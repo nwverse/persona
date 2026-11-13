@@ -232,6 +232,7 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
 - **Model behavior** (`inbox.triage`): prompt = generic association rules (`prompts/inbox/group.md`: replies / quotes, same topic, consecutive messages from one person belong together; a long gap plus new topic starts another;
   uncertainty merges into an existing event; at most 3 new events per batch; tier criteria shared with triage in `inbox/tiers.md`) + plugin `meta_description` + source rules (`rules`, otherwise global `inbox.rules`)
   + batch text. Existing events for the chat are preloaded (the no-query result of `events` below), saving one call. Each model response is JSON, either one tool call or a result.
+  The batch `context` may interleave the user's own messages by position: their sender is `我（自己说的，不归类）`, they have no message id of their own (a trailing `(回复 <id>)` or `(话题 <id>)` names another message), they are context only, they are not in `new`, and the model must not assign them.
   At most 4 tool calls per batch; at most 2 minutes total, 45 seconds per call.
 - **Tools**: `events` (hub-owned: open events in the same chat plus those handled within 3 days, at most 10, `{id, title, summary, tier, version, done, meta}`; `query` filters text in titles, summaries, meta);
   `messages_before`, `messages_around`, `search` (plugin-owned through `group.tool`, avatars / media stripped, at most 8 KB).

@@ -731,7 +731,7 @@ struct InboxPage: View {
                     Button("Collapse All") { for g in groups { setGroupOpen("done", g.id, false) } }
                     Button("Expand All") { for g in groups { setGroupOpen("done", g.id, true) } }
                 } label: {
-                    // a finger wide too: 跳到 is two characters, about 30 pt
+                    // a finger wide too: the two-character zh-Hans label is about 30 pt
                     Text("Jump To").font(Theme.Font.secondary).lineLimit(1)
                         .tapTargetHeight()
                         .scaledFrame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
