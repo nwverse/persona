@@ -273,6 +273,7 @@ struct TodoDetailView: View {
 
                     if isEditingNotes {
                         TextField(String(localized: "To-do notes"), text: $editingNotesText, axis: .vertical)
+                            .readingContent()
                             .lineLimit(3...8)
                             .textFieldStyle(.plain)
                             .accessibilityIdentifier("todo.notes.field")
@@ -280,6 +281,7 @@ struct TodoDetailView: View {
                             .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
                     } else if !text.notes.isEmpty {
                         Text(text.notes)
+                            .readingContent()
                             .font(Theme.Font.body)
                             .foregroundStyle(Color.primary)
                     } else {
