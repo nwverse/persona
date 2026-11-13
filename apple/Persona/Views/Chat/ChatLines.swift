@@ -29,6 +29,44 @@ struct ChatLines {
         }
     }
 
+    /// The lines without the raw `<closeout …>…</closeout>` block of the last reply (#3612): the card in the chat's
+    /// header says it, so the reply does not say it again as text. Exactly that block goes (`Closeout.strip`), from
+    /// the last exchange's last words only; a reply that was nothing but the block is not drawn at all. An earlier
+    /// turn's block stays as it was written: the card is about the turn that just ended.
+    /// What `hidingCloseout` adds to the id of the reply it draws without its block.
+    static let closeoutShownSuffix = "#closeout-shown"
+
+    static func hidingCloseout(_ lines: [ChatLine]) -> [ChatLine] {
+        for index in lines.indices.reversed() {
+            switch lines[index].content {
+            case .row(.assistant(let item)):
+                guard let text = item.text, Closeout.holdsBlock(text) else { return lines }
+                let stripped = Closeout.strip(text)
+                var out = lines
+                if stripped.isEmpty, item.fullSize == nil {
+                    out.remove(at: index)
+                } else {
+                    var shown = item
+                    shown.text = stripped
+                    // Its own id for what is worked out from the words: a message's Markdown is kept by its id
+                    // (`RowMemo`, filled off the main thread as items arrive), which may already hold the reply with
+                    // its block, and that was drawn in place of these words. The line keeps the reply's id, so the
+                    // list keeps its place when the card comes or goes.
+                    shown.id = item.id + Self.closeoutShownSuffix
+                    var line = ChatLine.replacing(lines[index], with: .assistant(shown))
+                    line.showsSource = lines[index].showsSource
+                    out[index] = line
+                }
+                return out
+            case .row(.user), .supervisionInput:
+                return lines // a message after the last reply: that exchange has no closing words yet
+            default:
+                continue
+            }
+        }
+        return lines
+    }
+
     /// Work lines the user opened; `openAll` flips them all (DEBUG `-openAllWork`).
     var openWork: Set<String>
     var openAll = false

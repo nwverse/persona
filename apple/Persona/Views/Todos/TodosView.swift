@@ -611,6 +611,9 @@ struct TodoRow: View {
                     if !todo.isDone { ReviewChip(todo: todo, compact: true) }
                 }
 
+                // Nobody is working on it (#3618): under its state, where its supervision shows.
+                OrphanedLine(todo: todo, state: status)
+
                 TodoPlanLine(todo: todo)
 
                 if triage?.section == .pr, let pr = todo.prLink {

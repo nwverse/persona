@@ -232,6 +232,7 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
 - **Model behavior** (`inbox.triage`): prompt = generic association rules (`prompts/inbox/group.md`: replies / quotes, same topic, consecutive messages from one person belong together; a long gap plus new topic starts another;
   uncertainty merges into an existing event; at most 3 new events per batch; tier criteria shared with triage in `inbox/tiers.md`) + plugin `meta_description` + source rules (`rules`, otherwise global `inbox.rules`)
   + batch text. Existing events for the chat are preloaded (the no-query result of `events` below), saving one call. Each model response is JSON, either one tool call or a result.
+  The batch `context` may interleave the user's own messages by position: their sender is `我（自己说的，不归类）`, they have no message id of their own (a trailing `(回复 <id>)` or `(话题 <id>)` names another message), they are context only, they are not in `new`, and the model must not assign them.
   At most 4 tool calls per batch; at most 2 minutes total, 45 seconds per call.
 - **Tools**: `events` (hub-owned: open events in the same chat plus those handled within 3 days, at most 10, `{id, title, summary, tier, version, done, meta}`; `query` filters text in titles, summaries, meta);
   `messages_before`, `messages_around`, `search` (plugin-owned through `group.tool`, avatars / media stripped, at most 8 KB).
@@ -637,6 +638,8 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   it came out washed like a stuck title's, and on an iPhone the scroll edge blurred every row above it once a title stuck (#4218).
   Done's title has Jump To (its groups with counts; picking one unfolds it, loads it if it isn't, and scrolls to its first row, since an iOS `List` can't scroll to a header)
   and Fold all / Unfold all.
+  On iOS each title a finger taps (a section's and its Mark all seen / Clear all, a group's and, selecting, its tick, Done's and its Jump To) is at least 44 pt tall,
+  its header or row adding no room above or below it (#6576, `InboxTitleTargetUITests`); a tap on Jump To opens its menu and leaves Done's fold beside it alone.
 - **Done's history**: past what the list holds (its 3 days, at most 200 done items), Done reads each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page; on iOS the default manager's).
   Items the hub didn't stamp with a manager get the default one when there are several, so the per-manager filter keeps them. Done from history reopens through the item's own manager.
   - **With day counts** (#2969; "Days" under "Lifecycle", #2967): when the list is shown the apps ask for the counts in this device's zone, and Done lists every group they name
@@ -756,7 +759,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   reply), plus the requested action (default "Summarize this, tell me what I need to do, and suggest a reply," with two other presets), sent as one message.
   Targets: **Persona (main chat)**, the default (#1194, every client): the item's own manager's main conversation (another manager's item goes to that manager's,
   found by asking it; with none yet, the message starts it), which then opens; **Persona (new chat)** starts a new conversation with the item's manager (iOS / Mac switch to the
-  Persona tab); an Agent (latest 8) receives it in its session (navigate there). Only live, writable Agents on online computers are offered. On iPhone, iPad and the Mac, the item stays open by default after the message arrives, for every target; Also Mark as Done files it only when the user chooses that option.
+  Persona tab); an Agent (latest 8) receives it in its session (navigate there). Only live, writable Agents on online computers are offered. The web, iOS and Mac leave the item open by default for every target; Android marks it done by default once the message got there, except for the main chat (below).
   Apple sends an Agent hand-off as one pending outbox message: a wait for the connection keeps the same message and operation id through the outbox's retries, not a new send; the item is filed only at the terminal sent state, and a refusal keeps the sheet open with its reason (#1846). The filing intent and whether it was initiated are restored with the outbox, so delivery after an app relaunch still files the item once.
   On iPhone, iPad and the Mac, after a new chat or Agent (including New Agent) accepts the hand-off, the client records the session with `POST /api/v1/inbox/{id}/handoff` and body `{session: {machine_id, session_id}, kind: "conversation" | "agent", title, client_id}`, with no `text`. This only records and links the session; it sends no second message. A new chat uses the item's title; an Agent uses its session title when listed, with the item's title as the fallback. The main chat's original request already records itself and is not repeated. Any record failure, including an older hub's 400 / 404 / 405, is ignored without changing the successful hand-off or its UI.
   **New Agent…** (#5933; iOS / iPadOS bar and sheet, the Mac through the same sheet, web; Android later) is the first row of the Agents, shown even when none is running,
@@ -768,8 +771,8 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   - **Confirmation:** nothing is sent before Start there, so there is no Undo toast. Cancel comes back to the item with the ask kept: the bar's field or the sheet / dialog as
     it was.
   - **After start:** the Agent opens (on the Mac once the sheet has closed, as for the other targets), and the item's source remembers that Agent, never "New Agent…" (the bar's `inbox.handOffTarget` too), so the next item from it starts there
-    while it can take messages. On iPhone, iPad and the Mac, "Also mark as done" is off by default for every target unless the user set the box; a checked item is filed once the Agent started. The web files it once its first message went.
-  - **Hub and manager:** the page's start (`POST /api/v1/sessions`) and first message are New Agent's own; after Start, the client records the Agent on the item through the hand-off endpoint above.
+    while it can take messages. "Also mark as done" is off by default for every target on the web, iOS and Mac; on Android, Agent targets default to on. The user's choice stays, and a checked item is filed once the Agent started (web: once its first message went).
+  - **Hub and manager:** the page's start (`POST /api/v1/sessions`) and first message are New Agent's own; on iPhone, iPad and the Mac, the client records the Agent on the item through the hand-off endpoint above after Start.
   **Write-back to the item** (#1194, web, iOS, Mac and Android): the main-chat target calls `POST /api/v1/inbox/{id}/handoff` `{text, client_id}` on the item's manager (`assistant/inbox_handoff.go`),
   which sends the text after a block naming the item (`prompts/inbox/handoff.md`) to its main conversation through `session.send_once` (the client id is the message id, so the same
   request again sends nothing more), or starts the main conversation with it, and answers `{item, session}`; a work machine is refused, and a failed send records nothing (`apierr.Call`'s status, as for a new conversation).
@@ -794,7 +797,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   shows a chip for every open item handed over. `prompts/inbox/handoff.md` tells the conversation to write back when the user wants
   a reply or a conclusion or the matter is settled, and again whenever it changes. The web's card has "Open in Inbox"; iOS has no way yet to open an
   item from the chat, so its card leaves rejecting and instructing to the item's page. Mock: `MOCK_TASKS=1 MOCK_HANDOFF_CARD=1` (`sent`: the reply went).
-  On iPhone, iPad and the Mac, "Also mark as done" is off by default for every target: handing a matter to a conversation or Agent starts work rather than finishing it, and an Agent's stop is reported back to the item. Switching targets keeps that default until the user sets the box,
+  "Also mark as done" is off by default on the web, iOS and Mac for every target; on Android it is off for the main chat (it may still write back) and on for the other targets. Switching targets follows the applicable default until the user sets the box,
   whose choice then stays. Checked, the item is filed once the hand-off is answered, and a later `inbox_suggest` on it is refused as already filed.
   Not covered: later messages on the item are not forwarded to the main conversation (it reads the source with its tools when asked), and filing the item is not told there.
   **The iPhone's event page** (#2055, `Persona/Views/Inbox/InboxHandOffBar.swift`) has no sheet: a bar pinned to the bottom, like iMessage's, at most two rows high and riding up
