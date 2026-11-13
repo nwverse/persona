@@ -83,6 +83,18 @@ struct InboxHandOffNewAgentTests {
         #expect(kept.done == 0)
     }
 
+    /// The Mac (#5921): the started Agent opens only once the hand-off sheet has closed, and once.
+    @Test func onTheMacTheStartedAgentOpensOnceTheSheetHasClosed() {
+        let calls = Calls(), m = model(calls)
+        let agent = SessionKey(machineID: "laptop", sessionID: "fresh")
+        m.started(agent, markDone: true)
+        m.openWhenClosed()
+        #expect(calls.went.isEmpty && calls.done == 1)
+        m.closed()
+        m.closed()
+        #expect(calls.went.count == 1 && calls.went[0].target == .agent(agent) && calls.went[0].key == agent)
+    }
+
     @Test func theSourceRemembersTheStartedAgentNotNewAgent() throws {
         let suite = "handoff-new-agent-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
