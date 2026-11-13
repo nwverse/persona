@@ -138,7 +138,7 @@ Smallest gap first, so each step proves part of the design before the harder sou
 | P1 | Recipe fields: P1a `sender_id`, `chat`, `chat_name` (#6165); P1b `seen` (#6176); P1c a failing pull shows as the source's read error at once (#6189) | 3b |
 | P2 | The `reply_to` field; reply through the subscription's connector (#6198). The apps already offer Draft only with `CanReply` | 3b, 3c |
 | P3 | The twin's source info and knowledge-base chat for subscription items (#6222) | 3d |
-| P4 | `changed` starts runs; extension-owned push sources | 3e |
+| P4 | P4a `changed` starts runs (#6247); P4b extension-owned push sources | 3e |
 | P5 | `migrates`, the switch, catch-up from the last item, rollback, `inbox_sources_migrated` | 3a, 3g |
 | M1 | **iMessage**: no reply to carry over; needs `seen`, `sender_id`, `chat` and the `changed` kick | P1, P4, P5 |
 | M2 | **GitHub**: comments as replies, inferred read, repo mutes. Its read tools first need a notifications tool | P1–P5 |
