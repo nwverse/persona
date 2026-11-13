@@ -156,7 +156,19 @@ func TestHubEchoKeepsOtherVoices(t *testing.T) {
 	}
 }
 
-// A span the phone never closes counts as closed after echoHoldMost, judged with the answer its speaking on carried.
+// runHas says whether recording id's run, read under its lock, holds ok.
+func (h *hubFixture) runHas(id string, ok func(r *hubRun) bool) bool {
+	r := h.s.hubRunOf(id)
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return ok(r)
+}
+
+// A span the phone does not close within echoHoldMost is assumed open from then on: the sentences held for it go,
+// judged with the answer its speaking on carried.
 func TestHubEchoSpanTimesOut(t *testing.T) {
 	h := newHubFixture(t)
 	h.tr.set(func(f *fakeTranscriber) { f.live = jobScript{lines: mixedLines[:2]} })
@@ -166,14 +178,11 @@ func TestHubEchoSpanTimesOut(t *testing.T) {
 	p.send(map[string]any{"type": "speaking", "on": true, "at": 1.9, "text": mixedLines[1].text})
 	p.audio(3.2)
 	p.wait("line", 1)
-	waitFor(t, "the span closed", func() bool {
-		r := h.s.hubRunOf(meetingRec)
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		return r.openFrom == nil && len(r.held) == 0
+	waitFor(t, "the hold released", func() bool {
+		return h.runHas(meetingRec, func(r *hubRun) bool { return r.openAssumed && len(r.held) == 0 && len(r.hub) == 2 })
 	})
 	if got := p.texts(); len(got) != 1 {
-		t.Fatalf("lines %q", got) // [2, 3] overlaps [1.9, 2.1] widened by half a second and says the answer: echo
+		t.Fatalf("lines %q", got) // [2, 3] overlaps the span open since 1.9 and says the answer: echo
 	}
 	waitFor(t, "the hub's transcript", func() bool { return len(h.hubTexts(meetingRec)) == 2 })
 	if got := h.hubEcho(meetingRec); !slices.Equal(got, []bool{false, true}) {
@@ -183,6 +192,100 @@ func TestHubEchoSpanTimesOut(t *testing.T) {
 	m, _, _ := h.engine().MeetingRead(meetingRec)
 	if tl := m.Transcription.Timeline; tl != nil && len(tl.Speaking) > 0 {
 		t.Fatalf("an assumed span in the timeline: %+v", tl.Speaking)
+	}
+}
+
+// longAnswer is a meeting in which Persona's answer (the second and third sentences) takes longer than the hold.
+var longAnswer = []fakeLine{
+	{0.5, 1.5, "我们先看 export cap。"}, // i18n-ignore
+	{2.0, 3.0, "The cap stays at four megabytes this week."},
+	{3.5, 4.5, "Bo sends the vendor notes on Friday."},
+	{5.5, 6.5, "下周三之前 Alice 要把 pricing 的 proposal 发出来。"}, // i18n-ignore
+}
+
+// An answer longer than echoHoldMost: once the hold is released the span stays assumed open, so a sentence of the
+// answer after it is still Persona's echo (no line, no caption), and the late speaking off closes it, written to the
+// timeline as the phone sent it.
+func TestHubEchoSpanLongerThanTheHold(t *testing.T) {
+	h := newHubFixture(t)
+	h.tr.set(func(f *fakeTranscriber) { f.live = jobScript{lines: longAnswer, interim: true} })
+	h.hubUpload(meetingRec, 1, nil)
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(1.6)
+	p.wait("line", 1)
+	echoHoldMost = 200 * time.Millisecond
+	answer := longAnswer[1].text + " " + longAnswer[2].text
+	p.send(map[string]any{"type": "speaking", "on": true, "at": 1.9, "text": answer})
+	p.audio(1.6)
+	waitFor(t, "the hold released", func() bool {
+		return h.runHas(meetingRec, func(r *hubRun) bool { return len(r.held) == 0 && len(r.hub) == 2 })
+	})
+	p.audio(1.5) // the rest of the answer, said after the hold
+	waitFor(t, "the answer's second sentence", func() bool {
+		return h.runHas(meetingRec, func(r *hubRun) bool { return len(r.hub) == 3 })
+	})
+	p.send(map[string]any{"type": "speaking", "on": false, "at": 4.8})
+	p.audio(2)
+	waitFor(t, "the last sentence's line", func() bool {
+		lines := p.of("line")
+		return len(lines) > 0 && lines[len(lines)-1]["text"] == longAnswer[3].text
+	})
+	if got := p.texts(); !slices.Equal(got, []string{longAnswer[0].text, longAnswer[3].text}) {
+		t.Fatalf("lines %q", got)
+	}
+	if got := lineTexts(h.lines(meetingRec)); !slices.Equal(got, []string{longAnswer[0].text, longAnswer[3].text}) {
+		t.Fatalf("live log %q", got)
+	}
+	if n := len(p.of("interim")); n != 2 { // the first and the last sentence's: none while Persona speaks
+		t.Fatalf("%d interim frames: %v", n, p.of("interim"))
+	}
+	waitFor(t, "the hub's transcript", func() bool { return len(h.hubTexts(meetingRec)) == 4 })
+	if got := h.hubEcho(meetingRec); !slices.Equal(got, []bool{false, true, true, false}) {
+		t.Fatalf("echo marks %v", got)
+	}
+	m, _, _ := h.engine().MeetingRead(meetingRec)
+	if tl := m.Transcription.Timeline; tl == nil || !slices.Equal(tl.Speaking, []kb.SpokenSpan{{Start: 1.9, End: 4.8, Text: answer}}) {
+		t.Fatalf("the timeline: %+v", m.Transcription.Timeline)
+	}
+	if h.runHas(meetingRec, func(r *hubRun) bool { return r.openFrom != nil }) {
+		t.Fatal("the span is still open after its speaking off")
+	}
+}
+
+// A speaking on at a later time while a span is assumed open: the span before ended unseen (its speaking off lost) and
+// the new answer is what the sentences after it are judged against; neither assumed end is written to the timeline.
+func TestHubEchoNextAnswerEndsAnAssumedSpan(t *testing.T) {
+	h := newHubFixture(t)
+	lines := []fakeLine{longAnswer[0], longAnswer[1], {4.0, 5.0, longAnswer[2].text}, {6.0, 7.0, longAnswer[3].text}}
+	h.tr.set(func(f *fakeTranscriber) { f.live = jobScript{lines: lines} })
+	h.hubUpload(meetingRec, 1, nil)
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(1.6)
+	p.wait("line", 1)
+	echoHoldMost = 200 * time.Millisecond
+	p.send(map[string]any{"type": "speaking", "on": true, "at": 1.9, "text": lines[1].text})
+	p.audio(1.6)
+	waitFor(t, "the hold released", func() bool {
+		return h.runHas(meetingRec, func(r *hubRun) bool { return len(r.held) == 0 && len(r.hub) == 2 })
+	})
+	p.send(map[string]any{"type": "speaking", "on": true, "at": 3.8, "text": lines[2].text}) // the off at 3.2 lost
+	p.audio(2)
+	p.send(map[string]any{"type": "speaking", "on": false, "at": 5.1})
+	p.audio(2)
+	waitFor(t, "the last sentence's line", func() bool {
+		lines := p.of("line")
+		return len(lines) > 0 && lines[len(lines)-1]["text"] == longAnswer[3].text
+	})
+	if got := p.texts(); !slices.Equal(got, []string{lines[0].text, lines[3].text}) {
+		t.Fatalf("lines %q", got)
+	}
+	waitFor(t, "the hub's transcript", func() bool { return len(h.hubTexts(meetingRec)) == 4 })
+	if got := h.hubEcho(meetingRec); !slices.Equal(got, []bool{false, true, true, false}) {
+		t.Fatalf("echo marks %v", got)
+	}
+	m, _, _ := h.engine().MeetingRead(meetingRec)
+	if tl := m.Transcription.Timeline; tl == nil || !slices.Equal(tl.Speaking, []kb.SpokenSpan{{Start: 3.8, End: 5.1, Text: lines[2].text}}) {
+		t.Fatalf("the timeline: %+v", m.Transcription.Timeline)
 	}
 }
 

@@ -277,6 +277,23 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.assertEqual(self.observed(rid)["timeline"]["speaking"],
                          [{"start": 0, "end": 1, "text": "Noted."}, {"start": 5, "end": 5.5, "text": "Again."}])
 
+    def test_an_answer_longer_than_the_hold_stays_personas_echo(self):
+        rid = self.recording()
+        ws = self.socket(rid)
+        answer = " ".join((CAP_LINE, PRICING_LINE, "Alice 负责检查 export test。", "Bo will share the notes tomorrow."))  # i18n-ignore: the script
+        ws.send({"type": "speaking", "at": 0, "on": True, "text": answer})
+        self.pcm(ws, 184)  # past the 180 s hold: what it held goes, and the span stays assumed open
+        self.wait(lambda: self.observed(rid)["bytes"] == 184 * 32000, "the audio")
+        self.assertIsNone(ws("interim", wait=0.3))  # no caption while it is open
+        self.assertEqual(self.live(rid)["next"], 0)  # every sentence so far is Persona's echo
+        ws.send({"type": "speaking", "at": 186, "on": False})  # late, and still taken
+        self.pcm(ws, 8)
+        self.assertEqual(ws("line")["start"], 188)
+        self.assertEqual(self.observed(rid)["timeline"]["speaking"], [{"start": 0, "end": 186, "text": answer}])
+        segs = self.detail(rid)["segments"]
+        self.assertEqual([s.get("echo", False) for s in segs], [True] * 47 + [False])
+        self.end(ws, 192)
+
     def test_a_heard_ask_flushes_the_hub_and_waits_for_fallback_material(self):
         rid = self.recording()
         self.wait(lambda: self.live(rid).get("room", {}).get("state") == "ready", "the room")

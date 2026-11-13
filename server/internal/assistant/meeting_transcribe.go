@@ -36,7 +36,7 @@ var (
 	jobIdle          = time.Minute      // a job with no audio this long is ended (sessions bill silence)
 	jobStall         = 30 * time.Second // a job behind (audio skipped) that acknowledged nothing this long has failed
 	jobDoneWait      = 5 * time.Minute  // a replay job sends done within this of the manager's end
-	echoHoldMost     = time.Minute      // a speaking span still open after this counts as closed
+	echoHoldMost     = 3 * time.Minute  // a speaking span open longer than this is assumed open from then on (hubRun.releaseHoldLocked)
 	hubSegmentsEvery = 15 * time.Second // the hub's live sentences are written to hub_segments.json this often
 	hubTick          = 250 * time.Millisecond
 	interimShown     = 10 * time.Second // GET …/live shows a caption at most this old
@@ -100,13 +100,16 @@ type hubRun struct {
 
 	// The timeline: meeting.json's union and what the socket said since; role is the meeting's own (before the
 	// timeline's first change). openFrom is a speaking span open now (since openAt) and openText the answer being said
-	// in it (its speaking on's text), held the sentences waiting for it to close, in order.
-	timeline kb.Timeline
-	role     string
-	openFrom *float64
-	openText string
-	openAt   time.Time
-	held     []hubSentence
+	// in it (its speaking on's text), held the sentences waiting for it to close, in order. openAssumed: it was held
+	// echoHoldMost without closing, and is assumed open since: sentences are no longer held for it but judged with it
+	// (assumedSpanLocked) until a speaking off or the timeline closes it.
+	timeline    kb.Timeline
+	role        string
+	openFrom    *float64
+	openText    string
+	openAt      time.Time
+	openAssumed bool
+	held        []hubSentence
 
 	// The hub's live sentences (hub_segments.json's and those since), whether hub_segments.json lags behind them,
 	// when it was last written, the end of the latest one.
@@ -271,9 +274,8 @@ func (r *hubRun) tick(now time.Time) {
 	if r.stopped {
 		return
 	}
-	if r.openFrom != nil && now.Sub(r.openAt) >= echoHoldMost { // counts as closed then
-		from := *r.openFrom
-		r.expireSpanLocked(from, from+echoHoldMost.Seconds())
+	if r.openFrom != nil && !r.openAssumed && now.Sub(r.openAt) >= echoHoldMost {
+		r.releaseHoldLocked()
 	}
 	if r.hubDirty && now.Sub(r.hubPutAt) >= hubSegmentsEvery {
 		r.putHubLocked()
@@ -411,7 +413,9 @@ func (r *hubRun) roleFrame(at float64, attendance string) {
 }
 
 // speaking is the socket's speaking frame: a span opens at at, Persona saying text (sentences that end after it began
-// wait), or closes.
+// wait), or closes. A speaking on at a later time while a span is open means the open span ended unseen (its speaking
+// off lost): it is closed there as assumed (expireSpanLocked) and the new one opens. A speaking off closes the open
+// span also after it was assumed open (releaseHoldLocked): the phone said where it ended.
 func (r *hubRun) speaking(on bool, at float64, text string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -419,6 +423,10 @@ func (r *hubRun) speaking(on bool, at float64, text string) {
 		return
 	}
 	if on {
+		const slack = 1.0 / kb.AudioRate // times are rounded to a sample
+		if r.openFrom != nil && at > *r.openFrom+slack {
+			r.expireSpanLocked(*r.openFrom, at)
+		}
 		if r.openFrom == nil {
 			r.openFrom, r.openText, r.openAt = &at, kb.SpokenText(text), time.Now()
 			r.clearInterimLocked() // no caption goes out while Persona speaks
@@ -432,10 +440,15 @@ func (r *hubRun) speaking(on bool, at float64, text string) {
 	r.closeSpanLocked(from, max(at, from))
 }
 
+// clearOpenLocked: no speaking span is open.
+func (r *hubRun) clearOpenLocked() {
+	r.openFrom, r.openText, r.openAssumed = nil, "", false
+}
+
 // closeSpanLocked: the open span is [from, to], with the answer said in it; the sentences held for it are judged now.
 func (r *hubRun) closeSpanLocked(from, to float64) {
 	span := kb.SpokenSpan{Start: from, End: to, Text: r.openText}
-	r.openFrom, r.openText = nil, ""
+	r.clearOpenLocked()
 	r.mergeTimelineLocked(kb.Timeline{Speaking: []kb.SpokenSpan{span}})
 	held := r.held
 	r.held = nil
@@ -445,20 +458,45 @@ func (r *hubRun) closeSpanLocked(from, to float64) {
 	r.notifyLocked()
 }
 
-// expireSpanLocked: the open span counts as closed at to without the phone saying so (held echoHoldMost, or the run
-// ends): the sentences held for it are judged with [from, to] and the answer it carried as a speaking span, which is
-// never written to the timeline. The timeline has only what the phone said, so a span whose speaking off a dropped
+// expireSpanLocked: the open span counts as closed at to without the phone saying so (a later speaking on, the run
+// ending): the sentences held for it are judged with [from, to] and the answer it carried as a speaking span, which
+// is never written to the timeline. The timeline has only what the phone said, so a span whose speaking off a dropped
 // socket lost (and that the next start or upload repairs) never becomes an assumed span that marks real speech in the
 // final pass.
 func (r *hubRun) expireSpanLocked(from, to float64) {
 	span := kb.SpokenSpan{Start: from, End: max(from, to), Text: r.openText}
-	r.openFrom, r.openText = nil, ""
+	r.clearOpenLocked()
 	held := r.held
 	r.held = nil
 	for _, s := range held {
 		r.judgeLocked(s, span)
 	}
 	r.notifyLocked()
+}
+
+// releaseHoldLocked: the open span was held echoHoldMost, longer than any answer the phone says (its speaking off is
+// late or lost), so the sentences held for it go now. The span is not forgotten: it stays open, assumed open to the end
+// of each sentence judged (assumedSpanLocked), the held ones and every one after them, until a speaking off (which
+// still writes [from, at] to the timeline: the phone sent it) or the timeline closes it; no caption goes out
+// meanwhile. Like expireSpanLocked's, the assumed span is never written to the timeline.
+func (r *hubRun) releaseHoldLocked() {
+	r.openAssumed = true
+	held := r.held
+	r.held = nil
+	for _, s := range held {
+		r.judgeLocked(s)
+	}
+	r.notifyLocked()
+}
+
+// assumedSpanLocked is the open span assumed open (releaseHoldLocked) as sentence s is judged: from its start to the
+// sentence's end, with the answer it carried; false when no span is assumed open.
+func (r *hubRun) assumedSpanLocked(s hubSentence) (kb.SpokenSpan, bool) {
+	if r.openFrom == nil || !r.openAssumed {
+		return kb.SpokenSpan{}, false
+	}
+	from := *r.openFrom
+	return kb.SpokenSpan{Start: from, End: max(from, s.End), Text: r.openText}, true
 }
 
 // reconcileOpenLocked closes the open speaking span once the timeline has it closed: the speaking off a dropped
@@ -495,18 +533,21 @@ func (r *hubRun) mergeTimelineLocked(t kb.Timeline) {
 // ---- the sentences ----
 
 // sentenceLocked is a sentence of the live job: held while a speaking span that it may be Persona's echo of is open
-// (and behind one held, so the live log stays in order), else judged at once.
+// and not yet assumed open (and behind one held, so the live log stays in order), else judged at once.
 func (r *hubRun) sentenceLocked(s hubSentence) {
-	if len(r.held) > 0 || r.openFrom != nil && kb.EchoHeld(s.End, *r.openFrom) {
+	if len(r.held) > 0 || r.openFrom != nil && !r.openAssumed && kb.EchoHeld(s.End, *r.openFrom) {
 		r.held = append(r.held, s)
 		return
 	}
 	r.judgeLocked(s)
 }
 
-// judgeLocked takes sentence s, marked Persona's echo when the echo rule says so against the timeline's speaking spans
-// and extra (a span assumed closed, expireSpanLocked).
+// judgeLocked takes sentence s, marked Persona's echo when the echo rule says so against the timeline's speaking spans,
+// extra (a span assumed closed, expireSpanLocked) and the span assumed open, if any (assumedSpanLocked).
 func (r *hubRun) judgeLocked(s hubSentence, extra ...kb.SpokenSpan) {
+	if sp, ok := r.assumedSpanLocked(s); ok {
+		extra = append(slices.Clone(extra), sp)
+	}
 	r.acceptLocked(s, kb.EchoOf(r.timeline, s.Start, max(s.End, s.Start), s.Text, extra...))
 }
 

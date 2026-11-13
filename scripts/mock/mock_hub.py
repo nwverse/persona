@@ -5881,6 +5881,26 @@ def transcription_echo(t, s, extra=None):
     return any(echo_by(sp, s["start"], s["end"], s.get("text", "")) for sp in t["timeline"]["speaking"] + ([extra] if extra else []))
 
 
+# The hold (meeting-minutes.md "No echo goes out first"): a speaking span open this long, longer than any answer the
+# phone says (150 s), is assumed open from then on. The hub counts it from the speaking on; the mock on the recording's
+# clock.
+SPEAKING_HOLD = 180
+
+
+def transcription_unspeak(t):
+    """No speaking span is open any more: the one that was (its start or None, the answer it carried)."""
+    began, said = t.pop("speaking", None), t.pop("speaking_text", "")
+    t.pop("speaking_assumed", None)
+    return began, said
+
+
+def transcription_assumed(t, s):
+    """The open speaking span once the hold let go of it (assumed open): open to sentence s's end, with the answer it
+    carried, until a speaking off or the timeline closes it; None when none is assumed open."""
+    if t.get("speaking") is None or not t.get("speaking_assumed"): return None
+    return {"start": t["speaking"], "end": max(t["speaking"], s["end"]), "text": t.get("speaking_text", "")}
+
+
 def transcription_reconcile(rid, send=None):
     """A timeline that has the open speaking span closed (a socket's start, or an upload, repairing a speaking off a
     dropped socket lost) closes it at once: the sentences held for it are judged now (meeting-minutes.md "No echo goes
@@ -5890,8 +5910,7 @@ def transcription_reconcile(rid, send=None):
     if began is None: return
     closing = next((sp for sp in t["timeline"]["speaking"] if sp["start"] <= began + 1 / 16000 < sp["end"]), None)
     if closing is not None:  # closed there, with the answer the speaking on carried (counted once when it has it)
-        t.pop("speaking")
-        said = t.pop("speaking_text", "")
+        _, said = transcription_unspeak(t)
         transcription_timeline(t, {"speaking": [{"start": began, "end": closing["end"], **({"text": said} if said else {})}]})
         transcription_drain(rid, send)
 
@@ -5933,7 +5952,7 @@ def transcription_publish(rid):
 def transcription_accept(rid, s, send=None, extra=None):
     """A hub sentence into the hub's transcript, Persona's echo marked; the rest also into the live log and a line."""
     t = TRANSCRIPTIONS[rid]
-    echo = transcription_echo(t, s, extra)
+    echo = transcription_echo(t, s, extra or transcription_assumed(t, s))
     t["hub"].append(dict(s, source="hub", **({"echo": True} if echo else {})))
     if t.pop("fallback", None): transcription_changed(rid)
     if t.get("problem") in ("upstream_unavailable", "upstream_failed"):
@@ -5955,7 +5974,7 @@ def transcription_drain(rid, send=None, extra=None):
     t = TRANSCRIPTIONS[rid]
     while t["pending"]:
         s = t["pending"][0]
-        if t.get("speaking") is not None and s["end"] > t["speaking"] - 0.5: break
+        if t.get("speaking") is not None and not t.get("speaking_assumed") and s["end"] > t["speaking"] - 0.5: break
         t["pending"].pop(0)
         transcription_accept(rid, s, send, extra)
     transcription_publish(rid)
@@ -6245,10 +6264,9 @@ def transcription_socket(h, rid):
                         state["sentence"] = end
                         continue
                     if at < edge: state["sentence"] = max(state["sentence"], edge)
-                    if t.get("speaking") is not None and end >= t["speaking"] + 60:
-                        began = t.pop("speaking")  # counts as closed: what it held is judged with it, never stored
-                        said = t.pop("speaking_text", "")
-                        transcription_drain(rid, send, extra={"start": began, "end": began + 60, "text": said})
+                    if t.get("speaking") is not None and not t.get("speaking_assumed") and end >= t["speaking"] + SPEAKING_HOLD:
+                        t["speaking_assumed"] = True  # held long enough: what it held goes, judged with it, never stored
+                        transcription_drain(rid, send)
                     step = t["line_seconds"]
                     start = state["sentence"]
                     while start < end:
@@ -6302,13 +6320,17 @@ def transcription_socket(h, rid):
                 elif kind == "speaking":
                     if type(msg.get("on")) is not bool or not isinstance(msg.get("text", ""), (str, type(None))): fail("bad_frame"); break
                     if msg["on"]:
+                        if t.get("speaking") is not None and at > t["speaking"] + 1 / 16000:  # the one open ended unseen
+                            began, said = transcription_unspeak(t)
+                            transcription_drain(rid, send, extra={"start": began, "end": at, "text": said})
                         if t.get("speaking") is None:  # the answer being said: what its echo is judged against
                             t["speaking"], t["speaking_text"] = at, spoken_cut(msg.get("text") or "")
                         t.pop("interim", None)
                     elif t.get("speaking") is not None:
                         if at < t["speaking"]: fail("bad_frame"); break
-                        span = {"start": t.pop("speaking"), "end": at}
-                        if (said := t.pop("speaking_text", "")): span["text"] = said
+                        began, said = transcription_unspeak(t)  # also after the hold let go of it: the phone said so
+                        span = {"start": began, "end": at}
+                        if said: span["text"] = said
                         transcription_timeline(t, {"speaking": [span]})
                         transcription_drain(rid, send)
                 elif kind == "end":
@@ -6319,8 +6341,7 @@ def transcription_socket(h, rid):
                         start = state["sentence"]
                         t["pending"].append({"start": start, "end": tail,
                                              "text": TRANSCRIPTION_SCRIPT[int(start / t["line_seconds"]) % len(TRANSCRIPTION_SCRIPT)]})
-                    began = t.pop("speaking", None)  # still open at the end: judged with it, never stored
-                    said = t.pop("speaking_text", "")
+                    began, said = transcription_unspeak(t)  # still open at the end: judged with it, never stored
                     transcription_drain(rid, send, extra={"start": began, "end": at, "text": said} if began is not None else None)
                     t.pop("interim", None)
                     transcription_changed(rid)
