@@ -1019,6 +1019,22 @@ final class VNCTests: XCTestCase {
         shot(app, "vnc-video-lost")
     }
 
+    /// #3954: the not-allowed line at the largest text size: the words and "How to turn it on" wrap, nothing cut off.
+    @MainActor func testVideoNotAllowedAtTheLargestText() throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_SCREEN_VIDEO"] == "1" else {
+            throw XCTSkip("needs the mock's video channel: MOCK_SCREEN_VIDEO=1 (PERSONA_SCREEN_VIDEO=1)")
+        }
+        let (app, _) = try signedInMachinePage(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
+        let screen = app.descendants(matching: .any)["vnc-screen"].firstMatch
+        XCTAssertTrue(picture(screen, "video"), "video took the picture: \(screen.value ?? "")")
+        try mock(hub!, "/mock/screen-video?pause=permission")
+        let how = app.buttons["screen-fallback-help"].firstMatch
+        XCTAssertTrue(how.waitForExistence(timeout: 10), "how to turn it on:\n\(app.debugDescription)")
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(how.frame), "on the screen: \(how.frame)")
+        shot(app, "vnc-video-not-allowed-ax")
+        try mock(hub!, "/mock/screen-video?resume=1")
+    }
+
     /// The picture the screen shows, as its DEBUG value says (`picture=video|vnc`), within 20 s.
     @MainActor private func picture(_ screen: XCUIElement, _ want: String) -> Bool {
         let deadline = Date.now.addingTimeInterval(20)
