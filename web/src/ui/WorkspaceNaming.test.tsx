@@ -57,3 +57,12 @@ it("ignores old preview and settings responses after edits or manager changes", 
   await render("other"); await click("Workspace naming"); const old = calls.at(-1)!;
   await render("another"); await answer(old, settings); expect(document.querySelector("input")).toBeNull();
 });
+
+it("shows field validation without suggesting a connection problem", async () => {
+  await render(); await click("Workspace naming"); await answer(calls[0], settings);
+  await type("../unsafe"); await click("Preview naming");
+  await answer(calls.at(-1)!, { code: "workspace_naming_path_invalid", field: "task_directory_template", error: "invalid" }, 400);
+  expect(document.querySelectorAll("input")[1].getAttribute("aria-invalid")).toBe("true");
+  expect(document.body.textContent).toContain("Check the highlighted fields");
+  expect(document.body.textContent).not.toContain("Check its connection and version");
+});

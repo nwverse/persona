@@ -80,6 +80,8 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
   const failure = (error: unknown, fallback: string) => {
     if (error instanceof ApiError && error.code?.startsWith("workspace_naming_")) {
       setResult({ status: "invalid", sample: !todoId, diagnostics: [{ code: error.code.slice("workspace_naming_".length), field: typeof error.body.field === "string" ? error.body.field : "workspace_rules", severity: "error" }] });
+      setError(error.status === 400 ? t("workspace-naming.check_fields") : fallback);
+      return;
     }
     setError(fallback);
   };
