@@ -107,7 +107,8 @@ struct ScreenVideoTests {
         s.close()
     }
 
-    /// The helper's `timing` comes through as it is, after the pictures it describes.
+    /// The helper's `timing` comes through as it is (a chunk's picture, the newest of its burst, follows its other
+    /// messages, so the order within a chunk is not the wire's).
     @Test func theHelpersTimingComesThrough() async throws {
         var bytes = try Self.prefix(messages: 4)
         bytes += Array(ScreenVideoMessage.timing(TimingMessage(captureMs: 0, encodeMs: 5.5, networkMs: 7, kbps: 900, fps: 30)).framed())
@@ -116,7 +117,8 @@ struct ScreenVideoTests {
         let s = ScreenVideoStream(transport: t, start: Self.start) { seen.add($0) }
         s.run()
         try await seen.until { $0.contains { $0.hasPrefix("timing") } }
-        #expect(seen.all.last == "timing encode 5.5 network 7.0")
+        #expect(seen.all.contains("timing encode 5.5 network 7.0"), "\(seen.all)")
+        #expect(seen.all.first == "hello hevc 960x600")
         #expect(s.receivedBytes == bytes.count, "every byte that came is counted")
         s.close()
     }
