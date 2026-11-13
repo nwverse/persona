@@ -22,8 +22,11 @@ final class QuestionSkipTests: XCTestCase {
     private var plainHub: String { ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"]! }
     private var cancelHub: String { ProcessInfo.processInfo.environment["PERSONA_QUESTION_CANCEL_HUB"]! }
 
-    private func launch(main: Bool, hub: String, question: String) {
+    private func launch(main: Bool, hub: String, question: String, resolveMode: String = "ok") {
         _ = try? Data(contentsOf: URL(string: hub + "/mock/reset")!)
+        // Reset the fixture and the previous test's response mode independently: an assertion can end a test before a
+        // defer restores the mode, and the next success case must not inherit its deliberate failure.
+        _ = try? Data(contentsOf: URL(string: hub + "/mock/resolve-mode?mode=" + resolveMode)!)
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         if main {
@@ -40,12 +43,13 @@ final class QuestionSkipTests: XCTestCase {
         dismissIconAlert()
     }
 
-    private func launchMain(cancel: Bool = true) {
-        launch(main: true, hub: cancel ? cancelHub : plainHub, question: cancel ? "这周先处理哪件事？" : "短拖动也不要替我选")
+    private func launchMain(cancel: Bool = true, resolveMode: String = "ok") {
+        launch(main: true, hub: cancel ? cancelHub : plainHub, question: cancel ? "这周先处理哪件事？" : "短拖动也不要替我选",
+               resolveMode: resolveMode)
     }
 
     private func launchAgent() {
-        launch(main: false, hub: cancelHub, question: "网络层的测试用哪个框架？")
+        launch(main: false, hub: cancelHub, question: "网络层的测试用哪个框架？", resolveMode: "slow")
     }
 
     private var skip: XCUIElement { app.buttons["question-skip"].firstMatch }
@@ -79,7 +83,7 @@ final class QuestionSkipTests: XCTestCase {
         XCTAssertFalse(app.buttons["interaction-menu"].exists, "Persona's own ask_user has no terminal to hand back to")
 
         skip.tap()
-        XCTAssertTrue(app.staticTexts["这周先处理哪件事？"].waitForNonExistence(timeout: 10), "the card stayed after Skip")
+        XCTAssertTrue(app.staticTexts["这周先处理哪件事？"].waitForNonExistence(timeout: 10), "the card stayed after Skip:\n\(app.debugDescription)")
         waitForResolution("ix_ask_long", count: 1)
         let resolution = resolved("ix_ask_long").first?["resolution"] as? [String: Any]
         XCTAssertEqual(resolution as? NSDictionary, ["cancel": true])
@@ -87,8 +91,6 @@ final class QuestionSkipTests: XCTestCase {
     }
 
     func testAgentSkipWorksAndKeepsTerminalHandoff() {
-        _ = try? Data(contentsOf: URL(string: cancelHub + "/mock/resolve-mode?mode=slow")!)
-        defer { _ = try? Data(contentsOf: URL(string: cancelHub + "/mock/resolve-mode?mode=ok")!) }
         launchAgent()
         let menu = app.buttons["interaction-menu"].firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 5), "an Agent question keeps its card menu")
@@ -115,13 +117,14 @@ final class QuestionSkipTests: XCTestCase {
     }
 
     func testFailedSkipKeepsThePickAndCard() {
-        _ = try? Data(contentsOf: URL(string: cancelHub + "/mock/resolve-mode?mode=fail")!)
-        defer { _ = try? Data(contentsOf: URL(string: cancelHub + "/mock/resolve-mode?mode=ok")!) }
-        launchMain()
+        launchMain(resolveMode: "fail")
         let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "选项 1")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 5))
         first.tap()
-        XCTAssertTrue(first.isSelected || first.label.contains("已选"), "the deliberate pick did not stay selected")
+        let picked = NSPredicate(format: "isSelected == true OR label CONTAINS %@", "已选")
+        let selection = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: picked, object: first)], timeout: 5)
+        XCTAssertTrue(selection == .completed && (first.isSelected || first.label.contains("已选")),
+                      "the deliberate pick did not stay selected")
         skip.tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label IN %@", ["重试", "Retry"])).firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["这周先处理哪件事？"].exists, "a failed Skip removed the card")
