@@ -181,6 +181,32 @@ func TestCardAddressesOwnerExactRolesAndIdentities(t *testing.T) {
 	}
 }
 
+func TestInboxConfirmedHandoffReplyStaysUnderOriginalMessage(t *testing.T) {
+	for _, thread := range []string{
+		"larkcli:chat:oc_example_chat:handoff:om_example_request",
+		"larkcli:chat:oc_example_chat:thread:omt_example_topic:handoff:om_example_request",
+	} {
+		t.Run(thread, func(t *testing.T) {
+			logPath := filepath.Join(t.TempDir(), "args.log")
+			t.Setenv("LARKCLI_FAKE_LOG", logPath)
+			c := testConnector(t, "inbox")
+			if err := c.Reply(context.Background(), connector.InboxReply{
+				Thread: thread, Last: "om_example_request", Text: "Confirmed reply", ClientID: "confirmed-handoff",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			log, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(log), "+messages-reply --message-id om_example_request") ||
+				!strings.Contains(string(log), "--reply-in-thread --as bot") || strings.Contains(string(log), "+messages-send") {
+				t.Fatalf("confirmed reply lost its original thread or bot identity: %s", log)
+			}
+		})
+	}
+}
+
 func TestGroupMessagesConfirmedTopicReply(t *testing.T) {
 	auth := adapter.AuthStatus{OpenID: "ou_example_owner", AppID: "cli_example_bot"}
 	request := addressedMessage("om_topic_request", "ou_example_peer", "Example Peer", `"Please investigate"`, "omt_example_topic",

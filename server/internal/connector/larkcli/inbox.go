@@ -420,8 +420,8 @@ func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
 		return fmt.Errorf("%s cannot be replied to", r.Thread)
 	}
 	var err error
-	if strings.TrimSpace(r.Last) != "" && strings.Contains(r.Thread, ":thread:") {
-		_, err = c.runner.ReplyText(ctx, r.Last, r.Text, r.ClientID, strings.Contains(r.Thread, ":thread:"))
+	if strings.TrimSpace(r.Last) != "" && (strings.Contains(r.Thread, ":thread:") || strings.Contains(r.Thread, ":handoff:")) {
+		_, err = c.runner.ReplyText(ctx, r.Last, r.Text, r.ClientID, true)
 	} else {
 		_, err = c.runner.SendText(ctx, chatID, r.Text, r.ClientID)
 	}
@@ -778,7 +778,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		Context:  contextText(contextMessages),
 		At:       messageTime(latest),
 		Last:     latest.MessageID,
-		ReplyTo:  replyTo(lang, name, group.threadID != ""),
+		ReplyTo:  replyTo(lang, name, group.threadID != "" || group.handoff),
 		CanReply: latest.MessageID != "",
 		Rules:    c.rules(),
 		Tags:     tags,
