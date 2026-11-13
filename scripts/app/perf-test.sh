@@ -3,7 +3,7 @@
 # "Performance UI tests"): an optimized build, one mock hub per suite with that suite's heavy data, XCTHitchMetric and
 # the scroll / navigation signposts per page and transition, then a JSON + Markdown report from the result bundles.
 #
-#   scripts/app/perf-test.sh [suite…]        # suites: agents assistant composer inbox settings machines (default: all of them)
+#   scripts/app/perf-test.sh [suite…]        # suites: agents assistant composer inbox settings machines reference
 #
 # Env:
 #   PERF_SIM         the assigned, existing simulator udid or name (required if "Persona Perf" is absent)
@@ -51,6 +51,7 @@ mock_env() {
     inbox) echo "MOCK_LARK=1 MOCK_LARK_RICH=1 MOCK_LARK_TOPIC=1 MOCK_INBOX_EXTRA=150 MOCK_MAIL=1 MOCK_AGENTS=1" ;;
     settings) echo "MOCK_EXTENSIONS=1 MOCK_SCHEDULE=1 MOCK_AGENTS=1" ;;
     machines) echo "MOCK_PERF_MACHINES=24 MOCK_PERF_METRIC_STEP=50 MOCK_AGENTS=1" ;;
+    reference) echo "MOCK_LONG_ASSISTANT=1 MOCK_AGENTS=1 MOCK_CHAT_LINES=1 MOCK_ASSISTANT_SIDEBAR=1" ;;
     *) return 1 ;;
   esac
 }
@@ -58,9 +59,10 @@ suite_class() {
   case "$1" in
     agents) echo PerfAgentsTests ;; assistant) echo PerfAssistantTests ;; composer) echo PerfComposerTests ;;
     inbox) echo PerfInboxTests ;; settings) echo PerfSettingsTests ;; machines) echo PerfMachinesTests ;;
+    reference) echo PerfReferenceTests ;;
   esac
 }
-for s in "${SUITES[@]}"; do mock_env "$s" >/dev/null || { verdict "failed unknown suite $s (agents assistant composer inbox settings machines)"; exit 2; }; done
+for s in "${SUITES[@]}"; do mock_env "$s" >/dev/null || { verdict "failed unknown suite $s (agents assistant composer inbox settings machines reference)"; exit 2; }; done
 
 # Never create or boot an extra simulator when an explicitly assigned device is missing.
 UDID=$(xcrun simctl list devices -j | python3 -c '
@@ -80,7 +82,7 @@ if [ "${PERF_SKIP_BUILD:-0}" != 1 ]; then
   log "building (optimized, $DD)…"
   "${SLOT[@]}" timeout 3600 xcodebuild build-for-testing -project apple/Persona.xcodeproj -scheme Persona \
     -destination "id=$UDID" -derivedDataPath "$DD" \
-    SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule >"$OUT/build.log" 2>&1
+    SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) PERF_SIGNPOST' >"$OUT/build.log" 2>&1
   if [ $? -ne 0 ]; then
     grep -E "error:" "$OUT/build.log" | head -20 >&2
     verdict "failed build (log $OUT/build.log)"; exit 1

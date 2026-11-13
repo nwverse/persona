@@ -48,6 +48,18 @@ class PerfTestCase: XCTestCase {
     /// the test waits `settle` seconds so first loads (history pages, images, metrics) are done before measuring.
     @MainActor @discardableResult
     func launch(_ args: [String], ready: XCUIElement? = nil, timeout: TimeInterval = 30, settle: UInt32 = 3) -> XCUIApplication {
+        preparePairingIfNeeded()
+        app = XCUIApplication()
+        app.launchArguments = ["-pairURL", pair, "-showFrameProbe", "YES"] + args
+        app.launchPinned()
+        allowNotifications()
+        acceptIconAlert()
+        if let ready { see(ready, "the page", timeout: timeout) }
+        sleep(settle)
+        return app
+    }
+
+    @MainActor func preparePairingIfNeeded() {
         if !Self.pairedHubs.contains(hub) {
             let first = XCUIApplication()
             first.launchArguments = ["-pairURL", pair, "-dev.openChat", ""]
@@ -57,14 +69,6 @@ class PerfTestCase: XCTestCase {
             first.terminate()
             Self.pairedHubs.insert(hub)
         }
-        app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-showFrameProbe", "YES"] + args
-        app.launchPinned()
-        allowNotifications()
-        acceptIconAlert()
-        if let ready { see(ready, "the page", timeout: timeout) }
-        sleep(settle)
-        return app
     }
 
     /// The notification prompt a fresh install shows over the first page.
@@ -79,14 +83,20 @@ class PerfTestCase: XCTestCase {
     /// by the app's own `FrameStats` (`FrameProbe`, Darwin notifications in, results through the mock hub). After
     /// the iterations the test prints one `perf-frames:` line (medians, the first iteration dropped as XCTest does)
     /// and attaches every iteration as `frames.json`; `scripts/app/perf_report.py` reads both.
-    @MainActor func measureFrames(_ metrics: [XCTMetric], assertMainThreadBudget: Bool = false, _ block: () -> Void) {
+    @MainActor func measureFrames(_ metrics: [XCTMetric], assertMainThreadBudget: Bool = false, action: String = "transition", _ block: () -> Void) {
         let name = testName
         mock("frames_label?name=" + name)
+        var iteration = 0
         measure(metrics: metrics, options: options) {
+            let id = UUID().uuidString
+            _ = mock("frames_context?name=" + name + "&run_id=" + id
+                     + "&warm_up=" + (iteration == 0 ? "1" : "0")
+                     + "&action=" + action + "&expected_iterations=" + String(iterations))
             darwinPost("com.persona.perf.frames.start")
             block()
             usleep(300_000) // the last frames of a fling or an animation
             darwinPost("com.persona.perf.frames.stop")
+            iteration += 1
         }
         sleep(1)
         let runs = (mock("frames?name=" + name)["runs"] as? [[String: Any]]) ?? []
@@ -172,9 +182,9 @@ class PerfTestCase: XCTestCase {
         var iteration = 0
         measure(metrics: metrics(), options: options) {
             let id = UUID().uuidString
-            let setup = mock("frames_glide_context?name=" + name + "&run_id=" + id
+            let setup = mock("frames_context?name=" + name + "&run_id=" + id
                              + "&warm_up=" + (iteration == 0 ? "1" : "0")
-                             + "&expected_iterations=" + String(iterations))
+                             + "&action=glide&expected_iterations=" + String(iterations))
             XCTAssertEqual(setup["run_id"] as? String, id, "the mock did not accept the glide command")
             darwinPost("com.persona.perf.frames.glide")
             let deadline = Date.now.addingTimeInterval(18)
@@ -232,8 +242,8 @@ class PerfTestCase: XCTestCase {
     }
 
     /// The page sitting still while the hub pushes (`/mock/<what>`, e.g. `churn?n=8&ms=300`), for `seconds`.
-    @MainActor func measureIdle(push what: String, seconds: UInt32 = 4, assertMainThreadBudget: Bool = false) {
-        measureFrames(metrics(), assertMainThreadBudget: assertMainThreadBudget) {
+    @MainActor func measureIdle(push what: String, seconds: UInt32 = 4, assertMainThreadBudget: Bool = false, action: String = "idle") {
+        measureFrames(metrics(), assertMainThreadBudget: assertMainThreadBudget, action: action) {
             _ = mock(what)
             sleep(seconds)
         }

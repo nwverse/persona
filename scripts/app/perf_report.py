@@ -244,10 +244,73 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
                 issues.append("multiple log summaries; no summary selected")
         probe.update(raw_count=0, measured_count=0, excluded_warm_up_indices=[], statistic_sample_indices=[])
         return probe
-
     samples = [record["sample"] for record in records]
+    # Process and microbenchmark observations are not frame arrays. Preserve their own numerical schema instead of
+    # interpreting an object containing raw_samples as a list of CADisplayLink measurements.
+    if samples and all(isinstance(sample, dict) and sample.get("kind") in ("first_frame", "memory") for sample in samples):
+        kind = samples[0]["kind"]
+        if any(sample["kind"] != kind for sample in samples):
+            issues.append("mixed observation kinds")
+        if any(sample.get("source") != "native-ios-process" for sample in samples):
+            issues.append("observation did not come from the native app process")
+        if any(not finite(sample.get("phys_footprint_bytes")) or sample["phys_footprint_bytes"] <= 0 for sample in samples):
+            issues.append("missing or invalid phys_footprint_bytes")
+        if kind == "first_frame":
+            values = [sample.get("view_appearance_ms") for sample in samples]
+            if not all(finite(value) and value >= 0 for value in values):
+                issues.append("invalid first-frame view-appearance value")
+            else:
+                probe["statistics"]["view_appearance_ms"] = {"values": values, "median": statistics.median(values)}
+                probe["medians"]["view_appearance_ms"] = statistics.median(values)
+            probe["trust"] = "native_view_appearance_not_presented_frame"
+        else:
+            required = 12  # one warmed baseline, ten real closes, one bounded settling sample
+            if len(samples) != required:
+                issues.append(f"expected {required} raw memory samples, got {len(samples)}")
+            values = [sample["phys_footprint_bytes"] for sample in samples if finite(sample.get("phys_footprint_bytes"))]
+            if values:
+                probe["statistics"]["phys_footprint_bytes"] = {"values": values}
+                probe["statistics"]["final_minus_warmed_bytes"] = {"value": values[-1] - values[0]}
+            probe["trust"] = "native_ten_open_close_phys_footprint"
+        probe.update(raw_count=len(samples), measured_count=len(samples), excluded_warm_up_indices=[],
+                     statistic_sample_indices=list(range(len(samples))))
+        probe["complete"] = not issues
+        return probe
+    if samples and all(isinstance(sample, dict) and (isinstance(sample.get("raw_samples"), list)
+                                                    or isinstance(sample.get("samples"), list)) for sample in samples):
+        grouped = {}
+        for sample in samples:
+            for row in sample.get("raw_samples", []):
+                if not isinstance(row, dict) or not finite(row.get("value_us")) or row["value_us"] < 0:
+                    issues.append("invalid raw microbenchmark timing")
+                    continue
+                if row.get("measured_on_main_thread") is not True:
+                    issues.append("microbenchmark sample was not measured on the main thread")
+                grouped.setdefault(row.get("metric"), []).append(row["value_us"])
+            if isinstance(sample.get("samples"), list):
+                if sample.get("scope") is None or sample.get("worker_flush_is_outside_timed_span") is not True:
+                    issues.append("large-page sample lacks timing-boundary metadata")
+                values = sample["samples"]
+                if len(values) != 1_000 or not all(finite(value) and value >= 0 for value in values):
+                    issues.append("large-page workload must retain exactly 1000 nonnegative samples")
+                else:
+                    grouped["large_page_core_drain_decode_apply"] = values
+        for metric, values in grouped.items():
+            if len(values) != 1_000:
+                issues.append(f"{metric}: expected 1000 raw samples, got {len(values)}")
+            ordered = sorted(values)
+            probe["statistics"][metric] = {
+                "count": len(values), "raw_values_us": values,
+                "p50_us": ordered[(len(ordered) - 1) // 2], "p99_us": ordered[int((len(ordered) - 1) * .99)],
+                "max_us": ordered[-1]}
+        probe["trust"] = "synthetic_binding_microbenchmark"
+        probe.update(raw_count=sum(len(values) for values in grouped.values()), measured_count=len(grouped),
+                     excluded_warm_up_indices=[], statistic_sample_indices=[])
+        probe["complete"] = not issues
+        return probe
     tagged = any(isinstance(sample, dict) and any(key in sample for key in TAG_KEYS) for sample in samples)
-    probe["trust"] = "tagged_glide" if tagged else "legacy_unverified"
+    probe["trust"] = "tagged_" + next((sample.get("action") for sample in samples if isinstance(sample, dict)
+                                       and isinstance(sample.get("action"), str)), "frame") if tagged else "legacy_unverified"
     probe["warm_up_policy"] = "explicit_tag" if tagged else "legacy_first_sample_assumed_for_diagnostics_only"
     if not tagged:
         probe["warnings"].append("legacy untagged samples: no verified IDs, action, movement, warm-up, or run count")
@@ -256,6 +319,9 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
         prefix = f"sample[{i}]"
         if not isinstance(sample, dict):
             issues.append(f"{prefix}: expected object")
+            continue
+        if sample.get("kind") in ("first_frame", "memory"):
+            issues.append(f"{prefix}: process observation has no frame fields")
             continue
         numeric_issues = [f"{prefix}: non-finite value at {path}" for path in nonfinite_paths(sample)]
         for key in ("frames", "seconds") + PROBE_KEYS:
@@ -282,21 +348,23 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
             run_ids.add(run_id)
         if type(sample.get("warm_up")) is not bool:
             issues.append(f"{prefix}: warm_up must be bool")
-        if sample.get("action") != "glide":
-            issues.append(f"{prefix}: action must be glide")
+        action = sample.get("action")
+        if action not in ("glide", "stream", "transition", "idle"):
+            issues.append(f"{prefix}: unsupported action")
         source = sample.get("sample_source")
-        if source != "app-list-glide":
+        if source != "app-list-glide" and action == "glide":
             issues.append(f"{prefix}: sample_source must be app-list-glide")
         if isinstance(source, str):
             sources.add(source)
-        viewport, content, movement = (sample.get(key) for key in
-                                      ("viewport_height_pt", "content_height_pt", "scroll_offset_delta_pt"))
-        if not finite(viewport) or viewport <= 0:
-            issues.append(f"{prefix}: invalid viewport_height_pt")
-        if not finite(content) or not finite(viewport) or content <= viewport:
-            issues.append(f"{prefix}: content_height_pt must exceed viewport_height_pt")
-        if not finite(movement) or movement <= 24:
-            issues.append(f"{prefix}: scroll_offset_delta_pt must exceed 24 pt")
+        if action == "glide":
+            viewport, content, movement = (sample.get(key) for key in
+                                          ("viewport_height_pt", "content_height_pt", "scroll_offset_delta_pt"))
+            if not finite(viewport) or viewport <= 0:
+                issues.append(f"{prefix}: invalid viewport_height_pt")
+            if not finite(content) or not finite(viewport) or content <= viewport:
+                issues.append(f"{prefix}: content_height_pt must exceed viewport_height_pt")
+            if not finite(movement) or movement <= 24:
+                issues.append(f"{prefix}: scroll_offset_delta_pt must exceed 24 pt")
         if "expected_iterations" in sample:
             try:
                 sample_expected.add(positive_integer(sample["expected_iterations"]))

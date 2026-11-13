@@ -230,6 +230,11 @@ struct RootView: View {
         // sheets too: drawn here, the tabs' Saved to Photos was under the image viewer and the share card (#1492). Where
         // there is no such window they are drawn here: a pairing link that failed on the welcome page said nothing (#4273).
         .overlay(alignment: .top) { if overlayToasts { ToastOverlay().padding(.top, toastClearance) } }
+        #if DEBUG || PERF_SIGNPOST
+        #if os(iOS) || os(visionOS)
+        .onAppear { CoreReferenceProbe.firstFrameIfNeeded() }
+        #endif
+        #endif
         #if os(iOS) || os(visionOS)
         // Settings › Appearance › Light & Dark on this scene's window (and any other open one) as it first shows.
         .onAppear { model.colorScheme.apply() }

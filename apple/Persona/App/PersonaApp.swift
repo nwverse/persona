@@ -220,6 +220,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 try? FileManager.default.removeItem(at: URL.applicationSupportDirectory.appending(path: dir))
             }
         }
+        #if DEBUG || PERF_SIGNPOST
+        #if os(iOS) || os(visionOS)
+        CoreReferenceProbe.launchStarted()
+        #endif
+        #endif
         #if os(iOS) || os(visionOS)
         PagePerf.runIfAsked()
         PagePerf.offsetIfAsked()

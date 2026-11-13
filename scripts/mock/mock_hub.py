@@ -23797,16 +23797,28 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/frames_label":
             FRAMES["label"] = q.get("name", [""])[0]
             return self.send_json({"ok": True})
-        if p == "/mock/frames_glide_context":
+        if p in ("/mock/frames_context", "/mock/frames_glide_context"):
             if "run_id" in q:
                 FRAME_GLIDE_CONTEXT.clear()
                 FRAME_GLIDE_CONTEXT.update(name=q.get("name", [""])[0], run_id=q["run_id"][0],
-                                           warm_up=q.get("warm_up", ["0"])[0] == "1", action="glide",
+                                           warm_up=q.get("warm_up", ["0"])[0] == "1",
+                                           action=q.get("action", ["glide"])[0],
                                            expected_iterations=int(q.get("expected_iterations", ["5"])[0]))
             return self.send_json(dict(FRAME_GLIDE_CONTEXT))
+        if p == "/mock/frames_clear":
+            before = len(FRAMES["runs"])
+            if "kind" in q:
+                FRAMES["runs"][:] = [r for r in FRAMES["runs"] if r.get("kind") != q["kind"][0]]
+            elif "name" in q:
+                FRAMES["runs"][:] = [r for r in FRAMES["runs"] if r.get("test") != q["name"][0]]
+            else:
+                FRAMES["runs"].clear()
+            return self.send_json({"removed": before - len(FRAMES["runs"])})
         if p == "/mock/frames":
             name = q.get("name", [None])[0]
-            return self.send_json({"runs": [r for r in FRAMES["runs"] if name is None or r.get("test") == name]})
+            kind = q.get("kind", [None])[0]
+            return self.send_json({"runs": [r for r in FRAMES["runs"]
+                                          if (name is None or r.get("test") == name) and (kind is None or r.get("kind") == kind)]})
         if p == "/mock/persona-tier":
             set_persona_tier(q.get("tier", [""])[0])
             return self.send_json({"ok": True, "tier": PERSONA_TIER["tier"]})
@@ -24821,6 +24833,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True, "push": {"route": "relay"}})
         if p == "/mock/frames":
             run = json.loads(self.last_body or b"{}")
+            run.update(FRAME_GLIDE_CONTEXT)
             run["test"] = run.get("name") or FRAMES["label"]
             FRAMES["runs"].append(run)
             return self.send_json({"ok": True})
