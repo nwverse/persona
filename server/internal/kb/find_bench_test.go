@@ -2,6 +2,7 @@ package kb
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,14 +48,64 @@ func benchStore(tb testing.TB) *Store {
 }
 
 func fillBenchStore(dir string) error {
+	return fillArchive(dir, archiveShape{chats: benchChats, days: benchDays, stride: 1, lines: benchLines,
+		start: time.Date(2025, 11, 1, 0, 0, 0, 0, time.UTC)})
+}
+
+// archiveShape is a synthetic archive's size: chats with days day files each, one every stride days from start, of
+// lines lines; the people, projects and docs are the same in every shape. varied: every message says something else
+// (variedText) instead of the one repeated line.
+type archiveShape struct {
+	chats, days, stride, lines int
+	start                      time.Time
+	varied                     bool
+}
+
+// variedText writes message texts of about the repeated line's length out of skewed vocabularies: a few characters
+// and words on most lines, a long tail of rare ones, as in real text. The repeated line gives a search index a few
+// thousand distinct keys whatever the archive's size; this gives it the many a real archive does. Every text has
+// "build", as the repeated line has. The same texts every time (a fixed seed).
+type variedText struct {
+	rng  *rand.Rand
+	han  *rand.Zipf
+	word *rand.Zipf
+}
+
+func newVariedText() *variedText {
+	rng := rand.New(rand.NewPCG(1273, 4))
+	return &variedText{rng: rng, han: rand.NewZipf(rng, 1.1, 4, 3499), word: rand.NewZipf(rng, 1.1, 4, 19999)}
+}
+
+func (v *variedText) write(sb *strings.Builder) {
+	for range 8 + v.rng.IntN(8) {
+		sb.WriteRune(rune(0x4E00 + v.han.Uint64()*5))
+	}
+	sb.WriteString(" build")
+	for range 2 {
+		sb.WriteByte(' ')
+		// A word is its rank written in syllables, so the common ones are short.
+		for n := v.word.Uint64() + 100; n > 0; n /= 100 {
+			sb.WriteByte("bcdfghjklmnpqrstvwxz"[n%100/5])
+			sb.WriteByte("aeiou"[n%5])
+		}
+	}
+}
+
+// fillArchive writes a synthetic archive of the shape into dir: Chinese and ASCII mixed, about 1% of the days with
+// the rare word, every file's mtime an hour back.
+func fillArchive(dir string, shape archiveShape) error {
 	st, err := NewStore(dir)
 	if err != nil {
 		return err
 	}
-	start := time.Date(2025, 11, 1, 0, 0, 0, 0, time.UTC)
-	for c := range benchChats {
+	start := shape.start
+	var varied *variedText
+	if shape.varied {
+		varied = newVariedText()
+	}
+	for c := range shape.chats {
 		ch := &Chat{ID: fmt.Sprintf("lark-c%03d", c), Name: fmt.Sprintf("群聊 %03d", c), Kind: "group",
-			Tagging: Tagging{Importance: fmt.Sprintf("P%d", c%4), Relevance: c % 100}, LastAt: start.AddDate(0, 0, benchDays)}
+			Tagging: Tagging{Importance: fmt.Sprintf("P%d", c%4), Relevance: c % 100}, LastAt: start.AddDate(0, 0, shape.days*shape.stride)}
 		if err := st.PutChat(ch); err != nil {
 			return err
 		}
@@ -66,16 +117,21 @@ func fillBenchStore(dir string) error {
 			return err
 		}
 		var sb strings.Builder
-		for d := range benchDays {
-			day := start.AddDate(0, 0, d).Format("2006-01-02")
+		for d := range shape.days {
+			day := start.AddDate(0, 0, d*shape.stride).Format("2006-01-02")
 			sb.Reset()
 			sb.WriteString("# " + day + "\n")
-			for l := range benchLines {
-				text := "今天的进度同步一下 build ok, next step review"
-				if (c*benchDays+d)%97 == 0 && l == 3 { // about 1% of the days mention the rare word
-					text = "Quarterly 周报 draft is ready"
+			for l := range shape.lines {
+				fmt.Fprintf(&sb, "- %02d:%02d 同事%d: ", 9+l/6, (l*7)%60, l%5)
+				switch {
+				case (c*shape.days+d)%97 == 0 && l == 3: // about 1% of the days mention the rare word
+					sb.WriteString("Quarterly 周报 draft is ready")
+				case varied != nil:
+					varied.write(&sb)
+				default:
+					sb.WriteString("今天的进度同步一下 build ok, next step review")
 				}
-				fmt.Fprintf(&sb, "- %02d:%02d 同事%d: %s #%d\n", 9+l/6, (l*7)%60, l%5, text, d*benchLines+l)
+				fmt.Fprintf(&sb, " #%d\n", d*shape.lines+l)
 			}
 			if err := os.WriteFile(filepath.Join(msgs, day+".md"), []byte(sb.String()), 0o600); err != nil {
 				return err
