@@ -15,6 +15,7 @@ describe("EventMark and the manager's now key", () => {
     const old = item({ handling: { owner: "manager", state: "waiting", since: "2026-01-01T09:00:00Z" } });
     expect(mark(old)).toContain("等对方回复");
     expect(mark({ ...old, now: "a_future_state" })).toBe(mark(old));
+    expect(mark({ ...old, now: "tomorrow" })).toBe(mark(old));
   });
 
   for (const [now, state, word] of [

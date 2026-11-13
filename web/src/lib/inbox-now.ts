@@ -1,9 +1,15 @@
 // The manager's inbox state key in the app's words (docs/assistant/inbox.md "Following up"). The key, its
 // translations and the shared examples live in spec/fixtures/inbox/now.json; an older hub's missing key, or a newer
 // hub's unknown one, leaves each existing state line on its own words.
-import { formatDate, hasKey, t } from "../i18n";
+import { formatDate, t } from "../i18n";
 import type { InboxItem } from "./inbox";
 import { hm } from "./routines";
+
+// State keys only: the catalogs also hold composition fragments (next, look_again…) and calendar words.
+const NOW_KEYS = new Set([
+  "confirm_reply", "confirm_agent", "decide", "queued", "looking", "agent_working", "waiting", "follow_up_ask", "check_due", "failed",
+  "needs_you", "fyi", "folded", "done_replied", "done_manager", "done_user", "done_read", "done_dismissed", "done_muted", "done_superseded",
+]);
 
 /** A follow-up moment in the local zone: "09:00" today, "tomorrow 09:00", then a date and the 24-hour clock. */
 function followTime(iso: string, now = new Date()): string {
@@ -21,7 +27,7 @@ function followTime(iso: string, now = new Date()): string {
 /** The item's current state in words, or undefined when this app does not know the manager's key. */
 export function nowText(item: InboxItem): string | undefined {
   const key = item.now;
-  if (!key || !hasKey(`lib-inbox-now.${key}`)) return undefined;
+  if (!key || !NOW_KEYS.has(key)) return undefined;
   const follow = item.follow;
   if (key === "waiting") {
     const waiting = follow?.who ? t("lib-inbox-now.waiting", { who: follow.who }) : t("lib-inbox-now.waiting_anyone");

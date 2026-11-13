@@ -88,7 +88,9 @@ for (const lang of LANGS) {
 describe("older and newer hubs", () => {
   it("leaves the app's own words in place without now or for an unknown key", () => {
     expect(nowText(item())).toBeUndefined();
-    expect(nowText(item({ now: "a_future_state" }))).toBeUndefined();
+    for (const now of ["a_future_state", "tomorrow", "next", "look_again", "waiting_anyone", "failed_plain"]) {
+      expect(nowText(item({ now })), now).toBeUndefined();
+    }
   });
 });
 
