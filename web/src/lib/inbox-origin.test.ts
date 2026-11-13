@@ -206,6 +206,23 @@ describe("inboxOriginForSession", () => {
     expect(resolve(current, { items: tied })?.id).toBe("first-tied");
   });
 
+  it("keeps chain and handling matches within a stamped session's manager", () => {
+    const current = session(SID, { manager: "manager-a" });
+    const own = handlingItem("own", MID, SID, { manager: "manager-a", updated_at: "2026-11-13T10:00:00Z" });
+    const other = chainItem("other", MID, SID, { manager: "manager-b", updated_at: "2026-11-13T12:00:00Z" });
+    expect(resolve(current, { items: [own, other] })?.id).toBe("own");
+    expect(resolve(current, { items: [other] })).toBeUndefined();
+  });
+
+  it("prefers a default-manager linked item for an unstamped session without losing exact-link compatibility", () => {
+    const current = session(SID);
+    const fallback = handlingItem("default", MID, SID, { manager: "", updated_at: "2026-11-13T10:00:00Z" });
+    const other = chainItem("other", MID, SID, { manager: "manager-b", updated_at: "2026-11-13T12:00:00Z" });
+    expect(resolve(current, { items: [fallback, other] })?.id).toBe("default");
+    // An older hub may not stamp the session's manager: the exact handling link is still authoritative on its own.
+    expect(resolve(current, { items: [other] })?.id).toBe("other");
+  });
+
   it("returns an undefined title when the matching item has none", () => {
     const current = session(SID);
     const items = [handlingItem("untitled", MID, SID, { title: "", manager: "manager-a" })];

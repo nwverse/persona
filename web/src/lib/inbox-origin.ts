@@ -30,8 +30,8 @@ function directOrigin(session: Session, input: InboxOriginInput): InboxOrigin | 
   const id = nonEmptyRef(session.origin_ref);
   if (!id) return undefined;
   const matches = [...input.items, ...input.history].filter((item) => item.id === id);
-  const item = matches.find((candidate) => sameManager(candidate.manager, session.manager)) ?? matches[0];
-  // The origin is authoritative even before its item has loaded.
+  const item = matches.find((candidate) => sameManager(candidate.manager, session.manager));
+  // The origin is authoritative even before its item has loaded; another manager's copy never lends its title or address.
   return item ? itemOrigin(item) : { id, manager: session.manager, title: undefined };
 }
 
@@ -65,10 +65,15 @@ function matchesSession(item: InboxItem, mid: string, sid: string): boolean {
 }
 
 function linkedOrigin(mid: string, sid: string, input: InboxOriginInput): InboxOrigin | undefined {
+  const linked = [...input.items, ...input.history].filter((item) => matchesSession(item, mid, sid));
+  const session = input.session;
+  const own = session ? linked.filter((item) => sameManager(item.manager, session.manager)) : [];
+  // A session under a non-default manager never follows another manager's item. Without a manager name (older hubs), an
+  // exact link stays usable; a default-manager copy still wins over another manager's when both name this session.
+  const candidates = own.length ? own : session?.manager ? [] : linked;
   let best: InboxItem | undefined;
   let bestTime = -Infinity;
-  for (const item of [...input.items, ...input.history]) {
-    if (!matchesSession(item, mid, sid)) continue;
+  for (const item of candidates) {
     const parsed = typeof item.updated_at === "string" ? Date.parse(item.updated_at) : NaN;
     const time = Number.isFinite(parsed) ? parsed : -Infinity;
     // Strict comparison preserves input order for equal and invalid dates.
