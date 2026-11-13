@@ -121,9 +121,9 @@ class AgentsListInfoTest {
 
     @Test fun anotherAgentsCardSaysWhoAsks() {
         val claude = Interaction("ix", kind = "permission", toolName = "Bash")
-        assertEquals("需要你授权", claude.cardTitle(res))
-        assertEquals("Codex 需要你授权", claude.copy(agent = "codex").cardTitle(res))
-        assertEquals("需要你授权", claude.copy(toolName = "mcp__persona__mail_send").cardTitle(res))
+        assertEquals("在等你批准", claude.cardTitle(res))
+        assertEquals("Codex 在等你批准", claude.copy(agent = "codex").cardTitle(res))
+        assertEquals("在等你批准", claude.copy(toolName = "mcp__persona__mail_send").cardTitle(res))
         assertEquals("DSH 在问你", claude.copy(kind = "question", agent = "dsh", agentLabelHint = "DSH").cardTitle(res))
         assertEquals("Claude 在问你", claude.copy(kind = "question", agent = "claude").cardTitle(res))
     }
@@ -163,6 +163,9 @@ class AgentsListInfoTest {
     @Test fun byToDoIsOfferedOnlyWhileTheHubHasToDos() {
         assertEquals(listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo), offeredGroupings(true))
         assertEquals(listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State), offeredGroupings(false))
+        // By pinned only with the hub's direction tree (#4352), after the rest.
+        assertEquals(listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo, AgentGrouping.Direction),
+            offeredGroupings(true, directions = true))
         // A saved By To-do on a hub without to-dos shows By project; the others stay.
         assertEquals(AgentGrouping.MachineSpace, resolvedGrouping(AgentGrouping.Todo, false))
         assertEquals(AgentGrouping.Todo, resolvedGrouping(AgentGrouping.Todo, true))

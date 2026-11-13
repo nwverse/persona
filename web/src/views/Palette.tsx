@@ -27,6 +27,7 @@ import { copyFileMention, FilesHeading, FilesNotice, FileResultRow, openFileHit,
 import { t } from "../i18n";
 import { byTime } from "../lib/times";
 import { STATE_LABEL } from "../lib/state-labels";
+import type { AssistantSearchAnswer, AssistantSearchHit } from "../lib/assistant-search";
 
 interface Hit {
   key: string;
@@ -34,6 +35,8 @@ interface Hit {
   to: Route;
   assistant?: boolean;
   score: number;
+  /** A Persona chat found by what was said in it (lib/assistant-search.ts): the message, shown as the row's second line. */
+  said?: AssistantSearchHit;
 }
 
 /** One selectable row of the list: a conversation, a terminal pane, an inbox item, a page ("Go to"), a file
@@ -62,6 +65,7 @@ const PLACE_WORDS: Record<string, string> = {
   kb: "knowledge kb people projects docs 知识库 项目 文档 会议", // i18n-ignore
   machines: "machines monitor computers cpu memory 电脑 监控 内存", // i18n-ignore
   terminal: "terminal shell 终端", // i18n-ignore
+  terminals: "terminals terminal shell 终端", // i18n-ignore
   settings: "settings preferences 设置 偏好", // i18n-ignore
 };
 
@@ -79,6 +83,7 @@ export function placeWords(key: string): string {
     kb: t("palette.words_kb"),
     machines: t("palette.words_machines"),
     terminal: t("palette.words_terminal"),
+    terminals: t("palette.words_terminal"),
     settings: t("palette.words_settings"),
   };
   return [PLACE_WORDS[key], own[key]].filter(Boolean).join(" ");
@@ -156,6 +161,8 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
   const machines = useStore((s) => s.machines);
   const bySession = useStore((s) => s.sessions);
   const panesOn = useStore((s) => s.features.includes("terminal_panes"));
+  // Persona chats found by what was said in them too (#6283): the manager's search, merged into the local matches
+  const searchOn = useStore((s) => s.features.includes("assistant_search"));
   const bindings = useBindings();
   // "Inbox" and "Go to" (the Mac's quick open): the open inbox items, and the sidebar's pages with Persona and "All chats"
   const inboxItems = useInbox((s) => s.items);
@@ -168,9 +175,11 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
     () => [
       ...(hasAssistant ? [{ key: "persona", title: t("palette.place_persona"), icon: "spark" as const, to: { name: "persona" } as Route }, { key: "history", title: t("sidebar.all_chats"), icon: "list" as const, to: { name: "history" } as Route }] : []),
       ...pages.map((p) => ({ key: p.k, title: p.label, icon: p.icon, to: p.to })),
+      // the Sessions and Terminal page's Terminals list (#4754): every plain terminal, to open one and type
+      ...(panesOn ? [{ key: "terminals", title: t("palette.place_terminals"), icon: "terminal" as const, to: { name: "terminal", view: "terminals" } as Route }] : []),
     ].map((p) => ({ ...p, words: placeWords(p.key) })),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `pages` is new each render; pagesKey says what it holds
-    [hasAssistant, pagesKey],
+    [hasAssistant, pagesKey, panesOn],
   );
   const rows = useRef<(HTMLButtonElement | null)[]>([]);
   const list = useRef<HTMLDivElement>(null);
@@ -206,6 +215,24 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
     [machines, trees, bySession],
   );
 
+  // loaded on intent (the palette is idle-tier, src/startup-preload.ts IDLE_TIER_BUDGET): the first query typed loads
+  // lib/assistant-search.ts; asked 200 ms after the last key, each query cancelling the one before
+  const [found, setFound] = useState<{ q: string; answer?: AssistantSearchAnswer; marks?: typeof import("../lib/assistant-search").markParts }>({ q: "" });
+  const asked = open && mode === "jump" && searchOn && Boolean(assistant) ? text.trim() : "";
+  useEffect(() => {
+    if (!asked) return;
+    const ctrl = new AbortController();
+    const id = window.setTimeout(() => {
+      void import("../lib/assistant-search")
+        .then((m) => m.searchAssistantChats(asked, ctrl.signal).then((answer) => setFound({ q: asked, answer: answer ?? undefined, marks: m.markParts })))
+        .catch(() => {}); // a failed search leaves the local matches
+    }, 200);
+    return () => {
+      clearTimeout(id);
+      ctrl.abort();
+    };
+  }, [asked]);
+  const said = { answer: asked && found.q === asked ? found.answer : undefined };
   const hits = useMemo((): Row[] => {
     if (mode !== "jump") return [];
     const query = text.toLowerCase();
@@ -218,6 +245,22 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
     for (const s of assistant?.conversations ?? []) {
       const sc = score(s, query, "persona");
       if (sc) out.push({ key: `j:${s.session_id}`, s, to: conversationPage(s.session_id, s.machine_id, s.manager), assistant: true, score: sc });
+    }
+    // what the manager found: a chat found by a message opens at it (not one found by its title); one not listed here
+    // (archived) is the result's own row
+    for (const r of said.answer?.results ?? []) {
+      const key = `j:${r.session_id}`;
+      const hit = r.hits[0];
+      const at = r.title_match ? undefined : hit?.item_id;
+      const known = out.find((h) => h.key === key);
+      if (known) {
+        known.said = hit;
+        known.to = conversationPage(r.session_id, known.s.machine_id, known.s.manager, at);
+        continue;
+      }
+      const s = (assistant?.conversations ?? []).find((c) => c.session_id === r.session_id)
+        ?? ({ machine_id: r.machine_id, session_id: r.session_id, title: r.title, cwd: "", status: "idle", assistant: true, archived: r.archived, updated_at: r.updated_at } as Session);
+      out.push({ key, s, to: conversationPage(r.session_id, s.machine_id, s.manager, at), assistant: true, score: r.title_match ? 80 : 40, said: hit });
     }
     // nothing typed: the conversations opened here come first, newest first, without the one on the page (#2191); the
     // first is the one before it, picked already, so ⌘K ⏎ goes back to it
@@ -232,7 +275,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
     const mail = inboxHits(inboxItems.filter((it) => !isDone(it)), text).map((h) => ({ kind: "inbox" as const, key: h.key, hit: h, score: h.score }));
     const go = placeHits(places, text).map((h) => ({ kind: "place" as const, key: h.key, hit: h, score: h.score }));
     return [...recentRows, ...orderGroups<Row & { score: number }>([all.slice(0, 40), mail, go]).flat()];
-  }, [mode, text, sessions, assistant, machines, machinePanes, inboxItems, places, recentChats]);
+  }, [mode, text, sessions, assistant, machines, machinePanes, inboxItems, places, recentChats, said.answer]);
 
   // command mode: what other modules offer for here, then the registered commands with their shortcuts
   const commands = useMemo((): Row[] => {
@@ -438,7 +481,13 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
                     <span className="truncate text-[13px] font-medium text-ink">{sessionTitle(h.s)}</span>
                     {r.previous && <span className="shrink-0 rounded-[5px] bg-field px-1.5 text-[10.5px] text-ink-3 shadow-hairline">{t("palette.previous")}</span>}
                   </span>
-                  <span className="block truncate text-[11.5px] text-ink-3">{[meta, shortPath(h.s.cwd)].filter(Boolean).join(" · ")}</span>
+                  {h.said ? (
+                    <span className="block truncate text-[11.5px] text-ink-3" data-said>
+                      {(found.marks?.(h.said.snippet, h.said.ranges) ?? [[h.said.snippet, false] as [string, boolean]]).map(([words, match], k) => (match ? <mark key={k} className="rounded-[3px] bg-accent-tint text-ink">{words}</mark> : <span key={k}>{words}</span>))}
+                    </span>
+                  ) : (
+                    <span className="block truncate text-[11.5px] text-ink-3">{[meta, shortPath(h.s.cwd)].filter(Boolean).join(" · ")}</span>
+                  )}
                 </span>
                 <span className="shrink-0 text-[11px] text-ink-3">{st === "offline" || h.assistant ? ago(h.s.updated_at) : STATE_LABEL[st]}</span>
               </button>

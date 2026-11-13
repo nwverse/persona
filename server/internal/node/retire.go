@@ -87,9 +87,10 @@ func (n *Node) stoppable(id string, retire bool) (unlock func(), a host.Agent, o
 		return no(notRetirable, "assistant conversations are not stopped")
 	case n.externalCodex(id) || h != nil || known || terminalOnly:
 		return no(noTerminal, "this session belongs to another tool")
-	}
-	if _, runtime := engineRuntimes[n.defaultKind()]; runtime {
-		return no(noTerminal, "this engine runs its agents without a terminal")
+	case n.restarting(id):
+		// Refused at once rather than after the lock below, which a message carrying out a launcher switch holds for
+		// minutes: stopping the agent it starts then would leave the switch for nothing (launcher_switch.go).
+		return no(notRetirable, "still starting")
 	}
 	unlock = n.typing.lock(id) // not while a message is on its way in (a send may be resuming it right now)
 	fail := func(code, why string) (func(), host.Agent, bool, error) {
@@ -102,6 +103,13 @@ func (n *Node) stoppable(id string, retire bool) (unlock func(), a host.Agent, o
 	if a, ok = n.agent(id); !ok {
 		unlock()
 		return nil, a, false, nil
+	}
+	kind := host.ParsePane(a.PaneID).Kind
+	if _, runtime := engineRuntimes[kind]; runtime {
+		return fail(noTerminal, "this engine runs its agents without a terminal")
+	}
+	if n.hosts.Get(kind) == nil {
+		return fail(noTerminal, "this session host is not available")
 	}
 	if retire {
 		if a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked {
@@ -206,24 +214,15 @@ func (n *Node) resumeTabName(id string) string {
 	return n.meta(p, fi).title
 }
 
-// resumeOther resumes a Codex or a compatible CLI that is not running, with text as its next message: in a new tab of the
-// engine, in the directory and with the launcher (and model) it was started with, the message going in as the
-// resume's prompt (nothing is typed). One Persona did not start (its launcher unknown) is refused as before.
-func (n *Node) resumeOther(ctx context.Context, id, text string, images []proto.Image) error {
-	st, mine := n.state.get(id)
-	if _, runtime := engineRuntimes[n.defaultKind()]; runtime || !mine || st.Launcher == "" || st.Cwd == "" {
-		return fmt.Errorf("这个 Agent 已经退出：Codex / TRAEX 的会话要在电脑上重新打开")
-	}
-	return n.resumeOtherWith(ctx, id, st, text, images)
-}
-
-// resumeOtherWith is resumeOther with the launcher, directory and model to resume with (st): the session's own, or
+// resumeOtherWith resumes a Codex or a compatible CLI that is not running, with text as its first message, the user's
+// Resume (#4754): with the launcher, directory and model to resume with (st): the session's own, or
 // what a Codex thread started outside Persona is resumed with (codex_resume.go).
 func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, text string, images []proto.Image) error {
+	ctx = n.withResumeHost(ctx, id)
 	if r := n.notRunningRefusal(ctx, id); r != nil {
 		return r
 	}
-	launch, err := hostCap[host.Launcher](n)
+	launch, err := n.launcherFor(n.startKind(ctx))
 	if err != nil {
 		return err
 	}
@@ -241,9 +240,7 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 		if argv, err = n.codexReadonlyArgs(st.Launcher, argv, st.AppMode); err != nil {
 			return err // Refuse conflicting permissions before creating a workspace, tab or attachment.
 		}
-		if st.Model != "" {
-			argv = append(withoutModelArgs(argv), "--model", st.Model)
-		}
+		argv = codexExecutionArgs(argv, modelExecution{Model: st.Model})
 	}
 	paths, err := n.saveImages(images)
 	if err != nil {
@@ -264,8 +261,9 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 	return uncertain(n.resumeCodex(ctx, launch, id, st, argv, text, ws, tab))
 }
 
-// resumeCodex runs `<launcher words> resume <id> -- <message>` (through codex-start, like a new Codex) in a new tab
-// and waits until the engine shows that Codex in it.
+// resumeCodex runs `<launcher words> resume <id> -- <message>` (through codex-start, like a new Codex, in the thread's
+// directory) in a new tab and waits until the engine shows that Codex in it. In a pane it was given (adoptedPane: a
+// switch between engines, engine_switch.go) it runs there once its shell is at rest.
 func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string, st sessionState, argv []string, prompt, ws, tabName string) error {
 	if codexOnRemote(argv) {
 		argv = append(argv, "-C", st.Cwd)
@@ -277,7 +275,7 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	defer os.RemoveAll(dir)
 	file := filepath.Join(dir, "start.json")
-	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex")})
+	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), Dir: st.Cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return err
 	}
@@ -286,10 +284,20 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 		return err
 	}
 	pane := created.Pane.String()
-	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
+	if adoptedPane(ctx) != nil {
+		// A shell that just took the agent's exit back: at rest before the line goes in (shellsettle.go).
+		if err := n.settleShell(ctx, pane); err != nil {
+			return err
+		}
+	} else {
+		time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
+	}
 	shells := paneShells(ctx, created)
 	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...), shells...) // typedstart.go
 	if err != nil {
+		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file) {
+			return unconfirmedStart(err) // a switch's message may be in it (engine_switch.go)
+		}
 		return err // the tab is closed: no pane to bind
 	}
 	defer done()
@@ -305,7 +313,11 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 		select {
 		case <-wait.Done():
 			screen, _ := n.readPane(context.WithoutCancel(ctx), pane, "recent-unwrapped", 30)
-			return fmt.Errorf("Codex 没有在新标签页里接上会话 %s\n%s", id, lastLines(screen, 12))
+			err := fmt.Errorf("Codex 没有在新标签页里接上会话 %s\n%s", id, lastLines(screen, 12))
+			if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file) {
+				return unconfirmedStart(err) // a switch's message may be in it (engine_switch.go)
+			}
+			return err
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
