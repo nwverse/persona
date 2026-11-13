@@ -252,8 +252,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * 477,447 B, 67 B over the budget before; this change takes it to 477,525 B, +78 B: lib/side-sessions.ts's
  * arrangement, the paged list's use of it for its order and the Earlier split, and a row's parent identity in
  * lib/runtime-list.ts; 31 B of room).
+ * And to 478,015 for the main chat model pill's revision-driven re-read (#6542): the Japanese first screen measured
+ * 477,984 B (en 474,268, zh-Hans 475,271); main already sat 418 B over the old cap, and the one effect that re-reads
+ * the purpose=assistant launchers on a hub push adds ~10 B, so the cap follows the measured screen with 31 B of room.
  */
-export const FIRST_SCREEN_BUDGET = 477_556;
+export const FIRST_SCREEN_BUDGET = 478_015;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -428,9 +431,12 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
  * query typed, off the idle tier; 31 B of room so the next main does not tip it). And 108 B for the same main
  * with the lead row-title restoration (#6400: 44,583 B after merging it, +108 B, of which 0 B fit the old room).
+ * And to 44,643 for the main chat model pill's revision-driven re-read (#6542): the idle tier measured 44,612 B
+ * (main already sent 44,608 B, over the old cap; the re-read effect shares the chat's chunk and adds ~4 B), so the
+ * cap follows the measured tier with 31 B of room.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 44_583;
+export const IDLE_TIER_BUDGET = 44_643;
 
 const gzip = promisify(gzipCompress);
 
