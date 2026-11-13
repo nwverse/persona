@@ -149,13 +149,14 @@ class WatcherTests(unittest.TestCase):
         captured = {}
         def fake_run(argv, **kwargs):
             captured["argv"] = argv
+            captured["kwargs"] = kwargs
             return subprocess.CompletedProcess(argv, 0, json.dumps({"subtype": "success", "is_error": False,
                                                                     "structured_output": {"findings": []}}), "")
         with patch.object(pr_watch_review, "checked", side_effect=["diff", "stat", "file.py"]), \
                 patch.object(pr_watch_review, "changed_lines", return_value={}), \
                 patch.object(pr_watch_review, "run", side_effect=fake_run):
             pr_watch_review.review("example/one", pr(), ".", {})
-        self.assertIn(pr_watch_review.SYSTEM_PROMPT, captured["argv"][2])
+        self.assertIn(pr_watch_review.SYSTEM_PROMPT, captured["kwargs"]["input_text"])
 
     def test_verification_does_not_import_pr_selector_or_receive_gh_credentials(self):
         with patch.object(pr_watch_verify, "checked", return_value="scripts/ci/paths.py\n"), \
@@ -215,6 +216,24 @@ class WatcherTests(unittest.TestCase):
             self.watcher.state.data["prs"]["example/one#7"]["retry_after"] = 0
         self.assertEqual(len(self.comments), 1)
         self.assertIn("invalid output", self.comments[0])
+
+    def test_conflicting_pr_waits_without_worker_or_requeue(self):
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")), \
+                patch.object(pr_watch, "semantic_review") as review:
+            self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        with patch.object(pr_watch, "gh_json", return_value=[{"number": 7, "headRefOid": SHA_A, "isDraft": False,
+                                                               "baseRefName": "main", "mergeable": "CONFLICTING"}]), \
+                patch.object(self.watcher, "enqueue") as enqueue:
+            self.watcher.discover()
+        enqueue.assert_not_called()
+
+    def test_failure_summary_retains_actual_errors(self):
+        result = subprocess.CompletedProcess([], 1, "PASS earlier lane\n" + "\n".join("ordinary" for _ in range(200)) +
+                                               "\nFAIL TestRealDefect\npanic: actual cause\n", "")
+        summary = pr_watch_verify.result_summary(result)
+        self.assertIn("FAIL TestRealDefect", summary)
+        self.assertIn("panic: actual cause", summary)
 
     def test_unknown_mergeability_waits(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="UNKNOWN")), \
