@@ -660,6 +660,8 @@ extension EnvironmentValues {
     var chat: [String: String] = [:]
     var lift = ""
     var select = ""
+    /// What is selected in the text view (`LiftUITextView.publishPicked`): its lines and its handles, in the window.
+    var picked = ""
     /// The text view's right edge, in the window.
     var edge: CGFloat = 0
 
@@ -793,7 +795,7 @@ private struct LiftedMessage: View {
             if LiftLines.on {
                 let l = LiftLines.shared
                 Color.clear.allowsHitTesting(false).accessibilityElement().accessibilityIdentifier("lift-lines")
-                    .accessibilityValue("chat=\(l.chat[lift.bar.id] ?? "")|lift=\(l.lift)|edge=\(String(format: "%.1f", l.edge))|select=\(selecting ? l.select : "")")
+                    .accessibilityValue("chat=\(l.chat[lift.bar.id] ?? "")|lift=\(l.lift)|edge=\(String(format: "%.1f", l.edge))|select=\(selecting ? l.select : "")|picked=\(selecting ? l.picked : "")")
             }
             #endif
             backdrop

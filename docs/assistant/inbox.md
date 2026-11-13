@@ -232,6 +232,7 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
 - **Model behavior** (`inbox.triage`): prompt = generic association rules (`prompts/inbox/group.md`: replies / quotes, same topic, consecutive messages from one person belong together; a long gap plus new topic starts another;
   uncertainty merges into an existing event; at most 3 new events per batch; tier criteria shared with triage in `inbox/tiers.md`) + plugin `meta_description` + source rules (`rules`, otherwise global `inbox.rules`)
   + batch text. Existing events for the chat are preloaded (the no-query result of `events` below), saving one call. Each model response is JSON, either one tool call or a result.
+  The batch `context` may interleave the user's own messages by position: their sender is `我（自己说的，不归类）`, they have no message id of their own (a trailing `(回复 <id>)` or `(话题 <id>)` names another message), they are context only, they are not in `new`, and the model must not assign them.
   At most 4 tool calls per batch; at most 2 minutes total, 45 seconds per call.
 - **Tools**: `events` (hub-owned: open events in the same chat plus those handled within 3 days, at most 10, `{id, title, summary, tier, version, done, meta}`; `query` filters text in titles, summaries, meta);
   `messages_before`, `messages_around`, `search` (plugin-owned through `group.tool`, avatars / media stripped, at most 8 KB).
@@ -637,6 +638,8 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   it came out washed like a stuck title's, and on an iPhone the scroll edge blurred every row above it once a title stuck (#4218).
   Done's title has Jump To (its groups with counts; picking one unfolds it, loads it if it isn't, and scrolls to its first row, since an iOS `List` can't scroll to a header)
   and Fold all / Unfold all.
+  On iOS each title a finger taps (a section's and its Mark all seen / Clear all, a group's and, selecting, its tick, Done's and its Jump To) is at least 44 pt tall,
+  its header or row adding no room above or below it (#6576, `InboxTitleTargetUITests`); a tap on Jump To opens its menu and leaves Done's fold beside it alone.
 - **Done's history**: past what the list holds (its 3 days, at most 200 done items), Done reads each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page; on iOS the default manager's).
   Items the hub didn't stamp with a manager get the default one when there are several, so the per-manager filter keeps them. Done from history reopens through the item's own manager.
   - **With day counts** (#2969; "Days" under "Lifecycle", #2967): when the list is shown the apps ask for the counts in this device's zone, and Done lists every group they name

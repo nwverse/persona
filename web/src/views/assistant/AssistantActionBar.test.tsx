@@ -214,7 +214,7 @@ describe("Assistant Needs you / In progress trays", () => {
     }
   });
 
-  it("keeps a stale parked task visible in In progress but out of its number, the To-dos page's rule (#3331)", async () => {
+  it("counts an unexpired parked task in In progress even after days without activity, as the To-dos page does", async () => {
     const stale = "2026-11-05T08:00:00Z";
     moreSessions = [{ machine_id: "demo", session_id: "parked-worker", title: "Parked agent", cwd: "/demo", state: "idle", status: "idle", updated_at: stale } as Session];
     moreTodos = [{
@@ -223,12 +223,12 @@ describe("Assistant Needs you / In progress trays", () => {
       supervision: { supervisor: conversation, state: "parked", updated_at: stale, reviews: [], parked: { reason: "Waiting on another team", until: "2026-11-14T09:00:00Z", waiting_on: "someone_else", count: 1 } },
     }];
     await act(async () => { await refresh(); await refreshTodos(); });
-    // the working fixture task is still the only one counted; the parked one adds no number
-    expect(entry("running").textContent).toBe(`${label.running}1`);
+    // Both tasks remain unfinished; explicit parking is not the inactivity fold.
+    expect(entry("running").textContent).toBe(`${label.running}2`);
     act(() => entry("running").click());
     const slots = host.querySelectorAll("[data-task-slot]");
     expect(slots).toHaveLength(2);
-    // its parked line stays visible in the tray even though the badge does not count it
+    // Its parked line and the shared open count survive the inactivity window.
     expect(host.textContent).toContain("Waiting on another team");
   });
 
