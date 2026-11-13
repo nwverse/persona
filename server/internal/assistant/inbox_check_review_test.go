@@ -345,3 +345,107 @@ func TestInboxCheckChainInTheUsersLanguage(t *testing.T) {
 		})
 	}
 }
+
+// The regression for the pass order: an item whose latest content has not reached its conversation is news, not an
+// empty look, even when its check time is long past. One pass leaves the check unrecorded, the count untouched, and
+// the conversation gets the single new-messages note rather than a due-look note beside it.
+func TestInboxCheckNewContentIsNotADueCheck(t *testing.T) {
+	h, it, now := followCheckHub(t, 1)
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
+	h.inbox.mu.Lock()
+	it.Last, it.Context, it.UpdatedAt = "101", "飞书私聊（张三）的新消息：\n[11-05 12:00] 张三：报价好了", now
+	h.inbox.mu.Unlock()
+
+	h.handPass(context.Background())
+
+	h.inbox.mu.Lock()
+	checks := it.Follow.Checks
+	kinds := chainKinds(it)
+	pending := append([]inboxNote(nil), it.Agent.Pending...)
+	state := it.Handling.State
+	servedOf := it.Agent.Of
+	h.inbox.mu.Unlock()
+	if checks != 0 {
+		t.Fatalf("the count after new content: %d, want 0 (escalate starts it over)", checks)
+	}
+	if servedOf != "101" {
+		t.Fatalf("the conversation's content is %q, want the new 101", servedOf)
+	}
+	for _, k := range kinds {
+		if k == ChainCheck {
+			t.Fatalf("a due check was recorded beside new content: %v", kinds)
+		}
+	}
+	if state != HandlingLooking {
+		t.Fatalf("after new content: handling %q", state)
+	}
+	h.f.mu.Lock()
+	var notes []string
+	for _, m := range h.f.agentSent {
+		if m["session_id"] == "s1" {
+			notes = append(notes, m["text"].(string))
+		}
+	}
+	h.f.mu.Unlock()
+	all := strings.Join(notes, "\n")
+	if len(notes) != 1 || strings.Contains(all, "到点回看") || strings.Contains(all, "到了再看") {
+		t.Fatalf("the conversation got %d notes, want one new-messages note without a due one:\n%s", len(notes), all)
+	}
+	if !strings.Contains(all, "报价好了") {
+		t.Fatalf("the new-messages note does not carry the news:\n%s", all)
+	}
+	_ = pending
+}
+
+// Content that arrives while the twin is off stays waiting rather than being released as check_due: enabling the twin
+// again still delivers it. Without new content, the same due item goes to the user.
+func TestInboxCheckTwinOffKeepsWaitingForNewContent(t *testing.T) {
+	h, it, now := followCheckHub(t, 0)
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = false })
+	h.inbox.mu.Lock()
+	it.Last, it.Context, it.UpdatedAt = "101", "飞书私聊（张三）的新消息：\n[11-05 12:00] 张三：报价好了", now
+	at := now.Add(-time.Minute)
+	it.Follow.CheckAt = &at
+	h.inbox.mu.Unlock()
+
+	h.handPass(context.Background())
+
+	h.inbox.mu.Lock()
+	state := it.Handling.State
+	due, checks := it.Follow.Due, it.Follow.Checks
+	checkAt := it.Follow.CheckAt
+	kinds := chainKinds(it)
+	h.inbox.mu.Unlock()
+	if state != HandlingWaiting || due || checks != 0 || checkAt == nil {
+		t.Fatalf("new content with the twin off: handling %q, due %v, checks %d, check_at %v", state, due, checks, checkAt)
+	}
+	for _, k := range kinds {
+		if k == ChainCheck {
+			t.Fatalf("a due check was recorded with the twin off over new content: %v", kinds)
+		}
+	}
+	if got := len(h.f.sentToAgents()); got != 0 {
+		t.Fatalf("the twin is off but %d notes went out", got)
+	}
+}
+
+// Without new content the twin-off rule stands: the item is due and needs the user, with no check counted.
+func TestInboxCheckTwinOffWithoutNewContentIsDue(t *testing.T) {
+	h, it, now := followCheckHub(t, 2)
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = false })
+	h.inbox.mu.Lock()
+	it.Tier = TierFYI
+	h.inbox.mu.Unlock()
+
+	h.checkInboxFollowUps(context.Background(), InboxAgentConfig{}, now)
+
+	h.inbox.mu.Lock()
+	state, listed, checks := it.Handling.State, it.listed(), it.Follow.Checks
+	h.inbox.mu.Unlock()
+	if state != HandlingDone || !it.Follow.Due || it.Follow.CheckAt != nil || checks != 2 {
+		t.Fatalf("twin off with no news: handling %q, follow %+v", state, it.Follow)
+	}
+	if listed.Now != NowCheckDue || listed.Status != StatusAction {
+		t.Fatalf("listed: now %q, status %q", listed.Now, listed.Status)
+	}
+}
