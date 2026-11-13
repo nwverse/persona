@@ -257,32 +257,45 @@ describe("ordering the Agents list (G099)", () => {
     expect(button("Agent 列表选项：最近更新")).toBeDefined();
   });
 
-  it("is not offered under 按状态, whose sections are the states", async () => {
+  it("is not offered under 按状态, whose sections are the states, and a menu with nothing left is not there (#6447)", async () => {
     localStorage.setItem("persona.agentGrouping", "state");
     localStorage.setItem("persona.agentSort", "updated");
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
     expect(host.querySelector('[role="radio"][aria-label="按状态"]')!.getAttribute("aria-checked")).toBe("true");
-    act(() => button("Agent 列表选项")!.click());
-    expect(item("全部折叠")).toBeDefined();
-    expect(item("最近更新")).toBeUndefined();
+    expect(host.querySelector('[aria-label^="Agent 列表选项"]')).toBeNull();
+    expect(host.querySelector("[data-sidebar-agents-controls] [data-testid=agents-fold-all]")).not.toBeNull();
   });
 });
 
-describe("the Agents list menu (#3027)", () => {
-  it("has 全部折叠 and 全部展开, which open the spaces folded by hand and leave the other blocks", async () => {
-    localStorage.setItem("fold:space:mac/a", "1");
+describe("the Agents fold-all button (#3027, #6447)", () => {
+  it("is the only 全部折叠 / 全部展开: the list menu does not repeat them", async () => {
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
     const menu = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.getAttribute("aria-label") === "Agent 列表选项")!;
     act(() => menu.click());
     await flush();
     const item = (label: string) => [...document.querySelectorAll<HTMLElement>("[role=menuitem], [role=menuitemradio], [role=menuitemcheckbox]")].find((el) => el.textContent?.includes(label));
-    expect(item("全部折叠")).toBeDefined();
-    act(() => item("全部展开")!.click());
+    expect(item("状态优先")).toBeDefined();
+    expect(item("全部折叠")).toBeUndefined();
+    expect(item("全部展开")).toBeUndefined();
+  });
+
+  it("opens with 全部展开 the spaces folded by hand, and leaves the other blocks", async () => {
+    localStorage.setItem("fold:space:mac/a", "1");
+    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
+    await flush();
+    const fold = () => host.querySelector<HTMLButtonElement>("[data-sidebar-agents-controls] [data-testid=agents-fold-all]")!;
+    if (fold().getAttribute("aria-label") === "全部折叠") {
+      act(() => fold().click());
+      await flush();
+    }
+    expect(fold().getAttribute("aria-label")).toBe("全部展开");
+    act(() => fold().click());
     await flush();
     expect(localStorage.getItem("fold:space:mac/a")).toBe("0");
     expect(localStorage.getItem("fold:persona")).toBeNull();
+    expect(button("Agents")!.getAttribute("aria-expanded")).toBe("true");
   });
 });
 

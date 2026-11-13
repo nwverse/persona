@@ -40,6 +40,22 @@ export function setAgentsFolded(folded: boolean, store: Pick<Storage, "length" |
   setAllFolded(folded, AGENTS_FOLD);
 }
 
+/** What the Agents title row's fold-all button does now (#6447): a click always changes what is on screen. */
+export type AgentsFoldAction = "open-block" | "fold-block" | "fold-groups" | "open-groups";
+
+/** `blockFolded`: the list is folded under the Agents title; `canFoldBlock`: it can be (the sidebar, not the phone's
+ *  Agents page); `flat`: the list is drawn without groups (the chat-list view; its Pinned and Recent sections at the
+ *  ends are not the list); `groups` / `open`: the group headings on screen and whether any is open. Folded under its
+ *  title, the list opens with every group in it; a flat list, or one with no groups (a grouping still loading, nothing
+ *  listed), folds under its title, or offers nothing where it cannot; otherwise the groups fold while any is open, and
+ *  open when none is. Before #6447 it acted on the groups alone, so in those cases a click only flipped its label or
+ *  opened a section out of sight. */
+export function agentsFoldAction({ blockFolded, canFoldBlock, flat = false, groups, open }: { blockFolded: boolean; canFoldBlock: boolean; flat?: boolean; groups: number; open: boolean }): AgentsFoldAction | null {
+  if (blockFolded) return "open-block";
+  if (flat || groups === 0) return canFoldBlock ? "fold-block" : null;
+  return open ? "fold-groups" : "open-groups";
+}
+
 // ── how Agents are grouped ───────────────────────────────
 
 const groupingListeners = new Set<(g: AgentGrouping) => void>();

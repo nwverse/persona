@@ -157,7 +157,7 @@ describe("group controls in every Agents view", () => {
     const action = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
     const disclosures = () => [...agentsBlock().querySelectorAll<HTMLButtonElement>("[data-sidebar-group-heading] button[aria-expanded]")].filter((b) => !b.closest("[data-sidebar-agents-controls]"));
     expect(disclosures().length).toBeGreaterThan(0);
-    expect(host.querySelectorAll("[data-sidebar-agents-controls] button[title=\"全部折叠\"], [data-sidebar-agents-controls] button[title=\"全部展开\"]")).toHaveLength(1);
+    expect(host.querySelectorAll("[data-sidebar-agents-controls] [data-testid=agents-fold-all]")).toHaveLength(1);
     await act(async () => { action("全部折叠").click(); await Promise.resolve(); });
     expect(disclosures().every((b) => b.getAttribute("aria-expanded") === "false")).toBe(true);
     expect(grouping().closest("[inert]")).toBeNull();

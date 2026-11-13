@@ -234,9 +234,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * 0821d1acca measured ja 474,717 B, 35 B over the old budget; this change takes it to 475,028 B, +311 B: the `?at=` of a
  * search hit's address and the chat's landing on it, which pages back for one further up, waiting while the chat still
  * fills the screen, and its one line when the message is not reached; the search itself stays in ⌘K's on-intent load
- * and All chats' page; 31 B of room so the next main does not tip it).
+ * and All chats' page; 31 B of room so the next main does not tip it). And 466 B for an Agents fold-all button that always
+ * changes something, with a hint (#6447: ja 475,495 B against 475,029 B on main at 098af3327: the button's rule for a
+ * folded list and the chat-list view, the hint under it and its four strings, less the two list-menu items it replaces;
+ * the to-do page's use of it stays in that page's chunk; 30 B of room, as main had).
  */
-export const FIRST_SCREEN_BUDGET = 475_059;
+export const FIRST_SCREEN_BUDGET = 475_525;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -410,9 +413,12 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * 44,444 B after, +598 B, of which 154 B fit the room main had: the merge of the manager's results into the palette's
  * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
  * query typed, off the idle tier; 31 B of room so the next main does not tip it).
+ * And 7 B for a to-do's Decisions showing the first five (#6447, 2026-11-13: 44,572 B on main at 098af3327, 44,579 B
+ * after: the first-five rule, the Show all row and the header's fold-all button on the to-do page; main was already
+ * 97 B over this budget, which this does not cover).
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 44_475;
+export const IDLE_TIER_BUDGET = 44_482;
 
 const gzip = promisify(gzipCompress);
 
