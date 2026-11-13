@@ -232,6 +232,38 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.textContent).toContain("Waiting on another team");
   });
 
+  it("says only the Agent's own state in the status column, with the to-do's state as its own chip (#6492)", async () => {
+    const stale = "2026-11-05T08:00:00Z";
+    moreTodos = [{
+      ...todo, id: "tray-parked-stopped", title: "Parked, Agent gone", pr_url: undefined, plan_id: undefined, created_at: stale, updated_at: stale,
+      agents: [{ machine_id: "demo", session_id: "gone-worker", linked_at: stale }],
+      supervision: { supervisor: conversation, state: "parked", updated_at: stale, reviews: [], parked: { reason: "Waiting on another team", until: "2026-11-14T09:00:00Z", waiting_on: "someone_else", count: 1 } },
+    }, {
+      ...todo, id: "tray-merge", title: "PR waiting to merge", plan_id: undefined, stage: "merge",
+      agents: [{ machine_id: "demo", session_id: "quiet-worker", linked_at: at }], supervision: undefined,
+    }];
+    await act(async () => {
+      await refreshTodos();
+      upsertSession({ machine_id: "demo", session_id: "gone-worker", title: "Gone agent", cwd: "/demo", state: "offline", status: "offline", updated_at: stale });
+      upsertSession({ machine_id: "demo", session_id: "quiet-worker", title: "Quiet agent", cwd: "/demo", state: "idle", status: "idle", updated_at: at });
+    });
+    act(() => entry("running").click());
+    const row = (title: string) => [...host.querySelectorAll("[data-task-slot]")].find((r) => r.querySelector(".font-semibold")?.textContent === title)!;
+    const parked = row("Parked, Agent gone");
+    // the column is the Agent's: it stopped; that the to-do is parked is the chip's to say, not the column's
+    expect(parked.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.agent_stopped"));
+    expect(parked.querySelector("[data-task-status]")!.getAttribute("data-task-status")).toBe("stopped");
+    expect(parked.querySelector("[data-task-todo-state]")!.textContent).toBe(t("assistant-tasks.todo_chip", { state: t("assistant-tasks.review_parked") }));
+    // one mark set for Agent states: the stopped Agent's hollow ring, as the sidebar draws it
+    expect(parked.querySelector('[data-task-mark="stopped"] [data-state="offline"]')).not.toBeNull();
+    const merge = row("PR waiting to merge");
+    expect(merge.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.agent_idle"));
+    expect(merge.querySelector("[data-task-todo-state]")!.textContent).toBe(t("assistant-tasks.todo_chip", { state: t("assistant-tasks.todo_waiting_merge") }));
+    // a to-do with nothing to add beyond its Agent has no chip
+    expect(row("Demo task").querySelector("[data-task-todo-state]")).toBeNull();
+    expect(row("Demo task").querySelector("[data-task-status]")!.textContent).toBe(t("lib-state-labels.working"));
+  });
+
   it("updates the same row while it runs, opens the task, and drops it once it is accepted", () => {
     act(() => entry("running").click());
     const row = host.querySelector("[data-task-slot]");
@@ -456,7 +488,7 @@ describe("Assistant Needs you / In progress trays", () => {
     act(() => entry("running").click());
     const rows = [...host.querySelectorAll("[data-task-slot]")];
     expect(rows.map((row) => row.querySelector(".font-semibold")?.textContent)).toEqual(["Demo task", "Finished, not seen", "Stopped between rounds"]);
-    expect(rows.map((row) => row.querySelector("[data-task-mark]")?.getAttribute("data-task-mark"))).toEqual(["working", "unread", "follow_up"]);
+    expect(rows.map((row) => row.querySelector("[data-task-mark]")?.getAttribute("data-task-mark"))).toEqual(["working", "unread", "idle"]);
     expect(host.textContent).not.toContain("Another chat's task");
     expect(host.textContent).not.toContain("Closed long ago");
     expect(host.textContent).not.toContain("Needs a decision");

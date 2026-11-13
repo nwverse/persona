@@ -61,7 +61,6 @@
   "starting_agent": "エージェントを起動中",
   "status_starting": "起動中",
   "needs_more": "{title} ほか {count} 件",
-  "no_activity": "まだ動きがありません",
   "list_separator": "、",
   "retrying": "再試行中",
   "retry": "再試行",
@@ -210,5 +209,9 @@
   "handoff_active_now": "たった今アクティブ",
   "handoff_not_active": "まだ動きがありません",
   "handoff_gone": "このタスクはもうありません",
-  "handoff_closed": "エージェントの起動前に終了しました"
+  "handoff_closed": "エージェントの起動前に終了しました",
+  "agent_idle": "待機中",
+  "agent_stopped": "停止",
+  "todo_chip": "ToDo：{state}",
+  "todo_waiting_merge": "マージ待ち"
 }

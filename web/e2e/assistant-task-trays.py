@@ -172,7 +172,9 @@ def run(args):
                     expect(bar.locator('[data-task-slot="task:demo-elsewhere"]')).to_have_count(1)
                     expect(bar.locator('[data-task-slot="task:demo-stale"]')).to_have_count(0)
                     expect(bar.locator("[data-progress-shelved]")).to_have_text("Shelved 1")
-                    expect(bar.locator('[data-task-slot="plan:demo-plan:4"] [data-task-mark="follow_up"]')).to_have_count(1)
+                    expect(bar.locator('[data-task-slot="plan:demo-plan:4"] [data-task-mark="idle"]')).to_have_count(1)
+                    # the status column is the Agent's own state (#6492): its Agent is idle, not "follow up"
+                    expect(bar.locator('[data-task-slot="plan:demo-plan:4"] [data-task-status]')).to_have_text("Idle")
                     # Agents: the hand-opened working one is a row; the tasks' agents are in their tasks' rows only
                     expect(bar.locator("[data-running-agent]")).to_have_count(1)
                     expect(bar.locator('[data-running-agent="demo/manual-work"]')).to_contain_text("Explore the crash logs")
