@@ -7140,6 +7140,34 @@ def kb_link(kind, eid):
     return dict(next(x for x in KB[kind] if x["id"] == eid))
 
 
+def kb_base_meta(kind, e):
+    """An entry's meta when KB_DETAIL has none: its own fields; a chat's and a document's also say where they came from."""
+    return dict(e, source="lark", source_id=e["id"], kind=e.get("extra") or "group") if kind == "chats" else \
+        dict(e, source="lark") if kind == "docs" else e
+
+
+def kb_meta(kind, eid):
+    """The meta a detail shows, kept in KB_DETAIL so a correction sticks (None for an entry that isn't there)."""
+    e = next((x for x in KB.get(kind, []) if x["id"] == eid), None)
+    if e is None: return None
+    return KB_DETAIL.setdefault((kind, eid), {}).setdefault("meta", dict(kb_base_meta(kind, e)))
+
+
+def kb_unlink(kind, eid, lst, oid):
+    """remove_people / remove_chats / remove_projects as the hub's kb.Update: the other entry leaves this one's list, this
+    one leaves the other's (a project names documents, meetings, events and recordings in `items` as kind/id), both lists
+    are locked against the automatic linking, and neither detail links the other any more."""
+    named = kind in ("people", "chats", "projects")
+    back, member = (kind, eid) if named else ("items", "%s/%s" % (kind, eid))
+    for m, field, x in ((kb_meta(kind, eid), lst, oid), (kb_meta(lst, oid), back, member)):
+        if m is None: continue
+        m[field] = [v for v in m.get(field) or [] if v != x]
+        m["locked_fields"] = sorted(set(m.get("locked_fields") or []) | {field})
+    for (k, i), other in (((kind, eid), (lst, oid)), ((lst, oid), (kind, eid))):
+        d = KB_DETAIL.get((k, i))
+        if d and d.get("links"): d["links"] = [l for l in d["links"] if (l["kind"], l["id"]) != other]
+
+
 # The entries the Android captures add: a summary under its name, a line of timeline, what it is about now, two links.
 for _kind, _id, _links in (("projects", "photo-sync", (("people", "lilei"), ("projects", "weather-app"))),
                            ("people", "lilei", (("chats", "design-review"), ("projects", "weather-app"))),
@@ -7157,6 +7185,19 @@ if os.environ.get("MOCK_KB_MANY_LINKS") == "1":
                              "relevance": 20, "updated": ago(days=2)})
     KB_DETAIL[("projects", "weather-app")]["links"] += [kb_link("people", "lilei")] + \
         [kb_link("people", "p_sample_%d" % _i) for _i in range(4)]
+
+
+# MOCK_KB_CORRECTIONS=1: the lists links are held in (a project's people, chats and items, an entry's projects, a person's
+# chats, a chat's people), so a link can be removed, and confirmed facts on 李雷 (#6997; docs/assistant/knowledge.md
+# "Corrections, locks and unlinking").
+if os.environ.get("MOCK_KB_CORRECTIONS") == "1":
+    kb_meta("projects", "weather-app").update(people=["p_han"], chats=["oc_team"], items=["docs/doc_widget"])
+    kb_meta("people", "lilei").update(projects=["weather-app"], chats=["design-review"],
+                                      pinned="负责天气 App 的图标和视觉，不负责交互稿。\n周二、周四下午不在。")
+    kb_meta("chats", "design-review").update(people=["lilei", "p_han"])
+    kb_meta("people", "p_han").update(projects=["weather-app"])
+    kb_meta("chats", "oc_team").update(projects=["weather-app"])
+    kb_meta("docs", "doc_widget").update(projects=["weather-app"])
 
 
 # MOCK_KB_TOPICS=1: knowledge points curated by topic (#3783, docs/assistant/knowledge.md "Topics"), out of the example
@@ -23230,6 +23271,7 @@ VOICE_VOICES = {
 MOCK_HELP = [
     "MOCK_TURN_USAGE=1|multi|unpriced  What a finished exchange cost, after the reply's time: \"菜谱搜索按用时排序\" on Opus 5.5 (1), with a Sonnet 5.5 subagent (multi), or on Haiku 5.5 without a price (unpriced: its tokens); the main conversation's last exchange the same (#5426)",
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
+    "MOCK_KB_CORRECTIONS=1  Knowledge base: the lists links are held in, so links can be removed, and confirmed facts on one person (#6997)",
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts, exact lookup and by to-do (todo=, #6662); list-mode sockets send hints instead of full lists (#6362)",
@@ -24581,8 +24623,7 @@ class H(BaseHTTPRequestHandler):
             if e is None: return self.send_json({"error": "not found"}, 404)
             # Like the hub's Detail, meta is always there (the entry's own fields unless KB_DETAIL has more). A chat's
             # and a document's say where it came from (source and the source's id), which a per-item selection names.
-            meta = dict(e, source="lark", source_id=e["id"], kind=e.get("extra") or "group") if kind == "chats" else \
-                dict(e, source="lark") if kind == "docs" else e
+            meta = kb_base_meta(kind, e)
             d = dict({"kind": kind, "id": e["id"], "path": "/home/me/.persona/data/%s/%s" % (kind, e["id"]), "meta": meta,
                       "summary": e.get("one_line")}, **KB_DETAIL.get((kind, e["id"]), {}))
             if kind == "recordings": d["meta"] = meeting_detail_meta(e["id"], d.get("meta") or {})
@@ -25354,6 +25395,12 @@ class H(BaseHTTPRequestHandler):
             if meta is not None:
                 meta.update({k: e[k] for k in ("importance", "relevance", "tags") if k in e})
                 if kind == "projects": meta["kind"], meta["status"] = e["extra"].split(" · ")
+            if isinstance(body.get("pinned"), str):  # confirmed facts: "" clears them
+                m = kb_meta(kind, eid)
+                if body["pinned"]: m["pinned"] = body["pinned"]
+                else: m.pop("pinned", None)
+            for field, lst in (("remove_people", "people"), ("remove_chats", "chats"), ("remove_projects", "projects")):
+                for oid in body.get(field) or []: kb_unlink(kind, eid, lst, oid)
             KB_UPDATES.append({"kind": kind, "id": eid, **body})
             return self.send_json({"ok": True})
         if os.environ.get("MOCK_LARK_NATIVE_OLK") and (p == "/test/lark-encryption/reset" or p == "/api/v1/lark/encryption/unlock" or p.endswith(("/encryption/covers", "/encryption/prepare", "/encrypted-messages"))):
