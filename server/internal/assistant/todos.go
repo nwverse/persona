@@ -81,6 +81,9 @@ type Todo struct {
 	StageKind     string `json:"stage_kind,omitempty"` // code or general; absent on older hubs
 	stageVerified bool   // explicit acceptance, kept with the stage setting
 	planPending   bool   // a live plan-approval card; never persisted as progress
+	// PRs are the earlier PRs its agents named before PRURL, newest last (reports.go todoStage.PRs): the Inbox links
+	// a comment on any of them to the task (inbox_task_links.go, #6507). Not sent to the apps.
+	PRs []string `json:"-"`
 	// Delivery: how far its finished work went out, and while short of live where it is held and who can unhold it
 	// (delivery.go, #3306); nil until judged.
 	Delivery *TodoDelivery `json:"delivery,omitempty"`
@@ -367,7 +370,7 @@ func (s *Service) loadTodosLocked(ctx context.Context) error {
 	}
 	for id, st := range s.todoStages(ctx) {
 		if t, ok := tmap[id]; ok {
-			t.Stage, t.PRURL, t.StageKind, t.Delivery, t.stageVerified, t.Check = st.Stage, st.PR, st.Kind, st.Delivery, st.Verified, st.Check
+			t.Stage, t.PRURL, t.PRs, t.StageKind, t.Delivery, t.stageVerified, t.Check = st.Stage, st.PR, st.PRs, st.Kind, st.Delivery, st.Verified, st.Check
 		}
 	}
 
