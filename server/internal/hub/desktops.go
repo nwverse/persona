@@ -25,6 +25,9 @@ import (
 // the desktops event too.
 const featureDesktopsLink = "desktops_link"
 
+// featureDesktopUnregister says this hub withdraws a connection's desktop presence without closing its app socket.
+const featureDesktopUnregister = "desktop_unregister"
+
 // desktopView is one connected desktop as the apps see it.
 type desktopView struct {
 	// Device is its device token's id (what "Sign out" revokes); empty when it connected with the pairing token, and

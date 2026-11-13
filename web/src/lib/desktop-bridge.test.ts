@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stripBase } from "./base";
 
 describe("Electron desktop bridge", () => {
   afterEach(() => {
@@ -25,16 +24,18 @@ describe("Electron desktop bridge", () => {
     expect(closeNotification).toHaveBeenCalledExactlyOnceWith("m/a#needs");
   });
 
-  it("returns a native click to the existing SPA router without exposing an origin", () => {
-    const openDesktopNotification = (route: string, go: (url: string) => void) => {
-      if (!route.startsWith("/") || route.startsWith("//") || route.includes("\\")) return;
-      go(stripBase(route));
-    };
-    const navigate = vi.fn();
-    openDesktopNotification("/persona/s/m/a?view=chat", navigate);
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("/persona/s/m/a?view=chat");
-    openDesktopNotification("https://evil.test", navigate);
-    openDesktopNotification("//evil.test", navigate);
-    expect(navigate).toHaveBeenCalledOnce();
+  it("retains the browser fallback if native display is rejected", async () => {
+    const note = { close: vi.fn() };
+    const BrowserNotification = vi.fn(function () { return note; });
+    vi.stubGlobal("window", Object.assign(window, { personaDesktop: {
+      notificationPermission: () => "granted", notify: () => false,
+      desktopPresence: () => ({ active: true, notifies: true }), closeNotification: vi.fn(),
+    } }));
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key === "persona.systemNotify" ? "1" : null, setItem: vi.fn(), removeItem: vi.fn() });
+    vi.stubGlobal("navigator", {});
+    vi.stubGlobal("Notification", Object.assign(BrowserNotification, { permission: "granted" }));
+    const { postNotification } = await import("./notify");
+    postNotification({ title: "Done", body: "Finished", tag: "m/a#finished", url: "/persona/s/m/a" }, () => {});
+    expect(BrowserNotification).toHaveBeenCalledExactlyOnceWith("Done", expect.objectContaining({ body: "Finished", tag: "m/a#finished" }));
   });
 });

@@ -5,9 +5,9 @@ import { attentionReason, interactionCanAnswer, sessionTitle, stateOf } from "./
 import { agentKey } from "./pins";
 import { homeKey } from "./folded-rows";
 import { useCounts, useAgentSessions } from "./sessions";
-import { getState, useStore, onHello, send, appSocketReady } from "./store";
+import { getState, useStore, onHello, send, appSocketReady, connect, disconnect, DESKTOP_UNREGISTER_FEATURE } from "./store";
 import { answeredTags, attentionSoundEnabled, badgeText, batchDue, finishedBatch, detectNewCards, detectTransitions, pickEvent, rateLimiter, SETTLE_MS, settledTags, suppressed, tabTitle, trackTurns, type Turn } from "./attention";
-import { claimNotification, closeNotification, dismissNotification, releaseClaim, FRONT_BEAT_MS, inQuietHours, loadNotifyPrefs, markFront, notificationText, notifyPrefs, waitingCard, otherTabInFront, postNotification, systemNotifyAllowed, systemNotifyActive, wants, managerMuted } from "./notify";
+import { claimNotification, closeNotification, dismissNotification, releaseClaim, FRONT_BEAT_MS, inQuietHours, loadNotifyPrefs, markFront, notificationText, notifyPrefs, waitingCard, otherTabInFront, postNotification, systemNotifyAllowed, systemNotifyActive, onSystemNotifyChange, wants, managerMuted } from "./notify";
 import { defaultManager } from "./manager-choice";
 import { failedTagsOver, listenForNotificationClicks } from "./notification-answer";
 import { isMuted } from "./session-actions";
@@ -244,17 +244,27 @@ export function useAttentionSignals(label: string, pane: { mid: string; sid: str
   useEffect(() => {
     const desktop = window.personaDesktop;
     if (!desktop) return;
-    const offHello = onHello(() => {
-      if (desktop.desktopPresence().active && systemNotifyActive() && appSocketReady()) send({ type: "register_desktop", device_name: desktop.deviceName });
-      else send({ type: "unregister_desktop" });
-    });
-    const offPresence = desktop.onPresenceChange(({ active }) => {
-      if (!active && appSocketReady()) send({ type: "unregister_desktop" });
-    });
+    const reconcile = () => {
+      if (!appSocketReady()) return;
+      if (desktop.desktopPresence().active && systemNotifyActive()) {
+        send({ type: "register_desktop", device_name: desktop.deviceName });
+        return;
+      }
+      if (getState().features.includes(DESKTOP_UNREGISTER_FEATURE)) send({ type: "unregister_desktop" });
+      else disconnect(); // Old hub: only closing this socket can withdraw its desktop registration.
+    };
+    const offHello = onHello(reconcile);
+    // Recovery must also work after an old hub's socket-close withdrawal: there is no new hello without reconnecting.
+    const restore = () => {
+      if (desktop.desktopPresence().active && systemNotifyActive()) connect();
+      reconcile();
+    };
+    const offPresence = desktop.onPresenceChange(restore);
+    const offNotifications = onSystemNotifyChange(restore);
     const offNotification = desktop.onOpenNotification((route) => {
       if (route.startsWith("/") && !route.startsWith("//") && !route.includes("\\")) navigate(stripBase(route));
     });
-    return () => { offHello(); offPresence(); offNotification(); };
+    return () => { offHello(); offPresence(); offNotifications(); offNotification(); };
   }, []);
 
   useEffect(armAudio, []);

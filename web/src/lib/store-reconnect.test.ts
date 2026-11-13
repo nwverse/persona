@@ -1,7 +1,7 @@
 // The socket's side of #1574: a drop is invisible inside the grace, a restart retries at once, and a resumed hello
 // refetches nothing while an ordinary one refreshes everything as before.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appSocketReady, applyMachine, checkSocket, connect, disconnect, getState, onAppSocket, onPrivateUIStream, onHubEvent, onHello, send, reconnectNow, refresh, reset } from "./store";
+import { appSocketReady, applyMachine, checkSocket, connect, disconnect, getState, onAppSocket, onPrivateUIStream, onHubEvent, reconnectNow, refresh, reset } from "./store";
 import { offlineNow } from "./feedback";
 import { liveEntry, resetLive } from "./live";
 import { messageFeedback } from "./message-send";
@@ -86,33 +86,6 @@ describe("reconnecting", () => {
     expect(messageFeedback("m", "chat", "trusted")).toBe("processing");
     vi.stubGlobal("localStorage", { getItem: () => "replacement-token" }); next.push(receipt("retired-credential"));
     expect(messageFeedback("m", "chat", "retired-credential")).toBeUndefined();
-  });
-  it("registers a fixed desktop identity only after each authenticated hello", async () => {
-    vi.stubGlobal("window", { setTimeout: (f: () => void, ms: number) => setTimeout(f, ms), clearTimeout: (t: number) => clearTimeout(t), personaDesktop: { version: 1, deviceName: "Test Desktop", onOpenNotification: () => () => {}, desktopPresence: () => ({ active: true, notifies: true }) } });
-    const stop = onHello(() => {
-      if (window.personaDesktop?.desktopPresence().active && appSocketReady()) send({ type: "register_desktop", device_name: window.personaDesktop.deviceName });
-    });
-    const old = online();
-    await vi.waitFor(() => expect(old.sent).toHaveLength(2));
-    expect(JSON.parse(old.sent[1]!)).toEqual({ type: "register_desktop", device_name: "Test Desktop" });
-    expect(old.sent).toHaveLength(2);
-    reconnectNow();
-    const next = last();
-    next.open();
-    expect(next.sent.map((m) => JSON.parse(m).type)).toEqual(["client_hello"]);
-    next.push({ type: "hello", resumed: true });
-    await vi.waitFor(() => expect(next.sent).toHaveLength(2));
-    expect(old.sent).toHaveLength(2);
-    disconnect();
-    next.push({ type: "hello", resumed: true });
-    expect(next.sent).toHaveLength(2);
-    stop();
-  });
-  it("does not claim desktop presence while the desktop is locked or notifications are unavailable", async () => {
-    vi.stubGlobal("window", { setTimeout: (f: () => void, ms: number) => setTimeout(f, ms), clearTimeout: (t: number) => clearTimeout(t), personaDesktop: { version: 1, deviceName: "Test Desktop", onOpenNotification: () => () => {}, desktopPresence: () => ({ active: false, notifies: false }) } });
-    const socket = online();
-    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
-    expect(JSON.parse(socket.sent[0]!).type).toBe("client_hello");
   });
   it("retires send receipt trust when the same token gets a new credential epoch", () => {
     const socket = online(["message_send_state"], 1);

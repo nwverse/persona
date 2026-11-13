@@ -415,6 +415,8 @@ function subscribeSystem(l: () => void) {
   };
 }
 
+export function onSystemNotifyChange(listener: () => void): () => void { return subscribeSystem(listener); }
+
 const snapshot = () => `${systemNotifyOn() ? 1 : 0}|${permission()}|${systemNotifyAlways() ? 1 : 0}`;
 
 export function useSystemNotify(): { on: boolean; permission: Permission; always: boolean } {
