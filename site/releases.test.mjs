@@ -18,6 +18,7 @@ const release = (tag, extra = {}) => ({
 });
 const full = (tag, v) => [
   asset(tag, `Persona-${v}-android.apk`, 21111552, { digest: "sha256:" + "a".repeat(64) }),
+  asset(tag, `Persona-${v}-harmony.hap`, 32000000),
   asset(tag, `Persona-${v}-darwin-arm64.tar.gz`, 117300513),
   asset(tag, `Persona-${v}-darwin-amd64.tar.gz`),
   asset(tag, `Persona-${v}-linux-amd64.tar.gz`),
@@ -61,7 +62,8 @@ test("files are classified by name, with GitHub's checksum kept", () => {
     name: "Persona-0.3.0-android.apk", size: 21111552, url: `${DL}v0.3.0/Persona-0.3.0-android.apk`,
     kind: "app", platform: "android", sha256: "a".repeat(64),
   });
-  assert.equal(byName["Persona-0.3.0-darwin-arm64.tar.gz"].platform, "macos");
+  assert.equal(byName["Persona-0.3.0-harmony.hap"].platform, "harmony");
+  assert.equal(byName["Persona-0.3.0-harmony.hap"].kind, "app");
   assert.equal(byName["Persona-0.3.0-darwin-arm64.tar.gz"].arch, "arm64");
   assert.equal(byName["Persona-0.3.0-windows-amd64.zip"].kind, "computer");
   assert.equal(byName["Persona-0.3.0-web.tar.gz"].kind, "web");
@@ -278,6 +280,8 @@ test("each device gets the latest stable file, or the newest stable release that
   assert.equal(mac.current, false);
   assert.equal(mac.asset.name, "Persona-0.3.0-darwin-arm64.tar.gz");
   assert.equal(downloadFor(data, "android", "").asset.name, "Persona-0.3.0-android.apk");
+  assert.equal(downloadFor(data, "harmony", "").asset.name, "Persona-0.3.0-harmony.hap");
+  assert.equal(areaLabel("harmony"), "鸿蒙");
   assert.equal(downloadFor(data, "web", "").asset.kind, "web");
   assert.equal(downloadFor(data, "linux", "riscv64"), null);
 
@@ -299,6 +303,12 @@ test("the visitor's system is read from the browser", () => {
   assert.equal(detectPlatform({ userAgent: mac, maxTouchPoints: 5 }).platform, "ios", "an iPad asking for the desktop site");
   assert.equal(detectPlatform({ userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X)" }).platform, "ios");
   assert.equal(detectPlatform({ userAgent: "Mozilla/5.0 (Linux; Android 15; Pixel 9)" }).platform, "android");
+  for (const ua of [
+    "Mozilla/5.0 (Phone; HarmonyOS 7.0; API 26)",
+    "Mozilla/5.0 (Linux; HarmonyOS NEXT; ALN-AL00)",
+    "Mozilla/5.0 (OpenHarmony 7.0)",
+  ]) assert.equal(detectPlatform({ userAgent: ua }).platform, "harmony", ua);
+  assert.equal(detectPlatform({ userAgentData: { platform: "HarmonyOS" } }).platform, "harmony");
   assert.deepEqual(detectPlatform({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }), { platform: "windows", arch: "amd64" });
   assert.deepEqual(detectPlatform({ userAgent: "Mozilla/5.0 (X11; Linux aarch64)" }), { platform: "linux", arch: "arm64" });
   assert.deepEqual(detectPlatform({ userAgent: "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0)" }), { platform: null, arch: "" });
@@ -346,8 +356,10 @@ test("device, guide, component, architecture and area copy is language-aware", (
   assert.equal(devicesFor(), DEVICES);
   assert.equal(devicesFor("zh"), DEVICES);
   assert.equal(devicesFor("en"), EN_DEVICES);
+  assert.deepEqual(EN_DEVICES.map((device) => device.id), DEVICES.map((device) => device.id));
   assert.equal(deviceFor("web"), DEVICES.find((device) => device.id === "web"));
   assert.equal(deviceFor("web", "en").name, "Web app");
+  assert.equal(deviceFor("harmony", "en").name, "HarmonyOS");
   assert.equal(deviceFor("ios", "en").sub, "Public TestFlight beta · Requires iOS 26");
   assert.equal(webGuideFor(), WEB_GUIDE);
   assert.equal(webGuideFor("en"), EN_WEB_GUIDE);
@@ -365,6 +377,7 @@ test("device, guide, component, architecture and area copy is language-aware", (
   assert.equal(areaLabel("assistant"), "助手");
   assert.equal(areaLabel("WEB", "en"), "Web");
   assert.equal(areaLabel("knowledge", "en"), "Knowledge base");
+  assert.equal(areaLabel("harmony", "en"), "HarmonyOS");
   assert.equal(areaLabel("unknown", "en"), "");
 });
 
@@ -384,6 +397,10 @@ test("the page text catalogs have matching keys and preserve Chinese phrasing", 
   assert.equal(PAGE_TEXT.zh.fullNotes(1), "GitHub 上的完整说明和另外 1 个文件");
   assert.equal(PAGE_TEXT.zh.fullNotes(0), "GitHub 上的完整说明");
   assert.equal(PAGE_TEXT.zh.showEarlier(2), "显示更早的 2 个版本");
+  assert.equal(PAGE_TEXT.zh.downloadHAP, "下载 HAP");
+  assert.equal(PAGE_TEXT.zh.buildFromSource, "从源码构建");
+  assert.equal(PAGE_TEXT.en.downloadHAP, "Download HAP");
+  assert.equal(PAGE_TEXT.en.buildFromSource, "Build from source");
   assert.equal(PAGE_TEXT.en.fullNotes(1), "Full release notes and 1 more file on GitHub");
   assert.equal(PAGE_TEXT.en.fullNotes(2), "Full release notes and 2 more files on GitHub");
   assert.equal(PAGE_TEXT.en.fullNotes(0), "Full release notes on GitHub");
@@ -407,8 +424,8 @@ test("the page draws data as text and never links packages through this site", a
 test("the home page offers every device's download, through the same model and never through this site", async () => {
   const home = await readFile(new URL("./public/index.html", import.meta.url), "utf8");
   const section = /<section class="block" id="download"[\s\S]*?<\/section>/.exec(home)[0];
-  for (const id of ["ios", "android", "macos", "windows", "linux", "web"]) assert.match(section, new RegExp(`data-id="${id}"`));
-  for (const id of ["android", "macos", "windows", "linux", "web"]) assert.match(section, new RegExp(`href="/releases/#dev-${id}"`), id);
+  for (const id of ["ios", "android", "harmony", "macos", "windows", "linux", "web"]) assert.match(section, new RegExp(`data-id="${id}"`));
+  for (const id of ["android", "harmony", "macos", "windows", "linux", "web"]) assert.match(section, new RegExp(`href="/releases/#dev-${id}"`), id);
   assert.doesNotMatch(section, /\/dl\//);
   assert.match(home, /import \{[^}]*downloadFor[^}]*\} from "\/releases\/model\.js"/);
   assert.match(home, /<a href="#download">下载<\/a>/);

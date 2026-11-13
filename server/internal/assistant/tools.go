@@ -33,7 +33,7 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"repositories_list", "repository_get", "view_show", "view_update", "view_get",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
-	"conversation_new", "conversation_send", "task_plan", "task_review", "task_scope", "task_start_screen", "task_start_keys", "task_retry",
+	"conversation_new", "conversation_send", "task_plan", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
 	"direction_name", "leader_progress"}
 
@@ -126,6 +126,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolTaskRetry(ctx, self, args)
 	case "task_scope":
 		return s.toolTaskScope(ctx, self, args) // task_brief_scope.go
+	case "task_decided":
+		return s.toolTaskDecided(ctx, machine, self, args) // task_decided.go
 	case "task_review":
 		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
 		if err == nil {
@@ -331,8 +333,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			handed = s.handAttachments(ctx, machine, am.ID, atts, mentioned)
 			params["text"] = withAttachments(text, handed)
 		}
+		unsent := s.noteAgentSend(self, am.ID, c.SessionID) // more from its task's conversation reopens an accepted task (#6726)
 		if c.Status != proto.StatusOffline {
 			if err := s.call(ctx, am.ID, DeviceSessionSend, params, nil); err != nil {
+				if !startResultUnknown(err) { // it may still arrive and start the turn
+					unsent()
+				}
 				return "", task.sendFailed(ctx, s, err)
 			}
 			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text), nil
@@ -343,6 +349,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
 		if err := s.call(sctx, am.ID, DeviceSessionSend, params, nil); err != nil {
+			if !startResultUnknown(err) { // it may still arrive and start the turn
+				unsent()
+			}
 			return "", task.sendFailed(sctx, s, err)
 		}
 		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + handed.said() + task.sent(sctx, s, a.Text), nil
@@ -432,6 +441,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Effort, _ = run["effort"].(string)
 			tier, runs = "", "" // the tier's launcher is not what runs
 		}
+		// The admission gate refuses a too-busy computer before the user is asked to approve anything.
+		if err := s.checkAgentStart(ctx, am.ID); err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
 		branch := strings.TrimSpace(a.Worktree.Branch)
 		where := am.Name + " · " + a.Cwd
 		if branch != "" {
@@ -463,7 +476,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
-		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, s.withCloseoutBrief(sctx, a.Prompt, false))
+		prompt := s.withCloseoutBrief(sctx, a.Prompt, false)
+		if !s.isWorkMachine(am.ID) {
+			prompt += "\n\n" + prompts.RenderTaskHandoff()
+		}
+		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, prompt)
 		if a.Ultracode {
 			params["ultracode"] = true
 		}
@@ -534,6 +551,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		lctx, lcancel := context.WithTimeout(sctx, agentStartListTimeout)
 		knownIDs := s.knownSessionIDs(lctx, am.ID)
 		lcancel()
+		// Last look on the machine it will really start on (a health detour may have changed am): re-check and hold
+		// its admission slot across the session.start call.
+		release, err := s.admitAgentStart(sctx, am.ID)
+		if err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
+		defer release()
 		s.setPlanThen(ctx, am.ID, params)
 		var values *handoffValues
 		if hand != nil {

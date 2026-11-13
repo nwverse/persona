@@ -2,7 +2,7 @@
 // text node; links are only GitHub's own download and release addresses (model.js isDirectDownload). The packages are
 // downloaded from GitHub directly: nothing here goes through this site.
 import {
-  GETTING_STARTED, GITHUB_RELEASES, TESTFLIGHT,
+  GETTING_STARTED, GITHUB_RELEASES, HARMONY_GUIDE, TESTFLIGHT,
   archLabel, areaLabel, compareVersions, componentsFor, countsLine, detectPlatform, deviceFor, devicesFor, downloadFor,
   formatAge, formatDate, formatSize, hasPackages, isDirectDownload, latestRelease, webGuideFor,
 } from "./model.js";
@@ -33,6 +33,7 @@ function el(tag, props = {}, ...kids) {
 const ICONS = {
   ios: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.8"/><path d="M10.5 18.5h3"/>',
   android: '<path d="M5.5 17.5v-2a6.5 6.5 0 0 1 13 0v2z"/><path d="m8 10.2-1.6-2.6M16 10.2l1.6-2.6"/><circle cx="9.5" cy="14.2" r=".6" fill="currentColor"/><circle cx="14.5" cy="14.2" r=".6" fill="currentColor"/>',
+  harmony: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M12 4v16M6.5 9.5h2.5M15 14.5h2.5"/>',
   macos: '<rect x="4" y="5" width="16" height="11" rx="2"/><path d="M2 19.5h20"/>',
   windows: '<rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.2"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.2"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.2"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.2"/>',
   linux: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7.5 9.5 3 2.5-3 2.5M12.5 15h4"/>',
@@ -48,7 +49,7 @@ function icon(name) {
 }
 
 const deviceOf = (id) => deviceFor(id, LANG);
-const PLATFORM_NAME = { macos: "Mac", linux: "Linux", windows: "Windows", android: "Android", web: deviceOf("web").short };
+const PLATFORM_NAME = { macos: "Mac", linux: "Linux", windows: "Windows", android: "Android", harmony: deviceOf("harmony").short, web: deviceOf("web").short };
 
 function releaseURL(r) {
   return typeof r.url === "string" && r.url === RELEASE_PAGE + encodeURIComponent(r.tag) ? r.url : GITHUB_RELEASES;
@@ -61,7 +62,7 @@ function fileChip(asset, label) {
 }
 
 function assetLabel(a) {
-  if (a.kind === "app") return "Android";
+  if (a.kind === "app") return a.platform === "harmony" ? deviceOf("harmony").short : "Android";
   if (a.kind === "computer" || a.kind === "component") return `${PLATFORM_NAME[a.platform]} · ${archLabel(a.platform, a.arch, LANG)}`;
   return a.name;
 }
@@ -140,7 +141,7 @@ function drawDownload(data, dev, arch) {
     const arches = dev.arches.slice().sort((a, b) => (a === arch ? -1 : b === arch ? 1 : 0));
     const found = arches.map((x) => ({ arch: x, d: downloadFor(data, dev.id, x) })).filter((x) => x.d);
     found.forEach(({ arch: x, d }, i) => {
-      const text = dev.id === "android" ? T.downloadAPK : archLabel(dev.id, x, LANG);
+      const text = dev.id === "android" ? T.downloadAPK : dev.id === "harmony" ? T.downloadHAP : archLabel(dev.id, x, LANG);
       actions.append(primaryButton({ href: d.asset.url, text, size: formatSize(d.asset.size), cls: i === 0 ? "btn btn-cheek" : "btn btn-paper" }));
     });
     if (found.length) {
@@ -153,7 +154,12 @@ function drawDownload(data, dev, arch) {
         notices.append(notice("amber", document.createTextNode(T.uploadingNotice(latest.tag, dev, first.tag))));
       }
     } else {
-      actions.append(primaryButton({ href: releaseURL(latest), text: T.viewOnGitHub, external: true, cls: "btn btn-paper" }));
+      if (dev.id === "harmony") {
+        actions.append(primaryButton({ href: HARMONY_GUIDE, text: T.buildFromSource, external: true }));
+        $("tk-meta").textContent = T.harmonySourceMeta;
+      } else {
+        actions.append(primaryButton({ href: releaseURL(latest), text: T.viewOnGitHub, external: true, cls: "btn btn-paper" }));
+      }
       notices.append(notice("cheek", document.createTextNode(T.noPackage(dev))));
     }
   }
@@ -207,9 +213,14 @@ function drawDevices(data, det) {
       const arches = you ? dev.arches.slice().sort((a, b) => (a === det.arch ? -1 : b === det.arch ? 1 : 0)) : dev.arches;
       arches.forEach((arch, i) => {
         const d = downloadFor(data, dev.id, arch);
-        const label = dev.id === "android" ? T.downloadAPK : archLabel(dev.id, arch, LANG);
+        const label = dev.id === "android" ? T.downloadAPK : dev.id === "harmony" ? T.downloadHAP : archLabel(dev.id, arch, LANG);
         if (!d) {
-          box.append(el("span", { class: "dl off" }, el("span", { class: "l", text: label }), el("span", { class: "r", text: T.notAvailable })));
+          if (dev.id === "harmony") {
+            box.append(el("a", { class: "dl", href: HARMONY_GUIDE, target: "_blank", rel: "noopener" },
+              el("span", { class: "l" }, icon("out"), el("span", { text: T.buildFromSource })), el("span", { class: "r", text: "GitHub" })));
+          } else {
+            box.append(el("span", { class: "dl off" }, el("span", { class: "l", text: label }), el("span", { class: "r", text: T.notAvailable })));
+          }
           return;
         }
         const side = formatSize(d.asset.size) + (d.current ? "" : ` · ${d.tag}`);

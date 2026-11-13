@@ -206,6 +206,9 @@ struct TodoDetailView: View {
                         }
                     }
 
+                    // Nobody is working on it (#3618): under its state.
+                    OrphanedLine(todo: todo, state: status)
+
                     if todo.autoDone {
                         // The hub closed it (docs/assistant/todos.md「Automatic completion」): say why, and how to undo it.
                         Text(todo.autoDoneReason.map { String(localized: "The agent stopped and the work looked finished, so it was marked done: \($0). If it isn't, tap “Reopen”.") }
@@ -270,6 +273,7 @@ struct TodoDetailView: View {
 
                     if isEditingNotes {
                         TextField(String(localized: "To-do notes"), text: $editingNotesText, axis: .vertical)
+                            .readingContent()
                             .lineLimit(3...8)
                             .textFieldStyle(.plain)
                             .accessibilityIdentifier("todo.notes.field")
@@ -277,6 +281,7 @@ struct TodoDetailView: View {
                             .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
                     } else if !text.notes.isEmpty {
                         Text(text.notes)
+                            .readingContent()
                             .font(Theme.Font.body)
                             .foregroundStyle(Color.primary)
                     } else {

@@ -1005,7 +1005,7 @@
   },
   {
     "name": "inbox_suggest",
-    "description": "Hand in your suggestion for the inbox event this conversation handles (one at a time: a new one replaces the last), and the event's recap. It waits in the user's inbox; nothing goes out until they confirm, and then the program does exactly what it says (you never send it yourself). `kind`: `reply` — one message to send, `text` in the user's voice, ready to go out as it is (no blanks to fill in like 【…】: leave out what you could not find and say so in `note`; for a Feishu sheet / Base item `changes` proposes moving rows' status: ref, field and one of the values the item lists); `agent` — an Agent to start, `text` its instruction (`machine` and `cwd` optional); `conclusion` — you dealt with it, `text` the conclusion, `outcome` `fyi` (worth knowing) or `done` (nothing to do). `handback: true` for one the user has to judge: their confirmation comes back here as an instruction instead of being carried out. `note`: one or two sentences on what you found and where. `recap`: the event's background, progress and where it is stuck (up to 600 characters), every time. `related`: ids of inbox items in other chats or sources this one is about. With only `recap` (no `kind`) it just updates the recap. Call it at the end of each turn. In a conversation the user handed an inbox item to (its context block names the item's id), pass that id as `item` and call it when you have something to write back to the item, and again whenever it changes (it also shows in that conversation as a card); it refuses an item not handed to this conversation or one the user already filed: answer in the chat then.",
+    "description": "Hand in your suggestion for the inbox event this conversation handles (one at a time: a new one replaces the last), and the event's recap. It waits in the user's inbox; nothing goes out until they confirm, and then the program does exactly what it says (you never send it yourself). `kind`: `reply` — one message to send, `text` in the user's voice, ready to go out as it is (no blanks to fill in like 【…】: leave out what you could not find and say so in `note`; for a Feishu sheet / Base item `changes` proposes moving rows' status: ref, field and one of the values the item lists); `agent` — an Agent to start, `text` its instruction (`machine` and `cwd` optional); `conclusion` — you dealt with it, `text` the conclusion, `outcome` `fyi` (worth knowing) or `done` (nothing to do). `handback: true` for one the user has to judge: their confirmation comes back here as an instruction instead of being carried out. `note`: one or two sentences on what you found and where. `recap`: the event's background, progress and where it is stuck (up to 600 characters), every time. `title`: what the matter is, without chat or person names; `summary`: one sentence on where things stand and who is waited on for what. Write both every time; items whose title comes from the source (mail, documents, PRs / issues, and the like) ignore `title`, and the tool says so. `related`: ids of inbox items in other chats or sources this one is about. `recap` without `kind` creates no suggestion, and may include `title` and `summary`. Call it at the end of each turn. In a conversation the user handed an inbox item to (its context block names the item's id), pass that id as `item` and call it when you have something to write back to the item, and again whenever it changes (it also shows in that conversation as a card); it refuses an item not handed to this conversation or one the user already filed: answer in the chat then.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1037,6 +1037,12 @@
           ]
         },
         "recap": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "summary": {
           "type": "string"
         },
         "machine": {
@@ -2288,6 +2294,36 @@
           "type": "integer",
           "minimum": 0,
           "description": "how long the task should take from now; leave it out (or 0) to keep it"
+        }
+      }
+    }
+  },
+  {
+    "name": "task_decided",
+    "description": "Record the owner's answer to a task's waiting decision (a needs_user decision on its to-do) when they gave it to you in this conversation, in their own words, instead of on the decision's card or row. Only from the main conversation or the task's supervisor, and only what the owner said: never your own call (a decision that is yours is no decision: send the agent on, or review the task). option is the label of one of the decision's options, the one their words choose; when their words fit none of them, don't record it: ask them, or restate the decision with task_review. With told_agent false the hub takes the option as the card does: it goes to the task's agent and is recorded (refused, and nothing recorded, while the agent cannot be reached). With told_agent true you already passed their answer to the agent with agent_send, and it is only recorded. Either way the decision ends as if they had answered it on its card: it leaves their Needs you, is not raised again, the to-do lists it among its decisions with their words, and the task is supervised as before. So when the owner answers a task's open decision in the chat, record it here; relaying it with agent_send alone leaves the decision waiting.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "todo_id",
+        "option",
+        "said"
+      ],
+      "properties": {
+        "todo_id": {
+          "type": "string",
+          "description": "the task's todo id (todo_…)"
+        },
+        "option": {
+          "type": "string",
+          "description": "the label of the option the owner chose, exactly as the decision lists it"
+        },
+        "said": {
+          "type": "string",
+          "description": "what the owner said, quoted (one or two sentences)"
+        },
+        "told_agent": {
+          "type": "boolean",
+          "description": "true when you already sent their answer to the task's agent (agent_send): it is only recorded; default false: the hub sends the option to the agent as the card does"
         }
       }
     }
