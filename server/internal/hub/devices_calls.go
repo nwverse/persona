@@ -13,6 +13,14 @@ import (
 
 // ---- calls through the manager ----
 
+// deviceBusMethod keeps cancellation scoped to the long file operations whose node side supports it.
+func deviceBusMethod(method string) string {
+	if method == "file.copy" || method == "file.zip" {
+		return devicewire.MethodFileCall
+	}
+	return devicewire.MethodCall
+}
+
 // busNode is a machine's node as the hub reaches it: through the manager.
 type busNode struct {
 	h    *Hub
@@ -49,7 +57,7 @@ func (b *busNode) Call(ctx context.Context, method string, params, out any) erro
 		p.TimeoutMS = managerTimeout(time.Until(dl)).Milliseconds()
 	}
 	var res json.RawMessage
-	if err := b.h.callBusAsIs(ctx, owner, devicewire.MethodCall, p, &res); err != nil {
+	if err := b.h.callBusAsIs(ctx, owner, deviceBusMethod(method), p, &res); err != nil {
 		return deviceError(b.id, err)
 	}
 	if out != nil && len(res) > 0 {

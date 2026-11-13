@@ -2,6 +2,7 @@ package devices
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -36,5 +37,26 @@ func TestFileCallCancelReachesNode(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("manager did not stop waiting")
+	}
+}
+
+func TestFileCallRequestReachesNode(t *testing.T) {
+	d := newTestDevices(t)
+	n := &testNode{}
+	connectedMachine(t, d, "box", n)
+	params, _ := json.Marshal(devicewire.NodeCall{MachineID: "box", Method: "file.copy", Params: json.RawMessage(`{}`)})
+	out, handled, err := d.Request(context.Background(), devicewire.MethodFileCall, params)
+	if !handled || err != nil {
+		t.Fatalf("file_call: handled=%v err=%v", handled, err)
+	}
+	var answer map[string]any
+	raw, ok := out.(json.RawMessage)
+	if !ok || json.Unmarshal(raw, &answer) != nil || answer["method"] != "file.copy" {
+		t.Fatalf("file_call answer = %#v", out)
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.calls) == 0 || n.calls[len(n.calls)-1] != "file.copy {}" {
+		t.Fatalf("node calls = %v", n.calls)
 	}
 }

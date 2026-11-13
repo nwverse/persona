@@ -23,7 +23,7 @@ func (d *Devices) Request(ctx context.Context, method string, params json.RawMes
 		return nil
 	}
 	switch method {
-	case devicewire.MethodCall:
+	case devicewire.MethodCall, devicewire.MethodFileCall:
 		var p devicewire.NodeCall
 		if err := decode(&p); err != nil {
 			return nil, true, err

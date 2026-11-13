@@ -70,6 +70,9 @@ const (
 	// MethodCall {machine_id, method, params, timeout_ms?} → the node's result: the apps' and the hub's calls to a
 	// machine's node. session.watch / session.unwatch also tell the manager what to watch again after a reconnect.
 	MethodCall = "devices.call"
+	// MethodFileCall has NodeCall's params too, but only for a long file.copy / file.zip whose caller may cancel it.
+	// Keeping it separate leaves ordinary devices.call completion semantics unchanged when an HTTP client disconnects.
+	MethodFileCall = "devices.file_call"
 	// EventNotify {machine_id, event, params}: a one-way event to a node (terminal input, a port's bytes).
 	EventNotify = "devices.notify"
 	// EventConfig Config: what the hub hands the manager changed (an entry added on the admin page, the mesh, the

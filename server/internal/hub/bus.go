@@ -282,8 +282,9 @@ func (h *Hub) serveBus(w http.ResponseWriter, r *http.Request) {
 	// caller went away, #2597). So is what the manager does for one of the hub's features (extensions.hub_call): a
 	// persona_settings change of one of its own settings is a card it holds and a change it makes, and untold it kept
 	// the card up and made the change on a later approval, after the assistant had heard the call failed (#5907). A
-	// devices.call's long file copy / zip likewise stops when the hub's caller goes away (#6113).
-	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true, extwire.MethodHubCall: true, devicewire.MethodCall: true}
+	// devices.file_call's long file copy / zip likewise stops when the hub's caller goes away (#6113). Ordinary
+	// devices.call methods run on: their node may not support cancellation, so stopping the manager would be ambiguous.
+	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true, extwire.MethodHubCall: true, devicewire.MethodFileCall: true}
 	c.peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		return h.busRequest(ctx, c, method, params)
 	}
