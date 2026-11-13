@@ -62,11 +62,14 @@ export function creationBody(draft: CreationDraft, info: WorktreePrepare): Workt
   }
   // Never downgrade an advanced choice into a different legacy checkout.
   if (draft.name.trim() || draft.note.trim() || repo.baseRef || repo.preset || repo.provider) unsupported();
-  if (parent !== undefined && !info.choose_parent) unsupported();
+  // A host that cannot choose a parent places the worktree under its source: the source named as the parent (a child
+  // worktree of the row the menu was opened on) asks for just that.
+  const sourceParent = Boolean(parent) && parent!.machineId === source.mid && parent!.host === (source.host || "") && parent!.workspaceId === source.workspaceId;
+  if (parent !== undefined && !info.choose_parent && !sourceParent) unsupported();
   if (draft.automaticName && !info.automatic_name) unsupported();
   const legacyForm = { ...draft, path: draft.pathEdited ? draft.path : suggestedPath(info.path, draft.branch) };
   if (!draft.automaticName) { const problem = formProblem(legacyForm); if (problem) throw new Error(problem); }
-  return { workspace_id: source.workspaceId, ...(source.host ? { kind: source.host } : {}), ...parentBody,
+  return { workspace_id: source.workspaceId, ...(source.host ? { kind: source.host } : {}), ...(info.choose_parent ? parentBody : {}),
     ...(draft.automaticName ? { auto_name: true as const } : { branch: draft.branch.trim(), path: legacyForm.path.trim() }) };
 }
 

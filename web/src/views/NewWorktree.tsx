@@ -65,6 +65,11 @@ function Composer({ session, request, onClose }: { session: WorktreeCreationSess
   const actual = intent && createdWorkspace(intent);
   const machine = machines.find((m) => m.id === source.mid);
   const offline = machine?.online === false;
+  // Paseo's workspaces have no terminal to open (docs/integrations/paseo.md): an Agent in it is what opening it means.
+  const agentOnly = source.host === "paseo";
+  const startAgent = () => {
+    if (actual && !launched.current && worktreeAdmission(source)) { launched.current = true; openNewAgent({ workspace: actual }); onClose(); }
+  };
 
   useEffect(() => {
     alive.current = true;
@@ -151,7 +156,8 @@ function Composer({ session, request, onClose }: { session: WorktreeCreationSess
   return <Dialog open onClose={onClose} title={intent?.created ? t("worktree.created") : t("worktree.dialog_title")}
     footer={<>
       <Button tone="quiet" onClick={onClose}>{t(intent?.created ? "worktree-composer.done" : "common.cancel")}</Button>
-      {intent?.created ? <Button tone="primary" disabled={!validOwner} onClick={() => { openCreated(source.mid, intent.created!); onClose(); }}>{t("worktree-composer.open")}</Button> :
+      {intent?.created ? agentOnly ? <Button tone="primary" disabled={!validOwner || launched.current} onClick={startAgent}>{t("worktree-composer.start_agent")}</Button> :
+        <Button tone="primary" disabled={!validOwner} onClick={() => { openCreated(source.mid, intent.created!); onClose(); }}>{t("worktree-composer.open")}</Button> :
         <Button tone="primary" busy={sending} disabled={!validOwner || offline || (!info && !intent) || Boolean(read.error && !intent) || Boolean(parentMismatch || unsupportedParent)} onClick={submit}>
           {t(locked ? "worktree-composer.check_result" : "worktree-composer.create")}</Button>}
     </>}>
@@ -160,7 +166,7 @@ function Composer({ session, request, onClose }: { session: WorktreeCreationSess
       <p className="break-all font-mono text-ink-2">{intent.created.path}</p>
       <p className="break-all text-ink-2">{intent.created.branch}</p>
       <p className="text-ink-3">{t("worktree-composer.created_help")}</p>
-      <Button disabled={launched.current} onClick={() => { if (!launched.current && worktreeAdmission(source)) { launched.current = true; openNewAgent({ workspace: actual }); onClose(); } }}>{t("worktree-composer.start_agent")}</Button>
+      {!agentOnly && <Button disabled={launched.current} onClick={startAgent}>{t("worktree-composer.start_agent")}</Button>}
       <Button tone="quiet" onClick={() => { notified.current = ""; session.fresh(); }}>{t("worktree-composer.create_another")}</Button>
     </div> : <form className="flex flex-col gap-3 text-sm text-ink-2" onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <fieldset disabled={locked || !validOwner} className="flex min-w-0 flex-col gap-3">

@@ -41,7 +41,8 @@ export function resolveWorktreeAction(target: WorkspaceTarget, context: Worktree
   return { workspace, machine, parent, available, writable: !reason, reason, hasChildren,
     // These adapters implement host.Organizer + host.Launcher. Other runtimes retain copy/open compatibility.
     canRename: !reason && ["herdr", "orca"].includes(target.host),
-    canCreate: !reason && ["herdr", "orca"].includes(target.host),
+    // Paseo makes worktrees of its Git workspaces itself (docs/integrations/paseo.md "Spaces and workspaces"); a folder has none.
+    canCreate: !reason && (["herdr", "orca"].includes(target.host) || target.host === "paseo" && workspace?.workspace_kind === "git"),
     canReconcile: owned && writable && Boolean(machine?.online && currentHosts(machine).hosts.includes(target.host)
       && !machine.engines?.some((e) => e.id === target.host && !e.available))
       && (matches.length === 0 || Boolean(workspace && workspace.online !== false && workspace.available !== false)),

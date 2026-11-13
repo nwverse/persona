@@ -68,6 +68,16 @@ describe("exact worktree action admission", () => {
     target.host = "future"; catalog.workspaces[0].source = "future"; machines[0].engine_hosts = ["future"];
     expect(resolve()).toMatchObject({ writable: true, canRename: false, canCreate: false, canDelete: false });
   });
+  it("makes Paseo worktrees of its Git workspaces only, and nothing else of Paseo's yet", () => {
+    target.host = "paseo"; machines[0].engine_hosts = ["herdr", "paseo"];
+    catalog.workspaces[0] = { ...catalog.workspaces[0], source: "paseo", workspace_kind: "git", is_main: true };
+    expect(resolve()).toMatchObject({ writable: true, canCreate: true, canRename: false, canClose: false, canDelete: false });
+    catalog.workspaces[0].workspace_kind = "folder";
+    expect(resolve()).toMatchObject({ writable: true, canCreate: false });
+    machines[0].engines = [{ id: "paseo", name: "Paseo", available: false }];
+    catalog.workspaces[0].workspace_kind = "git";
+    expect(resolve()).toMatchObject({ writable: false, canCreate: false });
+  });
   it("closes herdr workspaces and deletes only a verified linked checkout", () => {
     target.host = "herdr"; catalog.workspaces[0].source = "herdr";
     expect(resolve()).toMatchObject({ canClose: true, canDelete: false });

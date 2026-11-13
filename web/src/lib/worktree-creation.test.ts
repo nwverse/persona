@@ -138,6 +138,16 @@ describe("capability and placement safety", () => {
     expect(() => creationBody({ ...draft(), automaticName: true }, legacy)).toThrow();
     expect(creationBody({ ...draft(), automaticName: true, parent: null }, { ...legacy, automatic_name: true, choose_parent: true })).toEqual({ workspace_id: "source", kind: "orca", auto_name: true, no_parent: true });
   });
+  it("takes the source named as the parent as the default where the host cannot choose one (a child worktree of a Paseo row)", () => {
+    const paseo = { ...request().target, host: "paseo", workspaceId: "wks_main" };
+    const legacy = { ...prepared, composer: undefined, automatic_name: true };
+    const self = { machineId: "computer", host: "paseo", workspaceId: "wks_main", cwd: "/projects/demo", owner: credentialOwner(), manager: "assistant" };
+    expect(creationBody({ ...draft(), source: paseo, parent: self, branch: "feature/child" }, legacy))
+      .toEqual({ workspace_id: "wks_main", kind: "paseo", branch: "feature/child", path: "/worktrees/feature-child" });
+    expect(creationBody({ ...draft(), source: paseo, parent: self, automaticName: true }, legacy)).toEqual({ workspace_id: "wks_main", kind: "paseo", auto_name: true });
+    expect(() => creationBody({ ...draft(), source: paseo, parent: { ...self, workspaceId: "wks_other" }, branch: "x" }, legacy)).toThrow();
+    expect(() => creationBody({ ...draft(), source: paseo, parent: null, branch: "x" }, legacy)).toThrow();
+  });
   it("exports a child opener with independent canonical parent/source and acknowledgment callback", () => {
     const listen = vi.fn(); const stop = onOpenNewWorktree(listen); const onCreated = vi.fn();
     openChildWorktree({ machineId: "computer", host: "orca", workspaceId: "parent", cwd: "/collections" }, { source: { machineId: "computer", host: "orca", workspaceId: "source", cwd: "/projects/demo" }, onCreated });

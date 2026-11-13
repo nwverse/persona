@@ -294,6 +294,13 @@ func (n *Node) previewStartRPC(ctx context.Context, params json.RawMessage) (any
 	if err := json.Unmarshal(params, &p); err != nil || p.Cwd == "" || p.Name == "" || p.Workspace == "" {
 		return nil, errors.New("preview.start: need cwd, name and workspace")
 	}
+	if n.isRuntimeWorkspace(p.Workspace) {
+		// A runtime's workspace (a Paseo session's workspace_id) has no terminal: the server runs in a tab of the
+		// machine's terminal engine, if it has one.
+		if p.Workspace, p.Kind = n.firstLaunchSpace(""), ""; p.Workspace == "" {
+			return nil, errors.New("this computer has no terminal engine to run the server in")
+		}
+	}
 	file := findLaunchFile(filepath.Clean(p.Cwd))
 	if file == "" {
 		return nil, fmt.Errorf("no %s for %s", launchFile, p.Cwd)

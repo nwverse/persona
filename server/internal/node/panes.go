@@ -179,6 +179,11 @@ func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShe
 		}
 		start = real
 	}
+	if start != "" && n.isRuntimeWorkspace(ws) {
+		// A runtime's workspace (a Paseo session's workspace_id) has no terminal: the folder decides, as when the
+		// session names none.
+		ws, kind = "", ""
+	}
 	if ws == "" && start != "" {
 		ws = n.firstLaunchSpace(kind)
 	}
