@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -500,9 +499,8 @@ func (s *Service) unwatchDeploy(ctx context.Context, id string, since time.Time)
 	}
 }
 
-// githubForge is GitHub's REST API: through the hub's GitHub connector when it is signed in (via), else directly, with
-// GH_TOKEN or GITHUB_TOKEN from the environment when set (the repository may be public: without a token it is read as
-// anyone may).
+// githubForge uses the signed-in connector, else the hub user's authenticated GitHub CLI.
+// Production never falls back to anonymous HTTP. Custom API bases are used by transport tests.
 type githubForge struct {
 	base   string
 	client *http.Client
@@ -542,18 +540,15 @@ func (g githubForge) get(ctx context.Context, path string, out any) error {
 			return err
 		}
 	}
+	if g.base == "https://api.github.com" {
+		return githubCLIGet(ctx, path, out)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.base+path, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "persona-hub")
-	for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
-		if tok := strings.TrimSpace(os.Getenv(k)); tok != "" {
-			req.Header.Set("Authorization", "Bearer "+tok)
-			break
-		}
-	}
 	resp, err := g.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("GitHub network error: %s", githubDiagnostic(err.Error()))

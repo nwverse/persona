@@ -138,6 +138,16 @@ Direct GitHub failures retain only a sanitized message and allowlisted status/ra
 Permission errors do not pause other PRs. A transient pause reports its original failure and UTC recovery time;
 it does not claim a fresh request was made. There are no automatic request retries.
 
+**Authenticated GitHub reads**: the gate first borrows the signed-in built-in connector. When an extension has
+replaced it and does not provide that transport, the gate uses `gh api --include --method GET --hostname github.com`
+on the hub machine, under the hub user's existing GitHub CLI authorization. The CLI performs credential lookup and
+the request itself; Persona never calls `gh auth token`, exports credentials, or falls back to anonymous HTTP.
+Install `gh` on the hub service's PATH and authorize it using the CLI's normal sign-in flow if this fallback is
+needed. A missing CLI, unavailable authorization, or failed request keeps verification unavailable, not unfinished.
+The service log identifies this authenticated route and records response status, quota and request ID. The existing
+public-host restriction still applies to connectors. A versioned plugin delivery-snapshot capability remains a
+possible follow-up, not a requirement for the authenticated CLI path.
+
 **Deployed before the upstream merge** (#4867): a hub built from a local branch can run a PR that is still open. The PR has
 no merge commit, and GitHub's compare does not know a local commit. So the file names such a PR by a commit of its own,
 `# pr: <N> <sha>`: its head when the deployed commit contains it, else its newest own commit when the PR branch only merged
