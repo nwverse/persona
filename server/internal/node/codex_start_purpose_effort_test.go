@@ -50,6 +50,8 @@ func TestCodexStartLeavesOutAnEffortCodexAlreadyRuns(t *testing.T) {
 		t.Run(tc.effort+"/"+tc.model, func(t *testing.T) {
 			withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
 			n, _, cwd, _ := codexStartHerdr(t, 0)
+			t.Setenv("HOME", n.home)
+			t.Setenv("ZDOTDIR", n.home)
 			writeFile(t, filepath.Join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n")
 			writeFile(t, filepath.Join(n.codexHome(), "config.toml"), "model = \"gpt-6\"\nmodel_reasoning_effort = \"high\"\n\n[features]\nhooks = true\n")
 			_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hello", "effort": tc.effort, "model": tc.model})
@@ -76,6 +78,7 @@ func TestCodexStartKeepsTierEffortOverNativeShellFunction(t *testing.T) {
 				withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
 				n, _, cwd, _ := codexStartHerdr(t, 0)
 				t.Setenv("HOME", n.home)
+				t.Setenv("ZDOTDIR", n.home)
 				t.Setenv("SHELL", "/bin/"+shell)
 				writeFile(t, filepath.Join(n.home, "."+shell+"rc"),
 					`codex() { HTTPS_PROXY=http://proxy.example:8080 command codex `+flags+` "$@"; }`+"\n")
@@ -113,6 +116,7 @@ func TestCodexEffortInheritedKeepsTheFlagWhenShellResolutionIsUncertain(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			n, home := testNode(t)
 			t.Setenv("HOME", home)
+			t.Setenv("ZDOTDIR", home)
 			t.Setenv("SHELL", "/bin/bash")
 			writeFile(t, filepath.Join(home, ".bashrc"), tc.rc)
 			writeFile(t, filepath.Join(home, ".codex", "config.toml"), "model_reasoning_effort = \"high\"\n")
@@ -138,6 +142,7 @@ func TestCodexEffortInheritedChecksTheLaunchEnvironment(t *testing.T) {
 	}
 	n, home := testNode(t)
 	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", home)
 	t.Setenv("SHELL", "/bin/bash")
 	writeFile(t, filepath.Join(home, ".bashrc"), `
 if [ "${PERSONA_TEST_CODEX_FUNCTION-}" = yes ] && [ "$PWD" = "$HOME/repo" ]; then
@@ -201,6 +206,8 @@ func TestCodexEffortInherited(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, home := testNode(t)
+			t.Setenv("HOME", home)
+			t.Setenv("ZDOTDIR", home)
 			writeFile(t, filepath.Join(home, "repo", ".git", "HEAD"), "ref: refs/heads/main\n")
 			if tc.user != "-" {
 				writeFile(t, filepath.Join(home, ".codex", "config.toml"), tc.user)
