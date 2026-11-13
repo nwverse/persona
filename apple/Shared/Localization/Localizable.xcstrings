@@ -21819,6 +21819,29 @@
       },
       "extractionState" : "manual"
     },
+    "Answered: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Answered: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答済み：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已回答：%@"
+          }
+        }
+      }
+    },
     "Answers are formatted (Markdown)" : {
       "localizations" : {
         "en" : {
@@ -22937,6 +22960,29 @@
       },
       "extractionState" : "manual"
     },
+    "Artifacts" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Artifacts"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "成果物"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "产出"
+          }
+        }
+      }
+    },
     "As Set [Inbox Policy]" : {
       "localizations" : {
         "en" : {
@@ -23533,6 +23579,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Ask for a Closeout" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ask for a Closeout"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クローズアウトを求める"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要收尾记录"
+          }
+        }
+      }
     },
     "Ask privately. Answers stay on this screen and in the main chat." : {
       "extractionState" : "manual",
@@ -26733,6 +26802,29 @@
       },
       "extractionState" : "manual"
     },
+    "Blocked [Closeout]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blocked"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブロック中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "卡住了"
+          }
+        }
+      }
+    },
     "Blocked by rule %@" : {
       "localizations" : {
         "en" : {
@@ -26778,6 +26870,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Blocked on: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blocked on: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブロック中：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "卡在：%@"
+          }
+        }
+      }
     },
     "Blue" : {
       "extractionState" : "manual",
@@ -33434,6 +33549,52 @@
       },
       "extractionState" : "manual"
     },
+    "Choose %@ for %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose %1$@ for %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%2$@」で「%1$@」を選ぶ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为「%2$@」选「%1$@」"
+          }
+        }
+      }
+    },
+    "Choose %@, the recommended option, for %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose %1$@, the recommended option, for %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%2$@」でおすすめの「%1$@」を選ぶ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为「%2$@」选推荐的「%1$@」"
+          }
+        }
+      }
+    },
     "Choose Bearer if the gateway only accepts Authorization: Bearer (ANTHROPIC_AUTH_TOKEN). The hub keeps only the reference and fetches the key from its provider when it's needed." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -36536,6 +36697,29 @@
         }
       }
     },
+    "Closeout" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Closeout"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クローズアウト"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收尾记录"
+          }
+        }
+      }
+    },
     "Cloud Scheduled Task" : {
       "localizations" : {
         "en" : {
@@ -39081,6 +39265,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Confirm: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirm: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认：%@"
+          }
+        }
+      }
     },
     "Confirmed by you on a card" : {
       "localizations" : {
@@ -46764,6 +46971,29 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't send your answer. %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't send your answer. %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答を送信できませんでした。%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答没发出去。%@"
+          }
+        }
+      }
+    },
     "Couldn't send “%@”: %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -51476,6 +51706,29 @@
       },
       "extractionState" : "manual"
     },
+    "Deployed [Closeout]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deployed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デプロイ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部署"
+          }
+        }
+      }
+    },
     "Deploying" : {
       "localizations" : {
         "en" : {
@@ -54134,6 +54387,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "验收标准"
+          }
+        }
+      }
+    },
+    "Done [Closeout]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成"
           }
         }
       }
@@ -61739,6 +62015,29 @@
         }
       }
     },
+    "Fixed the sign-in test" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fixed the sign-in test"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サインインテストを修正"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修好了登录测试"
+          }
+        }
+      }
+    },
     "Flat at %@, low %@, high %@" : {
       "localizations" : {
         "en" : {
@@ -62079,6 +62378,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "メインチャットに従う"
+          }
+        }
+      }
+    },
+    "Follow Main Chat default" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Follow Main Chat default"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跟随主对话默认"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャットのデフォルトに戻す"
           }
         }
       }
@@ -66770,6 +67092,30 @@
         }
       }
     },
+    "Highlights [Meeting]" : {
+      "comment" : "The meeting page's top card: the room's highlights of the meeting so far (#3862 phase 2b)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Highlights"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要点"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要点"
+          }
+        }
+      }
+    },
     "History" : {
       "localizations" : {
         "en" : {
@@ -66882,6 +67228,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "話している間は押し続けてください。指を離すと Persona が答えます。"
+          }
+        }
+      }
+    },
+    "Holds an agent's stop once to ask what's done, merged, deployed and missing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Holds an agent's stop once to ask what's done, merged, deployed and missing"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作業後に報告なく止まったとき、一度だけ停止を保留して、完了・マージ・デプロイ・不足を尋ねます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "干了活没交代就停下时，拦它一次，让它补上做完没有、合没合、部署没有、还缺什么"
           }
         }
       }
@@ -67598,6 +67967,121 @@
       },
       "extractionState" : "manual"
     },
+    "Hub confirmed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hub confirmed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブが確認済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 已核实"
+          }
+        }
+      }
+    },
+    "Hub found it deployed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hub found it deployed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブの確認ではデプロイ済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 查到已部署"
+          }
+        }
+      }
+    },
+    "Hub found it isn't deployed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hub found it isn't deployed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブの確認では未デプロイ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 查到没有部署"
+          }
+        }
+      }
+    },
+    "Hub found it isn't merged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hub found it isn't merged"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブの確認では未マージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 查到没有合并"
+          }
+        }
+      }
+    },
+    "Hub found it merged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hub found it merged"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブの確認ではマージ済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 查到已合并"
+          }
+        }
+      }
+    },
     "Hub only" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -68010,6 +68494,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "If it waits: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If it waits: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待つ場合の影響：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等下去的代价：%@"
+          }
+        }
+      }
     },
     "If macOS asks to quit and reopen Cua Driver, or whether it may access the screen directly, choose Allow" : {
       "localizations" : {
@@ -81870,6 +82377,29 @@
       },
       "extractionState" : "manual"
     },
+    "Merged [Closeout]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merged"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合并"
+          }
+        }
+      }
+    },
     "Merged into Another Project" : {
       "localizations" : {
         "en" : {
@@ -84056,6 +84586,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "More answers" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "More answers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほかの答え"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更多回答"
+          }
+        }
+      }
     },
     "More careful" : {
       "localizations" : {
@@ -86566,6 +87119,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Never taken by default" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Never taken by default"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動では採用されません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不会默认执行，等你回复"
+          }
+        }
+      }
     },
     "New" : {
       "localizations" : {
@@ -93017,6 +93593,29 @@
       },
       "extractionState" : "manual"
     },
+    "Nobody is working on this" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nobody is working on this"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "誰も作業していません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没人在做"
+          }
+        }
+      }
+    },
     "None (the hub is too old, or hasn't been told)" : {
       "localizations" : {
         "en" : {
@@ -94052,6 +94651,29 @@
         }
       }
     },
+    "Not checked by the hub" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not checked by the hub"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブは未確認"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 没核对"
+          }
+        }
+      }
+    },
     "Not connected" : {
       "localizations" : {
         "en" : {
@@ -94603,6 +95225,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Not done [Closeout]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没做完"
+          }
+        }
+      }
+    },
+    "Not done: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not done: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未完了：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没做完：%@"
+          }
+        }
+      }
     },
     "Not enough storage. Saved recordings won't be lost." : {
       "localizations" : {
@@ -95245,6 +95913,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Not said" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not said"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "報告なし"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没说"
+          }
+        }
+      }
     },
     "Not saved. Type it again if this card closes." : {
       "extractionState" : "manual",
@@ -100706,6 +101397,29 @@
       },
       "extractionState" : "manual"
     },
+    "Open %@ to answer another way" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open %@ to answer another way"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」を開いて別の方法で答える"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开「%@」用别的方式回答"
+          }
+        }
+      }
+    },
     "Open %@'s conversation [Workflow Agent]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -103505,6 +104219,29 @@
       },
       "extractionState" : "manual"
     },
+    "Other…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Other…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その他…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他…"
+          }
+        }
+      }
+    },
     "Out of Bounds" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -106031,6 +106768,29 @@
         }
       }
     },
+    "Persona asks again with what this is and why." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona asks again with what this is and why."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が内容と理由を添えてもう一度尋ねます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 补上这是什么、为什么做，再问一次。"
+          }
+        }
+      }
+    },
     "Persona assistant (Claude on the hub)" : {
       "localizations" : {
         "en" : {
@@ -106375,6 +107135,29 @@
         }
       }
     },
+    "Persona decides and records what it assumed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona decides and records what it assumed."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が決め、前提を記録します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 自己决定，并记下它的假设。"
+          }
+        }
+      }
+    },
     "Persona didn't answer that. Ask again." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -106670,6 +107453,30 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Persona 旁听中"
+          }
+        }
+      }
+    },
+    "Persona is listening. Highlights come after a few minutes." : {
+      "comment" : "The meeting page's Highlights card before the room's first highlights, while Persona attends the meeting (#3862 phase 2b)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona is listening. Highlights come after a few minutes."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 正在听，几分钟后会出现要点。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が聞いています。数分後に要点が表示されます。"
           }
         }
       }
@@ -113176,6 +113983,29 @@
         }
       }
     },
+    "Reading models…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading models…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取模型中…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルを読み込み中…"
+          }
+        }
+      }
+    },
     "Reading quota…" : {
       "localizations" : {
         "en" : {
@@ -118619,6 +119449,29 @@
       },
       "extractionState" : "manual"
     },
+    "Reported done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reported done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了と報告"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自述已完成"
+          }
+        }
+      }
+    },
     "Reported version" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -121036,6 +121889,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Rounds that another conversation, a scheduled task or a follow-up started in the main chat or a leader conversation show as one line you can open. Rounds that ask or tell you something stay shown." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rounds that another conversation, a scheduled task or a follow-up started in the main chat or a leader conversation show as one line you can open. Rounds that ask or tell you something stay shown."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主对话和主管对话里，由别的对话、定时任务或跟进发起的轮次折成一行，点开能看全部；问过你或通知过你的轮次照常显示。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャットとリーダー会話で、別の会話・定期タスク・フォローアップが始めたラウンドを1行にまとめ、開くと全体を表示します。質問や通知をしたラウンドはそのまま表示します。"
+          }
+        }
+      }
     },
     "Rounds that another conversation, a scheduled task or a follow-up started in the main chat show as one line you can open. Rounds that ask or tell you something stay shown." : {
       "extractionState" : "manual",
@@ -123792,6 +124668,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Says no" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Says no"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "報告：いいえ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自述：否"
+          }
+        }
+      }
+    },
+    "Says yes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Says yes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "報告：はい"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自述：是"
+          }
+        }
+      }
     },
     "Scan Document" : {
       "localizations" : {
@@ -127697,6 +128619,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Sent back to Persona" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sent back to Persona"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona に戻しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已交回 Persona"
+          }
+        }
+      }
     },
     "Sent by the extension itself" : {
       "localizations" : {
@@ -136343,6 +137288,29 @@
       },
       "extractionState" : "manual"
     },
+    "Still needs" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Still needs"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不足"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还缺"
+          }
+        }
+      }
+    },
     "Still needs: %@" : {
       "localizations" : {
         "en" : {
@@ -140034,6 +141002,29 @@
         }
       }
     },
+    "Taken by default at %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Taken by default at %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ まで返答がなければおすすめを採用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 没回复就按推荐办"
+          }
+        }
+      }
+    },
     "Taking a photo, one moment" : {
       "localizations" : {
         "en" : {
@@ -140493,6 +141484,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Tap again to confirm" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap again to confirm"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "もう一度タップして確認"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再点一次确认"
+          }
+        }
+      }
     },
     "Tap an element to comment on it" : {
       "localizations" : {
@@ -141412,6 +142426,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Tell Me the Background First" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tell Me the Background First"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先に背景を教えて"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先告诉我背景"
+          }
+        }
+      }
     },
     "Tell Persona what needs doing in a chat, and it'll turn it into a task." : {
       "localizations" : {
@@ -143291,6 +144328,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "アバター、タイトルと時刻、最新の発言 2 行、実行場所。"
+          }
+        }
+      }
+    },
+    "The agent's own report" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The agent's own report"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェント自身の報告"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 自己的说法"
           }
         }
       }
@@ -149547,6 +150607,29 @@
       },
       "extractionState" : "manual"
     },
+    "The sign-in test passes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The sign-in test passes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サインインテストが通過"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录测试通过"
+          }
+        }
+      }
+    },
     "The sign-in the extension saved is deleted; sign in again when you need it." : {
       "localizations" : {
         "en" : {
@@ -150510,6 +151593,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The work pauses until Persona checks it against your request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The work pauses until Persona checks it against your request."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が依頼と照らし合わせるまで作業を止めます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先暂停，等 Persona 对照你的要求核对。"
+          }
+        }
+      }
     },
     "The xlsx file is damaged: %@" : {
       "comment" : "A document's part or an xlsx error, shown in Compare and the table viewer (PersonaKit, #5575)",
@@ -151499,6 +152605,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This Isn't What I Asked For" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Isn't What I Asked For"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "頼んだことと違います"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这不是我要的"
+          }
+        }
+      }
     },
     "This Item Is No Longer in the Inbox" : {
       "localizations" : {
@@ -153102,6 +154231,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This conversation has its own model. Following the default makes its next messages use Model configuration › Main chat again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation has its own model. Following the default makes its next messages use Model configuration › Main chat again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个对话有自己的模型。跟随默认后，它的下一轮消息会重新使用「模型配置 › 主对话」。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話には専用のモデルがあります。デフォルトに戻すと、次のメッセージからは「モデル設定 › メインチャット」を使います。"
+          }
+        }
+      }
     },
     "This conversation is working, so nothing was closed. Try again once it stops." : {
       "extractionState" : "manual",
@@ -161657,6 +162809,29 @@
       },
       "extractionState" : "manual"
     },
+    "Unavailable here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unavailable here"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此处不可用"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここでは利用不可"
+          }
+        }
+      }
+    },
     "Unavailable on This Computer" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -165954,6 +167129,29 @@
         }
       }
     },
+    "Used for this conversation's next messages, on every device." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Used for this conversation's next messages, on every device."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于这个对话的下一轮消息，在所有设备上生效。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話の次のメッセージから、すべてのデバイスで使われます。"
+          }
+        }
+      }
+    },
     "Used for this start only. Once it runs, it's listed under Typed Before." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -166611,6 +167809,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Verified [Closeout]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verified"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検証"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "验证"
+          }
+        }
+      }
     },
     "Verified [S S H Tunnel View d56a51]" : {
       "localizations" : {
@@ -170220,6 +171441,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "What changed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What changed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更内容"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "改了什么"
+          }
+        }
+      }
     },
     "What do you want to ask Persona?" : {
       "localizations" : {
@@ -174092,6 +175336,29 @@
       },
       "extractionState" : "manual"
     },
+    "You Decide" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You Decide"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任せます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你来定"
+          }
+        }
+      }
+    },
     "You Were Mentioned" : {
       "localizations" : {
         "en" : {
@@ -176519,6 +177786,52 @@
         }
       }
     },
+    "closed [Orphaned]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "closed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "終了済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭"
+          }
+        }
+      }
+    },
+    "closed after an error" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "closed after an error"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エラー後に終了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出错后关闭"
+          }
+        }
+      }
+    },
     "commented on code" : {
       "localizations" : {
         "en" : {
@@ -176561,6 +177874,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "压缩方式 %1$u"
+          }
+        }
+      }
+    },
+    "computer offline" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "computer offline"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パソコンがオフライン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑离线"
           }
         }
       }
@@ -176691,6 +178027,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "deployed [Closeout]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "deployed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デプロイ済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已部署"
+          }
+        }
+      }
+    },
+    "deployed ✓" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "deployed ✓"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デプロイ済み ✓"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已部署 ✓"
+          }
+        }
+      }
     },
     "description" : {
       "localizations" : {
@@ -178179,6 +179561,52 @@
         }
       }
     },
+    "merged [Closeout]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "merged"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マージ済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已合并"
+          }
+        }
+      }
+    },
+    "merged ✓" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "merged ✓"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マージ済み ✓"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已合并 ✓"
+          }
+        }
+      }
+    },
     "needs a name" : {
       "localizations" : {
         "en" : {
@@ -178288,6 +179716,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "タブを閉じられませんでした"
+          }
+        }
+      }
+    },
+    "not deployed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "not deployed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未デプロイ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未部署"
+          }
+        }
+      }
+    },
+    "not merged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "not merged"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未マージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未合并"
           }
         }
       }
@@ -182195,6 +183669,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "✗ says deployed, isn't" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "✗ says deployed, isn't"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "✗ デプロイ済みと報告、実際は未デプロイ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "✗ 说已部署，实际没有"
+          }
+        }
+      }
+    },
+    "✗ says merged, isn't" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "✗ says merged, isn't"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "✗ マージ済みと報告、実際は未マージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "✗ 说已合并，实际没有"
+          }
+        }
+      }
     },
     "、" : {
       "comment" : "Separator between computer names in a list\nSeparator between items in a list\nSeparator between list items\nSeparator between machine names\nSeparator between names in a list\nSeparator between quoted session titles\nSeparator between weekday names, e.g. Mon, Wed",
