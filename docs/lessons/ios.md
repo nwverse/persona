@@ -2,6 +2,17 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## An edit menu needs the selection's rect, not just a point (#6005)
+
+- If `UIEditMenuInteraction.presentEditMenu(with:)` gets only a `sourcePoint` and its delegate has no
+  `editMenuInteraction(_:targetRectFor:)`, the system doesn't know how tall the selection is or where its handles are.
+  In the lifted message it put the menu just under the selection's top edge, covering the selected word and its end
+  handle, so the handle couldn't be dragged. Return the selection's rect, clipped to what shows and padded for each
+  handle's knob (the start handle's above the first line, the end handle's below the last). The system then places
+  the menu above that rect, or below it when there is no room.
+- To check this in a UI test, a DEBUG value reports the selected lines and the handle views
+  (`UITextSelectionHandleView`) in window coordinates. Compare them with the frame of the edit menu's items.
+
 ## Selecting the words of a long lifted answer (#5291)
 
 - A `LazyVStack` opened at item N in a scroll view still lays out items 0 and 1 first, then walks the items between
@@ -2302,3 +2313,13 @@ the same frame as Core Location. Converting to GCJ-02, as older posts advise, mo
 a Mac (macOS 14, region China): Tiananmen Gate searched by name came back at (39.90919, 116.39746) and sat on the gate in
 a snapshot, the same point shifted to GCJ-02 (39.91059, 116.40371) landed in an alley 550 m east, and a walking route
 drawn from MapKit's own points followed the streets. Check on a phone in the mainland before adding any conversion.
+
+## A sidebar place has more than one way in (2026-11-13, #6599)
+
+The drawer's places (Inbox, Machines, Knowledge…) keep their stacks through `AssistantView.show` (`ShellPlaces`,
+`docs/design/sidebar-navigation.md`). The iPhone shell's rows all reach `show`, but the iPad's sidebar column wires its own
+closures in `AssistantView.sidebar(column:)`, and Knowledge, Scheduled Tasks, Profile and Health there still set the old
+`show…` flags: Machines was never left, so choosing it again counted as choosing the place in front and popped it. A new
+way into a place goes through `show`, and a UI test walks it on the iPad too (`testAPlaceKeepsItsStackBesideTheIPadColumn`).
+Against a mock hub XCUITest calls the shell's switch not hittable under the status window, which takes no touches: tap it
+with `ShellFinger` and check the probe, never `isHittable` (`DrawerSwipeTests` failed on `main` for this).
