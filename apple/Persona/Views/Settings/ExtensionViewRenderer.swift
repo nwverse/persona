@@ -70,16 +70,24 @@ struct ExtensionParts: Identifiable {
         var out: [ExtensionParts] = []
         for (i, s) in view.sections.enumerated() {
             var parts: [[Item]] = [[]]
+            var leftOut = false
             for (j, c) in s.items.enumerated() {
                 if case .divider = c { parts.append([]); continue }
-                if case .unknown = c { continue }
-                if case .html = c, !includeHTML { continue } // Extensions never receive the assistant sandbox context.
+                // Left out: a component this app doesn't know, and the assistant's HTML outside its chat (extensions never
+                // receive the assistant sandbox context).
+                if case .unknown = c { leftOut = true; continue }
+                if case .html = c, !includeHTML { leftOut = true; continue }
                 parts[parts.count - 1].append(Item(id: Item.id(c, section: i, index: j), component: c))
             }
             parts = parts.filter { !$0.isEmpty }
-            if parts.isEmpty { parts = [[]] }
+            if parts.isEmpty {
+                // Every component left out: the title would stand alone over nothing (#827), unless the footer or `more`
+                // has something to say. A section sent with no components at all keeps its title.
+                if leftOut, s.footer?.isEmpty != false, s.more == nil { continue }
+                parts = [[]]
+            }
             for (j, part) in parts.enumerated() {
-                let title = j == 0 ? (s.title?.isEmpty == false ? s.title : (i == 0 ? heading : nil)) : nil
+                let title = j == 0 ? (s.title?.isEmpty == false ? s.title : (out.isEmpty ? heading : nil)) : nil
                 let last = j == parts.count - 1
                 out.append(ExtensionParts(id: s.key.map { "k:" + $0 + ".part:\(j)" } ?? "\(out.count)", title: title, footer: last ? s.footer : nil, more: last ? s.more : nil,
                                           items: part))
@@ -328,9 +336,9 @@ struct ExtensionItemRow: View {
                 .listRowBackground(Color.clear)
                 // Its own page margin lines its first tile up with the rows' words; it scrolls to the section's edges.
                 .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.flush, bottom: Theme.Space.s, trailing: Theme.Space.flush))
-        // UI version 6's picture is not drawn yet (#827). Until all of version 6 is, the app asks for an older version,
-        // so the hub turns it into older components before it gets here.
-        case .divider, .unknown, .image: EmptyView()
+        // UI version 6's picture (`ExtensionMedia.swift`).
+        case .image(let i): ExtensionImageItem(item: i, model: model)
+        case .divider, .unknown: EmptyView()
         // UI version 4's code-hosting components: a View with them is drawn by the code page (`ExtensionCodePage`, #2961).
         case .header, .breadcrumb, .fileTree, .code, .diff, .commentThread, .composer: EmptyView()
         }

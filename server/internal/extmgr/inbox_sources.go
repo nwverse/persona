@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -112,9 +113,61 @@ func (b builtinSources) List(ctx context.Context) []subscriptionsui.Builtin {
 			b.mail(&src)
 		}
 		b.rules(&src)
+		b.via(ctx, &src)
 		out = append(out, src)
 	}
 	return out
+}
+
+// migrations are the built-in sources whose Inbox feed can be read through a default subscription (#6345, the M steps
+// of docs/design/proposals/inbox-sources-migration.md), by connector: what each subscription reads.
+var migrations = map[string]subscriptions.Migration{
+	// iMessage's rows as its Collect makes them, ready-made (#6317).
+	"imessage": {Connector: "imessage", Source: "imessage", Icon: "chat", Recipe: inboxRows(wire.ConnectorSubscriptionKindSubMessage)},
+	// GitHub's rows as its Collect makes them, through the generic inbox_things (#6381, #6404).
+	"github": {Connector: "github", Source: "github", Icon: "code", Recipe: inboxRows(wire.ConnectorSubscriptionKindSubNotice)},
+}
+
+// withheld are the sources whose default subscription is not offered yet: the owner says when (decision 6 of the
+// migration). GitHub's waits for iMessage's week on the owner's hub (2026-11-13). One already switched still shows
+// its switch, to switch back.
+var withheld = map[string]bool{"github": true}
+
+// inboxRows is a default subscription's recipe: the source's own Inbox rows, ready-made (inbox_things), a row
+// without a kind of its own being kind.
+func inboxRows(kind string) subscriptions.Recipe {
+	return subscriptions.Recipe{Mode: wire.ConnectorSubscriptionModeThings, Tool: subscriptions.InboxThingsTool, ItemsPath: "$.things",
+		Kind: kind, GroupBy: wire.ConnectorSubscriptionGroupThread}
+}
+
+// via is a built-in source's default subscription, for its page's switch: none when it has no migration.
+func (b builtinSources) via(ctx context.Context, src *subscriptionsui.Builtin) {
+	if _, ok := migrations[src.ID]; !ok || b.h.subs == nil {
+		return
+	}
+	via := &subscriptionsui.Via{}
+	if s, _, err := b.h.subs.Get(ctx, subscriptions.MigrationID(src.ID)); err == nil {
+		via.On, via.Subscription = s.Migrated != nil, s.ID
+	}
+	if withheld[src.ID] && !via.On {
+		return // not offered yet
+	}
+	src.Via = via
+}
+
+// SetMigrated reads source id's Inbox feed through its default subscription (on) or as before, named as the source.
+func (b builtinSources) SetMigrated(ctx context.Context, id string, on bool, by subscriptions.Actor) error {
+	m, ok := migrations[id]
+	c := b.h.connectors.Get(id)
+	if !ok || c == nil || b.h.subs == nil {
+		return fmt.Errorf("no default subscription for %q", id)
+	}
+	if on && withheld[id] {
+		return fmt.Errorf("%q's default subscription is not offered yet", id)
+	}
+	m.Label, m.SourceName = connector.DisplayName(ctx, c), c.Name()
+	_, err := b.h.subs.Migrate(ctx, m, on, by)
+	return err
 }
 
 // mail is the mail source's accounts: every account's inbox is read each mail round, with no switch for it.

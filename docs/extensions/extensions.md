@@ -2515,7 +2515,7 @@ A row's extra actions open from a right click, a half-second press on a touch sc
 The component showcase's version 6 pages are `web/src/showcase/v6` (with their pictures in `web/src/showcase/images`) until the showcase extension's own snapshots have them.
 
 **iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, the styles
-(the 45 icons, named colors, `title` / `headline`), row actions, charts and sparks, tiles (grid, carousel) and the new fields; see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+(the 45 icons, named colors, `title` / `headline`), row actions, charts and sparks, tiles (grid, carousel), the new fields and pictures, that is all of it; reporting 6 is the last step; see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)
 
@@ -2978,6 +2978,13 @@ Views, components, actions, responses, placements and context all use schema-gen
   rather than showing a date nobody chose, and a set one has a clear button. `multichoice`: a menu of toggles that stays open while picking, the chosen ones named beside the label, sent as a
   JSON array in the choices' order (anything else reads as none chosen). `multiline`: a field that grows from 3 to 8 lines. A field's `detail` is a line of help under it. Unit tests
   `ExtensionFieldValuesTests`; screenshots of `showcase › inputs-v6`.
+- UI version 6's pictures (#827, `ExtensionMedia.swift`): an `image` in its shape (`aspect`; `auto` from `width` / `height`), cropped or fitted (`fit`), its caption under it, VoiceOver
+  reading its `alt`; a tap opens the app's `ImageViewer` unless `no_zoom`. A tile's picture, a row's thumbnail and avatar likewise. A `url` loads without the app's credentials; a `path`
+  only when it is the hub's image route for the page's own extension (`ExtensionViewModel.isHubPicture`), through the page with the device's credentials and `w` about as many pixels as it
+  is drawn; when a hub picture fails (its token may have run out) the page is drawn again, at most once a minute. Not loaded: the plain fill; failed: the alt text over a broken-picture mark.
+  Mock: `showcase` pages get a `path` beside every `ref` and the route answers a made-up picture of its shape (`missing`: 404). Unit tests `ExtensionMediaTests`; screenshots of `showcase › image`.
+  A section whose every component this app leaves out (one it doesn't know) is not drawn, rather than its title alone over
+  nothing; a section sent with no components keeps its title (`ExtensionParts.of`).
 - UI version 5's code review (#827, "UI version 5: code review"), drawn in parts (pages send 4 until all of version 6 is drawn too, so the hub strips these fields for iOS meanwhile).
   Reading (`ExtensionCodeReview.swift`, the code page): the words that changed in a removed and added pair on a stronger fill (PersonaKit's `LineDiff` word comparison, worked out once per hunk);
   generated files and lockfiles (by the extension's `generated` or the web's path list), changes over 400 lines and viewed files start folded with a line saying why and **Show**; a generated
@@ -3642,8 +3649,9 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
   - **Prefer deletion on failure**: delete whether or not key-presence can be read (idempotent); unreadable presence still returns `secrets_cleared`. If deletion fails, save nothing, return 500 `secret_not_cleared`;
     if config save fails after deletion (database write failure, 409), the error also includes `secrets_cleared` and the old address remains. Invalid form config (400) changes nothing and keeps the key.
 - **Model fallback**: if the selected model's upstream disappears (address cleared, manager.json changed), no error/disconnect: use default model and voice, then send nonfatal `error{code: "model_unavailable"}` after connecting.
-- **`GET /info`**: `{"protocol": 2, "features": ["target", "runs", "asks", "resume", "suspend", "speak"], "setup"?: "…", "warnings"?: ["…"]}`, without keys or upstream list. `protocol` is the highest voice-frame version this extension speaks (2 since #3502; clients not sending `protocol: 2` in `start` still use protocol 1 from this section); `features` lists only implemented capabilities (`docs/assistant/voice.md` ("Version negotiation")).
+- **`GET /info`**: `{"protocol": 2, "features": ["target", "runs", "asks", "resume", "suspend", "speak", "meeting"], "setup"?: "…", "warnings"?: ["…"]}`, without keys or upstream list. `protocol` is the highest voice-frame version this extension speaks (2 since #3502; clients not sending `protocol: 2` in `start` still use protocol 1 from this section); `features` lists only implemented capabilities (`docs/assistant/voice.md` ("Version negotiation")).
 - **`POST /speak`** (#5004, feature `speak`): `{"text", "model"?, "voice"?, "lang"?}` read aloud in its own upstream session (no tools, instructions to say the text exactly as written); answers `200` `audio/pcm` with `X-Persona-Audio-Rate` and the reply's PCM16 as it comes, or, before any audio, `{"error", "code"}` with `400 bad_request`, `403 forbidden` (not a full device), `503 no_upstream`, `502 upstream_forbidden`, `503 upstream_unavailable`, `502 upstream_failed` or `504 no_audio`. The iPhone says meeting answers with it outside a call; details in `docs/assistant/voice.md` ("Reading a text aloud").
+- **Meeting calls** (#3862 phase 4, feature `meeting`): a protocol 2 `start` with `mode: "meeting"` and `recording_id`, bound to a recorded meeting's room, that hears only what the owner says while holding Talk (`talk` frames) and hands every question to the room; a room takes no other call (`meeting_room`). Details in `docs/assistant/voice.md` ("Meeting calls").
 - **Meeting transcription** (#3862 phase 5): the manifest also contributes `transcription: [{"id": "gpt-live", "name": "GPT-Live"}]` beside its voice (its kind stays `voice`), with the same upstreams and key.
   It transcribes only through a GPT-Live (`live` dialect) upstream: the default model's when its upstream is one, else the first `live` upstream's default; with none,
   `GET /transcription/gpt-live/info` says `setup: "live_upstream"`. See "Transcription" above and [meeting-minutes.md](../assistant/meeting-minutes.md) "The built-in adapter".

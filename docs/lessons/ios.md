@@ -2218,3 +2218,12 @@ toasted and ended the hold, while the tap's dictation went on. The TLA+ model in
   passed ends without a word. Make `stop()` pass the turn, and call it unconditionally rather than behind `isListening`.
 - A newer start of the same owner takes over from an older one already holding the resource instead of failing as "in
   use". Test the orderings with the wait held open (`Dictation.permission`, `DictationTurnTests`) and rerun the model.
+
+## MapKit speaks WGS-84 in mainland China too (2026-11-13, #6386)
+
+Apple draws its mainland China map in GCJ-02, but MapKit's public API never shows it: `MKLocalSearch` and `CLGeocoder`
+return WGS-84, `MKMapSnapshotter`'s `point(for:)` and `MKDirections` take WGS-84 and give their route lines back in it,
+the same frame as Core Location. Converting to GCJ-02, as older posts advise, moves every mark about 500 m. Checked from
+a Mac (macOS 14, region China): Tiananmen Gate searched by name came back at (39.90919, 116.39746) and sat on the gate in
+a snapshot, the same point shifted to GCJ-02 (39.91059, 116.40371) landed in an alley 550 m east, and a walking route
+drawn from MapKit's own points followed the streets. Check on a phone in the mainland before adding any conversion.

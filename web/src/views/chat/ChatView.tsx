@@ -4,7 +4,7 @@ import { LinkManager, useShownManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
-import { attentionReason, backgroundWaiting, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionDeletable, sessionMenuActions, sourceSubtitle, sessionTitle, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
+import { attentionReason, backgroundWaiting, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDeletable, sessionMenuActions, sourceSubtitle, sessionTitle, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, useSessionView, viewOnlyRow } from "../../lib/session-view";
@@ -104,7 +104,7 @@ import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions"
 import { QueueStrip } from "./QueueStrip";
 import type { LoadOutcome } from "./ChatSearch";
 import { forgetReveals, revealItem, undoReveals, clearReveal } from "./search-reveal";
-import { forwardDraftOf, openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
+import { forwardDraftOf, jumpWhenOpen, openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
 import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
 import { foldHolding, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
@@ -178,6 +178,8 @@ const NO_RAIL_TICKS: NavRailTick[] = [];
  *  up, and how long it stays lit (Android: 3 s). */
 const FIND_MS = 400;
 const GIVE_UP_MS = 2000;
+/** How long landing on a message waits for the chat to stop loading before it pages back itself. */
+const LANDING_WAIT_MS = 5000;
 const HIT_MS = 3000;
 const SEARCH_NOTICE: Record<SearchLoadOutcome, string | null> = {
   start: null,
@@ -220,15 +222,17 @@ async function forkAt(mid: string, sid: string, itemId: string, assistant: boole
   }
 }
 
-/** "Rewind to here" (#2436): the node drives Claude's /rewind to before the message; the message then goes back into the composer. */
-async function rewindTo(mid: string, sid: string, draftKey: string, items: Item[], messageId: string, text: string, restore: RewindRestore) {
+/** "Rewind to here" (#2436): the node drives Claude's /rewind to before the message; the message then goes back into the composer.
+ *  `declared`: the session's node declares rewind (a runtime's session or a Codex thread, #6294), which goes back by itself:
+ *  there is no Claude input box on the computer to have kept the message. */
+async function rewindTo(mid: string, sid: string, draftKey: string, items: Item[], messageId: string, text: string, restore: RewindRestore, declared: boolean) {
   const target = rewindTarget(items, messageId);
   if (!target) throw new Error(tr("rewind.no_text"));
   const res = await rewindSession(mid, sid, target, restore);
   const done = rewindDone(res, restore);
   toast(done.text, done.tone);
   if (res.input_cleared) sendDraft(draftKey, { type: "replace", text });
-  else toast(tr("rewind.input_kept"), "info");
+  else if (!declared) toast(tr("rewind.input_kept"), "info");
 }
 
 /** In a side panel (TaskPanel, AgentPanel; #3333, iOS #3255; opened while Agents open in the side panel, #5424): the
@@ -243,7 +247,7 @@ export interface PanelChrome {
   beside?: React.ReactNode;
 }
 
-export function ChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions }: {
+export function ChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt }: {
   mid: string;
   sid: string;
   assistant?: boolean;
@@ -271,6 +275,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   onRefresh?: () => void;
   /** The page's own buttons at the header's end, before the permission mode and ⋯ (Health's New and its past conversations, #4329). */
   headerActions?: React.ReactNode;
+  /** A message to open the chat at (`?at=`, a search hit's, #6283): landed on once it is in, paging back for it. */
+  landAt?: string;
 }) {
   const { session, detail, retry: retryDetail } = useRuntimeSession(mid, sid);
   // opened from a conversation's hand-off card (#5096): the way back to it, until put away
@@ -475,6 +481,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const canRewind = canCompose && !assistant;
   // Legacy terminals retain both choices. Native rewind needs explicit file-restoration support.
   const rewindCode = session?.capabilities?.rewind_code ?? !session?.capabilities?.rewind;
+  const rewindDeclared = session?.capabilities?.rewind === true;
   // Edit last message (#2945) and ↑ in an empty box (#4503), Slack's way: ↑, Esc twice or the safeguards card's button put
   // the last prompt in the box with an "Editing" bar, and the conversation-only rewind to before it runs when the edit is
   // sent (commitEdit), so starting or cancelling an edit changes nothing on the computer. One edit, of this conversation:
@@ -563,9 +570,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       images: () => items.current.filter((i) => i.kind === "image"),
       fork: canFork ? (itemId: string) => void forkAt(mid, sid, itemId, Boolean(assistant), session?.space, session?.manager) : undefined,
       assistant: Boolean(assistant),
-      rewind: canRewind ? { block: rewindLive, code: rewindCode, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore) } : undefined,
+      rewind: canRewind ? { block: rewindLive, code: rewindCode, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore, rewindDeclared) } : undefined,
     }),
-    [draftKey, title, canCompose, canFork, canRewind, rewindCode, rewindLive, mid, sid, assistant, persona.name, forwardFrom, picker],
+    [draftKey, title, canCompose, canFork, canRewind, rewindCode, rewindDeclared, rewindLive, mid, sid, assistant, persona.name, forwardFrom, picker],
   );
   // the assistant works on any computer, so its @ menu offers workspaces too
   const shownManager = useShownManager();
@@ -1483,14 +1490,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tr.expandFold follows the chat, as seekItem does
   }, [seekItem, earlier.liveItems, folds.fetched, ctx.scope]);
-  // a forward's card opened this chat at its original (#3899, lib/forward.ts jumpWhenOpen): brought into view once the
-  // transcript is in and holds it; one further back stays where the chat opens, as iOS does
-  useEffect(() => {
-    const item = peekJump(mid, sid);
-    if (!item || tr.loading) return;
-    takeJump(mid, sid);
-    if (earlier.liveItems.some((i) => i.id === item)) requestAnimationFrame(() => seekItem(item, true));
-  }, [mid, sid, tr.loading, earlier.liveItems, seekItem]);
   const backToOrigin = useCallback(() => {
     const o = origin.current;
     origin.current = null;
@@ -1540,6 +1539,35 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const key = SEARCH_NOTICE[outcome];
     return key ? t(key) : null;
   }, []);
+  // a message to open the chat at: a search hit's (`?at=`, #6283) or a forward card's original (#3899, lib/forward.ts
+  // jumpWhenOpen). Brought into view once the transcript is in and holds it; one further up is paged back for, as "Load
+  // earlier and keep searching" does (at most SEARCH_PAGES pages, the reader scrolling away or another landing stops
+  // it); not reached, the chat stays where it opened and says the message is further up.
+  useEffect(() => {
+    if (landAt) jumpWhenOpen(mid, sid, landAt);
+  }, [mid, sid, landAt]);
+  const msgLanding = useRef(0);
+  useEffect(() => {
+    const item = peekJump(mid, sid);
+    if (!item || tr.loading) return;
+    takeJump(mid, sid);
+    const run = ++msgLanding.current;
+    const holds = () => trNow.current.items.some((i) => i.id === item);
+    if (holds()) return void requestAnimationFrame(() => seekItem(item, true));
+    if (!trNow.current.hasMore) return;
+    void (async () => {
+      // the chat may still be filling the screen with older pages: wait for that, then page back (again if it was busy)
+      for (let go = 0, until = performance.now() + LANDING_WAIT_MS; go < 3 && run === msgLanding.current && !holds(); go++) {
+        while ((trNow.current.loading || trNow.current.loadingEarlier) && performance.now() < until) await nextFrame();
+        await loadForSearch(() => {}, () => run !== msgLanding.current || holds());
+      }
+      if (run !== msgLanding.current) return;
+      if (holds()) requestAnimationFrame(() => seekItem(item));
+      else toast(t("chat-chatview.message_further_up"));
+    })().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new landing is a new item asked for, not the items changing
+  }, [mid, sid, tr.loading, landAt, seekItem, loadForSearch]);
+  useEffect(() => () => void msgLanding.current++, [mid, sid]); // another chat ends a landing on its way
   const rounds = useMemo(() => segs.filter((x) => x.user).length, [segs]);
 
   // the newest plan of the chat (PlanCard.tsx planCardStep draws its card): while that card is out of view, a pill above the composer
@@ -1680,7 +1708,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const wait = useMemo(() => (outgoing || awaiting ? null : backgroundWaitLine(session)), [outgoing, awaiting, session]);
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
   const done = turnDone(state, session, lastLine, tr.items);
-  const running = session ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
+  // In a Persona conversation the live work line in the message stream already says the turn is at work (its "Working…"
+  // header, spinner and clock), so the dock does not repeat it while that line is on screen (#6230). The bar stays for
+  // background workflows, background waits and subagents (lastLive is false then; the stream only shows their quiet
+  // fold rows), and for Agent chats, whose dock keeps the full cindy status bar.
+  const running = session && !(assistant && lastLive) ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const hasQueue = queued.length > 0;
@@ -2314,7 +2346,8 @@ export const Header = memo(function Header({
   const running = session && !assistant ? backgroundCount(session) : 0;
   const backgroundOpen = Boolean(session && backgroundPanelOf(panel, session.machine_id, session.session_id));
   const openBackground = () => session && toggleBackgroundPanel(session.machine_id, session.session_id);
-  const canRename = Boolean(session && !main && !builtIn && sessionCan(session, "send") && (session.assistant || !session.source_kind));
+  // a runtime's session renames where its node says it can (capabilities.rename, #6294), as Close goes by capabilities.close
+  const canRename = Boolean(session && !main && !builtIn && sessionCanRename(session));
   const [editing, setEditing] = useState(false);
   const spaceRows: MenuItem[] = siblings
     .slice()
