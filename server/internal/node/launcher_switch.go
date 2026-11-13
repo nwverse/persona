@@ -597,6 +597,7 @@ func (n *Node) switchIdle(ctx context.Context, id, launcher, from, model string)
 	if err != nil {
 		return n.switchNowDropped(id, refusal(proto.CodeSwitchUnsupported, fmt.Sprintf("session %s is not running in one of Persona's terminals: there is no agent to switch (%v)", id, err), nil))
 	}
+	n.leaveLimitQuestion(ctx, id, pane) // the switch moves it off its usage limit: Claude Code's question about it goes
 	if err := n.checkPaneFor(ctx, pane, "claude", sendOpts{}); err != nil {
 		return n.switchNowDropped(id, err)
 	}

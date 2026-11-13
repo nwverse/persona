@@ -290,6 +290,22 @@ import Testing
         #expect(carry == nil)
         #expect(MeetingVoicePlayer.buffer(Data([0x01]), carry: &carry, format: format) == nil, "half a sample waits for the rest")
     }
+
+    /// On the recorder's answer player (24 kHz, a room meeting) a voice at another rate is resampled on its way in, its
+    /// odd byte still carried to the next piece.
+    @Test func aVoiceAtAnotherRateIsResampledForTheRecordersPlayer() throws {
+        var carry: UInt8?
+        let samples = [Int16](repeating: 8192, count: 160)
+        var pcm = VoicePCM.data(samples)
+        pcm.append(0x00)
+        let buffer = try #require(MeetingVoicePlayer.buffer(pcm, carry: &carry, rate: 16000, format: RecordingCapture.callFormat))
+        #expect(buffer.frameLength == 240, "10 ms at 16 kHz is 240 samples at 24 kHz")
+        #expect(buffer.floatChannelData?[0][120] == 0.25)
+        #expect(carry == 0x00)
+        var none: UInt8?
+        let same = try #require(MeetingVoicePlayer.buffer(VoicePCM.data(samples), carry: &none, rate: 24000, format: RecordingCapture.callFormat))
+        #expect(same.frameLength == 160, "the player's own rate is not resampled")
+    }
 }
 
 @MainActor final class FakeDeviceSpeech: MeetingDeviceSpeech {

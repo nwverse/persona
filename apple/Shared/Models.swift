@@ -660,8 +660,21 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var terminal = false
     var attach = false
     var modes: Bool?
+    /// The node's word on closing, renaming, switching the model and rewinding (#6294; docs/protocol/protocol.md "Codex
+    /// sources and capabilities"): a runtime's session has no terminal, yet does these where its runtime can. Nil from an
+    /// older node, or a value this app cannot read: the app keeps its terminal rules (`Session.canClose`, `canRename`,
+    /// `switchesModel`, `Rewind.block`).
+    var close: Bool?
+    var rename: Bool?
+    var model: Bool?
+    var rewind: Bool?
+    /// Rewind Code and Chat as well (`rewind_code`).
+    var rewindCode: Bool?
 
-    enum CodingKeys: String, CodingKey { case read, send, interrupt, approve, terminal, attach, modes }
+    enum CodingKeys: String, CodingKey {
+        case read, send, interrupt, approve, terminal, attach, modes, close, rename, model, rewind
+        case rewindCode = "rewind_code"
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -672,6 +685,11 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
         terminal = try c.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
         attach = try c.decodeIfPresent(Bool.self, forKey: .attach) ?? false
         modes = try c.decodeIfPresent(Bool.self, forKey: .modes)
+        close = try? c.decodeIfPresent(Bool.self, forKey: .close)
+        rename = try? c.decodeIfPresent(Bool.self, forKey: .rename)
+        model = try? c.decodeIfPresent(Bool.self, forKey: .model)
+        rewind = try? c.decodeIfPresent(Bool.self, forKey: .rewind)
+        rewindCode = try? c.decodeIfPresent(Bool.self, forKey: .rewindCode)
     }
 }
 
@@ -958,6 +976,25 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var canInterrupt: Bool { capabilities.map(\.interrupt) ?? !hasSource }
     var canApprove: Bool { capabilities.map(\.approve) ?? !hasSource }
     var canTerminal: Bool { capabilities.map(\.terminal) ?? !hasSource }
+    /// Close it (#6294, the web's `sessionCan(s, "close")`): the node's `capabilities.close` where it says (a runtime's
+    /// session closes without a terminal), else a terminal's, as before (an older node).
+    var canClose: Bool { capabilities?.close ?? canTerminal }
+    /// Rename it: the node's `capabilities.rename` where it says, else a terminal's (its tab and Claude's /rename).
+    var canRename: Bool { capabilities?.rename ?? canTerminal }
+    /// Its model can be switched while it runs (#3119; the web's `canSwitchModel`): where the node says so
+    /// (`capabilities.model`: a runtime's session takes a pick through POST …/modes, #6294), else Claude Code in a
+    /// terminal pane, which takes `/model`. Never an assistant conversation (its own chip) or one that cannot send.
+    var switchesModel: Bool {
+        guard !assistant, canSend else { return false }
+        if let said = capabilities?.model { return said }
+        return canTerminal && paneID != nil && isClaude && !isTraex
+    }
+    /// A model pick goes through POST …/modes rather than a typed `/model` (#6294): the node said it takes one. Such a
+    /// session's menus offer its launcher's list only, never Claude Code's fixed aliases.
+    var picksModelByModes: Bool { capabilities?.model == true }
+    /// Rewind Code and Chat is offered as well (the web's `rewind_code ?? !rewind`): the node's `rewind_code` where it
+    /// declares rewind (#6294); a Claude terminal, which declares nothing, keeps both choices.
+    var rewindsCode: Bool { capabilities?.rewindCode ?? (capabilities?.rewind != true) }
     /// An Agent of a terminal engine the node has no reader for (#6170): a CLI such as Kiro or gemini, or a pi / omp /
     /// opencode without Persona's extension. The node says so with `read_only_reason` on the row (node sessions.go
     /// `otherAgent`, pi.go, opencode.go); a pi or opencode with its extension has none and keeps its chat. Its terminal is the
