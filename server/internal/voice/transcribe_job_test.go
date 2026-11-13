@@ -1126,9 +1126,8 @@ func TestTranscriptionCaptionSkipsABurst(t *testing.T) {
 	tc := startTr(t, srv, liveStart())
 	tc.next(extwire.TFReady)
 	pcm := voicetest.PCM(voicetest.Script{Sentences: trScript4}, 13.4)
-	// The first 3 s in one frame: more than the caption session's writer can keep up with, as a backlog sent back to
-	// back may be.
-	burst := 2 * 16000 * 3
+	// The first 5 s in one frame: more than trCaptionJump behind, as a backlog sent back to back may be.
+	burst := 2 * 16000 * 5
 	if err := tc.c.Write(context.Background(), websocket.MessageBinary, pcm[:burst]); err != nil {
 		t.Fatal(err)
 	}
@@ -1146,7 +1145,7 @@ func TestTranscriptionCaptionSkipsABurst(t *testing.T) {
 	sameTexts(t, frames, trScript4)
 	live := 0 // interim captions of the sentences said after the burst, while they were said
 	for _, f := range trOfType(frames[:streamed], extwire.TFInterim) {
-		if *f.Start >= 3.5 {
+		if *f.Start >= 5.5 {
 			live++
 		}
 	}

@@ -39,8 +39,10 @@ var (
 	// trCaptionJump is how far a live caption session may fall behind the live edge (a burst of audio: the manager's
 	// backlog after ready, a resend) before it skips to the edge. It is never given a backlog: captions break faster
 	// than real time (59% character error rate measured at four times), and paced at real time it would stay behind
-	// for good, its captions too late to be interim ones (trInterimLag).
-	trCaptionJump = time.Second
+	// for good, its captions too late to be interim ones (trInterimLag). Three seconds, not one: a busy hub's writer
+	// that stalls for a second (measured under load in the end-to-end test) catches up instead of leaving a window
+	// without captions.
+	trCaptionJump = 3 * time.Second
 )
 
 // trBuffer is a job's audio by recording position (samples), for its sessions' writers.
