@@ -157,6 +157,41 @@ struct FolderTransfersTests {
         #expect(hub.requests.contains { $0.path.contains("/files/operations/") })
     }
 
+    @Test func remoteProgressAndPollingStayWithTheirSession() async throws {
+        let hub = FakeHub()
+        hub.onAsync("POST", "/api/v1/machines/m1/files/copy") { req in
+            let body = try JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any]
+            let id = body?["operation_id"] as? String ?? "missing"
+            hub.on("GET", "/api/v1/machines/m1/files/operations/\(id)", json: #"{"id":"\#(id)","kind":"copy","state":"running","files_done":1,"files_total":2,"bytes_done":32,"bytes_total":100}"#)
+            for _ in 0..<500 {
+                if Task.isCancelled { throw CancellationError() }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            return Data(#"{"copied":[]}"#.utf8)
+        }
+        let model = AppModel()
+        model.apiForTests = hub.client
+        let transfers = FolderTransfers()
+        defer { for item in transfers.items { transfers.cancel(item.id) } }
+        let a = SessionKey(machineID: "m1", sessionID: "a")
+        let b = SessionKey(machineID: "m1", sessionID: "b")
+        transfers.session = a
+        transfers.duplicate(["~/a.txt"], cwd: "~", machine: MachineRef(group: "", id: "m1"), model: model) { _ in }
+        try await Task.sleep(for: .milliseconds(1250))
+        #expect(transfers.visibleItems.count == 1)
+        transfers.stop()
+        let stoppedReads = hub.requests.filter { $0.path.contains("/files/operations/") }.count
+        transfers.session = b
+        transfers.resumePolling()
+        try await Task.sleep(for: .milliseconds(350))
+        #expect(transfers.visibleItems.isEmpty)
+        #expect(hub.requests.filter { $0.path.contains("/files/operations/") }.count == stoppedReads)
+        transfers.session = a
+        transfers.resumePolling()
+        await waitUntil { hub.requests.filter { $0.path.contains("/files/operations/") }.count > stoppedReads }
+        #expect(transfers.visibleItems.count == 1)
+    }
+
     @Test func remoteCopyDoesNotWaitForAnUpload() async throws {
         let hub = FakeHub()
         var uploadCancelled = false

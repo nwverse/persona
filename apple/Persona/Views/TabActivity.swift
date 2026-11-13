@@ -59,13 +59,16 @@ private struct TabVisibilityScope: ViewModifier {
     let appear: () -> Void
     let disappear: () -> Void
     @Environment(\.tabIsActive) private var active
+    @Environment(\.scenePhase) private var phase
     @State private var state = TabVisibilityState()
+    private var inFront: Bool { active && VisibleScenePolicy.permits(phase) }
 
     func body(content: Content) -> some View {
         content
-            .onAppear { state.update(mounted: true, active: active, appear: appear, disappear: disappear) }
-            .onDisappear { state.update(mounted: false, active: active, appear: appear, disappear: disappear) }
-            .onChange(of: active) { _, active in state.update(active: active, appear: appear, disappear: disappear) }
+            .onAppear { state.update(mounted: true, active: inFront, appear: appear, disappear: disappear) }
+            .onDisappear { state.update(mounted: false, active: inFront, appear: appear, disappear: disappear) }
+            .onChange(of: active) { _, _ in state.update(active: inFront, appear: appear, disappear: disappear) }
+            .onChange(of: phase) { _, _ in state.update(active: inFront, appear: appear, disappear: disappear) }
     }
 }
 
@@ -96,8 +99,8 @@ private struct TabActiveTask<ID: Hashable & Sendable>: ViewModifier {
 }
 
 extension View {
-    /// `onAppear` / `onDisappear` for work that belongs to the page in front: `appear` when the view is in the window and
-    /// its tab is picked, `disappear` when either stops.
+    /// `onAppear` / `onDisappear` for work that belongs to the page in front: `appear` when the view is in the window,
+    /// its tab is picked and the scene is active; `disappear` when any of them stops.
     func onTabVisibility(appear: @escaping () -> Void, disappear: @escaping () -> Void = {}) -> some View {
         modifier(TabVisibilityScope(appear: appear, disappear: disappear))
     }

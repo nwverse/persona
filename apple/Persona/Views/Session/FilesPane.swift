@@ -66,7 +66,9 @@ struct FilesPane: View {
         self.key = key
         self.reloadGit = reloadGit
         self.reveal = reveal
-        _transfers = State(initialValue: transfers ?? FolderTransfers())
+        let transfers = transfers ?? FolderTransfers()
+        transfers.session = key
+        _transfers = State(initialValue: transfers)
     }
 
     /// New Folder / New Text File waiting for a name (#5828).

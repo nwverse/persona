@@ -22,6 +22,7 @@ final class FolderTransfers {
         var zipping = false // several items (or a folder) zipped on the computer before the download (#5828)
         var filesDone = 0
         var filesTotal = 0
+        var session: SessionKey? // machine page: nil; Chat: the session that owns this item
         var showsProgress = true // remote copy / zip: one second plus a successful operation read
         var status = ""
     }
@@ -29,7 +30,7 @@ final class FolderTransfers {
     /// Rows and their display text are derived only when an item changes, not in the view's body.
     private(set) var visibleItems: [Item] = []
     private func syncVisible() {
-        visibleItems = items.filter(\.showsProgress).map { item in
+        visibleItems = items.filter { $0.showsProgress && $0.session == session }.map { item in
             var item = item
             item.status = Self.status(item)
             return item
@@ -61,6 +62,18 @@ final class FolderTransfers {
     enum Choice { case replace, keep, cancel }
 
     private(set) var items: [Item] = []
+    /// Chat can retain one model across sessions; only the current session's rows and polling are active. POSTs for a
+    /// hidden session continue. The machine page has no session, so all its items use the same nil scope.
+    var session: SessionKey? {
+        didSet {
+            let stale = pollTasks.keys.filter { id in
+                guard let item = items.first(where: { $0.id == id }) else { return false }
+                return item.session != session
+            }
+            for id in stale { pollTasks.removeValue(forKey: id)?.cancel() }
+            syncVisible()
+        }
+    }
     var conflict: Conflict? {
         didSet { if let conflict { conflictName = conflict.name } }
     }
@@ -241,7 +254,8 @@ final class FolderTransfers {
     }
 
     private func startPolling(_ id: UUID) {
-        guard pollTasks[id] == nil, let poll = pollRequests[id] else { return }
+        guard pollTasks[id] == nil, let poll = pollRequests[id],
+              let item = items.first(where: { $0.id == id }), item.session == session else { return }
         pollTasks[id] = Task { [weak self] in
             let delay = max(0, 1 - Date().timeIntervalSince(poll.started))
             try? await Task.sleep(for: .seconds(delay))
@@ -289,6 +303,8 @@ final class FolderTransfers {
 
     /// Uploads and downloads stay serial. A remote copy / zip starts independently so a long transfer cannot hide it.
     private func queue(_ item: Item, serial: Bool = true, _ work: @escaping () async -> Void) {
+        var item = item
+        item.session = session
         items.append(item)
         syncVisible()
         let prev = serial ? last : nil
