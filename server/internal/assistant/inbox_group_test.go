@@ -608,6 +608,42 @@ func TestInboxGroupFallsBackOnABadAnswer(t *testing.T) {
 	}
 }
 
+// Only a fallback-new event loses a redundant conversation-name prefix; model titles and existing events stay unchanged.
+func TestInboxGroupTitlePrefixOnlyChangesFallbackNewEvents(t *testing.T) {
+	tests := []struct {
+		name, where, title, want string
+		byModel, existing        bool
+	}{
+		{name: "matching prefix", where: "示例群", title: "示例群：周四评审改期", want: "周四评审改期"},
+		{name: "conversation name only", where: "示例群", title: "示例群", want: "示例群"},
+		{name: "empty remainder", where: "示例群", title: "示例群：", want: "示例群："},
+		{name: "ascii colon", where: "示例群", title: "示例群: 周四评审改期", want: "示例群: 周四评审改期"},
+		{name: "no conversation", title: "示例群：周四评审改期", want: "示例群：周四评审改期"},
+		{name: "other conversation", where: "示例群", title: "别的群：周四评审改期", want: "别的群：周四评审改期"},
+		{name: "model title", where: "示例群", title: "示例群：周四评审改期", want: "示例群：周四评审改期", byModel: true},
+		{name: "existing event", where: "示例群", title: "示例群：兜底标题", want: "示例 A 方案评审", existing: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &groupLark{placed: map[string]bool{}}
+			h, _ := groupHub(t, g, nil)
+			planned := plannedEvent{messages: []string{"m1060"}, title: tc.title, tier: TierFYI}
+			if tc.existing {
+				planned.existing = "lark:F1:1051"
+			}
+			thing, err := g.GroupAppend(context.Background(), connector.GroupAppend{Thread: "chat:F1", Event: planned.existing, Messages: planned.messages})
+			if err != nil {
+				t.Fatal(err)
+			}
+			thing.Tags = []connector.Tag{{Key: connector.TagChat, Name: tc.where}}
+			got := h.putEvent(sourceOf(g), "chat:F1", planned, thing, tc.byModel)
+			if got == nil || got.Title != tc.want {
+				t.Fatalf("event %+v, want title %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // Fallback appends preserve an existing event's triage whether the model or rules originally sorted it. In particular,
 // noise stays folded and an urgent event stays urgent; only the message count and version advance.
 func TestInboxGroupFallbackKeepsExistingTriage(t *testing.T) {

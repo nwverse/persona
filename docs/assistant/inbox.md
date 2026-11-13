@@ -247,6 +247,7 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
 - **Fallback**: unavailable model (unconfigured, no quota, error, timeout) or invalid result invokes plugin `group.fallback` for structural grouping (reply / quote chains, topics, consecutive messages by one person, time gaps).
   Without `group.fallback`, do not write the batch; wait for the model and resubmit next round, like Inbox items without fallback.
   It receives events under the same rules as `events`. For an event the fallback opens, use plugin `rule_tier`, reason "Rule-based," `triaged_by: "rules"`; do not send this version back to the model.
+  A fallback-opened event's title drops a leading `<where>：` when non-whitespace text remains; the conversation name is already stored in `where`.
   Ordinary fallback assignment to an existing event advances only the messages and version: its title, summary, tier, reason, urgency and `triaged_by` stay unchanged (user policy tiers still apply), and `triaged_at` advances so this version is not retriaged.
   In a direct chat, fallback-new events join the most recently updated supplied candidate whose latest message activity is within 2 hours, whether that candidate is open or done; a done target reopens. The rewrite keeps the title and summary unchanged, and the tier can only rise, except an existing noise tier stays noise and an event its processing conversation is handling keeps its tier.
   Fallback may also assign supplied done events directly, and the hub reopens them by default.
