@@ -175,6 +175,23 @@ func TestInboxSayAnythingStaleAndDone(t *testing.T) {
 	}
 }
 
+// An old draft is listed as a version 1 suggestion: version 0 is stale on it, as any other version it does not match.
+func TestInboxSayAnythingStaleOnAnOldDraft(t *testing.T) {
+	h, _ := sayAnythingHub(t)
+	at := time.Now().Add(-time.Hour)
+	it := sayItem(t, h, "say:draft", "", false)
+	h.inbox.mu.Lock()
+	it.Agent.State, it.Agent.Draft, it.Agent.DraftedAt = AgentDrafted, "旧的草稿", &at
+	g := currentSuggestion(it)
+	h.inbox.mu.Unlock()
+	if g == nil || g.Version != 1 {
+		t.Fatalf("the old draft is not listed as a suggestion: %+v", g)
+	}
+	if code, out := suggestionCall(t, h, it.ID, `{"version":0,"action":"instruct","text":"换个说法"}`); code != 409 || out["code"] != "suggestion_stale" {
+		t.Fatalf("version 0 over an old draft: %d %v", code, out)
+	}
+}
+
 // An answer-only device (the watch) may not say anything, and with no suggestion there is nothing to read from it:
 // 403, not a crash.
 func TestInboxSayAnythingWatch(t *testing.T) {
