@@ -300,16 +300,22 @@ describe("the list by project, on a hub with the catalog", () => {
     expect(groupReads()).toBe(2);
   });
 
-  it("reads a catalog again while its computers are still answering", async () => {
-    pending = 1;
+  it("reads a catalog again while its computers are still answering, less often as it goes on", async () => {
+    pending = 3;
     await show();
     vi.mocked(api).mockClear();
     await browseBy("project");
     expect(reads("catalog")).toHaveLength(1);
-    await act(async () => { await vi.advanceTimersByTimeAsync(1100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(reads("catalog")).toHaveLength(2);
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-    expect(reads("catalog")).toHaveLength(2); // settled: no more
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(reads("catalog")).toHaveLength(2); // the second wait is half as long again
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(reads("catalog")).toHaveLength(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2250); });
+    expect(reads("catalog")).toHaveLength(4);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(reads("catalog")).toHaveLength(4); // settled: no more
   });
 });
 

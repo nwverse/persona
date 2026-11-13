@@ -9,8 +9,10 @@ import { catalogGroups, countGroups, validCatalog, type GroupDimension, type Ses
 import { onHubEvent } from "../../lib/store";
 import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
 
-/** How soon a catalog whose computers were still answering is read again, and how often at most in a row. */
-const PENDING_RETRY = { delay: 1000, times: 8 } as const;
+/** How soon a catalog whose computers were still answering is read again: a second after the first answer, then
+ * half as long again each time up to ten seconds, for as long as it says so. A hub with many directories to ask takes
+ * a while, and nothing else tells the page when it is done. */
+const PENDING_RETRY = { first: 1000, grow: 1.5, most: 10_000 } as const;
 
 const validCounts = (v: unknown): v is ListCounts => typeof v === "object" && v !== null &&
   ["state", "group", "project", "machine"].every((key) => typeof (v as Record<string, unknown>)[key] === "object" && (v as Record<string, unknown>)[key] !== null);
@@ -41,7 +43,7 @@ function useHinted<T>(path: string | null, valid: (v: unknown) => v is T, event:
         // only a hub that says it has the answer is asked: anything else in its place is a broken answer
         if (!check.current.valid(value)) { setRead({ path, error: t("paged-agents.invalid_page") }); return; }
         setRead({ path, value });
-        if (check.current.pending?.(value) && retries++ < PENDING_RETRY.times && !timer) timer = setTimeout(load, PENDING_RETRY.delay);
+        if (check.current.pending?.(value) && !timer) timer = setTimeout(load, Math.min(PENDING_RETRY.first * PENDING_RETRY.grow ** retries++, PENDING_RETRY.most));
       }, (e) => { if (live && request === sequence) setRead((was) => ({ path, value: was?.path === path ? was.value : undefined, error: errorText(e) })); });
     };
     load();
