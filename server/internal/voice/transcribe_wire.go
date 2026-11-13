@@ -43,7 +43,7 @@ type tevKind int
 
 const (
 	tevStarted  tevKind = iota // the session is up; captions: the caption extension was granted
-	tevCaption                 // an interim caption: item, at (session seconds), text; final: withdrawn when text is ""
+	tevCaption                 // an interim caption: item, text; final: withdrawn when text is ""
 	tevReply                   // a reply began
 	tevText                    // a piece of the reply's text
 	tevTextDone                // the reply's whole text (text, "" when the service does not repeat it)
@@ -60,7 +60,6 @@ type tevent struct {
 	item        string
 	code, param string
 	reason      string
-	at          float64 // tevCaption: when recognition of the sentence began, in seconds of the session's audio
 	final       bool
 	seconds     float64
 	hasSeconds  bool
@@ -74,12 +73,11 @@ type tevent struct {
 // here. Anything else (the standard input caption among them: it is cut short while a model replies) is nothing.
 func decodeTranscribe(raw []byte) []tevent {
 	var f struct {
-		Type    string  `json:"type"`
-		ItemID  string  `json:"item_id"`
-		StartMS float64 `json:"start_ms"`
-		Text    string  `json:"text"`
-		IsFinal bool    `json:"is_final"`
-		Reason  string  `json:"reason"`
+		Type    string `json:"type"`
+		ItemID  string `json:"item_id"`
+		Text    string `json:"text"`
+		IsFinal bool   `json:"is_final"`
+		Reason  string `json:"reason"`
 		Usage   *struct {
 			Seconds *float64 `json:"seconds"`
 		} `json:"usage"`
@@ -117,7 +115,9 @@ func decodeTranscribe(raw []byte) []tevent {
 		}
 		return []tevent{e}
 	case strings.HasSuffix(f.Type, trCaptionSuffix):
-		return []tevent{{kind: tevCaption, item: f.ItemID, at: f.StartMS / 1000, text: f.Text, final: f.IsFinal}}
+		// start_ms is not read: the measured service counts it from the session's start, and every caption of a
+		// session has the same one (the adapter places a caption by where the session's audio was when it came).
+		return []tevent{{kind: tevCaption, item: f.ItemID, text: f.Text, final: f.IsFinal}}
 	case f.Type == "session.usage.updated":
 		if e := usage(tevent{kind: tevUsage}); e.hasSeconds {
 			return []tevent{e}

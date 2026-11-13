@@ -2,6 +2,7 @@ package voice
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -73,6 +74,48 @@ func levenshtein(a, b []rune) int {
 		prev, cur = cur, prev
 	}
 	return prev[len(b)]
+}
+
+// trCaptionRevise: a caption frame continues the caption before it when their beginnings are at most this share of
+// their length apart (normalized): the service revises a caption's last words as it grows ("andrea 那边" then
+// "android 那边的…" measured 0.38), while the next sentence written over it is about 1 away.
+const trCaptionRevise = 0.4
+
+// trContinues says whether caption text next continues prev, the caption's text before it: prev grown, its last
+// words maybe revised (or dropped), rather than the next sentence written over it (the measured service writes a
+// caption session's whole meeting as one item). Compared normalized (trNorm): next not under half as long as prev
+// (that is a new sentence, also one that begins as the last one did), and as much of prev as next has (all of it when
+// next is longer) within trCaptionRevise of a beginning of next. Text with no letters or digits continues anything.
+func trContinues(prev, next string) bool {
+	p, n := trNorm(prev), trNorm(next)
+	switch {
+	case len(p) == 0 || len(n) == 0:
+		return true
+	case 2*len(n) < len(p):
+		return false
+	}
+	k := min(len(p), len(n))
+	return float64(prefixDistance(p[:k], n)) <= trCaptionRevise*float64(k)
+}
+
+// prefixDistance is the least edit distance between a and a beginning of b (any length, none included).
+func prefixDistance(a, b []rune) int {
+	prev, cur := make([]int, len(b)+1), make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return slices.Min(prev)
 }
 
 // medoid is which of keep (indexes into texts) is closest to the others: the least summed distance. A tie goes to the

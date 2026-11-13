@@ -1,8 +1,8 @@
 // Package voicetest is a scripted stand-in for a GPT-Live-compatible upstream, for tests of the built-in voice
 // extension's meeting transcription and of the manager that runs it (docs/assistant/voice.md "Transcription"). Its
 // sessions hear the audio PCM makes of a script and answer with the frame shapes the measured service sends: interim
-// captions on a caption session (one that asks for the caption extension), one reply per sentence on a verbatim
-// session, usage and the session's close.
+// captions on a caption session (one that asks for the caption extension) as the measured service writes them, one
+// item for the whole session; one reply per sentence on a verbatim session; usage and the session's close.
 //
 // The audio carries the script: each 20 ms block of a sentence holds the sentence's number in its level, so a session
 // knows which sentence it hears wherever its audio starts (a reconnect, a rollover, a window of the final pass).
@@ -48,6 +48,12 @@ type Script struct {
 	// RefuseCaptions: a session start that asks for it is refused with an unsupported_extension error (the socket stays
 	// open).
 	RefuseCaptions bool
+	// CaptionItems: each sentence's captions are an item of their own, with start_ms its start and is_final on its
+	// last one (a service that splits its captions by sentence). Without it, as the measured service: a caption
+	// session, which never replies, writes the whole meeting as one item, whose start_ms is the first speech's,
+	// counted from the session's start (not its first audio), and never changes; no caption is ever final; the text
+	// grows through a sentence and the next sentence's text replaces it.
+	CaptionItems bool
 	// TextOnlyRefused: a session start with output_modalities is refused with an unknown_parameter error.
 	TextOnlyRefused bool
 	// ExpiresIn: each session ends this long after it started (session.started's expires_at says when; the service
@@ -275,17 +281,28 @@ type conn struct {
 	vn      int  // its number among the verbatim sessions, 0 for a caption session
 	caption bool // a caption session whose extension was granted
 	started bool
-	part    []byte
-	turn    bool
-	from    int64 // the turn's start
-	voice   int64 // the end of the turn's last voiced block
-	idx     []int // the sentences heard in the turn, in order
-	got     map[int]int64
-	item    int
-	partial int64 // when the last caption went out
-	usage   int64
-	replied map[int]bool
-	replyNo int
+	// startedAt is when session.started went out, lead how long after it the first audio came: the measured service's
+	// start_ms counts from the session's start.
+	startedAt time.Time
+	lead      time.Duration
+	heard     bool // any audio came
+	part      []byte
+	turn      bool
+	from      int64 // the turn's start
+	voice     int64 // the end of the turn's last voiced block
+	idx       []int // the sentences heard in the turn, in order
+	got       map[int]int64
+	item      int
+	partial   int64 // when the last caption went out
+	usage     int64
+	replied   map[int]bool
+	replyNo   int
+	// The caption session's caption: the item it writes, its start_ms, the sentence it is of, whether it has text
+	// that has not been written whole yet.
+	capItem  string
+	capStart int64
+	capIdx   int
+	capOpen  bool
 }
 
 // pendingReply is a reply written once its time comes (ReplyDelay).
@@ -374,7 +391,7 @@ func (c *conn) start(raw json.RawMessage) {
 		c.vn = l.verbatim
 	}
 	l.mu.Unlock()
-	c.started = true
+	c.started, c.startedAt, c.capIdx = true, time.Now(), -1
 	expires := any(int64(1) << 40)
 	if d := l.s.ExpiresIn; d > 0 {
 		expires = float64(time.Now().Add(d).UnixMilli()) / 1000
@@ -390,6 +407,9 @@ func (c *conn) start(raw json.RawMessage) {
 
 // audio takes an append; false: the script drops the session now.
 func (c *conn) audio(pcm []byte) bool {
+	if !c.heard {
+		c.heard, c.lead = true, time.Since(c.startedAt)
+	}
 	c.note(len(pcm) / 2)
 	buf := append(c.part, pcm...)
 	n := len(buf) / (2 * block) * (2 * block)
@@ -416,12 +436,15 @@ func (c *conn) audio(pcm []byte) bool {
 				c.idx = append(c.idx, i)
 			}
 			c.got[i] += block
+			if c.caption && i != c.capIdx {
+				c.nextSentence(i, at)
+			}
 		} else if c.turn && at+block-c.voice >= gap {
 			c.endTurn()
 		}
 		if c.caption && c.turn && at+block-c.partial >= rate/5 {
 			c.partial = at + block
-			c.caption1(false)
+			c.sentenceCaption(false)
 		}
 		if at+block-c.usage >= rate {
 			c.usage = at + block
@@ -464,25 +487,58 @@ func (c *conn) seconds() float64 {
 	return float64(c.samples) / rate
 }
 
-// caption1 sends the turn's caption so far (whole: final).
-func (c *conn) caption1(whole bool) {
-	var b strings.Builder
-	for k, i := range c.idx {
-		text := c.text(i)
-		if !whole && k == len(c.idx)-1 {
-			l := c.l.s.Sentences[i]
-			rs := []rune(text)
-			share := float64(c.got[i]) / rate / max(l.End-l.Start, 0.1)
-			text = string(rs[:min(len(rs), int(math.Ceil(share*float64(len(rs)))))])
-		}
-		b.WriteString(text)
+// sessionMS is session sample at in the service's session time: milliseconds since the session started, its audio
+// having begun lead after that.
+func (c *conn) sessionMS(at int64) int64 { return c.lead.Milliseconds() + at*1000/rate }
+
+// nextSentence: the caption session hears sentence i begin at at. The caption of the sentence before it, if not
+// written whole yet, is (final when CaptionItems); then the caption is of sentence i: the same item, and the same
+// start_ms, as the measured service writes them, or an item of its own from at with CaptionItems.
+func (c *conn) nextSentence(i int, at int64) {
+	if c.capOpen {
+		c.sentenceCaption(true)
 	}
+	c.capIdx, c.capOpen = i, true
+	switch {
+	case c.l.s.CaptionItems:
+		c.capItem, c.capStart = fmt.Sprintf("item-%d-%d", c.n, i), c.sessionMS(at)
+	case c.capItem == "":
+		c.capItem, c.capStart = fmt.Sprintf("item-%d", c.n), c.sessionMS(at)
+	}
+	c.partial = 0 // its first words go out at once
+}
+
+// sentenceCaption sends the caption session's caption of its sentence so far (whole: all of it, and final with
+// CaptionItems).
+func (c *conn) sentenceCaption(whole bool) {
+	i := c.capIdx
+	text := c.text(i)
+	if !whole {
+		text = c.heardOf(i, text)
+	} else {
+		c.capOpen = false
+	}
+	c.sendCaption(c.capItem, c.capStart, text, whole && c.l.s.CaptionItems)
+}
+
+// heardOf is as much of sentence i's text as the turn has heard of it.
+func (c *conn) heardOf(i int, text string) string {
+	if i < 0 || i >= len(c.l.s.Sentences) {
+		return ""
+	}
+	l := c.l.s.Sentences[i]
+	rs := []rune(text)
+	share := float64(c.got[i]) / rate / max(l.End-l.Start, 0.1)
+	return string(rs[:min(len(rs), int(math.Ceil(share*float64(len(rs)))))])
+}
+
+func (c *conn) sendCaption(item string, startMS int64, text string, final bool) {
 	noise := c.l.s.CaptionNoise
 	if c.l.s.CaptionNoiseFast > noise && c.fastTurn {
 		noise = c.l.s.CaptionNoiseFast
 	}
-	c.send(map[string]any{"type": "svc.input_transcript.partial", "item_id": fmt.Sprintf("item-%d-%d", c.n, c.item),
-		"start_ms": c.from * 1000 / rate, "text": noisy(b.String(), noise), "is_final": false})
+	c.send(map[string]any{"type": "svc.input_transcript.partial", "item_id": item, "start_ms": startMS,
+		"text": noisy(text, noise), "is_final": final})
 }
 
 func (c *conn) text(i int) string {
@@ -495,7 +551,9 @@ func (c *conn) text(i int) string {
 func (c *conn) endTurn() {
 	c.turn = false
 	if c.caption {
-		c.caption1(true)
+		if c.capOpen {
+			c.sentenceCaption(true)
+		}
 		return
 	}
 	if c.vn == 0 {

@@ -156,3 +156,31 @@ func TestSpreadSentences(t *testing.T) {
 		t.Errorf("weights %.2f", w)
 	}
 }
+
+// Which caption frames continue the caption before them, on the measured service's frames of one item: the text grows
+// through a sentence (its last words revised now and then) and the next sentence's replaces it.
+func TestTrContinues(t *testing.T) {
+	for _, tt := range []struct {
+		prev, next string
+		want       bool
+	}{
+		{"", "好人", true},
+		{"how 人都", "how 人都到齐了我们开始今天的发布评审", true},
+		{"the back end merge a", "the back end merge a p an now returns the conflicting paragraphs so the client can", true},
+		{"crate can we also check", "great can we also check the memory usage", true},
+		{"andrea 那边", "android 那边的 built 昨天挂了是 graded cache 的", true},
+		{"同意", "同意 pricing the tears 我们下周一再单独开会讨论", true},
+		{"可以我让", "可以我让 bo 跑一下满血看看是不是满血的", true},
+		{"merge a p an now returns the conflicting", "merge api now returns", true},
+		{"how 人都到齐了我们开始今天的发布评审", "先说 ios 这边离线编辑基本做完了", false},
+		{"the back end merge a p an now returns the conflicting paragraphs so the client can", "help 这词还是", false},
+		{"好的 bill 负责在周五之前把 crash rate 的", "上次会议决定 excel cap", false},
+		{"that works for me alice can own the rollout plan and the release notes", "好的 bill 负责在周五之前把 crash rate 的", false},
+		{"上线了 search latency 比之前", "上线", false}, // a new sentence that begins as the last one did
+		{"同意", "同步一下", false},
+	} {
+		if got := trContinues(tt.prev, tt.next); got != tt.want {
+			t.Errorf("%q then %q: %v, want %v", tt.prev, tt.next, got, tt.want)
+		}
+	}
+}

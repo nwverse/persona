@@ -188,8 +188,8 @@ type trSession struct {
 	passed   map[int]time.Time
 	lastAt   int64 // replay: where it was when its last reply began
 	// caption sessions
-	items []*trItem
-	byID  map[string]*trItem
+	items  []*trItem // its captions not forgotten yet, in order
+	capCur *trItem   // the caption it writes now (nil: none yet, or the last one was final)
 }
 
 // trQuiet is n samples of silence to send once the session's audio reached recording position at.
@@ -211,12 +211,13 @@ func (r *trReply) String() string {
 	return string(r.text)
 }
 
-// trItem is one caption: the service's whole text so far of one sentence.
+// trItem is one caption: the service's whole text so far of one sentence (captionOf).
 type trItem struct {
-	id    string
-	start int64 // recording samples
-	text  string
-	parts []trPart // the windows its text is of, in order
+	id     string // the service's item_id (on the measured service the same for every caption of a session)
+	start  int64  // recording samples (captionStart)
+	text   string
+	parts  []trPart // the windows its text is of, in order
+	closed bool     // final, or written over by the next sentence: no later frame of its item is of it
 }
 
 // trPart: a caption's text from rune from on is of window window (up to the next part).
@@ -225,7 +226,7 @@ type trPart struct{ window, from int }
 func newTrSession(j *trJob, kind string, slot *trSlot, window int, why string) *trSession {
 	j.opened++
 	s := &trSession{j: j, no: j.opened, kind: kind, slot: slot, window: window, why: why, last: -1,
-		gone: make(chan struct{}), poke: make(chan struct{}, 1), passed: map[int]time.Time{}, byID: map[string]*trItem{}}
+		gone: make(chan struct{}), poke: make(chan struct{}, 1), passed: map[int]time.Time{}}
 	s.stop.Store(-1)
 	s.limit.Store(-1)
 	return s
@@ -556,21 +557,6 @@ func (s *trSession) skipped(from, to int64) bool {
 		}
 	}
 	return false
-}
-
-// toRecording is the recording position of session sample c.
-func (s *trSession) toRecording(c int64) int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	i := sort.Search(len(s.marks), func(i int) bool { return s.marks[i].clock+s.marks[i].n > c })
-	if i == len(s.marks) {
-		return s.pos.Load()
-	}
-	m := s.marks[i]
-	if m.silent || c < m.clock {
-		return m.at
-	}
-	return m.at + (c - m.clock)
 }
 
 // clockAt is the session sample at which recording position at was sent, or the session went on past it (false: not

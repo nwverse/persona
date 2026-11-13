@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -306,6 +307,68 @@ func TestTranscriptionLiveSentences(t *testing.T) {
 	noMeetingText(t, logs.String(), append(scriptTexts(trScript), "export cap", "Alice", "MB")...)
 	if !strings.Contains(logs.String(), ": window 0 [0.0-6.1 s, 4.2 s of speech]: captions") || strings.Contains(logs.String(), "(dropped)") {
 		t.Errorf("log:\n%s", logs)
+	}
+}
+
+// Captions as the measured service writes them: the caption session's whole meeting is one item whose start_ms is the
+// first speech's, counted from the session's start, and never changes; no caption is final; the next sentence's text
+// replaces the last one's in the item. Each caption is told apart by its text and placed where the session's audio
+// was when it came: every window has its own sentences' captions, no session is dropped against them, and every
+// interim caption carries its sentence's start. A service that splits its captions by sentence (an item each, a final
+// one at its end) gets the same.
+func TestTranscriptionCaptionsAsMeasured(t *testing.T) {
+	for name, items := range map[string]bool{"one item": false, "an item per sentence": true} {
+		t.Run(name, func(t *testing.T) {
+			trFast(t)
+			_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript, CaptionItems: items})
+			tc := startTr(t, srv, liveStart())
+			tc.next(extwire.TFReady)
+			tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 20)
+			tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+			frames := tc.done()
+			defer func() {
+				if t.Failed() {
+					t.Log(logs.String())
+				}
+			}()
+			sameTexts(t, frames, trScript)
+			windows := 0
+			for _, line := range strings.Split(logs.String(), "\n") {
+				if !strings.Contains(line, ": window ") || strings.Contains(line, " 0.0 s of speech") {
+					continue
+				}
+				windows++
+				if strings.Contains(line, "captions 0 characters") || strings.Contains(line, "no captions") ||
+					strings.Contains(line, "(dropped)") || strings.Contains(line, "the captions' text") {
+					t.Errorf("window without its captions: %s", line)
+				}
+			}
+			if windows < 3 {
+				t.Errorf("%d windows", windows)
+			}
+			interim := 0
+			for _, f := range trOfType(frames, extwire.TFInterim) {
+				if *f.Text == "" {
+					continue
+				}
+				interim++
+				said := -1
+				for i, l := range trScript {
+					if strings.HasPrefix(l.Text, *f.Text) {
+						said = i
+					}
+				}
+				switch {
+				case said < 0:
+					t.Errorf("interim %q is the beginning of no sentence", *f.Text)
+				case math.Abs(*f.Start-trScript[said].Start) > 0.6:
+					t.Errorf("interim %q starts at %.2f, its sentence at %.1f", *f.Text, *f.Start, trScript[said].Start)
+				}
+			}
+			if interim < len(trScript) {
+				t.Errorf("%d interim captions", interim)
+			}
+		})
 	}
 }
 
