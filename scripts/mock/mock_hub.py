@@ -343,6 +343,15 @@ def mock_workspaces():
                     result.append({"id": "catalog-" + wid, "machine_id": mid, "source": "orca", "source_id": wid,
                                    "title": branch, "cwd": path, "index": 20, "parent_source_id": WORKSPACE_LINEAGE[mid, wid],
                                    "online": True, "available": True})
+    if os.environ.get("MOCK_PASEO"):
+        for wid, title, path, branch in [(w, t, PASEO_ROOT if tree is None else PASEO_TREES + tree, b)
+                                         for w, t, tree, b in PASEO_WORKSPACES] + PASEO_MADE:
+            # every worktree here is one Paseo made (owned): the ones Delete worktree is offered for (#6297)
+            result.append({"id": "catalog-" + wid, "machine_id": "server", "source": "paseo", "source_id": wid, "title": title,
+                           "cwd": path, "branch": branch, "workspace_kind": "git", "is_main": path == PASEO_ROOT,
+                           **({} if path == PASEO_ROOT else {"owned": True}),
+                           "project_id": PASEO_PROJECT["id"], "project_name": PASEO_PROJECT["name"], "project_path": PASEO_ROOT,
+                           "online": True, "available": True, "last_seen": ago()})
     return list({(w["machine_id"], w["source"], w["source_id"]): w for w in result}.values())
 
 
@@ -1162,12 +1171,21 @@ if os.environ.get("MOCK_ROW_EDGES"):
 PASEO_LEAD = "9a5e0000-0000-4000-8000-000000000002"
 PASEO_ASKS = "paseo-9a5e0000-0000-4000-8000-000000000003"
 PASEO_CODEX = "paseo-9a5e0000-0000-4000-8000-000000000004"
+# Paseo's workspaces (#6295), as the node lists them in the catalog: the main checkout, the two worktrees its agents work
+# in and one it made with no agent yet: (workspace id, title, folder under its worktrees root or None, branch).
+PASEO_ROOT, PASEO_TREES = "/home/me/code/app", "/home/me/.paseo/worktrees/1a2b3c4d/"
+PASEO_WORKSPACES = [("wks_5a1e000000000001", "Triage", None, "main"),
+                    ("wks_5a1e000000000002", "Fix the login flow", "brave-fox", "fix/login"),
+                    ("wks_5a1e000000000003", "Speed up the importer", "calm-owl", "perf/importer"),
+                    ("wks_5a1e000000000004", "Try the new parser", "quiet-elk", "spike/parser")]
 if os.environ.get("MOCK_PASEO"):
-    _paseo_root = "/home/me/code/app"
+    _paseo_root = PASEO_ROOT
     def _paseo(sid, title, workspace, tree, branch, status, state, minutes, last, agent="claude", **kw):
-        cwd = _paseo_root if tree is None else "/home/me/.paseo/worktrees/1a2b3c4d/" + tree
+        cwd = _paseo_root if tree is None else PASEO_TREES + tree
+        # each agent names its workspace (workspace_id, #6295); a Paseo workspace is still no terminal slot (slot_name only)
+        wid = next((w for w, t, _, _ in PASEO_WORKSPACES if t == workspace), None)
         row = dict(space_kind="paseo", space_id="prj_app", space_name="app", space_index=None, slot_id=None, slot_name=workspace,
-                   slot_index=None, pane_id=None, tab_id=None, workspace_id=None, host="paseo",
+                   slot_index=None, pane_id=None, tab_id=None, workspace_id=wid, host="paseo",
                    source_kind="runtime", source_instance_id="paseo", repo_root=_paseo_root, worktree=cwd, workspace_cwd=cwd,
                    branch=branch, launcher="claude" if agent == "claude" else "codex", started_by_persona=False,
                    # Paseo declares rename and close: the node lists both, rename not on an agent another one started (#6294),
@@ -2882,6 +2900,10 @@ def _direction_agents(t, sessions):
     return roots
 
 
+def _direction_running(agents):
+    return any(a.get("state") == "working" or _direction_running(a.get("children") or []) for a in agents)
+
+
 def mock_direction_tree():
     """GET /api/v1/assistant/directions/tree (#4352): each current leader with the open to-dos it supervises, then the
     secretary's group (the main conversation's id) with the rest. The real hub decides the states with the To-dos page's
@@ -2904,7 +2926,8 @@ def mock_direction_tree():
         tasks.sort(key=lambda x: x["_at"], reverse=True)
         tasks.sort(key=lambda x: _DIRECTION_STATE_ORDER[x["state"]])
         counts = {k: sum(1 for x in tasks if x["state"] == k) for k in _DIRECTION_STATE_ORDER}
-        return {"id": did, "name": name, **extra, "counts": counts,
+        # an Agent under it at work, at any depth and whatever its task's state (#6626, the hub's treeRunning)
+        return {"id": did, "name": name, **extra, "counts": counts, "running": any(_direction_running(x["agents"]) for x in tasks),
                 "tasks": [{k: v for k, v in x.items() if k != "_at"} for x in tasks]}
 
     out = [direction(lid, MOCK_DIRECTION_NAMES.get(lid, ""), groups[lid]) for lid in MOCK_LEADERS]
@@ -3812,6 +3835,7 @@ def _manager_known(mid):
 def stamp_managers(path, obj):
     """The merged lists' `manager` on each item, as the hub adds it; the default manager's items too."""
     if not _stamps() or not isinstance(obj, dict): return obj
+    if MOCK_INBOX_SHOWCASE and path == "/api/v1/inbox": return obj
     dflt = MANAGERS["default"]
     if path in ("/api/v1/inbox", "/api/v1/inbox/done") and isinstance(obj.get("items"), list):
         obj = dict(obj, items=[dict(x, manager=inbox_owner(x.get("id"))) if isinstance(x, dict) else x for x in obj["items"]])
@@ -8985,6 +9009,60 @@ if os.environ.get("MOCK_SCREEN_DANGER") in ("before", "after"):
                    + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend",
          "dialog": _danger})
 
+# MOCK_LONG_ASKS=1 (#6605): pending cards whose command or plan runs far past the cards' area, one long card per
+# conversation and two on one. The review agent: a terminal prompt read without its command (the dialog's detail is the
+# agent's words and the 52-line command, Yes / No), as a hub reads one whose header scrolled off. The blog agent: a Bash
+# permission with the same command. The orders agent: a 60-line plan. The release agent: the command as a hub reads it
+# now (command, description, warning, countdown) and a second long Bash permission. None of them is a chat
+# PendingCardsTests opens, so one mock with MOCK_AGENTS=1 serves both.
+def _long_ask_cmd():
+    rows = ["set -euo pipefail", "cd ./fixtures", "python3 -I - <<'EOF'", "import json, pathlib",
+            "root = pathlib.Path('.')", "seen = {}"]
+    for n in range(1, 15):
+        rows += ["p%d = root / 'city-%02d.json'" % (n, n),
+                 "d%d = json.loads(p%d.read_text()) if p%d.exists() else {'hours': []}" % (n, n, n),
+                 "seen['city-%02d'] = len(d%d['hours'])  # hours of rain to check" % (n, n)]
+    rows += ["print(json.dumps(seen, indent=2, sort_keys=True))", "EOF",
+             "swift test --filter ForecastFormatTests 2>&1 | tail -20", "git status --short ./fixtures | head -40"]
+    return "\n".join(rows)
+
+
+if os.environ.get("MOCK_LONG_ASKS") == "1":
+    _long_cmd = _long_ask_cmd()
+    _long_desc = "Check every city fixture's rain hours and run the formatter's tests"
+    _long_plan = "## 天气小组件的降雨时间线\n\n" + "\n".join(
+        "%d. 第 %d 步：把第 %d 个城市的小时数据接到时间线上，补上对应的格式化测试，跑一遍确认没有回归" % (n, n, n)
+        for n in range(1, 41)) + "\n\n## 不做的事\n\n" + "\n".join("- 第 %d 件先不做的事：留到下一轮再说" % n for n in range(1, 16))
+    INTERACTIONS.extend([
+        {"id": "scr_macbook_review_long", "machine_id": "macbook", "session_id": REVIEW, "session_title": "检查 PR #42 的改动",
+         "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=1), "expires_at": later(hours=24),
+         "screen": " " + _long_desc + "\n " + _long_cmd.replace("\n", "\n ") + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel",
+         "dialog": {"question": "Do you want to proceed?", "detail": _long_desc + "\n" + _long_cmd, "rev": "6605a0000001",
+                    "options": [{"key": "1", "label": "Yes", "keys": ["1"]}, {"key": "2", "label": "No", "keys": ["2"]}]}},
+        {"id": "ix_blog_long_bash", "machine_id": "studio", "session_id": BLOG, "session_title": "博客迁移到 Astro",
+         "cwd": "/Users/me/code/blog", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+         "tool_name": "Bash", "tool_use_id": "toolu_long_bash", "summary": _long_cmd,
+         "tool_input": {"command": _long_cmd, "description": _long_desc}},
+        {"id": "ix_orders_long_plan", "machine_id": "server", "session_id": ORDERS, "session_title": "排查 /orders 接口变慢",
+         "cwd": "/home/me/code/shop-api", "kind": "plan", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+         "tool_name": "ExitPlanMode", "tool_use_id": "toolu_long_plan", "plan": _long_plan},
+        {"id": "scr_macbook_release_long", "machine_id": "macbook", "session_id": RELEASE, "session_title": "整理发布说明",
+         "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=2), "expires_at": later(hours=24),
+         "screen": " Bash command\n " + _long_desc + "\n │ " + _long_cmd.replace("\n", "\n │ ")
+                   + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend",
+         "dialog": {"question": "Do you want to proceed?", "rev": "6605a0000002", "detail": "Bash command\n" + _long_desc + "\n" + _long_cmd,
+                    "command": _long_cmd, "description": _long_desc, "risk": "delete",
+                    "warning": "Dangerous rm operation not ruled out — the shell may read this command differently than it was parsed",
+                    "deadline": "Claude Code will automatically block this request in 4:59, to avoid holding up an unattended session",
+                    "deadline_action": "deny",
+                    "deadline_at": (datetime.now(timezone.utc) + timedelta(seconds=299)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "options": [{"key": "1", "label": "Yes", "keys": ["1"]}, {"key": "2", "label": "No", "keys": ["2"]}]}},
+        {"id": "ix_release_long_bash", "machine_id": "macbook", "session_id": RELEASE, "session_title": "整理发布说明",
+         "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+         "tool_name": "Bash", "tool_use_id": "toolu_long_bash_2", "summary": _long_cmd,
+         "tool_input": {"command": _long_cmd, "description": _long_desc}},
+    ])
+
 # MOCK_SCREEN_MULTI=1: a multi-select AskUserQuestion read off the terminal (Claude Code 2.1.316), the second of
 # three questions: two boxes already ticked at the computer, a few words in its free-text field, "Next" to send it.
 # /mock/reset puts it back unanswered (MultiSelectCardTests: each case starts from the card).
@@ -9645,10 +9723,20 @@ def mock_panes(mid):
     return {"hosts": [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes}]}
 
 
+PASEO_MADE = []  # worktrees made on Paseo's workspaces from the web (#6295), in the catalog after PASEO_WORKSPACES
+
+
 def worktree_route(h, p, body):
     """POST /api/v1/machines/{mid}/worktree/{prepare,create} (#2431)."""
     mid, verb = p.split("/")[4], p.split("/")[6]
     NODE_ACTIONS.append({"machine": mid, "route": "worktree/" + verb, **body})
+    if body.get("kind") == "paseo":  # Paseo makes it, in its own worktrees folder of the repository (#6295)
+        if verb == "prepare":
+            return h.send_json({"root": PASEO_ROOT, "repoName": "app", "branch": "main", "path": PASEO_TREES.rstrip("/"), "automatic_name": True})
+        branch, path = str(body.get("branch", "")), str(body.get("path", ""))
+        wid = "wks_5a1e00000000%04d" % (100 + len(PASEO_MADE))
+        PASEO_MADE.append((wid, branch, path, branch))
+        return h.send_json({"workspace_id": wid, "path": path, "branch": branch})
     if verb == "prepare":
         return h.send_json({"root": "/home/me/persona", "repoName": "persona", "branch": "main", "path": "/home/me/.herdr/worktrees/persona",
                             "choose_parent": body.get("kind") == "orca"})
@@ -9662,6 +9750,80 @@ def worktree_route(h, p, body):
     parent = body.get("parent_workspace_id") or body.get("workspace_id", "")
     if body.get("kind") == "orca": WORKSPACE_LINEAGE[mid, wid] = parent
     return h.send_json({"workspace_id": wid, "parent_workspace_id": parent, "tab_id": wid + ":t1", "pane": wid + ":p1", "terminal": "pane:" + wid + ":p1", "path": path, "branch": branch})
+
+
+# MOCK_PASEO=1 (#6297): Rename and Delete worktree on Paseo's rows, and Rename space on its project, answered as the node
+# answers them (node/runtimeworkspaces_manage.go): a title, the project's name (its agents' space_name, the catalog's
+# project_name), and a deletion previewed, then confirmed with the preview's token, only of a worktree Paseo made (the
+# main checkout is refused); the login flow's worktree has two uncommitted changes, which the dialog asks to confirm.
+# Recorded at GET /mock/node_actions.
+PASEO_PROJECT = {"id": "prj_app", "name": "app"}
+PASEO_PREVIEWS, PASEO_DIRTY = {}, {"wks_5a1e000000000002": 2}
+
+
+def _paseo_path(row):
+    """A Paseo workspace row's folder: PASEO_WORKSPACES name a folder under its worktrees root (None: the main checkout),
+    PASEO_MADE the whole path."""
+    return row[2] if row in PASEO_MADE else PASEO_ROOT if row[2] is None else PASEO_TREES + row[2]
+
+
+def _paseo_failed(h, detail):
+    """A node's refusal as the hub writes it (docs/protocol/protocol.md "Error body"): the node's words in detail."""
+    return h.send_json({"error": "The request could not be completed. Open details for the diagnostic.", "code": "internal", "detail": detail}, 502)
+
+
+def paseo_worktree_route(h, p, body):
+    """POST /api/v1/machines/{mid}/worktree/{rename,delete} of a Paseo row (#6297)."""
+    mid, verb = p.split("/")[4], p.split("/")[6]
+    NODE_ACTIONS.append({"machine": mid, "route": "worktree/" + verb, **body})
+    wid = str(body.get("workspace_id", ""))
+    found = next(((rows, i) for rows in (PASEO_WORKSPACES, PASEO_MADE) for i, row in enumerate(rows) if row[0] == wid), None)
+    if verb == "rename":
+        if not found:
+            return _paseo_failed(h, "Paseo no longer lists this workspace; refresh and try again")
+        rows, i = found
+        rows[i] = (wid, str(body.get("name", "")).strip()) + tuple(rows[i][2:])
+        return h.send_json({"ok": True})
+    token = str(body.get("preview_token", ""))
+    if body.get("preview"):
+        if not found:
+            return _paseo_failed(h, "The workspace or its changes differ from the preview; review a new preview")
+        rows, i = found
+        path = _paseo_path(rows[i])
+        if path == PASEO_ROOT:
+            return _paseo_failed(h, "The repository's main checkout cannot be deleted")
+        token = "paseo-preview-%d" % (len(PASEO_PREVIEWS) + 1)
+        PASEO_PREVIEWS[token] = wid
+        return h.send_json({"workspace_id": wid, "kind": "paseo", "host_id": "local", "instance_id": "paseo-mock", "path": path,
+                            "branch": rows[i][3], "dirty": PASEO_DIRTY.get(wid, 0), "folder": False, "preview_token": token})
+    if PASEO_PREVIEWS.get(token) != wid:
+        return _paseo_failed(h, "Preview this exact workspace again before deleting it")
+    if body.get("reconcile"):
+        return h.send_json({"workspace_id": wid, "removed": not found, "state": "present" if found else "removed"})
+    if not found:
+        return _paseo_failed(h, "Deletion was already sent; reconcile its status before any further action")
+    if PASEO_DIRTY.get(wid) and not body.get("force"):
+        return _paseo_failed(h, "The worktree has uncommitted changes")
+    rows, i = found
+    del rows[i]
+    SESSIONS[:] = [s for s in SESSIONS if not (s.get("space_kind") == "paseo" and s.get("workspace_id") == wid)]  # archived with it
+    return h.send_json({"workspace_id": wid, "removed": True, "state": "removed", **({"branch_deleted": True} if body.get("delete_branch") else {})})
+
+
+def paseo_space_route(h, p, body):
+    """POST /api/v1/machines/{mid}/spaces/{id}/rename of Paseo's project, by its id or one of its workspaces' (#6297): its
+    agents and the catalog show the new name; the hub answers it as pins.go does. False when the id is no Paseo one."""
+    sid = p.split("/")[6]
+    if sid != PASEO_PROJECT["id"] and not any(row[0] == sid for row in PASEO_WORKSPACES + PASEO_MADE):
+        return False
+    NODE_ACTIONS.append({"machine": p.split("/")[4], "route": "spaces/rename", "workspace_id": sid, **body})
+    name = str(body.get("name", "")).strip()
+    PASEO_PROJECT["name"] = name
+    for s in SESSIONS:
+        if s.get("space_kind") == "paseo" and s.get("space_id") == PASEO_PROJECT["id"]:
+            s["space_name"] = name
+    h.send_json({"ok": True, "name": name})
+    return True
 
 
 # MOCK_AGENT_WORKTREE=1 (#6115): a new agent in a worktree of its own. worktree/status says a folder under
@@ -10648,6 +10810,8 @@ def inbox_done_days(query):
 
 def inbox_for(query):
     """The list as the hub gives it: connectors' items only with ?sources=all."""
+    if MOCK_INBOX_SHOWCASE:
+        return copy.deepcopy(INBOX)
     all_sources = (query.get("sources") or [""])[0] == "all"
     return [dict({k: v for k, v in x.items() if k != "context"}, version=inbox_version(x)) for x in INBOX if all_sources or "connector" not in x]
 
@@ -11190,6 +11354,48 @@ def larkcli_area(h, method, p, raw):
                         "qr": {"size": len(WECHAT_QR_ROWS), "rows": WECHAT_QR_ROWS}}) or True
 
 
+
+# MOCK_LARKCLI_INBOX=1: a Lark mention read through lark-cli (飞书 · 我的消息) and its conversation page, as a hub that
+# reads the chat's own record gives it (kind group, the chat's name); =legacy: as an older hub gave it, an empty kind and
+# name (lark-cli's message list says neither). Its words are what lark-cli writes: a post's Markdown with a picture by
+# image key, an interactive message's <card title="…"> envelope, plain text. All made up.
+LARKCLI_INBOX = os.environ.get("MOCK_LARKCLI_INBOX", "")
+LARKCLI_THREAD = "larkcli:chat:oc_example_oncall"
+
+
+def larkcli_thread_page():
+    now = datetime.now(timezone.utc)
+    def at(h, m):
+        return now.replace(hour=h, minute=m, second=0, microsecond=0).isoformat().replace("+00:00", "Z")
+    a, b = {"id": "ou_example_a", "name": "示例同事"}, {"id": "ou_example_b", "name": "另一个示例同事"}
+    bot, helper = {"id": "cli_example_bot", "name": "示例值班机器人"}, {"id": "cli_example_helper", "name": "示例助手"}
+    msgs = [
+        {"id": "om_example_1", "at": at(1, 2), "sender": a, "text": "@示例用户 帮忙看下这个播放数的问题"},
+        {"id": "om_example_2", "at": at(1, 30), "sender": a, "text": "/save"},
+        {"id": "om_example_3", "at": at(1, 30), "sender": helper, "format": "markdown", "text": "<card>\n已将群聊转为常驻群，不会自动解散\n</card>"},
+        {"id": "om_example_4", "at": at(2, 13), "sender": bot, "format": "markdown", "text": (
+            "<card title=\"Oncall Notice\">\n本群已长时间未响应，工单已停留 **120** 小时，请确认是否结束。\n\n"
+            "如果问题已解决，请点击「已解决」；还没解决，请值班同学尽快响应。\n</card>")},
+        {"id": "om_example_5", "at": at(2, 16), "sender": b, "format": "markdown", "text": (
+            "**现象**：示例广告组的播放数低于展示数，漏斗倒挂；10-31 起自行恢复。\n"
+            "**已定位**\n- 问题在原始事件流：起播事件缺失，2 秒播放正常\n- 两端漏斗都正常，异常集中在一批未知端的请求\n"
+            "**请协助确认**\n1. 起播事件为什么没有上报\n2. 历史数据能否回补\n\n"
+            "[示例结论文档](https://example.com/doc)\n![Image](img_example_key)")},
+        {"id": "om_example_6", "at": at(2, 20), "sender": {"id": "ou_example_me", "name": "示例用户"}, "mine": True, "text": "收到，我来跟进"},
+    ]
+    legacy = LARKCLI_INBOX == "legacy"
+    return {"chat": {"id": LARKCLI_THREAD, "name": "" if legacy else "示例值班群", "kind": "" if legacy else "group"}, "messages": msgs}
+
+
+def larkcli_thread_area(h, method, p):
+    """The Lark (lark-cli) conversation page; True when it answered."""
+    if not LARKCLI_INBOX or method != "GET" or p != "/api/v1/connectors/larkcli/thread":
+        return False
+    if parse_qs(urlparse(h.path).query).get("thread", [""])[0] != LARKCLI_THREAD:
+        return h.send_json({"error": "没有叫这个的会话"}, 502) or True
+    return h.send_json(larkcli_thread_page()) or True
+
+
 TELEGRAM_MODE = os.environ.get("MOCK_TELEGRAM", "")
 TELEGRAM = {"enabled": TELEGRAM_MODE not in ("", "off"), "creds": TELEGRAM_MODE in ("signed_in", "limited"),
             "signed_in": TELEGRAM_MODE in ("signed_in", "limited"), "limited": TELEGRAM_MODE == "limited",
@@ -11456,6 +11662,17 @@ def telegram_area(h, method, p, raw):
     return False
 
 
+if LARKCLI_INBOX:
+    INBOX[1:1] = [
+        {"id": "larkcli:example_oncall", "source": "larkcli", "kind": "mention", "account": "larkcli", "account_name": "飞书 · 我的消息",
+         "title": "示例值班群", "sender": "示例值班机器人", "preview": "Oncall Notice", "count": 1,
+         "started_at": ago(minutes=30), "updated_at": ago(minutes=30), "tier": "action",
+         "summary": "值班群里在催你确认示例问题的进展", "reason": "被点名催响应", "read": False,
+         "context": "示例同事: @示例用户 帮忙看下这个播放数的问题\n另一个示例同事: **现象**：示例广告组的播放数低于展示数……\n示例值班机器人: <card title=\"Oncall Notice\">……</card>",
+         "connector": {"thread": LARKCLI_THREAD, "label": "飞书提及", "reply_to": "以你的身份发到「示例值班群」，会话里的人都能看到", "can_reply": True}},
+    ]
+
+
 if os.environ.get("MOCK_TELEGRAM_INBOX"):
     INBOX[1:1] = [
         {"id": "telegram:dm1", "source": "telegram", "kind": "dm", "account": "telegram", "account_name": "Telegram",
@@ -11692,6 +11909,18 @@ if MOCK_INBOX_EVENTS:
         }
         for _x in INBOX:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
+
+
+# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
+# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
+# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
+# now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
+MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
+if MOCK_INBOX_SHOWCASE:
+    _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                                  "spec", "fixtures", "inbox", "showcase.json")
+    with open(_showcase_path, encoding="utf-8") as _f:
+        INBOX[:] = json.load(_f)["items"]
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -12554,6 +12783,31 @@ def fs_find(mid):
 
 def fs_get(h, p, q):
     """GET /api/v1/lark/… and /mock/lark with MOCK_LARK (True when handled; the rest falls through)."""
+    # The unread switch must cross a whole read-only page, not filter just the first screen (#6553).
+    if os.environ.get("MOCK_LARK_UNREAD") and p in ("/api/v1/lark/conversations", "/api/v1/lark/pinned"):
+        pages = max(1, min(16, int(os.environ.get("MOCK_LARK_UNREAD_PAGES", "1"))))
+        rows = [dict(id="read-%03d" % n, name="Project archive %02d" % n, is_group=True, unread=0,
+                     at_me=False, muted=False, preview="Notes are up to date.", is_mine=False,
+                     updated_at="2026-01-02T12:00:00Z", pinned=n == 1) for n in range(1, pages * 60 + 1)]
+        rows += [dict(id=feed, name=name, is_group=True, unread=count, marked_unread=marked,
+                      at_me=False, muted=False, preview="A new update is waiting.", is_mine=False,
+                      updated_at="2026-01-01T12:00:00Z", pinned=feed == "f1")
+                 for feed, name, count, marked in [("f3", "Design review", 3, False),
+                                                  ("f2", "Weekend plans", 0, True),
+                                                  ("f1", "Release notes", 1, False)]]
+        if p.endswith("pinned"):
+            rows = [row for row in rows if row.get("pinned")]
+        elif q.get("scope", ["chats"])[0] == "unread":
+            rows = [row for row in rows if row["unread"] or row.get("marked_unread")]
+        cursor, limit = int(q.get("cursor", ["0"])[0] or "0"), int(q.get("limit", ["60"])[0])
+        if cursor:
+            delay = max(0, min(3, float(os.environ.get("MOCK_LARK_UNREAD_PAGE_DELAY", "0"))))
+            if delay:
+                print(f"lark-unread-page-start cursor={cursor}", flush=True)
+                time.sleep(delay)
+        h.send_json({"conversations": rows[cursor:cursor + limit], "account_id": LARK_ACCOUNT_ID,
+                     "next_cursor": str(cursor + limit) if cursor + limit < len(rows) else ""})
+        return True
     if p == "/mock/lark":
         h.send_json(FS_LOG); return True
     if p.startswith("/api/v1/lark/media/"):
@@ -12575,6 +12829,14 @@ def fs_get(h, p, q):
         h.end_headers(); h.wfile.write(data)
         return True
     if p == "/api/v1/lark/conversations":
+        # Optimized before/after list-scroll measurements use the same paginated synthetic workload (#6553).
+        if os.environ.get("MOCK_LARK_LIST"):
+            rows = FS_CONVS + [dict(FS_CONVS[-1], id="list-%03d" % n, name="Archive %03d" % n)
+                               for n in range(min(2000, int(os.environ["MOCK_LARK_LIST"])))]
+            cursor, limit = int(q.get("cursor", ["0"])[0] or "0"), int(q.get("limit", ["60"])[0])
+            h.send_json({"conversations": rows[cursor:cursor + limit], "account_id": LARK_ACCOUNT_ID,
+                         "next_cursor": str(cursor + limit) if cursor + limit < len(rows) else ""})
+            return True
         h.send_json({"conversations": FS_CONVS, "next_cursor": ""}); return True
     if p.startswith("/api/v1/lark/conversations/") and p.endswith("/messages"):
         h.send_json(fs_page(p.split("/")[5], q)); return True
@@ -15430,15 +15692,33 @@ ITEMS["hlth0004-0000-4000-8000-000000000004"] = (
 )
 # Assistant screenshots with the shared renderer: a read-only persona-view and a legacy persona-card, leaving other mock modes unchanged.
 if os.environ.get("MOCK_EXTENSION_CARDS") == "1":
-    _view = {"sections": [{"title": "本周概览", "items": [
+    # A card needs its `fallback` (the words a client that can't draw it shows): without one it is drawn as text.
+    _view = {"fallback": "本周概览：会议记录已整理。", "sections": [{"title": "本周概览", "items": [
         {"type": "markdown", "text": "**会议记录已整理**，可以查看摘要。"},
         {"type": "row", "title": "周会摘要", "icon": "doc", "action": {"id": "must-not-run"}},
         {"type": "button", "title": "不应运行", "action": {"id": "must-not-run"}},
         {"type": "link", "title": "查看说明", "url": "https://example.com/guide"}]}]}
     _legacy = {"type": "stat", "title": "今天步数", "value": 8432, "unit": "步", "note": "这是演示数据"}
     _fence = lambda language, data: "```" + language + "\n" + json.dumps(data, ensure_ascii=False) + "\n```"
-    ITEMS[ASK1] = [it("user", "text", 2, text="把今天的概览放到卡片里"),
-                   it("assistant", "text", 1, text=_fence("persona-view", _view) + "\n\n" + _fence("persona-card", _legacy))]
+    # UI version 4's code-hosting components in a card (#827): drawn read-only by ExtensionCodeSummary, now that cards
+    # report UI version 6 and the hub sends them as they are.
+    _code = {"fallback": "合并请求 #42：登录页支持“记住我”，3 个文件。", "sections": [{"title": "合并请求 #42", "items": [
+        {"type": "header", "title": "登录页支持“记住我”", "subtitle": "remember-me → main · 3 个提交"},
+        {"type": "breadcrumb", "crumbs": [{"title": "app"}, {"title": "web"}, {"title": "login.tsx"}]},
+        {"type": "file_tree", "entries": [
+            {"path": "web/login.tsx", "kind": "file", "status": "modified", "additions": 24, "deletions": 6},
+            {"path": "web/session.ts", "kind": "file", "status": "added", "additions": 41, "deletions": 0},
+            {"path": "web/old-login.css", "kind": "file", "status": "deleted", "additions": 0, "deletions": 18}]},
+        {"type": "code", "path": "web/session.ts", "language": "ts",
+         "text": "export function remember(days: number) {\n  const until = Date.now() + days * 86_400_000\n  return { until }\n}"},
+        {"type": "comment_thread", "comments": [
+            {"author": "评审人", "at": "2026-11-12T09:30:00Z", "body": "“记住我”默认关着比较稳妥。"},
+            {"author": "作者", "at": "2026-11-12T10:05:00Z", "body": "好，已经改成默认关。"}]},
+        {"type": "composer", "name": "reply", "placeholder": "回复", "buttons": [{"title": "发送", "action": {"id": "must-not-run"}}]}]}]}
+    ITEMS[ASK1] = [it("user", "text", 4, text="把今天的概览放到卡片里"),
+                   it("assistant", "text", 3, text=_fence("persona-view", _view) + "\n\n" + _fence("persona-card", _legacy)),
+                   it("user", "text", 2, text="合并请求 #42 现在怎么样了"),
+                   it("assistant", "text", 1, text=_fence("persona-view", _code))]
 
 if os.environ.get("MOCK_SPLIT_TABS"):
     ITEMS.update(split_tabs_items())
@@ -19774,6 +20054,10 @@ def bump(what, session=None):
     return {"error": "nothing to bump"}
 
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import stream_trace  # /mock/say?trace=… (#6651)
+
+
 # /mock/say?drop=1: the reply is written and the session list moves, but its push never reaches the page (#3139).
 # /mock/say?preset=markdown: a long reply whose blocks change height as they render (a code block, a table, a list),
 # for StreamingScrollTests: streamed at the hub's pace it shows whether the chat holds still while it grows.
@@ -20136,7 +20420,7 @@ def narrate(step, words, answer, steps=8, ms=250, line=True, ask="帮我把网�
     return {"error": "step is start or finish"}
 
 
-def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0):
+def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0, plan=None):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
     transcript grows and the session list says so (updated_at), but the items push is lost: the page has to notice (#3139).
@@ -20156,7 +20440,12 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upt
                     send({"type": "items", "machine_id": mid, "session_id": sid, "items": asked, **span(asked, before)})
                     user = None
                 shown = text[:upto] if upto > 0 else text
-                for k in range(1, steps + 1):
+                if plan:  # a recorded stream's cadence (&trace=…): each send at its time, the text so far
+                    began = time.monotonic()
+                    for at, n in plan:
+                        time.sleep(max(0, at / 1000 - (time.monotonic() - began)))
+                        send({"type": "delta", "machine_id": mid, "session_id": sid, "text": shown[:n]})
+                for k in range(1, 0 if plan else steps + 1):
                     time.sleep(ms / 1000)
                     send({"type": "delta", "machine_id": mid, "session_id": sid, "text": shown[:len(shown) * k // steps]})
                 if upto > 0:
@@ -20676,6 +20965,12 @@ if ENGINE_SETS:
     for _s in SESSIONS:
         if _s.get("session_id") == WIDGET:
             _s["host"], _s["also_open_in"] = "herdr", ["herdr-core"]
+if os.environ.get("MOCK_PASEO"):  # the server enables Paseo beside herdr: its workspaces are the catalog's (#6295)
+    for _m in MACHINES:
+        if _m["id"] == "server" and _m.get("online"):
+            _m["engines"] = [e for e in _m["engines"] if e["id"] != "paseo"] + [{"id": "paseo", "name": "Paseo", "available": True, "version": "0.14"}]
+            _m["engine_hosts"], _m["engine_default"] = ["herdr", "paseo"], "herdr"
+            _m["engine"] = legacy_engine(_m["engine_hosts"], _m["engine_default"])
 if RESUME_TERMINAL:  # the Mac mini enables no terminal engine: the empty set (#3302), herdr still named for older clients
     for _m in MACHINES:
         if _m["id"] == "mini":
@@ -22284,7 +22579,7 @@ MOCK_HELP = [
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
     "MOCK_CHILD_SESSIONS=1  The Paseo computer (MOCK_PASEO) with its agent's four created agents (one waiting for you, one working with a Codex subagent of its own, one done, one failed) and an agent whose creator is not listed: the hub folds them (folded_under / children) and the lead's chat draws a card for each (#5120)",
-    "MOCK_PASEO=1  A computer whose engine is Paseo: a project with its main checkout and two titled worktree workspaces, an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
+    "MOCK_PASEO=1  A computer that enables Paseo beside herdr: a project with its main checkout, two titled worktree workspaces and one with no agent, all in the workspace catalog (New worktree… makes one in Paseo's folder, #6295; Rename, Delete worktree and Rename space as the node answers them, the login flow's worktree with two uncommitted changes, #6297), an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
     "MOCK_PERMISSION_DIFF=1  Two chats wait on a Claude Code permission card for an Edit (longer than the card's preview) and a Write; the card shows the change (#4621)",
@@ -22817,9 +23112,13 @@ class H(BaseHTTPRequestHandler):
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,
             # the file was rewritten: docs/protocol/protocol.md "Continuity of items"); /mock/reset puts mock-1 back.
             if q.get("history", [""])[0]: HISTORY_NOW["token"] = q["history"][0]
-            args = (SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None, q.get("stream", ["0"])[0] == "1",
+            # &trace=markdown|prose&node=lead|trail: a recorded reply at the cadence the node sends it (scripts/mock/stream_trace.py, #6651).
+            trace = stream_trace.load(q["trace"][0]) if q.get("trace", [""])[0] else None
+            plan = stream_trace.deltas(trace["tokens"], q.get("node", ["trail"])[0]) if trace else None
+            args = (trace["text"] if trace else SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None,
+                    q.get("stream", ["0"])[0] == "1" or trace is not None,
                     int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1",
-                    int(q.get("upto", ["0"])[0]))
+                    int(q.get("upto", ["0"])[0]), plan)
             threading.Thread(target=say, args=args, daemon=True).start()
             return self.send_json({"ok": True})
         if MOCK_LARK and (p.startswith("/api/v1/lark/") or p == "/mock/lark") and fs_get(self, p, q): return  # area: feishu chat page
@@ -23344,6 +23643,9 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(t) if t else self.send_json({"error": "no such inbox item"}, 404)
         if p.startswith("/api/v1/inbox/"):
             iid = p[len("/api/v1/inbox/"):]
+            if MOCK_INBOX_SHOWCASE:
+                x = next((x for x in INBOX if x["id"] == iid), None)
+                if x is not None: return self.send_json(x)
             for x in INBOX + INBOX_HISTORY:  # an item done long ago: the history's (#2200)
                 if x["id"] == iid: return self.send_json(dict(x, context=x.get("context") or x["preview"]))
         if mail_area(self, "GET", p, q): return
@@ -23359,6 +23661,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/mail/messages": return self.send_json({"messages": [], "has_more": False})
         if p == "/api/v1/lark/unread-count": return self.send_json({"count": 4})
         if telegram_area(self, "GET", p, b""): return
+        if larkcli_thread_area(self, "GET", p): return
         if plugin_connector_area(self, "GET", p, b""): return
         if triage_route(self, "GET", p, b""): return
         if kb_selection_route(self, "GET", p, b""): return
@@ -23804,8 +24107,14 @@ class H(BaseHTTPRequestHandler):
         if plugins_route(self, p, self.last_body): return
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|close_finished|split|agent|git)|tabs/(close|rename))", p):
             return node_action(self, p, json.loads(self.last_body or b"{}"))
-        if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(prepare|create)", p):
+        if (os.environ.get("MOCK_TERMINAL_PANES") or os.environ.get("MOCK_PASEO")) and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(prepare|create)", p):
             return worktree_route(self, p, json.loads(self.last_body or b"{}"))
+        if os.environ.get("MOCK_PASEO") and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(rename|delete)", p) \
+                and json.loads(self.last_body or b"{}").get("kind") == "paseo":
+            return paseo_worktree_route(self, p, json.loads(self.last_body or b"{}"))
+        if os.environ.get("MOCK_PASEO") and re.fullmatch(r"/api/v1/machines/[^/]+/spaces/[^/]+/rename", p) \
+                and paseo_space_route(self, p, json.loads(self.last_body or b"{}")):
+            return
         if AGENT_WORKTREE and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(status|add|remove)", p):
             return agent_worktree_route(self, p, json.loads(self.last_body or b"{}"))
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/spaces/[^/]+/rename", p):
@@ -26026,6 +26335,7 @@ MOCK_HELP.append("MOCK_MOMENTS_FEED=<名字>  知识库的公司圈帖子带 fee
 MOCK_HELP.append("MOCK_NO_LARK=1  没装接飞书的扩展的 hub：features 里没有 lark / lark_moments / lark_attachments，/api/v1/lark/… 404，连接器里没有飞书")
 MOCK_HELP.append("MOCK_INBOX_TRIAGE=<状态>[:<条数>[:<来源名，逗号隔开>[:<原因>]]]  收件箱列表带 triage（新条目在等分拣，#1773）：unconfigured / paused / error / timeout / behind / ok；不设时没有 triage（老 hub）")
 MOCK_HELP.append("MOCK_INBOX_UNREAD=<来源名>[:<代码>[:<原因>]],…  收件箱 triage 的这些来源这一轮没读到（read_error / read_reason，#1849）：代码 timeout / rate_limited / failed；不写原因就没有 read_reason")
+MOCK_HELP.append("MOCK_INBOX_SHOWCASE=1  收件箱列表和单条详情使用 spec/fixtures/inbox/showcase.json 的 items（四端并排截图的同一场景，字段和时间保持夹具原值；客户端自己把时钟固定到 now_clock）；同时开 MOCK_INBOX_EVENTS 时以本开关为准")
 
 # ---------- area: commenting in the Feishu document reader (#1290) ----------
 # MOCK_DOC_COMMENTS=1: the plugin says `lark_doc_comments`; GET /api/v1/lark/raw/documents/comments has three made-up
