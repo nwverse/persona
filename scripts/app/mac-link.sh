@@ -18,7 +18,7 @@ APP="$OUT/Persona Link.app"
 
 build() {
   local version archs=() helpers=() nodes=()
-  version="$(git describe --always --dirty)-$(date +%Y%m%d%H%M)"
+  version="$(git describe --tags --match 'v[0-9]*' --always --dirty)-$(date +%Y%m%d%H%M)"
   if [ "${UNIVERSAL:-}" = 1 ]; then archs=(arm64 x86_64); else archs=("$(uname -m)"); fi
   # xcodebuild builds the Swift package (swift build's default backend can't find the developer directory here).
   (cd "$PKG" && xcodebuild -quiet -scheme PersonaLink -configuration Release -derivedDataPath build/dd \
