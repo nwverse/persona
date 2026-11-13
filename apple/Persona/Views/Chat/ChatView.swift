@@ -404,6 +404,32 @@ struct ChatView: View {
         }
     }
 
+    /// The closeout the header's card shows (#3612, `CloseoutCard`): a stopped agent's own account of its work, on its
+    /// own chat (not a subagent's, not an assistant conversation). The Mac app is frozen and draws no card, so it
+    /// keeps the reply as it was written.
+    private var shownCloseout: Closeout? {
+        #if os(macOS)
+        return nil
+        #else
+        guard style == .dev, pane == .chat, viewing == nil, let session, !session.assistant else { return nil }
+        return session.shownCloseout
+        #endif
+    }
+
+    /// The card, at most a share of the page tall (as the workflow section): the conversation stays under it.
+    @ViewBuilder private var closeoutCard: some View {
+        if let closeout = shownCloseout {
+            // Under an open workflow section it starts folded: the two would take most of the page.
+            CloseoutCard(closeout: closeout, artifacts: session?.work?.artifacts ?? [],
+                         maxHeight: pageHeight > 0 ? pageHeight * Theme.Size.workflowShare : nil, startsOpen: !hasWorkflows)
+                // A list row carries only where the closeout stands; what changed and what was verified come with
+                // the session's own read. One that arrived without them (a list push after the chat opened) is read again.
+                .task(id: CloseoutRead(key: key, closeout: closeout)) {
+                    if closeout.did == nil, closeout.verified == nil { await model.refreshSessionDetail(key) }
+                }
+        }
+    }
+
     /// A workflow runs in the background (#2935), or one just ended: its section shows (only in the chat pane).
     private var hasWorkflows: Bool { pane == .chat && !(session?.shownWorkflows().isEmpty ?? true) }
 
@@ -969,7 +995,8 @@ struct ChatView: View {
                                        streaming: drawsLive && (frozen.map { !$0.text.isEmpty } ?? liveShown),
                                        quietAgents: quietSubagents, workflowCalls: workflowCalls,
                                        day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil,
-                                       supervision: openSupervision, active: shownRoundActive, background: foldsBackground)
+                                       supervision: openSupervision, active: shownRoundActive, background: foldsBackground,
+                                       closeout: shownCloseout != nil)
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
         if frozen != nil {
@@ -989,6 +1016,8 @@ struct ChatView: View {
             lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
         }
         lines = ChatLines.sourceRuns(lines)
+        // The card in the header says the closeout (#3612): the reply that carried the raw block shows without it.
+        if key.closeout { lines = ChatLines.hidingCloseout(lines) }
         scratch.lines = lines
         scratch.linesKey = key
         ChatTrace.shared.note(shownKey, ChatTrace.screen(lines, live: store.liveText.count, streaming: key.streaming, running: key.live != nil,
@@ -3647,6 +3676,12 @@ struct ChatView: View {
                         .padding(.horizontal, Theme.Space.l)
                         .padding(.bottom, Theme.Space.s)
                 }
+                // What the agent said of its own work as it stopped (#3612): above the transcript, never inside it.
+                if shownCloseout != nil {
+                    closeoutCard
+                        .padding(.horizontal, Theme.Space.l)
+                        .padding(.bottom, Theme.Space.s)
+                }
                 // The ports it listens on (its dev servers, docs/operations/ports.md): a tap opens the page.
                 if let ports = session?.ports, !ports.isEmpty {
                     SessionPortChips(machine: key.machineRef, ports: ports)
@@ -3791,6 +3826,7 @@ struct ChatView: View {
         if tabs || hasActivity || mode != nil { contextRow(tabs: tabs, activity: hasActivity, mode: mode) }
         if let goal = session?.goal { GoalBar(goal: goal) }
         workflowBar
+        closeoutCard
         if let ports = session?.ports, !ports.isEmpty { SessionPortChips(machine: key.machineRef, ports: ports) }
         if pane == .chat {
             if host == nil {
@@ -6778,6 +6814,14 @@ struct ChatLine: Identifiable {
         self.content = content
     }
 
+    private init(id: String, content: Content) {
+        self.id = id
+        self.content = content
+    }
+
+    /// `line` drawn as `row` under its own id: the list keeps its place (`ChatLines.hidingCloseout`).
+    static func replacing(_ line: ChatLine, with row: ChatRow) -> Self { Self(id: line.id, content: .row(row)) }
+
     static func supervision(id: String, lines: [ChatLine], live: Bool, source: MessageSource? = nil) -> Self {
         Self(.supervision(id: id, lines: lines, live: live, source: source))
     }
@@ -7374,6 +7418,12 @@ struct WorkLine: View, Equatable {
 }
 
 
+/// What the closeout card's detail read follows: the chat and the closeout as the list has it.
+private struct CloseoutRead: Equatable {
+    var key: SessionKey
+    var closeout: Closeout
+}
+
 /// Where a work line's or tool run's header is, told to the chat's pin (`workHeadMoved`). Not from Full Page's copies of
 /// the lines (#1609): they are off screen, and their positions moved the list the next time a header was tapped.
 private struct WorkHeadReport: ViewModifier {
@@ -7589,6 +7639,8 @@ final class ChatScratch {
         var active = false
         /// Background rounds fold (`ChatLines.foldBackground`): the main conversation with the hub's switch on.
         var background = false
+        /// The header shows the session's closeout card: its raw block is left out of the last reply.
+        var closeout = false
     }
     /// What was sent from this chat lately: its transcript copy arriving brings you to the newest, others do not.
     var sentHere: [(id: UUID, text: String)] = []
