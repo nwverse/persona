@@ -208,11 +208,8 @@ struct AppSectionHeader: View {
         CountsHeading {
             if let kind = app.kind {
                 AgentMark(kind: kind).accessibilityHidden(true) // the title names it
-            } else if app.engine != nil {
-                ThemedIcon(Theme.Icon.terminal).foregroundStyle(.secondary)
-                    .scaledFrame(width: Theme.Size.markS, height: Theme.Size.markS)
-            } else {
-                ThemedIcon(Theme.Icon.agents).foregroundStyle(.secondary)
+            } else { // a terminal for an engine's section, the agents symbol for Other
+                ThemedIcon(app.engine != nil ? Theme.Icon.terminal : Theme.Icon.agents).foregroundStyle(.secondary)
                     .scaledFrame(width: Theme.Size.markS, height: Theme.Size.markS) // lined up with the marks above
             }
             if compact {
