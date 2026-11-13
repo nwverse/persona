@@ -92,7 +92,6 @@ export class TranscriptModel {
     for (const action of actions) {
       if (!this.active) return;
       if (action.kind === 'fetch_after') {
-        this.fillRequested = true;
         if (this.fillRunning) continue;
         this.fillRunning = true;
         try {

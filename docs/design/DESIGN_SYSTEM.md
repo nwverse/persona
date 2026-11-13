@@ -705,6 +705,8 @@ A list's controls come in four kinds. Each kind looks like itself, so that narro
 
 Search may take query operators and scopes; they live inside the search field.
 
+- **iOS Agents filter capsule** (#7033, owner-approved final E): `CapsuleFilterBar` below search is one fully rounded surface (`Theme.card`, `Theme.cardStroke`, `Theme.Size.hairline`). Only the existing quick filters scroll horizontally; their availability, counts and defaults are unchanged. Unfocused labels show two characters and an ellipsis; the selected choice and the choice nearest the strip's center after a scroll expand with `Theme.Motion.standard`. Counts never truncate. Focus is sampled at the end of a scroll gesture, not repeatedly from the animated widths, to avoid a layout feedback loop. Reduce Motion disables disclosure and selection animation. At the trailing end, a 44 pt `Theme.Icon.capsuleGrouping` control stays fixed behind a hairline of `Theme.FilterCapsule.separatorHeight` (22 pt); its menu contains only `DevGrouping.offeredNow` and checks the current grouping. The former separate grouping pill is removed. Personal Agents keeps its separate navigation entry, outside the capsule. Spoken filter labels remain complete, including counts and selection. Why: the owner requested one compact row without mixing grouping choices into state filters; this serves people monitoring Agents, not Assistant. Other platforms and the frozen Mac appearance are unchanged.
+
 A list row found by what is inside it, not by its own name (a Persona chat found by a message, #6283), keeps its title and puts the sentence that matched in place of its second line, the match marked as search in chat marks it (the accent tint), the line starting a few characters before the match so a narrow row still shows it (each client cuts for its own width, #7045); opening it goes to that message, ringed as a search hit. A row found by its name keeps its usual second line and opens as usual. Local matches show at once; what the server finds merges in, and a short line under the field says when the server's results may be incomplete.
 
 Android's `JMenu` takes a choice list in groups: an action can open a group with a title (`JAction.section`, drawn after a rule; `JActionSheet` draws it too, over its labels' column, as the Agents ⋯'s Display) and carry a quiet line under its label (`JAction.subtitle`), as the To-dos list's Show (each choice with how many it would show) and Sort by (#3740). A status section's count can sit in a capsule of its state's tone (`JSectionHeader` `countTone`, the To-dos list's sections, #3712), as iOS `CountBadge`. A one-line notice over a list keeps its action on its line as a text button (`JNotice` `inlineAction`: "1 more waiting on you, not in This week · Show all").
@@ -1620,7 +1622,7 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 
 - **Interface** is everything the person operates or scans rather than reads: buttons, top and bottom bars, toolbars, menus' own drawing, the tab bar, segmented controls, filter strips, list rows' labels and values, page headers, the calendar, widgets, a card's controls, settings rows, badges, previews and summaries in lists, search-result snippets. It is capped at `Theme.interfaceLargestTypeSize` (xxxLarge, the largest size that is not an accessibility size). `RootView` sets the cap on the environment's `dynamicTypeSize`, so no view has to ask for it; a view that needs a smaller cap (a glyph in a fixed circle) still names one.
 - **Reading content** keeps growing to AX5: a chat message's body (the user's and the assistant's, replies, quotes, and the same in an Agent session; code blocks follow the reply and scroll sideways), an Inbox item's body and detail, knowledge and file preview bodies, a to-do's description and plan, meeting minutes, transcript and the messages in a meeting's conversation, and what is being typed in a text field (the field's own buttons stay capped, its line limit stays). A tool row, a "Worked for…" fold header, expanded tool output, a diff and the terminal are interface (the terminal has its own text size).
-- A view lifts the cap with `.readingContent()` (`apple/Persona/DesignSystem/ReadingSize.swift`): it sets the size the reader chose, kept by `RootView` in `\.readingTypeSize`. Put it on the text, not on a whole screen. `scripts/test/test_apple_reading_content.py` lists the files that may use it; adding a file needs the reason there.
+- A view lifts the cap with `.readingContent()` (`apple/Persona/DesignSystem/ReadingSize.swift`): it sets the size the reader chose, kept by `RootView` in `\.readingTypeSize`. Put it on the text, not on a whole screen. `scripts/test/test_apple_reading_content.py` lists the files that may use it; adding a file needs the reason there. Outside a reading container a view never sees an accessibility size, so it has no AX-only layout: `scripts/test/test_apple_ax_branches.py` lets only the files it lists mention `isAccessibilitySize` or `.accessibility1…5`.
 - The system draws its own menus, alerts, confirmation dialogs, share sheet and keyboard at the system's size; do not cap them.
 - Because the interface is capped, it needs no layout of its own for the accessibility sizes. Do not add one: no `isAccessibilitySize` branch and no `.accessibility1…5` in interface code (`PR 2` of #6448 removes the old ones). A control that still does not fit at xxLarge or xxxLarge uses the rules in section 1.2 (shorten, stack by the width that is there with `StackingButtonRow` or `firstFittingText`).
 - Large Content Viewer: a capped control shows its name and icon large on a long press (`accessibilityShowsLargeContentViewer`); VoiceOver reads the whole content as before.
@@ -2257,7 +2259,81 @@ what was decided, and the transcript stays one tap away (principle 2) instead of
   `recording-sentence` and `recording-sentence-lit` keep their names. UI tests: `MinutesCardsUITests` (light and dark,
   the default and the largest text size, a cited photo) and `MeetingRecordingUITests` (to-dos, Regenerate, the date
   style).
-- Platforms: visionOS keeps the minutes' sections above the transcript; the web and Android have no Summary yet.
+- Platforms: visionOS keeps the minutes' sections above the transcript; the web shows minutes that carry an overview as
+  the summary card below and has no Summary | Transcript switch; Android has no Summary yet.
+
+### Web: the summary card (#6563)
+
+Who it serves: everyday people reading a meeting's minutes in the browser. Minutes that carry an `overview` read as one
+summary card (contract: `docs/assistant/meeting-minutes.md` "Summary card (#6563)"); the others look exactly as before,
+pixel for pixel. Reason: where the meeting landed and each workstream's state are what a reader looks for first, and
+the flat Key points / Decisions lists made them read every line (principle 2).
+
+- **Where.** `web/src/lib/minutes-overview.ts` reads the overview on its own (`minutesOverview`, the contract's
+  "Clients" cleaning) and finds the bold places (`boldParts`); `RecordingMinutes.tsx` chooses the layout once, when the
+  minutes change (a bullet left after cleaning), never while drawing; `web/src/views/knowledge/MinutesOverview.tsx` draws it.
+- **Card.** Still one `Card` in the recording page's column. Its first child holds the headline (or the minutes' title)
+  as the h3 in `text-card-title`, when · where · attendees on one line in `text-label` `--ink-2` (the dots are read out
+  too, so a screen reader keeps the facts apart), the partial note,
+  then **Core conclusions** on `bg-ai-tint` (`rounded-card`, the `light` icon in `--ai`, an h4; these are the AI's own
+  words), then the groups. The topic area is that one child, so no divider runs between topic cards. Action items (the
+  page's `ActionItems`, Add to to-dos / Added / Add all unchanged) and Open questions (`PointList`) follow as h4
+  sections, then the AI note (`sparkles` in `--ai`, `text-label` `--ink-3`). Key points and Decisions are not shown again.
+- **Groups.** A titled group is a `section` labelled by its h4 (`text-label` semibold `--ink-2`, a dot in its tint),
+  its topics h5. The single untitled group has no heading: a plain grid, each topic an h4. Each topic is an `article`
+  labelled by its title.
+- **Topic card.** `rounded-card` on `--topic-N-tint`, N by the group's position (the first group the first tint, four in
+  turn); a tile of `bg-surface` with the topic's glyph in `--topic-N`, its title in `text-meta` semibold. A bullet is a
+  dot in `--ink-3`, or for a decision the `flag` in `--ink-2` and the word **Decision** where a point shows its speaker
+  (`text-label` `--ink-3`), so nothing rests on the glyph or the color. That label goes to the next line whole when it
+  does not fit after the words, and only a name longer than the line wraps (an `inline-block` as wide as the line at
+  most). The words are `text-meta` `--ink` with the
+  `strong` places `font-semibold`; no text is read as Markdown. The time or the cited photo is the page's own
+  (`TranscriptTime`, `PhotoCite`): beside the words while they keep 12em, else under them on the right; disabled when
+  there is no transcript line (the trim), a kept photo still opens under Photos. After 4 bullets the card shows
+  **Show N more** / **Show less** (`Button` quiet, small, `aria-expanded`), which open the rest in place. The button
+  controls the topic's list (`controls`, aria-controls) and its name names the topic, its visible words first ("Show 2
+  more in Export", `label`), so several topics' buttons differ. A topic's fold is kept by the minutes' `version` and its
+  title: a confirmed to-do keeps it, rewritten minutes start folded.
+- **Grid.** `minutes-topic-grid`: wrapped rows of as many cards of `--minutes-card-min` as fit, never more than three
+  (a card is at least a third of the row), each card growing to fill its row and the cards of a row sharing its height.
+  Two in the 720 px column, at the Large text size and at 200% browser zoom too; one on a phone. A card alone in its
+  row (the third of three, a group's only one) takes the whole row, where a grid's `auto-fit` left it half a row beside
+  an empty cell. The reading order runs row by row.
+- **Text size.** Every size is a named one (`text-card-title`, `text-meta`, `text-label`); the card's own marks, tiles
+  and icons are sized in `em` and `--minutes-card-min` follows `--text-scale`, so they grow with the page's text.
+- **Tokens** in `web/src/views/knowledge/minutes-overview.css`, which loads with the Knowledge page: as Tailwind
+  utilities in `web/src/styles.css` they added 325 B to every language's first screen (`FIRST_SCREEN_BUDGET`) for a page
+  most visits never open, so the card's tokens and its few own rules (the tints by `data-minutes-tint`, the grid, the em
+  sizes) live there, as `web/src/ui/share-tokens.css` does for sharing; everything else is the usual utilities. Checked in
+  `web/src/ui/theme-contrast.test.ts` (`--ink`, `--ink-2`, `--ink-3` and `--accent-ink` at 4.5:1 on every tint, each hue
+  at 3:1 on its tile, `--ai` and the words at 4.5:1 on `--ai-tint`; the times for the page's own accent, every built-in
+  theme color, and a sweep of persona and extension accents through `accentTokens` and `meetContrast`):
+
+  | Token | Light | Dark | Use |
+  | --- | --- | --- | --- |
+  | `--topic-1` … `--topic-4` | `--hue-blue`, `--hue-teal`, `--hue-pink`, `--hue-gray` | same | a topic's glyph and its group's dot; never a status hue or `--ai` |
+  | `--topic-1-tint` … `--topic-4-tint` | `#ebf5ff` `#ecf6f7` `#fcf0f5` `#f5f5f5` (the hue at 8% over `--surface`) | `#26303d` `#263337` `#372d34` `#2f3034` (10%) | the topic cards (`.minutes-topic` under `data-minutes-tint="N"`) |
+  | `--minutes-card-min` | `calc(15.5rem * var(--text-scale, 1))` | same | a topic card's least width |
+  | `--minutes-card-gap` | `0.75rem` | same | the grid's gap |
+  | `--minutes-ai-accent-ink` | not set (`--accent-ink`) | `color-mix(in srgb, var(--accent-ink) 85%, var(--ink))` | a time in the core conclusions |
+
+  On `--ai-tint` dark `--ink-3` is under 4.5:1, so inside the conclusions it takes `--ink-2`
+  (`.dark [data-minutes-conclusions]`), as the dark user bubble does. The dark AI tint is also lighter than every page
+  background a theme color's `--accent-ink` is made readable on (`meetContrast`), so every built-in theme color's times
+  fell to about 4.3:1 there: inside the conclusions a time takes `--minutes-ai-accent-ink`, its `--accent-ink` 15% of the
+  way to `--ink` (4.6:1 at worst over the sweep; the page's own blue barely changes). The topic tints need nothing:
+  light they are lighter, dark darker, than the backgrounds `--accent-ink` is checked on.
+- **Topic glyphs** (`TOPIC_GLYPH`; any other value is `general`): progress `trendUp`, schedule `calendar`, release
+  `send`, performance `gauge`, metrics `chart`, tooling `tool`, quality `shield`, design `layers`, people `users`,
+  customer `person`, budget `money`, risk `shieldAlert`, general `list`.
+- **Copy** sends the hub's `markdown`, as it always did.
+- Checks: `web/src/lib/minutes-overview.test.ts` (the cleaning, `boldParts` and the shared
+  `spec/fixtures/minutes-overview/cases.json`), `RecordingMinutes.test.tsx` (order, heading levels, fallback, the fold,
+  to-dos, Copy, the trim), `RecordingPhotos.test.tsx` (a cited photo after the trim) and `web/e2e/recording-minutes.mjs`
+  (en, zh-Hans and ja at 1440 and 390, light and dark; the Large text size and a 1440 window at 200% zoom; a card
+  alone in its row and a long speaker name, with every topic card and line checked for running past its box; and the
+  legacy baseline).
 
 ## File page (#5827)
 
