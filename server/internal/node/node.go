@@ -290,6 +290,12 @@ type Node struct {
 	assistantLife typingLocks
 	restores      restoreMarks // "back to the configured model" asked, until newer model evidence (model_restore.go)
 	hookFlights   hookFlights  // hook calls in progress by session: their process waits on them (model_restore.go)
+
+	// screens: live-screen hardware video channel (#3954). Login binding per `pair` and the busy count (screen.go).
+	// screenStart is the capture/encode helper seam (Persona Screen.app) filled by the PoC on a real Mac; while it is
+	// nil, screen.dial returns video_unavailable, so a node without the helper keeps today's RFB-only behaviour.
+	screens     *screenLogins
+	screenStart func(ctx context.Context, id, pair string, keepAwake bool, done func()) error
 }
 
 func New(version string) (*Node, error) {
@@ -339,6 +345,7 @@ func New(version string) (*Node, error) {
 		hooks:    &hookTurns{},
 		codices:  newCodexRegistry(),
 		runtimes: newRuntimeRegistry(),
+		screens:  newScreenLogins(),
 	}
 	n.sessionScope = scope
 	if n.uid, err = LoadMachineUID(dir); err != nil {
@@ -1709,6 +1716,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.readFile(p.Path, p.Cwd, p.Offset, p.Stream)
 	case "port.dial":
 		return n.portDial(ctx, params)
+	case "screen.dial": // live-screen video channel (#3954): start the capture helper for a signed-in pair (screen.go)
+		return n.screenDial(ctx, params)
 	case "port.probe":
 		return n.portProbeRPC(ctx, params)
 	case "preview.servers": // a session folder's dev servers, from its .claude/launch.json (preview_launch.go)
