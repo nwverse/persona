@@ -419,7 +419,7 @@ With over ten Agents running, most mid-task questions concern internal choices t
 
 - **The card is the same card**: the same `question` interaction (`tool_name: ask_user`), push, Lark / channel cards, 2-hour expiry (`askUserWait`), `deadline` / `reversible` / `recommend` handling and duplicate-question check. The one difference is `resumable: true`, which the queue already knows from hook cards: nothing waits on it in memory, so it must outlive a manager restart and its node's connection.
 - **What the tool says** (`prompts/agents/question_asked_later.md`): the card is up, the answer comes later as a new message, end the turn without guessing or going ahead, and until when the card waits.
-- **How it ends**, each told once with `prompts/assistant/ask_later.md` (when it was asked, the questions, then the end):
+- **How it ends**, each told once with `prompts/assistant/ask_later.md` (when it was asked, the questions, then the end). The apps show that message as one line ("You answered: …", "The question timed out unanswered", "The question was closed without an answer"), never as the user's bubble (#6421; `docs/protocol/protocol.md`, "Messages injected by Persona"):
 
   | The card | The conversation is told |
   | --- | --- |

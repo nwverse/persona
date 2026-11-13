@@ -377,7 +377,7 @@ Each phase ships on its own, behind its own flag ("Flags and compatibility").
 | 0 Retention | Minutes outlive their transcript | Done (#3936) | Done | Done | — |
 | 1 Meeting conversation | The room conversation and asking it, Just me, the private mark (and earlier meetings marked not private back as material), the follow-up conversation, one thread | The room (guest kind `meeting` without the owner's Claude Code setup, meeting tools, batches), `meeting.json`, `…/ask` answered by it, `…/just-me` with its turn mark, `…/private`, `…/followup`, two origins, the `meeting_live` event, deleting the room at the transcript cut | One thread on the recording detail, the private switch, the follow-up composer | The meeting page (thread, Ask, Just me, role, private), the Live Activity's answer and Turn off | `meeting_conversation` |
 | 2 Live view | Live transcript and topics | Done (#3862): `lines` and `topics` on `GET …/live`, the topics tool, `lines` and `topics` in `meeting_live` | Done (#3862): Topics and live lines on the detail while it records | Done (#3862): 15-second segments; Topics and Live on the page; topic and latest line in the Live Activity | `meeting_live_view` |
-| 2b Highlights | 3–4 highlights of the meeting so far, each back to its moment in the transcript (#5891) | Done (#5891): `highlights` and `highlights_at` on `GET …/live` (with `revs` and `?parts=highlights`), `meeting_highlights_set` resolving each `said_at` to its minute's lines, the highlights in the batches and the follow-up's seed, `[m:ss · HH:MM]` lines from `meeting_lines`, `highlights` in `meeting_live` | — (the recording detail keeps Topics and Live) | Highlights at the top of the page, the transcript one tap away | `meeting_highlights` |
+| 2b Highlights | 3–4 highlights of the meeting so far, each back to its moment in the transcript (#5891) | Done (#5891): `highlights` and `highlights_at` on `GET …/live` (with `revs` and `?parts=highlights`), `meeting_highlights_set` resolving each `said_at` to its minute's lines, the highlights in the batches and the follow-up's seed, `[m:ss · HH:MM]` lines from `meeting_lines`, `highlights` in `meeting_live` | — (the recording detail keeps Topics and Live) | Highlights at the top of the page (the gist only; the words as said one tap away, on Full Transcript) | `meeting_highlights` |
 | 3 Photos | Photos as meeting material | Done (#3862): `…/photos`, storage with the recording, forwarding to the room, notes, citations in the minutes, retention | Photos on the detail, photo citations in the minutes | Camera and library on the page, on-device text recognition | `meeting_photos` |
 | 4 Realtime voice | Talk to Persona by voice during the meeting | Done (#3862): meeting calls in the built-in voice extension (`meeting` in `features`; `start.mode` `meeting` with `recording_id`, checked with `…/live`, else `not_meeting_room`; a room refuses other calls, `meeting_room`, its origin said on its session row by the manager; `delegate_task` to the room only, with no prefixes, the meeting instructions, the room's own questions and answers, no notes; `talk` frames, silence fed between spans, a span closed past 90 s; no pausing, no observed turns; the user-speech gate always on, with no Send Anyway) | — | Done (#3862): the meeting call on the recorder's capture (`mode: "meeting"`, `recording_id`, the room as `target`, `echo_cancellation`; never claims the microphone, no idle end, reconnects then every 30 s), Talk held on the page and a talk window from the Live Activity (`talking`, `TalkInMeetingIntent` with the action its button showed, its speech the owner's over the room's level), audio only inside spans (placed where it was captured, the press never early), Talk without a call through `…/ask` (`spoken: true`, also for a span the call lost and for any span opened before the Wording was on screen or seen), typed questions as `text` frames, echo cancellation from a participant start, the voice's and spoken answers' spans kept as they played with the words said in them (the call's: its captions), so Persona's echo is marked by #5905's rule, the privacy Wording, no voice in a room opened as a chat | `meeting` in the voice extension's `features` |
 | 5 Hub transcription | Hub mode | The `transcription` extension point and its built-in adapter, the audio socket, the live log's fallback to the phone's text, gap uploads, the transcript of record, the 4× final pass | Mode and gaps on the detail | The uplink from the recorder's tap, the timeline, gap uploads, the mode choice, privacy texts per mode | `meeting_transcription` |
@@ -632,7 +632,7 @@ While a meeting records, the top of the meeting page shows **3–4 highlights of
   - A person is named only when the words name them (owner decision 6), since the highlights are shown and may be said aloud.
 - **Older rooms.** A room started before the hub had the tool keeps the tools it started with: its batches show no highlights and it sets none, so its meeting's `highlights` stay `[]`.
 - **Meeting material.** The highlights come from the room, so they are material like the topics: the follow-up's seed lists them after the topics. They live in `live.json` and go with the transcript: the trim empties them, and `revs.highlights` starts again from 0 ("The `meeting_live` event"). `detail.meta` and `kb_get` never show them. They are among what may be said aloud or shown on the Lock Screen ("What may be said aloud"), although the Live Activity does not show them.
-- **Flag.** `meeting_highlights`, listed only beside `meeting_live_view` and only while the default manager names it, as "Flags and compatibility" says (an extension's report cannot add it). The phone reads it when a recording starts, and a meeting keeps it. Wherever `highlights` is empty (a hub or manager without the flag, a room without the tool, a meeting before its first highlights) the meeting page is as phase 2 has it ("The meeting card").
+- **Flag.** `meeting_highlights`, listed only beside `meeting_live_view` and only while the default manager names it, as "Flags and compatibility" says (an extension's report cannot add it). The phone reads it when a recording starts, and a meeting keeps it. A hub or manager without the flag leaves the meeting page as phase 2 has it; with it, the top card is Highlights, with a waiting line before the first ones while Persona attends ("The meeting card").
 - **Web.** Not in this phase: the recording detail keeps Topics and Live, and ignores the new fields.
 
 ### Phase 3: photos
@@ -877,7 +877,7 @@ While the meeting records:
 |   [18:40]  The vendor stays through Q3; the cost is    |
 |            checked next week.                          |
 |   [23:05]  Open: who owns the hiring plan?             |
-|   Live Transcript [v]                Full Transcript > |
+|                                     Full Transcript >  |
 +--------------------------------------------------------+
 | PERSONA                       may be heard by the room |
 |   You      What did we decide on the vendor?           |
@@ -891,18 +891,16 @@ While the meeting records:
 +--------------------------------------------------------+
 ```
 
-The top card is **Highlights** while the meeting has highlights (phase 2b, `meeting_highlights`). **Live Transcript** opens it in place to the newest lines, as phase 2's Live box shows them, and closes it again. In the regular layout, where only the thread scrolls, an open card keeps only its newest highlight (the latest `at`) above the lines. A closed card with four two-line highlights is about two rows taller than the Live box, an open one about three; the thread gives up that height and is otherwise as it was. At the accessibility sizes, where the page scrolls as one, an open card keeps every highlight above the lines.
+The top card is **Highlights** for a meeting started with `meeting_highlights` (phase 2b): the gist of the meeting so far in the room's words, and **Full Transcript** one tap away. It shows no transcript lines: during the meeting the owner reads the points, not the words as said, which are on the Full Transcript page (the owner's call, #5891). Before the room sets the first highlights, while Persona attends (its role is not `off` and its room is not `unavailable`), the card holds one waiting line instead:
 
 ```
 | HIGHLIGHTS                                             |
-|   [23:05]  Open: who owns the hiring plan?             |
-|   Live Transcript [^]           about 20 s behind      |
-|   22:58  ...so we keep the cap for this release.       |
-|   23:05  Can we keep the vendor through Q3?            |
-|   Full Transcript                                  >   |
+|   Persona is listening. Highlights come after a few    |
+|   minutes.                                             |
+|                                     Full Transcript >  |
 ```
 
-While `highlights` is empty (before the first, or on a hub without `meeting_highlights`), the top card is the **Live** box of phase 2:
+Where there can be no highlights (a hub without `meeting_highlights`, or a meeting Persona does not attend and that has none), the top card is the **Live** box of phase 2:
 
 ```
 | LIVE                                about 20 s behind  |
@@ -913,9 +911,9 @@ While `highlights` is empty (before the first, or on a hub without `meeting_high
 
 - **A highlight** shows its words and its time from the recording's start (`at`), earliest first, all of them (at most 4). The words take at most two lines at the regular text sizes, cut at the end, and VoiceOver reads them whole; at the accessibility sizes, where the page scrolls as one, they take what they need and the time goes under them.
 - **Its time** is the minutes cards' time ("Minutes cards (#5026)" in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md)): `RecordingFormat.clock` in a compact accent `Chip` inside a 44 pt hit area, read as "Show at m:ss in the transcript". Its words are not a button. A tap pushes the full transcript scrolled to the first of the phone's lines whose start is from `at` to `end`, with every such line lit for two seconds (`Theme.accentTint`), as the recording's page lights a line. When none of the phone's lines starts there (the hub transcribed the meeting, phase 5), it scrolls to and lights the line `RecordingMinutes.sentenceIndex` picks for `at`.
-- **The card** reads its title as a header. Live Transcript reads Expanded or Collapsed; the card starts closed and keeps the owner's choice while the page is open. Full Transcript stays one tap away, closed or open: a closed card ends on one row with Live Transcript at the leading side and Full Transcript at the trailing side. A new or changed highlight is never announced, and the switch from the Live box to the first highlights cross-fades on `Theme.Motion.state`, at once with Reduce Motion.
-- **While the keyboard is up** (regular sizes; at the accessibility sizes nothing folds), the card, open or closed, is phase 2's folded Live box: **Live** with how far behind and the newest line, without the highlights, Live Transcript or Full Transcript, since a typed question is usually about what was just said. It changes with the keyboard on `Theme.Motion.state`, as the subtitle and Topics do, and when the keyboard goes down the card is as the owner left it.
-- The phone's own lines fill the transcript, as in phase 2; the highlights are the room's. They stay on the page after the role turns `off` (the room stops getting batches, so they stop changing). After Stop the page goes on as the thread, as sketched below, and shows no highlights; the follow-up's seed carries them. The Live Activity and the Dynamic Island do not show highlights.
+- **The card** reads its title as a header, then the highlights or the waiting line, and ends on **Full Transcript** at the trailing side. A new or changed highlight is never announced, and the switch from the waiting line to the first highlights cross-fades on `Theme.Motion.state`, at once with Reduce Motion. In the regular layout, where only the thread scrolls, a card with four two-line highlights is about two rows taller than the Live box, and the thread gives up that height.
+- **While the keyboard is up** (regular sizes; at the accessibility sizes nothing folds), the card keeps only its newest highlight (the latest `at`), or the waiting line, without Full Transcript. It changes with the keyboard on `Theme.Motion.state`, as the subtitle and Topics do.
+- The Full Transcript page shows the phone's own lines, as in phase 2; the highlights are the room's. They stay on the page after the role turns `off` (the room stops getting batches, so they stop changing); a meeting with none by then shows the Live box. After Stop the page goes on as the thread, as sketched below, and shows no highlights; the follow-up's seed carries them. The Live Activity and the Dynamic Island do not show highlights.
 
 With **Just me** on, the Persona part and the composer change; Talk is hidden:
 
@@ -947,7 +945,6 @@ After Stop, the same page continues as the thread:
 | Photo | Page (the + menu: camera, library) | `…/photos` | 3 |
 | Talk | Page (hold), Lock Screen and Island (a tap opens a talk window) | The meeting call, or a spoken ask without one | 4 |
 | A highlight's time | Page (the Highlights card) | Opens the full transcript at the highlight's minute, its lines lit | 2b |
-| Live Transcript | Page (the Highlights card) | Opens or closes the card's newest lines | 2b |
 | Bookmark, Pause, Stop | Page; Bookmark and Stop on the Lock Screen and in the Island too | As today | — |
 | Turn Persona off | Page (menu); Lock Screen and Island while Persona attends, without unlocking (as #3375) | The role `off` | 1 |
 
