@@ -49,3 +49,36 @@ func nodeHas(info proto.NodeInfo, cap string) bool {
 		return slices.Contains(info.Capabilities, cap)
 	}
 	switch cap {
+	case nodeproto.AssistantConfigDir, nodeproto.SessionSkills, nodeproto.TaskExecution:
+		return false // these contracts arrived after the handshake
+	case nodeproto.ModelConfiguration:
+		return info.Version == "" || info.ModelConfiguration // "": a test's or a dev node that said nothing
+	case nodeproto.NodeUpdate:
+		return info.NodeUpdate
+	case nodeproto.Ultracode, nodeproto.HealthSpaces, nodeproto.SecretRun, nodeproto.ModelHTTP, nodeproto.ModelRun, nodeproto.LauncherSwitchNow, nodeproto.LauncherSwitchIdle, nodeproto.NodeUpdateIdle, nodeproto.PaneNewSpace: // came after the handshake: no node from before it has them
+		return info.Version == ""
+	}
+	return true
+}
+
+// buildDiffers: the node's personad is another build than the hub's. Builds are named <commit>[-dirty]-<time>
+// (deploy.sh); dev builds ("dev", empty) are never flagged. The local node is the hub binary itself. This is an
+// upgrade hint (the update offer, the hub's automatic redeploy), not compatibility: compatOf is.
+func buildDiffers(hub, node string) bool {
+	if hub == "" || node == "" || hub == "dev" || node == "dev" {
+		return false
+	}
+	return hub != node
+}
+
+// nodeMismatch is proto.Machine.NodeMismatch for a connected node: the redeploy offer, for another build or for a
+// node this manager cannot drive.
+func nodeMismatch(hub string, info proto.NodeInfo) bool {
+	return buildDiffers(hub, info.Version) || compatOf(info).Incompatible != ""
+}
+
+// usableWhileIncompatible are the node methods the manager still calls on a node it cannot drive otherwise: enough
+// to tell it is there, whether it is idle, and to update it.
+func usableWhileIncompatible(method string) bool {
+	return method == "ping" || method == "sessions.list" || method == "node.info" || strings.HasPrefix(method, "node.update.")
+}

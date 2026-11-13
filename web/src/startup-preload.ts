@@ -435,3 +435,72 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * #6542's model-pill re-read adds ~4 B to this tier, still far under the cap after the queue-panel reduction.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
+// Preserve the 7 B feature allowance while retaining main's queue-panel idle reduction.
+export const IDLE_TIER_BUDGET = 44_590;
+
+const gzip = promisify(gzipCompress);
+
+/** What the built-in hub sends for `files` (paths below `dir`, none with a brotli copy) once the release precompressed
+ *  them (server/internal/webasset): each one gzipped at the best level, or the file itself under BROTLI_MIN_SIZE. Build
+ *  time only. */
+export async function gzipBytes(dir: string, files: string[]): Promise<number> {
+  const sizes = await Promise.all(files.map(async (file) => {
+    const data = await readFile(join(dir, file));
+    return data.length < BROTLI_MIN_SIZE ? data.length : (await gzip(data, { level: 9 })).length;
+  }));
+  return sizes.reduce((sum, n) => sum + n, 0);
+}
+
+// The arguments of the call whose "(" ends just before `from` in `code`, as written and split at its top-level commas;
+// null when it never closes (not a call).
+function callArgs(code: string, from: number): string[] | null {
+  const args: string[] = [];
+  let depth = 0;
+  let start = from;
+  for (let i = from; i < code.length; i++) {
+    const c = code[i];
+    if (c === '"' || c === "'" || c === "`") {
+      for (i++; i < code.length && code[i] !== c; i++) if (code[i] === "\\") i++;
+    } else if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c) && depth-- === 0) return [...args, code.slice(start, i)].filter((a) => a.trim());
+    else if (c === "," && !depth) {
+      args.push(code.slice(start, i));
+      start = i + 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * The modules a source file (`code`) loads at idle: the "x" of each `lazyPage(() => import("x")…, { idle: true })`, as
+ * written, wherever `idle` stands among its options. Throws on a lazyPage marked idle whose loader is written another
+ * way, and on one whose options are not an object literal: either would load at idle without counting against
+ * IDLE_TIER_BUDGET. Build time only.
+ */
+export function idleImports(code: string): string[] {
+  const specs: string[] = [];
+  for (const m of code.matchAll(/(?<!function\s*)\blazyPage\(/g)) { // each call, not lazyPage's own definition
+    const [load, opts] = callArgs(code, m.index + m[0].length) ?? [];
+    if (opts === undefined) continue;
+    const call = `lazyPage(${load.trim().slice(0, 60)}…)`;
+    if (!opts.trim().startsWith("{")) throw new Error(`${call}: write its options as an object literal, so the idle tier's budget sees whether it is idle`);
+    if (!/\bidle\b(?!\s*:\s*false\b)/.test(opts)) continue;
+    const spec = /^\(\s*\)\s*=>\s*import\(\s*(["'])([^"'`]+)\1\s*\)/.exec(load.trim())?.[2];
+    if (!spec) throw new Error(`${call} is idle, but its loader is not \`() => import("…")\`, so the idle tier's budget cannot count it`);
+    specs.push(spec);
+  }
+  return specs;
+}
+
+/**
+ * The client namespaces the first screen's chunks (`code`) name in a key literal ("ns.…", 'ns.…' or `ns.…) that
+ * `startup` (src/i18n/startup-namespaces.json) leaves out, sorted. Their keys could be read before the rest of the
+ * catalog is in (src/i18n/index.ts startI18n), so the build fails on any. Build time only.
+ */
+export function startupNamespaceGaps(code: string[], namespaces: Iterable<string>, startup: Iterable<string>): string[] {
+  const known = new Set(namespaces);
+  const listed = new Set(startup);
+  const gaps = new Set<string>();
+  for (const c of code) for (const [, ns] of c.matchAll(/["'`]([a-z0-9][a-z0-9-]*)\./g)) if (known.has(ns) && !listed.has(ns)) gaps.add(ns);
+  return [...gaps].sort();
+}
