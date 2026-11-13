@@ -573,6 +573,15 @@ function AgentsBlock(props: AgentsBlockProps) {
 /** The Agents block's title, the paged list's as the complete list's (#6662): unpinning changes nothing above the list. */
 const AGENTS_TITLE = "min-w-0 flex-1 text-[11px] font-semibold text-ink-3";
 
+/** The Agents title row's ⋯ (Agent list options): the sort and the archived Agents; the clock while sorted by update. */
+function ListMenuButton({ label, sorted, open, onClick }: { label: string; sorted: boolean; open: boolean; onClick: React.MouseEventHandler<HTMLButtonElement> }) {
+  return (
+    <button type="button" title={label} aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={onClick} className={cx("touch-hit relative z-10 flex size-5 shrink-0 items-center justify-center rounded-[5px] hover:bg-hover hover:text-ink-2", sorted ? "text-accent" : "text-ink-3", open && "bg-hover")}>
+      <Icon name={sorted ? "clock" : "more"} size={12} stroke={2} />
+    </button>
+  );
+}
+
 /** The groupings this hub offers: By to-do only where it has to-dos. */
 function useGroupings() {
   const todosSupported = useStore((s) => s.todosSupported);
@@ -593,7 +602,7 @@ const NO_COUNTS: FilterCounts = { needs: 0, unread: 0, working: 0, bg_waiting: 0
 /** The paged list's section kind for each grouping it draws (#6662): By project is the space (`group`). */
 const PAGED_DIMENSION: Record<Exclude<AgentGrouping, "repo">, GroupDimension> = { todo: "todo", machine: "machine", space: "group", state: "state" };
 
-function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true, grouping, chooseGrouping }: AgentsBlockProps & { grouping: Exclude<AgentGrouping, "repo">; chooseGrouping: (g: AgentGrouping) => void }) {
+function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, grouping, chooseGrouping }: AgentsBlockProps & { grouping: Exclude<AgentGrouping, "repo">; chooseGrouping: (g: AgentGrouping) => void }) {
   const machines = useStore(selectSidebarMachines);
   const catalog = useStore((s) => s.features.includes(SESSIONS_CATALOG_FEATURE));
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
@@ -643,15 +652,27 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true,
     // the switch shows while there are Lark sessions to hide, or they are hidden
     bar: (counts) => <FilterBar selection={filter} counts={counts ?? NO_COUNTS} onChoose={chooseFilter} botmux={(counts?.feishu ?? 0) > 0 || botmuxHidden ? { hidden: botmuxHidden, onToggle: toggleBotmux } : undefined} />,
   } : undefined, [quickFilters, filter, botmuxHidden, chooseFilter, toggleBotmux]);
+  const groupsRef = useRef<HTMLDivElement>(null);
+  const listMenu = useMenu();
   const pagedGrouping = useMemo(() => ({
     dimension: PAGED_DIMENSION[grouping],
     label: AGENT_GROUPINGS.find((g) => g.key === grouping)?.label ?? "",
     todos: todoNames,
     quick,
+    // its sections follow the title row's fold-all, as the complete list's groups do
+    foldScope: AGENTS_FOLD,
     bar: <GroupingBar groupings={groupings} selection={grouping} onChoose={chooseGrouping} />,
   }), [grouping, todoNames, groupings, chooseGrouping, quick]);
-  return <>
-    <div className={SESSION_LIST_STYLE.heading}><span className={AGENTS_TITLE}>Agents</span>{archives && <SectionAdd icon="archive" label={t("agentmenus.archived_agents")} to={{ name: "agent-archives" }} go={go} />}{add && <SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}</div>
+  return <div data-sidebar-agents ref={groupsRef}>
+    {/* the complete list's title row (#6662): fold all, the ⋯ with the archived Agents (the paged list keeps the hub's
+        newest-first order, so no sort), and "+" */}
+    <div className={SESSION_LIST_STYLE.heading}>
+      <span className={AGENTS_TITLE}>Agents</span>
+      <GroupFoldButton groups={groupsRef} onAction={() => hover(null)} />
+      {archives && <ListMenuButton label={t("sidebar.list_menu")} sorted={false} open={Boolean(listMenu.anchor)} onClick={listMenu.open} />}
+      {add && <SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}
+    </div>
+    {listMenu.anchor && <Menu anchor={listMenu.anchor} onClose={listMenu.close} align="right" items={[{ key: "archived", label: t("agentmenus.archived_agents"), icon: "archive", onSelect: () => { navigate({ name: "agent-archives" }); onNavigate?.(); hover(null); } }]} />}
     <HubNoticeLine />
     <HerdrNotices />
     <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={runtimeParentIdentity} event="sessions_list" grouping={pagedGrouping}
@@ -670,7 +691,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true,
     {closing && <CloseAgentDialog open session={closing} machineName={machineWithHub(closing.machine_id, machines)} onClose={() => setClosing(null)} />}
     {archiveClosing && <ArchiveCloseDialog open session={archiveClosing} machineName={machineWithHub(archiveClosing.machine_id, machines)} onClose={() => setArchiveClosing(null)} />}
     <LinkTodoDialog open={Boolean(linkTarget)} session={linkTarget} onClose={closeLinkTarget} />
-  </>;
+  </div>;
 }
 
 function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, workspaceActions, add = true, foldable = false, grouping, chooseGrouping }: AgentsBlockProps & { grouping: AgentGrouping; chooseGrouping: (g: AgentGrouping) => void }) {
@@ -900,9 +921,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         {folded && <SessionTally sessions={live} folded />}
         <GroupFoldButton groups={groupsRef} onAction={() => hover(null)} block={foldable ? { folded, toggle: toggleBlock } : undefined} flat={chatList} />
         {listItems.length > 0 && (
-          <button type="button" title={listLabel} aria-label={listLabel} aria-haspopup="menu" aria-expanded={Boolean(listMenu.anchor)} onClick={listMenu.open} className={cx("touch-hit relative z-10 flex size-5 shrink-0 items-center justify-center rounded-[5px] hover:bg-hover hover:text-ink-2", byUpdate ? "text-accent" : "text-ink-3", listMenu.anchor && "bg-hover")}>
-            <Icon name={byUpdate ? "clock" : "more"} size={12} stroke={2} />
-          </button>
+          <ListMenuButton label={listLabel} sorted={byUpdate} open={Boolean(listMenu.anchor)} onClick={listMenu.open} />
         )}
         {add && <SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}
       </div>

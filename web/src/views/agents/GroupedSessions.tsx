@@ -42,9 +42,12 @@ export interface GroupedSessionsProps<T> {
   machineName: (id: string) => string;
   /** Where the open conversation is: its section opens by itself. */
   open?: SessionPlace;
+  /** The sections follow this scope's "Collapse all" / "Expand all" (the sidebar's Agents title row, #6662); without
+   *  it they keep out of it, as an expanded one reads its sessions. */
+  foldScope?: string;
 }
 
-export function GroupedSessions<T>({ groups, dimension, kind, scope, source, renderRow, groupName, machineName, open }: GroupedSessionsProps<T>) {
+export function GroupedSessions<T>({ groups, dimension, kind, scope, source, renderRow, groupName, machineName, open, foldScope }: GroupedSessionsProps<T>) {
   const [all, setAll] = useState(false);
   const shown = all ? groups : groups.slice(0, SESSION_LIST_METRICS.groupOptions);
   // a space or a directory names its computer only when the groups are on several
@@ -53,7 +56,7 @@ export function GroupedSessions<T>({ groups, dimension, kind, scope, source, ren
     <div data-session-groups={dimension}>
       {shown.map((group, i) => (
         <GroupSection key={group.key} group={group} first={i === 0} startsOpen={dimension === "todo" ? !group.rest : i < SESSION_LIST_METRICS.groupsOpen} dimension={dimension} kind={kind} scope={scope} source={source}
-          renderRow={renderRow} name={groupName(group)} machineName={machineName} several={several} holds={Boolean(open && holdsPlace(group, dimension, open))} />
+          renderRow={renderRow} name={groupName(group)} machineName={machineName} several={several} holds={Boolean(open && holdsPlace(group, dimension, open))} foldScope={foldScope} />
       ))}
       {groups.length > shown.length && (
         <ShowMoreRow label={t("paged-agents.more_groups", { count: groups.length - shown.length })} onClick={() => setAll(true)} />
@@ -62,13 +65,14 @@ export function GroupedSessions<T>({ groups, dimension, kind, scope, source, ren
   );
 }
 
-function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, source, renderRow, name, machineName, several, holds }: {
+function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, source, renderRow, name, machineName, several, holds, foldScope }: {
   group: SessionGroup; first: boolean; startsOpen: boolean; dimension: GroupDimension; kind: string; scope: ListFilters; source: GroupedSource<T>;
-  renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode; name: string; machineName: (id: string) => string; several: boolean; holds: boolean;
+  renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode; name: string; machineName: (id: string) => string; several: boolean; holds: boolean; foldScope?: string;
 }) {
   // The busiest few start open, the rest folded: an open section keeps a list of its own up to date. "Expand all"
-  // leaves them alone for the same reason (it would start one read per group). What someone folds or opens is kept.
-  const [folded, toggle] = useFolded(`sessions-by:${kind}:${dimension}:${group.key}`, !startsOpen, { holds, all: false });
+  // leaves them alone for the same reason (it would start one read per group), except in the sidebar, whose title row
+  // folds and opens them as the complete list's groups (`foldScope`, #6662): someone asked. What is folded is kept.
+  const [folded, toggle] = useFolded(`sessions-by:${kind}:${dimension}:${group.key}`, !startsOpen, { holds, all: Boolean(foldScope), scope: foldScope });
   // a space is one computer's: two computers' spaces of one name are told apart by it
   const computer = dimension === "group" && several && group.places[0]?.machine ? machineName(group.places[0].machine) : "";
   return (

@@ -64,7 +64,7 @@ export interface PagedSessionListProps<T> {
   grouping?: PagedGrouping;
 }
 
-export interface PagedGrouping { dimension: GroupDimension; bar: ReactNode; label: string; todos?: TodoNames; quick?: PagedQuickFilters }
+export interface PagedGrouping { dimension: GroupDimension; bar: ReactNode; label: string; todos?: TodoNames; quick?: PagedQuickFilters; /** The sections follow this scope's fold-all (useFolded). */ foldScope?: string }
 
 /** The complete list's quick filters on the paged list (`sessions_quick_filters`, #6662), in place of its state chips:
  *  what the chosen chip selects, what every read leaves out (hidden botmux), and the chips, drawn from the counts of
@@ -377,7 +377,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   );
   return (
     <div data-paged-sessions={personal ? "personal" : "runtime"} data-loaded-sessions={page.rows.length} data-has-more={page.hasMore}>
-      <div className="space-y-2 px-1 py-2">
+      {/* under the caller's title row its bar sits where the complete list's does: no padding of this list's above it */}
+      <div className={cx("space-y-2 px-1 pb-2", !grouping && "pt-2")}>
         {/* the caller's bar and chips where the complete list has them: its padding, not this list's as well */}
         {grouping ? <><div className="-mx-1">{grouping.bar}{quick ? quick.bar(quickCounts) : stateChips}</div>{searchField}</> : <>{searchField}
         <SegmentedTrack role="radiogroup" label={t("paged-agents.group_by")} className="flex gap-0.5 rounded-full p-0.5" thumbClassName="rounded-full bg-surface shadow-btn">
@@ -411,7 +412,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       {sections && <>
         {allGroups && allGroups.length > 0 && <Suspense fallback={loadingLine}>
           <GroupedSessions groups={allGroups} dimension={dimension as GroupDimension} kind={personal ? "personal" : "runtime"} scope={groupScope} source={source}
-            renderRow={renderRow} groupName={groupName} machineName={machineName} open={openPlace} />
+            renderRow={renderRow} groupName={groupName} machineName={machineName} open={openPlace} foldScope={grouping?.foldScope} />
         </Suspense>}
         {!allGroups && !grouped.error && loadingLine}
         {grouped.error && <div className="px-2 py-2"><p role="alert" className="text-xs text-red">{grouped.error}</p><Button onClick={grouped.retry}>{t("sidebar.retry")}</Button></div>}

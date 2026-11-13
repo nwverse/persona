@@ -155,4 +155,25 @@ describe("the sidebar's paged Agents by to-do", () => {
     expect(chips).toContain("全部");
     expect(chips.some((c) => c!.startsWith("已看"))).toBe(true);
   });
+
+  it("has the complete list's title row: fold all acts on the paged sections, the ⋯ holds the archived Agents", async () => {
+    await render(["sessions_list", "sessions_lookup", "sessions_todo", "agent_session_archives"]);
+    const foldAll = () => host.querySelector<HTMLButtonElement>("[data-testid=agents-fold-all]")!;
+    const open = () => sections().map((s) => heading(s).getAttribute("aria-expanded"));
+    expect(open()).toEqual(["true", "true", "false"]);
+    expect(foldAll().getAttribute("aria-label")).toBe("全部折叠");
+    await act(async () => foldAll().click());
+    await flush();
+    expect(open()).toEqual(["false", "false", "false"]);
+    expect(foldAll().getAttribute("aria-label")).toBe("全部展开");
+    await act(async () => foldAll().click());
+    await flush();
+    expect(open()).toEqual(["true", "true", "true"]);
+    // no archive icon of its own: the archived Agents are in the ⋯, as in the complete list
+    expect(host.querySelector('[aria-label="已归档的 Agent"]')).toBeNull();
+    const menu = host.querySelector<HTMLButtonElement>('button[aria-label="Agent 列表选项"]')!;
+    await act(async () => menu.click());
+    await flush();
+    expect([...document.querySelectorAll('[role="menuitem"], [role="menuitemradio"]')].map((el) => el.textContent)).toContain("已归档的 Agent");
+  });
 });
