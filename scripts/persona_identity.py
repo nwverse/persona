@@ -28,6 +28,10 @@ BINARY_NAMES = {"hub": ("personad", "jarvisd"), "node": ("personad", "jarvisd"),
 DATABASE_NAMES = ("persona-postgres", "jarvis-postgres")
 DATABASE_VOLUMES = ("persona-pgdata", "jarvis-pgdata")
 
+# Markup retained in older conversation transcripts, including screenshot mocks.
+CONTEXT_TAG_PATTERN = r"(?:persona|jarvis)-context"
+FILE_TAG_PATTERN = r"(?:persona|jarvis)-file"
+
 
 def env_value(name, environment=None):
     environment = os.environ if environment is None else environment
