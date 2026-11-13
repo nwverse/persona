@@ -114,6 +114,8 @@ struct InboxBackNavigationTests {
                                  push: { _ in Issue.record("nothing sent must not push") }, fallback: { fallback += 1 })
             #expect(fallback == targets.count + 1)
         }
+    }
+
     @Test func newAgentCompletionPushesTheAgentRecordedByStarted() throws {
         try keepingDefaults {
             let app = AppModel(), item = try item(manager: "m2")
