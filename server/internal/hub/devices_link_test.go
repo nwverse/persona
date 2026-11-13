@@ -474,6 +474,23 @@ func TestAManagersViewIsItsOwnReport(t *testing.T) {
 	}
 }
 
+// A report from a manager removed from the roster (sent before it was hung up) does not make it up: nothing of its
+// counts any more, as its entries do not (machine_entries.go).
+func TestAReportAfterLeavingTheRosterIsNotUp(t *testing.T) {
+	h := newTestHub(t)
+	h.cfg.Machines = []MachineConfig{{ID: "box", Name: "Box", Kind: "ssh"}}
+	h.startDevices(context.Background())
+	h.forgetMachineEntries("m-0b0b0b") // removed from the roster
+	h.applyDeviceStatesFrom("m-0b0b0b", devicewire.States{})
+	if h.devicesUpFor("m-0b0b0b") {
+		t.Fatal("a manager that left the roster is up")
+	}
+	h.applyDeviceStatesFrom(devicesOwner, devicewire.States{})
+	if !h.devicesUp() {
+		t.Fatal("the carrier's report")
+	}
+}
+
 // A hub that just restarted waits for the machine's own manager: a call to another manager's warm machine before that
 // manager reports waits for it, not for the carrier, instead of failing at once; once it reported and went, a call
 // fails at once as the carrier's do (#6795).

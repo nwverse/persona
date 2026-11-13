@@ -278,7 +278,9 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 	if owner == devicesOwner { // hub.json's entries another one absorbed: the carrier's to say
 		d.absorbed = st.Absorbed
 	}
-	if !d.upOpen[owner] { // its machines are reachable and the calls waiting for it go (waitDevicesFor)
+	// Its machines are reachable and the calls waiting for it go (waitDevicesFor); not on a report sent after it was
+	// removed from the roster (machine_entries.go: that one is dropped too).
+	if !d.upOpen[owner] && !d.reportedForgot[owner] {
 		close(d.upChanLocked(owner))
 		d.upOpen[owner] = true
 	}

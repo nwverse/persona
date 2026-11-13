@@ -17,12 +17,20 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// forwardAwaited is forwardOwned (ownership.go) after waiting for the manager the request goes to, as a call to one of
-// its machines waits (waitDevicesFor): the hub just started and it is on its way (bounded); else 503 assistant_offline
-// at once from the forwarding.
-func (h *Hub) forwardAwaited(w http.ResponseWriter, r *http.Request, by ownerOf) {
-	if id, ok := h.owner(w, r, by); ok {
+// awaitOwner is owner (ownership.go) after waiting for the manager the request goes to, as a call to one of its
+// machines waits (waitDevicesFor): the hub just started and it is on its way (bounded); else the forwarding answers 503
+// assistant_offline at once. False once it answered.
+func (h *Hub) awaitOwner(w http.ResponseWriter, r *http.Request, by ownerOf) (string, bool) {
+	id, ok := h.owner(w, r, by)
+	if ok {
 		_ = h.waitDevicesFor(r.Context(), id)
+	}
+	return id, ok
+}
+
+// forwardAwaited is forwardOwned (ownership.go) with awaitOwner's wait.
+func (h *Hub) forwardAwaited(w http.ResponseWriter, r *http.Request, by ownerOf) {
+	if id, ok := h.awaitOwner(w, r, by); ok {
 		h.forwardHTTP(w, r, id)
 	}
 }
@@ -101,8 +109,7 @@ func (h *Hub) transferSource(w http.ResponseWriter, r *http.Request) (ownerOf, b
 func (h *Hub) adminUsageRoutesRelayed(mux *http.ServeMux) {
 	for _, pattern := range devicewire.AdminUsageRoutes {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			if id, ok := h.owner(w, r, h.byRequest); ok { // the manager it names, else the default: its usage sources
-				_ = h.waitDevicesFor(r.Context(), id) // the hub just started: it is on its way (bounded); else 503 at once
+			if id, ok := h.awaitOwner(w, r, h.byRequest); ok { // the manager it names, else the default: its usage sources
 				h.forwardAdminHTTP(w, r, id)
 			}
 		})
