@@ -70,17 +70,24 @@ func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 	replying := s.replying(ctx)
 	for _, sub := range all {
 		src := InboxSource{ID: sub.ID, Name: sub.Label, Kinds: kindsOf(sub.Label), Things: []connector.InboxThing{}}
+		builtin, migrated := MigratedFrom(sub)
+		if migrated {
+			src.ID = builtin // the built-in's Inbox feed now: under its own source id (#6265)
+		}
 		catchup, live, err := s.inboxHeld(ctx, sub, now)
 		if err != nil {
 			return nil, err
 		}
 		d := s.deliverer(sub, now)
 		d.replies = replying[sub.Connector] && sub.RunState != StateNotConnected
+		d.migrated = migrated
 		if kbFrom(sub) != nil {
 			d.chats = map[string]string{}
 		}
 		src.Things = append(src.Things, d.inboxThings(catchup, live)...)
-		src.Connector, src.SourceName, src.Chats = sub.Connector, cmpOr(sub.SourceName, sub.Source), d.chats
+		if !migrated { // a built-in's feed reads as the built-in's to the AI twin
+			src.Connector, src.SourceName, src.Chats = sub.Connector, cmpOr(sub.SourceName, sub.Source), d.chats
+		}
 		src.Things = append(src.Things, d.failing())
 		if inboxFrom(sub) != nil {
 			src.ReadError = readErrorOf(sub.RunState)
@@ -155,6 +162,8 @@ func kindsOf(label string) map[string]string {
 // from when it was made.
 func inboxFrom(sub Subscription) *time.Time {
 	switch {
+	case sub.Migrated != nil:
+		return sub.Migrated // a built-in's Inbox feed since then (#6265)
 	case !sub.ToInbox:
 		return nil
 	case sub.InboxFrom != nil:
@@ -227,6 +236,9 @@ type deliverer struct {
 	replies bool
 	// chats, while the subscription's knowledge base is on, gets each row's thread → its knowledge-base chat (#6222).
 	chats map[string]string
+	// migrated: the subscription is a built-in's Inbox feed (MigratedFrom, #6265): its rows have the items' own threads,
+	// and its catch-up comes as rows, the ones the built-in already brought known by their ids.
+	migrated bool
 }
 
 func (s *Service) deliverer(sub Subscription, now time.Time) deliverer {
@@ -262,7 +274,7 @@ func (d deliverer) inboxThings(catchup, live []Held) []connector.InboxThing {
 			digest = append(digest, h)
 		}
 	}
-	if len(digest) <= digestOver {
+	if len(digest) <= digestOver || d.migrated {
 		rows, digest = append(rows, digest...), nil
 	}
 	for _, h := range live {
@@ -356,6 +368,15 @@ func markRows(next Subscription, caughtUp bool, start time.Time) Subscription {
 
 func (d deliverer) thread(key string) string { return threadPrefix(d.sub.ID) + key }
 
+// rowThread is a row's thread: the items' own (a built-in's, as its connector brought them) for a built-in's feed,
+// else under the subscription's prefix.
+func (d deliverer) rowThread(key string) string {
+	if d.migrated {
+		return key
+	}
+	return d.thread(key)
+}
+
 func threadPrefix(sub string) string { return "sub:" + sub + ":" }
 
 // OwnsThread says whether thread is one subscription id delivered to the Inbox (the item's connector thread, under
@@ -433,7 +454,7 @@ func (d deliverer) threadThing(key string, items []Held) connector.InboxThing {
 		b.WriteString("\n")
 	}
 	b.WriteString(d.block(last.Item, heldAt(last)))
-	t := connector.InboxThing{Thread: d.thread(key), Kind: cmpOr(last.Kind, d.sub.Recipe.Kind), Label: d.sub.Label,
+	t := connector.InboxThing{Thread: d.rowThread(key), Kind: cmpOr(last.Kind, d.sub.Recipe.Kind), Label: d.sub.Label,
 		Title: last.Title, Sender: last.Sender, Preview: clip(oneLine(last.Body), previewMost), Context: b.String(),
 		At: heldAt(last), Last: last.UID, Rules: d.rules, Extra: d.fallback(due), Tags: d.tags(&last.Item),
 		Read: last.Seen} // read in the source up to its newest item: read here (#6176)
