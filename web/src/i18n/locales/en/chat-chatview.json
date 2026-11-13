@@ -136,8 +136,5 @@
   "search_origin_changed": "Where you were has changed. Carry on from here.",
   "search_return": "Back to where you were",
   "search_menu": "Search in chat",
-  "todo_completed_label": "To-do (Completed): {title}",
-  "todo_completed_owner": "Its to-do is completed.",
-  "todo_cancelled_owner": "Its to-do was cancelled.",
-  "todo_closed_continue": "You can keep chatting here."
+  "todo_completed_label": "To-do (Completed): {title}"
 }

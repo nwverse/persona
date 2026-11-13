@@ -120,6 +120,22 @@ func TestTaskActivitySurvivesRestartAndViewExit(t *testing.T) {
 	}
 }
 
+func TestOwnerActivityDoesNotChangeReadReceipts(t *testing.T) {
+	ft := newFleetTest(t)
+	ctx := context.Background()
+	ft.s.loadSeen(ctx)
+	before := ft.s.seenAt("mac", "s1")
+	ft.s.UserSpoke(ctx, SessionRef{MachineID: "mac", SessionID: "s1"})
+	setTaskViewer(t, ft.s, "mac", "s1", true)
+	setTaskViewer(t, ft.s, "mac", "s1", false)
+	if after := ft.s.seenAt("mac", "s1"); !after.Equal(before) {
+		t.Fatalf("owner input/view exit marked an unread answer seen: %v -> %v", before, after)
+	}
+	if why := ft.s.sessionActivityReason(ctx, "mac", "s1", time.Now()); why == "" {
+		t.Fatal("separating read receipts lost the activity protection")
+	}
+}
+
 func TestIdlePassDoesNotBypassClosedTaskGrace(t *testing.T) {
 	ft, row := closeTestService(t, nil)
 	row.UpdatedAt = time.Now().Add(-48 * time.Hour)
@@ -184,6 +200,9 @@ func TestClosedTaskAgentWaitsForOwnerThenArchivesWithReason(t *testing.T) {
 			s.fleet.mu.Lock()
 			s.fleet.seen[[2]string{"mac", row.SessionID}] = old
 			s.fleet.mu.Unlock()
+			s.taskActivity.mu.Lock()
+			s.taskActivity.times[runtimeListID("mac", row.SessionID)] = old
+			s.taskActivity.mu.Unlock()
 			working := row
 			working.Status, working.State = proto.StatusWorking, proto.StateWorking
 			ft.d.setSessions("mac", []proto.Session{working})

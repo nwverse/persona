@@ -997,3 +997,5 @@ a connected app may still be reading it, or a user message may be ahead of the n
 subscriptions and durable owner activity before automatic closure/retirement; re-check task ownership after asynchronous
 lookups. Cancellation must use the same idle-only retirement as completion, not a forced stop or terminal-close fallback.
 Keep historical ownership and an explicit stop reason so the remaining transcript explains what happened.
+Input and view-exit activity are not read receipts: writing them as seen can suppress the reply the owner is waiting
+for (`TestQuietPatrolAbsorbedUserQuestionPushes`). Persist them separately and keep notification regressions in the check.

@@ -74,7 +74,7 @@ func (s *Service) seenAt(machine, session string) time.Time {
 }
 
 // markSeen records that the user looked at a session (opened it, or it finished while open) and refreshes states.
-func (s *Service) rememberSessionActivity(ctx context.Context, machine, session string) time.Time {
+func (s *Service) recordSessionSeen(ctx context.Context, machine, session string) time.Time {
 	now := time.Now().UTC()
 	s.fleet.mu.Lock()
 	if s.fleet.seen == nil {
@@ -91,7 +91,7 @@ func (s *Service) rememberSessionActivity(ctx context.Context, machine, session 
 }
 
 func (s *Service) markSeen(ctx context.Context, machine, session string) {
-	now := s.rememberSessionActivity(ctx, machine, session)
+	now := s.recordSessionSeen(ctx, machine, session)
 	s.SessionSeen(ctx, SessionSeen{MachineID: machine, SessionID: session, At: now}) // how long a triaged turn waited
 	s.publishSessions(machine)
 	s.seenToRuntime(machine, session)
