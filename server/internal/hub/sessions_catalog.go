@@ -297,8 +297,10 @@ func projectOf(path, origin string) (id, name string) {
 }
 
 // sessionCatalogOf builds the catalog of the rows opts selects; with own (an extension token's manager-limited
-// view), only of the machines in it.
-func (h *Hub) sessionCatalogOf(ctx context.Context, index *sessionlist.Index, opts sessionlist.Options, own []string, limited bool) (sessionCatalog, error) {
+// view), only of the machines in it. repositories: the directories' computers are asked what repository each holds.
+// Without it every project goes by its folder's name: that answer is the Git routes', which take full credentials,
+// so an extension's token neither gets it nor has a computer asked for it.
+func (h *Hub) sessionCatalogOf(ctx context.Context, index *sessionlist.Index, opts sessionlist.Options, own []string, limited, repositories bool) (sessionCatalog, error) {
 	opts.Cursor = "" // the current membership, as counts=1 reads it without a cursor
 	counts, err := index.PlaceCounts(opts)
 	if err != nil {
@@ -322,8 +324,10 @@ func (h *Hub) sessionCatalogOf(ctx context.Context, index *sessionlist.Index, op
 			machines[p.Machine] = true
 		}
 	}
-	origins, pending := h.originsOf(ctx, places)
-	out.Pending = pending
+	var origins map[sessionlist.Place]string
+	if repositories {
+		origins, out.Pending = h.originsOf(ctx, places)
+	}
 
 	// The rows in no directory are a project of their own, under the empty id.
 	projects := map[string]*catalogProject{}

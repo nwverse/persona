@@ -280,10 +280,10 @@ func TestSessionCatalogFollowsTheFiltersAndPlaces(t *testing.T) {
 	}
 }
 
-// An extension token's manager-limited view has only its own computers' projects, spaces and total.
+// A manager-limited view has only its own computers' projects, spaces and total.
 func TestSessionCatalogOfOwnMachinesOnly(t *testing.T) {
 	h, mac, pc := threeComputers(t)
-	got, err := h.sessionCatalogOf(context.Background(), h.sessionListIndex(), sessionlist.Options{}, []string{"pc"}, true)
+	got, err := h.sessionCatalogOf(context.Background(), h.sessionListIndex(), sessionlist.Options{}, []string{"pc"}, true, true)
 	if err != nil || got.Total != 3 || len(got.Projects) != 2 || len(got.Spaces) != 2 {
 		t.Fatalf("own: %+v %v", got, err)
 	}
@@ -301,6 +301,45 @@ func TestSessionCatalogOfOwnMachinesOnly(t *testing.T) {
 	}
 	if len(mac.calls()) != 0 || len(pc.calls()) != 3 {
 		t.Fatalf("asked mac %v, pc %v", mac.calls(), pc.calls())
+	}
+}
+
+// An extension's token gets every project by its folder's name, and no computer is asked for it: what repository a
+// directory holds is the Git routes' answer, which take full credentials (testdata/route_scopes.txt).
+func TestSessionCatalogForAnExtensionAsksNoComputer(t *testing.T) {
+	h, mac, pc := threeComputers(t)
+	read := func(p principal) sessionCatalog {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/api/v1/sessions?catalog=1", nil)
+		r = r.WithContext(context.WithValue(r.Context(), principalKey{}, p))
+		w := httptest.NewRecorder()
+		h.listSessions(w, r)
+		var out sessionCatalog
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != 200 {
+			t.Fatalf("catalog: %d %s %v", w.Code, w.Body, err)
+		}
+		return out
+	}
+	ext := principal{ID: "extension:tool", Role: roleExtension, Extension: "tool"}
+	got := read(ext)
+	if got.Pending || len(mac.calls())+len(pc.calls()) != 0 {
+		t.Fatalf("asked for an extension: pending %v, mac %v, pc %v", got.Pending, mac.calls(), pc.calls())
+	}
+	for _, p := range got.Projects {
+		if p.Origin != "" || strings.HasPrefix(p.ID, "git:") {
+			t.Fatalf("an extension was told a repository: %+v", p)
+		}
+	}
+	// by folder, the checkouts, the fork and the offline copy are all "app"
+	if app := project(got, "dir:app"); app == nil || app.Total != 5 || len(app.Places) != 4 {
+		t.Fatalf("app by folder: %+v", got.Projects)
+	}
+	// What a full client learned since is not handed to the extension either.
+	if full := read(principal{Role: roleFull}); project(full, "git:git.example.com/team/app") == nil {
+		t.Fatalf("a full client: %+v", full.Projects)
+	}
+	if again := read(ext); project(again, "dir:app") == nil || project(again, "git:git.example.com/team/app") != nil {
+		t.Fatalf("after a full client asked: %+v", again.Projects)
 	}
 }
 
