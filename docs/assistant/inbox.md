@@ -703,7 +703,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
 - DEBUG: `-tab mail` (Inbox), `-openInboxFirst YES` (first unhandled item), `-openInboxItem <id>` (specific item), `-showInboxAction draft|handoff` (then that sheet),
   `-showInboxSuggestionEdit YES` (suggestion editor on iPhone event page).
 - **Plugin-rendered details** (#1681; `docs/extensions/extensions.md`, "Inbox items"): for items from a plugin connector (`source` = connector) contributing `inbox_item`,
-  the plugin's item View remains the source body for items without a native chat conversation. Hub passes `{id, title, summary, tier, reason, done, meta, extra}`; meta unchanged, unparsed.
+  the plugin's item View is the slot's source body. Hub passes `{id, title, summary, tier, reason, done, meta, extra}`; meta unchanged, unparsed.
   On iOS, View original and source chain entries for an item with `larkConversation` open `LarkChatView` directly, at the chain link's position or the conversation's own focus;
   they skip the plugin's intermediate item View and its Back-to-event strip. Documents, Moments, mail, connector items and other non-chat sources keep the existing slot behavior,
   including its original-body fallback for sources without a slot, old hubs, read-only devices and rendering failures. The Mac detail root is unchanged; its position links use the same source page.
