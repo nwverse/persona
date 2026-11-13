@@ -14,6 +14,7 @@ APP = ROOT / "apple" / "Persona"
 # file (under apple/Persona) -> what it draws as reading content
 READING_FILES = {
     "DesignSystem/ReadingSize.swift": "the modifier itself",
+    "DesignSystem/WindowTextSize.swift": "the window cap, which names the modifier in its comment",
     "DesignSystem/QuoteViews.swift": "the user's message bubble and its quotes",
     "DesignSystem/ShellComposerBar.swift": "what is being typed",
     "Views/Chat/ComposerParts.swift": "what is being typed",
