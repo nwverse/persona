@@ -61,20 +61,21 @@ final class InboxBackTests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 15), "\(step): not the item detail:\n\(app.debugDescription)")
         XCTAssertTrue(app.descendants(matching: .any)["inbox.chain"].firstMatch.waitForExistence(timeout: 5),
                       "\(step): the detail's timeline is missing")
-        XCTAssertTrue(app.buttons.matching(identifier: "inbox.chain.session").firstMatch.waitForExistence(timeout: 5),
+        XCTAssertTrue(chainRow("开了子会话").waitForExistence(timeout: 5),
                       "\(step): the detail's conversation rows are missing")
         shot(step)
     }
 
     @MainActor private func chainRow(_ text: String) -> XCUIElement {
-        app.buttons.matching(identifier: "inbox.chain.session")
-            .matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+        // The chain container may combine its children's accessibility elements, so accept either the row's or its id.
+        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", text))
+            .matching(NSPredicate(format: "identifier == %@ OR identifier == %@", "inbox.chain", "inbox.chain.session")).firstMatch
     }
 
     @MainActor private func revealChainRow(_ text: String) -> XCUIElement {
         let row = chainRow(text)
         if !row.exists {
-            let all = app.buttons["inbox.chain.all"].firstMatch
+            let all = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "展开全部")).firstMatch
             for _ in 0..<5 where all.exists && !all.isHittable {
                 app.swipeUp()
                 _ = all.waitForExistence(timeout: 2)
@@ -93,9 +94,14 @@ final class InboxBackTests: XCTestCase {
         row.tap()
         let composer = app.descendants(matching: .any)["shell-composer-field"].firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 20), "\(step): the conversation did not open:\n\(app.debugDescription)")
-        XCTAssertTrue(app.navigationBars.buttons["BackButton"].firstMatch.waitForExistence(timeout: 5),
-                      "\(step): the conversation is not pushed over its opening page")
+        assertPushed(step)
         shot(step)
+    }
+
+    @MainActor private func assertPushed(_ step: String) {
+        // A pushed ChatView draws its own back button rather than the navigation stack's BackButton.
+        let back = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@", "chevron.left", "返回")).firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "\(step): the conversation is not pushed over its opening page")
     }
 
     /// Back as a finger does it: an edge drag, held and slow, after the push has settled.
@@ -174,8 +180,7 @@ final class InboxBackTests: XCTestCase {
 
         let composer = app.descendants(matching: .any)["shell-composer-field"].firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 20), "View did not open the handed-off conversation")
-        XCTAssertTrue(app.navigationBars.buttons["BackButton"].firstMatch.waitForExistence(timeout: 5),
-                      "the handed-off conversation is not pushed over the item")
+        assertPushed("phone-handoff-chat")
         shot("phone-handoff-chat")
         swipeBack()
         assertDetail("phone-handoff-back")
