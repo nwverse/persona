@@ -14,7 +14,7 @@ import { nestUnderParents } from "../../lib/side-sessions";
 import { Button } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
-import { GroupCount, NeedsCount, Section } from "../SidebarSection";
+import { GroupCount, NeedsCount, Section, ShowMoreRow } from "../SidebarSection";
 
 /** How a section's own list is read: the collection the groups are of, as the list above them reads it. */
 export interface GroupedSource<T> {
@@ -56,7 +56,7 @@ export function GroupedSessions<T>({ groups, dimension, kind, scope, source, ren
           renderRow={renderRow} name={groupName(group)} machineName={machineName} several={several} holds={Boolean(open && holdsPlace(group, dimension, open))} />
       ))}
       {groups.length > shown.length && (
-        <div className="px-2 pt-2"><Button onClick={() => setAll(true)}>{t("paged-agents.more_groups", { count: groups.length - shown.length })}</Button></div>
+        <ShowMoreRow label={t("paged-agents.more_groups", { count: groups.length - shown.length })} onClick={() => setAll(true)} />
       )}
     </div>
   );
@@ -147,6 +147,6 @@ function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
     {page.loading && !page.loaded && <p role="status" className="px-2 py-1 text-xs text-ink-3">{t("sidebar.loading")}</p>}
     {page.error && <div className="px-2 py-1"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}
     {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-1 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
-    {(page.rows.length > limit || page.hasMore) && !page.loading && !page.error && <div className="px-2 py-1"><Button onClick={more}>{t("paged-agents.more")}</Button></div>}
+    {(page.rows.length > limit || page.hasMore) && !page.loading && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={more} />}
   </>;
 }

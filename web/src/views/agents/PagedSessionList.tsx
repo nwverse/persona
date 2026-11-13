@@ -22,7 +22,7 @@ import { useFolded } from "../../lib/use-folded";
 import { nestUnderParents } from "../../lib/side-sessions";
 import { sameValue } from "../../lib/stable-lines";
 import { lazyPage } from "../../lib/lazy-page";
-import { NeedsCount } from "../SidebarSection";
+import { NeedsCount, ShowMoreRow } from "../SidebarSection";
 import type { GroupedSessionsProps, GroupedSource } from "./GroupedSessions";
 import { useSessionGroups } from "./use-session-groups";
 
@@ -431,7 +431,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       {page.loading && loadingLine}
       {page.error && <div className="px-2 py-2"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}
       {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
-      {hasMore && !page.loading && !page.error && <Button onClick={() => void list.more().catch(() => {})}>{t("paged-agents.more")}</Button>}
+      {hasMore && !page.loading && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={() => void list.more().catch(() => {})} />}
       </>}
     </div>
   );
