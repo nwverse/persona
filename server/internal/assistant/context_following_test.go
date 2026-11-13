@@ -106,15 +106,15 @@ func TestFollowingInboxItemsFiltersAndDoesNotMutate(t *testing.T) {
 	}
 }
 
-func TestSnapshotFollowingHasNoEmptySection(t *testing.T) {
+func TestSnapshotFollowingRendersEmptyState(t *testing.T) {
 	s := snapshotFollowingTestService()
 	rows, total := s.snapshotFollowing(context.Background(), time.UTC)
 	if len(rows) != 0 || total != 0 {
 		t.Fatalf("empty inbox gave %d rows and total %d", len(rows), total)
 	}
 	out := prompts.RenderSnapshot(prompts.Snapshot{Now: time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC), Zone: "UTC"})
-	if strings.Contains(out, "在跟的事") {
-		t.Fatalf("an empty following section was rendered:\n%s", out)
+	if !strings.Contains(out, "- 在跟的事：没有\n") || strings.Contains(out, "在跟的事（0 件）") {
+		t.Fatalf("the empty following state is missing or has an empty count:\n%s", out)
 	}
 }
 
