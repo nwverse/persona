@@ -113,6 +113,7 @@
   "field.link": "链接",
   "field.sender": "发件人",
   "field.sender_id": "发件人 ID（用于静音）",
+  "field.seen": "已读状态",
   "field.thread": "线程",
   "field.time": "时间",
   "field.title": "标题",

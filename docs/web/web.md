@@ -52,8 +52,12 @@ unseen and stopped between rounds count; a task shelved (no activity for 48 h, n
 browser) folds under one **Shelved N** line and is not counted; accepted (task_review accepted), deployed, done, cancelled
 and old failed starts fold under **Closed N**. The main conversation watches every task, so its Progress has a row for
 every to-do whatever its origin, and its count is the To-dos page's "Not done"; other conversations count only the tasks
-they handed out. What needs the user sorts first (`todoRank`), each row leads with its status mark (`TaskMark`). Plan
-tasks waiting for Start are no to-dos yet: neither Progress nor the To-dos page lists or counts them. While a plan waits
+they handed out. What needs the user sorts first (`todoRank`), each row leads with its status mark (`TaskMark`). A row
+stays visible whatever its bucket — a parked task past 48 h still reads its parked line, a shelved one unfolds from
+**Shelved N** — but the badge counts a to-do row only while `countsAsOpen` says the page counts it open; each task row
+carries `data-counts-open` so the trays' open markers and the To-dos header are one number. Rows that are no to-do
+(a hand-opened Agent, a plan waiting for Start, a draft card, the chat's own ask card) remain one item each as before.
+Plan tasks waiting for Start are no to-dos yet: neither Progress nor the To-dos page lists or counts them. While a plan waits
 a fourth entry, **To start N**, sits after Pending: its tray is the plan cards themselves (Start, Edit, Don't start), so a
 plan is not lost in the chat; Pending no longer lists or counts those plans.
 

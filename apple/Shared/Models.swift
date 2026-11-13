@@ -947,6 +947,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var canInterrupt: Bool { capabilities.map(\.interrupt) ?? !hasSource }
     var canApprove: Bool { capabilities.map(\.approve) ?? !hasSource }
     var canTerminal: Bool { capabilities.map(\.terminal) ?? !hasSource }
+    /// An Agent of a terminal engine whose chat Persona cannot draw in structure (a CLI in a herdr pane that is not Claude
+    /// Code, Codex or TRAEX, e.g. Kiro CLI, #6170): its terminal is the useful view, so an empty chat offers it at once.
+    var isTerminalOnly: Bool { !assistant && !hasSource && canTerminal && !isClaude && !isCodex && !isTraex && !isStopped }
     /// A stopped Agent (#4754): its conversation and terminal stay, it takes no messages; Resume on its terminal page runs
     /// it again (node stopped.go). A Codex thread nothing has open is marked the same way (node codex_registry.go, #5521),
     /// though its row keeps its Codex history source.

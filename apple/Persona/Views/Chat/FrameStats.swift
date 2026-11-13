@@ -171,6 +171,9 @@ import UIKit
         } else if let list = PagePerf.mainScrollView() {
             context["viewport_height_pt"] = Double(list.bounds.height)
             context["content_height_pt"] = Double(list.contentSize.height)
+            // A chat is told a finger is on its list, as for `-showPagePerf`: otherwise it keeps to its newest end and
+            // the list does not move.
+            PagePerf.touch(list, true)
             list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top), animated: false)
             try? await Task.sleep(for: .milliseconds(500))
             let startY = list.contentOffset.y
@@ -179,6 +182,7 @@ import UIKit
             let moved = abs(list.contentOffset.y - startY)
             await ListGlide.run(list, seconds: 3, speed: -2000)
             let frames = stats.stop(label: "probe-glide")
+            PagePerf.touch(list, false)
             context.merge(frames) { _, measured in measured }
             context["scroll_offset_delta_pt"] = Double(moved)
         } else {
@@ -207,7 +211,7 @@ import UIKit
     /// only for its own list: several chats can be mounted at once (Persona's conversation stays in the shell).
     static var touchers: [ObjectIdentifier: (UIScrollView, Bool) -> Void] = [:]
 
-    private static func touch(_ list: UIScrollView, _ down: Bool) {
+    static func touch(_ list: UIScrollView, _ down: Bool) {
         for toucher in touchers.values { toucher(list, down) }
     }
 

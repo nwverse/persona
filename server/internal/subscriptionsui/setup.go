@@ -175,9 +175,10 @@ func (p *pages) recipeFrom(ps []param, values map[string]string) subscriptions.R
 	}
 	f := wire.ConnectorSubscriptionFields{Title: values["f.title"], Time: values["f.time"], Sender: values["f.sender"],
 		Body: values["f.body"], Link: values["f.link"], DueDate: values["f.due_date"], ID: values["f.id"], Thread: values["f.thread"]}
-	// The form has no pickers for who and where (#6165): the recipe's own stay while it reads the same tool.
+	// The form has no pickers for who and where (#6165) or read state (#6176): the recipe's own stay while it reads
+	// the same tool.
 	if own := p.ownFields(); own != nil {
-		f.SenderID, f.Chat, f.ChatName = own.SenderID, own.Chat, own.ChatName
+		f.SenderID, f.Chat, f.ChatName, f.Seen = own.SenderID, own.Chat, own.ChatName, own.Seen
 	}
 	if f != (wire.ConnectorSubscriptionFields{}) {
 		r.Fields = &f
