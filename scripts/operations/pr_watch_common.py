@@ -15,7 +15,7 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 PR_FIELDS = (
     "number,title,body,state,isDraft,headRefOid,headRefName,baseRefName,"
     "baseRefOid,isCrossRepository,mergeable,mergeStateStatus,reviewDecision,url"
-)
+).replace("baseRefOid,", "")
 
 
 class WatchError(Exception):
@@ -96,13 +96,15 @@ def pr_snapshot(repo, number, timeout=90, environ=None):
     if not isinstance(data, dict) or data.get("number") != number:
         raise WatchError("unexpected PR snapshot")
     for field in ("headRefOid", "baseRefOid"):
+        if field == "baseRefOid" and not data.get(field):
+            # gh pr view does not expose baseRefOid on every supported version.
+            # Resolve the actual current base tip, not the PR's original base.
+            data[field] = checked(["gh", "api", "repos/%s/commits/%s" % (repo, data["baseRefName"]),
+                                   "--jq", ".sha"], timeout=timeout, environ=environ).strip()
         if not isinstance(data.get(field), str) or not SHA.fullmatch(data[field]):
             raise WatchError("PR snapshot has no valid %s" % field)
         if field == "baseRefOid" and data[field] == "0" * 40:
-            data[field] = checked(["gh", "api", "repos/%s/commits/%s" % (repo, data["baseRefName"]),
-                                   "--jq", ".sha"], timeout=timeout, environ=environ).strip()
-            if not SHA.fullmatch(data[field]):
-                raise WatchError("cannot resolve the PR base commit")
+            raise WatchError("PR snapshot has no repository base commit")
     for field in ("title", "body", "state", "headRefName", "baseRefName", "url", "mergeable"):
         if not isinstance(data.get(field), str):
             raise WatchError("PR snapshot has no valid %s" % field)
