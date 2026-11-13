@@ -139,8 +139,8 @@ private val WORKTREE_ENGINES = setOf("herdr", "herdr-core", "orca", "tern", "pas
 
 /**
  * The engine a session runs in, which made its own worktree (Paseo makes its own): its terminal's host, else the runtime
- * engine its space is; null when it names neither, and the computer's default decides (iOS `AgentWorktree.engine(of:)`,
- * web `worktreeKind`).
+ * engine its space is; null when it names neither, and the computer's default decides (iOS `AgentWorktree.engine(of:)`;
+ * the web sends the session's `host`).
  */
 val Session.worktreeKind: String?
     get() = hostKind.takeIf { it in WORKTREE_ENGINES } ?: spaceKind?.takeIf { it in WORKTREE_ENGINES }
