@@ -198,7 +198,8 @@ class InboxShowcaseShotsTest {
             val english = language == Locale.ENGLISH
             val separator = if (english) ": " else "："
             rule.onNodeWithText("订单群 · 张三${separator}好的，我看一下新的", useUnmergedTree = true).assertExists()
-            rule.onNodeWithText(if (english) "Waiting for 张三确认新报价" else "等张三确认新报价", substring = true, useUnmergedTree = true).assertExists()
+            // Only the current-state line carries follow.next; the timeline's waiting step ends after look again.
+            rule.onNodeWithText("问更正后的报价行不行", substring = true, useUnmergedTree = true).assertExists()
             rule.onNodeWithText("发了邮件：报价单更正", useUnmergedTree = true).assertExists()
             rule.onNodeWithText(if (english) "Assistant says" else "助手说", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("收到 2 条消息 · 张三", useUnmergedTree = true).assertDoesNotExist()
