@@ -78,6 +78,42 @@ def widget_source_for_platform(platform):
 
 
 class PersonaOnlyTests(unittest.TestCase):
+    def test_vision_html_acceptance_reuses_focused_hosted_probes(self):
+        targets = yaml.safe_load(source("project.yml"))["targets"]
+        self.assertIn("PersonaVisionTests", targets)
+        target = targets["PersonaVisionTests"]
+        self.assertEqual(target["platform"], "visionOS")
+        self.assertEqual(target["type"], "bundle.unit-test")
+        self.assertEqual(target["dependencies"], [{"target": "PersonaVision"}])
+        self.assertEqual({item["path"] for item in target["sources"]}, {
+            "PersonaTests/AssistantHTMLCardTests.swift",
+            "PersonaTests/AssistantHTMLSecurityTests.swift",
+            "PersonaTests/AssistantHTMLSafetyTests.swift",
+        })
+        settings = target["settings"]["base"]
+        self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"], "$(PERSONA_BUNDLE_ID).visiontests")
+        self.assertEqual(settings["SWIFT_DEFAULT_ACTOR_ISOLATION"], "nonisolated")
+        self.assertTrue(settings["GENERATE_INFOPLIST_FILE"])
+        self.assertEqual(settings["TEST_HOST"], "$(BUILT_PRODUCTS_DIR)/Persona.app/Persona")
+        self.assertEqual(settings["BUNDLE_LOADER"], "$(TEST_HOST)")
+        self.assertEqual(targets["PersonaVision"]["settings"]["base"]["PRODUCT_MODULE_NAME"], "Persona")
+
+    def test_vision_html_scheme_builds_tests_without_opting_into_destructive_probe(self):
+        scheme = yaml.safe_load(source("project.yml"))["schemes"]["PersonaVision"]
+        self.assertEqual(scheme["build"]["targets"].get("PersonaVisionTests"), ["test"])
+        self.assertEqual(scheme["test"]["targets"], ["PersonaVisionTests"])
+        self.assertNotIn("PERSONA_HTML_DESTRUCTIVE_WATCHDOG_SECONDS", json.dumps(scheme))
+
+    def test_html_acceptance_keeps_vision_execution_gate_closed(self):
+        safety = source("Persona/Views/Chat/AssistantHTMLSafety.swift")
+        self.assertRegex(safety, r"#if os\(iOS\)[\s\S]*?executionVerified = true\s+#else\s+static let executionVerified = false\s+#endif")
+        test_path = APPLE / "PersonaTests/AssistantHTMLSafetyTests.swift"
+        self.assertTrue(test_path.is_file(), "the execution gate needs a shared platform regression test")
+        tests = test_path.read_text(encoding="utf-8")
+        self.assertIn("@testable import Persona", tests)
+        self.assertRegex(tests, r"#if os\(visionOS\)\s+#expect\(!AssistantHTMLSafety.executionVerified\)")
+        self.assertRegex(tests, r"#elseif os\(iOS\)\s+#expect\(AssistantHTMLSafety.executionVerified\)")
+
     def test_vision_widgets_embed_read_only_bundle_with_shared_storage(self):
         targets = yaml.safe_load(source("project.yml"))["targets"]
         self.assertIn("PersonaVisionWidgets", targets)

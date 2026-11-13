@@ -753,6 +753,22 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Persona.app/Persona"
         BUNDLE_LOADER: "$(TEST_HOST)"
+  PersonaVisionTests:
+    type: bundle.unit-test
+    platform: visionOS
+    sources:
+      - path: PersonaTests/AssistantHTMLCardTests.swift
+      - path: PersonaTests/AssistantHTMLSecurityTests.swift
+      - path: PersonaTests/AssistantHTMLSafetyTests.swift
+    dependencies:
+      - target: PersonaVision
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PERSONA_BUNDLE_ID).visiontests
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Persona.app/Persona"
+        BUNDLE_LOADER: "$(TEST_HOST)"
   # The Mac shell's own logic (Mac/): menu bar, notifications, quick open… Hosted in the Mac app.
   PersonaMacTests:
     type: bundle.unit-test
@@ -903,5 +919,10 @@ schemes:
     build:
       targets:
         PersonaVision: all
+        PersonaVisionTests: [test]
     run:
       config: Debug
+    test:
+      targets: [PersonaVisionTests]
+      language: zh-Hans
+      region: CN

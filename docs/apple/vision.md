@@ -60,3 +60,45 @@ xcrun simctl io <udid> screenshot vision.png
   In DEBUG visionOS builds, `-openWelcome YES` treats the just-cleared registry as known empty, so demo mode works without signing too (not verified on the simulator).
 - When you change code shared by iOS / Mac, build all three: `Persona`, `PersonaMac`, `PersonaVision`.
 - On the visionOS simulator, `launch` after `simctl terminate` often shows no window (the process is there, the scene is not created): `simctl shutdown` and then `boot` first.
+
+## HTML card security acceptance
+
+`PersonaVisionTests` is a focused hosted test bundle for `PersonaVision`. It reuses
+`AssistantHTMLCardTests` and `AssistantHTMLSecurityTests`, and shares
+`AssistantHTMLSafetyTests` with the iOS test bundle. It does not include the rest of the iOS-only tests.
+The production visionOS execution gate stays closed: building these tests is preparation for acceptance,
+not evidence that HTML execution is safe on Vision Pro.
+
+From the repository root, compile the app and test bundle without starting a simulator:
+
+```bash
+eval "$(python3 scripts/persona_config.py env)"
+python3 scripts/persona_config.py xcconfig
+(cd apple && xcodegen generate)
+xcodebuild -project apple/Persona.xcodeproj -scheme PersonaVision \
+  -destination 'generic/platform=visionOS Simulator' -configuration Debug \
+  -jobs 4 -derivedDataPath /tmp/persona-vision-html-tests \
+  CODE_SIGNING_ALLOWED=NO build-for-testing
+```
+
+Use a private DerivedData directory, not an automated sync job's directory. `build-for-testing` only
+compiles; it does not run the probes, launch a simulator, or verify signed entitlements.
+An unsigned build is not a substitute for signing the test host when later running on a device.
+
+Runtime acceptance is a separate, explicitly authorized step on visionOS, using synthetic data only:
+
+- Run both shared sandbox suites against a real WKWebView, including the unsandboxed controls.
+  Confirm no outbound requests or navigation, isolated storage, current-main-frame bridge validation,
+  termination recovery, and disposal of running work. An offline listener or a skipped suite is not a pass.
+- Check native reply/open confirmation, one-shot replies, visibility and background lifecycle,
+  fallback, and dark/light presentation on Vision Pro. The unit-test bundle alone does not verify these UI flows.
+- The real infinite-loop probe is disabled by default. Its existing
+  `PERSONA_HTML_DESTRUCTIVE_WATCHDOG_SECONDS=30` opt-in is only an acknowledgement, not a watchdog.
+  Run it separately in a disposable simulator with an external 30-second watchdog and cleanup on every exit path;
+  never opt it into the normal scheme or run it unguarded on a user's headset.
+- Record actual results and remaining memory/timer limits before proposing any execution-gate change.
+  Neither a passing build nor this test target enables production configuration; enabling remains a separate decision.
+  When enabling visionOS execution after acceptance and explicit approval, update both
+  `test_html_acceptance_keeps_vision_execution_gate_closed` in `apple/PersonaTests/test_persona_only.py`
+  and `executionRequiresPlatformAcceptance` in `apple/PersonaTests/AssistantHTMLSafetyTests.swift`
+  to reflect the newly accepted platform state; these assertions deliberately guard the current closed gate.

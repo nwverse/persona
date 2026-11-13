@@ -57,7 +57,7 @@ class AppleRenameTests(unittest.TestCase):
             'PersonaShare': 'PersonaShare', 'PersonaVisionShare': 'PersonaShare',
             'PersonaWatchWidgets': 'PersonaWatchWidgets', 'PersonaVisionWidgets': 'PersonaWidgets',
         }
-        self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaMacTests', 'PersonaUITests', 'PersonaMacUITests'})
+        self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaVisionTests', 'PersonaMacTests', 'PersonaUITests', 'PersonaMacUITests'})
         for target, module in expected.items():
             with self.subTest(target=target):
                 self.assertIn('PRODUCT_MODULE_NAME: ' + module + '\n', targets[target])
