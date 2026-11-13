@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // writeOmpSession writes the head of an omp session file and returns its path.
@@ -141,7 +142,7 @@ func TestOmpOfflineRowAndCalls(t *testing.T) {
 	}
 
 	res, err := request(t, n, "session.items", map[string]any{"session_id": id, "turns": 2})
-	if err != nil || !strings.Contains(fmt.Sprint(res), ompOfflineNotice) {
+	if err != nil || !strings.Contains(fmt.Sprint(res), transcript.OmpStoppedNotice) {
 		t.Fatalf("items %v %v", res, err)
 	}
 	if _, err := request(t, n, "session.send", map[string]any{"session_id": id, "text": "go on", "client_msg_id": "m-1"}); !isRefusal(err, "omp_resume_unknown") {
@@ -149,6 +150,43 @@ func TestOmpOfflineRowAndCalls(t *testing.T) {
 	}
 	if got := f.trace(); len(got) != 0 {
 		t.Fatalf("a stopped session asked herdr: %v", got)
+	}
+}
+
+// The same live omp opened through a symlink to the session's directory still hides it: directories are compared as
+// physical paths.
+func TestOmpDiskHidesALivePaneThroughASymlink(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	n, f, home := herdrNode(t)
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "project")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip(err)
+	}
+	id := "01a10000-0000-7000-8000-000000000008"
+	writeOmpSession(t, ompSessionsDir(home), "-w-real", id, "live", real, time.Now())
+	seedAgents(t, n, f, ompPaneAgent("w1:p8", link, ""))
+	for _, s := range listSessions(t, n) {
+		if s.SessionID == id {
+			t.Fatalf("a live pane behind a symlink had its file listed as stopped: %+v", s)
+		}
+	}
+	if _, ok := n.ompSession(id); ok {
+		t.Fatal("a live pane behind a symlink had its file taken as stopped")
+	}
+}
+
+// A pi pane in the same directory is not an omp: it never writes omp's session files, so the stopped omp stays listed.
+func TestOmpDiskIgnoresAPiPane(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	n, f, home := herdrNode(t)
+	cwd := t.TempDir()
+	id := "01a10000-0000-7000-8000-000000000009"
+	writeOmpSession(t, ompSessionsDir(home), "-w-pi", id, "stopped", cwd, time.Now())
+	seedAgents(t, n, f, piPaneAgent("w1:p9", cwd, ""))
+	onlyRow(t, listSessions(t, n), id)
+	if _, ok := n.ompSession(id); !ok {
+		t.Fatal("a pi pane hid a stopped omp session")
 	}
 }
 

@@ -412,8 +412,8 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 		id := n.piSession(a)
 		if id == "" {
 			id = otherSession(a) // nothing reported its session yet: the pane is the row, terminal only (pi.go)
-			if id != "" {
-				fallbacks = append(fallbacks, a)
+			if id != "" && a.Agent == ompAgent {
+				fallbacks = append(fallbacks, a) // the panes that may be writing a file ompdisk.go lists
 			}
 		}
 		if id != "" {

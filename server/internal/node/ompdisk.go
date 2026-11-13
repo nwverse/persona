@@ -123,17 +123,22 @@ func (n *Node) ompSession(id string) (ompDiskSession, bool) {
 	return s, true
 }
 
-// ompDiskWrittenByLivePane: a family pane the node knows only by its fallback id runs in the session's directory, so
-// its file may be the one that omp is still writing (no extension, no herdr integration: nothing says which session).
+// ompDiskWrittenByLivePane: an omp pane the node knows only by its fallback id runs in the session's directory, so its
+// file may be the one that omp is still writing (no extension, no herdr integration: nothing says which session).
 // A pane seen since the file was last written hides it; a pane from before this node started hides the directory's
-// rows, and getting them back when the pane goes beats resuming into a second omp.
+// rows, and getting them back when the pane goes beats resuming into a second omp. Directories are compared as
+// physical paths, so a pane opened through a symlink still matches the file's directory.
 func (n *Node) ompDiskWrittenByLivePane(s ompDiskSession) bool {
 	if s.Cwd == "" {
 		return false
 	}
-	cwd := filepath.Clean(s.Cwd)
-	for _, p := range n.piFamilyFallbackPanes() {
-		if p.cwd != "" && filepath.Clean(p.cwd) == cwd && (p.seen.IsZero() || !s.Modified.Before(p.seen.Add(-2*time.Second))) {
+	panes := n.ompFallbackPanes()
+	if len(panes) == 0 {
+		return false
+	}
+	cwd := realPath(filepath.Clean(s.Cwd))
+	for _, p := range panes {
+		if p.cwd != "" && realPath(filepath.Clean(p.cwd)) == cwd && (p.seen.IsZero() || !s.Modified.Before(p.seen.Add(-2*time.Second))) {
 			return true
 		}
 	}
