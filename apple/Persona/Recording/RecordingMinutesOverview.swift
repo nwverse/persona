@@ -33,13 +33,13 @@ struct RecordingMinutesOverview: View {
             ForEach(group.topics) { topic in
                 if let title = group.title, topic.id == group.topics.first?.id {
                     Section {
-                        MinutesTopicCard(topic: topic, recording: entry.id, show: show)
+                        MinutesTopicCard(topic: topic, recording: entry.id, show: show).id(topic.says)
                     } header: {
                         MinutesGroupHeading(title: title, hue: group.hue).accessibilityIdentifier("minutes-\(group.id)")
                     }
                 } else {
                     Section {
-                        MinutesTopicCard(topic: topic, recording: entry.id, show: show)
+                        MinutesTopicCard(topic: topic, recording: entry.id, show: show).id(topic.says)
                     }
                 }
             }
@@ -165,6 +165,12 @@ private struct MinutesGroupHeading: View {
     }
 }
 
+extension RecordingMinutesCards.Topic {
+    /// What the topic says. Its card is identified by it as well as by its place: rewritten minutes that say something
+    /// else there start the card folded with no bullet open; a transcript refresh or a to-do change keeps its state.
+    var says: [String] { [title] + bullets.map(\.text) }
+}
+
 /// A topic's card: its icon on a tile in its group's tint and its title (the heading; the tile is decoration), then its
 /// bullets, a point with a dot and a decision with the decision mark, each an item as the four cards' (its time, its
 /// transcript lines in place). The first `topic.shown` show; Show N More opens the rest in place and Show Less folds them
@@ -268,34 +274,41 @@ struct MinutesTodoCircle: View {
 
     /// Whether the circle shows `todo` open: the To-dos list's checkbox (`TodoTriageLogic.checksAsOpen`), with the triage
     /// the list gives it worked out only for a closed failed start, the one case it changes.
-    static func open(_ todo: TodoItem) -> Bool {
+    static func open(_ todo: TodoItem, now: Date) -> Bool {
         TodoTriageLogic.checksAsOpen(todo, among: { TodoStore.shared.todos },
                                      lookup: { TodosLogic.makeSessionLookup(AppModel.shared.sessionsNow) },
-                                     now: .now, calendar: TodoCalendar.userCalendar)
+                                     now: now, calendar: TodoCalendar.userCalendar)
     }
 
     var body: some View {
         if let id, let todo = TodoStore.shared.byID[id] {
-            let open = Self.open(todo)
-            Button { TodoStore.shared.toggleDone(todo, done: open) } label: {
-                // The column is a finger wide; the hit area grows above and below, the row's layout does not.
-                ThemedIcon(open ? Theme.Icon.unchecked : Theme.Icon.successFilled)
-                    .font(Theme.Font.heading)
-                    .foregroundStyle(open ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.positive))
-                    .scaledFrame(width: Theme.Size.tapTarget)
-                    .tapTargetOutset()
+            // A minute's tick moves a failed start across the list's 48 h line while the page is open, as the To-dos
+            // list's clock does; a tap works out the state again, so it always sends what the list would.
+            TimelineView(.everyMinute) { context in
+                circle(todo, open: Self.open(todo, now: context.date))
             }
-            .buttonStyle(.plain)
-            .accessibilityRepresentation {
-                Toggle(String(localized: "Done: \(action) [Minutes To-Do]"), isOn: Binding(get: { !open }, set: { _ in
-                    TodoStore.shared.toggleDone(todo, done: open)
-                }))
-            }
-            .accessibilityIdentifier(open ? "minutes-todo-open" : "minutes-todo-done")
         } else {
             Color.clear.scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.hairline)
                 .accessibilityHidden(true)
         }
+    }
+
+    private func circle(_ todo: TodoItem, open: Bool) -> some View {
+        Button { TodoStore.shared.toggleDone(todo, done: Self.open(todo, now: .now)) } label: {
+            // The column is a finger wide; the hit area grows above and below, the row's layout does not.
+            ThemedIcon(open ? Theme.Icon.unchecked : Theme.Icon.successFilled)
+                .font(Theme.Font.heading)
+                .foregroundStyle(open ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.positive))
+                .scaledFrame(width: Theme.Size.tapTarget)
+                .tapTargetOutset()
+        }
+        .buttonStyle(.plain)
+        .accessibilityRepresentation {
+            Toggle(String(localized: "Done: \(action) [Minutes To-Do]"), isOn: Binding(get: { !open }, set: { _ in
+                TodoStore.shared.toggleDone(todo, done: Self.open(todo, now: .now))
+            }))
+        }
+        .accessibilityIdentifier(open ? "minutes-todo-open" : "minutes-todo-done")
     }
 }
 

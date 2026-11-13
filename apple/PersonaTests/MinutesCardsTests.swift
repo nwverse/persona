@@ -285,6 +285,18 @@ struct MinutesCardsTests {
         #expect(MinutesTopicCard.tileAbove(.accessibility1) && MinutesTopicCard.tileAbove(.accessibility5))
     }
 
+    /// A topic card keeps its fold and open bullets while what it says stays (a transcript refresh brings new lines
+    /// around a bullet), and starts over when rewritten minutes say something else in its place.
+    @MainActor @Test func aTopicCardStartsOverOnlyWhenItsWordsChange() {
+        func topic(_ text: String, context: [RecordingMinutesCards.Line] = []) -> RecordingMinutesCards.Topic {
+            .init(id: "topic-0-0", title: "Export", symbol: Theme.Icon.topicGeneral, hue: 0,
+                  bullets: [.init(id: "topic-0-0-0", text: text, at: 60, context: context)], shown: 4)
+        }
+        let refreshed = topic("Export ships Friday", context: [.init(id: 3, start: 58, text: "Friday it is", said: true)])
+        #expect(topic("Export ships Friday").says == refreshed.says)
+        #expect(topic("Export ships Friday").says != topic("Export slips a week").says)
+    }
+
     /// No headline: the card heads with the minutes' title (the page decides whether it repeats the header).
     @Test func noHeadlineHeadsWithTheTitle() throws {
         var m = rich
