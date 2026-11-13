@@ -1579,6 +1579,40 @@ class InboxRepositoryTest {
         }
     }
 
+    @Test fun aBareIdUsesTheCachedManagerOnlyWhenItsOwnershipIsKnown() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-item-manager-cache-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val missing = object : IOException("missing"), HubCodedFailure {
+                override val status = 404
+                override val code: String? = null
+            }
+            val transport = FakeTransport().apply { onItem = { _ ->
+                if (currentCoroutineContext()[RequestManager]?.id == "m-2") singleItem("history") else throw missing
+            } }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            val appId = InboxItemKey.of("history", "m-2")
+            assertEquals("m-2", repository.item(appId)?.manager)
+            assertEquals(1, transport.itemCalls.size)
+
+            // Without the list's note, a bare id must not borrow the other manager's cached record.
+            AssistantManagerChoice.forgetItems()
+            assertNull(repository.item("history"))
+            assertEquals(2, transport.itemCalls.size)
+
+            // A list that showed this manager makes its app-id cache discoverable by the bare id, without another read.
+            AssistantManagerChoice.noteItem(listOf("inbox", "history"), "m-2")
+            assertEquals(appId, repository.item("history")?.item?.id)
+            assertEquals(2, transport.itemCalls.size)
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun concurrentSingleReadersShareOneRequest() = runBlocking {
         val directory = Files.createTempDirectory("inbox-item-concurrent-test").toFile()
         val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)

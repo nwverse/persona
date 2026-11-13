@@ -437,10 +437,13 @@ class RealInboxRepository(
      */
     override suspend fun item(itemId: String): InboxRecord? = itemReadLock.withLock {
         recordOf(itemId)?.let { return it }
+        val hubId = InboxItemKey.hubId(itemId)
+        val manager = InboxItemKey.managerOf(itemId) ?: AssistantManagerChoice.itemManager(listOf("inbox", hubId))
+        // A bare id may name an item already cached by its manager-aware app id; never alias different managers' records.
+        if (manager != null) recordOf(InboxItemKey.appId(hubId, manager))?.let { return it }
         val transport = requireTransport()
-        val manager = InboxItemKey.managerOf(itemId) ?: AssistantManagerChoice.itemManager(listOf("inbox", itemId))
         val data = try {
-            asStamped(manager) { transport.item(InboxItemKey.hubId(itemId)) }
+            asStamped(manager) { transport.item(hubId) }
         } catch (e: Exception) {
             if ((e as? persona.core.contracts.api.HubCodedFailure)?.status == 404) return null
             throw e
