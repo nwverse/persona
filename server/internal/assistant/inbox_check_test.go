@@ -46,7 +46,8 @@ func followCheckNoFailure(t *testing.T, h *inboxHub, it *InboxItem) {
 	}
 }
 
-// A future look and one whose suggestion already waits for the user are left exactly as they were.
+// A future look, one whose suggestion already waits for the user, and a member merged into another row are left exactly
+// as they were. A merged member is not open even though its DoneAt may be empty.
 func TestInboxCheckSkipsItemsThatMustNotRun(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -58,6 +59,9 @@ func TestInboxCheckSkipsItemsThatMustNotRun(t *testing.T) {
 		}},
 		{name: "current suggestion", prepare: func(it *InboxItem, now time.Time) {
 			it.Suggestion = &InboxSuggestion{Version: 1, Kind: SuggestReply, Text: "可以，周四给你", At: now}
+		}},
+		{name: "merged member", prepare: func(it *InboxItem, now time.Time) {
+			it.MergedInto = "lark:f1:parent"
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
