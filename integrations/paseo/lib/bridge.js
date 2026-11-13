@@ -161,7 +161,10 @@ export function createPaseoBridge(deps = {}, options = {}) {
     reindex()
   }
 
-  /** Which agent each session id is: the one not closed, else the latest, when two claim one id. */
+  /**
+   * Which agent each session id is, when two claim one id: the one whose own id it is (not only kept, withKept), then
+   * the one not closed, else the latest.
+   */
   function reindex() {
     bySession.clear()
     for (const { agent } of agents.values()) index(agent)
@@ -173,9 +176,10 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (!id) return
     const cur = agents.get(bySession.get(id))?.agent
     if (cur && cur.id !== agent.id) {
-      const better = (a) => [a.status !== 'closed' ? 1 : 0, Date.parse(a.updatedAt) || 0]
+      const better = (a) => [a[KEPT] ? 0 : 1, a.status !== 'closed' ? 1 : 0, Date.parse(a.updatedAt) || 0]
       const [x, y] = [better(agent), better(cur)]
-      if (x[0] < y[0] || (x[0] === y[0] && x[1] <= y[1])) return
+      const i = x.findIndex((v, n) => v !== y[n])
+      if (i < 0 || x[i] < y[i]) return
     }
     bySession.set(id, agent.id)
   }
@@ -228,18 +232,25 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (!id) {
       const was = prev && !prev.agent.labels?.[SESSION_LABEL] ? sessionIdOf(prev.agent, roots) : undefined
       id = was && was !== now ? was
-        : lines ? lineage.rootOf(now, { cwd: agent.cwd, createdAt: agent.createdAt, taken: (s) => takenBy(s, agent.id) }) : undefined
+        : lines ? lineage.rootOf(now, { cwd: agent.cwd, createdAt: agent.createdAt, taken: (s) => takenBy(s, agent.id, true) }) : undefined
     }
-    if (!id || id === now) return agent
-    keptIds.set(agent.id, id)
-    return { ...agent, [KEPT]: id }
+    // Another agent's own since (Paseo imported that earlier session as an agent of its own): it keeps its current id.
+    if (id && takenBy(id, agent.id, false)) keptIds.delete(agent.id)
+    else if (id && id !== now) {
+      keptIds.set(agent.id, id)
+      return { ...agent, [KEPT]: id }
+    }
+    return agent
   }
 
-  /** Whether an agent other than self (listed or archived) has session id: as its Claude session, its label or kept. */
-  function takenBy(id, self) {
+  /**
+   * Whether an agent other than self (listed or archived) has session id: as its Claude session or its label, and,
+   * with kept, as the id the bridge keeps for it.
+   */
+  function takenBy(id, self, kept) {
     for (const m of [agents, archived]) {
       for (const [aid, { agent }] of m) {
-        if (aid !== self && (claudeId(agent) === id || agent.labels?.[SESSION_LABEL] === id || agent[KEPT] === id)) return true
+        if (aid !== self && (claudeId(agent) === id || agent.labels?.[SESSION_LABEL] === id || (kept && agent[KEPT] === id))) return true
       }
     }
     return false

@@ -160,6 +160,23 @@ test('a line is not followed for a conversation that began before its agent, nor
   assert.deepEqual([id('handed over'), id('the original'), id('a branch'), id('pruned')], [B, OTHER, BRANCH, C])
 })
 
+test('an id kept for an agent gives way to an agent whose own session it becomes (Paseo imported the earlier transcript)', async (t) => {
+  const claudeHome = tempDir(t, 'ppfork-claude-')
+  const claudeDir = join(claudeHome, '.claude')
+  const cwd = tempDir(t, 'ppfork-work-')
+  const created = Date.now() - DAY
+  transcript(claudeDir, cwd, A, { started: iso(created + 1000) })
+  transcript(claudeDir, cwd, B, { from: A, started: iso(created + 1000) })
+  const agent = claudeAgent(B, { cwd, createdAt: iso(created), updatedAt: iso(created + 5000) })
+  const { fake, rows } = await setupWith(t, claudeHome, { agents: [{ agent }] })
+  await until('kept', () => rows().some((r) => r.session_id === A && r.title === 'Fixing the UI'))
+  fake.upsert(claudeAgent(A, { cwd, title: 'imported', createdAt: iso(Date.now()), updatedAt: iso(Date.now()) }))
+  await until('the session is the importing agent\'s', () => rows().find((r) => r.session_id === A)?.title === 'imported')
+  fake.update(agent.id, { status: 'running' })
+  await until('the first agent under its own session again', () => rows().find((r) => r.session_id === B)?.title === 'Fixing the UI')
+  assert.equal(fake.requestsOf('update_agent_request').length, 0, 'nothing pinned for an id another agent has')
+})
+
 test("an archived agent Paseo forked before the bridge started: a row of its own under the line's first id, no transcript named", async (t) => {
   const claudeHome = tempDir(t, 'ppfork-claude-')
   const claudeDir = join(claudeHome, '.claude')
