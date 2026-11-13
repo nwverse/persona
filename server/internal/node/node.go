@@ -1049,7 +1049,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		n.configured()          // a hub that lists without engine.use keeps herdr (engine.go)
 		n.useBotmux(true, true) // and one that lists without saying botmux keeps it, as before (hostbotmux.go)
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
-		return map[string]any{"sessions": n.sessionList(ctx, true)}, nil
+		list := n.sessionList(ctx, true)
+		// update_busy: node.update.commit would refuse now; the manager waits on it before sending a build (node_update_idle).
+		return map[string]any{"sessions": list, "update_busy": updateWouldCut(AssistantsBusy(), list)}, nil
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, "", p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:

@@ -104,7 +104,7 @@ import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions"
 import { QueueStrip } from "./QueueStrip";
 import type { LoadOutcome } from "./ChatSearch";
 import { forgetReveals, revealItem, undoReveals, clearReveal } from "./search-reveal";
-import { forwardDraftOf, openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
+import { forwardDraftOf, jumpWhenOpen, openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
 import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
 import { foldHolding, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
@@ -178,6 +178,8 @@ const NO_RAIL_TICKS: NavRailTick[] = [];
  *  up, and how long it stays lit (Android: 3 s). */
 const FIND_MS = 400;
 const GIVE_UP_MS = 2000;
+/** How long landing on a message waits for the chat to stop loading before it pages back itself. */
+const LANDING_WAIT_MS = 5000;
 const HIT_MS = 3000;
 const SEARCH_NOTICE: Record<SearchLoadOutcome, string | null> = {
   start: null,
@@ -245,7 +247,7 @@ export interface PanelChrome {
   beside?: React.ReactNode;
 }
 
-export function ChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions }: {
+export function ChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt }: {
   mid: string;
   sid: string;
   assistant?: boolean;
@@ -273,6 +275,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   onRefresh?: () => void;
   /** The page's own buttons at the header's end, before the permission mode and ⋯ (Health's New and its past conversations, #4329). */
   headerActions?: React.ReactNode;
+  /** A message to open the chat at (`?at=`, a search hit's, #6283): landed on once it is in, paging back for it. */
+  landAt?: string;
 }) {
   const { session, detail, retry: retryDetail } = useRuntimeSession(mid, sid);
   // opened from a conversation's hand-off card (#5096): the way back to it, until put away
@@ -1486,14 +1490,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tr.expandFold follows the chat, as seekItem does
   }, [seekItem, earlier.liveItems, folds.fetched, ctx.scope]);
-  // a forward's card opened this chat at its original (#3899, lib/forward.ts jumpWhenOpen): brought into view once the
-  // transcript is in and holds it; one further back stays where the chat opens, as iOS does
-  useEffect(() => {
-    const item = peekJump(mid, sid);
-    if (!item || tr.loading) return;
-    takeJump(mid, sid);
-    if (earlier.liveItems.some((i) => i.id === item)) requestAnimationFrame(() => seekItem(item, true));
-  }, [mid, sid, tr.loading, earlier.liveItems, seekItem]);
   const backToOrigin = useCallback(() => {
     const o = origin.current;
     origin.current = null;
@@ -1543,6 +1539,35 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const key = SEARCH_NOTICE[outcome];
     return key ? t(key) : null;
   }, []);
+  // a message to open the chat at: a search hit's (`?at=`, #6283) or a forward card's original (#3899, lib/forward.ts
+  // jumpWhenOpen). Brought into view once the transcript is in and holds it; one further up is paged back for, as "Load
+  // earlier and keep searching" does (at most SEARCH_PAGES pages, the reader scrolling away or another landing stops
+  // it); not reached, the chat stays where it opened and says the message is further up.
+  useEffect(() => {
+    if (landAt) jumpWhenOpen(mid, sid, landAt);
+  }, [mid, sid, landAt]);
+  const msgLanding = useRef(0);
+  useEffect(() => {
+    const item = peekJump(mid, sid);
+    if (!item || tr.loading) return;
+    takeJump(mid, sid);
+    const run = ++msgLanding.current;
+    const holds = () => trNow.current.items.some((i) => i.id === item);
+    if (holds()) return void requestAnimationFrame(() => seekItem(item, true));
+    if (!trNow.current.hasMore) return;
+    void (async () => {
+      // the chat may still be filling the screen with older pages: wait for that, then page back (again if it was busy)
+      for (let go = 0, until = performance.now() + LANDING_WAIT_MS; go < 3 && run === msgLanding.current && !holds(); go++) {
+        while ((trNow.current.loading || trNow.current.loadingEarlier) && performance.now() < until) await nextFrame();
+        await loadForSearch(() => {}, () => run !== msgLanding.current || holds());
+      }
+      if (run !== msgLanding.current) return;
+      if (holds()) requestAnimationFrame(() => seekItem(item));
+      else toast(t("chat-chatview.message_further_up"));
+    })().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new landing is a new item asked for, not the items changing
+  }, [mid, sid, tr.loading, landAt, seekItem, loadForSearch]);
+  useEffect(() => () => void msgLanding.current++, [mid, sid]); // another chat ends a landing on its way
   const rounds = useMemo(() => segs.filter((x) => x.user).length, [segs]);
 
   // the newest plan of the chat (PlanCard.tsx planCardStep draws its card): while that card is out of view, a pill above the composer
