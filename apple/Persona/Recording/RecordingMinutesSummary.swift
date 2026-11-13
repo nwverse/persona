@@ -219,10 +219,10 @@ enum MinutesMark {
 }
 
 /// An item: its words (and for an action, who and by when), the photo it cites, its time as a chip and the disclosure for
-/// its lines, then `below` (an action item's Add to To-Dos) under all of it. At the accessibility sizes the time and the
-/// disclosure go under the words, which then keep the card's whole width. In the summary card (#6563) a `mark` starts
-/// it, its words have their bold places (`item.words`), a conclusion's time has the AI's fill (`chip`), on its box, and
-/// its parts are laid out by the width that is there (`byWidth`, `MinutesItemLayout`).
+/// its lines, then `below` (an action item's Add to To-Dos) under all of it. At the accessibility reading sizes the time
+/// and the disclosure go under the words, which then keep the card's whole width. In the summary card (#6563) a `mark`
+/// starts it, its words have their bold places (`item.words`), a conclusion's time has the AI's fill (`chip`), on its
+/// box, and its parts are laid out by the width that is there (`byWidth`, `MinutesItemLayout`).
 struct MinutesItemRow<Below: View>: View {
     var item: RecordingMinutesCards.Item
     var recording: UUID
@@ -236,7 +236,8 @@ struct MinutesItemRow<Below: View>: View {
     /// under them with who said it (`MinutesItemLayout`). The four cards' items keep their own layout.
     var byWidth = false
     @ViewBuilder var below: Below
-    @Environment(\.dynamicTypeSize) private var size
+    /// The size its words read at: the layout follows them, not the interface's cap.
+    @Environment(\.readingTypeSize) private var reading
 
     var body: some View {
         if case .none = mark {
@@ -250,7 +251,7 @@ struct MinutesItemRow<Below: View>: View {
     }
 
     private var row: some View {
-        let layout = size.isAccessibilitySize
+        let layout = reading?.isAccessibilitySize == true
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.xs))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: Theme.Space.s))
         return VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -476,7 +477,8 @@ struct MinutesItemLayout: Layout {
 /// primary color and the stronger weight (so it never rides on color alone), its neighbours in the secondary color.
 struct MinutesContext: View {
     var lines: [RecordingMinutesCards.Line]
-    @Environment(\.dynamicTypeSize) private var size
+    /// The size its words read at: the layout follows them, not the interface's cap.
+    @Environment(\.readingTypeSize) private var reading
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -497,7 +499,7 @@ struct MinutesContext: View {
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
         return Group {
-            if size.isAccessibilitySize {
+            if reading?.isAccessibilitySize == true {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) { stamp; words }
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) { stamp; words }
