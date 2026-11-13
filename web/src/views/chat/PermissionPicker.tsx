@@ -16,10 +16,11 @@ import { applyModes, useModeSet } from "./SessionDialogs";
 
 const PLAN = "plan";
 
-/** The words a mode's chip and row show on hover: what the mode does (Full access's warning when it is on). */
+/** The words a mode's chip and row show on hover: what the mode does (Full access's warning when it is on); none while
+ *  the mode is not known. */
 function modeTip(mode: string | undefined): string {
   if (mode === BYPASS_MODE) return BYPASS_WARNING;
-  return PERMISSION_MODES.find((m) => m.id === (mode || "default"))?.detail ?? "";
+  return PERMISSION_MODES.find((m) => m.id === mode)?.detail ?? "";
 }
 
 /** The picker's rows: the header's, Plan mode left to the + panel, each with its symbol and its description on hover. A
@@ -40,17 +41,19 @@ export const PermissionPicker = memo(function PermissionPicker({ session, assist
   const { set } = useModeSet(session);
   const mode = session.permission_mode;
   const danger = mode === BYPASS_MODE;
-  const label = modeTitle(mode || "default");
+  // A mode not known yet (Claude Code's before its first prompt, which can still be changed) is named by no value: just
+  // "Permission mode", as on iOS (#5756, #5596), never a mode the agent may not have.
+  const label = mode ? modeTitle(mode) : t("chat-sessiondialogs.permission_mode");
   return (
     <>
       <button
         type="button"
         data-testid="permission-picker"
-        data-mode={mode || "default"}
+        data-mode={mode || undefined}
         aria-haspopup="menu"
         aria-expanded={Boolean(menu.anchor)}
-        aria-label={t("chat-sessiondialogs.header_mode", { mode: label })}
-        title={modeTip(mode)}
+        aria-label={mode ? t("chat-sessiondialogs.header_mode", { mode: label }) : label}
+        title={modeTip(mode) || undefined}
         // the caret stays in the message box (Tab still reaches the chip)
         onMouseDown={(e) => e.preventDefault()}
         onClick={menu.open}

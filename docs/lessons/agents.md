@@ -285,6 +285,19 @@ setting sources, carries the login keys (`env`, `apiKeyHelper`, the AWS and `for
 model `<synthetic>`, error `authentication_failed` only in the transcript); read the session row's `turn_error` before
 taking the turn's last words as an answer.
 
+## `--setting-sources project` still reads `~/.claude` as the home's project files (2026-11-12, #5786)
+
+A guest conversation's `--tools ""` and `--strict-mcp-config` take away tools, not context: an extension's guest on the
+CLI read the owner's `~/.claude/CLAUDE.md`, every `~/.claude/rules` file and the auto-memory index (about 39k tokens in
+its first request on one machine), so the person it answered could ask for them. A meeting's room was started with
+`--setting-sources project`, CLAUDE.md excludes for every directory above its own and auto memory off, and even that let
+the rules through (about 27k of those tokens): for a directory below the home, Claude Code reads `~/.claude` as the home
+directory's project `.claude`, rules included. `claudeMdExcludes` takes paths and globs and covers rules files too, so
+every guest now also excludes `<dir>/.claude/rules/**` for each directory above its own, the home's and the profile's;
+the same first request was under 3k tokens. The same goes for `AGENTS.md` and `.claude/AGENTS.md` above it, which Claude
+Code reads in place of CLAUDE.md when the guest's directory has no CLAUDE.md of its own. Check such isolation on the real CLI: pick a marker line from each source and
+count it in the run's transcript, which records the instructions the process loaded.
+
 ## Read colors to determine whether Claude's input box is empty (#1434)
 
 After each turn, Claude Code puts a suggested next message in dim text (SGR 2), such as `❯ 现在部署一下 hub` ("deploy the hub now"). Plain-text screen reads can't distinguish it from typed text.
@@ -391,6 +404,7 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 - Keep a refusal's code through every hop (`control.go` used to wrap it into text with the screen tail; `startLog.finish` kept only `err.Error()`): the apps and the hub can only word what still has its code.
 - Match what the programs really print, not what they mean to: `personad launch` ends through `log.Fatal`, whose default flags put the date and time in front (a pattern anchored at the start of the line never matched it);
   dash, ksh and busybox say `not found` of a missing path; fish follows an error inside a function with a backtrace that repeats the function's arguments, the session id with them.
+- Don't read a shell's lines by their English words alone (#6122): bash translates them through gettext (about 40 catalogs) and glibc translates `strerror`, and Homebrew's bash on a Mac follows the system language even without `LANG` (`bash: nosuch: 未找到命令`), so the start waited out its timeout on any non-English machine. Read the line's shape instead (a shell's name first, then colon or full-width colon parts, one of them the start's own command), and only for the command the start itself typed, so rc noise in any language still never ends a start.
 - Don't compare a node's timestamps with the manager's clock: a node whose clock ran behind made a first failed start look counted already. Keep what was counted instead (with the health records, across restarts).
 
 ## Don't default to bare claude when resuming externally created sessions (2026-11-05, #411)
@@ -401,6 +415,9 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 - Keep the session's original model on resume (`sessionState.Model`); switch to the "New Agent" model only when using the hub-selected launcher.
 
 ## `--resume` without `--model` brings back the session's last model (2026-11-09, #2487, 2.1.296)
+
+- A model's `model_not_found` is not automatically a configuration error (#5234). The live main conversation's model answered normally, then the gateway returned 404 on later turns; treating every user-selected model as final left each turn on an error card. Record when a model last answered in this conversation: a `model_not_found` within an hour gets the same bounded same-model retry as a 5xx, then the normal model chain. Never replay a model that has not answered here, and remember a missing recovery-chosen fallback for its launcher across conversations and resident handovers so it is not offered again at once.
+- An Agent SDK bridge has no `initialize` control request. Its own task-list control must supply an explicit empty background-task inventory before a model switch may restart it. Unknown or refused inventories must still block the switch.
 
 - Claude Code restores the model a resumed session last ran on. Only `--model`, `ANTHROPIC_MODEL` or an `ANTHROPIC_DEFAULT_*_MODEL` stops it; `"model"` in `settings.json` or `--settings` does not.
   The main chat had no model configured, so the app said "Claude Code default", but every `--resume` kept the model an earlier start had used. When the gateway dropped that model, every turn failed (`model_not_found`, later a 503 retried ten times), and changing Claude Code's settings changed nothing.
@@ -885,7 +902,7 @@ refused as `dialog_open` with nothing on the phone to answer.
   same check that ignored allow honoured deny.
 - `--setting-sources project` does not keep a `--settings` file out: flag settings always load, hooks, plugins and output
   style included. A launcher alias's `--settings` is a user settings file, so a process that must carry none of the user's
-  setup (a meeting's room, `node/assistant_guest.go` `meetingRoomKeys`) copies only what it needs from it (env, login, model).
+  setup (a guest conversation, `node/assistant_guest.go` `guestSettingsKeys`) copies only what it needs from it (env, login, model).
 - A node's session state is stored by the hub's manager (`db.NodeSession`): a field it does not keep is gone after the next node
   restart. Persist what decides how a process runs (a guest's tools and kind), and fail closed when it is missing.
 

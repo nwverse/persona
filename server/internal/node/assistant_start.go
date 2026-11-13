@@ -263,14 +263,14 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	if settingsErr != nil {
 		return nil, settingsErr
 	}
-	if n.guestKindOf(id) == guestMeeting { // a meeting's room: none of the owner's Claude Code setup (assistant_guest.go)
-		if n.guestOf(id) == nil {
-			return nil, errRoomRecord // never with the assistant's tools
-		}
-		if settings, settingsErr = n.meetingRoomSettingsFile(id, cwd, configPath, settings, hooks == ""); settingsErr != nil {
+	if n.guestKindOf(id) == guestMeeting && n.guestOf(id) == nil {
+		return nil, errRoomRecord // a meeting's room never runs with the assistant's tools
+	}
+	if n.guestOf(id) != nil { // a guest, a meeting's room too: none of the owner's Claude Code setup (assistant_guest.go)
+		if settings, settingsErr = n.guestSettingsFile(id, cwd, configPath, settings, hooks == ""); settingsErr != nil {
 			return nil, settingsErr
 		}
-		args = append(args, meetingRoomArgs()...)
+		args = append(args, guestSettingArgs()...)
 	}
 	if settings != "" {
 		args = append(args, "--settings", settings)
@@ -306,8 +306,9 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	} else {
 		args = append(args, "--session-id", id)
 	}
-	// Persona's own tools are few and used all the time: load them up front instead of behind ToolSearch.
-	env := identity.Environment(os.Environ(), append([]string{"PERSONA_ASSISTANT=1", "ENABLE_TOOL_SEARCH=false"}, compaction.env()...)...)
+	// Persona's own tools are few and used all the time: personad mcp marks them alwaysLoad (#5838). Other MCP
+	// servers keep Claude Code's normal ToolSearch deferral instead of having every tool forced into the context.
+	env := identity.Environment(os.Environ(), append([]string{"PERSONA_ASSISTANT=1"}, compaction.env()...)...)
 	env = n.claudeProcessEnv(env, configDir)
 	guest := n.guestOf(id) != nil
 	if guest && execution.Runtime == proto.AssistantRuntimeAgentSDK && n.guestKindOf(id) == guestMeeting {

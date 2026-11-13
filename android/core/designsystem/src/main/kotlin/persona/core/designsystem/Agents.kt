@@ -24,6 +24,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
@@ -46,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import persona.core.contracts.CoreText
 import persona.core.domain.sort.AgentListDisplay
@@ -101,7 +103,7 @@ private val AvatarGap get() = Tokens.Space.m
 /** Between Two Lines' dot and its words (iOS style B: `Theme.Space.s`). */
 private val TwoLineGap get() = Tokens.Space.s
 /** The background-waiting clock against the dot it stands in for (as on the space page's cards). */
-private const val WaitClockScale = 1.7f
+internal const val WaitClockScale = 1.7f
 /** A State Card that needs you, tinted in its blue (iOS `StatusPalette.needsYouWash`: the system blue at this opacity). */
 private const val CardWashAlpha = 0.1f
 /** iOS's outlined chip: secondary words in a hairline of the secondary color at this opacity. */
@@ -183,7 +185,7 @@ private fun SectionRule() {
  * `StateCounts`. Each is spoken as one. [lighter]: the counted agents only wait in the background, so their dots take that tone.
  */
 @Composable
-private fun StateCounts(counts: List<Pair<Status, Int>>, waiting: Int = 0, lighter: Boolean = false) {
+internal fun StateCounts(counts: List<Pair<Status, Int>>, waiting: Int = 0, lighter: Boolean = false) {
     val palette = PersonaTheme.palette
     @Composable fun count(n: Int, spoken: String, mark: @Composable () -> Unit) {
         Spacer(Modifier.width(Tokens.Space.s + Tokens.Space.xxs))
@@ -200,7 +202,10 @@ private fun StateCounts(counts: List<Pair<Status, Int>>, waiting: Int = 0, light
             clockDrawn = true
             count(waiting, waitingWords) { JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Caret, tint = palette.backgroundWaiting.dot, decorative = true) }
         }
-        count(n, "$n ${stringResource(status.labelRes)}") { JStatusDot(status, size = Dot, waiting = lighter) }
+        // Idle is spoken as iOS says it ("3 idle"), not by the state's own name (Seen).
+        count(n, if (status == Status.Idle) pluralStringResource(R.plurals.designsystem_idle_count, n, n) else "$n ${stringResource(status.labelRes)}") {
+            JStatusDot(status, size = Dot, waiting = lighter)
+        }
     }
     if (waiting > 0 && !clockDrawn) count(waiting, waitingWords) {
         JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, size = Caret, tint = palette.backgroundWaiting.dot, decorative = true)
@@ -285,7 +290,8 @@ fun AgentTreeHeader(
 /**
  * The second level: a herdr workspace under its computer, indented [depth] steps (0 when the list shows one
  * computer and drops its heading) and smaller than the computer. A [quiet] space (all finished and seen) is lighter
- * and says how many [sessions] it holds instead of [counts]. [menu] is the space's ⋯ (a [HeadingAction] and its sheet).
+ * and says how many [sessions] it holds instead of [counts]. [counts] take a clock for the agents that only [waiting] in the
+ * background, as iOS's `StateCounts` does. [menu] is the space's ⋯ (a [HeadingAction] and its sheet).
  * Under "By repository" the same heading is a repository or one of its working trees, told apart by [icon] (folder, ⌂ for the
  * main checkout, a branch for another tree) and one more [depth] step for a tree. [kind] names the level for TalkBack
  * (space, repository, main worktree, worktree): the caret says "Expand" / "Collapse" it, the icon says what it is, the heading whether it is open.
@@ -301,6 +307,8 @@ fun AgentSpaceHeader(
     quiet: Boolean = false,
     sessions: Int = 0,
     counts: List<Pair<Status, Int>> = emptyList(),
+    /** The agents that only wait in the background, drawn apart from [counts] with a clock ([StateCounts]). */
+    waiting: Int = 0,
     flags: List<RowFlag> = emptyList(),
     menu: (@Composable () -> Unit)? = null,
     icon: PhIcon? = null,
@@ -326,14 +334,28 @@ fun AgentSpaceHeader(
             flags.forEach { Spacer(Modifier.width(Tokens.Space.xs)); JIcon(it.icon, it.label, size = Caret, tint = palette.ink3) }
         }
         if (quiet) Text(pluralStringResource(R.plurals.designsystem_sessions, sessions, sessions), style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink3, maxLines = 1)
-        else StateCounts(counts)
+        else StateCounts(counts, waiting)
         menu?.invoke()
     }
 }
 
-/** "N more idle": opens the finished sessions an active space keeps tucked away. [depth] is the space's. */
+/**
+ * "N more idle": opens the finished sessions an active space keeps tucked away. [depth] is the space's. Once they are
+ * [open] (Glass's By project, iOS `collapseRow`, #4338 A8) the row follows them as "Hide N Idle" in the accent and folds them
+ * again. Closed, on Glass, it names the first of them: [tabs] (their tab names, at most six) as chips in a row of their own
+ * that does not take touches and fades out toward the end of the line (iOS `IdleFoldRow`), in [compact] lists as one line of
+ * words after the count (iOS `CompactFoldRow`). Brief and Board keep the count alone.
+ */
 @Composable
-fun AgentIdleRow(hidden: Int, onClick: () -> Unit, modifier: Modifier = Modifier, depth: Int = 1) {
+fun AgentIdleRow(
+    hidden: Int, onClick: () -> Unit, modifier: Modifier = Modifier, depth: Int = 1, open: Boolean = false,
+    tabs: List<String> = emptyList(), compact: Boolean = false,
+) {
+    if (open) {
+        AgentFoldRow(persona.core.designsystem.icons.PersonaIcons.collapse, pluralStringResource(R.plurals.designsystem_idle_hide, hidden, hidden), onClick, modifier, depth)
+        return
+    }
+    val names = if (PersonaTheme.style == AppStyle.Glass) tabs.take(IdleTabNames) else emptyList()
     val start = Step * depth + (Caret - markSize) / 2
     Row(
         modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick)
@@ -343,6 +365,41 @@ fun AgentIdleRow(hidden: Int, onClick: () -> Unit, modifier: Modifier = Modifier
         Text(pluralStringResource(R.plurals.designsystem_idle_more, hidden, hidden), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1)
         Spacer(Modifier.width(Tokens.Space.xs))
         JIcon(PhIcons.CaretDown, null, size = Caret, tint = PersonaTheme.palette.ink3)
+        if (names.isNotEmpty()) {
+            Spacer(Modifier.width(Tokens.Space.s))
+            if (compact) Text(names.joinToString(" · "), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            else Row(Modifier.weight(1f).fadeOutAtEnd().horizontalScroll(rememberScrollState(), enabled = false), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                names.forEach { IdleTabChip(it) }
+            }
+        }
+    }
+}
+
+/** How many of the hidden agents "N more idle" names (iOS `IdleFoldRow`: `sessions.prefix(6)`). */
+private const val IdleTabNames = 6
+
+/** iOS's neutral `Chip`: a tab's name in a capsule of the chip fill, in the secondary words. */
+@Composable
+private fun IdleTabChip(text: String) {
+    val palette = PersonaTheme.palette
+    Text(text, Modifier.clip(CircleShape).background(if (palette.dark) Tokens.Common.Dark.Fill.chip else Tokens.Common.Light.Fill.chip)
+        .padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xxs),
+        style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.Medium), color = palette.ink2, maxLines = 1, softWrap = false)
+}
+
+/**
+ * A line's last half fading out (iOS `.mask(LinearGradient(.black, .black, .clear))`): the first half whole, the rest to nothing
+ * at the end. Only the gradient's alpha counts (the mask keeps what it covers), so any palette ink will do.
+ */
+@Composable
+private fun Modifier.fadeOutAtEnd(): Modifier {
+    val solid = PersonaTheme.palette.ink
+    return graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.drawWithContent {
+        drawContent()
+        val rtl = layoutDirection == LayoutDirection.Rtl
+        drawRect(Brush.horizontalGradient(0f to solid, 0.5f to solid, 1f to solid.copy(alpha = 0f),
+            startX = if (rtl) size.width else 0f, endX = if (rtl) 0f else size.width), blendMode = BlendMode.DstIn)
     }
 }
 
@@ -352,6 +409,16 @@ fun AgentIdleRow(hidden: Int, onClick: () -> Unit, modifier: Modifier = Modifier
  */
 @Composable
 fun AgentShowAllRow(count: Int, expanded: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, depth: Int = 1) {
+    AgentFoldRow(
+        if (expanded) persona.core.designsystem.icons.PersonaIcons.collapse else persona.core.designsystem.icons.PersonaIcons.expand,
+        if (expanded) stringResource(R.string.designsystem_show_fewer) else stringResource(R.string.designsystem_show_all, count),
+        onClick, modifier, depth,
+    )
+}
+
+/** A line that opens or folds a run of rows, in the accent as a button: its [icon] in the rows' mark column, then [words]; [depth] as the rows'. */
+@Composable
+private fun AgentFoldRow(icon: PhIcon, words: String, onClick: () -> Unit, modifier: Modifier, depth: Int) {
     val start = Step * depth + (Caret - markSize) / 2
     val accent = PersonaTheme.palette.accent
     Row(
@@ -361,11 +428,9 @@ fun AgentShowAllRow(count: Int, expanded: Boolean, onClick: () -> Unit, modifier
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
     ) {
         Box(Modifier.width(markSize), contentAlignment = Alignment.Center) {
-            JIcon(if (expanded) persona.core.designsystem.icons.PersonaIcons.collapse else persona.core.designsystem.icons.PersonaIcons.expand,
-                null, size = Caret, tint = accent, decorative = true)
+            JIcon(icon, null, size = Caret, tint = accent, decorative = true)
         }
-        Text(if (expanded) stringResource(R.string.designsystem_show_fewer) else stringResource(R.string.designsystem_show_all, count),
-            style = PersonaTheme.type.caption, color = accent, maxLines = 1)
+        Text(words, style = PersonaTheme.type.caption, color = accent, maxLines = 1)
     }
 }
 
@@ -431,6 +496,8 @@ fun AgentRow(
     val avatar = glass && parts.leading == AgentRowLeading.Well && agentMark != null
     val placeLine = glass && parts.placeLine && place != null
     val mark = if (avatar) AvatarWell else markSize
+    // Avatar's words take two lines, as iOS's; every other row keeps one.
+    val wordLines = if (avatar) parts.wordLines else 1
     val start = if (board) Step * depth else (Step * depth + (Caret - mark) / 2).coerceAtLeast(None)
     val gap = if (avatar) AvatarGap else Tokens.Space.s - Tokens.Space.xxs
     val hasMetadata = note != null || facts.isNotEmpty()
@@ -483,7 +550,7 @@ fun AgentRow(
                 preview?.takeIf { it.isNotBlank() }?.let { append(it.replace('\n', ' ')) }
             }
             val lineText: @Composable () -> Unit = {
-                Text(line, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(line, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = wordLines, overflow = TextOverflow.Ellipsis)
             }
             if (!boardMetadata) {
                 if (source != null && !placeLine) Row(verticalAlignment = Alignment.CenterVertically) {

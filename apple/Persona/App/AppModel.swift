@@ -195,10 +195,30 @@ final class AppModel {
     /// What a chat's model last did on each Mac (`ComputerActivity`), kept by the open chat: the live screen shows it
     /// over the picture.
     var computerActivities: [MachineRef: ComputerActivity] = [:]
-    var openChat: SessionKey?
+    var openChat: SessionKey? {
+        didSet { if openChat != nil { agentsNavigationRevision += 1 } }
+    }
+    /// Cancels deferred list resets even after a newer targeted open has already been consumed.
+    @ObservationIgnored private(set) var agentsNavigationRevision = 0
+    /// An explicit Agents-tab selection returns to its list; targeted opens do not change this request.
+    var agentsListReveal = 0
+
+    /// User navigation, unlike `open` (notifications / links): choosing Agents discards its retained detail.
+    func selectHomeTab(_ tab: AppTab) {
+        if tab == .chats {
+            openChat = nil
+            openPersonalAgent = nil
+            Self.rememberChat(nil)
+            agentsNavigationRevision += 1
+            agentsListReveal = agentsNavigationRevision
+        }
+        if selectedTab != tab { selectedTab = tab }
+    }
     /// A personal agent's conversation to open on the Agents page, over its list (a Spotlight result, #4519): ChatsView
     /// takes it as it takes `openChat`.
-    var openPersonalAgent: PersonalAgentSession?
+    var openPersonalAgent: PersonalAgentSession? {
+        didSet { if openPersonalAgent != nil { agentsNavigationRevision += 1 } }
+    }
     /// A chat to open at its latest answer, like a finished one from the list (ChatView takes it): a tap on a
     /// "Done" notification. From the background the session list is stale (the agent still reads as working until the
     /// hub's next list), so the chat cannot tell by itself that this turn finished unseen (2026-10-31).
@@ -268,9 +288,18 @@ final class AppModel {
     /// The directions' names by leader conversation id (`GET /api/v1/assistant/leaders`): the sidebar's Directions group
     /// shows these instead of the conversations' titles. Read again with the assistant; empty without leaders.
     private(set) var directionNames: [String: String] = [:]
-    /// How much work each direction holds (`GET /api/v1/assistant/directions/tree`, read on its `directions` push and on
-    /// every (re)connect): the sidebar's "N working · N need you" under its name. Empty from a hub without the tree.
-    private(set) var directionCounts: [String: APIClient.DirectionCounts] = [:]
+    /// The hub's direction tree (#4352, `GET /api/v1/assistant/directions/tree`): the directions' open to-dos with their
+    /// state and Agents, for the sidebar's Pinned rows, the To-dos page and the Agents page. Read with the assistant, on
+    /// every connect and on the `directions` event; nil from a hub without it (404) or before it is read.
+    private(set) var directionTree: DirectionTree?
+    /// Numbers the tree reads in the order they were asked; `directionTreeLanded` is the newest one whose answer was
+    /// taken. An answer older than that is dropped; a read that fails moves neither, so it never makes an earlier
+    /// good answer count as stale.
+    @ObservationIgnored private var directionTreeAsk = 0
+    @ObservationIgnored private var directionTreeLanded = 0
+    /// How much work each direction holds, by leader conversation id: the tree's `counts` (the secretary group left
+    /// out), for the sidebar's "N working · N need you" under each name. Empty from a hub without the tree.
+    var directionCounts: [String: DirectionTree.Counts] { directionTree?.leaderCounts ?? [:] }
     @ObservationIgnored private var assistantRetryInFlight: Task<Void, Never>?
     /// The assistant conversation shown in the Chat tab (persisted across launches).
     ///
@@ -421,11 +450,14 @@ final class AppModel {
             guard let self, self.isPaired, !self.isDemo else { return }
             WatchSync.shared.push(persona: self.personas.chosenID)
             self.pushWatchConfigs()
-            WatchSync.shared.push(summary: self.watchSummary())
+            summariesChanged()
         }
         personas.onChange = { [weak self] in
             self?.applyPersonaPalette()
             self?.followAppIcon()
+            #if os(iOS)
+            HomeWidgetWriter.shared.schedule()
+            #endif
         }
         applyPersonaPalette()
         connection.onCaughtUp = { [weak self] in self?.flushOutbox() }
@@ -436,9 +468,17 @@ final class AppModel {
         #endif
         for name in leaving {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { @Sendable [weak self] _ in
-                MainActor.assumeIsolated { self?.flushSnapshot() }
+                MainActor.assumeIsolated {
+                    self?.flushSnapshot()
+                    #if os(iOS)
+                    HomeWidgetWriter.shared.flush() // the widgets keep what the app last showed
+                    #endif
+                }
             }
         }
+        #if os(iOS)
+        HomeWidgetWriter.shared.source = { [weak self] in self?.homeSnapshotSource() }
+        #endif
         #if os(iOS) || os(visionOS)
         if registryUnreadable {
             NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil,
@@ -1016,6 +1056,9 @@ final class AppModel {
             // resolve one (their default), so an empty answer means an old hub — show Couldn't Load Settings instead of an
             // endless Reading or a made-up name.
             assistantConfigLoadFailed = (assistantConfig?.launcher ?? "").isEmpty
+            // The tree is read on every hello and `directions` event; here only when none is held (a manager or hub
+            // group was just picked, which clears it), off this read's path so the page does not wait for it.
+            if directionTree == nil { Task { await refreshDirectionTree(api, followLeaders: false) } }
         } catch {
             // Settings that already name a launcher stay usable; with none held the page shows Couldn't Load Settings (#4200).
             if showsPage(of: api), (assistantConfig?.launcher ?? "").isEmpty { assistantConfigLoadFailed = true }
@@ -1027,12 +1070,19 @@ final class AppModel {
     private func refreshDirectionInfo(_ api: APIClient, leaders: [String]) async {
         guard !leaders.isEmpty else {
             if !directionNames.isEmpty { directionNames = [:] }
-            if !directionCounts.isEmpty { directionCounts = [:] }
             return
         }
         guard let list = try? await api.leaders(), showsPage(of: api) else { return }
         let names = APIClient.directionNames(list)
         if names != directionNames { directionNames = names }
+    }
+
+    /// What the To-dos and Agents pages' headers call direction `d`: its name, Secretary for the secretary group, else
+    /// its leader conversation's title as the sidebar's lead row says it (New Chat when that has none either).
+    func directionTitle(_ d: DirectionTree.Direction) -> String {
+        if let name = directionNames[d.id], !name.isEmpty { return d.title(fallback: name) }
+        let t = assistantConfig?.conversations.first { $0.sessionID == d.id }?.title ?? ""
+        return d.title(fallback: t.isEmpty || t == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : t)
     }
 
     /// The assistant's leader conversations (the sidebar's Directions), never the main one, in the hub's order.
@@ -1054,18 +1104,27 @@ final class AppModel {
         } catch { show(error) }
     }
 
-    /// The hub's direction tree (#4352): its current directions in order, their names and counts. Read on the hub's
-    /// `directions` push and on every (re)connect. The tree answers for the default manager alone, so another manager's
-    /// page keeps what `GET /api/v1/assistant/leaders` gave it; a hub older than the tree (404) changes nothing.
-    private func refreshDirectionTree(_ api: APIClient) async {
-        guard assistantShows(nil), showsPage(of: api) else { return }
-        guard let tree = try? await api.directionsTree(), assistantShows(nil), showsPage(of: api) else { return }
-        let directions = APIClient.directions(tree)
-        let names = APIClient.directionNames(tree)
-        let counts = APIClient.directionCounts(tree)
+    /// Reads the hub's direction tree again (#4352, `directionTree`, the one copy every page draws): on the hub's
+    /// `directions` push, on every (re)connect and with the assistant. It also carries the directions' order and names.
+    /// The tree answers for the default manager alone, so another manager's page keeps what
+    /// `GET /api/v1/assistant/leaders` gave it and holds no tree. A hub older than the tree (404) has none; another
+    /// failure (offline) keeps what is held. Only an answer newer than the last one taken applies, and a read that fails
+    /// moves neither number, so it never makes an earlier good answer count as stale.
+    /// `followLeaders` false (read from `refreshAssistant` itself): a direction the conversations do not list yet does
+    /// not read the assistant again.
+    func refreshDirectionTree(_ from: APIClient? = nil, followLeaders: Bool = true) async {
+        guard let api = from ?? api, assistantShows(nil), showsPage(of: api) else { return }
+        directionTreeAsk += 1
+        let ask = directionTreeAsk
+        let read: DirectionTree?
+        do { read = try await api.directionsTree() } catch { return }
+        guard ask > directionTreeLanded, assistantShows(nil), showsPage(of: api) else { return }
+        directionTreeLanded = ask
+        if read != directionTree { directionTree = read }
+        guard let tree = read else { return }
+        let names = tree.leaderNames
         if names != directionNames { directionNames = names }
-        if counts != directionCounts { directionCounts = counts }
-        let ids = directions.map(\.id)
+        let ids = tree.leaders.map(\.id)
         if ids != assistantLeaders, var cfg = assistantConfig {
             cfg.leaders = ids
             assistantConfig = cfg
@@ -1073,7 +1132,7 @@ final class AppModel {
         // A direction the page's conversations do not list yet: the whole settings are read, so its row appears
         // without a relaunch.
         let known = Set((assistantConfig?.conversations ?? []).map(\.sessionID))
-        if ids.contains(where: { !known.contains($0) }) { await refreshAssistant() }
+        if followLeaders, ids.contains(where: { !known.contains($0) }) { await refreshAssistant() }
     }
 
     /// The Couldn't Load Settings retry: the page flips back to Reading at once, and repeated taps share the one request (#4200).
@@ -1714,7 +1773,7 @@ final class AppModel {
             let asked = Date.now
             guard let ixs = try? await api(group)?.interactions() else { return }
             replaceInteractions(group, ixs, askedAt: asked)
-            WatchSync.shared.push(summary: watchSummary())
+            summariesChanged()
         }
     }
 
@@ -1872,7 +1931,7 @@ final class AppModel {
             olds.append((old, list))
         }
         if lists != sessionsByMachine { sessionsByMachine = lists }
-        WatchSync.shared.push(summary: watchSummary())
+        summariesChanged()
         for (old, new) in olds {
             for session in new where session.assistant == true {
                 chats[session.key]?.updateQueuePhotoMarks(queued: session.queued, own: session.ownQueuedCount)
@@ -1962,9 +2021,17 @@ final class AppModel {
             }
             #endif
             Task { await refreshInAppTunnel(group) }
-            Task { await refreshManagerRoster(group) }
+            let rosterRead = Task { await refreshManagerRoster(group) }
             // Back on the hub: an install that moved on while the connection was down shows where it is now (#3307).
-            if isHub, Set(hello.features).hasExtensionFeature("operations") { Task { await ExtensionOperations.shared.reload() } }
+            if isHub, Set(hello.features).hasExtensionFeature("operations") {
+                Task {
+                    await ExtensionOperations.shared.reload()
+                    await rosterRead.value
+                    if managerRoster != nil, let manager = assistantManagerID {
+                        await ExtensionOperations.shared.reload(manager: manager)
+                    }
+                }
+            }
             if isHub { flushErrorReports(group) } // the feature may have come or gone with this hello (#5621)
             if isHub, link(group)?.isDemo == false { learnedRecordingDay(hello) }
             #if DEBUG && (os(iOS) || os(visionOS))
@@ -2155,14 +2222,14 @@ final class AppModel {
             interactions[ix.uid] = ix
             noteScreenCard(ix, live: true)
             if announces { Haptics.attention() }
-            WatchSync.shared.push(summary: watchSummary())
+            summariesChanged()
         case .interactionResolved(let id, let assistant):
             let uid = group.isEmpty ? id : group + "|" + id
             endedInteractionIDs.insert(uid)
             answering.hubEnded(uid)
             if let assistant, let ix = interactions[uid] { keepDelegated(ix, assistant) }
             interactions[uid] = nil
-            WatchSync.shared.push(summary: watchSummary())
+            summariesChanged()
         case .interactionReanswered(let id, let answers):
             noteReanswer(group.isEmpty ? id : group + "|" + id, answers)
         case .toolCall(let callID, let name, let args):
@@ -2560,6 +2627,8 @@ final class AppModel {
         }
         var msg = PendingMessage(text: text, images: images)
         msg.via = via
+        // The composer says "queued" while the agent works: such a message is drawn in the queue strip (#1461).
+        if session(key)?.status.isActive == true { msg.queuedMode = true }
         chat(key).pending.append(msg)
         saveOutbox()
         Haptics.tap()
@@ -3302,6 +3371,8 @@ final class AppModel {
         if let g = hub?.group {
             assistantConfig = heldAssistant(g)
         }
+        directionTree = nil // the other hub's to-dos and sessions; `refreshAssistant` below reads this one's
+        directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
         // The picked group's settings are read again: until that read finishes, the page shows its loading state.
         assistantConfigLoadFailed = false
         if let a = assistantCurrent, a.group != hub?.group { assistantCurrent = assistantMain }
@@ -3330,6 +3401,11 @@ final class AppModel {
     /// (`assistantSwitches`). Another assistant's conversation opened from a notification stays through a re-read.
     func assistantManagerChanged(switched: Bool = true) {
         assistantConfig = heldAssistant(hub?.group ?? "")
+        // The tree is the default manager's: kept through a re-read of it, dropped for any other.
+        if switched || !assistantShows(nil) {
+            directionTree = nil // the other manager's; `refreshAssistant` below reads this one's
+            directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
+        }
         assistantConfigLoadFailed = false
         readiness.forget()
         relistAssistant()
@@ -3734,6 +3810,15 @@ final class AppModel {
         Haptics.attention()
     }
 
+    /// What the watch's summary and the Home Screen widgets show may have changed: the watch gets the summary, and
+    /// the widgets' snapshot is written soon, coalesced (`HomeWidgetWriter`, docs/apple/home-widgets.md).
+    func summariesChanged() {
+        WatchSync.shared.push(summary: watchSummary())
+        #if os(iOS)
+        HomeWidgetWriter.shared.schedule()
+        #endif
+    }
+
     func watchSummary() -> WatchSummary {
         // A quiet task's agent and its questions are the main conversation's (#1731).
         let (live, asking) = QuietTasks.leavingOut(sessions: allSessions.filter { $0.status.isLive }, interactions: pendingInteractions,
@@ -3796,6 +3881,7 @@ struct Toast: Identifiable, Equatable {
 /// No taptic engine on Apple Vision Pro: the system's own sounds and the hover effect are the feedback.
 enum Haptics {
     static func tap() {}
+    static func selection() {}
     static func success() {}
     static func error() {}
     static func attention() {}
@@ -3803,6 +3889,8 @@ enum Haptics {
 #else
 enum Haptics {
     static func tap() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    /// A tick as something dragged reaches a new place (a to-do on the calendar at the next quarter hour or day).
+    static func selection() { UISelectionFeedbackGenerator().selectionChanged() }
     static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
     static func error() { UINotificationFeedbackGenerator().notificationOccurred(.error) }
     static func attention() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }

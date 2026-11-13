@@ -29,7 +29,7 @@ import persona.core.domain.sort.agentSpaces
 import persona.core.navigation.AppTab
 import persona.core.navigation.ChatRoute
 import persona.core.navigation.ConversationKind
-import persona.core.navigation.MachineDetailRoute
+import persona.core.navigation.MachineSpacesRoute
 import persona.core.navigation.Navigator
 import persona.core.navigation.SpaceRoute
 import kotlinx.coroutines.delay
@@ -72,11 +72,13 @@ private fun SpaceDestination(route: SpaceRoute, navigator: Navigator, dependenci
                 listContext = kotlinx.coroutines.Dispatchers.Default)
         }
         val creationService = LocalAgentCreationService.current
+        val starPrompt = persona.core.designsystem.LocalStarPrompt.current
         val creationModel = creationService?.let { service ->
             viewModel(key = "space-new-agent:${service.scope}:${System.identityHashCode(service)}") {
                 NewAgentViewModel(service, wiring.creationPreferences?.let { AgentCreationPreferences(context, it) }
                     ?: AgentCreationPreferences(context), dependencies.sessions().machines,
-                    usage = dependencies.machines()?.let { m -> { id: String -> m.usageWindows(id) } })
+                    usage = dependencies.machines()?.let { m -> { id: String -> m.usageWindows(id) } },
+                    launched = { starPrompt?.launched() })
             }
         }
         SpacePage(route, model, navigator, creationModel)
@@ -158,7 +160,7 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
                 onMarkRead = unread.takeIf { it.isNotEmpty() }?.let { rows -> { confirmRead = rows } })
         },
         sessionMenu = rowMenu, title = route.title,
-        onMachine = { navigator.navigate(MachineDetailRoute(it)) },
+        onMachine = { navigator.navigate(MachineSpacesRoute(it)) },
         // The page's list arrives a moment after it opens: no "No running agents" flash before that.
         loaded = page.sessions.isNotEmpty() || page.machines.isNotEmpty(),
         onClose = { row -> closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) } })

@@ -58,12 +58,12 @@ class DirectionTreeMockTests(unittest.TestCase):
         self.assertEqual(secretary["id"], get(base, "/api/v1/assistant")["main"])
         self.assertTrue(secretary["tasks"])
         states = {t["state"] for d in tree for t in d["tasks"]}
-        self.assertEqual(states, {"needs_you", "review", "stuck", "working"})
-        order = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3}
+        self.assertEqual(states, {"needs_you", "review", "stuck", "working", "planned"})
+        order = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3, "planned": 4}
         for d in tree:
             ranks = [order[t["state"]] for t in d["tasks"]]
             self.assertEqual(ranks, sorted(ranks))
-            for k in ("working", "needs_you", "stuck", "review"):
+            for k in ("working", "needs_you", "stuck", "review", "planned"):
                 self.assertEqual(d["counts"][k], sum(1 for t in d["tasks"] if t["state"] == k))
         # a spawned agent sits under the agent it came from, once
         weather = next(t for d in tree for t in d["tasks"] if t["id"] == "todo_weather")
