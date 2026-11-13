@@ -1,6 +1,6 @@
 # Phase 2: interactions (#4210)
 
-Part of the [Android alignment plan](README.md) (#4194). Status: plan, 2026-11-11.
+Part of the [Android alignment plan](README.md) (#4194). Status: T6 done (11-12) and T1, T2, T3 and T5 (11-13); T4 left out for now and T7 waiting for the owner's answer to Q6 (see their sections).
 
 ## Requirements
 
@@ -69,6 +69,8 @@ Android: `android/feature/inbox/src/main/kotlin/persona/feature/inbox/InboxItemR
 
 Risk: with gesture navigation, a swipe that starts at the very right edge is the system's back. Starting inside the row works, as in other Android apps with row swipes.
 
+Done (11-13): in every style (direction and actions are behaviour), both row kinds (`InboxItemRow`, `InboxConversationItemRow`) take one swipe, from the end, from `inboxRowSwipe`: **Done** (the check mark) in the positive tone, or **Move Back** (the undo arrow) in the accent tone on a done item and in the Done section; none from the start, none while the row's write is out or items are being picked. The hand-off is only in the long-press menus now (an open row's long press starts a selection, and the picked row's More holds Hand to AI, as before); #3901 and #6042 are untouched. `JSwipeActions` gets a `SwipeTone` and TalkBack actions: every action of a swipe is a custom accessibility action on the row that applies `swipeActionSemantics()` (`MessageItem` does, in its Glass card too), since only the row's own node takes the screen reader's focus. On Glass a toned action is drawn as iOS tints it: a fill of the accent or the positive green with white marks (black on the bright green in dark, where white would be 2:1); Brief and Board keep their neutral backing and the status color, so their rows are pixel-identical at rest (`android_shots_diff.py` of `main` against the branch: the whole Inbox page at rest, three styles, light and dark, 6 of 6 identical). A single item gives a tap haptic both ways, a conversation row counting as one; many at once keep success when filed (`doneHaptic(done, single)`). The label for putting back becomes iOS's **Move Back** (移回, 戻す) in all three languages, and the long-press sheet shows the same done and undo icons. Tests `InboxRowSwipeTest` (the action of each state, open, done, busy and picking, for both row kinds; the gesture each way; TalkBack's actions; the fill on Glass and the neutral backing in Brief and Board), `SwipeActionsAccessibilityTest` (the component's actions, the latest function, the tone's colors), `InboxConversationSwipeTest` (the conversation tests moved to the one swipe, with the hand-off through the long press and the tap haptic), `InboxHapticsTest`; shots `InboxSwipeShotsTest` (the revealed swipe on Glass, light and dark, `main` beside the branch; Brief and Board at rest and revealed). Release notes: no file in the repository keeps them for Android; they are compiled from merged PRs, so the PR's "Release notes (Android)" paragraph says it (principle 1). Left: the other rows inside `JSwipeActions` (To-dos, Agents, the conversation history) do not apply `swipeActionSemantics` yet, so TalkBack still reaches their swipes through their own menus; iOS's full swipe is a threshold on Android, as for every swipe row (56 dp).
+
 ### T2. Dismissing the keyboard on drag
 
 **Today.** iOS hides the keyboard when a real drag starts on the conversation (in `apple/Persona/Views/Chat/ChatView.swift`; the flipped list ignores SwiftUI's own setting). Android's chats share a reversed `LazyColumn` in `android/core/chatlist/src/main/kotlin/persona/core/chatlist/ChatList.kt`; only a tap on empty space hides the keyboard (`KeyboardDismiss.kt`), and a drag is consumed before it gets there.
@@ -98,6 +100,8 @@ Done (11-13): on Glass the composer's send and stop move as on iOS, in every cha
 
 Risks: offset arithmetic in a reversed list; a header that is off screen; steps streaming in while open; the saved reading position during a hold.
 
+Not done (11-13): left out of this round, decided on 2026-11-13. The design above stands for when it is picked up; until then the rows of an opened step or tool call still push its header up.
+
 ### T5. Selecting in place
 
 **Today.** iOS (`apple/Persona/Views/Chat/LiftSelection.swift`) redraws the lifted message in a text view, because its Markdown renderer can't select. Android's Select opens `FullTextReader.kt`, full screen, with the raw Markdown.
@@ -105,6 +109,8 @@ Risks: offset arithmetic in a reversed list; a header that is off screen; steps 
 **Change.** The Markdown renderer Android uses draws with Compose `Text`, so one message can be wrapped in a `SelectionContainer`. Select makes only that message selectable and turns off its long press, its swipe to quote and its inline-code copy until the selection ends. The Lark views already select in place with their own menu items (`android/feature/inbox/src/main/kotlin/persona/feature/inbox/LarkTextPicks.kt`), and a Quote item can reuse that.
 
 Risks: no selection across messages; a selection may be lost when the message scrolls away; Compose may have no public way to start with the word under the finger selected (to check); inline math images and scrolling code blocks.
+
+Done (11-13): in every style (what Select does is behaviour), choosing Select in a message's menu selects the words of that message where it is. `SelectableWords` (`MessageSelection.kt`) keeps the message's words in one `movableContentOf`, so an opened quote or an unfolded code block keeps its state, and moves them into a `SelectionContainer` with `selectAll()` once they have registered: the system's handles, its long press that picks a word and its floating menu (Copy, Select all, the platform's own items) work on them, and a Quote item is added to that menu (`appendTextContextMenuComponents`, as `LarkTextPicks.kt` does). Quote takes only the picked words, as iOS's `ContextRef.quote(part: "selection")` does: a composer card "Quoting selected text · agent" (`ChatLinkContext.part`, `part="selection"` in the XML, saver V3 that still restores V2 and older), kept once per message and words. While it selects, the message has no long press, swipe to quote or inline-code copy (`messageMenu` returns at once; `LocalSelectionAbove` makes `copyingCode` draw plain text); its code blocks are selected with it (a nested `SelectionContainer` would drop them from Select all: `SelectableOnItsOwn`), while their header and copy buttons, the streaming cursor, persona views and cards are `DisableSelection`. It ends as iOS's does when nothing is selected any more (a tap on the words, Copy, Quote) and, as Android's own text selection does, on a tap that starts outside the message (`endSelectionOnTapOutside` on the chat list: it only watches, so the tap goes on to what is under it, and a drag scrolls the list with the words still selected), on Back, and when the message has left the screen or the composition; choosing Select in another message moves the selection there. Copy goes through `pickedWords`: no thin spaces from the inline-code padding, no placeholders for formulas, a list item's marker back on its line. `FullTextReader` stays where else it opens (a long message's "View full text" and reader button, a code block's reader, thoughts, plans, a tool's raw input and output); Select no longer opens it. Tests `MessageSelectionTest` (19: selection on for that message only, long press, swipe and inline-code copy off and back, Copy, Quote and its part, tap outside, a drag, Back, scrolled away, unfolded state kept, your own bubble, a message with nothing to select, no reader, the part surviving a configuration change, the card's heading); shots `MessageSelectionShotsTest` (at rest and selecting, three styles, light and dark: at rest Brief and Board are pixel-identical to `main`, and selecting moves nothing but the highlight). Checked on an emulator: handles and floating menu, Quote, Copy to the clipboard, Back, a tap outside, a long press that picks a word, scrolling with the words selected. Left: starting with the word under the finger (Compose has no public way: `SelectionState` offers `selectAll`, `select(range)` and `extendSelectionByWord`, and the Markdown renderer exposes no text layouts to turn a point into an offset), so Select selects the whole message and a long press on a word picks that word, as iOS's second long press does; iOS's lift of the message over the dimmed chat, which an action sheet over the chat does not need; formulas are pictures and are left out of what is copied (the Markdown model cannot say their source from here); a table copies one cell per line; Robolectric draws neither the handles nor the system's menu, so the shots show the highlight only (the emulator shows both); TalkBack on a device is not checked.
 
 ### T6. Pending requests above the composer (if Q4 is yes)
 
@@ -128,12 +134,16 @@ Done (11-12), after Q4 was decided as follow iOS: in every style (the stack is b
 
 Risks: overriding density inside the theme instead would compound and could lose Android 14's non-linear font scaling; fixed-height layouts may clip; the switcher already scales with font size and must not scale twice; the floating capsule's window needs the override too.
 
+Not started (11-13): Q6 is still open with the owner (#4208), and T7 was left out of this round on 2026-11-13.
+
 ### Order of work
 
 1. T2 and T1: small, independent PRs.
 2. T3, after the motion tokens of phase 1.
 3. T4, then T5.
 4. T6 (Q4 was decided on 2026-11-12: follow iOS), then T7 after the owner answers Q6.
+
+On 2026-11-13 T2, T1, T3 and T5 were built in that order (#6606, #6633, #6665, #6669); T4 and T7 were not.
 
 ### Verification
 

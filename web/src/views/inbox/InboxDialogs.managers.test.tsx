@@ -89,7 +89,7 @@ const send = async (done: (c: Call) => boolean) => {
 };
 const started = () => calls.find((c) => c.url.endsWith("/assistant/conversations"))!;
 const sentTo = (sid: string) => (c: Call) => c.method === "POST" && c.url === `/api/v1/sessions/mac/${sid}/messages`;
-const handedOff = (c: Call) => c.method === "POST" && c.url === "/api/v1/inbox/lark:f1:1/handoff";
+const handedOff = (c: Call) => c.method === "POST" && c.url === "/api/v1/inbox/lark:f1:1/handoff" && typeof (c.body as { text?: unknown } | undefined)?.text === "string";
 const handOffs = () => calls.filter(handedOff);
 const filed = (c: Call) => c.url === "/api/v1/inbox/lark:f1:1/done";
 
