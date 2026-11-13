@@ -61,7 +61,10 @@ A recipe is a description of one pull, independent of its schedule and enabled d
     "time": "$.time",
     "body": "$.body",
     "link": "$.link",
-    "due_date": "$.due_date"
+    "due_date": "$.due_date",
+    "sender_id": "$.sender_id",
+    "chat": "$.chat.id",
+    "chat_name": "$.chat.name"
   },
   "kind": "sub_notice",
   "group_by": "thread"
@@ -69,6 +72,8 @@ A recipe is a description of one pull, independent of its schedule and enabled d
 ```
 
 Required fields are `mode`, `tool`, `kind`, and `group_by`. The tool must be a short name in this source. `args` defaults to `{}`; it is an object, and strings can contain the runner's `{{since}}` and `{{since_date}}` variables. `items_path` defaults to `$`. Field paths are relative to one item; all are optional at the protocol layer. Supported path syntax is `$`, `.field` (letters/underscore followed by letters, digits, underscore or hyphen), and `[index]`. Wildcards, filters, recursive descent and expressions are not supported.
+
+`sender_id`, `chat` and `chat_name` say who and where, for mutes and policies (#6165). They are not part of an item's content: they don't enter its content hash, so adding them to a recipe makes no item look changed. A row's `sender` tag matches by `sender_id` when the recipe maps it, kept as the source writes it, as a built-in's mutes match (a Lark sender id). Without it, the tag is the lowercased display name. With `chat` mapped, the row also gets a `chat` tag named by `chat_name` (the id when there is none), so its menu offers to mute the chat. The tags are the row's newest item's. The setup form has no pickers for these three: saving it keeps the recipe's own while the subscription reads the same tool.
 
 An items recipe can opt into resumable pagination. Cursor pagination sets both `cursor_arg` (the top-level tool argument that takes the cursor) and `next_cursor_path` (where the result's next cursor is); a missing, null or empty cursor is terminal. Page pagination sets `page_arg` (a positive integer argument, default 1) and can set `next_page_path` to the result's next page number, or to a boolean that is true when another page exists. Without `next_page_path`, a full requested page continues and a short page is terminal. The two strategies cannot be combined. Every leased run reads one page and commits its new items, dedup keys and bounded continuation in one transaction. A continuation keeps the original window and is due immediately, still subject to the connector's call gap, budget and backoff. `since_at` and destination catch-up advance only after the terminal page. Repeated cursors/pages, invalid values and the 100-page safety cap pause the subscription in `needs_recipe` instead of skipping ahead. Recipes without these mappings keep their legacy one-page behavior.
 

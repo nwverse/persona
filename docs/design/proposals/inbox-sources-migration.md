@@ -66,11 +66,11 @@ manager can create such a subscription. It can't be duplicated, and deleting it 
 
 ### 3b. Recipe fields for identity, reply and read state
 
-`ConnectorSubscriptionFields` gains optional `sender_id`, `chat`, `reply_to` and `seen`, each mapped from the read
-tool's JSON like the existing fields:
+`ConnectorSubscriptionFields` gains optional `sender_id`, `chat`, `chat_name`, `reply_to` and `seen`, each mapped from
+the read tool's JSON like the existing fields:
 
-- `sender_id` and `chat` become tags (`sender` by id, `chat`), so mutes and policies can name them. The display name stays
-  the label.
+- `sender_id` and `chat` become tags (`sender` by id, `chat` named by `chat_name`), so mutes and policies can name them.
+  The display name stays the label. Done in P1a (#6165).
 - `seen` becomes the item's `Read`. An item missing from a full page settles as the built-ins' `Settles` does, so read
   elsewhere means read here (inbound only, as today).
 - `reply_to` is the line saying where a reply goes and who sees it, as a built-in item's `ReplyTo` ("Comment on
@@ -135,8 +135,8 @@ Smallest gap first, so each step proves part of the design before the harder sou
 
 | Step | What | Needs |
 | --- | --- | --- |
-| P1 | Recipe fields `sender_id`, `chat`, `reply_to`, `seen`; settling; a failing pull shows as the source's read error at once | 3b |
-| P2 | Reply through the subscription's connector; Draft and the twin check `CanReply` | 3c |
+| P1 | Recipe fields: P1a `sender_id`, `chat`, `chat_name` (#6165); P1b `seen` and settling; P1c a failing pull shows as the source's read error at once | 3b |
+| P2 | The `reply_to` field; reply through the subscription's connector; Draft and the twin check `CanReply` | 3b, 3c |
 | P3 | The twin's source info and knowledge-base chat for subscription items | 3d |
 | P4 | `changed` starts runs; extension-owned push sources | 3e |
 | P5 | `migrates`, the switch, catch-up from the last item, rollback, `inbox_sources_migrated` | 3a, 3g |
