@@ -25,6 +25,7 @@ READING_FILES = {
     "Views/Chat/NotebookFileView.swift": "a notebook's Markdown cells",
     "Views/Inbox/ConnectorThread/GitHubThreadView.swift": "a thread comment's body",
     "Views/Inbox/Lark/LarkMessageContent.swift": "a Lark message's text",
+    "Views/Interactions/InteractionViews.swift": "a plan awaiting approval",
     "Views/Mail/MailViews.swift": "an email's body",
     "Views/Knowledge/KnowledgeView.swift": "a knowledge page's body",
     "Views/Todos/TodoDetailView.swift": "a to-do's notes, read and edited",
