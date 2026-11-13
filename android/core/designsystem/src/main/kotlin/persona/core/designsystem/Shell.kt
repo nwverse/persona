@@ -268,7 +268,10 @@ fun HomeNavigation(
             // past its two cells and left an empty box beside them.
             Box(Modifier.weight(1f)) {
                 JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
-                    items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { select(items[it].key) })
+                    items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { index ->
+                        val key = items[index].key
+                        if (key == selected && onSelectedMenu != null) onSelectedMenu() else select(key)
+                    })
             }
             trailing()
         }
