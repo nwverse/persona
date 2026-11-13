@@ -310,7 +310,7 @@ func (s *Service) askGroup(ctx context.Context, c assistantwire.InboxSource, t c
 			}
 			problem, why = checkErr, "模型的结果不合格："
 		case in.Left == 0:
-			return nil, fmt.Sprintf("模型查了 %d 次还要查", groupCalls)
+			return nil, fmt.Sprintf("模型查了 %d 次还要查", len(in.Calls))
 		}
 		if problem != nil {
 			if retried {
