@@ -109,6 +109,7 @@ func (f filters) matches(r *record) bool {
 		(f.State == "" || f.State == stateOf(v, f.Roots)) &&
 		(f.Machine == "" || f.Machine == v.Machine) &&
 		(f.Project == "" || f.Project == v.Project) &&
+		(f.Places == "" || inPlaces(f.Places, v.Machine, v.Project)) &&
 		(f.Group == "" || f.Group == v.Group) &&
 		(f.Source == "" || f.Source == v.Source) &&
 		(f.PaneSource == "" || f.PaneSource == v.PaneSource) &&

@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"net/url"
 	"strconv"
 	"strings"
@@ -14,7 +15,7 @@ import (
 // machine_id filtering. Presence matters: malformed new parameters must be
 // parsed and rejected rather than silently falling back to the legacy API.
 func Enabled(v url.Values) bool {
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id"} {
+	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id", "place", "catalog"} {
 		if _, exists := v[key]; exists {
 			return true
 		}
@@ -23,11 +24,11 @@ func Enabled(v url.Values) bool {
 }
 
 // Parse strictly validates recognized parameters. Unknown parameters remain
-// available to adapters. The counts selector is validated but is not an Options
-// field: adapters choose the counts endpoint, while Query ignores the selector.
+// available to adapters. The counts and catalog selectors are validated but are not
+// Options fields: adapters choose those answers, while Query ignores the selectors.
 func Parse(v url.Values) (Options, error) {
 	o := Options{Limit: defaultLimit}
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "machine_id", "project", "group", "source", "provider", "q", "counts", "with_counts", "pane_source", "roots", "parent_session_id"} {
+	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "machine_id", "project", "group", "source", "provider", "q", "counts", "with_counts", "pane_source", "roots", "parent_session_id", "catalog"} {
 		if values, exists := v[key]; exists && len(values) != 1 {
 			return Options{}, failure("invalid_query", key+" must have exactly one value")
 		}
@@ -46,7 +47,7 @@ func Parse(v url.Values) (Options, error) {
 		}
 		o.Summary = b
 	}
-	for _, key := range []string{"counts", "with_counts"} {
+	for _, key := range []string{"counts", "with_counts", "catalog"} {
 		if values, exists := v[key]; exists {
 			if _, err := boolean(values[0]); err != nil {
 				return Options{}, err
@@ -81,6 +82,20 @@ func Parse(v url.Values) (Options, error) {
 			return Options{}, failure("invalid_query", "pane_source must not be empty")
 		}
 		o.PaneSource = values[0]
+	}
+	if values, exists := v["place"]; exists {
+		// Repeatable, unlike the other keys: each value is one machine and project pair, spelled as the JSON array a
+		// row's composite identity is, so neither part needs a separator it could not contain.
+		if len(values) == 0 || len(values) > maxPlaces {
+			return Options{}, failure("invalid_query", "place takes between 1 and 64 values")
+		}
+		for _, value := range values {
+			var pair []string
+			if err := json.Unmarshal([]byte(value), &pair); err != nil || len(pair) != 2 {
+				return Options{}, failure("invalid_query", "place must be a JSON array of a machine id and a project")
+			}
+			o.Places = append(o.Places, Place{Machine: pair[0], Key: pair[1]})
+		}
 	}
 	return validate(o)
 }
@@ -121,6 +136,14 @@ func validate(o Options) (Options, error) {
 		// The rows folded under a session are never roots: together they would always select nothing.
 		return Options{}, failure("invalid_query", "roots cannot be combined with parent_session_id")
 	}
+	if len(o.Places) > maxPlaces {
+		return Options{}, failure("invalid_query", "place takes between 1 and 64 values")
+	}
+	for _, p := range o.Places {
+		if p.Machine == "" {
+			return Options{}, failure("invalid_query", "place must name a machine")
+		}
+	}
 	switch o.PaneSource {
 	case "", "terminal", "feishu", "desktop", "unknown":
 	default:
@@ -152,7 +175,7 @@ func normalizeQ(s string) string { return strings.ToLower(s) }
 
 func (o Options) filters() filters {
 	return filters{ID: o.ID, State: o.State, Machine: o.Machine, Project: o.Project, Group: o.Group, Source: o.Source, Provider: o.Provider, Q: o.Q, PaneSource: o.PaneSource, Manager: o.Manager,
-		Roots: o.Roots, Under: o.Under, NoPrivate: o.NoPrivate}
+		Roots: o.Roots, Under: o.Under, NoPrivate: o.NoPrivate, Places: placesKey(o.Places)}
 }
 
 func (o Options) binding() binding {

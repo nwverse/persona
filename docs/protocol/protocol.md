@@ -160,7 +160,7 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
   - Avatars: `look_uploads` (`POST /api/v1/looks/uploads` and `DELETE /api/v1/looks/uploads/{id}` in the REST table, #2404; the apps offer making an avatar from an image only when the hub lists it).
   - Extensions ([extensions.md](../extensions/extensions.md)): `extensions` (`GET /api/v1/extensions` and the relay under `/api/v1/extensions/{id}/`), `extension_manager` (an extension's detail, form, settings, secrets and switch under `/api/v1/extensions/{id}/-/`), `extension_ui_slots` ("UI slots", `extension_ui` events), `extension_auto_upgrade` ("Auto-upgrade", `extension_upgrade` events), `extension_market_spec` (`PUT /api/v1/extensions/-/markets/{id}` with `spec`: a market moves and keeps its id), `extension_operations` (install, upgrade, uninstall in steps with progress, see "Extension install, upgrade and uninstall progress" below), `extension_auth` (extension sign-in `/api/v1/extensions/{id}/-/auth…`, `extension_auth` events, the install step `tools`, "Sign-in (auth)"), `extension_ui_v3` ("UI version 3"), `extension_widgets`, `extension_shortcuts` and `extension_notify_actions` (widgets, Shortcuts and notification buttons, "System-level placements"), `extension_secret_references` (a secret may hold a provider's reference: `PUT …/{id}/-/secrets/{name}` with `{reference}`, `secrets[].reference`, `secret_users` and `handoff_rules` in the details, `DELETE …/{id}/-/handoff-rules/{rule}`, [secret-providers.md](../extensions/secret-providers.md)). `plugins`, `plugin_manager`, `plugin_ui_slots` and `plugin_auto_upgrade` are the same under the old names (`/api/v1/plugins/…`, `plugin_ui` and `plugin_upgrade` events), kept for the apps out there until at least 2027-05-05 ("Naming and compatibility").
 - Added by the hub:
-  - Always: `sessions_list` (see "Bounded Agents lists"), `sessions_lookup` (see "Exact runtime-session detail"), `sessions_pane_source` (see "Pane/host origins"), `sessions_manager` (see "One manager's sessions"), `sessions_page_counts` (see "Counts with the page"), `sessions_hierarchy` (see "Session hierarchy"), `machine_rename` (see "Renaming a computer").
+  - Always: `sessions_list` (see "Bounded Agents lists"), `sessions_lookup` (see "Exact runtime-session detail"), `sessions_pane_source` (see "Pane/host origins"), `sessions_manager` (see "One manager's sessions"), `sessions_page_counts` (see "Counts with the page"), `sessions_hierarchy` (see "Session hierarchy"), `sessions_catalog` (see "Projects and spaces"), `machine_rename` (see "Renaming a computer").
   - `meeting_attendance` only while the default manager (the one recording routes go to) is connected and names it in its `manager.hello` capabilities (an extension's report cannot add it): attending a recorded meeting (the `attendance` / `attending_session` upload fields, `…/live`, `…/ask` and the `meeting_attendance_default` setting, see "Recording sync"). The phone offers a role only when the hub lists it, since an older hub or manager accepts the fields and ignores them.
   - `meeting_conversation` only while the default manager names both `meeting_attendance` and `meeting_conversation` in its `manager.hello` capabilities, the same way: the meeting conversation's phase 1 (the upload's `room` and `private`, the room conversation, `…/ask` answered by it, `…/just-me`, `…/private`, `…/followup`, the origins `meeting` and `meeting_followup`, the `meeting_live` event and the fields phase 1 adds to `GET …/live` and `detail.meta`; see "Meeting conversation (#3862)").
   - `meeting_photos` only while the default manager names `meeting_photos` beside `meeting_conversation` (and so `meeting_attendance`) in its `manager.hello` capabilities, the same way: the meeting conversation's phase 3, its photos (`POST` / `GET …/photos`, `GET` / `DELETE …/photos/{n}`, forwarding them to the room, the room's `meeting_photo_note`, `photo` on minutes items, the `photos` part of `meeting_live` and of `GET …/live`'s `revs`; see "Meeting conversation (#3862)"). The phone sends photos only when the hub lists it.
@@ -1999,7 +1999,7 @@ A machine's session list has hundreds of sessions at about 1 KB each, and a push
 
 #### Opt-in parameters (both session collections)
 
-Any of `limit`, `cursor`, `since`, `summary`, `state`, `project`, `group`, or `counts` opts into the bounded API. `pane_source`, `roots` and `parent_session_id` also opt in, but are supported only by the runtime collection (see below). Without them, legacy requests and response shapes remain unchanged: runtime `machine_id` filtering still returns the complete list; personal-agent `source`/`provider` filtering still returns the complete list; personal-agent `q` alone still searches messages and returns `items`.
+Any of `limit`, `cursor`, `since`, `summary`, `state`, `project`, `group`, or `counts` opts into the bounded API. `pane_source`, `roots`, `parent_session_id`, `place` and `catalog` also opt in, but are supported only by the runtime collection (see below). Without them, legacy requests and response shapes remain unchanged: runtime `machine_id` filtering still returns the complete list; personal-agent `source`/`provider` filtering still returns the complete list; personal-agent `q` alone still searches messages and returns `items`.
 
 | Parameter | Contract |
 | --- | --- |
@@ -2014,6 +2014,8 @@ Any of `limit`, `cursor`, `since`, `summary`, `state`, `project`, `group`, or `c
 | `pane_source` | Runtime only: exactly `terminal`, `feishu`, `desktop`, or `unknown`. Requires the independently advertised `sessions_pane_source` capability. See pane/host origins below. |
 | `roots` | Runtime only: `1`/`true` leaves the child sessions folded under a listed parent out of the rows, `total` and every count, and filters and counts the others by their folded state; `0`/`false` is the same as no key. Requires the independently advertised `sessions_hierarchy` capability. See "Session hierarchy" below. |
 | `parent_session_id` | Runtime only: a session id, with `machine_id` (400 `invalid_query` without it, when empty, or with `roots=1`): only the sessions folded under that session, all depths. Requires `sessions_hierarchy`. See "Session hierarchy" below. |
+| `place` | Runtime only, repeatable (1 to 64 values): each value is a JSON array `["<machine_id>","<project>"]`, and the sessions at any of those directories are selected: one project's checkouts across computers. Requires the independently advertised `sessions_catalog` capability. See "Projects and spaces" below. |
+| `catalog` | Runtime only: `1`/`true` returns the filtered list's projects and spaces instead of rows; `0`/`false` selects a normal page. Requires `sessions_catalog`. See "Projects and spaces" below. |
 | `manager` | Runtime only: a manager's id; only the sessions on its computers. Requires the independently advertised `sessions_manager` capability, and does not opt into the bounded API by itself. See "One manager's sessions" below. |
 | `provider` | Runtime `agent` or personal-agent `provider`. Empty values on older runtime nodes stay empty; no agent name is guessed. |
 | `q` | Case-insensitive substring, at most 256 Unicode characters. Runtime title, cwd, repository, branch, space/slot/agent names and last preview; personal-agent title/provider/account id. With an opt-in parameter this is **row search**, never remote transcript/message search. |
@@ -2190,6 +2192,43 @@ GET /api/v1/sessions?summary=1&limit=50&machine_id=demo&parent_session_id=<sid>
 - `roots` takes the boolean values of `counts`; repeated or malformed values, an empty `parent_session_id`, one without `machine_id` and `roots=1` together with `parent_session_id` (the rows folded under a session are never roots) return **400 `invalid_query`**.
 
 Older hubs ignore both keys and answer with every row, so clients send them only when `sessions_hierarchy` is advertised.
+
+#### Projects and spaces (`sessions_catalog`, #994)
+
+The `project` filter and the `project` count map go by a directory's path, so one repository checked out on two computers is two projects, and a path means nothing without its computer. The `group` map has the same limit: space ids are machine-local and say nothing a person reads. When `hello.features` advertises **`sessions_catalog`**, the runtime collection answers both:
+
+```http
+GET /api/v1/sessions?catalog=1
+GET /api/v1/sessions?catalog=1&state=needs_you&q=release&roots=1
+GET /api/v1/sessions?summary=1&limit=50&place=%5B%22mac%22%2C%22%2FUsers%2Fme%2Fcode%2Fapp%22%5D&place=%5B%22pc%22%2C%22C%3A%5C%5Ccode%5C%5Capp%22%5D
+```
+
+```json
+{
+  "revision": "<opaque checkpoint>",
+  "total": 5,
+  "projects": [
+    {"id": "git:git.example.com/team/app", "name": "app", "origin": "git.example.com/team/app", "total": 3,
+     "places": [{"machine_id": "mac", "path": "/Users/me/code/app", "total": 2},
+                {"machine_id": "pc", "path": "C:\\code\\app", "total": 1}]},
+    {"id": "dir:notes", "name": "notes", "total": 2,
+     "places": [{"machine_id": "mac", "path": "/Users/me/notes", "total": 1},
+                {"machine_id": "pc", "path": "D:\\work\\Notes", "total": 1}]}
+  ],
+  "spaces": [{"machine_id": "mac", "id": "w1", "name": "Release", "total": 2}]
+}
+```
+
+- **Membership.** `catalog=1` counts the same filtered rows as `counts=1` with the same keys (`state`, `machine_id`, `project`, `group`, `source`, `provider`, `q`, `pane_source`, `roots`, `parent_session_id`, `manager`, `place`), at the current `revision`: `total` is their number, and every project and space `total` is over them. `limit` and `since` do not change it (`since` is validated); a `cursor` is ignored, the catalog being of the current list. An extension token's manager-limited view has its own computers only.
+- **A place** is one directory on one computer: `path` is the rows' project attribute there (`repo_root`, else `workspace_cwd`, else `cwd`), the value the `project` filter takes with that `machine_id`. Rows without one are in `total` but in no project.
+- **A project** is a repository wherever it is checked out. The hub asks each place's computer what the directory holds (the node's `git.status` with `identity_only`, the same answer the Git routes give) and remembers it. Directories whose computers name the same network remote are one project: `id` is `git:` and the remote lowercased, `origin` the remote as the computer spelled it (`host/path`, never credentials; a non-default SSH account as a digest), `name` its last segment. A directory with no repository, no remote or only a local-path remote, and one whose computer has not said (offline since the hub started, a node from before `identity_only`), goes by its folder's name: `id` is `dir:` and the name lowercased, so `Notes` and `notes` are one project. The folder is the path's last segment by its computer's own separator: a path that starts with a drive letter or a UNC share is a Windows computer's, read by backslashes and slashes; any other by slashes only. A project's name and origin are as its first place has them.
+- **`pending`** (omitted when false): some places' computers were still being asked when the answer was written (the hub waits about 1.5 s). Those places go by their folder's name in this answer; read again a moment later. The hub asks a computer about a directory once, uses the answer for 30 minutes, and tries again after a minute when the computer could not be reached; nothing a page, a count or a push is built from waits for it.
+- **A space** is one computer's: `id` is the rows' group attribute there (`space_id`, else `workspace_id`), the value the `group` filter takes with that `machine_id`; `name` is the rows' `space_name` for it, the id when they have none. Rows in no space are in `total` but in no space.
+- **Order.** `projects` by `total` descending, then name (ignoring case), then `id`; a project's `places` by `total` descending, then `machine_id`, then `path`; `spaces` by `total` descending, then name, then `machine_id`, then `id`. `projects` and `spaces` are `[]`, never null.
+- **`place`** selects the rows at any of the given places, the way to list or count a project that has several: pass each of its `places` as `["<machine_id>","<path>"]`. It combines with every other filter (a place and a `machine_id` that excludes it select nothing), applies to pages, `counts=1`, `with_counts=1`, `since` deltas and `catalog=1`, and is bound into cursors and cache keys as a set: repeat the same places with a cursor in any order; a cursor of other places returns 400. A value that is not a JSON array of exactly two strings, an empty machine id, or more than 64 values returns **400 `invalid_query`**.
+- `catalog` takes the boolean values of `counts`; repeated or malformed values return **400 `invalid_query`**.
+
+Older hubs ignore both keys: `catalog=1` then answers an ordinary page and `place` filters nothing. Clients send them only when `sessions_catalog` is advertised, and keep grouping by the `project` and `group` count maps otherwise. The personal-agent collection has neither.
 
 #### Incremental recovery
 
