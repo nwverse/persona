@@ -32,7 +32,7 @@ Domains are examples; replace with your configuration. HTTP addresses should be 
 | Field | Default and behavior |
 | --- | --- |
 | `listen` | HTTP default `:18660`, retained for LAN / VPN. `hub pair` also requires IPv4 loopback access |
-| `public_url` | QR `url`, also added to candidates; keep an address old clients can reach |
+| `public_url` | Primary pairing URL (see the [local app QR exception](../protocol/protocol.md#temporary-pairing)), also added to candidates; keep an address old clients can reach |
 | `public.tls_listen` | Empty string disables TLS; setting it adds separate HTTPS / WSS listening |
 | `public.cert_file` / `public.key_file` | Both empty means managed self-signed certificates; custom certificates require both file paths, preferably absolute |
 | `public.advertise` | Additional candidates; full HTTPS URLs recommended, also accepts domains, IPs, or hosts with ports. Missing scheme / port is filled from current listener. Advertising does not start listeners, open firewalls, or update DNS |
@@ -450,6 +450,7 @@ TUN proxy automatic routes may send public-connection responses into the proxy, 
 | `403 master_token_local_only` | Use temporary pairing or device tokens publicly |
 | `429 rate_limited` | Wait `Retry-After`, stop repeated reconnects with invalid tokens |
 | Public-key mismatch | Changed key, wrong hub, TLS-terminating proxy; re-pair through a trusted channel, never skip pinning |
+| Public-key mismatch only away from home | A LAN address the hub advertised (`public_url` or `advertise_lan`) is another device on that network. Android treats such a private address as unreachable and keeps trying the others; to stop handing it out, set `public_url` to a name and `public.advertise_lan` to `false` |
 | `hub pair` cannot connect locally | Hub running, HTTP supports IPv4 loopback, command configuration matches running instance |
 | TLS inaccessible after enabling `security.proxy_protocol` | `proxy protocol: refused …` logs: upstream not sending headers, or direct bypass ([PROXY protocol](#proxy-protocol)) |
 

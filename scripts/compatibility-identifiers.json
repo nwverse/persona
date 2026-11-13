@@ -862,11 +862,10 @@
       "path_tokens": [],
       "external_refs": []
     },
-    "server/internal/assistant/testdata/prompts/assistant_claude_md.persona_view.golden": {
-      "reason": "Generated assistant-instruction golden for exact legacy tool-name migration guidance.",
+    "server/internal/assistant/testdata/session_reads_apps_list.json": {
+      "reason": "Baseline regression fixture or generated carrier asserting an exact versioned contract.",
       "tokens": [
-        "jarvis_settings",
-        "mcp__jarvis__X"
+        "started_by_jarvis"
       ],
       "path_tokens": [],
       "external_refs": []

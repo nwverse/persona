@@ -84,6 +84,9 @@ type Hub struct {
 	sessionsMu   sync.Mutex
 	sessionsSent map[string][]sentSession
 	listCache    runtimeList // opt-in indexed transport rows; initialized by the first paginated reader
+	// origins: what repository each listed directory holds, as its computer said when a catalog asked
+	// (sessions_catalog.go); has its own lock.
+	origins placeOrigins
 
 	mu      sync.Mutex
 	clients map[*client]struct{}
@@ -306,6 +309,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	go h.fullKeepalive(ctx)
 	go h.live.run(ctx)
 	h.sayMovedSections()
+	h.sayRetiredKeys()
 	// The assistant, its own process on the bus (assistant_process.go); it carries the machines, so the hub's stop
 	// waits for it as it waited for the node connections.
 	h.nodeWorkers.Add(1)

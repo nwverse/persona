@@ -89,7 +89,7 @@ final class TodoStore {
     init(cachedTodos: [TodoItem]? = nil,
          cacheWriter: (@MainActor ([TodoItem]) -> Void)? = { StateCache.save(TodoStore.stateName, $0) },
          hubListChanged: @escaping @MainActor () -> Void = {
-        WatchSync.shared.push(summary: AppModel.shared.watchSummary()) // its questions name their tasks
+        AppModel.shared.summariesChanged() // its questions name their tasks
     }, managers: Managers = .one) {
         self.managers = managers
         let initial = cachedTodos ?? StateCache.load(Self.stateName, as: [TodoItem].self) ?? []
@@ -269,6 +269,40 @@ final class TodoStore {
         return res
     }
 
+    /// Moves a to-do to another due date (#2045: dragged on the calendar, or its "Change Due Date…"): drawn there at
+    /// once, before the hub answers; a failed save puts it back and says why. The task ends with whether it was saved.
+    @discardableResult
+    func reschedule(_ id: String, to due: APIClient.TodoPlanChange.Due, api: APIClient? = nil) -> Task<Bool, Never> {
+        guard let before = todo(id: id) else { return Task { false } }
+        let targetGeneration = generation
+        // Optimistic, as toggleDone: a read already in flight cannot replace it.
+        mutationRevision += 1
+        var updated = todos
+        if let idx = updated.firstIndex(where: { $0.id == id }) {
+            updated[idx] = TodoCalendar.moved(before, to: due)
+            apply(updated)
+        }
+        return Task {
+            do {
+                try await updatePlan(id: id, APIClient.TodoPlanChange(due: due), api: api)
+                return true
+            } catch {
+                // Back as it was: only this to-do, so what else changed meanwhile stays.
+                guard generation == targetGeneration else { return false }
+                mutationRevision += 1
+                var back = todos
+                if let idx = back.firstIndex(where: { $0.id == id }) {
+                    back[idx] = before
+                    apply(back)
+                }
+                // Felt as well as shown (offline has its own haptic, in `notDone`).
+                if !error.isOffline { Haptics.error() }
+                AppModel.shared.show(error)
+                return false
+            }
+        }
+    }
+
     /// `api` is the client to write through (tests pass a fake hub's); the app uses the current hub connection.
     /// Closes an open to-do or reopens a closed one. `done` says which when the row knows better than `doneAt`: a failed
     /// start waiting on the owner reads open and is closed for good (#3713, `TodoTriageLogic.checksAsOpen`).
@@ -295,6 +329,35 @@ final class TodoStore {
                 AppModel.shared.show(error)
             }
         }
+    }
+
+    /// Marks a to-do seen (Got It, or opening it: #5707, docs/assistant/todo-status-sop.md "Seen") or, with `seen` false,
+    /// takes the mark off (Undo). The list moves it at once (principle 7); the hub's mark takes the place of the local
+    /// one, and a failure puts back the mark it had and throws. `after`: the moment that put it in Just finished, so the
+    /// mark shown before the hub answers is not earlier than it on a clock behind the hub's. Only the mark is taken from
+    /// the answer: the list's own fields (its ask) are not in it.
+    func setSeen(id: String, _ seen: Bool, after: Date = .distantPast, api injected: APIClient? = nil) async throws {
+        guard let api = client(for: id, injected) else { throw APIError(status: 0, message: String(localized: "Not connected to a hub [Todo Store 04f822]")) }
+        let targetGeneration = generation
+        let before = byID[id]?.seenAt
+        markSeen(id, seen ? max(Date(), after) : nil)
+        do {
+            let res = try await api.setTodoSeen(id: id, seen: seen)
+            guard generation == targetGeneration else { return }
+            markSeen(id, res.seenAt)
+        } catch {
+            if generation == targetGeneration { markSeen(id, before) }
+            throw error
+        }
+    }
+
+    /// Sets to-do `id`'s seen mark in the list; a read already in flight cannot put the old one back.
+    private func markSeen(_ id: String, _ at: Date?) {
+        guard let idx = todos.firstIndex(where: { $0.id == id }) else { return }
+        mutationRevision += 1
+        var updated = todos
+        updated[idx].seenAt = at
+        apply(updated)
     }
 
     func delete(id: String, api injected: APIClient? = nil) async throws {

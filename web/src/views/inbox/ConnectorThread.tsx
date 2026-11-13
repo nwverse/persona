@@ -4,7 +4,7 @@
 // A thread that cannot be read (a CI run, a rate limit, a connector without threads) shows what the hub collected
 // about the item instead, with "Open in X". Read-only otherwise: no pages for browsing the source (CLAUDE.md).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, errorText } from "../../lib/api";
+import { api, ApiError, errorText } from "../../lib/api";
 import {
   chatHeadline, checkLabel, githubStateLabel, isChatThread, isGitHubThread, labelColor, loadThread, mediaLine, mediaURL, mergeNewest, mergeOlder,
   reachMessage, replyInThread, reviewLabel, startsGroup, type ThreadChat, type ThreadMedia, type ThreadMessage, type ThreadPage,
@@ -82,8 +82,9 @@ function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: str
     } catch (e) {
       if (!current()) return;
       // Said over the text only when it is worth saying (a rate limit, the connector unavailable); a thread that
-      // simply has no page of its own (a CI run) falls back quietly. "" is failed, null still loading.
-      setFailure(conversationFailure(e));
+      // simply has no page of its own (a CI run; a subscription's item, which an older manager answers with 404
+      // `no connector`, #5537) falls back quietly; a source without conversations is noted, the rest said.
+      setFailure(e instanceof ApiError && e.status === 404 ? null : conversationFailure(e));
       setLoaded(true);
     }
   }, [id, thread, manager]);

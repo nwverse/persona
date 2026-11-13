@@ -7,6 +7,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
@@ -16,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
@@ -76,6 +78,8 @@ fun ChatComposer(
     onMention: (ChatLinkContext) -> Unit = {},
     /** A task picked in the @ menu (Persona's conversations, [ComposerMentions.tasks]): the next message goes to it. */
     onMentionTask: (String) -> Unit = {},
+    /** Whether the @ menu is open over the field (iOS `MentionMenuOpen`): New chat's page makes room for it. */
+    onMentionOpen: (Boolean) -> Unit = {},
     /** /model in the "/" list, which opens the model choices instead of typing (Claude in a terminal pane). */
     onModel: (() -> Unit)? = null,
     /** /loop in the "/" list, with a line under the box saying what it will do (Claude Code only, web `hasLoop`). */
@@ -86,6 +90,11 @@ fun ChatComposer(
      */
     blockedLabel: String? = null,
     onBlocked: () -> Unit = {},
+    /**
+     * The model pill (#5055, Glass): at the right of the toolbar row, before the mic and Send, while the toolbar shows; it
+     * gets how much room the composer has ([ModelPillWidth], the web's container rules). Null: none.
+     */
+    modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val adaptiveProbePage = "chat:${session.path}"
@@ -289,8 +298,17 @@ fun ChatComposer(
     // @: the word being typed just before the caret, while nothing is selected and no "/" list is open.
     val selection = state.value.selection
     val mention = if (enabled && mentions != null && suggestions.isEmpty() && selection.collapsed) mentionAt(state.value.text, selection.start) else null
-    val mentionRows = remember(mentions, mention?.query) { if (mentions != null && mention != null) mentionRows(mentions, mention.query) else emptyList() }
+    val mentionOpen = mention != null
+    LaunchedEffect(mentionOpen) { onMentionOpen(mentionOpen) }
+    DisposableEffect(Unit) { onDispose { onMentionOpen(false) } }
+    // A typed folder (New chat's page): read from the computer while the list is open.
+    val browsing = rememberMentionListing(mentions, mention?.query)
+    val mentionRows = remember(mentions, mention?.query, browsing.listing) {
+        if (mentions != null && mention != null) mentionRows(mentions, mention.query, browsing.listing) else emptyList()
+    }
     val usedFile = stringResource(R.string.chat_mention_used_file)
+    val folderWord = stringResource(R.string.chat_mention_folder)
+    val sessionFolderWord = stringResource(R.string.chat_mention_session_folder)
     // With tasks in the list each group says what a pick does: iOS's "Message a Task", then the files and sessions.
     val taskSection = stringResource(R.string.chat_tasks_mention_title)
     val otherSection = stringResource(R.string.chat_mention).takeIf { mentionRows.any { it is MentionRow.Task } }
@@ -306,8 +324,15 @@ fun ChatComposer(
             is MentionRow.Quote -> ComposerSuggestion(row.session.displayTitle,
                 stringResource(R.string.chat_mention_session_detail, sessionMentionDetail(row.session)), key = row.key, flexible = true,
                 section = otherSection)
+            // An entry of a folder: its name, a folder's with a slash, and the folder typed so far (iOS `MentionRows`); one of
+            // the session's own folder says so ("Folder" for a folder, "Session folder" for a file), among the other groups.
+            is MentionRow.Entry -> ComposerSuggestion(if (row.folder) "${row.name}/" else row.name,
+                if (!row.top) row.typed else if (row.folder) folderWord else sessionFolderWord, key = row.key, flexible = true,
+                section = otherSection.takeIf { row.top })
         }
     }
+    // `@` at the caret, whose list opens: the @ button's, and the + menu's Mention a file or session (iOS `typeMention`).
+    fun startMention() { state.beginEdit(); state.value = typeMention(state.value); state.focusRequest++ }
     fun pickMention(picked: ComposerSuggestion) {
         val token = mention ?: return
         val row = mentionRows.firstOrNull { it.key == picked.key } ?: return
@@ -316,6 +341,8 @@ fun ChatComposer(
             // The @word goes; the next message goes to the task (iOS `TaskMentionList`), as its Message sets it.
             is MentionRow.Task -> { onMentionTask(row.task.id); state.value = replaceMention(state.value, token, "") }
             is MentionRow.File -> state.value = replaceMention(state.value, token, row.insert)
+            // A folder stays typed with its slash, and the list browses it.
+            is MentionRow.Entry -> state.value = replaceMention(state.value, token, row.insert)
             // A session goes with the message as a quote, not as text (web pickMention).
             is MentionRow.Quote -> { onMention(sessionQuote(row.session, resources)); state.value = replaceMention(state.value, token, "") }
         }
@@ -333,9 +360,9 @@ fun ChatComposer(
         }
     }
 
-    // The field grows with the draft up to growLines (from the height above the keyboard), then scrolls inside and
-    // shows Expand at its top right; the text keeps clear of the button only while it shows.
-    val growLines = rememberComposerGrowLines()
+    // The field grows with the draft through six lines, then scrolls inside and offers Expand.
+    // The text keeps clear of the button only while it shows.
+    val growLines = ComposerGrowLines
     var lineCount by remember { mutableIntStateOf(1) }
     val offersExpand = enabled && composerOffersExpand(lineCount, growLines)
     LaunchedEffect(enabled) { if (!enabled) expandedEditor = false }
@@ -347,20 +374,23 @@ fun ChatComposer(
     val expanded = state.focused || hasContent
     val composerPlaceholder = if (homeAssistant) stringResource(R.string.chat_composer_ask_persona, LocalPersonaName.current) else placeholder
 
+    // The composer's own width, for how much of the model pill fits (the web measures its composer card the same way).
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    var composerDp by remember { mutableFloatStateOf(0f) }
     ComposerFrame(
+        modifier = if (modelPill != null) Modifier.onSizeChanged { composerDp = with(density) { it.width.toDp().value } } else Modifier,
         // Blank space around the field (its padding, beside the buttons) types too: one tap, not a hunt for the line.
         onBlankTap = { if (enabled) { focusRequester.requestFocus(); keyboard?.show() } },
         expanded = expanded,
         leading = {
             JIconButton(PhIcons.Plus, stringResource(R.string.chat_composer_add), { menu = true }, enabled = !sending && enabled)
             if (expanded) {
-                if (mentions != null) JIconButton(PhIcons.At, stringResource(R.string.chat_mention), {
-                    state.beginEdit(); state.value = typeMention(state.value); state.focusRequest++
-                }, enabled = enabled)
+                if (mentions != null) JIconButton(PhIcons.At, stringResource(R.string.chat_mention), ::startMention, enabled = enabled)
                 leading?.invoke(this)
             }
         },
         trailing = {
+            if (expanded && enabled) modelPill?.invoke(ModelPillWidth.of(composerDp))
             // The mic stays (iOS ShellComposerBar): more can be dictated after what is typed. Send beside it once there is
             // something to send, else a stop while the agent works; nothing else while the box is empty.
             dictate?.let { JIconButton(PhIcons.Microphone, stringResource(R.string.chat_composer_dictate), it, enabled = !sending) }
@@ -398,10 +428,18 @@ fun ChatComposer(
             ComposerSuggestions(suggestions.map { ComposerSuggestion(it.word, it.detail, destructive = it.clear) },
                 onPick = { picked -> suggestions.firstOrNull { it.word == picked.word }?.let(::pick) },
                 modifier = Modifier.padding(vertical = Tokens.Space.xs))
-            // The @ menu: Persona's open tasks, files this chat used, then other sessions; a word that matches nothing says so.
-            ComposerSuggestions(mentionItems, onPick = ::pickMention, modifier = Modifier.padding(vertical = Tokens.Space.xs))
-            if (mention != null && mentionItems.isEmpty()) Text(stringResource(R.string.chat_mention_no_match),
-                Modifier.padding(vertical = Tokens.Space.xs), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+            // The @ menu: Persona's open tasks, files this chat used, the session folder's entries, then other sessions; a word
+            // that matches nothing says so. On Glass it grows in and out in iOS's state motion, rising from the field, as the
+            // lines over New chat's composer step aside for it (`NeedsStepAside`).
+            Column(Modifier.fillMaxWidth().then(if (PersonaTheme.style == AppStyle.Glass && !PersonaTheme.reduceMotion)
+                Modifier.animateContentSize(PersonaTheme.motion.enter(), Alignment.BottomStart) else Modifier)) {
+                ComposerSuggestions(mentionItems, onPick = ::pickMention, modifier = Modifier.padding(vertical = Tokens.Space.xs))
+                if (mention != null && mentionItems.isEmpty()) Text(stringResource(when {
+                        browsing.reading -> R.string.chat_mention_reading_folder
+                        browsing.browse != null -> R.string.chat_mention_no_match_folder
+                        else -> R.string.chat_mention_no_match
+                    }), Modifier.padding(vertical = Tokens.Space.xs), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+            }
             hint?.let { Text(it.text, style = PersonaTheme.type.caption, color = if (it.missing) PersonaTheme.palette.cautionText else PersonaTheme.palette.ink2) }
         },
     ) {
@@ -438,6 +476,8 @@ fun ChatComposer(
         })
         add(JAction(stringResource(R.string.chat_composer_take_photo), enabled = service != null && roomForMedia) { takePhoto() })
         add(JAction(stringResource(R.string.chat_composer_files), enabled = service != null) { launchPicker { files.launch(arrayOf("*/*")) } })
+        // iOS's Mention a File or Session, after the attachments (`AttachMoreSection.common`): where the composer has an @ list.
+        if (mentions != null) add(JAction(stringResource(R.string.chat_mention)) { menu = false; startMention() })
         // Quick messages go out at once; /clear asks first, and only while nothing is running or being cleared.
         extensionPrompts.forEach { prompt -> add(JAction(prompt.title) { menu = false; state.fillQuickPrompt(prompt) }) }
         SlashCommand.all(resources).forEach { command -> add(JAction(command.title) { menu = false; onCommand(command.text) }) }

@@ -2,6 +2,7 @@ import { formatDate, t } from "../i18n";
 import { currentHeaders, noteItemManager } from "./manager-choice";
 import { acceptanceStands, reviewState, type Supervision } from "./supervision";
 import type { LineageStep, TaskBrief } from "./brief";
+import type { RuleSuggestion } from "./rule-suggestion";
 import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
 import { parseAPIError, retryable } from "./api-errors";
@@ -66,6 +67,9 @@ export interface Todo {
   done_reason?: string;
   /** When the user last reopened it after it was done. */
   reopened_at?: string | null;
+  /** When the owner last looked at it in Just finished: Got it, or opening it (#5707, lib/todo-seen.ts); a to-do seen
+   *  since it got there is filed under Done (lib/todo-triage.ts). Unset when never seen, and from hubs before it. */
+  seen_at?: string | null;
   /** Opened from the main conversation while "notify tasks the main chat dispatched only in the main chat" was on (#1731). */
   quiet?: boolean;
   /** The task's agent did not start, and why: the hub ended it there (done_at is set too, #1077). */
@@ -140,6 +144,12 @@ export interface TodoAsk {
   /** The fixed answer already given while the decision still waits (`explain_first`: Persona is to ask again with the
    *  background; the options stay answerable meanwhile). */
   response?: string;
+  /** `true` while a decision that can wait is held for the next briefing: nothing was pushed for it (#4930, #5803;
+   *  views/assistant/BriefingMark). Absent otherwise, and from an older hub. */
+  for_briefing?: boolean;
+  /** The rule the hub suggests once the owner gave this go-ahead for this directory three times (#4929,
+   *  lib/rule-suggestion.ts). Absent otherwise. */
+  suggestion?: RuleSuggestion;
 }
 
 /** One option of a decision: its label, which is the answer, and what choosing it leads to. */

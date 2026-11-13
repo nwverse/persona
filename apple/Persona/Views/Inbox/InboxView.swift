@@ -156,7 +156,11 @@ struct InboxPage: View {
                             // Every source subscription, with the Inbox's other settings, once the hub shows them (#2041).
                             if model.hubFeatures.contains(SubscriptionsUI.feature) {
                                 Button { showingSubscriptions = true } label: {
-                                    Label("Subscriptions [Source Subscriptions]", systemImage: Theme.Icon.subscriptions)
+                                    if model.hubFeatures.contains(SubscriptionsUI.sourcesFeature) { // every source of the Inbox (#5278)
+                                        Label("Inbox Sources", systemImage: Theme.Icon.subscriptions)
+                                    } else {
+                                        Label("Subscriptions [Source Subscriptions]", systemImage: Theme.Icon.subscriptions)
+                                    }
                                 }
                                 .accessibilityIdentifier("inbox.subscriptions")
                             }
@@ -1071,7 +1075,8 @@ struct InboxRow: View {
             } else if item.isLark {
                 LarkAvatarImage(name: item.title, url: item.avatar, isGroup: item.lark?.isGroup ?? false, size: Theme.Size.avatar)
             } else {
-                Monogram(name: item.sender ?? "", fill: Theme.monogramFill)
+                let disc = Theme.monogram(item.sender ?? "")
+                Monogram(name: item.sender ?? "", fill: disc.fill, ink: disc.ink)
             }
             }
             .opacity(item.isDone ? 0.6 : 1)
