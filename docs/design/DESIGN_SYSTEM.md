@@ -837,7 +837,10 @@ Workspace rows (#2599) are the existing resource row with the folder mark, title
 case-insensitively; title prefixes come first, then available before unavailable, stable in the hub's order. The first row for
 one computer and folder wins (trailing `/` ignored), and folderless rows are omitted. Unavailable rows stay pickable. Persona's
 conversations and the ordinary new conversation read `GET /api/v1/workspaces` once per opening; Agents, Health, Mac and
-visionOS don't offer them, and an old hub or unavailable manager leaves the other rows unchanged. A pick takes the @word out
+visionOS don't offer them. The active hub link holds only its last good in-memory snapshot: later openings show it before
+the request answers, a different answer replaces it, and an old hub or unavailable manager keeps it. A hub that has never
+answered has none, so only that first opening can shift when the response arrives; there is no prefetch. Removing the hub
+group drops the link and its snapshot. A pick takes the @word out
 and adds a removable Workspace context using the existing `QuoteBar`; send writes `<persona-context kind="workspace"
 machine="…" cwd="…" branch="…">` before the message (`branch` when known), which the manager expands as for the web. No new
 component, token, style or setting is introduced. The separate legacy BeautifulUI `PromptComposer` @ menu is unchanged.

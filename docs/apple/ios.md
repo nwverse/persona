@@ -335,7 +335,9 @@ Chat page:
   A file types `@path ` (relative to the session's folder) with the caret after it; a folder types `@dir/` and keeps browsing; a workspace or session takes the token out and adds its
   context over the box. A workspace goes as `<persona-context kind="workspace" machine="…" cwd="…" branch="…">` (`branch` when known), a session as a `<persona-context>` quote like any quote.
   On iPhone and iPad, Persona's conversations and the ordinary new conversation read `GET /api/v1/workspaces` once each time this list opens; Agent chats, Health, Mac and visionOS don't offer them.
-  A 404, 503 or another failed read leaves the other rows unchanged. Workspaces match by title, folder, computer or branch, one per computer and folder (trailing `/` ignored, folderless rows omitted),
+  Each `HubLink` keeps its last good workspace snapshot in memory: a later opening projects it immediately, a different answer replaces it, and a 404, 503 or another failed read keeps it.
+  Only the first opening after launch has no snapshot and can add rows when the answer arrives; there is no prefetch. Removing a hub group drops its link and cached snapshot. Workspaces match by title, folder, computer or branch,
+  one per computer and folder (trailing `/` ignored, folderless rows omitted),
   title prefixes first and available before unavailable, stable in the hub's order. Their row's second line is computer · shortened folder (· branch). A new conversation has no files or folder: it offers
   workspaces and sessions, and what a typed absolute or `~/` path lists on the assistant's machine, as the web's does. The + menu's Mention a File or Session types `@` at the caret (the web's @
   button beside +; the iOS row has no room for another button). Logic in `Views/Chat/MentionMenu.swift`

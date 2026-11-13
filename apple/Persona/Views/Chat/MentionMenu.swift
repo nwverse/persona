@@ -311,23 +311,37 @@ final class MentionFolders {
     }
 }
 
-/// The hub's workspaces for one opening of the @ list. The catalog and current inputs are unobserved; only the projected
-/// rows publish. Query changes and a response that arrives later always meet at the latest projection.
+/// One active `HubLink` owns one of these: its last successful workspace snapshot, in memory only. A replacement does
+/// not accumulate history, and removing the group drops the link and this snapshot with it (performance P2 / P11).
+@MainActor
+final class MentionWorkspaceCache {
+    private(set) var workspaces: [HostWorkspace] = []
+    func replace(_ workspaces: [HostWorkspace]) { self.workspaces = workspaces }
+}
+
+/// The hub's workspaces for one opening of the @ list. The last good snapshot projects synchronously on a later opening;
+/// the catalog and current inputs are unobserved and only changed rows publish. Query changes and a late response always
+/// meet at the latest projection.
 @MainActor @Observable
 final class MentionWorkspaces {
     @ObservationIgnored private var all: [HostWorkspace] = []
     @ObservationIgnored private var query = ""
     @ObservationIgnored private var machines: [Machine] = []
+    @ObservationIgnored private var cache: MentionWorkspaceCache?
     @ObservationIgnored private var started = false
     private(set) var rows: [MentionRow] = []
 
-    func update(query: String, machines: [Machine]) {
+    func update(query: String, machines: [Machine], cache: MentionWorkspaceCache?) {
+        if !started, self.cache !== cache {
+            self.cache = cache
+            all = cache?.workspaces ?? []
+        }
         self.query = query
         self.machines = machines
         project()
     }
 
-    /// Reads once while this menu is open. An old hub or an unavailable manager simply contributes no workspace rows.
+    /// Reads once while this menu is open. A response replaces the hub's last good snapshot; a failed read keeps it.
     func load(api: APIClient?, group: String) async {
         guard !started else { return }
         started = true
@@ -336,12 +350,11 @@ final class MentionWorkspaces {
             var fetched = try await api.workspaces()
             guard !Task.isCancelled else { return }
             for i in fetched.indices { fetched[i].group = group }
+            cache?.replace(fetched)
             all = fetched
             project()
         } catch {
-            guard !Task.isCancelled else { return }
-            all = []
-            project()
+            // An old hub or an unavailable manager leaves the cached rows, if this hub has answered before, in place.
         }
     }
 
@@ -358,9 +371,9 @@ private struct MentionProjection: Equatable {
     var empty: MentionMenu.Empty = .noMatch
 }
 
-/// The @ list for the token being typed: reads the folder and workspaces it needs once per opening, and on a pick types
-/// the file or folder in the token's place, or adds the workspace/session context and takes the token out. All row
-/// projection lives here, outside `body` (performance P4).
+/// The @ list for the token being typed: a later opening projects its hub's last good workspaces at once, then reads
+/// the folder and workspaces once per opening. A file/folder pick types in the token's place; a workspace/session pick
+/// adds context and takes the token out. All row projection lives here, outside `body` (performance P4).
 struct ComposerMentionMenu: View {
     @Environment(AppModel.self) private var model
     var token: MentionToken
@@ -384,7 +397,10 @@ struct ComposerMentionMenu: View {
                 rebuild()
             }
             .onChange(of: token.query, initial: true) { _, query in
-                if source.workspaces { workspaces.update(query: query, machines: model.namedMachines) }
+                if source.workspaces {
+                    workspaces.update(query: query, machines: model.namedMachines,
+                                      cache: model.link(source.machine.group)?.workspaceMentions)
+                }
                 rebuild()
             }
             .onChange(of: source.cwd ?? "") { _, _ in rebuild() }
@@ -392,7 +408,8 @@ struct ComposerMentionMenu: View {
             .onChange(of: workspaces.rows) { _, _ in rebuild() }
             // Agent menus do not observe machine-name changes or project an empty workspace catalog (performance P5).
             .onChange(of: source.workspaces ? model.machineChoices : []) { _, _ in
-                workspaces.update(query: token.query, machines: model.namedMachines)
+                workspaces.update(query: token.query, machines: model.namedMachines,
+                                  cache: model.link(source.machine.group)?.workspaceMentions)
                 rebuild()
             }
             .task(id: projection.directory) {

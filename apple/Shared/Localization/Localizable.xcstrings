@@ -163741,7 +163741,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "文件夹：%1$@"
+            "value" : "目录：%1$@"
           }
         }
       },

@@ -289,21 +289,22 @@ struct MentionMenuTests {
         #expect(try JSONDecoder().decode(ContextRef.self, from: Data(legacy.utf8)).extra == nil)
     }
 
-    @MainActor @Test func workspacesLoadOncePerOpeningAndFailuresLeaveNoRows() async {
+    @MainActor @Test func workspacesLoadOncePerOpeningAndFailuresWithoutCacheLeaveNoRows() async {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/workspaces", json: #"{"workspaces":[{"machine_id":"m","source":"herdr","source_id":"1","title":"One","cwd":"/one"}]}"#)
+        let cache = MentionWorkspaceCache()
         let store = MentionWorkspaces()
-        store.update(query: "", machines: [])
+        store.update(query: "", machines: [], cache: cache)
         await store.load(api: hub.client, group: "group-a")
         await store.load(api: hub.client, group: "group-a")
         #expect(hub.sent("GET", "/api/v1/workspaces").count == 1)
         #expect(store.rows.count == 1)
         #expect(store.rows.first.flatMap(workspaceValue)?.group == "group-a")
-        store.update(query: "not-a-workspace", machines: [])
+        store.update(query: "not-a-workspace", machines: [], cache: cache)
         #expect(store.rows.isEmpty)
         #expect(hub.sent("GET", "/api/v1/workspaces").count == 1)
         let reopened = MentionWorkspaces()
-        reopened.update(query: "", machines: [])
+        reopened.update(query: "", machines: [], cache: cache)
         await reopened.load(api: hub.client, group: "group-a")
         #expect(hub.sent("GET", "/api/v1/workspaces").count == 2)
 
@@ -322,6 +323,53 @@ struct MentionMenuTests {
         #expect(noAPI.rows.isEmpty)
     }
 
+    @MainActor @Test func laterOpeningsKeepTheHubsLastGoodWorkspacesUntilADifferentAnswer() async {
+        let hub = FakeHub(), cache = MentionWorkspaceCache()
+        hub.on("GET", "/api/v1/workspaces", json: #"{"workspaces":[{"machine_id":"m","source":"herdr","source_id":"1","title":"One","cwd":"/one"}]}"#)
+        let first = MentionWorkspaces()
+        first.update(query: "", machines: [], cache: cache)
+        #expect(first.rows.isEmpty, "a hub that never answered has no cached rows")
+        await first.load(api: hub.client, group: "a")
+        #expect(first.rows.map(\.name) == ["One"])
+
+        hub.on("GET", "/api/v1/workspaces", json: #"{"workspaces":[{"machine_id":"m","source":"herdr","source_id":"1","title":"Two","cwd":"/two"}]}"#)
+        let gate = MentionWorkspaceResponseGate()
+        var delayed = hub.client
+        let answer = delayed.transport!
+        delayed.transport = { request in
+            let data = try await answer(request)
+            await gate.hold()
+            return data
+        }
+        let second = MentionWorkspaces()
+        second.update(query: "", machines: [], cache: cache)
+        #expect(second.rows.map(\.name) == ["One"], "the second opening projects the cache before its request")
+        let loading = Task { await second.load(api: delayed, group: "a") }
+        await gate.started()
+        #expect(second.rows.map(\.name) == ["One"], "a pending answer cannot move the session rows")
+        #expect(hub.sent("GET", "/api/v1/workspaces").count == 2)
+        await gate.release()
+        await loading.value
+        #expect(second.rows.map(\.name) == ["Two"], "a different answer replaces the cached rows")
+
+        hub.on("GET", "/api/v1/workspaces") { _ in throw APIError(status: 503, message: "manager away") }
+        let failed = MentionWorkspaces()
+        failed.update(query: "", machines: [], cache: cache)
+        #expect(failed.rows.map(\.name) == ["Two"])
+        await failed.load(api: hub.client, group: "a")
+        #expect(failed.rows.map(\.name) == ["Two"], "a failed read keeps the last good list")
+
+        let otherHub = FakeHub(url: "https://other.invalid"), otherCache = MentionWorkspaceCache()
+        otherHub.on("GET", "/api/v1/workspaces", json: #"{"workspaces":[{"machine_id":"m","source":"herdr","source_id":"2","title":"Other","cwd":"/other"}]}"#)
+        let other = MentionWorkspaces()
+        other.update(query: "", machines: [], cache: otherCache)
+        #expect(other.rows.isEmpty, "two hubs never see each other's cached rows")
+        await other.load(api: otherHub.client, group: "b")
+        #expect(other.rows.map(\.name) == ["Other"])
+        #expect(other.rows.first.flatMap(workspaceValue)?.group == "b")
+        #expect(failed.rows.map(\.name) == ["Two"])
+    }
+
     @Test func aPickedSessionIsQuoted() {
         let s = session("s1", title: "Blog", cwd: "/Users/me/code/blog", updated: 5, last: "Done.")
         let ref = PromptItems.quote(s)
@@ -332,5 +380,31 @@ struct MentionMenuTests {
         // The prompt bar's pick quotes the same.
         let source = PromptItems.sessions([s], except: nil)[0]
         #expect(PromptItems.quote(source, in: [s])?.text == ref.text)
+    }
+}
+
+/// Holds one workspace response after FakeHub has decoded it, proving what a later opening shows before the answer.
+private actor MentionWorkspaceResponseGate {
+    private var pending: CheckedContinuation<Void, Never>?
+    private var arrival: CheckedContinuation<Void, Never>?
+    private var hasStarted = false
+
+    func hold() async {
+        hasStarted = true
+        await withCheckedContinuation { continuation in
+            pending = continuation
+            arrival?.resume()
+            arrival = nil
+        }
+    }
+
+    func started() async {
+        if hasStarted { return }
+        await withCheckedContinuation { arrival = $0 }
+    }
+
+    func release() {
+        pending?.resume()
+        pending = nil
     }
 }
