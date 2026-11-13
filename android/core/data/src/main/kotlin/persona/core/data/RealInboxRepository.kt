@@ -586,13 +586,8 @@ class RealInboxRepository(
                     val transport = requireTransport()
                     val old = recordOf(request.itemId)
                     val hubItemId = old?.hubItemId ?: request.itemId
-                    val result = asItem(old) {
+                    asItem(old) {
                         transport.recordAgentHandOff(hubItemId, key, request.targetTitle.orEmpty(), request.operationId)
-                    }
-                    if (owns(transport)) {
-                        result.obj("item")?.takeIf { it.optional("id") == hubItemId }?.let { data ->
-                            refreshLock.withLock { if (owns(transport)) replaceRecord(record(data, transport, old)) }
-                        }
                     }
                 }
             }

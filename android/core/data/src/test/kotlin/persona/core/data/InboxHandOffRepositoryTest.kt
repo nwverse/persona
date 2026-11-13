@@ -157,6 +157,7 @@ class InboxHandOffRepositoryTest {
         val directory = Files.createTempDirectory("inbox-agent-handoff-record").toFile()
         val recordingStarted = CompletableDeferred<Unit>()
         val finishRecording = CompletableDeferred<Unit>()
+        val recordingFinished = CompletableDeferred<Unit>()
         try {
             AssistantManagerChoice.choose("hub", null, "assistant")
             val transport = ItemsTransport(buildJsonArray {
@@ -169,10 +170,12 @@ class InboxHandOffRepositoryTest {
                 assertEquals(1, agents.sent.size) // Recording starts only after the outbox accepts the message.
                 calls += listOf(item, session, title, client, currentCoroutineContext()[RequestManager]?.id)
                 recordingStarted.complete(Unit)
-                finishRecording.await()
-                buildJsonObject {
-                    put("item", buildJsonObject { put("id", "item"); put("kind", "mail"); put("title", "Recorded") })
-                }
+                try {
+                    finishRecording.await()
+                    buildJsonObject {
+                        put("item", buildJsonObject { put("id", "item"); put("kind", "mail"); put("title", "Recorded") })
+                    }
+                } finally { recordingFinished.complete(Unit) }
             }
             val repository = repository(transport, directory, backgroundScope, main = main, agents = agents)
             repository.snapshot.first { it.contentSource != null }
@@ -189,8 +192,9 @@ class InboxHandOffRepositoryTest {
             assertEquals(listOf<List<Any?>>(listOf("item", key, "Example agent", "op-agent", "m-2")), calls)
             assertEquals("Example", repository.snapshot.value.records.single().item.title)
             finishRecording.complete(Unit)
-            repository.snapshot.first { it.records.single().item.title == "Recorded" }
+            recordingFinished.await()
             assertTrue(main.sent.isEmpty())
+            assertEquals("Example", repository.snapshot.value.records.single().item.title) // The next refresh, not this response, updates the row.
             assertEquals("m-2", repository.snapshot.value.records.single().manager)
         } finally {
             finishRecording.complete(Unit)
