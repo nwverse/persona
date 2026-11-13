@@ -230,15 +230,16 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * browser started share one on-demand import of the rule, lib/star-prompt-load.ts, which a failed load only skips, and
  * the sidebar's milestone line is a lazy component; the rule, the pill, the line and their strings stay off the first
  * screen). And 128 B for recent main changes (#6346: ja 474,617 B on main at 2010e8229f, 63 B over the old budget,
- * with 65 B of room). And 1,402 B for the paged Agents list by group (#6348: ja 476,123 B against 474,721 B on main at
- * f9f651b710: the Browse by kept in this browser, the groups read from the hub's catalog or the count maps
+ * with 65 B of room). And 1,510 B for the paged Agents list by group (#6348: ja 476,227 B against 474,717 B on main at
+ * a6c73fd7eb: the Browse by kept in this browser, the groups read from the hub's catalog or the count maps
  * (lib/session-groups.ts, views/agents/use-session-groups.ts) while the sections' code loads, the pill's menu from them
  * with a project's remote and directories, the place and space filters and a list that reads rows only
  * (lib/session-list.ts), and a row's computer under a project on several; the sections themselves,
- * views/agents/GroupedSessions.tsx, load when a Browse by is chosen), plus 40 B of room. main was already 39 B over its
- * budget at f9f651b710 (ja 474,721 B against 474,682 B); that overage is kept here, not new room.
+ * views/agents/GroupedSessions.tsx, load when a Browse by is chosen, which took 407 B back off), plus 64 B of room. main
+ * was already 35 B over its budget at a6c73fd7eb (ja 474,717 B against 474,682 B); that overage is kept here, not new
+ * room.
  */
-export const FIRST_SCREEN_BUDGET = 476_163;
+export const FIRST_SCREEN_BUDGET = 476_291;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
