@@ -225,6 +225,33 @@ class AssistantDrawerShotsTest {
         rule.onAllNodesWithText("工作中").assertCountEquals(1)
     }
 
+    // #6230: one spinning activity mark. A lead whose own conversation is idle while the Agents under it work spins in
+    // every style; a lead with nothing running keeps its quiet row.
+    @Test fun anIdleLeadWithAgentsWorkingSpins() {
+        var style by mutableStateOf(AppStyle.Glass)
+        val idleLead = Session(machineId = "hub", sessionId = "l9", title = "1110 | 探索 | 基建", status = "idle",
+            updatedAt = minutesAgo(8), lastText = "等待下一轮。")
+        val groups = ConversationGroups(main, listOf(idleLead), recent,
+            names = mapOf("l9" to "基建"),
+            counts = mapOf("l9" to LeaderCounts(working = 2, needsYou = 0)))
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = style) {
+                Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onSettings = {})
+                }
+            }
+        }
+        rule.onNodeWithText("在做 2").assertExists()
+        for (s in AppStyle.entries) {
+            style = s
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            // the spinner is the only element carrying the loading content description (JSpinner), one for this lead
+            rule.onNodeWithContentDescription("加载中").assertExists()
+            capture("drawer-lead-working-spin-${s.name.lowercase()}-light")
+        }
+    }
+
     // #4331: the leaders, "常驻", under their names, each saying what it has open, in every style, light and dark; every
     // other chat waits under one All chats row.
     @Test fun drawsTheLeadersWithTheirCounts() {

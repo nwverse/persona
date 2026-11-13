@@ -28,7 +28,7 @@ struct AutoConversationsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var filter: Filter
-    /// The chat whose 设为常驻 / 取消常驻 confirmation is open (#6214): the menu asks before the hub call.
+    /// The chat whose Pin / Unpin confirmation is open (#6214): the menu asks before the hub call.
     @State private var leaderConfirm: Session?
     private let taskChats = AssistantTaskChatsStore.shared
     var open: (SessionKey) -> Void

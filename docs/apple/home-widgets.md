@@ -44,6 +44,41 @@ app's Settings (principles 2 and 3).
 - **StandBy**: the system removes the background and scales a small widget up. Every widget reads on black, and at
   night the system draws it in red.
 
+## Lock Screen
+
+Every widget but Record comes in the Lock Screen's three families; Record in the circle and the rectangle (one action).
+
+- **Circular**: the hero alone. Agents: how many need you (the face when none). Today: the weekday and the day. To-dos,
+  Inbox: the count under the widget's mark. Usage: the fullest window as a gauge. Computers: online of all. Health: a
+  gauge of the steps against the average. Record: the button.
+- **Rectangular**: the widget's line in its accent ("2 need you", the next event, "6 to-dos today", "3 of 4 online")
+  and one or two lines under it (the agent waiting longest, the event after, two to-dos, the windows, two computers,
+  last night's sleep, the newest message). Agents keeps the face beside it, Record its button.
+- **Inline**, beside the clock: one line after the widget's mark.
+
+The system draws them in one color (`vibrant`): every part is in the accent group or a level of the primary color.
+Before pairing a Lock Screen widget shows its mark and "Open Persona to connect"; when the snapshot is an hour old its
+content steps back, as on the Home Screen. Inbox and Health stay `privacySensitive`.
+
+## Edit Widget
+
+Three widgets have choices, on the widget itself (touch and hold, Edit Widget); nothing about the widgets is in the
+app's Settings (principles 2 and 3). Every choice starts at a default that works on a fresh install.
+
+| Widget | Choice | Default | The others |
+| --- | --- | --- | --- |
+| Agents | Show | All Agents | Agents on Your Computers (the coding agents), Persona's Tasks |
+| Agents, Computers | Computer | Any Computer | each computer in the snapshot |
+| Usage | Account | The Fullest | each subscription account in the snapshot (up to 8) |
+
+- The lists come from the snapshot the app last wrote (`HomeChoices`), so Edit Widget never calls the hub and names
+  everything as the widgets do. The choices are `HomeWidgetEdit` intents whose entities (`HomeComputerEntity`,
+  `HomeAccountEntity`) keep the computer's or the account's id; the empty id is the default.
+- A narrowed widget counts only what it shows: the Agents counts, the corner's mood and the Smart Stack's score are its
+  rows' (the rows past the snapshot's cap count only with no choice). Usage's tokens stay every computer's. A computer
+  or an account that is gone leaves the widget's empty state until another is chosen.
+- A widget placed before Edit Widget existed keeps its kind and takes the defaults.
+
 ## The persona, as an accent
 
 The persona never takes the hero's place. It appears in three places:
@@ -80,7 +115,7 @@ The same definition as the app, from the same code (principle 4):
 | To-dos | the count | the To-dos page's Today filter: due today, plus open overdue ones | `TodoStore`, `TodoListLogic` |
 | Usage | a window's percent, reset time | `GET /api/v1/usage/windows`, the Machines page's numbers | `UsageWindowsStore` |
 | Usage | tokens today, by the hour | the island's Tokens Today; the hours from `GET /api/v1/usage`'s `hourly` (#5721) | `FleetState.stats`, the usage summary |
-| Usage | money spent today | only what a gateway reports (`LauncherQuota.Usage.costUSD`); never estimated from prices. Not read yet (phase 3, with the accounts in Edit Widget): until then the widget shows no money | launcher quotas |
+| Usage | money spent today | only what a gateway reports (`LauncherQuota.Usage.costUSD`); never estimated from prices. Not read yet (phase 4: a quota report names its usage entries' period only in words): until then the widget shows no money | launcher quotas |
 | Computers | online, load | `Machine.online`; load from `FleetState.stats.loads` | `AppModel.machines` |
 | Health | steps, sleep, resting heart rate | Health's own numbers, with the user's permission | `HealthTool.daily` / `.summary` |
 | Inbox | Need You, Unread | open items the triage marks as yours (`InboxStore.actionCount`); the Inbox badge's number | `InboxStore` |
@@ -141,7 +176,7 @@ intent without opening the app, and the recording's Live Activity confirms it at
 
 ## Smart Stack
 
-Each entry carries a `TimelineEntryRelevance`: highest when something needs you (agents, messages, an overdue to-do)
+Each entry carries a `TimelineEntryRelevance` (`HomeRelevance`), scored on what the widget shows after its Edit Widget choices: highest when something needs you (agents, messages, an overdue to-do)
 or a recording is running, high when a meeting starts within 15 minutes, low otherwise.
 
 ## Screenshots
@@ -163,6 +198,8 @@ shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s
 2. **The rest of the Home Screen**: Today, To-dos (with ticking off, `CompleteTodoIntent`, `HomeWidgetActions`), Usage,
    Computers, Health; their data (`HomeWidgetData`, `HomeToday`, `HomeTodos`, `HomeUsage`); taps to the To-dos,
    Machines and Health pages.
-3. **Lock Screen, settings and the Smart Stack**: the accessory families, Edit Widget (entities for computers and
-   accounts read from the snapshot), the gateways' money for Usage, relevance, background refresh, and the hub's push
-   (#5721, its own PR).
+3. **Lock Screen, Edit Widget and the Smart Stack**: the accessory families (with the states before pairing and when
+   stale), Edit Widget (`HomeWidgetEdit`, entities for computers and accounts read from the snapshot), relevance
+   (`HomeRelevance`) with its tests. The hub's push (#5721) and the app's refresh on it came with part 2.
+4. **The gateways' money for Usage**: today's spend as a gateway reports it. A quota report's usage entries name their
+   period only in words ("today" in the extension's language), so this waits for a period the app can read.
