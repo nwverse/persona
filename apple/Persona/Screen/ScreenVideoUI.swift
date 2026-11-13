@@ -88,7 +88,7 @@ struct ScreenStats: Equatable {
     // VNC mode: what RFB can measure.
     var roundTripMs: Double? = nil
 
-    /// The latency segments present, in pipeline order, for the overlay's "采集 · 编码 · 网络 · 解码" line.
+    /// The latency segments present, in pipeline order, for the overlay's "Capture · Encode · Network · Decode" line.
     var segments: [(label: String, ms: Double)] {
         var out: [(String, Double)] = []
         if let v = captureMs { out.append((String(localized: "Capture"), v)) }
@@ -143,6 +143,12 @@ struct ScreenStatsOverlay: View {
                 Text("·").foregroundStyle(.tertiary)
                 Text(path.label).foregroundStyle(.secondary)
             }
+            // The one number the user watches most: the end-to-end total (video) or the round-trip (VNC), up here on the
+            // first line rather than trailing the per-segment breakdown. The segments line below breaks it down.
+            if let total = primaryLatencyMs {
+                Text("·").foregroundStyle(.tertiary)
+                Text(ms(total))
+            }
             Spacer(minLength: Theme.Space.m)
             Button { onClose() } label: { ThemedIcon(Theme.Icon.close).font(Theme.Font.caption) }
                 .buttonStyle(.plain)
@@ -151,6 +157,10 @@ struct ScreenStatsOverlay: View {
                 .accessibilityIdentifier("screen-stats-close")
         }
     }
+
+    /// The one latency number the user watches most: the end-to-end total (video) or the round-trip (VNC). It leads the
+    /// header; the per-segment line breaks it down.
+    private var primaryLatencyMs: Double? { stats.totalMs ?? stats.roundTripMs }
 
     /// bitrate · fps, and codec · resolution in video mode.
     private var rateLine: some View {
@@ -166,17 +176,13 @@ struct ScreenStatsOverlay: View {
         if let text = latencyText { Text(text).foregroundStyle(.secondary) }
     }
 
-    /// "Capture x · Encode x · Network x · Decode x   Total x" (video) or "Round-trip x" (VNC); omitted segments drop out.
+    /// The per-segment breakdown, "Capture x · Encode x · Network x · Decode x" (video); omitted segments drop out. The
+    /// total that these add up to is in the header. VNC has no segments, so this line is left out and only the header's
+    /// round-trip shows.
     private var latencyText: String? {
         let segs = stats.segments
-        if !segs.isEmpty {
-            var s = segs.map { "\($0.label) \(ms($0.ms))" }.joined(separator: "  ·  ")
-            if let total = stats.totalMs { s += "   " + String(localized: "Total") + " " + ms(total) }
-            return s
-        }
-        if let total = stats.totalMs { return String(localized: "Total") + " " + ms(total) }
-        if let rt = stats.roundTripMs { return String(localized: "Round-trip") + " " + ms(rt) }
-        return nil
+        guard !segs.isEmpty else { return nil }
+        return segs.map { "\($0.label) \(ms($0.ms))" }.joined(separator: "  ·  ")
     }
 
     private func kv(_ label: String, _ value: String, note: String? = nil) -> some View {

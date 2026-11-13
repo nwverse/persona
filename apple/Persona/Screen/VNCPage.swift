@@ -102,6 +102,9 @@ struct VNCPage: View {
             statsOn = ScreenStatsPref.of(ref)
             #if DEBUG
             let args = ProcessInfo.processInfo.arguments
+            // `-showScreenVideoDemo` stands in for a node that advertises the video channel (videoAdvertised), and picks
+            // the video channel, so a screenshot shows the Picture and Quality items the switcher offers.
+            if args.contains("-showScreenVideoDemo") { picture = .video }
             if args.contains("-showScreenStatsDemo") { statsOn = true }
             if args.contains("-showScreenFallbackDemo") {
                 fallbackReason = String(localized: "Video couldn’t connect, switched to VNC: no route to the computer on this network.")
@@ -342,23 +345,26 @@ struct VNCPage: View {
                 Label("Mouse Mode", systemImage: Theme.Icon.pointer).tag(VNCMode.mouse)
                 Label("Trackpad Mode", systemImage: Theme.Icon.trackpad).tag(VNCMode.trackpad)
             }
-            // Picture channel and its quality bias (#3954), remembered per Mac. Input stays on RFB in both; only the
-            // picture path changes. Video falls back to VNC on its own and says why on the page.
-            Picker(selection: Binding(get: { picture }, set: { picture = $0; ScreenPicture.set($0, for: ref) })) {
-                ForEach(ScreenPicture.allCases, id: \.self) { p in Label(p.label, systemImage: p.icon).tag(p) }
-            } label: {
-                Label("Picture", systemImage: Theme.Icon.video)
-            }
-            .pickerStyle(.menu)
-            .accessibilityIdentifier("screen-picture")
-            if picture == .video {
-                Picker(selection: Binding(get: { quality }, set: { quality = $0; ScreenQuality.set($0, for: ref) })) {
-                    ForEach(ScreenQuality.allCases, id: \.self) { q in Text(q.label).tag(q) }
+            // Picture channel and its quality bias (#3954), remembered per Mac — only when this Mac's node advertises the
+            // video channel, so no Mac shows a control it can't use (the switcher stays hidden until it does). Input stays
+            // on RFB in both; only the picture path changes. Video falls back to VNC on its own and says why on the page.
+            if videoAdvertised {
+                Picker(selection: Binding(get: { picture }, set: { picture = $0; ScreenPicture.set($0, for: ref) })) {
+                    ForEach(ScreenPicture.allCases, id: \.self) { p in Label(p.label, systemImage: p.icon).tag(p) }
                 } label: {
-                    Label("Quality", systemImage: Theme.Icon.pluginGauge)
+                    Label("Picture", systemImage: Theme.Icon.video)
                 }
                 .pickerStyle(.menu)
-                .accessibilityIdentifier("screen-quality")
+                .accessibilityIdentifier("screen-picture")
+                if picture == .video {
+                    Picker(selection: Binding(get: { quality }, set: { quality = $0; ScreenQuality.set($0, for: ref) })) {
+                        ForEach(ScreenQuality.allCases, id: \.self) { q in Text(q.label).tag(q) }
+                    } label: {
+                        Label("Quality", systemImage: Theme.Icon.pluginGauge)
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("screen-quality")
+                }
             }
             Toggle(isOn: Binding(get: { statsOn }, set: { statsOn = $0; ScreenStatsPref.set($0, for: ref) })) {
                 Label("Connection Stats", systemImage: Theme.Icon.pluginChart)
@@ -507,6 +513,15 @@ struct VNCPage: View {
                            bitrateMbps: s.mbps > 0 ? s.mbps : nil,
                            fps: s.fps > 0 ? s.fps : nil,
                            roundTripMs: s.latency)
+    }
+
+    /// Whether this Mac's node advertises the hardware video channel (#3954): the Picture and Quality items appear only
+    /// then, so no Mac shows a control it can't use. A `-showScreenVideoDemo` build forces it on for screenshots.
+    private var videoAdvertised: Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-showScreenVideoDemo") { return true }
+        #endif
+        return model.screenVideoAdvertised(ref)
     }
     #endif
 
