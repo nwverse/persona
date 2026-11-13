@@ -814,9 +814,9 @@ One App for iPhone and iPad (`TARGETED_DEVICE_FAMILY` 1,2). Previously only 1, g
 Settings › Appearance › Navigation chooses how the app lays out Persona and the Agents (`NavigationLayout`, this device's
 own UserDefaults key `app.navigation`, applied at once, Settings staying on its page): **Separate**, the default and
 everything above unchanged (the Assistant | Agents switch on an iPhone, the Persona | Agents tabs on an iPad), or
-**Sidebar**, the web sidebar's structure in one column. The owner asked for it on 2026-11-13. The Sidebar layout is
-built for the iPad's regular width first (`NavigationLayout.offered`: the row shows on an iPad only); the iPhone's drawer
-follows in #6332's second part. The Mac (frozen) and Apple Vision Pro keep their own navigation.
+**Sidebar**, the web sidebar's structure in one column. The owner asked for it on 2026-11-13. On an iPhone (and at any
+compact width: iPhone Duo closed, an iPad's narrow split) the column is the drawer that slides in from the left; at
+regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro keep their own navigation.
 
 - **The column** (`UnifiedSidebarColumn`, `Persona/Views/Shell/UnifiedSidebar.swift`), in the web's order: the assistant
   (its switcher) and Search; the main conversation held at the top while the rest scrolls (as the web's, #5581); one
@@ -840,6 +840,19 @@ follows in #6332's second part. The Mac (frozen) and Apple Vision Pro keep their
   flag, so the next pick does not land under it. The conversation's sidebar button folds and brings back the split's
   column (`SplitShowList.hide`). The shaded row follows what is beside the sidebar (`UnifiedSidebar.atRoot`,
   `shownPlace`).
+- **On a phone** (`SplitNavigation`'s drawer layout, `\.splitDrawer`, `SplitDetail.drawer`): the same column in the
+  drawer (`AssistantDrawerLayout`, the shell's drawer: 82% of the width, at most 380 pt), the Persona conversation the root
+  of one stack under it, and what the drawer opens that stack's first page. The conversation's bar has no Assistant |
+  Agents switch: the persona's face opens the drawer (the inbox's mark on it, how many Agents need the user at its
+  corner, `SidebarWaitingBadge`), its name in the middle holds the face's menu, New Chat on the right
+  (`AssistantTopBar.drawerRow`). A first page has the same face where a back would be (`DrawerButtonItem`; an Agent's
+  chat in its own header), and a drag to the right on it opens the drawer as on the conversation (the drawer's pan only
+  yields to a second page's back swipe, `DrawerPan.firstPages`). A pick closes the drawer. Choosing Agents by itself
+  opens the drawer at the Agents. While the drawer is in, the Agents list holds its updates as a covered list does, and
+  the Persona rows keep the list they last showed (`SidebarFeed`). The conversation is the iPhone's (`shellChat`, the
+  shell's new-conversation page). Behind the drawer is the Agents list's own page color (`Theme.groupedPage`), so its
+  head, list and foot are one surface in dark mode too. Settings is the sheet the shell shows it in (`PadRoutes`: the
+  whole window only at a phone's regular width), so it opens and closes the same way in both layouts.
 - **Routes** (`PadRouter(unified: true)`): notifications, links, Live Activities, widgets, quick actions and Siri /
   Shortcuts set `AppModel.selectedTab` and `openChat` as in the Separate layout and land on the same chat or page: an
   Agent's chat opens beside the sidebar (the Agents list takes `openChat` as before); `.assistant` goes back to the
@@ -850,7 +863,8 @@ follows in #6332's second part. The Mac (frozen) and Apple Vision Pro keep their
 - The Separate layout's views take the same code with the Sidebar layout's parts off: the whole `AssistantSidebar`,
   `RootTabs` and the shell are drawn as before (pixel comparisons in #6332's PR).
 - Tests: `SidebarLayoutRoutingTests` (the router), `SidebarLayoutTests` (iPad UI: the column, a pick replacing the
-  page, the routes). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout; `-openAppearance navigation` opens
+  page, the routes), `SidebarLayoutPhoneTests` (iPhone UI: the drawer, a pick replacing the page, the face where a back
+  would be, the setting switching both ways at once). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout; `-openAppearance navigation` opens
   the setting's page.
 
 ## Home-screen quick actions (#3199)

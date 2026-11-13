@@ -23,6 +23,7 @@ fi
 _env=$(python3 scripts/persona_config.py env) || exit $?
 eval "$_env"; unset _env
 python3 scripts/persona_config.py xcconfig
+native/app-core/scripts/build-apple.sh
 echo "Building with $(xcodebuild -version | head -1) (config \"xcode\" picks another, docs/operations/config.md)"
 # No private values in what is about to ship from this tree (CLAUDE.md).
 python3 scripts/privacy_check.py
