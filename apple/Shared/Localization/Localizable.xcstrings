@@ -178829,29 +178829,6 @@
         }
       }
     },
-    "New Folder" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New Folder"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新規フォルダ"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新建文件夹"
-          }
-        }
-      }
-    },
     "New Text File" : {
       "extractionState" : "manual",
       "localizations" : {
