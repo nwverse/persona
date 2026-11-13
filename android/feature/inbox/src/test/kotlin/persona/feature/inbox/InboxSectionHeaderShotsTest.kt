@@ -12,14 +12,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodes
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.SemanticsMatcher
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CoroutineScope
@@ -100,7 +105,7 @@ class InboxSectionHeaderShotsTest {
         for (appearance in AppStyle.entries) for (night in listOf(false, true)) for (scale in listOf(1f, 2f)) {
             rule.runOnIdle { style = appearance; dark = night; fontScale = scale }
             rule.waitForIdle()
-            rule.onNodeWithText("Needs you").assertExists()
+            rule.onAllNodes(hasText("Needs you") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertCountEquals(1)
             if (scale == 1f) rule.onNodeWithText("Mark all as read").assertExists()
             else rule.onNodeWithContentDescription("More").assertExists()
             capture("${appearance.name.lowercase()}-${if (night) "dark" else "light"}-${scale}x")

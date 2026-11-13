@@ -163,9 +163,7 @@ fun JSectionHeader(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     title,
-                    style = if (sub) PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
-                    else if (style == AppStyle.Glass) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp))
-                    else PersonaTheme.type.headline.copy(fontSize = androidx.compose.ui.unit.TextUnit(15f, androidx.compose.ui.unit.TextUnitType.Sp)),
+                    style = titleStyle,
                     color = if (muted) palette.ink3 else if (sub || style == AppStyle.Glass) palette.ink2 else palette.ink,
                     maxLines = if (wrap) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
@@ -184,14 +182,16 @@ fun JSectionHeader(
         }
 
         val leading = subcompose("leading") {
-            leading?.let { it(); Spacer(Modifier.width(Tokens.Space.xs)) }
-            if (sub && open != null) {
-                JIcon(PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3, modifier = Modifier.rotate(if (open) 90f else 0f))
-                Spacer(Modifier.width(Tokens.Space.xs))
-            }
-            if (status != null && style == AppStyle.Board) {
-                Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(palette.status(status).dot))
-                Spacer(Modifier.width(8.dp.dense))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                leading?.let { it(); Spacer(Modifier.width(Tokens.Space.xs)) }
+                if (sub && open != null) {
+                    JIcon(PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3, modifier = Modifier.rotate(if (open) 90f else 0f))
+                    Spacer(Modifier.width(Tokens.Space.xs))
+                }
+                if (status != null && style == AppStyle.Board) {
+                    Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(palette.status(status).dot))
+                    Spacer(Modifier.width(8.dp.dense))
+                }
             }
         }.map { it.measure(Constraints()) }
         val leadingWidth = leading.maxOfOrNull { it.width } ?: 0
@@ -218,13 +218,17 @@ fun JSectionHeader(
             if (action != null) maxOf(48.dp.toPxInt(), textWidth(overflowActions.last().label, actionStyle) + 16.dp.dense.toPxInt()) else 0
         val overflow = overflowActions.isNotEmpty() && leadingWidth + fullTitleWidth + ordinaryWidth > constraints.maxWidth
         val right = if (overflow) subcompose("overflow") {
-            Spacer(Modifier.width(8.dp.dense))
-            JIconButton(PhIcons.DotsThree, stringResource(R.string.designsystem_more), { menu = true }, raised = false)
-            JMenu(menu, { menu = false }, buildList {
-                trailing?.let { add(JAction(it, enabled = onClick != null, onClick = { onClick?.invoke() })) }
-                addAll(overflowActions)
-            })
-        }.map { it.measure(Constraints()) } else subcompose("ordinary-visible") { ordinaryActions() }.map { it.measure(Constraints()) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.width(8.dp.dense))
+                JIconButton(PhIcons.DotsThree, stringResource(R.string.designsystem_more), { menu = true }, raised = false)
+                JMenu(menu, { menu = false }, buildList {
+                    trailing?.let { add(JAction(it, enabled = onClick != null, onClick = { onClick?.invoke() })) }
+                    addAll(overflowActions)
+                })
+            }
+        }.map { it.measure(Constraints()) } else subcompose("ordinary-visible") {
+            Row(verticalAlignment = Alignment.CenterVertically) { ordinaryActions() }
+        }.map { it.measure(Constraints()) }
         val rightWidth = right.maxOfOrNull { it.width } ?: 0
         val bounded = constraints.maxWidth != Constraints.Infinity
         val titleWidth = if (bounded) (constraints.maxWidth - leadingWidth - rightWidth).coerceAtLeast(0) else fullTitleWidth
