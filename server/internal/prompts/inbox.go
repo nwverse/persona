@@ -187,6 +187,8 @@ const (
 	NoteRejected     = "inbox/handling/rejected"
 	NoteInstructed   = "inbox/handling/instructed"
 	NoteClosed       = "inbox/handling/closed"
+	NoteSelfReplied  = "inbox/handling/self_replied"
+	NoteSelfRead     = "inbox/handling/self_read"
 )
 
 func RenderInboxHandlingNote(name string, n InboxHandlingNote) string {
