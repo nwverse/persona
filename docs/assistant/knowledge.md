@@ -983,7 +983,8 @@ manifest records `unicode.Version` and `norm.Version`) or in another format: the
 update starts it again from the files. `rm -r <data dir>/.search` is always safe, also while the manager runs. Tests: `kb/search_index_query_test.go`
 compares `Find`, `Search`, `SearchKind` and `Matches` with the scan over generated archives (Chinese and English mixed) and random queries, at several
 limits, with the index absent, half built, built, behind (files changed, added, renamed and deleted since), up to date and damaged in each of its
-parts; `kb/search_index_test.go` covers the update itself.
+parts (`PERSONA_KB_DIFF_SEED` draws other archives and queries than the ones every run uses, `PERSONA_KB_DIFF_DEPTH` more of them);
+`kb/search_index_test.go` covers the update itself.
 
 **Keys.** A search finds a file when every word of the query is a *substring* of the file's folded text (`fold`: lowercase, then NFC; the words are
 the query split at white space), and then looks for the lines. So the index answers "which files can hold this substring", never "which files

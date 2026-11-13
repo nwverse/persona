@@ -349,6 +349,14 @@ func TestDamagedSegmentIsNeverBelieved(t *testing.T) {
 		t.Fatal(err)
 	}
 	queries := testQueries(rng, texts)[:30]
+	// Which files hold each query, worked out once: every damaged copy is checked against it.
+	holds := map[string]map[string]bool{}
+	for _, q := range queries {
+		holds[q] = map[string]bool{}
+		for name, text := range texts {
+			holds[q][name] = hasAll(fold(text), words(q))
+		}
+	}
 	bad := filepath.Join(dir, "seg-000002.idx")
 	refused, caught := 0, 0
 	check := func(what string, damaged []byte) {
@@ -375,11 +383,10 @@ func TestDamagedSegmentIsNeverBelieved(t *testing.T) {
 				continue
 			}
 			for id, d := range seg.docs {
-				text, ok := texts[d.name]
-				if !ok {
+				if _, ok := texts[d.name]; !ok {
 					t.Fatalf("%s: opened with a file it never had, %q", what, d.name)
 				}
-				if hasAll(fold(text), words(q)) && !cand.has(uint32(id)) {
+				if holds[q][d.name] && !cand.has(uint32(id)) {
 					t.Fatalf("%s: %q rules out %s, which holds it", what, q, d.name)
 				}
 			}

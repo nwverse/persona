@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,30 @@ import (
 // The searches with a search index give what they give without one, whatever state the index is in: these tests
 // compare Find, Search, SearchKind and Matches with the scans they replaced (findReference, searchByWalk,
 // matchesReadingEveryFile, which read every file themselves) over random archives and random queries.
+//
+// Every run of the package draws the same archives and queries. PERSONA_KB_DIFF_SEED draws others, and
+// PERSONA_KB_DIFF_DEPTH=n takes n times as many random queries and compares every search at every limit:
+//
+//	PERSONA_KB_DIFF_SEED=7 PERSONA_KB_DIFF_DEPTH=4 go test ./internal/kb -run '^TestSearchesWith' -count=1
+
+// diffSeed is what the random archives and queries are drawn from.
+func diffSeed() uint64 {
+	if n, err := strconv.ParseUint(os.Getenv("PERSONA_KB_DIFF_SEED"), 10, 64); err == nil {
+		return n
+	}
+	return 1273
+}
+
+// diffDepth is how many times the usual number of random queries a comparison takes.
+func diffDepth() int {
+	if n, err := strconv.Atoi(os.Getenv("PERSONA_KB_DIFF_DEPTH")); err == nil && n > 0 {
+		return n
+	}
+	return 1
+}
+
+// diffRNG is the random source of one test's draw (stream).
+func diffRNG(stream uint64) *rand.Rand { return rand.New(rand.NewPCG(diffSeed(), stream)) }
 
 // diffWords are what the random archive's lines are made of: Chinese and English, the two run together, both
 // cases, composed and decomposed, full-width, punctuation, an emoji.
@@ -57,7 +82,7 @@ func diffArchive(t *testing.T, seed uint64) *Engine {
 		t.Fatal(err)
 	}
 	e := &Engine{Store: st}
-	rng := rand.New(rand.NewPCG(1273, seed))
+	rng := diffRNG(seed)
 	at := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
 	for c := range 6 {
 		ch := &Chat{ID: fmt.Sprintf("lark-c%d", c), Name: diffWords[rng.IntN(len(diffWords))] + " 群", Kind: "group",
@@ -114,9 +139,10 @@ func diffArchive(t *testing.T, seed uint64) *Engine {
 
 // diffQueries are random queries for the archive: runs of its files' text as written (a word, part of one, several
 // words), the same in the other case, words it does not have, and the short and mixed ones the index answers in
-// its own ways.
+// its own ways. n random ones (times diffDepth) after the fixed ones.
 func diffQueries(t *testing.T, e *Engine, rng *rand.Rand, n int) []string {
 	t.Helper()
+	n *= diffDepth()
 	out := []string{"build", "周报", "周", "报", "的", "a", "ok", "bu", "度o", "报 dr", "周报 draft", "build 周报 review", "c++", "+", "#",
 		"#42", "(", "café", "CAFÉ", "ａｂ", "🙂", "i̇stanbul", "İ", "nowhere", "build nowhere", "不存在", "续行", "同事1:", "10:00"}
 	var texts []string
@@ -167,10 +193,13 @@ func withoutIndex(t *testing.T, dir string, f func(plain *Engine)) {
 }
 
 // checkSearches compares every search of e's store with the scans, for each query: on e itself (which may have
-// searched before, and holds the index as the test left it) and on an engine over a store opened now.
+// searched before, and holds the index as the test left it) and on an engine over a store opened now. Find and Search
+// at every limit; Matches and SearchKind, which the index serves through the same filter, at a small one and
+// without one (at every limit with PERSONA_KB_DIFF_DEPTH).
 func checkSearches(t *testing.T, step string, e *Engine, queries []string) {
 	t.Helper()
 	limits := []int{1, 3, 40, 1 << 20}
+	every := diffDepth() > 1
 	kinds := []string{KindChat, KindPerson, KindProject, KindDoc, KindRecording}
 	entries := [][2]string{{KindChat, "lark-c1"}, {KindChat, "lark-busy"}, {KindPerson, "lark-u0"}, {KindProject, "p0"}, {KindDoc, "d0"}, {KindRecording, recID}}
 	type kindKey struct {
@@ -208,6 +237,9 @@ func checkSearches(t *testing.T, step string, e *Engine, queries []string) {
 					if got := eng.Search(q, messages, limit); !reflect.DeepEqual(got, want) && (len(got) > 0 || len(want) > 0) {
 						t.Fatalf("%s, %s: Search(%q, %v, %d):\n got %d %+v\nwant %d %+v", step, name, q, messages, limit, len(got), got, len(want), want)
 					}
+				}
+				if !every && limit != 3 && limit != 1<<20 {
+					continue
 				}
 				for _, en := range entries {
 					want := matchesReadingEveryFile(ref, en[0], en[1], q, limit)
@@ -281,8 +313,8 @@ func TestSearchesWithAnIndexGiveWhatTheScanGives(t *testing.T) {
 				smallSegments(t)
 			}
 			e := diffArchive(t, 1)
-			rng := rand.New(rand.NewPCG(1273, 11))
-			queries := diffQueries(t, e, rng, 40)
+			rng := diffRNG(11)
+			queries := diffQueries(t, e, rng, 15)
 			checkSearches(t, "no index", e, queries)
 
 			// Half built: an update stopped after its first files.
@@ -300,7 +332,7 @@ func TestSearchesWithAnIndexGiveWhatTheScanGives(t *testing.T) {
 
 			// Behind: the files changed, the index not told.
 			changeArchive(t, e, rng)
-			queries = append(diffQueries(t, e, rng, 25), changedQueries...)
+			queries = append(diffQueries(t, e, rng, 10), changedQueries...)
 			checkSearches(t, "behind", e, queries)
 
 			e.Store.SearchIndexPurge()
@@ -392,8 +424,8 @@ func TestSearchesWithADamagedIndexGiveWhatTheScanGives(t *testing.T) {
 			if err != nil || len(man.Segments) != 1 || man.Log == "" {
 				t.Fatalf("the index is %+v (%v), want one segment and a log", man, err)
 			}
-			rng := rand.New(rand.NewPCG(1273, 12))
-			queries := append(diffQueries(t, e, rng, 25), "zqlog", "zqlog 周报")
+			rng := diffRNG(12)
+			queries := append(diffQueries(t, e, rng, 8), "zqlog", "zqlog 周报")
 			// e searched with the index whole before it was damaged; the damage is on disk under it.
 			if got := e.Find("周报", 5); len(got) == 0 {
 				t.Fatal("nothing found before the damage")
@@ -533,8 +565,8 @@ func TestSearchesWithAnIndexOnTheGeneratedArchive(t *testing.T) {
 			if stats := updateIndex(t, e); stats.Read != stats.Files || stats.Files < shape.chats*shape.days {
 				t.Fatalf("update: %+v", stats)
 			}
-			rng := rand.New(rand.NewPCG(1273, 13))
-			queries := append(diffQueries(t, e, rng, 30), "周报 draft", "Quarterly", "群聊 05", "同事 1", "设计文档", "review #7")
+			rng := diffRNG(13)
+			queries := append(diffQueries(t, e, rng, 12), "周报 draft", "Quarterly", "群聊 05", "同事 1", "设计文档", "review #7")
 			checkGenerated(t, e, queries)
 			// And behind: a tenth of the days rewritten, some removed, the index not told.
 			days := e.files().days
@@ -591,7 +623,7 @@ func TestSearchesWithAnIndexOnTheBenchArchive(t *testing.T) {
 	// The other tests on the bench archive take it without an index.
 	t.Cleanup(func() { _ = os.RemoveAll(e.Store.searchDir()) })
 	updateIndex(t, e)
-	rng := rand.New(rand.NewPCG(1273, 14))
+	rng := diffRNG(14)
 	queries := append(diffQueries(t, e, rng, 12), "build", "周报 draft", "周", "群聊 05", "nowhere")
 	sort.Strings(queries)
 	checkGenerated(t, e, queries)
