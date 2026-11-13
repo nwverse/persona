@@ -1,6 +1,7 @@
 package node
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"time"
@@ -35,6 +36,8 @@ const claudeFresh = 45 * time.Second
 //     within claudeFresh. A transcript whose turn has finished keeps the host's word: a title read just before Claude
 //     redrew it says nothing then.
 //
+// Tern reports no state at all: there the Claude's own word (ternClaudeStatus) comes before both.
+//
 // Hooks whose claude process is gone (or whose pid now belongs to another program) are forgotten.
 func (n *Node) claudeStatus(id string, a host.Agent, now time.Time) string {
 	if a.Agent != "claude" || a.AgentStatus != proto.StatusDone && a.AgentStatus != proto.StatusIdle && a.AgentStatus != proto.StatusUnknown {
@@ -46,6 +49,11 @@ func (n *Node) claudeStatus(id string, a host.Agent, now time.Time) string {
 	if p := n.transcriptPath(id); p != "" {
 		if st, err := os.Stat(p); err == nil {
 			m, mod, hasFile = n.meta(p, st), st.ModTime(), true
+		}
+	}
+	if a.AgentStatus == proto.StatusUnknown && host.ParsePane(a.PaneID).Kind == host.Tern {
+		if s := n.ternClaudeStatus(id, a.PaneID, hasFile); s != "" {
+			return s
 		}
 	}
 	// When the transcript last said something: its newest timed line, not its mtime (#5967); the mtime when the tail has
@@ -77,11 +85,49 @@ func (n *Node) claudeStatus(id string, a host.Agent, now time.Time) string {
 	return a.AgentStatus
 }
 
-// restingClaude: a Claude Code in a herdr pane whose host says its turn is over (or does not know), so a dialog on
-// its screen is what it waits on (dialogstatus.go). Only herdr: where it was seen (#2553); Orca reports its own
+// ternClaudeStatus is what a Claude in a Tern block says of itself, "" when it says nothing. Tern reports no agent
+// state (ternAgent), so a Claude there was judged by its transcript alone (#6312): a question it asked read as working
+// while the transcript was fresh, then as unknown, which the overview does not list, and it never needed the user.
+// Claude Code keeps its own state in its sessions/<pid>.json (the pid of the block's claude, the file that names its
+// session): busy, idle, or waiting while a dialog of its own has the keyboard (a question, a permission, a picker;
+// claudebg.go reads the same field for the claudes no engine shows). Waiting is blocked, and its screen card is made as
+// for herdr's. Idle is a turn that ended, done as herdr calls a finished turn nobody has looked at, once there is a
+// transcript (hasFile); before its first message it is idle. Nothing to go by (no pid found for the block yet, a file
+// that names another session after a /clear, an older Claude Code that writes no status) is "".
+func (n *Node) ternClaudeStatus(id, pane string, hasFile bool) string {
+	n.mu.Lock()
+	pid := n.panePIDs[pane].pid
+	n.mu.Unlock()
+	if pid == 0 {
+		return ""
+	}
+	b, err := os.ReadFile(n.claudeSessionFile(pid))
+	if err != nil {
+		return ""
+	}
+	var f struct {
+		SessionID string `json:"sessionId"`
+		Status    string `json:"status"`
+	}
+	if json.Unmarshal(b, &f) != nil || f.SessionID != id {
+		return ""
+	}
+	s := claudeBgStatus[f.Status]
+	if s == proto.StatusIdle && hasFile {
+		return proto.StatusDone
+	}
+	return s
+}
+
+// restingClaude: a Claude Code in a herdr or Tern pane whose host says its turn is over (or does not know), so a
+// dialog on its screen is what it waits on (dialogstatus.go). herdr: where it was seen (#2553). Tern: a Claude Code
+// that does not mark a dialog of its own waiting (ternClaudeStatus) shows it only there. Orca reports its own
 // permission state, and botmux sessions have no screen of theirs to read.
 func restingClaude(a host.Agent, status string) bool {
-	if a.Agent != "claude" || a.PaneID == "" || host.ParsePane(a.PaneID).Kind != host.Herdr {
+	if a.Agent != "claude" || a.PaneID == "" {
+		return false
+	}
+	if k := host.ParsePane(a.PaneID).Kind; k != host.Herdr && k != host.Tern {
 		return false
 	}
 	return status == proto.StatusDone || status == proto.StatusIdle || status == proto.StatusUnknown
