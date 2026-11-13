@@ -1511,6 +1511,38 @@ What a large request body costs the hub's slot and the manager it is relayed to,
   `-bench 'Decode(22MB|1K)' ./internal/assistant`, `-bench CallLarge ./internal/rpc`; compare two builds' test
   binaries in alternating rounds with `benchstat`.
 
+## Hub transcription live check
+
+Hub transcription (`docs/assistant/meeting-minutes.md`, "Phase 5: hub transcription") against a real service, for what
+the tests' scripted contribution cannot tell: how well the words come back, how soon, and what it costs.
+`server/internal/transcribelive` plays the phone against a running test hub whose voice extension is set up with a
+GPT-Live-compatible upstream (the contribution chosen for transcription, `meeting_transcription_ready` true; it also
+reads the meeting aloud through that extension's speech). Run it on the hub machine, from `server/`:
+
+```sh
+cd server
+go run ./internal/transcribelive -hub <hub address> -token-file <file> -kb <PERSONA_HOME>/data -lang zh-CN -out <directory>
+```
+
+- Without `-hub` and `-token-file` it takes `public_url` and `token` from `$PERSONA_HOME/hub.json` (`-kb` defaults to
+  `$PERSONA_HOME/data`, where it reads the meeting's files). Never point it at a hub in use: it also sets the hub's
+  `meeting_glossary` to the script's terms.
+- The meeting is made up (`server/internal/transcribelive/testdata/mixed_meeting.json`): a third Chinese, a third
+  English, a third both in one sentence, and one line said by "Persona". The hub reads each line aloud
+  (`POST /api/v1/extensions/voice/speak`, `-voices F=<id>,M=<id>,E=<id>,P=<id>` picks the voices); the audio and the
+  script with each line's times go to `<out>/meeting.pcm` and `<out>/script.json`, which a later run reuses
+  (`-synth-only` stops there).
+- It uploads the meeting in hub mode, marked private, with the room in `-role` (`listener` by default), streams the
+  audio over the audio socket in real time (100 ms frames, `speaking` on and off around Persona's line, an upload with
+  the timeline every 15 seconds), sends `end` and the `complete: true` upload, then waits for the final pass and the
+  minutes. At the end it deletes the recording (`-keep` keeps it).
+- It prints `<out>/report.json`: the live lines and the final transcript against the script (character error rate per
+  line and in all, the Latin words kept as said); the latency of each `line` frame after its sentence ended, of the
+  first caption after each sentence began, of the final pass after the complete upload and of the minutes after it;
+  Persona's echo (marked in the hub's transcript, never a live line); the minutes' share of Han letters against
+  `-lang`; the upstream's billed seconds (`-price-per-minute` adds the cost) and whether the hub deleted the audio.
+  `<out>/frames.json` has every socket frame with when it came, `<out>/detail.json` the recording as the API returns it.
+
 ## Live Activity screenshots (`LiveActivityShots`)
 
 `simctl io screenshot` doesn't capture Dynamic Island/lock-screen activities. `LiveActivityShots` uses `-showFleetSample` for fictional activity,
