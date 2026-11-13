@@ -225,11 +225,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * shares with the stopped line's Resume, Codex threads counted as stopped Agents, and a stable Terminal handler so the
  * header still draws only when it changes). And 31 B because #5579 and #5860 landed together (#5879): #5579 was measured
  * on main at 9223f7f92 (+228 B) and #5860 merged before it, on whose main at bae989cf42 (ja 474,213 B) it costs +262 B;
- * ja 474,475 B on main at 624f81dde, with 0 B of room. And 79 B for the GitHub star prompts (#5761: ja 474,554 B against
- * 474,421 B on main at 47c38a3466, +133 B, of which 54 B fit the room main had: the readiness answer and an Agent this
- * browser started share one on-demand import of the rule, lib/star-prompt-load.ts, which a failed load only skips, and
- * the sidebar's milestone line is a lazy component; the rule, the pill, the line and their strings stay off the first
- * screen). And 128 B for recent main changes (#6346: ja 474,617 B on main at 2010e8229f, 63 B over the old budget,
+ * ja 474,475 B on main at 624f81dde, with 0 B of room. And 79 B for the former GitHub star prompts (#5761: ja 474,554 B
+ * against 474,421 B on main at 47c38a3466, +133 B, of which 54 B fit the room main had); #6570 removes those prompts
+ * and their readiness/launch hooks without raising the budget. And 128 B for recent main changes (#6346: ja 474,617 B on main at 2010e8229f, 63 B over the old budget,
  * themselves, views/agents/GroupedSessions.tsx, load when a Browse by is chosen, which took 407 B back off; the same
  * code measured +1,396 B and +1,510 B on the two mains before, docs/lessons/web.md; the 30 B of room main had stay).
  * +100 B for the scheduled tasks list's "Inbox: …" marks and the assistant's own Inbox row (#6430): the Japanese first
@@ -259,7 +257,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * Collapse all, out for Expand all) and its name as the tooltip, less the two list-menu items it replaces and the
  * Recent row's ⓘ words, and the decisions' words in the to-dos' catalog; main's 11 B of room stay).
  */
-export const FIRST_SCREEN_BUDGET = 478_302;
+// #6575: verified runtime checkout display membership adds 79 B to the first screen on main at 2e57ac117
+// (ja 478,119 B to 478,198 B). Carry that measured feature allowance onto the current main budget.
+export const FIRST_SCREEN_BUDGET = 478_381;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
