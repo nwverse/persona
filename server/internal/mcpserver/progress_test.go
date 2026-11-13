@@ -48,7 +48,12 @@ type waitingCall struct {
 
 func waitingNode(t *testing.T) *waitingCall {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	home, err := os.MkdirTemp("/tmp", "pm") // a short path: a Unix socket's is bounded
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Setenv("HOME", home)
 	path := nodeclient.SocketPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
