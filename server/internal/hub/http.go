@@ -609,15 +609,8 @@ func (h *Hub) proxyBody(method string) http.HandlerFunc {
 // proxyBodyFor is proxyBody that waits up to timeout for the node.
 func (h *Hub) proxyBodyFor(method string, timeout time.Duration) http.HandlerFunc {
 	return h.withMachine(func(w http.ResponseWriter, r *http.Request, m *Machine) {
-		p := map[string]any{}
-		if r.ContentLength != 0 {
-			if err := decodeJSONBody(w, r, &p, 32<<20); err != nil && !errors.Is(err, io.EOF) {
-				writeBodyErr(w, err, err)
-				return
-			}
-		}
-		if p == nil {
-			writeErr(w, http.StatusBadRequest, errors.New("request body must be a JSON object"))
+		p, ok := optionalObject(w, r, 32<<20)
+		if !ok {
 			return
 		}
 		p["session_id"] = r.PathValue("sid")
@@ -640,15 +633,9 @@ func (h *Hub) proxyBodyFor(method string, timeout time.Duration) http.HandlerFun
 // the user's stop button in an app: the assistant is told, so a Feishu /agent request it works on is stopped as well
 // (#3308; the plugin's own /stop goes through the assistant, not here).
 func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machine) {
-	p := map[string]any{}
-	if r.ContentLength != 0 {
-		if err := decodeJSONBody(w, r, &p, 32<<20); err != nil && !errors.Is(err, io.EOF) {
-			writeBodyErr(w, err, err)
-			return
-		}
-	}
-	if p == nil {
-		p = map[string]any{}
+	p, ok := optionalObject(w, r, 32<<20)
+	if !ok {
+		return
 	}
 	sid := r.PathValue("sid")
 	p["session_id"] = sid

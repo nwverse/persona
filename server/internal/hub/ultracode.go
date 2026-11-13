@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -21,15 +20,8 @@ import (
 // silently ignore it and claim success. Dismissing a resume-loss notice uses the same new RPC without changing
 // the switch: {"ultracode_dismiss_lost":true} becomes {"dismiss_lost":true}.
 func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
-	p := map[string]any{}
-	if r.ContentLength != 0 {
-		if err := decodeJSONBody(w, r, &p, 32<<20); err != nil && !errors.Is(err, io.EOF) {
-			writeBodyErr(w, err, err)
-			return
-		}
-	}
-	if p == nil {
-		writeErr(w, http.StatusBadRequest, errors.New("request body must be a JSON object"))
+	p, ok := optionalObject(w, r, 32<<20)
+	if !ok {
 		return
 	}
 	if pr := principalOf(r.Context()); pr.Role == roleExtension { // extension_modes.go

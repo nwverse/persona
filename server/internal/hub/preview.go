@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"slices"
@@ -86,7 +85,11 @@ func (h *Hub) previewStart(w http.ResponseWriter, r *http.Request, m *Machine) {
 		Workspace string `json:"workspace"`
 		Kind      string `json:"kind"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil || body.Cwd == "" || body.Name == "" || body.Workspace == "" {
+	if err := decodeJSONBody(w, r, &body, 64<<10); err != nil {
+		writeBodyErr(w, err, errors.New("cwd, name and workspace are required"))
+		return
+	}
+	if body.Cwd == "" || body.Name == "" || body.Workspace == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("cwd, name and workspace are required"))
 		return
 	}
