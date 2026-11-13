@@ -792,6 +792,8 @@ struct AssistantSidebar: View {
     #endif
     @State private var ending: Session?
     @State private var renaming: Session?
+    /// The chat whose 设为常驻 / 取消常驻 confirmation is open (#6214): the menu asks before the hub call.
+    @State private var leaderConfirm: Session?
     @State private var showArchived = false
     @State private var autoList: AutoConversationsRoute?
     @State private var feed = SidebarFeed()
@@ -873,6 +875,30 @@ struct AssistantSidebar: View {
         .task(id: out ? "\(all.count)|\(model.assistantManagerID ?? "")" : "") { if out { await taskChats.refresh(model.api) } }
         .confirmClose($ending)
         .renameSessionAlert($renaming)
+        .confirmationDialog(
+            leaderConfirm.map { session in
+                model.assistantLeaders.contains(session.sessionID)
+                    ? String(localized: "Unpin Confirmation Title [Leader Actions 6214]")
+                    : String(localized: "Pin Confirmation Title [Leader Actions 6214]")
+            } ?? "",
+            isPresented: Binding(get: { leaderConfirm != nil }, set: { if !$0 { leaderConfirm = nil } }),
+            titleVisibility: .visible, presenting: leaderConfirm) { session in
+            // The hub stays the only state source: only the second choice calls make/end (#6214).
+            let lead = model.assistantLeaders.contains(session.sessionID)
+            Button(lead ? String(localized: "Unpin [Assistant Sidebar b7c40e]")
+                       : String(localized: "Pin [Assistant Sidebar 6d1f2a]")) {
+                Task { await model.setDirectionLead(session.sessionID, !lead) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { session in
+            if model.assistantLeaders.contains(session.sessionID) {
+                let title = session.title.isEmpty || session.title == "Claude Code"
+                    ? String(localized: "New Chat [Quick Actions ea4b29]") : session.title
+                Text(String(localized: "Unpin Confirmation Message \(title) [Leader Actions 6214]"))
+            } else {
+                Text(String(localized: "Pin Confirmation Message [Leader Actions 6214]"))
+            }
+        }
         .sheet(item: $autoList) { route in
             AutoConversationsView(source: route.source) { key in
                 autoList = nil
@@ -1250,7 +1276,15 @@ struct AssistantSidebar: View {
         let directions = AssistantSidebarGroups.directions(all, leaders: model.assistantLeaders, main: main)
         if !directions.isEmpty {
             heading(String(localized: "Directions")) { EmptyView() }
-            ForEach(directions) { row($0, named: model.directionNames[$0.sessionID]) }
+            // Each folds open to its to-dos (#4352, AssistantSidebarDirections.swift). The secretary group has no row
+            // here: the main conversation's own row stands for it (#4331).
+            ForEach(directions) { s in
+                AssistantSidebarDirection(direction: model.directionTree?.leader(s.sessionID), id: s.sessionID,
+                                          name: model.directionNames[s.sessionID] ?? s.title, isShell: isShell, drawer: drawer,
+                                          selected: s.key == current, selectedFill: Self.selectedFill) { shades in
+                    row(s, named: model.directionNames[s.sessionID], drawsShade: shades)
+                }
+            }
         }
         let recent = AssistantSidebarGroups.recent(all, leaders: model.assistantLeaders, main: main,
                                                    background: model.assistantConfig?.backgroundSupervisor)
@@ -1377,7 +1411,8 @@ struct AssistantSidebar: View {
 
     /// A conversation: a round mark (Persona's face for the main one), its title on one line, its state on the right.
     /// `named`: a direction's name, shown instead of its leader conversation's title.
-    private func row(_ s: Session, named: String? = nil) -> some View {
+    /// `drawsShade` false: a direction's row with its fold chevron beside it, which draws the shade across both (#4352).
+    private func row(_ s: Session, named: String? = nil, drawsShade: Bool = true) -> some View {
         let selected = s.key == current
         let isMain = s.key == model.assistantMain
         // The main conversation and the hub's built-in background supervisor (#5083) stay: no Archive, Pin or End.
@@ -1414,11 +1449,11 @@ struct AssistantSidebar: View {
             .padding(.vertical, Theme.Sidebar.rowPadding)
             .scaledFrame(minHeight: Theme.Sidebar.row)
             .background {
-                if selected {
+                if selected && drawsShade {
                     RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous).fill(Self.selectedFill)
                 }
             }
-            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
+            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous), isEnabled: drawsShade)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1443,10 +1478,10 @@ struct AssistantSidebar: View {
             if isMain { MainConversationMenu(key: s.key) } // Compact context, New Main Chat… (#1762)
             if !kept {
                 // A direction is the hub's, for every device (#4331): the long press makes a conversation one, or ends
-                // the direction there (#4331, `make` / `end`).
+                // the direction there (#4331, `make` / `end`). It asks a second time first (#6214).
                 let lead = model.assistantLeaders.contains(s.sessionID)
                 Button {
-                    Task { await model.setDirectionLead(s.sessionID, !lead) }
+                    leaderConfirm = s
                 } label: {
                     lead ? Label("Unpin [Assistant Sidebar b7c40e]", systemImage: Theme.Icon.unpin)
                         : Label("Pin [Assistant Sidebar 6d1f2a]", systemImage: Theme.Icon.pin)

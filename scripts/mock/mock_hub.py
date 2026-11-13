@@ -1349,6 +1349,13 @@ if MOCK_CODEX_WAITING:
     SESSIONS.append(sess("macbook", CODEX_WAITING, "weather-app", "/Users/me/code/weather-app", "idle", "idle", "weather-app", 7, "codex", 3, 1,
                          "", agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS))
 
+# MOCK_TERMINAL_ONLY=1 (#6170): a Kiro CLI in a herdr pane, an Agent whose chat Persona cannot draw (the node's read_only_reason):
+# its chat offers the Terminal button over the composer. Open it with -openSession macbook/<TERMINAL_ONLY>.
+TERMINAL_ONLY = "c0de0000-0000-4000-8000-000000000002"
+if os.environ.get("MOCK_TERMINAL_ONLY") == "1":
+    SESSIONS.append(sess("macbook", TERMINAL_ONLY, "kiro-demo", "/Users/me/code/kiro-demo", "idle", "idle", "kiro-demo", 8, "kiro", 1, 1,
+                         "", agent="kiro", launcher="kiro", read_only_reason="Persona 还不能读 kiro 的对话：手机上只能看终端、按键盘"))  # i18n-ignore
+
 
 # MOCK_RUN_HERE_CODEX=<mid,…> (#5504): those computers start Codex in a shell pane the user picked and keep that pane when
 # the start fails (run_here), so Run agent here offers their Codex launchers; the others' stay out, as an older node's.
@@ -9406,6 +9413,7 @@ def cell_width(ch):
 # MOCK_TERMINAL_PANES=1 (with MOCK_TERMINAL_STREAM / MOCK_TERMINAL_CONTROL): the hub says terminal_panes and lists made-up
 # workspaces, tabs and panes of the machines (agents of the mock sessions and plain shells, GET /api/v1/machines/{mid}/panes);
 # POST there opens a new shell tab. A terminal addressed "pane:<id>" is a made-up shell, not the Claude screen.
+# MOCK_PANES_DELAY=<seconds>: GET .../panes answers that late (the Terminals page's "hasn't answered yet" with Retry, #6153).
 PANES_NEW = {}  # machine id -> [(workspace id, pane)] opened by POST
 # The menu actions (close / split / rename / run an agent / git), recorded at GET /mock/node_actions and applied to the
 # layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell, an agent run in a
@@ -12812,6 +12820,10 @@ IMPORT_ONLY = ("aliases", "existing", "create_as", "sources", "differs", "varian
 PROVIDER_DISCOVERED = [{"id": "example-opus", "name": "Example Opus", "context_window": 1000000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
                        {"id": "example-sonnet", "name": "Example Sonnet", "context_window": 200000, "efforts": ["low", "medium", "high"]},
                        {"id": "example-haiku", "context_window": 200000}]
+# MOCK_DISCOVER_MODELS=<n>: "Fetch models" finds n models, the three above and then made-up ones, like a gateway that
+# lists dozens (more than the wizard checks by itself, AUTO_CHECK in web/src/lib/providers.ts).
+PROVIDER_DISCOVERED += [{"id": "example-model-%02d" % i, "context_window": 200000}
+                        for i in range(1, int(os.environ.get("MOCK_DISCOVER_MODELS") or 0) - len(PROVIDER_DISCOVERED) + 1)]
 if MOCK_PROVIDERS:
     LAUNCHERS[:0] = [
         {"name": "gw_full", "display_name": "Team gateway", "source": "persona", "base_url": "https://gw.example.com", "model": "example-opus", "has_key": True,
@@ -12871,8 +12883,8 @@ def auto_named(b):
 
 def machine_launchers(mid=""):
     """GET /api/v1/machines/{mid}/launchers's launchers: claude, sonnetcc and codex ("Create from the phone"; not on the
-    Mac Studio under MOCK_NEW_AGENT_PANEL), and under MOCK_PROVIDERS the managed providers Agents can start, each with its
-    display name."""
+    Mac Studio under MOCK_NEW_AGENT_PANEL), under MOCK_PROVIDERS the managed providers Agents can start, each with its
+    display name, and under MOCK_DESKTOP_APPS the MacBook's claude-desktop and codex-app."""
     out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"}, codex_launcher()]
     if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
         out += [{"name": "cc_main", "model": "opus"}, {"name": "cc_team", "model": "example-pro"}]
@@ -12885,6 +12897,12 @@ def machine_launchers(mid=""):
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
                 for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
+    if os.environ.get("MOCK_DESKTOP_APPS") and mid == "macbook":
+        # The MacBook's Claude desktop app keeps Claude Code sessions: its launcher starts one there (#5480,
+        # docs/integrations/claude-integration.md "New sessions in the desktop app").
+        out.append({"name": "claude-desktop", "model": "", "source": "claude_desktop", "agent": "claude", "agent_type": "claude"})
+        # Its Codex App runs: its launcher starts a chat there (#5726, docs/integrations/codex.md).
+        out.append({"name": "codex-app", "model": "", "source": "codex_app", "agent": "codex", "agent_type": "codex"})
     return launcher_health_list(out)
 
 
@@ -14593,6 +14611,56 @@ def mock_peer_fold():
 
 if os.environ.get("MOCK_PEER_FOLD") == "1":
     mock_peer_fold()
+
+
+# MOCK_LONG_INPUT=1: your own long message folds (#5676): an Agent chat with a long pasted report (past 14 lines on a
+# phone), a twelve-line one that stays whole, and the same report at the end of Persona's conversation. MOCK_LONG_INPUT=perf:
+# forty exchanges, each opened by a long pasted report, for the chat's scrolling frames (docs/apple/performance.md P12),
+# and their twin (LONG_INPUT_TWIN): each report cut to about the lines a folded one takes on a phone, so as many rows
+# to the screen with nothing folded (PerfLongInputTests). Synthetic text.
+LONG_INPUT = "a1f3c2d4-0000-4000-8000-000005676a00"
+LONG_INPUT_TWIN = "a1f3c2d4-0000-4000-8000-000005676a01"
+LONG_REPORT = ("车道 sample-lane：A、C 的 PR 开好了，请批截图（只改 hub 文案 / hub 行为，网页和 App 代码没动）。\n"
+               "A #1201（issue #1188）市场读取报错说清原因 + i18n：填错地址时不再说「版本号是 0」，改成「这个地址返回的不是扩展市场…"
+               "仓库请填 owner/repo」「返回的是网页…」「要更新的 hub」，代理 / 登录页回的 JSON 会引用它的原话；限流、404、要 token 也走 i18n。\n"
+               "截图（改前 main / 改后，中英日、深浅、宽窄）：本机 .lane/shots/a/sheet-*.png。\n"
+               "C #1203（issue #1190）新 hub 第一次开市场不再显示假的「读不到官方扩展 / 去填 token」：首个请求等官方市场第一次读完（最多 10 秒）。"
+               "截图（全新 hub 第一次打开，改前 / 改后）：.lane/shots/c/sheet-c-wide.png、sheet-c-narrow.png。\n"
+               "B 还在跑：扩展装好后列表第一次刷新慢 3 秒，原因是目录缓存过期判断用了本地时间；改成 hub 时间后本地复现不了了，等测试包上手机再确认。\n"
+               "D 卡住：要你决定「扩展更新提示」放设置页还是放收件箱。两种做法的样稿在 .lane/shots/d/，我倾向放设置页（不打扰）。\n"
+               "下一步：批了就合 A、C；B 等测试包；D 等决定。最后一行在这里。")
+LONG_TWELVE = "\n".join("第 %d 行：短短一句。" % (n + 1) for n in range(12))
+LONG_REPLY = "收到。A、C 的截图我都看过了，没问题，可以合。B 等测试包；D 我倾向放设置页，理由和你一样。"
+
+
+def mock_long_input(perf):
+    if perf:
+        cut = LONG_REPORT[:LONG_REPORT.index("代理 / 登录页")]  # ten lines and Show More's, on a phone
+        for sid, report in ((LONG_INPUT, LONG_REPORT), (LONG_INPUT_TWIN, cut)):
+            items = []
+            for n in range(40):
+                m = 60 * 24 - n * 30
+                items.append(it("user", "text", m + 2, text="第 %d 份报告：\n" % (n + 1) + report))
+                items.append(it("assistant", "text", m, text=LONG_REPLY))
+            ITEMS[sid] = items
+        SESSIONS.append(sess("macbook", LONG_INPUT_TWIN, "车道任务跟进（短）", "/Users/me/code/shop-app", "done", "read", "shop-app", 21,
+                             "lanes", 1, 5, LONG_REPLY))
+    else:
+        ITEMS[LONG_INPUT] = [
+            it("user", "text", 30, text="各个车道的进展贴给你，帮我看哪些能合"),
+            it("assistant", "text", 29, text="好的，你贴过来，我一条条看。"),
+            it("user", "text", 12, text=LONG_TWELVE),
+            it("assistant", "text", 11, text="这条不长，不用折。"),
+            it("user", "text", 6, text=LONG_REPORT),
+            it("assistant", "text", 5, text=LONG_REPLY),
+        ]
+        ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 3, text=LONG_REPORT), it("assistant", "text", 2, text=LONG_REPLY)]
+    SESSIONS.append(sess("macbook", LONG_INPUT, "车道任务跟进", "/Users/me/code/shop-app", "done", "read", "shop-app", 20, "lanes", 1, 5,
+                         LONG_REPLY))
+
+
+if os.environ.get("MOCK_LONG_INPUT") in ("1", "perf"):
+    mock_long_input(os.environ.get("MOCK_LONG_INPUT") == "perf")
 
 
 # MOCK_REPLY_BREAKS=1: a reply written line by line (#2088): bold lines with steps right under them, one list numbered
@@ -16680,6 +16748,7 @@ if os.environ.get("MOCK_FILES"):
     FILES[ROOT + "/server/handlers.go"] = long_go()
     FILES[ROOT + "/README.md"] = long_markdown()
     FILES[ROOT + "/logs/api.log"] = log()
+    FILES[ROOT + "/data/chart.png"] = _bar_png(360, 150)  # a picture opened as a file (#1331)
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_office
     FILES[ROOT + "/data/observations.csv"] = mock_office.csv_text(100_000)  # 5 MB: the table viewer's paging
@@ -17454,6 +17523,43 @@ def case_route(h, method, p, q, body):
 # first subscribe hold the last 2 whole turns, an older page `turns` more; otherwise the whole history comes at once.
 # ChatFollowTests' cold start at a saved place far up needs it (#597). /mock/reset turns it off.
 PAGING = {"on": False}
+
+
+# MOCK_CHAT_SEARCH=1 (#6281, docs/design/proposals/assistant-search.md): the long Persona conversation (ASK4) is one whose
+# marker words each sit in one place only: the title, the user's words, a reply that is not the last, the last reply, a
+# thought, a tool output left unfolded and one in a folded run, early history beyond the first pages, a quoted context, a
+# card's answer (and an HTML card's) and a message Persona injected. History is paged (turns) so the early words need "Load earlier". Made up.
+def mock_chat_search():
+    rows = [it("user", "text", 300, text="冰川邮局 GlacierPost 几点开门？"), it("assistant", "text", 299.5, text="EarlyReply 早年回复：九点开门。")]
+    for n in range(2, 7):
+        rows += [it("user", "text", 300 - n * 10, text=f"第 {n} 个问题：明天天气怎么样？"), it("assistant", "text", 300 - n * 10 - 0.5, text=f"第 {n} 个回答：晴。")]
+    rows += [it("user", "text", 200, text="InjectedRaw 注入原文：检查示例任务的结果。\n<persona-supervision level=\"triage\" />",
+                injected={"kind": "system", "state": "supervise", "level": "triage", "line": "示例任务验收"}),
+             it("assistant", "text", 199.5, text="已检查，结果正常。")]
+    rows += [it("user", "text", 150, text="选 B：步行\n<persona-action view=\"msg-a/0\" action=\"choose-b\">{\"values\":{\"code\":\"ActionSecret\"}}</persona-action>"),
+             it("assistant", "text", 149.5, text="好的，按步行规划。")]
+    rows += [it("user", "text", 120, text="Open the map\n<persona-action view=\"msg-b/0\" action=\"map\">{\"html\":true,\"values\":{}}</persona-action>"),
+             it("assistant", "text", 119.5, text="地图打开了。")]
+    rows += [it("user", "text", 100, text="帮我看看路线\n<persona-context kind=\"selection\" title=\"摘录\">HiddenCtx 隐藏摘录</persona-context>"),
+             it("assistant", "thinking", 99.8, text="ThinkWord 思考词：先读一下路线文件。"),
+             it("assistant", "text", 99.6, text="WisteriaTea 紫藤茶馆 在巷口，先去那里。")]
+    rows += tool("Read", {"file_path": "/home/me/notes/route.md"}, "SilverKey 银钥匙 在第二个抽屉。", 99.4)
+    rows += [it("assistant", "text", 99.2, text="路线整理好了。"), it("user", "text", 50, text="我想去青石巷 BlueLane 看看")]
+    rows += tool("Bash", {"command": "ls ~/notes", "description": "List notes"}, "route.md\nkeys.md", 49.8)
+    rows += tool("Read", {"file_path": "/home/me/notes/keys.md"}, "CopperKey 铜钥匙 挂在门后。", 49.6)
+    rows += tool("WebFetch", {"url": "https://example.com/map"}, "地图已打开。", 49.4)
+    last = "LastReplyWord 末句词：路线已发你。"
+    rows += [it("assistant", "text", 49.2, text=last)]
+    for seq, row in enumerate(rows, 1):
+        row["seq"] = seq
+    ITEMS[ASK4] = rows
+    session = next(s for s in ASSISTANT if s["session_id"] == ASK4)
+    session.update(title="琥珀灯塔 AmberTitle 周末出行", last_text=last, updated_at=ago(minutes=1), seen_at=ago(minutes=0), rev=3000, total_items=len(rows))
+    PAGING["on"] = True
+
+
+if os.environ.get("MOCK_CHAT_SEARCH") == "1":
+    mock_chat_search()
 SOCKETS = set()
 
 
@@ -22458,7 +22564,7 @@ class H(BaseHTTPRequestHandler):
             HERDR_STOPPED.clear(); HERDR_STOPPED.update(herdr_env()); HERDR_STARTS.clear()  # the herdr row (#1916)
             HERDR_MODE["start"] = os.environ.get("MOCK_HERDR_START", ""); HERDR_MODE["gen"] += 1
             # A test that died before putting them back: the start-up delay (MOCK_DELAY), no paging.
-            NET["delay"], PAGING["on"] = float(os.environ.get("MOCK_DELAY", "0")), False
+            NET["delay"], PAGING["on"] = float(os.environ.get("MOCK_DELAY", "0")), os.environ.get("MOCK_CHAT_SEARCH") == "1"
             HISTORY_NOW["token"] = HISTORY
             # ExtensionMarketTests' update installed (#2988): example-gateway at 1.0.0 again, its newer version waiting.
             PLUGINS.pop("example-gateway-next", None); _UPGRADE_WHILE_ON.pop("example-gateway", None)
@@ -23008,6 +23114,7 @@ class H(BaseHTTPRequestHandler):
                                    "context_tokens": 48200, "output_tokens": 12800, "compactions": 0, "turns": 6,
                                    "started_at": ago(minutes=40), "last_activity": ago()})
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/panes", p):
+            time.sleep(float(os.environ.get("MOCK_PANES_DELAY", "0")))  # seconds: a computer slow to answer (#6153)
             return self.send_json(mock_panes(p.split("/")[4]))
         if p.startswith("/api/v1/sessions/") and p.endswith("/screen"):
             fail = os.environ.get("MOCK_SCREEN_FAIL_AFTER")

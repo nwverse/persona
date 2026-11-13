@@ -176,9 +176,13 @@ export function sessionTitle(s: Pick<Session, "title" | "cwd">): string {
   return s.title?.trim() || baseName(s.cwd) || t("lib-format.untitled_session");
 }
 
+// A path from a Windows computer: a drive letter or a UNC share. Only there is a backslash a separator; in any other
+// path it is a character of a name.
+const WINDOWS_PATH = /^[A-Za-z]:[\\/]|^\\\\/;
+
 export function baseName(p?: string): string {
   if (!p) return "";
-  const parts = p.replace(/\/+$/, "").split("/");
+  const parts = (WINDOWS_PATH.test(p) ? p.replace(/\\/g, "/") : p).replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || p;
 }
 

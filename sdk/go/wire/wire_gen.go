@@ -3055,14 +3055,17 @@ type ConnectorCatalogCallParams struct {
 	Args         json.RawMessage `json:"args,omitempty"`
 }
 
-// Values of ConnectorSubscriptionMode.
+// ConnectorSubscriptionMode: items: new items, each kept once; snapshot: the answer as one state, kept when it
+// changes; things: the answer lists Inbox rows ready-made (ConnectorInboxThing), kept and handed to the Inbox as they
+// are.
 const (
 	ConnectorSubscriptionModeItems    = "items"
 	ConnectorSubscriptionModeSnapshot = "snapshot"
+	ConnectorSubscriptionModeThings   = "things"
 )
 
 // ConnectorSubscriptionModes are the values of ConnectorSubscriptionMode, in order.
-var ConnectorSubscriptionModes = []string{"items", "snapshot"}
+var ConnectorSubscriptionModes = []string{"items", "snapshot", "things"}
 
 // Values of ConnectorSubscriptionGroup.
 const (
@@ -3088,7 +3091,9 @@ const (
 var ConnectorSubscriptionKinds = []string{"sub_mail", "sub_message", "sub_notice", "sub_deadline", "sub_event", "sub_update", "sub_digest"}
 
 // ConnectorSubscriptionFields: paths relative to one item. Only $, .field and [index] are supported; no expressions
-// or recursive descent.
+// or recursive descent. sender_id, chat and chat_name name who and where for mutes and policies (the Inbox row's
+// sender and chat tags), seen its read state, and reply_to where a reply goes; none of them is part of an item's
+// content.
 type ConnectorSubscriptionFields struct {
 	ID      string `json:"id,omitempty"`
 	Thread  string `json:"thread,omitempty"`
@@ -3098,13 +3103,26 @@ type ConnectorSubscriptionFields struct {
 	Body    string `json:"body,omitempty"`
 	Link    string `json:"link,omitempty"`
 	DueDate string `json:"due_date,omitempty"`
+	// The sender's stable id; without it the sender tag is the lowercased display name.
+	SenderID string `json:"sender_id,omitempty"`
+	// The conversation's stable id: the row gets a chat tag.
+	Chat string `json:"chat,omitempty"`
+	// The conversation's name, the chat tag's name.
+	ChatName string `json:"chat_name,omitempty"`
+	// Whether the item was already seen in the source: true, a non-zero number, or true, 1, yes, read or seen in any
+	// case. The Inbox row is read when its newest item is; seen only ever turns on.
+	Seen string `json:"seen,omitempty"`
+	// Where a reply goes and who sees it, in a line for people. With it, an item with an id can be replied to through
+	// the connector's inbox reply, with its thread (else its id) and its id as last.
+	ReplyTo string `json:"reply_to,omitempty"`
 }
 
-// ConnectorSubscriptionRecipe: A pull recipe, not a schedule. args is an object (default {}); strings may contain
-// {{since}} or {{since_date}}. cursor_arg and next_cursor_path opt into cursor pagination; page_arg and optional
-// next_page_path opt into page pagination (without next_page_path, a full requested page continues). items_path
-// defaults to $; fields are relative to one item. Text results require snapshot mode. Runtime argument/schema and
-// mapped-value validation belongs to the subscription runner.
+// ConnectorSubscriptionRecipe: A pull recipe, not a schedule. In things mode the rows bring their own threads and
+// kinds: group_by is thread, kind is a row's when it has none, and fields and pagination are not used. args is an
+// object (default {}); strings may contain {{since}} or {{since_date}}. cursor_arg and next_cursor_path opt into
+// cursor pagination; page_arg and optional next_page_path opt into page pagination (without next_page_path, a full
+// requested page continues). items_path defaults to $; fields are relative to one item. Text results require snapshot
+// mode. Runtime argument/schema and mapped-value validation belongs to the subscription runner.
 type ConnectorSubscriptionRecipe struct {
 	Mode           string                       `json:"mode"`
 	Tool           string                       `json:"tool"`

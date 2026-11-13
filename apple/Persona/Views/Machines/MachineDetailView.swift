@@ -283,11 +283,11 @@ struct MachineDetailView: View {
         }
     }
 
-    /// This computer's terminals, plain ones too (#4754): a leaf like the engine row, so a view push is fine here.
+    /// This computer's terminals, plain ones too (#4754), pushed by value as the Agents menu pushes them: a view push in
+    /// this value stack could leave on screen a page whose load never ran (#6153). Every stack that shows this page
+    /// declares `TerminalsRoute`.
     private var terminalsRow: some View {
-        NavigationLink {
-            TerminalsView(only: ref.path)
-        } label: {
+        NavigationLink(value: TerminalsRoute(machine: ref.path)) {
             HStack(spacing: Theme.Space.s) {
                 ThemedIcon(Theme.Icon.terminal).font(Theme.Font.body).foregroundStyle(Theme.accent).scaledFrame(width: Theme.Size.icon)
                 Text("Terminals").font(Theme.Font.body).lineLimit(1)

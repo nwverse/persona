@@ -108,11 +108,17 @@ fun JPage(
     /** The edge style on both bars unless [topScrollEdgeStyle] overrides the top. */
     scrollEdgeStyle: ScrollEdgeStyle = ScrollEdgeStyle.Blurred,
     topScrollEdgeStyle: ScrollEdgeStyle = scrollEdgeStyle,
+    /**
+     * Whether content sits under the top bar right now; null (the default) keeps the top edge on. A page whose top
+     * controls stay put passes it so the edge, which reaches below the bar, does not blur them while nothing scrolls.
+     */
+    underTop: (() -> Boolean)? = null,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val back = onBack ?: LocalRootBack.current
     PageFrame(modifier, ambience, topBar ?: { JTopBar(title, subtitle, back, actions, titleBusy, onTitleClick) }, bottomBar,
-        edges = edges, topScrollEdgeStyle = topScrollEdgeStyle, bottomScrollEdgeStyle = scrollEdgeStyle, content = content)
+        underTop = underTop, edges = edges, topScrollEdgeStyle = topScrollEdgeStyle, bottomScrollEdgeStyle = scrollEdgeStyle,
+        content = content)
 }
 
 @Composable

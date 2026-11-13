@@ -30,6 +30,12 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 	if name != "claude" && !shellcmd.NameRe.MatchString(name) {
 		return proto.LauncherCheck{Error: fmt.Sprintf("invalid launcher %q", name)}
 	}
+	if isDesktopLauncher(name) { // nothing of its own to run: the app's session runs on the app's settings
+		return proto.LauncherCheck{Agent: "claude", Error: desktopCheckMsg}
+	}
+	if isCodexAppLauncher(name) {
+		return proto.LauncherCheck{Agent: "codex", Error: codexAppCheckMsg}
+	}
 	agent := n.launcherAgent(ctx, name)
 	dir, err := os.MkdirTemp("", launcherCheckDir)
 	if err != nil {
