@@ -21,6 +21,7 @@ func newInboxAgentStoppedHub(t *testing.T) (*inboxHub, *InboxItem, proto.Session
 	h.inbox.handing.Lock()
 	t.Cleanup(h.inbox.handing.Unlock)
 	h.inboxAgentStarted(context.Background(), "s1", "box", "s-sub", "check the example")
+	waitNeedsYouIdle(t, h.Service)
 	sess := proto.Session{MachineID: "box", SessionID: "s-sub", Status: proto.StatusIdle,
 		LastText: "the example is fixed", UpdatedAt: time.Now().UTC()}
 	h.f.setSessions("box", sess)
