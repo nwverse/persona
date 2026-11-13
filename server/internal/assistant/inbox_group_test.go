@@ -263,8 +263,8 @@ func TestInboxGroupByTheModel(t *testing.T) {
 }
 
 // An answer that does not hold up is the model being unavailable: the connector's fallback groups the batch, with the
-// events the model would have seen, and the events keep its rule tiers ("By rule", triaged_by rules) for good: the model
-// coming back sorts nothing again.
+// events the model would have seen. A new event keeps its rule tier ("By rule", triaged_by rules) for good. An existing
+// event keeps its words and triage, with triaged_at advanced so the model coming back sorts nothing again.
 func TestInboxGroupFallsBackOnABadAnswer(t *testing.T) {
 	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, fallback: connector.GroupFallbackResult{
 		Assign: []connector.GroupAssign{{Message: "m1060", Event: "lark:F1:1051"}},
@@ -279,8 +279,8 @@ func TestInboxGroupFallsBackOnABadAnswer(t *testing.T) {
 		t.Fatalf("fallback asked %+v", g.fallbacks)
 	}
 	old, fresh := h.inbox.items["lark:F1:1051"], h.inbox.items["lark:F1:1061"]
-	if old.Tier != TierFYI || old.Reason != "按规则" || old.TriagedBy != "rules" || old.Summary != "" || old.TriagedAt != old.Last ||
-		old.Title != "示例兜底标题 lark:F1:1051" {
+	if old.Tier != TierAction || old.Reason != "示例" || old.TriagedBy != "model" || old.Summary != "等你定时间" ||
+		old.Title != "示例 A 方案评审" || old.Count != 2 || old.Last != "1060" || old.TriagedAt != old.Last {
 		t.Fatalf("existing event %+v", old)
 	}
 	if fresh == nil || fresh.Tier != TierNoise || fresh.Title != "示例结构分组" || fresh.TriagedBy != "rules" || fresh.Reason != "按规则" {
@@ -290,8 +290,38 @@ func TestInboxGroupFallsBackOnABadAnswer(t *testing.T) {
 	h.triageInbox(context.Background())
 	h.inbox.triaging.Lock()
 	h.inbox.triaging.Unlock()
-	if len(model.asked()) != before || old.TriagedBy != "rules" {
-		t.Fatal("an event sorted by rules was sorted again")
+	if len(model.asked()) != before || old.TriagedBy != "model" {
+		t.Fatal("an event triaged at this version was sorted again")
+	}
+}
+
+// Fallback appends preserve an existing event's triage whether the model or rules originally sorted it. In particular,
+// noise stays folded and an urgent event stays urgent; only the message count and version advance.
+func TestInboxGroupFallbackKeepsExistingTriage(t *testing.T) {
+	tests := []struct {
+		name, title, summary, tier, reason, triagedBy string
+		urgent                                        bool
+	}{
+		{name: "noise", title: "示例折叠标题", summary: "示例折叠总结", tier: TierNoise, reason: "示例折叠理由", triagedBy: "model"},
+		{name: "rules", title: "示例规则标题", summary: "示例规则总结", tier: TierFYI, reason: "按规则", triagedBy: "rules"},
+		{name: "urgent", title: "示例紧急标题", summary: "示例紧急总结", tier: TierAction, reason: "示例紧急理由", triagedBy: "model", urgent: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, fallback: connector.GroupFallbackResult{
+				Assign: []connector.GroupAssign{{Message: "m1060", Event: "lark:F1:1051"}, {Message: "m1061", Event: "lark:F1:1051"}}}}
+			h, _ := groupHub(t, g, nil)
+			it := h.inbox.items["lark:F1:1051"]
+			it.Title, it.Summary, it.Tier, it.Reason, it.TriagedBy = tc.title, tc.summary, tc.tier, tc.reason, tc.triagedBy
+			it.Urgent = tc.urgent
+			h.collectInbox(context.Background(), roundPoll)
+			h.waitGrouping()
+
+			if it.Title != tc.title || it.Summary != tc.summary || it.Tier != tc.tier || it.Reason != tc.reason ||
+				it.TriagedBy != tc.triagedBy || it.Urgent != tc.urgent || it.Count != 3 || it.Last != "1061" || it.TriagedAt != it.Last {
+				t.Fatalf("existing event %+v", it)
+			}
+		})
 	}
 }
 
