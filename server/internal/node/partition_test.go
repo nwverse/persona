@@ -62,10 +62,11 @@ func runPartitioned() (code int, ran bool) {
 	}
 	logFile := testFlag("test.testlogfile")
 	var (
-		mu     sync.Mutex
-		wg     sync.WaitGroup
-		failed bool
-		logs   = make([]string, parts)
+		mu       sync.Mutex
+		wg       sync.WaitGroup
+		failed   bool
+		logs     = make([]string, parts)
+		failures = make([]string, parts)
 	)
 	for i := range parts {
 		args, log := partitionArgs(names, parts, i, os.Args[1:], logFile)
@@ -84,6 +85,7 @@ func runPartitioned() (code int, ran bool) {
 			if err != nil {
 				failed = true
 				fmt.Fprintf(&out, ", %v", err)
+				failures[i] = fmt.Sprintf("partition %d of %d (%v): %s", i+1, parts, err, failedTests(out.Bytes()))
 			}
 			out.WriteString("\n")
 			_, _ = os.Stdout.Write(out.Bytes())
@@ -93,10 +95,39 @@ func runPartitioned() (code int, ran bool) {
 	if logFile != "" && joinTestLogs(logFile, logs) != nil {
 		failed = true
 	}
-	if failed {
-		return 1, true
+	if !failed {
+		return 0, true
 	}
-	return 0, true
+	// Last, where a reader that keeps only the end of the output (a verifier's summary) still sees what failed: a
+	// partition's own lines went out when it ended, maybe long before.
+	for _, f := range failures {
+		if f != "" {
+			fmt.Println("node tests failed in " + f)
+		}
+	}
+	return 1, true
+}
+
+// failedTest matches a test that failed, at any depth ("--- FAIL: TestX (1.2s)"), and testPanic a partition that
+// panicked or ran out of time instead.
+var (
+	failedTest = regexp.MustCompile(`(?m)^\s*--- FAIL: (\S+)`)
+	testPanic  = regexp.MustCompile(`(?m)^(panic: .*|.*test timed out after .*)$`)
+)
+
+// failedTests names what failed in a partition's output: its failed tests (subtests too), else why it stopped.
+func failedTests(out []byte) string {
+	var names []string
+	for _, m := range failedTest.FindAllSubmatch(out, -1) {
+		names = append(names, string(m[1]))
+	}
+	if len(names) == 0 {
+		if m := testPanic.Find(out); m != nil {
+			return clipText(string(m), 300)
+		}
+		return "no failed test named in its output"
+	}
+	return strings.Join(names, ", ")
 }
 
 // partitionArgs is the command line of partition i of parts: an exact -run list of every parts-th name from the i-th
@@ -234,5 +265,19 @@ func TestPartitionTestLogsJoin(t *testing.T) {
 	}
 	if joinTestLogs(path, []string{filepath.Join(dir, "missing")}) == nil {
 		t.Fatal("a partition's missing log must fail the run")
+	}
+}
+
+// What failed in a partition is named at the end of the run: its failed tests and subtests, else its panic or timeout.
+func TestPartitionFailuresNamed(t *testing.T) {
+	for out, want := range map[string]string{
+		"=== RUN   TestA\n--- FAIL: TestA (0.10s)\n    --- FAIL: TestA/sub (0.00s)\n--- PASS: TestB (0.00s)\nFAIL\n": "TestA, TestA/sub",
+		"ok\npanic: test timed out after 10m0s\n\trunning tests:\n":                                                  "panic: test timed out after 10m0s",
+		"panic: boom\n\ngoroutine 1 [running]:\n":                                                                    "panic: boom",
+		"exit status 2\n": "no failed test named in its output",
+	} {
+		if got := failedTests([]byte(out)); got != want {
+			t.Errorf("failedTests(%q) = %q, want %q", out, got, want)
+		}
 	}
 }
