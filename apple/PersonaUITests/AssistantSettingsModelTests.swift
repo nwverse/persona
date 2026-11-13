@@ -168,9 +168,14 @@ final class AssistantSettingsModelTests: XCTestCase {
         for _ in 0..<12 where !toggle.isHittable { app.swipeUp() }
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         XCTAssertTrue(toggle.isHittable, "the largest text must leave the switch reachable")
-        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
-        let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
-        from.press(forDuration: 0.2, thenDragTo: to) // A full swipe can jump past the row; leave it wholly in view.
+        // A full swipe can stop with the row at either edge. Drag by the row's own distance from the middle, and hold
+        // before letting go so the list does not coast: a fixed drag pushed the row off the top once the page grew.
+        let offset = 0.5 - toggle.frame.midY / app.windows.firstMatch.frame.height
+        if abs(offset) > 0.1 {
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+            let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5 + offset))
+            from.press(forDuration: 0.2, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
         XCTAssertTrue(toggle.isHittable)
         XCTAssertEqual(toggle.value as? String, "0")
         shot(app, "assistant-next-suggestions-large-text")
