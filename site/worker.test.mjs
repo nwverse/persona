@@ -412,7 +412,7 @@ function languageRequest(path, acceptLanguage, cookie) {
   return new Request("https://site.example" + path, { headers });
 }
 
-test("Accept-Language selects English by q-value, and unsupported languages keep Chinese", async () => {
+test("Accept-Language prefers supported ranges and uses English for other positive languages", async () => {
   for (const [header, english] of [
     ["en-US,en;q=0.9", true],
     ["EN-us", true],
@@ -424,15 +424,20 @@ test("Accept-Language selects English by q-value, and unsupported languages keep
     ["en;q=0x1,zh;q=0.7", false],
     ["en;q=0.1234,zh;q=0.5", false],
     ["en;q=0.8;q=0.9,zh;q=0.7", false],
-    ["fr-FR,*;q=0.8", false],
+    ["fr-FR,*;q=0.8", true],
     ["en;q=1.5,zh;q=0.5", false],
     ["en;q=bogus,zh;q=0.5", false],
     ["zh-CN,zh;q=0.9,en;q=0.8", false],
     ["fr-FR;q=1,en-GB;q=0.7,zh-CN;q=0.4", true],
+    ["fr;q=1,zh-CN;q=0.9", false],
     ["en;q=0.4,zh;q=0.7", false],
-    ["fr-FR,de-DE;q=0.9", false],
+    ["fr-FR,de-DE;q=0.9", true],
+    ["ja-JP,ja;q=0.9", true],
     ["fr-FR,en;q=0.2", true],
     ["en;q=0,zh-CN;q=0.5", false],
+    ["fr;q=0,en;q=0,zh;q=0,*;q=0", false],
+    ["*", false],
+    ["", false],
     ["not a valid header", false],
     [undefined, false],
   ]) {
@@ -556,6 +561,9 @@ test("a missing page gets the selected language's 404 without changing its statu
   for (const [path, header, cookie, expected] of [
     ["/not-here", "en-US", "", "/en/404.html"],
     ["/not-here", "zh-CN", "", "/404.html"],
+    ["/not-here", "ja-JP,ja;q=0.9", "", "/en/404.html"],
+    ["/not-here", "fr-FR,*;q=0.8", "", "/en/404.html"],
+    ["/not-here", "*", "", "/404.html"],
     ["/not-here", "en-US", "persona_lang=zh", "/404.html"],
     ["/en/not-here", "zh-CN", "persona_lang=zh", "/en/404.html"],
   ]) {

@@ -1,7 +1,7 @@
 // node --test site/worker.test.mjs site/releases.test.mjs
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import worker from "./worker.mjs";
 import { RELEASES_API, FRESH_MS, classifyAsset, compareTags, slimReleases, summarizeNotes } from "./releases.mjs";
 import {
@@ -211,9 +211,54 @@ test("the route is GET / HEAD only, and no package path is served by the Worker"
   assert.equal(edge.calls.length, before);
   const wrangler = await readFile(new URL("./wrangler.jsonc", import.meta.url), "utf8");
   const first = /"run_worker_first":\s*\[([^\]]*)\]/.exec(wrangler)[1];
-  // Localized 404s require every missing path to reach the Worker. Its dispatch order and the assertions above keep
-  // release metadata on serveReleases and every package path on ASSETS; Wrangler rejects redundant per-route entries.
-  assert.deepEqual(JSON.parse(`[${first}]`), ["/*"]);
+  // Localized 404s require every non-excluded path to reach the Worker. Static assets bypass it; metadata never does.
+  assert.deepEqual(JSON.parse(`[${first}]`), [
+    "/*", "!/img/*", "!/fonts/*", "!/favicon.png", "!/favicon-dark.png", "!/style.css",
+    "!/releases/*.js", "!/install.sh",
+  ]);
+});
+
+function excludedBy(patterns, path) {
+  return patterns.some((pattern) => {
+    if (!pattern.startsWith("!")) return false;
+    const route = pattern.slice(1);
+    if (route.endsWith("/*")) return path.startsWith(route.slice(0, -1));
+    if (route.includes("*")) {
+      const source = route.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*");
+      return new RegExp(`^${source}$`).test(path);
+    }
+    return path === route;
+  });
+}
+
+async function publicFiles(directory, prefix = "") {
+  const found = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) found.push(...await publicFiles(new URL(entry.name + "/", directory), `${prefix}${entry.name}/`));
+    else found.push("/" + prefix + entry.name);
+  }
+  return found;
+}
+
+test("every static asset has a Worker exclusion, and no exclusion covers a page or dynamic route", async () => {
+  const wrangler = await readFile(new URL("./wrangler.jsonc", import.meta.url), "utf8");
+  const first = /"run_worker_first":\s*\[([^\]]*)\]/.exec(wrangler)[1];
+  const patterns = JSON.parse(`[${first}]`);
+  const dynamic = [/^\/dl\//, /^\/relay\//, /^\/extensions\/catalog\.json$/, /^\/extensions\/icons\//, /^\/releases\/data\.json$/];
+  const files = await publicFiles(new URL("./public/", import.meta.url));
+  assert.ok(files.length > 10);
+  for (const path of files) {
+    if (path.endsWith(".html") || dynamic.some((pattern) => pattern.test(path))) continue;
+    assert.ok(excludedBy(patterns, path), `${path} must bypass the Worker; add its negative run_worker_first pattern`);
+  }
+  assert.ok(excludedBy(patterns, "/install.sh"), "publish-time install.sh bypasses the Worker");
+  for (const path of [
+    "/", "/en/", "/missing", "/releases/", "/en/releases/",
+    "/dl/VERSION", "/dl/personad-linux-amd64.gz", "/dl/v1/manifest.json", "/relay/v1/health",
+    "/extensions/catalog.json", "/extensions/icons/github", "/releases/data.json",
+  ]) {
+    assert.equal(excludedBy(patterns, path), false, `${path} must still reach the Worker`);
+  }
 });
 
 // ---------- the page's logic ----------

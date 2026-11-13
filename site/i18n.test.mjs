@@ -84,6 +84,19 @@ test("English rich pages and social previews use the English README recording", 
   }
 });
 
+test("privacy update dates are equal in both languages", async () => {
+  const [zh, en] = await Promise.all([page("privacy/index.html"), page("en/privacy/index.html")]);
+  const zhDate = /更新于 (\d{4}) 年 (\d{1,2}) 月 (\d{1,2}) 日/.exec(zh);
+  const enDate = /Updated ([A-Z][a-z]+) (\d{1,2}), (\d{4})/.exec(en);
+  assert.ok(zhDate, "Chinese privacy update date");
+  assert.ok(enDate, "English privacy update date");
+  const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const fromEnglish = `${enDate[3]}-${String(months.indexOf(enDate[1]) + 1).padStart(2, "0")}-${enDate[2].padStart(2, "0")}`;
+  const fromChinese = `${zhDate[1]}-${zhDate[2].padStart(2, "0")}-${zhDate[3].padStart(2, "0")}`;
+  assert.equal(fromEnglish, fromChinese);
+  assert.equal(fromChinese, "2026-11-13", "the language-cookie disclosure's update date");
+});
+
 test("both home pages carry the same install command", async () => {
   for (const path of PAIRS.slice(0, 1)) {
     for (const file of path) {

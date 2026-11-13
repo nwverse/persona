@@ -5,14 +5,15 @@ const COOKIE = "persona_lang";
 const PAGE_DIRS = new Set(["extensions", "releases", "privacy", "terms"]);
 
 export function acceptLanguage(header) {
-  let best = { language: "zh", quality: 0 };
+  let best = { language: "", quality: 0 };
+  let otherLanguage = false;
   for (const entry of String(header || "").split(",")) {
     const [rawTag, ...parameters] = entry.toLowerCase().split(";");
     const tag = rawTag.trim();
-    const language = /^en(?:-[a-z0-9]{1,8})*$/.test(tag) ? "en"
-      : /^zh(?:-[a-z0-9]{1,8})*$/.test(tag) ? "zh" : null;
-    // Wildcards and unsupported ranges fall back to the existing Chinese page.
-    if (!language) continue;
+    // A basic language range, excluding wildcards and malformed entries.
+    if (!/^[a-z]{1,8}(?:-[a-z0-9]{1,8})*$/.test(tag)) continue;
+    const language = tag === "en" || tag.startsWith("en-") ? "en"
+      : tag === "zh" || tag.startsWith("zh-") ? "zh" : "";
     let quality = 1;
     let valid = true;
     let sawQuality = false;
@@ -24,10 +25,13 @@ export function acceptLanguage(header) {
       if (!/^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(match[1])) valid = false;
       else quality = Number(match[1]);
     }
-    // The first supported tag wins a tie, as required by Accept-Language's order.
-    if (valid && quality > best.quality) best = { language, quality };
+    if (!valid || quality === 0) continue;
+    // Any positive supported range outranks an unsupported language. The first supported tag wins a quality tie.
+    if (language && quality > best.quality) best = { language, quality };
+    if (!language) otherLanguage = true;
   }
-  return best.language;
+  // People who name only another real language get English; absent, wildcard, malformed and all-zero headers stay Chinese.
+  return best.language || (otherLanguage ? "en" : "zh");
 }
 
 function rememberedLanguage(request) {

@@ -35,10 +35,11 @@ Every page has a distinct, shareable English URL; the existing unprefixed URL st
 | `/404.html` | `/en/404.html` |
 
 `site/language.mjs` handles only HTML selection; the dynamic routes in `site/worker.mjs` still run first, and all other
-existing assets go back to the static binding unchanged. On a legacy HTML URL with no explicit choice, the Worker parses
-`Accept-Language` by quality and header order (`en` and `en-*` select English, `zh` and `zh-*` select Chinese), defaulting
-to Chinese for missing, unknown or malformed values. An English result is a 302 to the `/en/` sibling, never a permanent
-redirect. The visible switch uses `?lang=en` or `?lang=zh`; that explicit choice wins over the browser header, sets a
+existing assets go back to the static binding unchanged. On a legacy HTML URL with no explicit choice, the Worker first
+compares the supported `zh*` and `en*` ranges by quality and header order. If none has q > 0, any other valid language
+range with q > 0 selects English; missing, empty, wildcard-only, malformed and all-q=0 headers select Chinese, so
+scripts, crawlers and old clients keep their existing behavior. An English result is a 302 to the `/en/` sibling, never
+a permanent redirect. The visible switch uses `?lang=en` or `?lang=zh`; that explicit choice wins over the browser header, sets a
 one-year `persona_lang` cookie (`Secure`, `HttpOnly`, `SameSite=Lax`, path `/`) and redirects to the clean localized URL.
 Opening a shared `/en/` URL always shows English but does not itself change the remembered preference. Japanese remains
 follow-up work; this site version is English and Chinese.
@@ -46,11 +47,12 @@ follow-up work; this site version is English and Chinese.
 Legacy HTML responses and negotiation/switch redirects carry `Cache-Control: private, no-store` and
 `Vary: Accept-Language, Cookie`: the Hong Kong entry must not reuse a Chinese page or English redirect for a visitor with
 a different preference. Canonical `/en/` pages have distinct URLs and retain normal static caching. Localized 404 bodies
-keep status 404 and are likewise `no-store`. `run_worker_first` is `/*` so every missing path reaches this logic; the
-Worker's original dispatch order handles `/install.sh`, `/dl/*`, `/relay/*`, `/releases/data.json`, the extension
-catalog/icons and all other existing assets before the language fallback. Per-route `run_worker_first` entries are not
-repeated because Wrangler rejects them as redundant under `/*`. There is no `/en/releases/data.json` or other localized
-API: both languages use the same data and assets.
+keep status 404 and are likewise `no-store`. `run_worker_first` starts with `/*` so every missing path reaches this logic;
+negative patterns then keep `/img/*`, `/fonts/*`, both root favicons, `style.css`, `releases/*.js` and the publish-time
+`install.sh` on the unmetered direct-static-asset path. They do not cover `/dl/*`, `/relay/*`, `/releases/data.json`,
+the extension catalog/icons, HTML pages or unknown paths. `site/releases.test.mjs` walks every non-HTML public file and
+fails if an asset lacks an exclusion or an exclusion covers a dynamic route. Both languages use the same data and assets;
+there is no `/en/releases/data.json` or other localized API.
 
 The English home follows `README.md` as the Chinese page follows `README.zh-CN.md`: the same facts, sections, hero story
 and install command in natural English. Legal translations preserve the source meaning and need a human read before
@@ -137,11 +139,12 @@ releases pages; English uses the system serif described above.
 - **Icons go through `/extensions/icons/<id>`**: icon hosts such as raw.githubusercontent.com are often unreachable from
   mainland China, this site is not. The Worker fetches only the `icon_url` the catalog gives that id, passes image types
   only (at most 512 KB), and sends `nosniff` and a sandboxing CSP so an SVG opened on its own runs nothing here.
-- `run_worker_first` is `["/*"]` in `site/wrangler.jsonc`, so every request reaches the Worker before static-asset
-  handling. The small dynamic-handler set still contains only the catalog and icon routes in this section; other paths
-  continue to static assets or language negotiation. The wildcard is also required for localized 404s because, with
-  `not_found_handling` set, a missing path would otherwise never reach the Worker. Do not add redundant per-route
-  entries beneath `/*`: Wrangler 4 rejects them.
+- `run_worker_first` in `site/wrangler.jsonc` has the `/*` positive pattern for HTML and unknown paths plus negative
+  patterns for the committed static assets and `install.sh`. The small dynamic-handler set still contains only the
+  catalog and icon routes in this section; those routes, `/dl/*`, `/relay/*` and `/releases/data.json` are deliberately
+  not excluded. The wildcard is required for localized 404s because, with `not_found_handling` set, a missing path would
+  otherwise never reach the Worker. Keep the negative list current when adding an asset: the releases test checks every
+  non-HTML file and rejects any exclusion that covers a dynamic route.
 
 ## Releases page
 
@@ -187,10 +190,11 @@ are on in one click, and still reach every other device, component and earlier v
   cannot be reached the old copy is served marked `stale` for up to 30 days. With no copy the route answers 503 and
   `no-store`. A new release appears without a site deployment.
 - **No package bandwidth on this site**: every download goes from the browser straight to `github.com`. A file whose
-  `browser_download_url` is not exactly GitHub's address for this repository, tag and name is dropped. The wildcard
-  `run_worker_first` dispatches every request, but only `/releases/data.json` has a dynamic handler under this section;
-  there is no download or redirect route under `/releases/`, and no package passes through the Hong Kong entry, the
-  Worker or R2. `install.sh` is not offered on this page: it fetches
+  `browser_download_url` is not exactly GitHub's address for this repository, tag and name is dropped. `/*` reaches the
+  Worker unless a negative static-asset pattern matches, but only `/releases/data.json` has a dynamic handler under this
+  section; `releases/*.js` bypasses the Worker while the JSON route never does. There is no download or redirect route
+  under `/releases/`, and no package passes through the Hong Kong entry, the Worker or R2. `install.sh` is not offered on
+  this page: it fetches
   from this site's `/dl/`, which stays for hub and node updates (`docs/operations/release.md`, "Publishing personad").
 - **Tests**: `node --test site/worker.test.mjs site/releases.test.mjs site/i18n.test.mjs` covers version filtering and
   ordering, file classification, hostile download addresses, note summaries, caching, stale fallback, the per-device
@@ -213,8 +217,14 @@ Old builds / deployed hubs ──► <old-domain> ──► 301 to same path on 
   so Cloudflare IP changes need no restart. Cache canonical pages / static files for 60 seconds, serving stale if Worker fails; `/relay/`, `/dl/`, `/install.sh` stream without cache.
   Negotiated legacy HTML, language redirects and localized 404s carry `private, no-store` and **must bypass the entry cache**;
   never override their `Cache-Control`, `Set-Cookie` or `Vary` with `proxy_ignore_headers`, or one visitor's language can be
-  served to another. After deploying this change, smoke-test the same legacy URL through the entry with English and Chinese
-  headers and with each explicit cookie; local Worker tests cannot verify the external entry's cache configuration.
+  served to another. After the relay check, `deploy_site` in `scripts/release/publish.sh` runs
+  `scripts/release/site_language_check.sh <base url>`: three alternating Chinese/English rounds on `/`, the explicit English
+  cookie against a Chinese header, the canonical English page, and `/install.sh` when present (direct, non-HTML). Every
+  request has a timeout and each failure names its step. A failed check prints a loud entry-cache error but lets all normal
+  post-deploy release checks finish; the final publish status then fails instead of skipping those checks. On failure, make
+  the entry honor `Cache-Control` and `Vary`, bypass its cache for negotiated HTML, redirects and localized 404s, and never
+  cache a `Set-Cookie` response for another visitor. Rerun the same command directly after changing the entry; local Worker
+  tests cannot verify that external configuration.
 - **Client addresses**: after forwarding, `cf-connecting-ip` is the entry's address. Entry adds `x-persona-edge-secret` (Worker secret `EDGE_SECRET`)
   and `X-Forwarded-For: <client>`. `site/worker.mjs` trusts it only with the matching secret, using it for push-relay rate limits; absent / incorrect secret preserves original behavior.
   Secret in 1Password; entry copy `/etc/nginx/persona/edge-secret.conf` (0600).
