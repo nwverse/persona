@@ -183,29 +183,33 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
     <Button tone="quiet" size="sm" icon="chat" onClick={() => setSayOpen(true)} testId="inbox-say">{t("inbox-inboxdetail.say_something")}</Button>
   ) : null);
   const showSay = sayOpen && canSay && !failed;
+  const actions = (open || action) ? <div className="flex shrink-0 items-center gap-2" data-event-status-actions>{open}{action}</div> : null;
   if (!preparing(item) && !failed && !word && !action && !showSay) return null;
   return (
     <div className="flex flex-col gap-2">
       {preparing(item) ? (
-        <div className="flex min-w-0 items-center gap-2 rounded-[10px] bg-inset p-3 text-[12.5px] shadow-hairline" data-event-preparing>
-          <Spinner size={12} />
-          <Shimmer className="min-w-0 flex-1 truncate">{now ?? t("inbox-inboxevent.preparing")}</Shimmer>
-          {open}
-          {action}
+        <div className="flex min-w-0 flex-col gap-2 rounded-[10px] bg-inset p-3 text-[12.5px] shadow-hairline sm:flex-row sm:items-center" data-event-preparing>
+          <div className="flex min-w-0 items-center gap-2 sm:flex-1">
+            <Spinner size={12} />
+            <Shimmer className="min-w-0 flex-1 truncate">{now ?? t("inbox-inboxevent.preparing")}</Shimmer>
+          </div>
+          {actions}
         </div>
       ) : failed ? (
-        <div className="flex items-start gap-2 rounded-[10px] bg-red-tint p-3 text-[12.5px] text-red" role="status" data-event-failed>
-          <Icon name="warning" size={14} className="mt-px shrink-0" />
-          <span className="min-w-0 flex-1 leading-relaxed">{now ?? (h?.error ? t("inbox-inboxevent.failed_with", { error: h.error }) : t("inbox-inboxevent.failed"))}</span>
-          {open}
-          {action}
+        <div className="flex min-w-0 flex-col gap-2 rounded-[10px] bg-red-tint p-3 text-[12.5px] text-red sm:flex-row sm:items-start" role="status" data-event-failed>
+          <div className="flex min-w-0 items-start gap-2 sm:flex-1">
+            <Icon name="warning" size={14} className="mt-px shrink-0" />
+            <span className="min-w-0 flex-1 leading-relaxed">{now ?? (h?.error ? t("inbox-inboxevent.failed_with", { error: h.error }) : t("inbox-inboxevent.failed"))}</span>
+          </div>
+          {actions}
         </div>
       ) : word ? (
-        <div className="flex min-w-0 items-center gap-2 text-[12.5px] text-ink-2" data-event-handling={h?.state ?? (done ? "done" : undefined)} data-event-now={now === undefined ? undefined : item.now}>
-          {done ? <Icon name="check" size={13} stroke={2.4} className="shrink-0 text-green" /> : h?.state === "waiting" ? <Icon name="clock" size={13} className="shrink-0 text-ink-3" /> : working ? <Spinner size={12} /> : null}
-          <span className={cx("min-w-0 flex-1", now === undefined && "truncate")}>{word}</span>
-          {open}
-          {action}
+        <div className="flex min-w-0 flex-col gap-2 text-[12.5px] text-ink-2 sm:flex-row sm:items-center" data-event-handling={h?.state ?? (done ? "done" : undefined)} data-event-now={now === undefined ? undefined : item.now}>
+          <div className="flex min-w-0 items-center gap-2 sm:flex-1">
+            {done ? <Icon name="check" size={13} stroke={2.4} className="shrink-0 text-green" /> : h?.state === "waiting" ? <Icon name="clock" size={13} className="shrink-0 text-ink-3" /> : working ? <Spinner size={12} /> : null}
+            <span className={cx("min-w-0 flex-1", now === undefined && "truncate")}>{word}</span>
+          </div>
+          {actions}
         </div>
       ) : action ? <div className="flex justify-end gap-2">{open}{action}</div> : null}
       {showSay && (
