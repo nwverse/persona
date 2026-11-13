@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
 import { adoptConversation, askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
-import { sessionTitle, stateOf, uuid } from "../../lib/format";
+import { baseName, sessionTitle, stateOf, uuid } from "../../lib/format";
 import {
   agentDraft, connectorReference, conversationRoute, docChangeKey, docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, recordHandOff, sendReply, useDroppedChanges,
   setDone, unsentReplies, type InboxItem,
@@ -213,6 +213,8 @@ function listedAgent(sessions: Record<string, Session[]>, machines: Machine[], p
 }
 
 const sameSession = (a: Session, b: Session) => a.machine_id === b.machine_id && a.session_id === b.session_id;
+// The name shown on the Agent row, without sessionTitle's localized "untitled" fallback: the manager supplies that instead.
+const handOffAgentTitle = (s: Session) => s.title?.trim() || baseName(s.cwd);
 
 /** Hands the item to Persona (its manager's main conversation by default, which may write back to the item, or a new
  *  one) or to a running agent, as a <persona-context> plus the ask. The item's source remembers where it went (#2121). */
@@ -260,7 +262,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
         prompt: ask.trim() || HANDOFF_PRESETS[0],
         onStarted: (s) => {
           if (memoryKey) rememberHandOff(memoryKey, agentTarget(s.machine_id, s.session_id));
-          void recordHandOff(item, s, "agent", s.title);
+          void recordHandOff(item, s, "agent", handOffAgentTitle(s));
           if (markDone) void setDone(item, true);
           onClose();
         },
@@ -317,7 +319,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
         navigate({ name: "session", mid: target.machine_id, sid: target.session_id });
         void sendToSession(target.machine_id, target.session_id, { text }).then((ok) => {
           if (!ok) return;
-          void recordHandOff(item, target, "agent", target.title);
+          void recordHandOff(item, target, "agent", handOffAgentTitle(target));
           if (markDone) void setDone(item, true);
         });
         return;
