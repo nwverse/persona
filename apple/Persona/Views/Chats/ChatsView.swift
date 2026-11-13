@@ -95,18 +95,36 @@ extension Session {
 }
 
 extension DevGrouping {
-    /// The groupings offered: 「按待办」 needs the hub's todos (an old hub answers 404 and has none).
-    static func offered(supportsTodos: Bool) -> [DevGrouping] { allCases.filter { supportsTodos || $0 != .todo } }
+    /// The groupings offered: 「按待办」 needs the hub's todos (an old hub answers 404 and has none), By Pinned the hub's
+    /// direction tree (#4352).
+    static func offered(supportsTodos: Bool, supportsDirections: Bool = false) -> [DevGrouping] {
+        allCases.filter { (supportsTodos || $0 != .todo) && (supportsDirections || $0 != .direction) }
+    }
 
-    /// The grouping in use: a stored 「按待办」 falls back to 「按项目」 on a hub without todos.
-    static func resolved(_ stored: DevGrouping, supportsTodos: Bool) -> DevGrouping {
-        stored == .todo && !supportsTodos ? .space : stored
+    /// The grouping in use: a stored 「按待办」 falls back to 「按项目」 on a hub without todos; a stored By Pinned to By
+    /// To-do (or By Project) on a hub without the direction tree, or before it is read.
+    static func resolved(_ stored: DevGrouping, supportsTodos: Bool, supportsDirections: Bool = false) -> DevGrouping {
+        if stored == .direction && !supportsDirections { return resolved(.todo, supportsTodos: supportsTodos) }
+        return stored == .todo && !supportsTodos ? .space : stored
+    }
+
+    /// Whether the hub has the direction tree By Pinned is built from.
+    @MainActor static var supportsDirections: Bool { AppModel.shared.directionTree != nil }
+
+    /// `offered` and `resolved` for what the hub has now: its todos, its direction tree.
+    @MainActor static var offeredNow: [DevGrouping] {
+        offered(supportsTodos: TodoStore.shared.isSupported, supportsDirections: supportsDirections)
+    }
+    @MainActor static func resolvedNow(_ stored: DevGrouping) -> DevGrouping {
+        resolved(stored, supportsTodos: TodoStore.shared.isSupported, supportsDirections: supportsDirections)
     }
 }
 
 /// How Develop groups its agents (the menu at the top left; remembered).
 enum DevGrouping: String, CaseIterable, Identifiable {
     case repo, space, todo, state, machine, app, recent
+    /// By Pinned direction (#4352): the hub's direction tree, direction → to-do → Agent → sub-Agent. Not the default.
+    case direction
     /// What an app that never chose a grouping shows (#2108): machines → repositories → working trees, after Orca.
     static let standard = DevGrouping.repo
     var id: String { rawValue }
@@ -119,6 +137,7 @@ enum DevGrouping: String, CaseIterable, Identifiable {
         case .machine: String(localized: "By Machine")
         case .app: String(localized: "By App")
         case .recent: String(localized: "Recently Used")
+        case .direction: String(localized: "By Pinned")
         }
     }
     var symbol: String {
@@ -130,6 +149,7 @@ enum DevGrouping: String, CaseIterable, Identifiable {
         case .machine: Theme.Icon.machine
         case .app: Theme.Icon.byApp
         case .recent: Theme.Icon.recent
+        case .direction: Theme.Icon.pin
         }
     }
 }
@@ -377,6 +397,16 @@ struct ChatsView: View {
                     spaceAt = spaceAt.filter { $0.key < p.count }
                     if p.isEmpty, !leaving { AppModel.rememberChat(nil); model.chatSwitched = [:] } // back at the list: next launch starts here
                 }
+                .onChange(of: model.agentsListReveal) { _, request in
+                    let previousPath = path
+                    stackStill.whenStill {
+                        // A newer targeted open wins, even if the stable-stack opener already consumed it.
+                        guard !leaving, model.agentsNavigationRevision == request, path == previousPath,
+                              model.openChat == nil, model.openPersonalAgent == nil else { return }
+                        spaceAt = [:]
+                        if !path.isEmpty { path = NavigationPath() }
+                    }
+                }
                 .onChange(of: model.openChat, initial: true) { _, key in
                     // Not before the list is on screen: a push into a stack whose root has not appeared yet built the
                     // chat three times (a TabView launch onto a chat, `-openSession` / a notification: items
@@ -403,8 +433,11 @@ struct ChatsView: View {
                     // Not over a personal agent's conversation asked for (#4519): that one is what the app came up for.
                     if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, model.selectedTab == .chats,
                        let v = AppModel.rememberedChat {
+                        let request = model.agentsNavigationRevision
                         DispatchQueue.main.async {
-                            if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, AppModel.rememberedChat == v, !leaving {
+                            if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil,
+                               model.selectedTab == .chats, model.agentsNavigationRevision == request,
+                               AppModel.rememberedChat == v, !leaving {
                                 model.openChat = SessionKey(path: v)
                             }
                         }
@@ -423,6 +456,13 @@ struct ChatsView: View {
                     }
                     #endif
                     if !machineFilter.isEmpty, !model.machines.isEmpty, model.machine(MachineRef(path: machineFilter)) == nil { machineFilter = "" }
+                }
+                // Another assistant is current, and the list is its agents now: a computer picked in the menu that is
+                // not one of its own would leave the list empty, and what was pushed from the list (a chat, a space, a
+                // computer) is the assistant before's.
+                .onChange(of: model.assistantSwitches) {
+                    if !machineFilter.isEmpty, !model.scopedMachines(inFront: false).contains(where: { $0.ref.path == machineFilter }) { machineFilter = "" }
+                    if !path.isEmpty { path = NavigationPath() }
                 }
         } empty: {
             SplitPlaceholder(symbol: Theme.Icon.agents, title: String(localized: "Choose an Agent"),
@@ -644,7 +684,7 @@ private struct AgentsList: View {
     @StoredValue(HubFilter.key) private var hubFilter = ""
     @StoredValue("dev.grouping") private var storedGrouping: DevGrouping = .standard // by repository first (#2108)
     /// The grouping in use (`DevGrouping.resolved`).
-    private var grouping: DevGrouping { DevGrouping.resolved(storedGrouping, supportsTodos: TodoStore.shared.isSupported) }
+    private var grouping: DevGrouping { DevGrouping.resolvedNow(storedGrouping) }
     @StoredValue("dev.sort") private var sort: AgentSort = .state
     /// Compact List: one line per agent.
     @StoredValue("dev.compact") private var compact = false
@@ -716,7 +756,7 @@ private struct AgentsList: View {
     }
 
     private var sessions: [Session] { feed.following ? feed.sessions : model.sessionLists.sessions }
-    private var machines: [Machine] { feed.following ? feed.machines : model.machines }
+    private var machines: [Machine] { feed.following ? feed.machines : model.scopedMachines() }
     /// What the rows read (a machine's name, an agent's label), filled by each run of the body and not observed. SwiftUI
     /// tracks what each row of a `List` read when it was last drawn: a row that asked the model for its machine went on
     /// following the machines while the list was held, was drawn again by the next push, and the `List` measured its
@@ -785,7 +825,7 @@ private struct AgentsList: View {
                                                workspaceRevision: workspaceCatalog.revision)
         return feed.projection.resolve(key, immediate: !follows || feed.immediateRevision == key.revision,
             input: { .init(sessions: follows ? feed.sessions : model.sessionLists.sessions,
-                           machines: follows ? feed.machines : model.machines, settings: settings,
+                           machines: follows ? feed.machines : model.scopedMachines(), settings: settings,
                            workspaces: workspaceCatalog.workspaces) },
             valid: { key in
                 key.revision >= feed.immediateRevision && AgentListProjectionCache.partitions(model) == key.partitions &&
@@ -872,7 +912,7 @@ private struct AgentsList: View {
         // One row per session that waits for the user, its cards under it (`AgentsNeedsYou`): the section, the Needs
         // You filter and the tab's badge count these rows.
         let waiting = AgentsNeedsYou.rows(
-            cards: AgentsNeedsYou.cards(feed.following ? feed.interactions : model.pendingInteractions, session: session,
+            cards: AgentsNeedsYou.cards(feed.following ? feed.interactions : model.scopedInteractions, session: session,
                                         machine: machineFilter, hub: model.isMultiHub ? hubFilter : nil),
             waiting: AgentsNeedsYou.waiting(base)) // a subtask waiting for you is a row of its own (`CodexTasks`)
         let _ = (lookup.needsYou = waiting.count)
@@ -888,6 +928,7 @@ private struct AgentsList: View {
             if grouping == .todo {
                 return TodosLogic.buildTodoAgentGroups(sessions: unpinned, todos: TodoStore.shared.todos, isMuted: model.isMuted).map(\.key)
             }
+            if grouping == .direction, let layout = directionLayout(unpinned.filter { $0.state.isLive }) { return layout.foldIDs }
             return projection.menuSections
         }()
         let _ = menuActions.update(sections: sectionsForMenu,
@@ -1030,6 +1071,8 @@ private struct AgentsList: View {
                 recentSection(unpinned)
             } else if grouping == .todo {
                 todoSections(unpinned.filter { $0.state.isLive })
+            } else if grouping == .direction {
+                directionSections(unpinned.filter { $0.state.isLive })
             } else if grouping == .state {
                 stateSections(unpinned.filter { $0.state.isLive })
             } else if grouping == .machine {
@@ -1319,6 +1362,14 @@ private struct AgentsList: View {
         case .todo:
             let groups = TodosLogic.buildTodoAgentGroups(sessions: live, todos: TodoStore.shared.todos, isMuted: model.isMuted)
             shown = rows.todos(groups) { g in g.todoID == nil ? isFolded(g.key, otherwise: g.folded) : isFolded(g.key) }
+        case .direction:
+            let other = { (g: TodoAgentGroup) in g.todoID == nil ? isFolded(g.key, otherwise: g.folded) : isFolded(g.key) }
+            if let layout = directionLayout(live) {
+                shown = rows.directions(layout, isOther: other)
+            } else {
+                let groups = TodosLogic.buildTodoAgentGroups(sessions: live, todos: TodoStore.shared.todos, isMuted: model.isMuted)
+                shown = rows.todos(groups, isFolded: other)
+            }
         case .state: shown = rows.states(live)
         case .machine: shown = rows.machines(live, order: machineOrder(live).map(\.ref))
         case .app: shown = rows.apps(lookup.projection?.apps ?? AppGroups.build(unpinned))
@@ -1351,7 +1402,7 @@ private struct AgentsList: View {
             cardRow(ix)
         } else if let first = row.cards.first {
             if compact {
-                NavigationLink(value: first.sessionKey) {
+                agentNavigationLink(first.sessionKey) {
                     CompactInteractionRow(interaction: first, machine: machine(first.machineRef)?.title, more: row.cards.count - 1)
                 }
                 #if os(macOS)
@@ -1386,7 +1437,7 @@ private struct AgentsList: View {
             .accessibilityIdentifier("agents.interaction")
         } else if compact {
             // Compact List: one row like an agent's; the chat answers it.
-            NavigationLink(value: ix.sessionKey) {
+            agentNavigationLink(ix.sessionKey) {
                 CompactInteractionRow(interaction: ix, machine: machine(ix.machineRef)?.title)
             }
             #if os(macOS)
@@ -1431,7 +1482,7 @@ private struct AgentsList: View {
         let s = session(row.key)
         let place = s.flatMap { machine($0.machineRef)?.title }
         if compact {
-            NavigationLink(value: row.key) {
+            agentNavigationLink(row.key) {
                 CompactWaitingRow(session: s, machine: place, since: row.since)
             }
             .listRowInsets(CompactList.rowInsets)
@@ -2283,7 +2334,11 @@ private struct AgentsList: View {
     /// `TodoAgentGroup.folded`).
     @ViewBuilder private func todoSections(_ live: [Session]) -> some View {
         let todoGroups = TodosLogic.buildTodoAgentGroups(sessions: live, todos: TodoStore.shared.todos, isMuted: model.isMuted)
-        let mixedHosts = Set(live.compactMap(\.hostKind)).count > 1
+        todoGroupSections(todoGroups, mixedHosts: Set(live.compactMap(\.hostKind)).count > 1)
+    }
+
+    /// By To-do's sections for `todoGroups` (also By Pinned's last ones, for the Agents its tree does not have).
+    @ViewBuilder private func todoGroupSections(_ todoGroups: [TodoAgentGroup], mixedHosts: Bool) -> some View {
         ForEach(todoGroups) { g in
             let id = g.key
             let folded = g.todoID == nil ? isFolded(id, otherwise: g.folded) : isFolded(id)
@@ -2326,6 +2381,113 @@ private struct AgentsList: View {
                 .listSectionSpacing(folded ? .custom(0) : .default)
             }
         }
+    }
+
+    /// By Pinned (#4352, `DirectionAgentSections`) from the hub's tree; nil without one.
+    private func directionLayout(_ live: [Session]) -> DirectionAgentSections? {
+        guard let tree = model.directionTree else { return nil }
+        return DirectionAgentSections.build(tree, shown: live, known: Set(model.sessionsNow.map(\.key)),
+                                            group: model.hub?.group ?? "", filtering: quick != .all || !query.isEmpty,
+                                            isMuted: model.isMuted)
+    }
+
+    /// By Pinned: a section per direction of the hub's tree, headed by its name and 「在做 N · 等你 N」, folding as a
+    /// to-do's section does; in it each to-do's row (its state; a tap opens its card), its Agents a level in under it
+    /// and their sub-Agents further in. Then By To-do's Started Manually and Unassigned for the Agents the tree does not
+    /// have. Without a tree (it is being read), By To-do.
+    @ViewBuilder private func directionSections(_ live: [Session]) -> some View {
+        if let layout = directionLayout(live) {
+            let mixedHosts = Set(live.compactMap(\.hostKind)).count > 1
+            ForEach(layout.entries) { e in
+                let folded = isFolded(e.key)
+                let title = model.directionTitle(e.direction)
+                listSection {
+                    if !folded {
+                        ForEach(e.tasks) { t in
+                            directionTaskRow(t.task)
+                            ForEach(t.lines) { l in
+                                if let s = l.session {
+                                    slotRow(s, context: true, showHost: mixedHosts, depth: l.depth + 1)
+                                } else {
+                                    directionAgentLine(l)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    FoldButton(title: title, folded: folded, detail: e.direction.counts.label ?? "") { toggleFold(e.key) } label: {
+                        HStack(spacing: Theme.Space.sm) {
+                            if compact {
+                                Text(title).font(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
+                            } else {
+                                Text(title).lineLimit(1)
+                            }
+                            DirectionCountsLine(counts: e.direction.counts).textCase(nil)
+                        }
+                    }
+                }
+                .listSectionSpacing(folded ? .custom(0) : .default)
+            }
+            todoGroupSections(layout.others, mixedHosts: mixedHosts)
+        } else {
+            todoSections(live)
+        }
+    }
+
+    /// A to-do under a direction: its title and its state in words; a tap opens its card.
+    private func directionTaskRow(_ task: DirectionTree.TaskNode) -> some View {
+        Button { openFromList(TodoDetailRoute(id: task.id)) } label: {
+            HStack(spacing: compact ? CompactList.gap : Theme.Space.s) {
+                ThemedIcon(Theme.Icon.todo)
+                    .font(compact ? CompactList.metaStrong : Theme.Font.secondaryMedium)
+                    .foregroundStyle(.secondary)
+                    .scaledFrame(width: compact ? CompactList.mark : Theme.Size.iconS)
+                Text(task.displayTitle).font(compact ? CompactList.title : Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                Spacer(minLength: Theme.Space.xs)
+                DirectionTaskStateWord(state: task.state)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(.tertiary)
+            }
+            .scaledFrame(minHeight: Theme.Size.tapTarget)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([task.displayTitle, task.state.text]
+            .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityHint(String(localized: "View to-do details"))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("agents.direction.task")
+        .listRowInsets(rowInsets(level: 0))
+        .listRowBackground(floating ? Color.clear : nil)
+        .listRowSeparator(floating ? .hidden : .automatic)
+    }
+
+    /// An Agent the tree has and the list does not (a sub-Agent inside a session): its state from the tree, its title; a
+    /// tap opens it.
+    private func directionAgentLine(_ l: DirectionAgentSections.Line) -> some View {
+        let state = l.node.agentState
+        let title = l.node.title.isEmpty ? (l.node.agent.isEmpty ? String(localized: "Agent") : l.node.agent) : l.node.title
+        return Button { openFromList(l.key) } label: {
+            HStack(spacing: compact ? CompactList.gap : Theme.Space.s) {
+                StatusDot(state: state)
+                Text(title).font(compact ? CompactList.title : Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(1)
+                Spacer(minLength: Theme.Space.xs)
+                // Not the dot's color alone (HIG-040): every state says itself in words too.
+                Text(state.label).font(Theme.Font.caption).foregroundStyle(state.tone.text).lineLimit(1)
+            }
+            .padding(.leading, nested(l.depth + 1))
+            .scaledFrame(minHeight: Theme.Size.tapTarget)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([title, state.label]
+            .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("agents.direction.agent")
+        .listRowInsets(rowInsets(level: l.depth + 1))
+        .listRowBackground(floating ? Color.clear : nil)
+        .listRowSeparator(floating ? .hidden : .automatic)
     }
 
     /// An app section's spoken counts: the state counts, then the offline agents, which they leave out.
@@ -2885,7 +3047,23 @@ private struct AgentsList: View {
                 .macOptionClick { MacShellState.shared.chatWindow = s.key }
         }
         #else
-        NavigationLink(value: s.key) { content() }
+        agentNavigationLink(s.key, content: content)
+        #endif
+    }
+
+    /// A split sidebar's value link owns selection outside the bound detail path. Use the path on iOS so tab
+    /// selection can clear every Agent detail, without rebuilding the list and losing its state.
+    @ViewBuilder private func agentNavigationLink<Content: View>(_ key: SessionKey, @ViewBuilder content: () -> Content) -> some View {
+        #if os(iOS)
+        // A split's sidebar can read compact: use the parent page's layout, not the column's width class.
+        if !ownsTop {
+            Button { openFromList(key) } label: { content() }
+                .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: key, label: content)
+        }
+        #else
+        NavigationLink(value: key, label: content)
         #endif
     }
 }
@@ -3259,6 +3437,7 @@ nonisolated struct AgentsListShown: Encodable, Equatable {
             x.subagents = (s.subagents ?? []).contains(where: \.running) ? [] : nil
             x.background = (s.background ?? []).isEmpty ? nil : []
             x.workflows = s.runningWorkflows.isEmpty ? nil : []
+            x.listWorkflowProgress = nil // a summary row's run: its counts move on every step, only rows show them
             return x
         }, byTime: byTime)
     }
@@ -3271,11 +3450,11 @@ nonisolated struct AgentsListShown: Encodable, Equatable {
     /// once; watched again at every change, held or not, never twice at a time).
     private func current() -> ([Session], [Interaction], [Machine])? {
         guard let model else { return nil }
-        guard !watching else { return (model.sessionLists.sessions, model.pendingInteractions, model.machines) }
+        guard !watching else { return (model.sessionLists.sessions, model.scopedInteractions, model.scopedMachines()) }
         watching = true
         return withObservationTracking {
             let _ = AgentListProjectionCache.partitions(model)
-            return (model.sessionLists.sessions, model.pendingInteractions, model.machines)
+            return (model.sessionLists.sessions, model.scopedInteractions, model.scopedMachines())
         } onChange: { [weak self] in
             Task { @MainActor in // told before the change: read it after
                 self?.watching = false

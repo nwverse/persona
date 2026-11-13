@@ -51,6 +51,8 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	// inboxExt is what the extensions wrote for the Inbox, read at most once a minute (extension_context.go).
+	inboxExt inboxExtensionCache
 	// id is Options.ID: the manager this assistant is.
 	id               string
 	repositoriesMu   sync.Mutex
@@ -111,6 +113,9 @@ type Service struct {
 	prepared   map[string]preparedState
 
 	epoch string
+	// born is when this manager started: a background supervisor started before it may be in a profile with no login
+	// (backgroundSignedOut).
+	born  time.Time
 	pubMu sync.Mutex
 	seq   uint64
 
@@ -200,6 +205,7 @@ type Service struct {
 	agentArchives agentArchiveBook
 	orphans       orphanBook      // tasks_orphan.go: the open to-dos nobody works on
 	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
+	switchQ       switchQueue     // agents_switch's switches waiting for their agents' turns to end (agents_switch.go)
 	fleet         fleetBook       // what comes from the nodes (fleet.go)
 	nextSug       nextSuggestBook // suggest_next.go: the hub-made next-message suggestions
 	askUp         escalationBook  // cards that reached the user through an escalation (ask_route.go), under fleet.mu
@@ -229,7 +235,7 @@ var _ Handler = (*Service)(nil)
 
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
-	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(),
+	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
 	if s.store == nil {
@@ -449,6 +455,9 @@ func (s *Service) sessions(ctx context.Context, machine string) ([]proto.Session
 // sessionsMuted is sessions, and which of them are muted (the agent or its space: pushes off), by session id, as
 // sessions.list says.
 func (s *Service) sessionsMuted(ctx context.Context, machine string) ([]proto.Session, map[string]bool, error) {
+	if list, muted, ok, err := s.localSessions(machine); ok {
+		return list, muted, err
+	}
 	var res struct {
 		Sessions []proto.Session `json:"sessions"`
 		Muted    []string        `json:"muted"`
@@ -739,6 +748,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.todosSessionsChanged(ctx, d)
 	s.taskStageSessions(ctx, d)
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
+	s.switchQueueListed(d.MachineID)    // a queued launcher switch whose turn ended (agents_switch.go)
 	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 	s.directionTreeSessions(d)          // an Agent of the direction tree may have moved (direction_tree.go)
 	s.agentNamesChanged(d)

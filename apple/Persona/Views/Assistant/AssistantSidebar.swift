@@ -745,7 +745,7 @@ struct AssistantSidebar: View {
     /// The open conversation's row. On the Mac, the shade the shell's other lists select with (`macSelected`): the
     /// phone's `well` on the Mac's lighter fills (#1169) was hard to find there.
     #if os(macOS)
-    private static let selectedFill = Theme.Fill.macSelected
+    private static var selectedFill: Color { Theme.Fill.macSelected } // the style's: read when drawn
     #else
     private static let selectedFill = Theme.Fill.well
     #endif
@@ -772,9 +772,9 @@ struct AssistantSidebar: View {
     var onOpenExtension: ((ExtensionNavRoute) -> Void)? = nil
     /// Health: the health space's page (docs/assistant/health.md); nil leaves the row out.
     var openHealth: (() -> Void)? = nil
-    /// Record (docs/apple/recording.md「Meeting recordings」): starts recording a meeting and opens Recordings; while
-    /// something records, opens it. nil leaves the row out (the Mac records nothing).
-    var startMeeting: (() -> Void)? = nil
+    /// Recordings (docs/apple/recording.md「Meeting recordings」): opens the Recordings page, whose Record starts one, or
+    /// the recording running. nil leaves the row out (the Mac records nothing).
+    var openRecordingsPage: (() -> Void)? = nil
     /// The column's own button that folds it away, at its top trailing corner, as ChatGPT's on iPhone Duo open (#2623).
     /// Search goes to its foot then, beside Persona's name and where it runs, and the main conversation's row holds what
     /// the face's menu at the top of the page did (the switch has that place). nil elsewhere.
@@ -922,8 +922,8 @@ struct AssistantSidebar: View {
             }
         } else {
             HStack {
-                if model.managerRoster?.isMulti == true, let current = model.currentAssistant {
-                    // Keep the current multi-assistant switcher; a sole assistant keeps the persona title.
+                if model.showsAssistantSwitcher, let current = model.currentAssistant {
+                    // One installed assistant uses the switcher too; only a missing roster or current assistant keeps the persona title.
                     AssistantSwitcherHeader(manager: current, nameFont: Theme.Font.title, compact: macTitleRow, openSettings: showSettings)
                 } else {
                     #if os(macOS)
@@ -1066,14 +1066,15 @@ struct AssistantSidebar: View {
         }
     }
 
-    /// First among the places: one tap from the drawer records the meeting in the room (Record, the one name every entry
-    /// point uses, #5243); while a recording runs, the row says so and opens it.
+    /// First among the places: Recordings, a place like the rows under it, so a tap opens the page and its Record button
+    /// starts a recording (#5517: as Record, the tap recorded at once, and in zh-Hans and ja it reads as the page's name).
+    /// While a recording runs, the row says so and opens it.
     @ViewBuilder private var meetingRow: some View {
         #if os(iOS)
-        if let startMeeting {
+        if let openRecordingsPage {
             let recording = RecordingCapture.shared.state != .idle
-            action(recording ? String(localized: "Recording… Open") : String(localized: "Record [Recordings Section ef2821]"),
-                   Theme.Icon.recording, id: "sidebar-meeting-recording", run: startMeeting)
+            action(recording ? String(localized: "Recording… Open") : String(localized: "Recordings"),
+                   Theme.Icon.recording, id: "sidebar-meeting-recording", run: openRecordingsPage)
         }
         #endif
     }
@@ -1249,7 +1250,15 @@ struct AssistantSidebar: View {
         let directions = AssistantSidebarGroups.directions(all, leaders: model.assistantLeaders, main: main)
         if !directions.isEmpty {
             heading(String(localized: "Directions")) { EmptyView() }
-            ForEach(directions) { row($0, named: model.directionNames[$0.sessionID]) }
+            // Each folds open to its to-dos (#4352, AssistantSidebarDirections.swift). The secretary group has no row
+            // here: the main conversation's own row stands for it (#4331).
+            ForEach(directions) { s in
+                AssistantSidebarDirection(direction: model.directionTree?.leader(s.sessionID), id: s.sessionID,
+                                          name: model.directionNames[s.sessionID] ?? s.title, isShell: isShell, drawer: drawer,
+                                          selected: s.key == current, selectedFill: Self.selectedFill) { shades in
+                    row(s, named: model.directionNames[s.sessionID], drawsShade: shades)
+                }
+            }
         }
         let recent = AssistantSidebarGroups.recent(all, leaders: model.assistantLeaders, main: main,
                                                    background: model.assistantConfig?.backgroundSupervisor)
@@ -1376,7 +1385,8 @@ struct AssistantSidebar: View {
 
     /// A conversation: a round mark (Persona's face for the main one), its title on one line, its state on the right.
     /// `named`: a direction's name, shown instead of its leader conversation's title.
-    private func row(_ s: Session, named: String? = nil) -> some View {
+    /// `drawsShade` false: a direction's row with its fold chevron beside it, which draws the shade across both (#4352).
+    private func row(_ s: Session, named: String? = nil, drawsShade: Bool = true) -> some View {
         let selected = s.key == current
         let isMain = s.key == model.assistantMain
         // The main conversation and the hub's built-in background supervisor (#5083) stay: no Archive, Pin or End.
@@ -1413,11 +1423,11 @@ struct AssistantSidebar: View {
             .padding(.vertical, Theme.Sidebar.rowPadding)
             .scaledFrame(minHeight: Theme.Sidebar.row)
             .background {
-                if selected {
+                if selected && drawsShade {
                     RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous).fill(Self.selectedFill)
                 }
             }
-            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
+            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous), isEnabled: drawsShade)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1625,7 +1635,7 @@ private struct AssistantProfileFooter: View {
                         PersonaAvatar(size: Theme.Size.avatarL)
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                             HStack(spacing: Theme.Space.xs) {
-                                Text(model.persona.name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
+                                Text(model.assistantShownName).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
                                 ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                             }
                             HStack(spacing: Theme.Space.xs) {
@@ -1641,7 +1651,7 @@ private struct AssistantProfileFooter: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(model.persona.name), \(state), view profile")
+                .accessibilityLabel("\(model.assistantShownName), \(state), view profile")
                 Spacer(minLength: Theme.Space.s)
                 if let search {
                     // The shell's foot's round button (Settings beside New Chat), as the row above has it.
@@ -1693,7 +1703,7 @@ private struct AssistantStatusLine: View {
                 HStack(spacing: Theme.Space.s) {
                     Circle().fill(online ? Theme.positive : Color.secondary.opacity(0.5))
                         .scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS)
-                    Text("\(model.persona.name) \(state) · \(place)").lineLimit(1)
+                    Text("\(model.assistantShownName) \(state) · \(place)").lineLimit(1)
                     Spacer(minLength: 0)
                 }
                 .font(Theme.Font.caption)
@@ -1703,8 +1713,8 @@ private struct AssistantStatusLine: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .help("View \(model.persona.name)'s Profile")
-            .accessibilityLabel("\(model.persona.name), \(state), \(place), view profile")
+            .help("View \(model.assistantShownName)'s Profile")
+            .accessibilityLabel("\(model.assistantShownName), \(state), \(place), view profile")
         }
     }
 }
