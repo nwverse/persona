@@ -440,7 +440,7 @@ private struct HomeTodayWidget: View {
         HStack(alignment: .top, spacing: HomeWidgetTokens.halves) {
             dateHead(compact: false).frame(width: HomeWidgetTokens.ringHero, alignment: .leading)
                 .frame(maxHeight: .infinity, alignment: .top)
-            VStack(alignment: .trailing, spacing: HomeWidgetTokens.gap) {
+            VStack(alignment: .trailing, spacing: HomeWidgetTokens.tight) {
                 HStack(spacing: HomeWidgetTokens.tight) {
                     Spacer(minLength: 0)
                     HomeCalendarSwitch(c: c, shown: .today)
@@ -469,11 +469,11 @@ private struct HomeTodayWidget: View {
         }
     }
 
-    /// The next `fit` events; when there are more, one fewer and how many more.
-    private func upcoming(_ fit: Int) -> some View {
+    /// The next `count` events, and how many more there are.
+    private func upcoming(_ count: Int) -> some View {
         let events = c.events
-        let shown = events.count <= fit ? events : Array(events.prefix(fit - 1))
-        return VStack(alignment: .leading, spacing: HomeWidgetTokens.row) {
+        let shown = Array(events.prefix(count))
+        return VStack(alignment: .leading, spacing: HomeWidgetTokens.gap) {
             ForEach(shown, id: \.self) { HomeEventView(event: $0, lines: 1) }
             if events.isEmpty { none }
             if shown.count < events.count { more(events.count - shown.count) }

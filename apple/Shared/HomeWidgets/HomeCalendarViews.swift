@@ -350,6 +350,8 @@ struct HomeAgenda: View {
     var body: some View {
         let groups = days()
         ViewThatFits(in: .vertical) {
+            lines(groups, budget: 16)
+            lines(groups, budget: 14)
             lines(groups, budget: 12)
             lines(groups, budget: 10)
             lines(groups, budget: 8)

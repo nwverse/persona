@@ -59,7 +59,7 @@ enum HomeSamples {
                 .init(title: t("Movie with Sam", "和小林看电影"), start: at(19, 0), end: at(21, 0)),
             ],
             source: .calendar)
-        s.today?.days = days(zh: zh, now: now, at: at)
+        s.today?.days = days(zh: zh, now: now, today: s.today?.events ?? [])
         s.todos = .init(
             items: [
                 .init(id: "t1", title: t("Renew the passport", "续签护照"), due: at(9, 0), overdue: true),
@@ -99,15 +99,13 @@ enum HomeSamples {
     }
 
     /// The weeks around the sample's day for the Calendar widget's week and month: a made-up calendar of meetings,
-    /// errands and evenings, today's events among them (with one already over), the times moving with `at`'s.
-    static func days(zh: Bool, now: Date, at: (Int, Int) -> Double) -> HomeSnapshot.Days {
+    /// errands and evenings at their clock times; today's are `today` (the widget's list) and a stand-up already over.
+    static func days(zh: Bool, now: Date, today: [HomeSnapshot.Event]) -> HomeSnapshot.Days {
         func t(_ en: String, _ cn: String) -> String { zh ? cn : en }
         let made: [(day: Int, title: String, hour: Int, minute: Int, minutes: Int)] = [
             (-10, t("Team sync", "周会"), 9, 30, 30), (-9, t("Dentist check-up", "牙医复查"), 15, 0, 30),
             (-7, t("Dinner with Sam", "和小林吃饭"), 19, 0, 120), (-3, t("Team sync", "周会"), 9, 30, 30),
             (-2, t("Pay the rent", "交房租"), 0, 0, -1), (-1, t("Lunch with Sam", "和小林吃午饭"), 12, 0, 60),
-            (0, t("Stand-up", "站会"), 9, 30, 15), (0, t("Design review", "设计评审"), 14, 0, 60),
-            (0, t("1:1 with Alex", "和 Alex 一对一"), 16, 30, 30), (0, t("Movie with Sam", "和小林看电影"), 19, 0, 120),
             (1, t("Mom's birthday", "妈妈生日"), 0, 0, -1), (1, t("Dentist", "牙医"), 9, 0, 30),
             (2, t("Quarterly review", "季度复盘"), 15, 0, 90), (3, t("Badminton", "羽毛球"), 10, 0, 120),
             (4, t("Team sync", "周会"), 9, 30, 30), (5, t("Check-up", "体检"), 8, 0, 60),
@@ -115,15 +113,19 @@ enum HomeSamples {
             (11, t("Team sync", "周会"), 9, 30, 30), (13, t("Concert", "音乐会"), 20, 0, 120),
         ]
         let calendar = Calendar.current
-        let events = made.map { m -> HomeSnapshot.Event in
+        let midnight = calendar.startOfDay(for: now)
+        func day(_ offset: Int) -> Date { calendar.date(byAdding: .day, value: offset, to: midnight) ?? midnight }
+        var events = made.map { m -> HomeSnapshot.Event in
+            let start = day(m.day)
             if m.minutes < 0 {
-                let day = calendar.date(byAdding: .day, value: m.day, to: calendar.startOfDay(for: now)) ?? now
-                let end = calendar.date(byAdding: .day, value: 1, to: day) ?? day
-                return .init(title: m.title, start: day.timeIntervalSince1970, end: end.timeIntervalSince1970, allDay: true)
+                return .init(title: m.title, start: start.timeIntervalSince1970, end: day(m.day + 1).timeIntervalSince1970, allDay: true)
             }
-            let start = at(m.hour, m.minute) + Double(m.day) * 86_400
-            return .init(title: m.title, start: start, end: start + Double(m.minutes) * 60)
+            let at = start.timeIntervalSince1970 + Double(m.hour * 3600 + m.minute * 60)
+            return .init(title: m.title, start: at, end: at + Double(m.minutes) * 60)
         }
+        let standUp = max(midnight.timeIntervalSince1970, now.timeIntervalSince1970 - 2 * 3600)
+        events.append(.init(title: t("Stand-up", "站会"), start: standUp, end: standUp + 15 * 60))
+        events += today
         return HomeDays.build(events, range: HomeDays.range(around: now, calendar: calendar), calendar: calendar)
     }
 
