@@ -1,14 +1,21 @@
 package persona.core.designsystem
 
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
@@ -270,6 +277,48 @@ class HomeChromeTest {
             assertEquals("switcher is not centered with $count trailing actions",
                 (pane.left.value + pane.right.value) / 2,
                 (switcher.left.value + switcher.right.value) / 2, 0.51f)
+        }
+    }
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h800dp-xhdpi")
+    @Test fun board400DpKeepsOriginalVerticalPosition() {
+        var fontScale by mutableStateOf(1f)
+        val items = listOf(
+            NavItem("assistant", "Assistant", PhIcons.ChatCircle),
+            NavItem("agents", "Agents", PhIcons.Robot),
+        )
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = fontScale)) {
+                PersonaTheme(style = AppStyle.Board, reduceMotion = true) {
+                    Column {
+                        Box(Modifier.width(400.dp).testTag("old-pane")) {
+                            Row(
+                                Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                            ) {
+                                JPersonaButton(PersonaState.Idle, "Sidebar", {})
+                                Box(Modifier.weight(1f)) {
+                                    JSegmented(items.map { JSegment(it.label) }, 0, {}, Modifier.testTag("old-switcher"))
+                                }
+                            }
+                        }
+                        Box(Modifier.width(400.dp).testTag("new-pane")) {
+                            HomeNavigation(items, "assistant", {}, leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {}) })
+                        }
+                    }
+                }
+            }
+        }
+        for (scale in listOf(1f, 1.25f, 1.5f, 1.75f, 2f)) {
+            rule.runOnIdle { fontScale = scale }
+            rule.waitForIdle()
+            val oldPane = rule.onNodeWithTag("old-pane").getBoundsInRoot()
+            val newPane = rule.onNodeWithTag("new-pane").getBoundsInRoot()
+            val oldSwitcher = rule.onNodeWithTag("old-switcher").getBoundsInRoot()
+            val newSwitcher = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            assertEquals("Board's 400dp vertical position changed at fontScale=$scale",
+                oldSwitcher.top - oldPane.top, newSwitcher.top - newPane.top)
         }
     }
 

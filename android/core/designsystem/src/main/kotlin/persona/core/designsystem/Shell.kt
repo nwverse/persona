@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 
@@ -415,10 +416,10 @@ private fun HomeNavigationLayout(
         val desiredHeight = contentHeight + vertical * 2
         val height = if (constraints.hasBoundedHeight) desiredHeight.coerceIn(constraints.minHeight, constraints.maxHeight)
             else maxOf(desiredHeight, constraints.minHeight)
-        val leadingY = if (!stacked && centerInlineVertically) vertical + (contentHeight - leadingPlaceable.height) / 2 else vertical
-        val trailingY = if (!stacked && centerInlineVertically) vertical + (contentHeight - trailingPlaceable.height) / 2 else vertical
+        val leadingY = if (!stacked && centerInlineVertically) vertical + ((contentHeight - leadingPlaceable.height) / 2f).roundToInt() else vertical
+        val trailingY = if (!stacked && centerInlineVertically) vertical + ((contentHeight - trailingPlaceable.height) / 2f).roundToInt() else vertical
         val switcherY = if (stacked) vertical + firstRowHeight + stackGap
-            else if (centerInlineVertically) vertical + (contentHeight - switcher.height) / 2 else vertical
+            else if (centerInlineVertically) vertical + ((contentHeight - switcher.height) / 2f).roundToInt() else vertical
         val switcherX = when {
             stacked -> horizontal + (contentWidth - switcher.width - accessoryOverflow) / 2
             centerSwitcher -> horizontal + (contentWidth - switcher.width) / 2
