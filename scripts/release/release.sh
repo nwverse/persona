@@ -23,6 +23,7 @@ fi
 _env=$(python3 scripts/persona_config.py env) || exit $?
 eval "$_env"; unset _env
 python3 scripts/persona_config.py xcconfig
+native/app-core/scripts/build-apple.sh
 echo "Building with $(xcodebuild -version | head -1) (config \"xcode\" picks another, docs/operations/config.md)"
 # No private values in what is about to ship from this tree (CLAUDE.md).
 python3 scripts/privacy_check.py
@@ -111,5 +112,5 @@ fi
 # The same release of personad for anyone to install (publish.sh, docs/operations/release.md "Publishing personad"), versioned with this
 # build's number. Not with NO_UPLOAD or NO_PUBLISH, nor when the config has no publish.site_url.
 if [ -z "${NO_UPLOAD:-}" ] && [ -z "${NO_PUBLISH:-}" ] && [ -n "${PERSONA_PUBLISH_URL:-}" ]; then
-  VERSION="$(git describe --always --dirty 2>/dev/null || echo dev)-$BUILD" ./scripts/release/publish.sh
+  VERSION="$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)-$BUILD" ./scripts/release/publish.sh
 fi
