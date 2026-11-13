@@ -99,6 +99,8 @@ struct UnifiedSidebarColumn<Agents: View>: View {
             persona(.footer)
         }
         .modifier(AssistantSidebarPresenters(ui: state.ui, open: open))
+        // A container: on its own the identifier went onto every element in it, the rows' own lost.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("unified-sidebar")
     }
 
