@@ -698,12 +698,12 @@ final class MessageLiftUITests: XCTestCase {
     /// The edit menu over a selection in a lifted answer covers neither the selected words nor either handle (#6005):
     /// a word on the long answer's last line, near the bottom of the screen (the menu above it); a word of its first
     /// line, scrolled to near the top (the menu below it, clear of the end handle); that selection's end handle dragged
-    /// down a few lines (the text view's own menu); a short answer all selected with Select Text. At the default and
-    /// the largest text size.
+    /// down a few lines (the text view's own menu); a short answer all selected with Select Text. At the default text
+    /// size and at xxxLarge, the largest the interface takes (#6448); Quote is in the menu at both.
     @MainActor func testTheEditMenuStaysOffTheSelectionAndItsHandles() throws {
         inEachScheme {
             for big in [false, true] {
-                let size = big ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : []
+                let size = big ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryXXXL"] : []
                 let tag = big ? "-xxxl" : ""
                 app = XCUIApplication()
                 launch(long, ["-showLiftLines", "YES", "-openChatsFresh", "YES"] + size)
@@ -712,7 +712,7 @@ final class MessageLiftUITests: XCTestCase {
                 XCTAssertTrue(shows(end), "the pressed line shows")
                 pressInLift(CGPoint(x: end.frame.minX + 12, y: end.frame.maxY - 12))
                 checkTheMenuIsClear("bottom" + tag)
-                // Quote (引用) is the menu's first item; at the largest text size its row showed 拷贝 first.
+                // Quote (引用) is the menu's first item; at the largest accessibility size its row showed 拷贝 first (#6149).
                 let items = editMenuItems("bottom" + tag)
                 XCTAssertTrue(items.all.contains("引用"), "\(tag): 引用 is in the edit menu: row \(items.row), all \(items.all)")
                 let copy = [app.menuItems["拷贝"].firstMatch, app.buttons["拷贝"].firstMatch].first { $0.exists && $0.isHittable }
@@ -721,7 +721,7 @@ final class MessageLiftUITests: XCTestCase {
                 XCTAssertTrue(app.textViews["lift-text"].waitForNonExistence(timeout: 3), "拷贝 put the answer back")
 
                 liftTheLongAnswerAtItsEnd()
-                scrollToTheTop(tries: big ? 30 : 8) // the largest text makes the answer several times as tall
+                scrollToTheTop(tries: big ? 30 : 8) // xxxLarge makes the answer taller
                 XCTAssertTrue(shows(firstLine), "the lifted answer scrolls to its first line")
                 pressInLift(CGPoint(x: firstLine.frame.minX + 12, y: firstLine.frame.minY + 12))
                 checkTheMenuIsClear("top" + tag)
