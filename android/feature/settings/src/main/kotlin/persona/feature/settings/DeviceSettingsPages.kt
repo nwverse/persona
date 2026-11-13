@@ -28,6 +28,17 @@ internal fun DevicesPage(
     /** "Connect a new device"'s hub calls (a code for another device); null where it cannot be made (demo mode). */
     connect: DeviceSettings? = null,
 ) {
+    val features = LocalHubFeatures.current
+    val feedback = LocalAppFeedback.current
+    val context = LocalContext.current
+    val scanner = androidx.activity.compose.rememberLauncherForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { result ->
+        result.contents?.let { value ->
+            val uri = android.net.Uri.parse(value)
+            if (uri.scheme == "persona" && uri.host == "browser-login") {
+                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, uri).setPackage(context.packageName))
+            } else { feedback?.notice(context.getString(R.string.settings_browser_login_invalid)) }
+        }
+    }
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
     var pending by remember { mutableStateOf<PairedDevice?>(null) }
@@ -40,6 +51,12 @@ internal fun DevicesPage(
     JListPage(title = stringResource(R.string.settings_devices_title), onBack = onBack) {
         if (!available) item { JEmptyState(stringResource(R.string.settings_devices_unavailable), stringResource(R.string.settings_check_pairing_and_hub)) }
         else {
+            if (connect != null && "browser_qr_login" in features) item("scan-browser") {
+                JButton(stringResource(R.string.settings_browser_login_scan), {
+                    scanner.launch(com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingScanActivity::class.java)
+                        .setOrientationLocked(false).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setPrompt("").setBeepEnabled(false))
+                }, kind = JButtonKind.Secondary, icon = PhIcons.QrCode)
+            }
             if (connect != null) item("connect") {
                 JGroupItem(GroupPosition.Single, Modifier.padding(bottom = Tokens.Space.m)) {
                     JRow(stringResource(R.string.settings_onb_connect_title), leadingIcon = PhIcons.QrCode,

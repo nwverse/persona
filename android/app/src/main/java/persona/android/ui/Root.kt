@@ -113,6 +113,8 @@ fun PersonaRoot(
         ("extension_manager" in features || "plugin_manager" in features) }
     persona.feature.settings.ExtensionDeclarationsHost(api, active?.identity.orEmpty()) {
         PersonaRootContent(hub, openNavigation, services, shell, onPaired)
+        val browserLogin = MainActivity.pendingBrowserLogin.value
+        if (browserLogin != null && hub != null) BrowserLoginApproval(hub, browserLogin) { MainActivity.pendingBrowserLogin.value = null }
     }
 }
 

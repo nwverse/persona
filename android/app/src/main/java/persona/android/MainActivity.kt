@@ -260,6 +260,10 @@ class MainActivity : ComponentActivity() {
             openNavigation.value = { it.parse(RouteInput.Notification(session)) }
         }
         val uri = intent.data ?: return
+        if (uri.scheme == "persona" && uri.host == "browser-login") {
+            pendingBrowserLogin.value = uri.toString()
+            return
+        }
         if (uri.host == "password-login") {
             persona.android.platform.PasswordBrowserLogin.complete(uri)
             return
@@ -295,5 +299,6 @@ class MainActivity : ComponentActivity() {
         val pendingCapsuleUrl = mutableStateOf<String?>(null)
         /** A pairing link the activity was opened with, for the pairing screen to confirm. */
         val pendingPairLink = mutableStateOf<String?>(null)
+        val pendingBrowserLogin = mutableStateOf<String?>(null)
     }
 }
