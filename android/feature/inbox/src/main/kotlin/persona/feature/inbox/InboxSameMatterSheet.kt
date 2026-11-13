@@ -44,7 +44,7 @@ import persona.core.designsystem.JTextButton
 import persona.core.designsystem.LocalAppFeedback
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
-import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 
 /** Open items this one can join: same manager, not itself or its direct children, newest first, title / where search. */
 internal fun sameMatterCandidates(
@@ -159,9 +159,9 @@ internal fun InboxSameMatterSheet(
 internal fun InboxSameMatterMenu(repository: InboxRepository, record: InboxRecord, onLinked: () -> Unit) {
     var menu by remember(record.item.id) { mutableStateOf(false) }
     var showSame by remember(record.item.id) { mutableStateOf(false) }
-    JIconButton(PhIcons.DotsThree, stringResource(R.string.inbox_more), onClick = { menu = true })
+    JIconButton(PersonaIcons.more, stringResource(R.string.inbox_more), onClick = { menu = true })
     if (menu) JActionSheet(title = record.item.title, onDismiss = { menu = false }, actions = listOf(
-        JAction(stringResource(R.string.inbox_line_same), PhIcons.LinkSimple, onClick = { showSame = true }),
+        JAction(stringResource(R.string.inbox_line_same), PersonaIcons.link, onClick = { showSame = true }),
     ))
     if (showSame) InboxSameMatterSheet(repository, record, initialTree = null,
         onDismiss = { showSame = false }, onLinked = { onLinked() })

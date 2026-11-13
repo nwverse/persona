@@ -23,7 +23,6 @@ import persona.core.designsystem.JTextButton
 import persona.core.designsystem.LocalAppFeedback
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.icons.PersonaIcons
-import persona.core.designsystem.icons.PhIcons
 import persona.core.designsystem.text
 import persona.core.domain.inbox.InboxTier
 import persona.core.domain.sort.stateLabel
@@ -100,7 +99,7 @@ internal fun InboxLineSection(repository: InboxRepository, record: InboxRecord, 
             }
         }
         JTextButton(stringResource(R.string.inbox_line_same), onClick = { showSame = true },
-            Modifier.padding(horizontal = Tokens.Space.s), icon = PhIcons.LinkSimple)
+            Modifier.padding(horizontal = Tokens.Space.s), icon = PersonaIcons.link)
     }
     if (showSame) InboxSameMatterSheet(repository, record, initialTree = tree,
         onDismiss = { showSame = false }, onLinked = { tree = it })
