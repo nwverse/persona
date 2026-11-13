@@ -583,6 +583,9 @@ func (s *Service) writeGroup(ctx context.Context, c assistantwire.InboxSource, t
 	// No rollback here (#4366): the batch is spent once its events are written (a connector with meta stops sending
 	// what group.append took, and a repeated batch is related once), so an undone event would never come back and an
 	// existing one would hand the connector stale meta. Memory keeps the events; the row catches up at their next save.
+	b.mu.Lock()
+	saved = b.followMerged(saved, time.Now())
+	b.mu.Unlock()
 	for id := range s.saveInbox(ctx, saved) {
 		s.logf("inbox: %s: event %s could not be saved; it stays in memory until its next save", c.ID, id)
 	}
