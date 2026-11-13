@@ -4,6 +4,7 @@
     <string name="settings_style_transparency">透明效果</string>
     <string name="settings_style_glass_auto">Android 13 以上用折射玻璃，更早的系统用模糊玻璃；省电模式下，或者滑动明显掉帧时，自动换成不透明的面板。</string>
     <string name="settings_style_glass_reduced">所有浮层都用不透明的面板，最省电，文字也最清楚。</string>
+    <string name="settings_agents_layout">Agents 列表布局</string>
     <string name="settings_default">默认</string>
     <string name="settings_preview_row1_title">补齐网络层的单元测试</string>
     <string name="settings_preview_row1_preview">网络层的测试用哪个框架？</string>
@@ -270,6 +271,14 @@
     <string name="settings_network_unreadable">无法读取网络状态</string>
     <string name="settings_update_none">暂未发现可用更新。</string>
     <string name="settings_update_check_failed">检查更新失败，请稍后重试。</string>
+    <string name="settings_update_up_to_date">已是最新</string>
+    <string name="settings_update_no_apk">hub 没有 APK</string>
+    <string name="settings_update_package_mismatch">不同的应用</string>
+    <string name="settings_update_package_mismatch_detail">Release APK 属于另一个 Android 应用，无法更新当前安装。</string>
+    <string name="settings_update_signature_mismatch">签名不匹配</string>
+    <string name="settings_update_signature_mismatch_detail">Release APK 使用不同的签名。请先卸载当前应用，再从 GitHub 安装 Release APK。卸载会删除本地应用数据。</string>
+    <string name="settings_update_last_checked">上次检查：%1$s</string>
+    <string name="settings_update_source">hub：%1$s</string>
     <string name="settings_off">关闭</string>
     <string name="settings_retry_cleanup">重试清理</string>
     <string name="settings_try_demo">没有 Hub？先体验一下</string>

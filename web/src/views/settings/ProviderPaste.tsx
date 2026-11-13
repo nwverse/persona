@@ -4,11 +4,16 @@
 // host, models, sign-in, what it brings and leaves out, and why parts were not used; on an address already stored, a
 // choice between adding its models there, replacing that provider's key, or a new provider. The wizard keeps the state
 // (lib/provider-paste.ts) and its Continue goes on. The text never leaves the request body: no URL, log or report.
+// Opened from an import link (#5420, lib/import-link.ts), the view holds the link instead of a box: a line says where
+// it came from, it is read at once, and "Paste something else" leaves it for an empty box. The link is never shown: it
+// may hold a key. A hub that can't read links (no `launcher_import_link`) says so instead of reading it.
 import { useEffect, useId, useRef, useState } from "react";
 import { api, ApiError, errorText } from "../../lib/api";
 import { providerTitle } from "../../lib/provider-names";
-import { answered, draftModels, headerLines, noteText, pasteActions, pasteChoice, sameAction, type PasteAction, type PasteDraft, type PasteNote, type PasteResult, type PasteState } from "../../lib/provider-paste";
+import { IMPORT_LINK_FEATURE } from "../../lib/provider-link";
+import { answered, draftModels, headerLines, newPaste, noteText, pasteActions, pasteChoice, sameAction, type PasteAction, type PasteDraft, type PasteNote, type PasteResult, type PasteState } from "../../lib/provider-paste";
 import { hostOf, importBrings, importLeftOut } from "../../lib/providers";
+import { hubHas, useStore } from "../../lib/store";
 import { cx, SECRET_INPUT } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { textareaClass } from "../assistant/parts";
@@ -25,6 +30,7 @@ const FORMAT: Record<string, () => string> = {
   settings: () => t("settings-providerpaste.format_settings"),
   curl: () => t("settings-providerpaste.format_curl"),
   cindy: () => t("settings-providerpaste.format_cindy"),
+  link: () => t("settings-providerpaste.format_link"),
 };
 
 export function ProviderPaste({ paste, setPaste }: { paste: PasteState; setPaste: React.Dispatch<React.SetStateAction<PasteState>> }) {
@@ -36,6 +42,9 @@ export function ProviderPaste({ paste, setPaste }: { paste: PasteState; setPaste
   const seq = useRef(0);
   // the latest change was a paste (or a drop): read it without waiting
   const now = useRef(false);
+  // a link this hub can't read: said instead of sent (an unknown hub is tried, and a 404 says the same)
+  const linksRead = useStore((s) => hubHas(s.features, IMPORT_LINK_FEATURE, true));
+  const linkOld = !!paste.link && !linksRead;
 
   const read = async (text: string, mine: number) => {
     setReading(true);
@@ -47,7 +56,11 @@ export function ProviderPaste({ paste, setPaste }: { paste: PasteState; setPaste
       if (mine !== seq.current) return;
       // an older hub has no such route
       const old = e instanceof ApiError && e.status === 404;
-      setError({ text: old ? t("settings-providerpaste.hub_old") : t("settings-providerpaste.read_failed", { error: errorText(e) }), retry: !old });
+      const why = errorText(e);
+      const text = paste.link
+        ? old ? t("settings-providerpaste.link_hub_old") : t("settings-providerpaste.link_read_failed", { error: why })
+        : old ? t("settings-providerpaste.hub_old") : t("settings-providerpaste.read_failed", { error: why });
+      setError({ text, retry: !old });
     } finally {
       if (mine === seq.current) setReading(false);
     }
@@ -55,7 +68,8 @@ export function ProviderPaste({ paste, setPaste }: { paste: PasteState; setPaste
 
   useEffect(() => {
     const mine = ++seq.current;
-    const at = now.current;
+    // a link is all there is to read: at once
+    const at = now.current || !!paste.link;
     now.current = false;
     setReading(false);
     setError(null);
@@ -64,30 +78,48 @@ export function ProviderPaste({ paste, setPaste }: { paste: PasteState; setPaste
       return;
     }
     // read already (back from "Connect")
-    if (paste.result?.text === paste.text) return;
+    if (paste.result?.text === paste.text || linkOld) return;
     if (at) return void read(paste.text, mine);
     const timer = setTimeout(() => void read(paste.text, mine), AUTO_TEST_MS);
     return () => clearTimeout(timer);
-  }, [paste.text]);
+  }, [paste.text, linkOld]);
 
-  const answer = paste.result?.answer;
+  const answer = linkOld ? undefined : paste.result?.answer;
   const stale = !!paste.result && paste.result.text !== paste.text;
   const drafts = answer?.drafts ?? [];
   const chosen = pasteChoice(paste);
   const pick = (i: number) => setPaste((s) => ({ ...s, draft: i, action: null }));
   return (
     <div className="flex flex-col gap-3">
-      <Labelled label={t("settings-providerpaste.label")} hint={t("settings-providerpaste.hint")} htmlFor={id} describedById={hintId}>
-        <textarea id={id} aria-describedby={hintId} value={paste.text} rows={6} placeholder={EXAMPLE} autoFocus {...SECRET_INPUT} autoComplete="off"
-          onChange={(e) => {
-            now.current = PASTED.has((e.nativeEvent as InputEvent).inputType);
-            const text = e.target.value;
-            setPaste((s) => ({ ...s, text }));
-          }}
-          className={cx(textareaClass, "font-mono")} />
-      </Labelled>
-      {reading ? (
-        <BusyLine>{t("settings-providerpaste.reading")}</BusyLine>
+      {paste.link ? (
+        <div data-paste-link className="flex items-start gap-2.5 rounded-card bg-inset px-3 py-2.5 shadow-hairline">
+          <Icon name="link" size={14} stroke={2.2} className="mt-0.5 shrink-0 text-ink-2" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13px] font-medium text-ink">{t("settings-providerpaste.link_title")}</span>
+            <span className="mt-0.5 block text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerpaste.link_hint")}</span>
+          </span>
+          <span className="mt-px text-[12px] text-ink-2">
+            <LineAction onClick={() => setPaste(newPaste())}>{t("settings-providerpaste.link_paste_instead")}</LineAction>
+          </span>
+        </div>
+      ) : (
+        <Labelled label={t("settings-providerpaste.label")} hint={t("settings-providerpaste.hint")} htmlFor={id} describedById={hintId}>
+          <textarea id={id} aria-describedby={hintId} value={paste.text} rows={6} placeholder={EXAMPLE} autoFocus {...SECRET_INPUT} autoComplete="off"
+            onChange={(e) => {
+              now.current = PASTED.has((e.nativeEvent as InputEvent).inputType);
+              const text = e.target.value;
+              setPaste((s) => ({ ...s, text }));
+            }}
+            className={cx(textareaClass, "font-mono")} />
+        </Labelled>
+      )}
+      {linkOld ? (
+        <p role="status" className="flex items-start gap-1.5 text-[12px] text-ink-2">
+          <Icon name="info" size={12} stroke={2.2} className="mt-0.5 shrink-0" />
+          <span className="min-w-0 flex-1 break-words">{t("settings-providerpaste.link_hub_old")}</span>
+        </p>
+      ) : reading ? (
+        <BusyLine>{paste.link ? t("settings-providerpaste.link_reading") : t("settings-providerpaste.reading")}</BusyLine>
       ) : error ? (
         <div role="alert" className="flex items-start gap-1.5 text-[12px] text-red">
           <Icon name="warning" size={12} stroke={2.4} className="mt-0.5 shrink-0" />
@@ -95,11 +127,12 @@ export function ProviderPaste({ paste, setPaste }: { paste: PasteState; setPaste
           {error.retry && <LineAction onClick={() => void read(paste.text, ++seq.current)}>{t("settings-providerwizard.retry")}</LineAction>}
         </div>
       ) : (
-        answer && !stale && FORMAT[answer.format] && <p role="status" className="text-[12px] text-ink-2">{FORMAT[answer.format]!()}</p>
+        // a link's own line above already says what it is
+        answer && !stale && !paste.link && FORMAT[answer.format] && <p role="status" className="text-[12px] text-ink-2">{FORMAT[answer.format]!()}</p>
       )}
       {answer && (
         <div className={cx("flex flex-col gap-3", stale && "opacity-60")}>
-          {drafts.length === 0 && <p className="text-[12.5px] text-ink-2">{t("settings-providerpaste.nothing")}</p>}
+          {drafts.length === 0 && <p className="text-[12.5px] text-ink-2">{paste.link ? t("settings-providerpaste.link_nothing") : t("settings-providerpaste.nothing")}</p>}
           {drafts.length === 1 && (
             <div className="overflow-hidden rounded-card bg-surface shadow-btn">
               <DraftCard d={drafts[0]!} />

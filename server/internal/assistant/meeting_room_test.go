@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"path"
 	"slices"
@@ -69,7 +70,15 @@ func (r *roomFixture) meeting(id string) kb.Meeting {
 // roomUp uploads id as a room meeting in role and starts its room; the room's session id, listed idle.
 func (r *roomFixture) roomUp(id, role string) string {
 	r.t.Helper()
-	out := r.upload(id, 1, map[string]any{"room": map[string]any{"attendance": role}, "title": "Design review", "private": false})
+	return r.roomUpWith(id, role, nil)
+}
+
+// roomUpWith is roomUp with more fields on the upload (its started_at, say).
+func (r *roomFixture) roomUpWith(id, role string, more map[string]any) string {
+	r.t.Helper()
+	fields := map[string]any{"room": map[string]any{"attendance": role}, "title": "Design review", "private": false}
+	maps.Copy(fields, more)
+	out := r.upload(id, 1, fields)
 	if room, _ := out["room"].(map[string]any); room["state"] != "none" || out["attendance"] != role {
 		r.t.Fatalf("upload: %v", out)
 	}
@@ -126,7 +135,7 @@ func TestMeetingRoomStarts(t *testing.T) {
 	start := sends[0]
 	guest, _ := start["guest"].(map[string]any)
 	text, _ := start["text"].(string)
-	if start["new_session_id"] != sid || start["client_msg_id"] != "meeting-"+meetingRec || guest["kind"] != "meeting" || len(guest["tools"].([]any)) != 3 || start["is_main"] != false ||
+	if start["new_session_id"] != sid || start["client_msg_id"] != "meeting-"+meetingRec || guest["kind"] != "meeting" || len(guest["tools"].([]any)) != 5 || start["is_main"] != false ||
 		start["config_dir"] != meetingProfile || !strings.Contains(text, "Title: Design review") || !strings.Contains(text, `"kind":"meeting"`) || !strings.Contains(text, "Role: participant") {
 		t.Fatalf("start %v", start)
 	}
@@ -330,12 +339,15 @@ func TestMeetingRoomTools(t *testing.T) {
 	r.earlierMeeting("Exports over four megabytes are dropped")
 	sid := r.roomUp(meetingRec, "listener")
 	r.do("POST", livePath(meetingRec), "", `{"from":0,"segments":[{"start":61,"end":64,"text":"Ada: keep the cap."},{"start":3700,"end":3705,"text":"Bo: later."}]}`, http.StatusOK)
+	rec, _ := r.engine().Store.Recording(meetingRec)
+	loc := zoneApart(t, rec.StartedAt) // the user's, neither UTC nor this machine's: the batches' zone
+	setSettings(t, r.s, func(v *Settings) { v.Timezone = loc.String() })
 	tools := r.s.sessionMCPTools(context.Background(), "server", sid, true, true)
 	var names []string
 	for _, tl := range tools {
 		names = append(names, tl.Name)
 	}
-	if !slices.Equal(names, []string{"meeting_lines", "meeting_earlier", "meeting_photo_note"}) {
+	if !slices.Equal(names, []string{"meeting_lines", "meeting_earlier", "meeting_photo_note", "meeting_topics_set", "meeting_highlights_set"}) {
 		t.Fatalf("tools %v", names)
 	}
 	d := newFleetDevs() // the nodes' requests are the fleet's
@@ -355,8 +367,13 @@ func TestMeetingRoomTools(t *testing.T) {
 		}
 		return b.String()
 	}
-	if got := text(call("meeting_lines", `{"to":100}`)); got != "[1:01] Ada: keep the cap." {
+	// Each line's offset, then the clock time a batch gives it in the user's zone (what a highlight's said_at copies).
+	clock := func(sec float64) string { return kb.LiveClock(*rec, sec, loc) }
+	if got := text(call("meeting_lines", `{"to":100}`)); got != "[1:01 · "+clock(61)+"] Ada: keep the cap." {
 		t.Fatalf("lines %q", got)
+	}
+	if got := text(call("meeting_lines", `{"from":3000}`)); got != "[1:01:40 · "+clock(3700)+"] Bo: later." {
+		t.Fatalf("lines past an hour %q", got)
 	}
 	if got := text(call("meeting_earlier", `{"query":"export cap"}`)); !strings.Contains(got, "Keep the cap for this release") {
 		t.Fatalf("earlier %q", got)

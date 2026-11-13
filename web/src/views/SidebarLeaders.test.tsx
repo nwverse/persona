@@ -111,10 +111,27 @@ describe("the leader conversations in the sidebar", () => {
     expect(row("lead-a").textContent).toContain("在做 2 · 等你 1");
     expect(row("lead-b").textContent).toContain("Infrastructure");
     expect(row("lead-b").textContent).not.toContain("在做");
-    // the pin icon on each, no other group, and none of the old words
+    // 常驻 is marked only by its heading and counts (#6214): a lead with nothing running draws the ordinary chat icon,
+    // the same one a 最近 row draws — no pin glyph that could read as a tappable button. (lead-a has Agents working, so
+    // it carries the working arc instead, asserted in the spin test below.)
+    const leadIcon = row("lead-b").querySelector("svg")!.outerHTML;
+    const recentIcon = row("newest").querySelector("svg")!.outerHTML;
+    expect(leadIcon).toBe(recentIcon);
+    // 常驻 is marked only by its heading and counts (#6214): no pin glyph on the row that could read as a button
     const allChats = host.querySelector<HTMLAnchorElement>('a[href="/history"]')!;
     expect(allChats.textContent).toContain(t("sidebar.all_chats"));
     expect(headings().join()).not.toMatch(/置顶|其他对话|方向/);
+  });
+
+  it("spin the one working mark while any Agent under them runs, even when their own conversation is idle (#6230)", async () => {
+    await renderSidebar();
+    // lead-a's own session is idle but two of its Agents work: the row carries the working arc and the "在做 2" count
+    const leadA = row("lead-a");
+    expect(leadA.textContent).toContain("在做 2");
+    expect(leadA.querySelector('[data-shape="arc"][data-state="working"]')).not.toBeNull();
+    // lead-b has nothing running: no working arc, the quiet pin stays
+    const leadB = row("lead-b");
+    expect(leadB.querySelector('[data-shape="arc"]')).toBeNull();
   });
 
   it("show their titles on a hub without the leaders list", async () => {
@@ -143,7 +160,8 @@ describe("the leader conversations in the sidebar", () => {
     const pad = (d: number) => String(d).padStart(2, "0");
     // 20 older chats of the user's own, c20 the newest of them
     const older = Array.from({ length: 20 }, (_, i) => conversation(`c${pad(i + 1)}`, `Chat ${i + 1}`, `2026-10-${pad(i + 1)}T00:00:00Z`));
-    const own = ["newest", "wx", "mine", ...older.map((c) => c.session_id).reverse()];
+    // every chat but the main one and the leaders, whoever opened it (#5195): the scheduled task's and the Inbox's lead
+    const own = ["task", "twin", "newest", "wx", "mine", ...older.map((c) => c.session_id).reverse()];
     const button = (text: string) => [...host.querySelectorAll("button")].find((b) => b.textContent === text);
     const showMore = () => Array.from({ length: 15 }, (_, i) => button(t("sidebar.show_more", { count: i + 1 }))).find(Boolean);
     beforeEach(() => {
@@ -156,18 +174,23 @@ describe("the leader conversations in the sidebar", () => {
       ];
     });
 
-    it("lists the newest 15 of the user's own other chats; the hub's own are only under 全部对话", async () => {
+    it("lists the newest 15 other chats whoever opened them, the hub's own with their origin's mark (#5195)", async () => {
       await renderSidebar();
       expect(rowIds()).toEqual(["lead-a", "lead-b", ...own.slice(0, 15)]);
       expect(host.querySelector('a[href="/history"]')!.textContent).toContain(String(conversations.length));
+      const mark = (id: string) => row(id).querySelector("[data-origin-mark]");
+      expect(mark("task")?.getAttribute("data-origin-mark")).toBe("task");
+      expect(mark("task")?.getAttribute("aria-label")).toBe(t("assistant-conversations.origin_task"));
+      expect(mark("twin")?.getAttribute("data-origin-mark")).toBe("inbox");
+      for (const id of ["newest", "wx", "mine"]) expect(mark(id), id).toBeNull();
     });
 
     it("shows 15 more for each Show more until none are left, Show less goes back, and a reload keeps what was open", async () => {
       await renderSidebar();
       expect(button(t("sidebar.show_less"))).toBeUndefined();
-      act(() => button(t("sidebar.show_more", { count: 8 }))!.click());
+      act(() => button(t("sidebar.show_more", { count: 10 }))!.click());
       expect(rowIds()).toEqual(["lead-a", "lead-b", ...own]);
-      expect(button(t("sidebar.show_more", { count: 8 }))).toBeUndefined();
+      expect(button(t("sidebar.show_more", { count: 10 }))).toBeUndefined();
       // a reload
       act(() => root.unmount());
       root = createRoot(host);
@@ -204,13 +227,24 @@ describe("the leader conversations in the sidebar", () => {
     expect(link!.parentElement!.textContent).toContain(t("sidebar.persona_chats"));
   });
 
-  it("are made and ended from the menu through the hub: 取消常驻 on one, never 置顶", async () => {
+  it("are made and ended from the menu through the hub: 取消常驻 asks again, never 置顶 (#6214)", async () => {
     await renderSidebar();
     act(() => row("lead-a").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 })));
     await flush();
-    const items = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')];
-    expect(items.some((el) => el.textContent?.includes("置顶"))).toBe(false);
-    act(() => items.find((el) => el.textContent?.includes("取消常驻"))!.click());
+    const unpin = () => [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
+      .find((el) => el.textContent?.includes("取消常驻"));
+    expect([...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
+      .some((el) => el.textContent?.includes("置顶"))).toBe(false);
+    // the first tap only arms the row and says what moves; nothing has reached the hub
+    act(() => unpin()!.click());
+    await flush();
+    const asking = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
+      .find((el) => el.textContent?.includes("确认取消常驻"));
+    expect(asking).toBeTruthy();
+    expect(asking!.textContent).toContain("最近");
+    expect(posts).toEqual([]);
+    // the second tap runs the end call
+    act(() => asking!.click());
     await flush();
     expect(posts).toEqual(["/api/v1/assistant/directions/lead-a/end"]);
   });

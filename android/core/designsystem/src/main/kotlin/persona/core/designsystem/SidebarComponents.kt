@@ -30,11 +30,18 @@ fun JSidebarHistoryRow(
     menuLabel: String,
     /** The line under the title (a leader conversation's open tasks, #4331); null: one line only. */
     hint: String? = null,
+    /** The title's quiet start ([JRow]'s `titleLead`): a hub title's day and kind. */
+    titleLead: String? = null,
     titleAccessory: (@Composable () -> Unit)? = null,
+    /** Drawn before the ⋯ (a 常驻 lead's caret that folds its to-dos open, #4352); null: nothing. */
+    trailingAccessory: (@Composable () -> Unit)? = null,
+    /** A lead whose Agents work while its own conversation is idle spins the working mark anyway (#6230). */
+    working: Boolean = false,
 ) {
     JRow(title, onClick = onClick, onLongClick = onMenu, selected = selected, chevron = false, subtitle = hint,
-        titleAccessory = titleAccessory, trailing = {
-            if (status == Status.NeedsYou || status == Status.Working || status == Status.Unread) JStatusDot(status)
+        titleAccessory = titleAccessory, titleLead = titleLead, trailing = {
+            if (status == Status.NeedsYou || status == Status.Working || status == Status.Unread || working) JStatusDot(status, spinning = working && status != Status.NeedsYou && status != Status.Unread)
+            trailingAccessory?.invoke()
             JIconButton(PhIcons.DotsThree, menuLabel, onMenu)
         })
 }

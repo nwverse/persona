@@ -1,9 +1,10 @@
-// End-to-end check of the leader conversations in the sidebar (#3623, #4331, #4873, docs/web/web.md "Persona chats"): with
+// End-to-end check of the leader conversations in the sidebar (#3623, #4331, #4873, #6214, docs/web/web.md "Persona chats"): with
 // the hub's `assistant.leaders` set, a fresh browser shows Persona chats as the leaders, the 常驻 group, in the hub's order
 // under each one's name from GET /api/v1/assistant/leaders with what it has open (在做 N · 等你 N), then 最近, the newest
-// 15 of the user's other chats (a fresh browser's default, #5146) (none the hub opened by itself); every other chat is under 全部对话; New chat is the
-// compose icon on the section's title; a lead's menu has 取消常驻 (no 置顶 anywhere), which ends it on the hub and takes it
-// out of 常驻; 全部对话's menu has 设为常驻, which brings it back.
+// 15 other chats (a fresh browser's default, #5146) whoever opened them, the hub's own with their origin's mark (#5195); every other chat is under 全部对话; New chat is the
+// compose icon on the section's title; a lead's menu has 取消常驻 (no 置顶 anywhere) which asks a second time
+// (确认取消常驻, saying the chat returns to 最近 and its open tasks go back to the main chat), then ends it on the hub and takes it
+// out of 常驻; 全部对话's menu has 设为常驻, which asks once (确认设为常驻) and brings it back.
 //
 // Needs the web page against the fake hub with leaders, and Chrome (or any Chromium through --executable):
 //
@@ -46,18 +47,22 @@ const assistant = await hub("/assistant");
 const leaders = assistant.leaders ?? [];
 if (leaders.length < 2) fail(`the fake hub has no leaders (start it with MOCK_LEADERS=1): ${JSON.stringify(leaders)}`);
 const names = new Map(((await hub("/assistant/leaders")).leaders ?? []).map((l) => [l.id, l.name]));
-// 常驻 then 最近 as lib/conversation-origins.ts `recentConversations` picks them: the newest 15 of the user's own others
+// 常驻 then 最近 as lib/conversation-origins.ts `recentConversations` picks them: the newest 15 of the others whoever opened
+// them, never the background supervisor (#5195)
 const ms = (t) => (t ? Date.parse(t) || 0 : 0);
 const own = (c) => !c.origin || c.origin === "user" || c.origin === "channel";
+const listed = (a, c) => c.session_id !== a.background_supervisor;
 const leadsOf = (a) => (a.leaders ?? []).filter((id) => id !== a.main);
 const recentOf = (a) => a.conversations
-  .filter((c) => c.session_id !== a.main && !leadsOf(a).includes(c.session_id) && !c.archived && own(c))
+  .filter((c) => c.session_id !== a.main && !leadsOf(a).includes(c.session_id) && !c.archived && listed(a, c))
   .sort((x, y) => ms(y.updated_at) - ms(x.updated_at) || (x.session_id < y.session_id ? -1 : 1))
   .slice(0, 15)
   .map((c) => c.session_id);
 const expectedRows = (a) => [...leadsOf(a).filter((id) => a.conversations.some((c) => c.session_id === id)), ...recentOf(a)];
 const recent = recentOf(assistant);
-if (!recent.length) fail("the fake hub lists no chat of the user's own besides the leaders (start it with MOCK_RECENT=1)");
+if (!recent.length) fail("the fake hub lists no chat besides the leaders (start it with MOCK_RECENT=1)");
+// the hub's own among them carry their origin's mark, the user's own none (MOCK_ORIGINS=1)
+const markedIds = assistant.conversations.filter((c) => recent.includes(c.session_id) && !own(c)).map((c) => c.session_id);
 
 // the Persona chats' rows in the order shown, without New chat
 const rowIds = (page) => page.$$eval('aside a[href^="/persona/"]', (as) => as.map((a) => a.getAttribute("href").slice("/persona/".length).split("?")[0]).filter((id) => id !== "new"));
@@ -117,7 +122,10 @@ try {
       if (!(await page.locator('aside a[href="/history"]', { hasText: "全部对话" }).count())) fail(`${where}: no 全部对话`);
       const compose = page.locator('aside .group\\/sec a[href="/persona/new"][aria-label="新对话"]');
       if (!(await compose.count()) || (await compose.first().textContent()) !== "") fail(`${where}: New chat is not the icon on the Persona chats title`);
-      ok(`${where}: Persona chats are 常驻 (${leaders.map((id) => `${names.get(id)}${label(counted.get(id)) ? " " + label(counted.get(id)) : ""}`).join(" / ")}), 最近 (${recent.length}) then 全部对话; New chat is the title's icon`);
+      const marks = await page.$$eval('aside a[href^="/persona/"]', (as) => as.map((a) => [a.getAttribute("href").slice("/persona/".length).split("?")[0], a.querySelector("[data-origin-mark]")?.getAttribute("data-origin-mark") ?? ""]));
+      const marked = marks.filter(([id, m]) => m && recent.includes(id)).map(([id]) => id);
+      if (JSON.stringify(marked) !== JSON.stringify(recent.filter((id) => markedIds.includes(id)))) fail(`${where}: the rows with an origin mark are ${marked.join(",")}, not the hub's own in 最近`);
+      ok(`${where}: Persona chats are 常驻 (${leaders.map((id) => `${names.get(id)}${label(counted.get(id)) ? " " + label(counted.get(id)) : ""}`).join(" / ")}), 最近 (${recent.length}, ${marked.length} with their origin's mark) then 全部对话; New chat is the title's icon`);
       if (shots) await page.screenshot({ path: join(shots, `web-leader-pins-${width > 600 ? "wide" : "narrow"}-${theme}.png`) });
       await ctx.close();
     }
@@ -131,12 +139,19 @@ try {
   const items = await menu.locator('[role="menuitem"]').allTextContents();
   if (items.some((x) => x.includes("置顶"))) fail(`a lead's menu still says 置顶: ${items.join(" | ")}`);
   if (shots) await page.screenshot({ path: join(shots, "web-lead-menu.png") });
+  // 取消常驻 asks a second time before the hub call (#6214): the first tap arms the row, the second runs it.
   await menu.locator('[role="menuitem"]', { hasText: "取消常驻" }).first().click();
+  const confirmUnpin = menu.locator('[role="menuitem"]', { hasText: "确认取消常驻" }).first();
+  await confirmUnpin.waitFor({ state: "visible", timeout: 5000 });
+  const asking = (await menu.allTextContents()).join(" | ");
+  if (!asking.includes("最近") || !asking.includes("主对话")) fail(`the unpin confirm does not say what moves: ${asking}`);
+  if (shots) await page.screenshot({ path: join(shots, "web-lead-unpin-confirm.png") });
+  await confirmUnpin.click();
   const ended = await hub("/assistant");
   if (ended.leaders?.includes(first)) fail("the hub still lists the ended lead");
   await rowsBecome(page, expectedRows(ended)).catch((ids) => fail(`取消常驻 left the sidebar at ${ids}, not 常驻 without it then 最近`));
-  ok(`取消常驻 ends the lead on the hub and takes it out of 常驻${recentOf(ended).includes(first) ? " (into 最近)" : ""}`);
-  // back from 全部对话: its menu has 设为常驻
+  ok(`取消常驻 asks again, then ends the lead on the hub and takes it out of 常驻${recentOf(ended).includes(first) ? " (into 最近)" : ""}`);
+  // back from 全部对话: its menu has 设为常驻, which also asks a second time
   await page.goto(`${base}/history`);
   // the page's row, not the sidebar's: the ended lead can be under 最近 there now
   const histRow = page.locator("main").locator(`a[href^="/persona/${first}"]`).first();
@@ -145,8 +160,12 @@ try {
   const hmenu = page.locator('[role="menu"]').last();
   await hmenu.waitFor({ state: "visible", timeout: 5000 });
   await hmenu.locator('[role="menuitem"]', { hasText: "设为常驻" }).first().click();
+  const confirmPin = hmenu.locator('[role="menuitem"]', { hasText: "确认设为常驻" }).first();
+  await confirmPin.waitFor({ state: "visible", timeout: 5000 });
+  if (shots) await page.screenshot({ path: join(shots, "web-lead-make-confirm.png") });
+  await confirmPin.click();
   await rowsBecome(page, expectedRows(await hub("/assistant")), 8000).catch((ids) => fail(`设为常驻 in 全部对话 did not bring it back to 常驻: ${ids}`));
-  ok("设为常驻 in 全部对话 makes it a lead again");
+  ok("设为常驻 in 全部对话 asks again, then makes it a lead again");
   await ctx.close();
 } finally {
   await browser.close();

@@ -16,19 +16,27 @@ vi.mock("./store", () => {
   };
 });
 vi.mock("./router", () => ({ navigate: vi.fn() }));
+vi.mock("../ui/atoms", async (actual) => ({ ...(await actual<typeof import("../ui/atoms")>()), toast: vi.fn() }));
 
-import { acceptOutgoing, arrived, forgetOutgoing, askPersona, discardOutbox, inSendOrder, keepFailed, keepOutgoing, noteSent, noteWritten, outboxMessage, placeFailed, resetOutboxClaimsForTests, resetRestoredForTests, restoreOutbox, retryOutbox, sendToSession, settle, settleOutbox, SENT_GRACE_MS, type OutboxEntry } from "./outbox";
+import { acceptOutgoing, arrived, forgetOutgoing, askPersona, discardOutbox, inSendOrder, keepFailed, keepOutgoing, noteSent, noteWritten, outboxMessage, placeFailed, queueToSession, resetOutboxClaimsForTests, resetRestoredForTests, restoreOutbox, retryOutbox, sendToSession, settle, settleOutbox, SENT_GRACE_MS, type OutboxEntry } from "./outbox";
+import { messageFeedback, resetMessageFeedback } from "./message-send";
 import type { ChatLine } from "./turns";
 import { ApiError } from "./api";
 import { pickLauncher } from "./assistant-chat";
 import { navigate } from "./router";
 import { getState } from "./store";
+import { toast } from "../ui/atoms";
+import { skillContext, skillDraft, splitSkillDraft } from "./skill-mentions";
 
 function response(body: unknown, status = 200) {
   return { ok: status < 400, status, text: async () => JSON.stringify(body) };
 }
 const outbox = () => getState().outbox as Record<string, OutboxEntry[]>;
 const entry = (patch: Partial<OutboxEntry> = {}): OutboxEntry => ({ id: "e1", text: "你好", images: [], at: 1000, state: "sent", ...patch });
+const retryPrompts = [
+  { kind: "plain text", text: "Please check this." },
+  { kind: "selected skill", text: skillDraft([skillContext({ id: "scoped-reference", name: "review", source: "Project" })], "Please check this.") },
+];
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => "test" });
@@ -36,7 +44,7 @@ beforeEach(() => {
   (getState() as { assistant: unknown }).assistant = null;
   vi.clearAllMocks();
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { resetMessageFeedback(); vi.unstubAllGlobals(); });
 
 describe("which bubbles stay", () => {
   it("goes once the transcript says the same, with as many images", () => {
@@ -93,6 +101,25 @@ describe("which bubbles stay", () => {
 });
 
 describe("sending from another page", () => {
+  it.each([{ status: 200, state: "sent", sent: true }, { status: 409, state: "failed", sent: false }])("dispatches all 257 queued sends and retains the evicted first HTTP outcome ($state)", async ({ status, state, sent }) => {
+    vi.useFakeTimers();
+    try {
+      let release!: () => void;
+      const gate = inSendOrder("m/s", () => new Promise<void>(resolve => { release = resolve; }));
+      const fetcher = vi.fn().mockResolvedValue(response({})).mockResolvedValueOnce(response(status === 200 ? {} : { error: "Synthetic send refusal", delivered: "none" }, status));
+      vi.stubGlobal("fetch", fetcher);
+      const jobs = Array.from({ length: 257 }, (_, i) => queueToSession("m", "s", { text: `Synthetic queued input ${i}` }));
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(messageFeedback("m", "s", jobs[0].id)).toBeUndefined(); // the UI cache still has its original 256-entry limit
+      release(); await gate;
+      const results = await Promise.all(jobs.map(job => job.sent));
+      expect(fetcher).toHaveBeenCalledTimes(257);
+      expect(JSON.parse(fetcher.mock.calls[0][1].body).client_msg_id).toBe(jobs[0].id);
+      expect(results[0]).toBe(sent); expect(results.slice(1).every(Boolean)).toBe(true);
+      expect(outbox()["m/s"][0]).toMatchObject({ id: jobs[0].id, state });
+      expect(messageFeedback("m", "s", jobs[0].id)).toBeUndefined();
+    } finally { vi.useRealTimers(); }
+  });
   it("shows the message at once and marks it sent", async () => {
     let resolve!: (v: unknown) => void;
     const fetcher = vi.fn().mockReturnValueOnce(new Promise((r) => (resolve = r)));
@@ -110,16 +137,28 @@ describe("sending from another page", () => {
     expect(outbox()["m/s"]).toBeUndefined();
   });
 
-  it("keeps a failure with why, retries as another operation (the hub keeps its answer for the id), and can drop it", async () => {
+  it("says when the Agent reads it only after the question on the computer is answered (#5890)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response({ ok: true, waits_on_computer: true })).mockResolvedValueOnce(response({ ok: true })));
+    expect(await sendToSession("m", "s", { text: "为什么没得点" })).toBe(true);
+    expect(outbox()["m/s"][0].state).toBe("sent");
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("电脑上的那个问题答完后"), "info");
+    vi.mocked(toast).mockClear();
+    expect(await sendToSession("m", "s", { text: "还有一条" })).toBe(true);
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it.each(retryPrompts)("keeps $kind after a refusal and retries as another operation without changing its intent", async ({ text }) => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(response({ code: "input_draft", error: "draft", clearable: "old" }, 409))
       .mockResolvedValueOnce(response({ ok: true }));
     vi.stubGlobal("fetch", fetcher);
-    expect(await sendToSession("m", "s", { text: "看一下" })).toBe(false);
+    expect(await sendToSession("m", "s", { text }, { launcher: "claude" })).toBe(false);
     const failed = outbox()["m/s"][0];
     expect(failed).toMatchObject({ state: "failed", error: "电脑上的输入框里有没发出去的字", clearable: "old" });
     expect(await retryOutbox("m", "s", failed.id, failed.clearable)).toBe(true);
     const again = JSON.parse(fetcher.mock.calls[1][1].body);
+    expect(again.launcher).toBe("claude");
+    expect(splitSkillDraft(again.text)).toEqual(splitSkillDraft(text));
     expect(again.client_msg_id).not.toBe(failed.id);
     expect(fetcher.mock.calls[1][1].headers.get("X-Persona-Op-Id")).toBe(again.client_msg_id);
     expect(again.clear_draft).toBe("old");
@@ -224,16 +263,18 @@ describe("messages kept across a reload", () => {
     vi.stubGlobal("localStorage", fakeStorage);
   });
 
-  it("comes back as a failed bubble, and Retry sends the same id", async () => {
-    keepFailed("m", "s", { id: "a1", text: "还在吗", images: [], at: 1000 }, new TypeError("network"));
+  it.each(retryPrompts)("restores $kind after a reload, and Retry preserves the same identity and payload", async ({ text }) => {
+    keepFailed("m", "s", { id: "a1", text, images: [], at: 1000, launcher: "codex" }, new TypeError("network"));
     expect(store.size).toBe(1);
     reload();
     restoreOutbox("m", "s");
-    expect(outbox()["m/s"]).toMatchObject([{ id: "a1", text: "还在吗", state: "failed", restored: true }]);
+    expect(outbox()["m/s"]).toMatchObject([{ id: "a1", text, launcher: "codex", state: "failed", restored: true }]);
     const fetcher = vi.fn().mockResolvedValueOnce(response({ ok: true }));
     vi.stubGlobal("fetch", fetcher);
     expect(await retryOutbox("m", "s", "a1")).toBe(true);
-    expect(JSON.parse(fetcher.mock.calls[0][1].body).client_msg_id).toBe("a1");
+    const retried = JSON.parse(fetcher.mock.calls[0][1].body);
+    expect(retried).toMatchObject({ client_msg_id: "a1", launcher: "codex" });
+    expect(splitSkillDraft(retried.text)).toEqual(splitSkillDraft(text));
     expect(store.size).toBe(1); // accepted, still waiting for its transcript copy
     settleOutbox("m", "s", [{ id: "accepted-retry", client_msg_id: "a1", text: "accepted", images: [] }]);
     expect(store.size).toBe(0);

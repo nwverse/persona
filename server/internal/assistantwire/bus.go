@@ -38,6 +38,27 @@ const (
 	// photos"). The hub lists meeting_photos only while the default manager names it beside
 	// CapabilityMeetingConversation.
 	CapabilityMeetingPhotos = "meeting_photos"
+	// CapabilityMeetingLiveView: the manager takes the meeting conversation's phase 2, its live view (lines and topics
+	// on GET …/live, the room's meeting_topics_set, lines and topics in meeting_live; docs/assistant/meeting-minutes.md
+	// "Phase 2: live view"). The hub lists meeting_live_view only while the default manager names it beside
+	// CapabilityMeetingConversation.
+	CapabilityMeetingLiveView = "meeting_live_view"
+	// CapabilityMeetingHighlights: the manager takes the meeting conversation's phase 2b, its highlights (highlights and
+	// highlights_at on GET …/live, the room's meeting_highlights_set, highlights in meeting_live and in GET …/live's
+	// revs and parts; docs/assistant/meeting-minutes.md "Phase 2b: highlights"). The hub lists meeting_highlights only
+	// while the default manager names it beside CapabilityMeetingLiveView.
+	CapabilityMeetingHighlights = "meeting_highlights"
+	// CapabilityMeetingEcho: the manager takes Persona's echo marked on a meeting's upload (#5905: the segments' echo
+	// and the spoken spans, its own copy of the rule, echo lines kept but left out of the minutes, the summary and the
+	// follow-up; docs/assistant/meeting-minutes.md "Persona's echo"). The hub lists meeting_echo only while the default
+	// manager names it beside CapabilityMeetingAttendance; until then a phone leaves echo lines out of the upload.
+	CapabilityMeetingEcho = "meeting_echo"
+	// CapabilityMeetingTranscription: the manager transcribes meetings on the hub (#3862 phase 5: the upload's
+	// transcription and timeline, the audio socket GET …/audio and the gap uploads PUT …/audio, the hub's transcript of
+	// record, the meeting_transcription_* settings; docs/assistant/meeting-minutes.md "Phase 5: hub transcription").
+	// The hub lists meeting_transcription only while the default manager names it beside CapabilityMeetingConversation
+	// and CapabilityMeetingLiveView.
+	CapabilityMeetingTranscription = "meeting_transcription"
 	// CapabilityRecordingDay: the manager takes all-day recordings and writes their daily recap (the upload's kind
 	// day, POST …/segments, detail.recap, recap_state; #4741). The hub lists the recording_day feature only while the
 	// default manager names it.
@@ -209,6 +230,8 @@ var Routes = []string{
 	"PATCH /api/v1/todos/{id}/decisions/{did}",
 	"PUT /api/v1/todos/{id}/thread",
 	"DELETE /api/v1/todos/{id}/thread",
+	"PUT /api/v1/todos/{id}/seen", // Got it on a Just finished to-do, and its Undo (todo_seen.go, #5707)
+	"DELETE /api/v1/todos/{id}/seen",
 	"POST /api/v1/todos/{id}/accept",
 	"POST /api/v1/todos/{id}/decision-dismiss",
 	"POST /api/v1/todos/{id}/decision-undo-dismiss",
@@ -226,6 +249,7 @@ var Routes = []string{
 	"PUT /api/v1/assistant/memory/{name}",
 	"DELETE /api/v1/assistant/memory/{name}",
 	"GET /api/v1/assistant/capabilities",
+	"GET /api/v1/assistant/skills",
 	"POST /api/v1/assistant/conversations",
 	"POST /api/v1/assistant/conversations/{id}/compact",
 	"PUT /api/v1/assistant/conversations/{id}/model", // the model a conversation's next messages run on (model_pick.go, #5033)
@@ -283,4 +307,13 @@ var Routes = []string{
 	"GET /api/v1/recordings/{id}/photos",
 	"GET /api/v1/recordings/{id}/photos/{n}",
 	"DELETE /api/v1/recordings/{id}/photos/{n}",
+	// Hub transcription's gap uploads (meeting_transcribe.go there, "Phase 5: hub transcription"); its audio socket is
+	// one of SocketRoutes.
+	"PUT /api/v1/recordings/{id}/audio",
 }
+
+// SocketRoutes are the assistant's routes that upgrade to a WebSocket. The hub relays them over a relay stream
+// (extwire.MethodAccept) to the default manager, as it relays the extensions' routes, never as http.request; the
+// manager's extensions layer hands them to the assistant (extmgr.Options.AssistantSocket). The assistant serves exactly
+// these on its socket handler (assistant.Service.ServeSocket).
+var SocketRoutes = []string{"GET /api/v1/recordings/{id}/audio"}
