@@ -472,7 +472,7 @@ input, the clipboard and as the fallback; only the picture moves to video. Off b
   binding); no password travels anywhere new. `computer.status` / `browser.status` gain `screen_video {version, codecs,
   permission}` (absent from an old node or one without the helper, so an old app keeps RFB).
 
-
+## Locking, preventing sleep and per-App approval (plan, #1507, decided)
 
 Reference: Computer Use settings in the Codex desktop app. The main session read only the UI strings in its package, took no code, and found:
 - Locked use;
