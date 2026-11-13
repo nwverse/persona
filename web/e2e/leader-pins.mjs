@@ -1,9 +1,10 @@
-// End-to-end check of the leader conversations in the sidebar (#3623, #4331, #4873, docs/web/web.md "Persona chats"): with
+// End-to-end check of the leader conversations in the sidebar (#3623, #4331, #4873, #6214, docs/web/web.md "Persona chats"): with
 // the hub's `assistant.leaders` set, a fresh browser shows Persona chats as the leaders, the 常驻 group, in the hub's order
 // under each one's name from GET /api/v1/assistant/leaders with what it has open (在做 N · 等你 N), then 最近, the newest
 // 15 other chats (a fresh browser's default, #5146) whoever opened them, the hub's own with their origin's mark (#5195); every other chat is under 全部对话; New chat is the
-// compose icon on the section's title; a lead's menu has 取消常驻 (no 置顶 anywhere), which ends it on the hub and takes it
-// out of 常驻; 全部对话's menu has 设为常驻, which brings it back.
+// compose icon on the section's title; a lead's menu has 取消常驻 (no 置顶 anywhere) which asks a second time
+// (确认取消常驻, saying the chat returns to 最近 and its open tasks go back to the main chat), then ends it on the hub and takes it
+// out of 常驻; 全部对话's menu has 设为常驻, which asks once (确认设为常驻) and brings it back.
 //
 // Needs the web page against the fake hub with leaders, and Chrome (or any Chromium through --executable):
 //
@@ -138,12 +139,19 @@ try {
   const items = await menu.locator('[role="menuitem"]').allTextContents();
   if (items.some((x) => x.includes("置顶"))) fail(`a lead's menu still says 置顶: ${items.join(" | ")}`);
   if (shots) await page.screenshot({ path: join(shots, "web-lead-menu.png") });
+  // 取消常驻 asks a second time before the hub call (#6214): the first tap arms the row, the second runs it.
   await menu.locator('[role="menuitem"]', { hasText: "取消常驻" }).first().click();
+  const confirmUnpin = menu.locator('[role="menuitem"]', { hasText: "确认取消常驻" }).first();
+  await confirmUnpin.waitFor({ state: "visible", timeout: 5000 });
+  const asking = (await menu.allTextContents()).join(" | ");
+  if (!asking.includes("最近") || !asking.includes("主对话")) fail(`the unpin confirm does not say what moves: ${asking}`);
+  if (shots) await page.screenshot({ path: join(shots, "web-lead-unpin-confirm.png") });
+  await confirmUnpin.click();
   const ended = await hub("/assistant");
   if (ended.leaders?.includes(first)) fail("the hub still lists the ended lead");
   await rowsBecome(page, expectedRows(ended)).catch((ids) => fail(`取消常驻 left the sidebar at ${ids}, not 常驻 without it then 最近`));
-  ok(`取消常驻 ends the lead on the hub and takes it out of 常驻${recentOf(ended).includes(first) ? " (into 最近)" : ""}`);
-  // back from 全部对话: its menu has 设为常驻
+  ok(`取消常驻 asks again, then ends the lead on the hub and takes it out of 常驻${recentOf(ended).includes(first) ? " (into 最近)" : ""}`);
+  // back from 全部对话: its menu has 设为常驻, which also asks a second time
   await page.goto(`${base}/history`);
   // the page's row, not the sidebar's: the ended lead can be under 最近 there now
   const histRow = page.locator("main").locator(`a[href^="/persona/${first}"]`).first();
@@ -152,8 +160,12 @@ try {
   const hmenu = page.locator('[role="menu"]').last();
   await hmenu.waitFor({ state: "visible", timeout: 5000 });
   await hmenu.locator('[role="menuitem"]', { hasText: "设为常驻" }).first().click();
+  const confirmPin = hmenu.locator('[role="menuitem"]', { hasText: "确认设为常驻" }).first();
+  await confirmPin.waitFor({ state: "visible", timeout: 5000 });
+  if (shots) await page.screenshot({ path: join(shots, "web-lead-make-confirm.png") });
+  await confirmPin.click();
   await rowsBecome(page, expectedRows(await hub("/assistant")), 8000).catch((ids) => fail(`设为常驻 in 全部对话 did not bring it back to 常驻: ${ids}`));
-  ok("设为常驻 in 全部对话 makes it a lead again");
+  ok("设为常驻 in 全部对话 asks again, then makes it a lead again");
   await ctx.close();
 } finally {
   await browser.close();

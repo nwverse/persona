@@ -53,24 +53,35 @@ struct ModelFallbackTests {
         #expect(ModelFallbackText.words(r) == nil)
     }
 
+    @Test func aPersonaConversationSaysTheRefusalInOneSentence() {
+        let r = ModelRefusal(subtype: ModelRefusal.fallbackSubtype, originalModel: "claude-opus-5-5", fallbackModel: "claude-sonnet-5-5")
+        #expect(ModelFallbackText.plainRefusal(r) == "上游拒绝了这次请求，已改用 Sonnet 5.5。")
+        #expect(ModelFallbackText.plainRefusal(ModelRefusal(subtype: "model_refusal")) == "上游拒绝了这次请求")
+        #expect(ModelFallbackText.detailsLabel == "详情")
+    }
+
     @Test func aTerminalSessionsCardHasOnlyTheModelStep() throws {
         let s = try session(#","model_fallback":\#(refusal),"turn_error":"API Error: 404","turn_error_code":"model_fallback_unavailable""#)
         #expect(s.turnErrorCode == ModelFallbackText.unavailableCode)
         let card = try #require(ModelFallbackText.card(s, headless: false))
-        #expect(card.title == "上游拒绝后，这个会话改用了回退模型" && !card.offersRestore)
+        #expect(card.title == "上游拒绝后，这个会话改用了回退模型" && !card.offersRestore && card.details.isEmpty)
         #expect(card.lines == ["原请求模型：Opus 5.5", "回退模型：Sonnet 5.5", "之后的错误：API Error: 404",
                                "终端里的会话请在 Claude Code 里自己输入 /model 换模型；它可能同时改掉新会话的默认模型。"])
     }
 
     @Test func aPersonaConversationGoesBackAndThenOnlyWaits() throws {
-        let s = try session(#","assistant":true,"model_fallback":\#(refusal)"#)
+        // One plain sentence and the actions; the record under Details (#5202).
+        let s = try session(#","assistant":true,"model_fallback":\#(refusal),"turn_error":"API Error: 404""#)
         let card = try #require(ModelFallbackText.card(s, headless: true))
-        #expect(card.offersRestore && card.lines.last == "不会重发任何消息；同样的请求可能再次被拒绝。")
+        #expect(card.title == "上游拒绝了一次请求，这个对话现在用 Sonnet 5.5 回复。" && card.lines.isEmpty && card.offersRestore)
+        #expect(card.details == ["原请求模型：Opus 5.5", "回退模型：Sonnet 5.5", "之后的错误：API Error: 404",
+                                 "不会重发任何消息；同样的请求可能再次被拒绝。"])
         let pending = try session(#","assistant":true,"model_fallback":\#(refusal),"model_restore":{"state":"next_start","to":"claude-opus-5-5","at":"2026-11-12T00:00:00Z"}"#)
         let waiting = try #require(ModelFallbackText.card(pending, headless: true))
         #expect(waiting.title == "下次启动将使用配置的模型" && !waiting.offersRestore)
-        #expect(waiting.lines.contains("配置的模型：Opus 5.5"))
-        #expect(waiting.lines.contains("要等这个会话的下一次回复，才知道实际用的是哪个模型。"))
+        #expect(waiting.lines == ["配置的模型：Opus 5.5"])
+        #expect(waiting.details.contains("要等这个会话的下一次回复，才知道实际用的是哪个模型。"))
+        #expect(!waiting.details.contains("配置的模型：Opus 5.5"))
         // No fallback model named, or none at all: no card.
         #expect(ModelFallbackText.card(try session(#","model_fallback":{"subtype":"model_refusal_fallback"}"#), headless: true) == nil)
         #expect(ModelFallbackText.card(try session(""), headless: true) == nil)

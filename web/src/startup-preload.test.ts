@@ -83,8 +83,11 @@ describe("brotli copies", () => {
     expect(st).toEqual({ files: 1, before: big.length, after: br.length });
     expect(brotliDecompressSync(br).toString()).toBe(big);
     expect(existsSync(join(dir, "assets/small-2.js.br"))).toBe(false);
-    // what the hub sends for them, as the first-screen budget counts it when they name no other file
-    expect(await firstScreenBytes(dir, [["en", ["assets/App-1.js", "assets/small-2.js"]]], [])).toEqual([["en", br.length + BROTLI_MIN_SIZE - 1]]);
+    // what the hub sends for them, as the first-screen budget counts it when they name no other file. Local
+    // bindings are normalized for this measurement, so the count may be smaller than the original file's brotli copy.
+    const [[, counted]] = await firstScreenBytes(dir, [["en", ["assets/App-1.js", "assets/small-2.js"]]], []);
+    expect(counted).toBeLessThanOrEqual(br.length + BROTLI_MIN_SIZE - 1);
+    expect(counted).toBeGreaterThan(BROTLI_MIN_SIZE - 1);
     await brotliCopies(dir, ["assets/App-1.js"]);
     expect(readFileSync(join(dir, "assets/App-1.js.br")).equals(br)).toBe(true);
     rmSync(dir, { recursive: true });
@@ -201,6 +204,42 @@ describe("first-screen budget", () => {
       'export{}from"./api-kRgYO_n8.js";',
       "export{};",
     ].join(""));
+  });
+
+  it("keeps the same count when the minifier renames a chunk's local bindings", async () => {
+    const { placeholderLocalNames } = await import("./startup-preload");
+    const before = 'const firstName="x";function doThing(longParameter){const result=longParameter+firstName;return result}doThing("y");';
+    const after = 'const z9="x";function q(a){const b=a+z9;return b}q("y");';
+    expect(placeholderLocalNames(before)).toBe(placeholderLocalNames(after));
+  });
+
+  it("leaves strings, property names, method names, labels and globals alone", async () => {
+    const { placeholderLocalNames } = await import("./startup-preload");
+    const code = 'const value={longKey:"firstName",method(){return this.longKey}};outer:for(const item of [value]){if(item)break outer;console.log(Math.max(item.longKey,1)}';
+    const out = placeholderLocalNames(code);
+    expect(out).toContain('"firstName"');
+    expect(out).toContain('longKey:');
+    expect(out).toContain('method(){');
+    expect(out).toContain('this.longKey');
+    expect(out).toContain('outer:');
+    expect(out).toContain('break outer');
+    expect(out).toContain('console.log');
+    expect(out).toContain('Math.max');
+    expect(out).not.toContain('value');
+  });
+
+  it("does not move the first-screen count when local names are renamed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "first-screen-locals-"));
+    mkdirSync(join(dir, "assets"));
+    const file = "assets/App-abcdefgh.js";
+    const write = (code: string) => {
+      writeFileSync(join(dir, file), code);
+      return firstScreenBytes(dir, [["ja", [file]]], [file]);
+    };
+    const before = await write('const firstName="x";function doThing(longParameter){const result=longParameter+firstName;return result}doThing("y");');
+    const after = await write('const z9="x";function q(a){const b=a+z9;return b}q("y");');
+    expect(after).toEqual(before);
+    rmSync(dir, { recursive: true });
   });
 
   it("does not move when a lazy chunk makes a first-screen chunk export one more name, though what is sent does", async () => {

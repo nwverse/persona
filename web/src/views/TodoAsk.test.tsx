@@ -24,7 +24,6 @@ const toast = vi.hoisted(() => vi.fn());
 vi.mock("../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../ui/atoms")>()), toast }));
 
 const { TodosView } = await import("./Todos");
-const { FeedLineView } = await import("./assistant/Tasks");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -197,17 +196,5 @@ describe("a to-do's page", () => {
   it("shows nothing while the to-do waits on nothing", async () => {
     await drawList([todo({ ask: undefined })], "t1");
     expect(host.querySelector("[data-testid=todo-ask-panel]")).toBeNull();
-  });
-});
-
-describe("the main chat's task card", () => {
-  it("carries the ask and takes it in place", async () => {
-    seed({ todos: [todo({ agents: [{ machine_id: "m1", session_id: "s1", linked_at: now }] })], sessions: {}, interactions: [] });
-    act(() => root.render(<FeedLineView item={{ id: "f1", conversation: "conv1", at: now, kind: "task", ref: "t1" }} />));
-    await flush();
-    expect(askRow()!.textContent).toContain("推荐：先发预发环境");
-    act(() => askButton()!.click());
-    await flush();
-    expect(accepts()).toHaveLength(1);
   });
 });

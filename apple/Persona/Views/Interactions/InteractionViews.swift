@@ -299,13 +299,16 @@ struct InteractionPanel: View {
     /// The form asks to keep its end in sight (`CardFormKeepsEnd`), and where its scroll area is.
     @State private var keepsEnd = false
     @State private var formPosition = ScrollPosition(edge: .top)
+    /// The suggested rule's line under the form (#5802) while it is drawn: what of the card the form may not have.
+    @State private var suggestionHeight: CGFloat = 0
 
     /// The form's cap while the keyboard is up (`cardFits`): the area less the card's header and margins; at least a tap
     /// target, so a sliver of a form never shows (a small iPhone with the shell's composer leaves the cards little more).
     private func cap(for available: CGFloat) -> CGFloat {
         guard available > 0, headerHeight > 0 else { return .infinity }
         let row = headerAway ? 0 : headerHeight + Theme.Space.m // the row and the gap under it
-        return max(available - row - Theme.Space.m - Theme.Space.l, Theme.Size.tapTarget) // and the margins
+        let line = suggestionHeight > 0 ? suggestionHeight + Theme.Space.m : 0 // a suggested rule's line and its gap
+        return max(available - row - line - Theme.Space.m - Theme.Space.l, Theme.Size.tapTarget) // and the margins
     }
 
     private var fitsCap: CGFloat { cap(for: fits) }
@@ -355,6 +358,10 @@ struct InteractionPanel: View {
                     .frame(height: room > 0 ? min(formHeight == 0 ? room : formHeight, room * 0.55, fitsCap) : nil)
                     .transition(.opacity)
                 }
+                // A standing rule the hub suggests on a question a supervisor passed up (#5802); nothing otherwise.
+                RuleSuggestionLine(suggestion: interaction.suggestion,
+                                   card: .interaction(uid: interaction.uid, manager: interaction.manager),
+                                   group: interaction.group, height: $suggestionHeight)
             }
         }
         .padding(.horizontal, Theme.Space.l)
@@ -466,10 +473,14 @@ struct QuestionForm: View {
     @State private var writing = false
     /// Several questions (#2970): the review shown before the answers go.
     @State private var reviewing = false
+    @State private var failureHeight: CGFloat = 0
     @FocusState private var otherFocused: Bool
 
     private var questions: [Question] { interaction.questions ?? [] }
     private var stepped: Bool { QuestionSteps.enabled(questions) }
+    /// Its answer is on the way (#6279): this form sent it a moment ago, or the model says so (the card was drawn again).
+    private var isSending: Bool { sending || model.answerProgress(interaction.uid) == .sending }
+    private var failure: String? { model.answerFailure(interaction.uid) }
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else { plainLayout }
@@ -483,8 +494,12 @@ struct QuestionForm: View {
             }
             .scrollBounceBehavior(.basedOnSize)
             .frame(height: contentCap)
+            if let failure, !isSending {
+                AnswerFailureRow(message: failure) { retry() }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { failureHeight = $0 }
+            }
             if showsReviewFooter {
-                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: sending ? "submit" : nil,
+                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: isSending ? "submit" : nil,
                                    back: { withAnimation(Theme.Motion.standard) { reviewing = false } }, submit: { send() }, answer: nil)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             } else if showsFooter {
@@ -499,7 +514,7 @@ struct QuestionForm: View {
 
     private var contentCap: CGFloat? {
         guard formCap > 0, formCap.isFinite else { return nil }
-        let fixed = showsFooter || showsReviewFooter ? footerHeight + Theme.Space.m : 0
+        let fixed = (showsFooter || showsReviewFooter ? footerHeight + Theme.Space.m : 0) + (failure != nil ? failureHeight + Theme.Space.m : 0)
         let available = max(formCap - fixed, Theme.Size.tapTarget)
         return min(contentHeight == 0 ? available : contentHeight, available)
     }
@@ -511,7 +526,7 @@ struct QuestionForm: View {
                 ScreenSteps(steps: QuestionSteps.steps(questions) { answer(questions[$0]) != nil }, current: reviewing ? nil : page)
             }
             if stepped, reviewing {
-                ScreenReview(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: sending ? "submit" : nil,
+                ScreenReview(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: isSending ? "submit" : nil,
                              back: { withAnimation(Theme.Motion.standard) { reviewing = false } },
                              submit: { send() }, showsFooter: false)
             } else if questions.indices.contains(page) {
@@ -580,6 +595,8 @@ struct QuestionForm: View {
                     }
                 }
                 Spacer(minLength: 0)
+                // The picked row says it is on its way (one question, one choice: the tap was the answer).
+                if isSending, selected, !needsFooter { SendingMark() }
             }
             .multilineTextAlignment(.leading)
             .padding(.horizontal, Theme.Space.l)
@@ -588,7 +605,7 @@ struct QuestionForm: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .disabled(sending)
+        .disabled(isSending)
         .accessibilityLabel(label + (recommended ? String(localized: ", recommended", comment: "Accessibility suffix: the recommended option") : "")
                             + (assistantPick ? String(localized: ", the assistant's pick", comment: "Accessibility suffix: the option the assistant recommends") : "")
                             + (selected ? String(localized: ", selected", comment: "Accessibility suffix: a selected option") : ""))
@@ -618,11 +635,15 @@ struct QuestionForm: View {
                         if !v.trimmingCharacters(in: .whitespaces).isEmpty, !q.multiSelect { picks[q.question] = [] }
                     }
                 if !needsFooter, !text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Button { submit() } label: {
-                        ThemedIcon(Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent)
+                    if isSending {
+                        SendingMark()
+                    } else {
+                        Button { submit() } label: {
+                            ThemedIcon(Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Send answer")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Send answer")
                 }
             } else {
                 Text("Other answer…").foregroundStyle(.secondary)
@@ -652,13 +673,13 @@ struct QuestionForm: View {
             Spacer(minLength: 0)
             Button { advance() } label: {
                 HStack(spacing: Theme.Space.sm) {
-                    if sending { ProgressView().controlSize(.small).tint(.white) }
-                    Text(isLast ? String(localized: "Submit") : String(localized: "Next [Interaction Views f82c68]")).lineLimit(1)
+                    if isSending { ProgressView().controlSize(.small).tint(.white) }
+                    Text(isSending ? String(localized: "Sending…") : isLast ? String(localized: "Submit") : String(localized: "Next [Interaction Views f82c68]")).lineLimit(1)
                 }
                 .padding(.horizontal, Theme.Space.s)
             }
             .themedButton(prominent: true)
-            .disabled(!canAdvance || sending)
+            .disabled(!canAdvance || isSending)
         }
         .controlSize(.regular)
     }
@@ -727,6 +748,7 @@ struct QuestionForm: View {
     }
 
     private func send() {
+        guard !isSending else { return } // a second tap sends nothing
         sending = true
         otherFocused = false
         var answers: [String: String] = [:]
@@ -735,6 +757,47 @@ struct QuestionForm: View {
             await model.resolve(interaction, Resolution(answers: answers))
             sending = false
         }
+    }
+
+    /// The same answer again, with the op id it had (the picks and text are still here).
+    private func retry() {
+        guard !isSending else { return }
+        sending = true
+        Task {
+            await model.retryAnswer(interaction)
+            sending = false
+        }
+    }
+}
+
+/// "Sending…" on the row (or the button) whose answer is on its way (#6279).
+struct SendingMark: View {
+    var body: some View {
+        HStack(spacing: Theme.Space.sm) {
+            ProgressView().controlSize(.small)
+            Text("Sending…").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A question whose answer failed: the error and Retry, under the card's options, which keep what was picked (#6279).
+struct AnswerFailureRow: View {
+    var message: String
+    var retry: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: Theme.Space.m) {
+            ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
+            Text("Couldn't send: \(message)")
+                .font(Theme.Font.caption).foregroundStyle(Theme.danger)
+                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button { retry() } label: { Text("Retry").lineLimit(1) }
+                .themedButton(prominent: true)
+                .controlSize(.regular)
+        }
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -1645,10 +1708,14 @@ struct BUIQuestionForm: View {
     @State private var round = 0
     @State private var sending = false
     @State private var notesHeight: CGFloat = 0
+    @State private var failureHeight: CGFloat = 0
     @State private var reviewHeight: CGFloat = 0
     @State private var reviewFooterHeight: CGFloat = 0
 
     private var questions: [Question] { interaction.questions ?? [] }
+    /// Its answer is on the way (#6279): sent from this form, or the model says so.
+    private var isSending: Bool { sending || model.answerProgress(interaction.uid) == .sending }
+    private var failure: String? { model.answerFailure(interaction.uid) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
@@ -1657,12 +1724,24 @@ struct BUIQuestionForm: View {
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { notesHeight = $0 }
             }
             card
+            if let failure, !isSending {
+                AnswerFailureRow(message: failure) {
+                    sending = true
+                    Task { await model.retryAnswer(interaction); sending = false }
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { failureHeight = $0 }
+            }
+        }
+        // A failed answer: the card is built again from its answers, no longer in its sent state.
+        .onChange(of: failure) { _, now in
+            if now != nil { round += 1 }
         }
     }
 
     private var cardCap: CGFloat? {
         guard formCap > 0, formCap.isFinite else { return nil }
-        let notes = interaction.isDelegating || interaction.delegate != nil ? notesHeight + Theme.Space.m : 0
+        let notes = (interaction.isDelegating || interaction.delegate != nil ? notesHeight + Theme.Space.m : 0)
+            + (failure != nil ? failureHeight + Theme.Space.m : 0)
         return max(formCap - notes, Theme.Size.tapTarget)
     }
 
@@ -1678,7 +1757,7 @@ struct BUIQuestionForm: View {
             // way back to it.
             VStack(alignment: .leading, spacing: Theme.Space.m) {
                 ScrollView {
-                    ScreenReview(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: sending ? "submit" : nil,
+                    ScreenReview(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: isSending ? "submit" : nil,
                                  back: { reopen(at: questions.count - 1) },
                                  submit: { send(held) },
                                  answer: { (row: ScreenReviewRow) in reopen(at: row.index) }, showsFooter: false)
@@ -1686,7 +1765,7 @@ struct BUIQuestionForm: View {
                 }
                 .scrollBounceBehavior(.basedOnSize)
                 .frame(height: reviewCap)
-                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: sending ? "submit" : nil,
+                ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: Self.shown(held, questions)), sending: isSending ? "submit" : nil,
                                    back: { reopen(at: questions.count - 1) }, submit: { send(held) },
                                    answer: { (row: ScreenReviewRow) in reopen(at: row.index) })
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reviewFooterHeight = $0 }
@@ -1694,14 +1773,16 @@ struct BUIQuestionForm: View {
         } else {
             let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
             ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, startAt: startAt, answers: kept, skipLabel: nil,
-                         continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: String(localized: "Submit"),
-                         customPlaceholder: String(localized: "Other answer…"), sentMessage: String(localized: "Sent"),
-                         options: .panel(maxHeight: cardCap, rejectsDraggedPicks: true)) { answers in
+                         continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: isSending ? String(localized: "Sending…") : String(localized: "Submit"),
+                         customPlaceholder: String(localized: "Other answer…"),
+                         sentMessage: isSending ? String(localized: "Sending…") : String(localized: "Sent"),
+                         options: .panel(sending: isSending, maxHeight: cardCap, rejectsDraggedPicks: true)) { answers in
                 Haptics.tap()
                 if QuestionSteps.enabled(questions) { // the review first
                     withAnimation(Theme.Motion.standard) { held = answers; kept = answers }
                 } else {
-                    Task { await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions))) }
+                    kept = answers // a failed answer builds the card again with them
+                    send(answers)
                 }
             }
             .id(round)
@@ -1716,6 +1797,7 @@ struct BUIQuestionForm: View {
     }
 
     private func send(_ answers: ApprovalAnswers) {
+        guard !isSending else { return } // a second tap sends nothing
         sending = true
         Task {
             await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions)))

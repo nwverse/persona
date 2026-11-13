@@ -436,6 +436,17 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(len(expected), 9)
         self.assertEqual(expected, tokens)
 
+    def test_android_glass_reading_sizes_use_font_units(self):
+        # Android's intentional reading-size difference (#5780) does not enter the shared iOS levels above.
+        self.assertEqual(self.catalog.values["type.body.size"], {"value": 17, "unit": "px"})
+        self.assertEqual(self.catalog.values["typeGlass.body.size"], {"value": 16, "unit": "px"})
+        self.assertEqual(self.catalog.values["typeGlass.secondary.size"], {"value": 14, "unit": "px"})
+        block = gen.render_kotlin(self.catalog, "persona.core.designsystem").split("object TypeGlass {", 1)[1]
+        self.assertIn("val size: TextUnit = 16.sp", block)
+        self.assertIn("val size: TextUnit = 14.sp", block)
+        for path, expected in (("typeGlass.body.size", "1rem"), ("typeGlass.secondary.size", "0.875rem")):
+            self.assertEqual(gen.css_value(self.catalog.tokens[path]["$type"], self.catalog.values[path], path), expected)
+
     def test_ios_motion_matches(self):
         # The shared motions (phase 1 R3) as Theme.Motion writes them; the rest of Theme.Motion belongs to single components
         # (the composer, attaching, blinks). SwiftUI's snappy has a bounce of 0.15, smooth none.

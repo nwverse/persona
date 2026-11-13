@@ -89,6 +89,18 @@ grew 9 B, but the ja count grew 255 B and `main` failed the build, with no first
 now counts imported names as one fixed string and export lists as empty ones. To check a surprising move, compare the
 number of entries in each first-screen chunk's `export{…}` between the two builds.
 
+## A change's first-screen cost depends on the main it is measured on (#6348)
+
+The paged Agents list's groups measured +1,402 B for ja on one `main`, then +1,510 B, +1,396 B and +1,501 B on the
+next three, within two hours and with the change's own code untouched: brotli counts a change against everything around it,
+and each merge moved what it compresses against. For the same reason a lazy split saves far less than the module weighs
+alone: the sections' view is about 1.5 KB minified and compressed on its own, and moving it to its own chunk took 407 B
+off. Measure the branch and `main` at the same commit, after the last merge, and write that pair beside
+`FIRST_SCREEN_BUDGET`; never carry a delta over from an earlier base, and never estimate a split from a module's own
+size. A build under its budget prints no numbers: build a scratch checkout with the constant set to 1 B, and the error
+names every language's count. While the PR waits, `main` may raise the budget for its own changes: merge it, keep its
+note, and append yours with a new pair.
+
 ## An idle-contracted chunk's growth raises the idle budget, it cannot move to on-intent (#5386)
 
 `code-views-lazy.test` asserts that `ExtensionChart` loads with `{ idle: true }`, so adding the single-category share

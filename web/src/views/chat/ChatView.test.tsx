@@ -148,6 +148,13 @@ describe("ChatView composer task routing", () => {
     expect(url).toBe("/api/v1/sessions/hub/c1/messages");
     expect(JSON.parse(init.body)).toMatchObject({ text: "Look at this", images: [image] });
   });
+
+  // a terminal Claude held on a question at the computer reads it only once that is answered (#5890)
+  it.each([[true, 1], [false, 0]])("says when the message waits on the computer (waits_on_computer=%j)", async (waits, toasts) => {
+    fetcher.mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify(waits ? { ok: true, waits_on_computer: true } : { ok: true }) });
+    expect(await sender(false)({ text: "One more thing", images: [] })).toBe(true);
+    expect(vi.mocked(toast).mock.calls.filter(([text]) => text === t("lib-outbox.waits_on_computer"))).toEqual(toasts ? [[t("lib-outbox.waits_on_computer"), "info"]] : []);
+  });
 });
 
 describe("ChatView message context availability", () => {

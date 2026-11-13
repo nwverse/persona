@@ -66,6 +66,23 @@ final class PushRegistrar {
         }
     }
 
+    /// The way the hub at group pushes to this device now, as Settings › Devices reads it (`GET /api/v1/auth/tokens`):
+    /// Settings › Notifications asks when it opens (#1859). The registration's answer is kept from launch or pairing,
+    /// so pushes that started failing since (or stopped failing) showed only after the next launch, while Settings ›
+    /// Devices already said so. No entry for this credential: the hub has no push registration from it. A hub that sends
+    /// no routes (older) leaves what is known. A failed read says so instead of the older route; a cancelled one is no
+    /// answer.
+    func refreshRoute(group: String, tokens: () async throws -> APIClient.DeviceTokens) async {
+        do {
+            let r = try await tokens()
+            guard let routes = r.push, let current = r.current else { return }
+            health.update { $0.read(routes[current], group: group) }
+        } catch {
+            if error.isCancellation { return }
+            health.update { $0.readFailed(error.localizedDescription, group: group) }
+        }
+    }
+
     private func queue(_ work: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
         let previous = last
         let task = Task {
@@ -131,8 +148,11 @@ final class PushRegistrar {
                 }
                 do {
                     let route = try await c.api.register(device: body) // nil: an older hub, which does not say
-                    await PushHealthStore.shared.update { $0.routes[c.group] = route }
-                } catch {}
+                    await PushHealthStore.shared.update { $0.read(route, group: c.group) }
+                } catch {
+                    // Not the previous route as if current: the page says it couldn't check (#1859).
+                    await PushHealthStore.shared.update { $0.readFailed(error.localizedDescription, group: c.group) }
+                }
             }
         }
     }

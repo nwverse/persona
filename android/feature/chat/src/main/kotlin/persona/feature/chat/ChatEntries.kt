@@ -118,6 +118,7 @@ class ChatDraftEditor(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { error.value = R.string.chat_draft_read_failed }
             ready.value = true
+            state.draftLoaded = true
             // What was typed before the draft arrived was not saved then: it is now (it replaces the draft).
             if (touched) changes.trySend(state.draft)
             val versions = sessionVersions?.let { flow -> launch {
@@ -206,6 +207,7 @@ fun ChatDestination(
         ChatScreen(session, services.chats(), services.messages(),
             services.interactions(), services.sessions(), onBack = onHistoryBack ?: navigator::back,
             onTerminal = onTerminal ?: { navigator.navigate(TerminalRoute(it.machineId, it.sessionId)) },
+            onResumeInTerminal = { navigator.navigate(TerminalRoute(it.machineId, it.sessionId, resume = true)) },
             chrome = ChatChromeBindings(actions = wiring?.actions.takeUnless { historyReadOnly }, connection = wiring?.connection,
                 worktrees = wiring?.worktrees.takeUnless { historyReadOnly },
                 onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },

@@ -4,6 +4,7 @@ import type { Machine, Session } from "./types";
 
 import { buildDirectionAgentTree } from "./direction-agent-tree";
 import {
+  DIRECTION_STATE_TONE,
   directionStateName,
   directionTitle,
   directionTreeGroups,
@@ -19,7 +20,7 @@ import {
   type DirectionTree,
 } from "./direction-tree";
 
-const counts = (working = 0, needs_you = 0, stuck = 0, review = 0) => ({ working, needs_you, stuck, review });
+const counts = (working = 0, needs_you = 0, stuck = 0, review = 0, planned = 0) => ({ working, needs_you, stuck, review, planned });
 
 const session = (mid: string, sid: string, state: Session["state"] = "working", extra: Partial<Session> = {}): Session => ({ machine_id: mid, session_id: sid, title: sid, cwd: "/code/app", status: "", state, ...extra });
 
@@ -53,6 +54,10 @@ describe("direction tree", () => {
     expect(normalizeTree(null)).toEqual({ directions: [] });
     // a count that is not a finite number is 0, never drawn as "null"
     expect(normalizeTree({ directions: [{ id: "b", counts: { working: null, needs_you: "3", stuck: Infinity, review: 1 } }] }).directions[0].counts).toEqual(counts(0, 0, 0, 1));
+    // not started (#5846) is kept as the hub sent it, and counted
+    const planned = normalizeTree({ directions: [{ id: "c", counts: { planned: 2 }, tasks: [{ id: "p", title: "P", state: "planned" }] }] }).directions[0];
+    expect(planned.tasks?.[0].state).toBe("planned");
+    expect(planned.counts).toEqual(counts(0, 0, 0, 0, 2));
   });
 
   it("groups by direction only with a leader; the secretary's group shows only with a leader and a task", () => {
@@ -73,6 +78,8 @@ describe("direction tree", () => {
     expect(directionStateName("review")).toBe("待验收");
     expect(directionStateName("stuck")).toBe("卡住");
     expect(directionStateName("working")).toBe("在做");
+    expect(directionStateName("planned")).toBe("未开始");
+    expect(DIRECTION_STATE_TONE.planned).toBe("text-ink-3");
     expect(directionTitle(TREE.directions[2])).toBe("书记官");
     expect(directionTitle({ id: "x", name: "", counts: counts() }, "Title")).toBe("Title");
   });

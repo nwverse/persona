@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -44,9 +45,11 @@ import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.FeedItem
 import persona.core.contracts.FeedResponse
 import persona.core.contracts.Interaction
+import persona.core.contracts.ImagePayload
 import persona.core.contracts.Item
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.Machine
+import persona.core.contracts.QueueEdit
 import persona.core.contracts.Resolution
 import persona.core.contracts.ServerEvent
 import persona.core.contracts.Session
@@ -138,9 +141,12 @@ class AssistantQueueShotsTest {
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = Unit
     }
     private val actions = object : ChatActions {
+        /** The photos the hub returns beside the queue when a message is taken back, by message. */
+        var photos: List<List<ImagePayload>?> = emptyList()
         override suspend fun isMuted(session: Session) = false
         override suspend fun execute(session: Session, action: ChatAction): ChatActionResult = ChatActionResult.Done
         override suspend fun verify(session: Session, action: ChatAction): ChatActionResult = ChatActionResult.Done
+        override suspend fun editQueue(session: Session, keep: List<Int>): QueueEdit = QueueEdit(session.queued.orEmpty(), photos)
     }
 
     private fun settle() {
@@ -224,4 +230,62 @@ class AssistantQueueShotsTest {
             }
         }
     }
+
+    // Persona messages with photos (the paths this phone sent in the words, as its composer writes them): on Glass a row says how
+    // many, "N images" under its words, iOS's count; Brief and Board keep the mark among the words.
+    private val withPhotos = JsonCodec.decodeFromString<Session>("""{"machine_id":"computer-a","session_id":"main","title":"Persona",
+        "assistant":true,"status":"working","state":"working","queued":["Look at these two screens for the rollout\n\n<attached_images>\n/tmp/shot-a.jpg\n/tmp/shot-b.jpg\n</attached_images>",
+        "Please look at the image\n\n<attached_images>\n/tmp/shot-c.jpg\n</attached_images>","Check the flight times for Friday too"]}""")
+
+    @Test fun personasQueueRowsSayHowManyPhotosTheyCarry() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        sessions.sessions.value = listOf(withPhotos, web)
+        page({ style }, { dark })
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            settle()
+            rule.onAllNodesWithContentDescription("queued · Persona", substring = true).fetchSemanticsNodes().firstOrNull()?.let {
+                rule.onAllNodesWithContentDescription("queued · Persona", substring = true)[0].performClick(); settle()
+            }
+            shot("queue-photos-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+            rule.onAllNodesWithText("2 images").assertCountEquals(if (s == AppStyle.Glass) 1 else 0)
+            rule.onAllNodesWithText("1 image").assertCountEquals(if (s == AppStyle.Glass) 1 else 0)
+            rule.onAllNodesWithContentDescription("queued · Persona", substring = true).fetchSemanticsNodes().firstOrNull()?.let {
+                rule.onAllNodesWithContentDescription("queued · Persona", substring = true)[0].performClick(); settle()
+            }
+        }
+    }
+
+    private fun photo(color: Int): ImagePayload {
+        val bitmap = Bitmap.createBitmap(160, 120, Bitmap.Config.ARGB_8888).apply { eraseColor(color) }
+        val bytes = java.io.ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        return ImagePayload("image/png", java.util.Base64.getEncoder().encodeToString(bytes))
+    }
+
+    // Taken back, a message brings its photos with it (the hub returns them beside the queue, base64): they are in the draft, over the words.
+    private fun takeBack(dark: Boolean) {
+        useChatFileProvider(androidx.test.core.app.ApplicationProvider.getApplicationContext())
+        // the third message carries two photos as payloads (sent from another device: its words hold no paths for them)
+        actions.photos = listOf(null, null, listOf(photo(0xFF4F8DF7.toInt()), photo(0xFFE9A23B.toInt())))
+        sessions.sessions.value = listOf(withPhotos, web)
+        page({ AppStyle.Glass }, { dark })
+        settle()
+        rule.onAllNodesWithContentDescription("queued · Persona", substring = true)[0].performClick(); settle()
+        rule.onAllNodesWithContentDescription("Item 3", substring = true)[0].performClick(); settle()
+        rule.onAllNodesWithText("Take back to edit")[0].performClick()
+        // the photos are thumbnails of the draft (the page shows no notice of its own: the app's feedback host does); they are
+        // written off the main thread, so the page's frames go on by hand while the clock stands still
+        repeat(400) {
+            if (rule.onAllNodesWithContentDescription("Photo 2", substring = true).fetchSemanticsNodes().isNotEmpty()) return@repeat
+            settle(); Thread.sleep(25)
+        }
+        rule.onAllNodesWithContentDescription("Photo 2", substring = true).assertCountEquals(1)
+        settle()
+        shot("queue-take-back-${if (dark) "dark" else "light"}")
+    }
+
+    @Test fun takingBackAPersonaMessageBringsItsPhotosBackLight() = takeBack(dark = false)
+
+    @Test fun takingBackAPersonaMessageBringsItsPhotosBackDark() = takeBack(dark = true)
 }

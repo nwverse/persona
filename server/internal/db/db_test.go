@@ -946,6 +946,43 @@ func TestPendingInteractionsIndexed(t *testing.T) {
 
 // Each combination of filters returns the same rows the single OR statement did: newest first, limited, and a
 // session alone matches that session id on every machine.
+// LateAnswer records answers given after a card expired: one question at a time, added up, the status kept; a card
+// that did not expire is never written over, nor is the expiry's own dismissal kept beside an answer.
+func TestLateAnswer(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Now().UTC()
+	for _, id := range []string{"ix_expired", "ix_pending"} {
+		if err := d.InsertInteraction(ctx, proto.Interaction{ID: id, MachineID: "m1", SessionID: "s1", Kind: proto.IxQuestion, CreatedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.FinishInteraction(ctx, "ix_expired", "expired", &proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []map[string]string{{"Q1": "A"}, {"Q2": "B"}} {
+		if ok, err := d.LateAnswer(ctx, "ix_expired", a, "", ""); err != nil || !ok {
+			t.Fatalf("late answer %v: %v %v", a, ok, err)
+		}
+	}
+	status, res, err := d.InteractionOutcome(ctx, "ix_expired")
+	if err != nil || status != "expired" || res == nil || !res.Late || res.Dismiss || res.Reason != "" || res.AnsweredBy != "" ||
+		res.Answers["Q1"] != "A" || res.Answers["Q2"] != "B" {
+		t.Fatalf("expired card: %s %+v %v", status, res, err)
+	}
+	if ok, err := d.LateAnswer(ctx, "ix_expired", map[string]string{"Q1": "C"}, proto.AnsweredByDefault, "deadline"); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if _, res, _ := d.InteractionOutcome(ctx, "ix_expired"); res.AnsweredBy != proto.AnsweredByDefault || res.Reason != "deadline" || res.Answers["Q1"] != "C" || res.Answers["Q2"] != "B" {
+		t.Fatalf("default: %+v", res)
+	}
+	if ok, err := d.LateAnswer(ctx, "ix_pending", map[string]string{"Q1": "A"}, "", ""); err != nil || ok {
+		t.Fatalf("pending card written: %v %v", ok, err)
+	}
+	if status, res, _ := d.InteractionOutcome(ctx, "ix_pending"); status != "pending" || res != nil {
+		t.Fatalf("pending card: %s %+v", status, res)
+	}
+}
+
 func TestInteractionsFilters(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	base := time.Now().Add(-time.Hour).UTC()

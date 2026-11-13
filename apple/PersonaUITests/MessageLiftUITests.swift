@@ -264,9 +264,10 @@ final class MessageLiftUITests: XCTestCase {
 
     /// A line of words as `LiftLines` writes it: its glyphs, its first glyph's left edge, its baseline, its last glyph's
     /// right edge, and (the text view's) its last word's.
-    /// closes: the text view's line ends in a CJK closing bracket, which TextKit 1 draws narrower than SwiftUI there.
+    /// closes: the text view's line ends in a CJK closing bracket, which TextKit 1 draws narrower than SwiftUI there;
+    /// opens: it starts with a CJK opening bracket, which TextKit 1 draws narrower there too (the line is moved right).
     private struct Line: CustomStringConvertible {
-        var glyphs: Int, minX: Double, baseline: Double, maxX: Double, wordsMaxX: Double, closes = false
+        var glyphs: Int, minX: Double, baseline: Double, maxX: Double, wordsMaxX: Double, closes = false, opens = false
         var description: String { "\(glyphs)@(\(minX), \(baseline))…\(maxX)" + (wordsMaxX < maxX - 0.05 ? " (words …\(wordsMaxX))" : "") }
     }
 
@@ -276,7 +277,9 @@ final class MessageLiftUITests: XCTestCase {
     private static func parse(_ s: Substring) -> [Line] {
         s.split(separator: ";").compactMap { l in
             let v = l.split(separator: ",").compactMap { Double($0) }
-            return v.count >= 5 ? Line(glyphs: Int(v[0]), minX: v[1], baseline: v[2], maxX: v[3], wordsMaxX: v[4], closes: v.count > 5 && v[5] == 1) : nil
+            let brackets = v.count > 5 ? Int(v[5]) : 0
+            return v.count >= 5 ? Line(glyphs: Int(v[0]), minX: v[1], baseline: v[2], maxX: v[3], wordsMaxX: v[4],
+                                       closes: brackets & 1 != 0, opens: brackets & 2 != 0) : nil
         }
     }
 
@@ -307,7 +310,9 @@ final class MessageLiftUITests: XCTestCase {
     /// sameEngine: the lines hold the same glyphs. Else `b` is the text view's: its count may add a line's end, its line
     /// ends where the chat's does with or without the space there, and both end at its right edge (`edge`: a code line
     /// longer than its box runs on under the box's edge). A line that ends in a CJK closing bracket may end up to a fifth
-    /// of an em (17 pt) short: TextKit 1 draws that bracket narrower there (docs/lessons/ios.md).
+    /// of an em (17 pt) short: TextKit 1 draws that bracket narrower there (docs/lessons/ios.md). One that starts with a
+    /// CJK opening bracket may start up to as much in: TextKit 1 draws that bracket narrower there too, and the line is
+    /// moved right by what it lost, for the words after it to be on the chat's (#5982).
     private static func difference(_ a: [Line], _ b: [Line], dy: Double = 0, sameEngine: Bool = true, edge: Double = 0) -> String? {
         guard !a.isEmpty else { return "no lines" }
         guard a.count == b.count else { return "\(a.count) lines, then \(b.count):\n\(a)\n\(b)" }
@@ -315,7 +320,9 @@ final class MessageLiftUITests: XCTestCase {
             let end = sameEngine || edge <= 0 ? x.maxX : min(x.maxX, edge)
             var right = sameEngine ? abs(end - y.maxX) : min(abs(end - y.maxX), abs(end - y.wordsMaxX))
             if !sameEngine, y.closes, end - y.maxX > 0, end - y.maxX <= 3.4 { right = 0 }
-            let off = [abs(x.minX - y.minX), abs(x.baseline + dy - y.baseline), right].max()!
+            var left = abs(x.minX - y.minX)
+            if !sameEngine, y.opens, y.minX - x.minX > 0, y.minX - x.minX <= 3.4 { left = 0 }
+            let off = [left, abs(x.baseline + dy - y.baseline), right].max()!
             let count = sameEngine ? x.glyphs == y.glyphs : abs(x.glyphs - y.glyphs) <= 1
             if off > 0.5 || !count { return "line \(i + 1): \(x) then \(y) (moved by \(dy))\nall: \(a)\nthen: \(b)" }
         }
@@ -325,12 +332,15 @@ final class MessageLiftUITests: XCTestCase {
     /// Lifts the message with `words` and selects all of its words in place: in each state its lines are where the
     /// chat drew them. Lifted, a message with no room for its bar beside it moves (all of it, upright, `moves`); the
     /// text view over the selected words lays them out as the chat did (`selectMatches`), within half a point.
+    /// unfold: the message is a long one of yours, folded in the chat (#5676; a long press would open it rather than lift
+    /// it): opened with Show More first, then pressed open, as these checks are about the words of an open message.
     @MainActor private func checkTheWordsStay(_ words: String, _ name: String, moves: Bool = false, selectMatches: Bool = true,
-                                             close: Bool = false, reveal: Bool = false) {
+                                             close: Bool = false, reveal: Bool = false, unfold: Bool = false) {
         guard text(words).waitForExistence(timeout: 20) else { return XCTFail("\(name): missing \(words)") }
         // Closed again even when a step fails, so the next check finds the chat as it was.
         defer { if close, self.lifted.exists { closeTheLift(name) } }
         sleep(2)
+        if unfold { openYourFoldedMessage(name) }
         if reveal { self.reveal(words) }
         shot(name + "-normal")
         guard liftAt(words) else { return XCTFail("\(name): did not lift") }
@@ -353,6 +363,19 @@ final class MessageLiftUITests: XCTestCase {
         }
         print("LIFT-LINES \(name) select=\(selected.select)")
         shot(name + "-selected")
+    }
+
+    /// Show More on your folded long message (#5676), if it is folded (open is kept from an earlier run). Its frame may
+    /// come flipped in the upside-down chat list (as `liftAt` finds): tapped where it shows.
+    @MainActor private func openYourFoldedMessage(_ name: String) {
+        let more = app.buttons["bubble.expand"].firstMatch
+        guard more.exists else { return }
+        let window = app.windows.firstMatch.frame
+        var f = more.frame
+        if !window.insetBy(dx: 0, dy: window.height * 0.12).contains(CGPoint(x: f.midX, y: f.midY)) { f.origin.y = window.height - f.maxY }
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.minX + 24, dy: f.midY)).tap()
+        XCTAssertTrue(app.buttons["bubble.collapse"].firstMatch.waitForExistence(timeout: 5), "\(name): Show More did not open it")
+        sleep(1)
     }
 
     /// Two taps beside the lifted message: the first ends the selecting, the second puts it back.
@@ -380,7 +403,7 @@ final class MessageLiftUITests: XCTestCase {
             checkTheWordsStay("可以，就这么改", "mine-short")
             app = XCUIApplication()
             launchWithLines(mix)
-            checkTheWordsStay("定时检查", "mine-long", moves: true)
+            checkTheWordsStay("定时检查", "mine-long", moves: true, unfold: true)
         }
     }
 
@@ -415,7 +438,7 @@ final class MessageLiftUITests: XCTestCase {
             checkTheWordsStay("要我先带你看哪一块", "persona-answer", moves: true)
             app = XCUIApplication()
             launchWithLines(mix, style: "clay")
-            checkTheWordsStay("定时检查", "clay-mine", moves: true)
+            checkTheWordsStay("定时检查", "clay-mine", moves: true, unfold: true)
             app = XCUIApplication()
             launchWithLines(mix, style: "clay")
             checkTheWordsStay("下一次核对在整点之后五分钟", "clay-answer", moves: true)

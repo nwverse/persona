@@ -210,7 +210,7 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 		for _, l := range s.storedLaunchers(ctx) {
 			if l.Name == name {
 				if l.Kind != "api" && !messagesAPI(l.API) {
-					return c, i18n.Err("assistant-models.err_launcher_not_responses")
+					break // no gateway the manager can call: its CLI answers on a computer (models_run.go)
 				}
 				if err := checkAPITransport(l.Kind, l.API, l.Proxy, l.NoProxy, l.HeadersSealed != ""); err != nil {
 					return c, err
@@ -225,8 +225,15 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 				break
 			}
 		}
-		if !found {
-			return c, i18n.Err("assistant-models.err_not_callable")
+		if !found { // plain claude, a computer's own launcher, a managed one without a Messages gateway
+			// Claude Code only (an empty agent is Claude Code) and one the manager knows: a deleted launcher is an error.
+			if name != "claude" && !slices.ContainsFunc(s.launcherViews(ctx), func(v LauncherView) bool { return v.Name == name && (viewAgent(v) == "" || viewAgent(v) == "claude") }) {
+				return c, i18n.Err("assistant-models.err_not_callable")
+			}
+			c = ai.Config{RunLauncher: name, ViaMachine: s.settings(ctx).MachineID}
+			if c.ViaMachine == "" {
+				return c, i18n.Err("assistant-models.err_run_no_machine")
+			}
 		}
 	} else {
 		return c, i18n.Err("assistant-models.err_not_api")

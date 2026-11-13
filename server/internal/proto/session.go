@@ -11,6 +11,10 @@ var (
 	PermissionModes = []string{"default", "acceptEdits", "plan", "auto", "bypassPermissions"}
 )
 
+// CodexEffortLevels are Codex's reasoning efforts, weakest first: a codex launcher's model catalog advertises ultra,
+// so a start on one takes it too (node/codex_effort.go). Claude Code's list stops at max.
+var CodexEffortLevels = []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
 
@@ -482,6 +486,10 @@ const (
 	// CodeSwitchFailedStopped: the agent did not come up on the new launcher and could not be brought back on its own
 	// one: it has stopped (Resume on its terminal page).
 	CodeSwitchFailedStopped = "switch_failed_stopped"
+	// CodeSwitchBusy: the assistant's switch (session.send with switch_now, #5973) could not be carried out now: the
+	// agent works, waits for the user, is starting or has background work a quit would end. Nothing was typed and the
+	// switch was dropped.
+	CodeSwitchBusy = "switch_busy"
 )
 
 // TodoRef is a session's link to an active todo (docs/assistant/todos.md).
@@ -532,6 +540,14 @@ type ModelPick struct {
 	Launcher string `json:"launcher"`
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
+}
+
+// QueueEdit is the answer to POST /api/v1/sessions/{mid}/{sid}/queue in a Persona conversation (node session.queue.edit,
+// docs/protocol/protocol.md): the messages that were queued before the edit, in order, and their photos for the composer
+// when any carried some. Images[i] is message i's photos, null when it had none; the key is left out when no message did.
+type QueueEdit struct {
+	Queue  []string  `json:"queue"`
+	Images [][]Image `json:"images,omitempty"`
 }
 
 // ServiceTier is a speed advertised by the native Codex model catalog.

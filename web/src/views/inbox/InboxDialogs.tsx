@@ -8,18 +8,19 @@ import { startConversation } from "../../lib/assistant-start";
 import { adoptConversation, askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { sessionTitle, stateOf, uuid } from "../../lib/format";
 import {
-  agentDraft, connectorReference, conversationRoute, docChangeKey, docChangeLine, HANDOFF_PRESETS, handOffMessage, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges,
+  agentDraft, connectorReference, conversationRoute, docChangeKey, docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges,
   setDone, unsentReplies, type InboxItem,
 } from "../../lib/inbox";
 import { isTransient } from "../../lib/ops";
 import { machineWithHub } from "../../lib/mesh";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate } from "../../lib/router";
+import { openNewAgent } from "../../lib/new-agent";
 import { refreshAssistant, useStore } from "../../lib/store";
 import type { Machine, Session } from "../../lib/types";
 import { agentTarget, handOffSourceKey, recallHandOff, rememberHandOff, resolveHandOff } from "../../lib/handoff-memory";
 import { t } from "../../i18n";
-import { Button, cx, Dialog, Loading, toast } from "../../ui/atoms";
+import { Button, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { Spark } from "./InboxParts";
@@ -245,6 +246,34 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
     if (memoryKey) rememberHandOff(memoryKey, typeof target === "object" ? agentTarget(target.machine_id, target.session_id) : target);
   };
 
+  // "New agent…" (#5933): New agent over this dialog, with the item as the card over the first message (the same
+  // <persona-context> an agent gets here) and the ask, or the first preset, as the message. Nothing is sent before its
+  // Start; its Cancel comes back here as it was. Once the agent is going: this source remembers that agent, never "New
+  // agent…", and the item is filed unless "Also mark as done" was turned off here (on for agents).
+  const [opening, setOpening] = useState(false);
+  const startNewAgent = async () => {
+    if (busy || opening) return;
+    setOpening(true);
+    setError("");
+    try {
+      const full = await api<InboxItem>(itemPath(item.id), { headers: itemRequest(item) });
+      const file = doneChosen.current ? markDone : true;
+      openNewAgent({
+        forwards: [handOffContext({ ...item, ...full })],
+        prompt: ask.trim() || HANDOFF_PRESETS[0],
+        onStarted: (s) => {
+          if (memoryKey) rememberHandOff(memoryKey, agentTarget(s.machine_id, s.session_id));
+          if (file) void setDone(item, true);
+          onClose();
+        },
+      });
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setOpening(false);
+    }
+  };
+
   const send = async () => {
     setBusy(true);
     setError("");
@@ -365,6 +394,14 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
       <div role="radiogroup" aria-label={t("inbox-inboxdialogs.target_label")} className="max-h-[300px] divide-y divide-line overflow-y-auto rounded-card bg-surface shadow-card">
         <Target on={target === "main"} last={isLast("main")} onPick={() => choose("main")} title={t("inbox-inboxdialogs.target_main")} sub={t("inbox-inboxdialogs.target_main_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
         <Target on={target === "new"} last={isLast("new")} onPick={() => choose("new")} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="compose" size={12} /></span>} />
+        <button type="button" onClick={() => void startNewAgent()} disabled={busy || opening} data-testid="handoff-new-agent" className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover disabled:opacity-60">
+          <span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="plus" size={12} /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] text-ink">{t("inbox-inboxdialogs.target_new_agent")}</span>
+            <span className="block truncate text-[11.5px] text-ink-3">{t("inbox-inboxdialogs.target_new_agent_sub")}</span>
+          </span>
+          {opening ? <Spinner size={13} /> : <Icon name="chevronRight" size={13} className="shrink-0 text-ink-3" />}
+        </button>
         {agents.map((s) => (
           <Target
             key={`${s.machine_id}/${s.session_id}`}

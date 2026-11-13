@@ -197,7 +197,8 @@ export function RenameDialog({ session, open, onClose }: { session: Session; ope
       >
         {hasTab && <Field label={t("chat-sessiondialogs.tab_name")} value={tab} onChange={setTab} autoFocus />}
         <Field label={t("chat-sessiondialogs.session_name")} value={title} onChange={setTitle} autoFocus={!hasTab} />
-        <p className="text-[12px] leading-relaxed text-ink-3">{session.assistant ? t("chat-sessiondialogs.rename_hint_assistant") : t("chat-sessiondialogs.rename_hint_agent")}</p>
+        {/* the agent's hint is about herdr's tab and Claude's /rename: a session without a terminal (a runtime's) has neither */}
+        {(session.assistant || sessionCan(session, "terminal")) && <p className="text-[12px] leading-relaxed text-ink-3">{session.assistant ? t("chat-sessiondialogs.rename_hint_assistant") : t("chat-sessiondialogs.rename_hint_agent")}</p>}
         <button type="submit" hidden />
       </form>
     </Dialog>

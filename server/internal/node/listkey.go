@@ -107,6 +107,14 @@ func listKeySized(list []proto.Session, size int) string {
 		if len(s.Efforts) > 0 {
 			fmt.Fprintf(&w.b, "effort:%s/%v\n", s.Effort, s.Efforts)
 		}
+		// The model, mode and effort the phone just switched show at once (#6334): such a change alone comes with no new
+		// revision or status, and updated_at counts only in steps of 10 s.
+		if s.Model != "" || s.PermissionMode != "" || s.Effort != "" {
+			w.b.WriteString("modes:")
+			w.quote(s.Model, '/')
+			w.quote(s.PermissionMode, '/')
+			w.quote(s.Effort, '\n')
+		}
 		w.b.WriteString("source:")
 		w.str(s.SourceKind, '/')
 		w.str(s.SourceThreadID, '/')
@@ -231,6 +239,18 @@ func (w *keyWriter) caps(c *proto.SessionCapabilities) {
 	}
 	if c.Model != nil {
 		w.b.WriteString(" model=" + strconv.FormatBool(*c.Model))
+	}
+	if c.Close != nil {
+		w.b.WriteString(" close=" + strconv.FormatBool(*c.Close))
+	}
+	if c.Rename != nil {
+		w.b.WriteString(" rename=" + strconv.FormatBool(*c.Rename))
+	}
+	if c.Rewind != nil {
+		w.b.WriteString(" rewind=" + strconv.FormatBool(*c.Rewind))
+	}
+	if c.RewindCode != nil {
+		w.b.WriteString(" rewind_code=" + strconv.FormatBool(*c.RewindCode))
 	}
 	w.b.WriteByte('}')
 }

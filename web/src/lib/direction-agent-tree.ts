@@ -7,7 +7,7 @@ import type { AgentState, Machine, Session } from "./types";
 import { splitSubagentLink } from "./subagent-link";
 
 /** The Agents tree's one-word state for a task's state: needs you, working, and waiting for stuck and review. */
-const TREE_STATE: Record<DirectionTaskState, TreeState> = { needs_you: "needs_you", working: "working", stuck: "waiting", review: "waiting" };
+const TREE_STATE: Record<DirectionTaskState, TreeState> = { needs_you: "needs_you", working: "working", stuck: "waiting", review: "waiting", planned: "waiting" };
 
 /** What a session row needs of an agent the session list does not have (another assistant's, an in-session sub-agent):
  *  its title and the state the hub saw. */

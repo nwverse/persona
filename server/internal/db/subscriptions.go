@@ -133,10 +133,10 @@ func (d *DB) SubscriptionSeen(ctx context.Context, id string, uids []string) (ma
 }
 
 // CommitSubscriptionRun writes a run of subscription id at once: merge turns the stored row's data and revision into
-// the data to keep, the new dedup keys and items are added, the old keys pruned, and the lease released. A subscription
-// deleted meanwhile keeps nothing.
+// the data to keep, the new dedup keys and items are added, the held items of read (uids) marked seen, the old keys
+// pruned, and the lease released. A subscription deleted meanwhile keeps nothing.
 func (d *DB) CommitSubscriptionRun(ctx context.Context, id string, merge func(data []byte, revision int64) ([]byte, error),
-	seen []SubscriptionSeenRow, items []SubscriptionItemRow, now time.Time) error {
+	seen []SubscriptionSeenRow, items []SubscriptionItemRow, read []string, now time.Time) error {
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -172,6 +172,13 @@ func (d *DB) CommitSubscriptionRun(ctx context.Context, id string, merge func(da
 	for _, it := range items {
 		if _, err := tx.Exec(ctx, `INSERT INTO subscription_items (subscription_id, uid, data, created_at) VALUES ($1, $2, $3, $4)`,
 			id, it.UID, it.Data, now); err != nil {
+			return err
+		}
+	}
+	if len(read) > 0 {
+		// Held items read in the source since they were stored (#6176): their data says so; never unmarked.
+		if _, err := tx.Exec(ctx, `UPDATE subscription_items SET data = jsonb_set(data::jsonb, '{seen}', 'true')::json
+			WHERE subscription_id = $1 AND uid = ANY($2::text[]) AND (data->>'seen') IS DISTINCT FROM 'true'`, id, read); err != nil {
 			return err
 		}
 	}
@@ -221,6 +228,21 @@ func (d *DB) SubscriptionItems(ctx context.Context, id string, q SubscriptionIte
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// SubscriptionItem is subscription id's held item uid, the newest stored if several are; nil when it holds none (a
+// reply to its row looks up the item it answers, #6198).
+func (d *DB) SubscriptionItem(ctx context.Context, id, uid string) (*SubscriptionItemRow, error) {
+	var r SubscriptionItemRow
+	err := d.pool.QueryRow(ctx, `SELECT seq, uid, data, created_at FROM subscription_items WHERE subscription_id = $1 AND uid = $2
+		ORDER BY seq DESC LIMIT 1`, id, uid).Scan(&r.Seq, &r.UID, &r.Data, &r.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
 // PruneSubscriptionItems removes subscription id's held items stored before before: the destinations are past them.

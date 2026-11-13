@@ -88,12 +88,11 @@ val AgentListDisplay.rowParts: AgentRowParts get() = when (this) {
 }
 
 /**
- * The state in words (iOS `Session.stateLabel(muted:)`): Awaiting reply for a seen one that asks you (not when [muted]),
- * Waiting in the background, Working (Background) while a workflow runs ([isBackgroundWorking]), else the state's own name:
- * Needs you, Working, Unread, Seen, Not running (offline) or Unknown.
+ * The state in words, plain (iOS `Session.stateLabel`): Waiting in the background, Working (Background) while a workflow runs
+ * ([isBackgroundWorking]), else the state's own name: Needs you, Working, Unread, Seen, Not running (offline) or Unknown.
+ * Never Awaiting reply, which needs to know whether the agent is muted ([stateWord]). A chat's header says it too.
  */
-fun AgentSession.stateWord(muted: Boolean): CoreText = CoreText.of(when {
-    asksYou && !muted -> Key.StateAwaitingReply
+val AgentSession.stateLabel: CoreText get() = CoreText.of(when {
     waitsInBackground -> Key.StateBackgroundWaiting
     isBackgroundWorking -> Key.StateWorkingBackground
     else -> when (state) {
@@ -105,6 +104,9 @@ fun AgentSession.stateWord(muted: Boolean): CoreText = CoreText.of(when {
         AgentState.Unknown -> Key.StateUnknown
     }
 })
+
+/** [stateLabel], and Awaiting reply for a seen one that asks you (not when [muted]; iOS `Session.stateLabel(muted:)`). */
+fun AgentSession.stateWord(muted: Boolean): CoreText = if (asksYou && !muted) CoreText.of(Key.StateAwaitingReply) else stateLabel
 
 /**
  * State Cards' word at the card's foot (iOS `cardRow`): its [stateWord], every state but Seen (Awaiting reply, Waiting in

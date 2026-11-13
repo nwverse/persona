@@ -137,11 +137,17 @@ type InboxAgentLark struct {
 	Account int
 }
 
-// InboxAgentConnector is the thread of a connector's item: Source is the connector's id.
+// InboxAgentConnector is the thread of a connector's item: Source is the connector's id (a subscription's id for a
+// subscription's item). ReplyTo says where a reply goes (with CanReply false, how the user replies themself:
+// iMessage's "reply in Messages"); none, no line. A subscription's item names the subscription (Name), the connector it
+// reads (Via) and that source's name (ViaSource, #6222).
 type InboxAgentConnector struct {
-	Source  string
-	URL     string
-	ReplyTo string
+	Source    string
+	URL       string
+	ReplyTo   string
+	Name      string
+	Via       string
+	ViaSource string
 }
 
 type InboxAgentDoc struct {

@@ -199,7 +199,7 @@ function ConnectorText({ item, problem, onRetry }: { item: InboxItem; problem?: 
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             {c?.url && (
               <Button tone="secondary" icon="external" onClick={() => openLink(c.url!, item.title, item.manager)}>
-                {tightCJK(t("inbox-connectorthread.open_in", { name: item.account_name || item.source }))}
+                {item.source === "assistant" ? t("inbox-connectorthread.open_chat") : tightCJK(t("inbox-connectorthread.open_in", { name: item.account_name || item.source }))}
               </Button>
             )}
             {item.source !== "larkcli" && c?.reply_to && c.can_reply && <p className="min-w-0 text-[12px] text-ink-3">{t("inbox-connectorthread.reply_goes", { how: c.reply_to })}</p>}

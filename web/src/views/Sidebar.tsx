@@ -1,7 +1,7 @@
 import { removeStoredValue, storedValue, storeValue } from "../lib/compatibility";
 // Beautiful UI's Sidebar Nav: workspace row, quick search, sections, one gliding highlight. Persona's main conversation
 // is the first entry (the app opens on the assistant); a new conversation and a new agent are the "+" of their sections (#1239).
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { NARROW, useMedia } from "../lib/viewport";
 import { AGENT_FILTERS, agentFilter, applyFilter, arrangeSpaces, BOTMUX_HIDDEN_KEY, botmuxAndFilter, filterCounts, isBotmux, isSpaceMuted, matchingKeys, shownFilters, unreadOf, withoutBotmux, type AgentFilter, type FilterCounts } from "../lib/agent-filter";
@@ -61,7 +61,8 @@ import { jumpHint, useBindings } from "../lib/shortcuts";
 import { markAllSeenLabel, stateCount } from "../lib/state-labels";
 import { PagedSessionList } from "./agents/PagedSessionList";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
-import { runtimeActiveAt, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeRemoval, runtimeSessions } from "../lib/runtime-list";
+import { runtimeActiveAt, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimePlace, runtimeRemoval, runtimeSessions } from "../lib/runtime-list";
+import { groupMachines, SESSIONS_CATALOG_FEATURE } from "../lib/session-groups";
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
@@ -80,6 +81,8 @@ export { SidebarRail } from "./SidebarRail";
 // Skip parent pushes with unchanged props; each leaf still receives its own state and subscription updates.
 const HerdrNotices = memo(HerdrNoticesContent);
 const HubNoticeLine = memo(HubNoticeLineContent);
+// the GitHub star line (#5761): its own chunk, off the first screen
+const StarPromptLine = lazy(() => import("./agents/StarPrompt").then((m) => ({ default: m.StarPromptLine })));
 const NodePrompt = memo(NodePromptContent);
 const SidebarUsage = memo(SidebarUsageContent);
 const LinkTodoDialog = memo(lazyDialog(() => import("./LinkTodoDialog").then((m) => m.LinkTodoDialog)));
@@ -299,8 +302,10 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   useStickyTop(nav);
   const go = useGo(onNavigate);
 
+  // A lead's row is an ordinary conversation row under the 常驻 heading (#6214): no pin glyph of its own, so it never
+  // reads as a button. Its "在做 N · 等你 N" counts stay on hover and the ⋯ has its own reserved end slot (keepTrailing).
   const directionRow = (c: Session) => (
-    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionLabel(directionNames, c.session_id, conversationTitle(c))} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} icon="pin" onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
+    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionLabel(directionNames, c.session_id, conversationTitle(c))} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={(counts.get(c.session_id)?.working ?? 0) > 0} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
   );
 
   const recentRow = (c: Session) => (
@@ -561,8 +566,13 @@ function AgentsBlock(props: AgentsBlockProps) {
   return bounded && !full ? <BoundedAgentsBlock {...props} chooseGrouping={chooseGrouping} /> : <LegacyAgentsBlock {...props} grouping={agentGrouping(grouping)} chooseGrouping={chooseGrouping} pagedList={pagedList} />;
 }
 
+// The computer before a row's title, where rows of several computers sit under one project: as a tab's name before its
+// agent's (SidebarTree), it gives way before the title does.
+const PLACE_PREFIX = "min-w-0 max-w-[40%] shrink truncate text-xs text-ink-3";
+
 function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true, chooseGrouping }: AgentsBlockProps) {
   const machines = useStore(selectSidebarMachines);
+  const catalog = useStore((s) => s.features.includes(SESSIONS_CATALOG_FEATURE));
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
   const [rowMenu, setRowMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
   const [renaming, setRenaming] = useState<Session | null>(null);
@@ -576,13 +586,20 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true,
   return <>
     <div className={SESSION_LIST_STYLE.heading}><span className={SESSION_LIST_STYLE.headingText}>{t("agentspage.title")}</span>{archives && <SectionAdd icon="archive" label={t("agentmenus.archived_agents")} to={{ name: "agent-archives" }} go={go} />}{add && <SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}</div>
     <HubNoticeLine />
+    <Suspense fallback={null}><StarPromptLine /></Suspense>
     <HerdrNotices />
     <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} event="sessions_list" onRepo={chooseGrouping ? () => chooseGrouping("repo") : undefined}
       activeAt={runtimeActiveAt} needsYou={runtimeNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
+      catalog={catalog} placeOf={runtimePlace}
       label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
-      renderRow={(s) => {
+      renderRow={(s, within, group) => {
         const k = `s:${s.machine_id}/${s.session_id}`;
-        return <SessionRow s={s} k={k} reg={reg} hover={hover} active={activeKey === k} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} hint={[machineWithHub(s.machine_id, machines), s.space_name || baseName(s.cwd)].filter(Boolean).join(" · ")} showTodoTag />;
+        // a project checked out on several computers: each row says before its title which one it is on
+        const spread = within === "project" && group ? groupMachines([group]) > 1 : false;
+        // under a group's heading the row leaves out what the heading says: its computer, its space, its project's folder
+        const where = [within === "machine" || spread ? "" : machineWithHub(s.machine_id, machines), within === "group" ? "" : s.space_name || (within === "project" ? "" : baseName(s.cwd))];
+        return <SessionRow s={s} k={k} reg={reg} hover={hover} active={activeKey === k} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} hint={where.filter(Boolean).join(" · ")} showTodoTag
+          prefix={spread ? machineWithHub(s.machine_id, machines) : undefined} prefixClass={spread ? PLACE_PREFIX : undefined} />;
       }} />
     {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTarget} onCloseAgent={setClosing} onArchiveClose={setArchiveClosing} />}
     {renaming && <RenameDialog open session={renaming} onClose={() => setRenaming(null)} />}
@@ -838,6 +855,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       {/* "herdr is not running on <computer>" with "Start" (#1916): before a message to an agent there fails */}
       {/* the one line about the hub (#2897): updating, rolled back, a newer version or image */}
       {!folded && <HubNoticeLine />}
+      {/* a GitHub star, once this browser started enough Agents and nothing waits (#5761) */}
+      {!folded && <Suspense fallback={null}><StarPromptLine searching={dimFilters.query.trim() !== ""} /></Suspense>}
       {!folded && <HerdrNotices />}
 
       {unreadShown.length > 0 && (

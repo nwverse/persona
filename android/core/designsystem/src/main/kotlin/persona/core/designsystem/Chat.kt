@@ -60,6 +60,11 @@ fun ChatTopBar(
     onTitleClick: (() -> Unit)? = null,
     /** Which agent runs here, and in which client (#6390): its mark before the status line's dot. */
     agentMark: AgentMarkSpec? = null,
+    /**
+     * It works only because the background work it started waits (iOS `Session.waitsInBackground`): Glass draws the clock
+     * for its dot and says its words in that state's lighter tone (`stateTone`); Brief and Board keep the dot and the tone.
+     */
+    waiting: Boolean = false,
     /** What a tap on the title does, as the screen reader says it ("View session info"); null: just a button. */
     titleClickLabel: String? = null,
     actions: @Composable RowScope.() -> Unit = {},
@@ -67,7 +72,8 @@ fun ChatTopBar(
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val style = PersonaTheme.style
-    val tone = status?.let { palette.status(it) }
+    val lighter = waiting && style == AppStyle.Glass
+    val tone = status?.let { if (lighter) palette.backgroundWaiting else palette.status(it) }
     val titleBlock: @Composable RowScope.() -> Unit = {
         Column(Modifier.weight(1f).padding(horizontal = 4.dp.dense).then(if (onTitleClick != null) Modifier.clickable(role = Role.Button, onClickLabel = titleClickLabel, onClick = onTitleClick) else Modifier)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -84,7 +90,7 @@ fun ChatTopBar(
                     // A quiet state says nothing in words (iOS): its dot alone, which TalkBack reads by its name.
                     val spoken = stringResource(status.labelRes)
                     if (statusText != null && style == AppStyle.Brief && status == Status.Working) JSpinner(Modifier.size(11.dp), stroke = 1.6.dp)
-                    else Box(if (statusText == null) Modifier.semantics { contentDescription = spoken } else Modifier) { JStatusDot(status, size = 7.dp) }
+                    else Box(if (statusText == null) Modifier.semantics { contentDescription = spoken } else Modifier) { JStateDot(status, Tokens.Size.dotS, waiting) }
                     statusText?.let {
                         Spacer(Modifier.width(afterDot))
                         Text(it, style = type.caption, color = if (style == AppStyle.Brief) palette.ink else tone!!.text, maxLines = 1)
@@ -132,9 +138,9 @@ fun UserBubbleFrame(modifier: Modifier = Modifier, footer: (@Composable () -> Un
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = when (style) {
-        AppStyle.Glass -> RoundedCornerShape(Tokens.Radius.bubble)
-        AppStyle.Brief -> RoundedCornerShape(22.dp.corner, 22.dp.corner, 6.dp.corner, 22.dp.corner)
-        AppStyle.Board -> RoundedCornerShape(10.dp.corner)
+        AppStyle.Glass -> RoundedCornerShape(Tokens.Radius.Standard.bubble.bubbleCorner)
+        AppStyle.Brief -> RoundedCornerShape(22.dp.bubbleCorner, 22.dp.bubbleCorner, 6.dp.bubbleCorner, 22.dp.bubbleCorner)
+        AppStyle.Board -> RoundedCornerShape(10.dp.bubbleCorner)
     }
     val chrome = LocalHomeChrome.current
     val bubble = { frame: Modifier ->
@@ -711,9 +717,9 @@ fun IncomingBubbleFrame(
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = when (style) {
-        AppStyle.Glass -> RoundedCornerShape(24.dp.corner, 24.dp.corner, 24.dp.corner, 8.dp.corner)
-        AppStyle.Brief -> RoundedCornerShape(22.dp.corner, 22.dp.corner, 22.dp.corner, 6.dp.corner)
-        AppStyle.Board -> RoundedCornerShape(10.dp.corner)
+        AppStyle.Glass -> RoundedCornerShape(24.dp.bubbleCorner, 24.dp.bubbleCorner, 24.dp.bubbleCorner, 8.dp.bubbleCorner)
+        AppStyle.Brief -> RoundedCornerShape(22.dp.bubbleCorner, 22.dp.bubbleCorner, 22.dp.bubbleCorner, 6.dp.bubbleCorner)
+        AppStyle.Board -> RoundedCornerShape(10.dp.bubbleCorner)
     }
     Row(modifier.fillMaxWidth().padding(vertical = Tokens.Space.sm), verticalAlignment = Alignment.Top) {
         avatar?.let { it(); Spacer(Modifier.width(10.dp.dense)) }

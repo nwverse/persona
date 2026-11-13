@@ -72,11 +72,13 @@ private fun SpaceDestination(route: SpaceRoute, navigator: Navigator, dependenci
                 listContext = kotlinx.coroutines.Dispatchers.Default)
         }
         val creationService = LocalAgentCreationService.current
+        val starPrompt = persona.core.designsystem.LocalStarPrompt.current
         val creationModel = creationService?.let { service ->
             viewModel(key = "space-new-agent:${service.scope}:${System.identityHashCode(service)}") {
                 NewAgentViewModel(service, wiring.creationPreferences?.let { AgentCreationPreferences(context, it) }
                     ?: AgentCreationPreferences(context), dependencies.sessions().machines,
-                    usage = dependencies.machines()?.let { m -> { id: String -> m.usageWindows(id) } })
+                    usage = dependencies.machines()?.let { m -> { id: String -> m.usageWindows(id) } },
+                    launched = { starPrompt?.launched() })
             }
         }
         SpacePage(route, model, navigator, creationModel)

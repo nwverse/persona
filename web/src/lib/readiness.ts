@@ -7,6 +7,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, ApiError, errorText, isAbort, pastHub } from "./api";
 import { navigate } from "./router";
+import { withStarPrompt } from "./star-prompt-load";
 import { getState, hubHas, useStore } from "./store";
 
 export const READINESS_FEATURE = "assistant_readiness";
@@ -283,7 +284,11 @@ export function refreshReadiness(o: { force?: boolean; probe?: boolean; changed?
   const p = (o.probe ? api<Readiness>(`${READINESS_PATH}?probe=1`, { timeout: pastHub(PROBE_HUB_MS) }) : api<Readiness>(READINESS_PATH))
     .then((r) => {
       // a newer answer replaces a failed try's words, as it replaces a try's result
-      if (lands()) set({ readiness: r, unsupported: false, probeError: "", at: Date.now() });
+      if (!lands()) return;
+      const prev = rs.readiness;
+      set({ readiness: r, unsupported: false, probeError: "", at: Date.now() });
+      // a step was still open and now it is ready: maybe setup just finished, for the GitHub star toast (#5761)
+      if (prev?.next && r.ready) withStarPrompt((m) => m.starPromptReadiness(prev, r));
     })
     .catch((e) => {
       // 404: an older hub; 503 assistant_offline and the rest: keep what was there, ask again next time

@@ -33,7 +33,6 @@ import {
   modifiersPressed,
   parseTerminalPush,
   pasteBytes,
-  terminalPalette,
   typedWithModifiers,
   usableGrid,
   withModifiers,
@@ -57,7 +56,6 @@ import {
 } from "../../../lib/terminal-mouse";
 import {
   DEFAULT_CURSOR,
-  hex6,
   lineEditBytes,
   parseCursorStyle,
   parseFlag,
@@ -65,10 +63,12 @@ import {
   type CursorStyle,
 } from "../../../lib/terminal-details";
 import { FIND_LIMIT, findIndex, findInLines, marksFor, stepFind, type FindMarks, type FindPos, type RowMatch } from "../../../lib/terminal-search";
+import { subscribeAppearance } from "../../../lib/terminal-appearance";
 import { toast } from "../../../ui/atoms";
 import { copyNotice, copyWith, osc52Text, transferFiles } from "../../../lib/terminal-clipboard";
 import { cjkFontStack, terminalFontReady } from "./cjk";
 import { browserClipboard, clipboardFiles } from "./clipboard";
+import { findDecorations, terminalColors } from "./colors";
 import { FileTransfer } from "./transfer";
 import { t } from "../../../i18n";
 
@@ -123,7 +123,7 @@ export interface FeedView {
   fontFamily: string;
   /** The screen as rows the page draws ("Wrap" while watching); null while xterm draws it. */
   screen: ScreenRows | null;
-  /** xterm's colors, for the rows the page draws (follows light / dark). */
+  /** xterm's colors, for the rows the page draws (the terminal's Appearance: the page's light / dark, or its own). */
   palette: TerminalPalette | null;
   /** "Cursor style" / "Blinking cursor" / "WebGL rendering": the options in "Terminal settings" (remembered). */
   cursorStyle: CursorStyle;
@@ -383,12 +383,10 @@ export class TerminalFeed {
     host.addEventListener("mousedown", this.mouseDownEvent, true);
     host.addEventListener("contextmenu", this.mouseContextMenu, true);
     host.addEventListener("click", this.click, true);
-    const colors = new MutationObserver(() => {
-      const palette = this.theme();
-      this.patch({ palette });
-      if (this.term) this.term.options.theme = palette;
-    });
+    // the page's scheme, or the terminal's Appearance, changed
+    const colors = new MutationObserver(this.recolor);
     colors.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    const appearance = subscribeAppearance(this.recolor);
     const sizes = new ResizeObserver(() => this.measure());
     sizes.observe(viewport);
     const offs = [onHubEvent("terminal", this.onTerminal), onHubEvent("terminal_control", this.onControl), onHubEvent("hello", this.onHello)];
@@ -412,6 +410,7 @@ export class TerminalFeed {
       () => this.mouseEnd(),
       () => host.removeEventListener("click", this.click, true),
       () => colors.disconnect(),
+      appearance,
       () => sizes.disconnect(),
       ...offs,
       () => clearInterval(tick),
@@ -457,9 +456,14 @@ export class TerminalFeed {
   }
 
   private theme(): TerminalPalette {
-    const css = getComputedStyle(document.documentElement);
-    return terminalPalette((n) => css.getPropertyValue(n), document.documentElement.classList.contains("dark"));
+    return terminalColors();
   }
+
+  private recolor = () => {
+    const palette = this.theme();
+    this.patch({ palette });
+    if (this.term) this.term.options.theme = palette;
+  };
 
   // ── the loop (four times a second, as iOS) ─────────────
 
@@ -1200,14 +1204,7 @@ export class TerminalFeed {
   }
 
   private searchOptions() {
-    const css = getComputedStyle(document.documentElement);
-    const c = (name: string) => hex6(css.getPropertyValue(name));
-    const border = c("--orange"), tint = c("--accent-tint"), accent = c("--accent");
-    const decorations =
-      border && tint && accent
-        ? { matchBorder: border, matchOverviewRuler: border, activeMatchBackground: tint, activeMatchBorder: accent, activeMatchColorOverviewRuler: accent }
-        : undefined;
-    return { caseSensitive: this.found.cs, decorations };
+    return { caseSensitive: this.found.cs, decorations: findDecorations() };
   }
 
   /**

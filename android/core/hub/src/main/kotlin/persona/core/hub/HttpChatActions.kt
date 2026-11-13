@@ -86,14 +86,16 @@ class HttpChatActions internal constructor(
         }
     }
 
-    override suspend fun editQueue(session: Session, keep: List<Int>): List<String> {
+    override suspend fun editQueue(session: Session, keep: List<Int>): QueueEdit {
         // An empty keep list is meaningful (delete the only queued message), so the body is written out explicitly.
         val body = buildJsonObject { put("keep", JsonArray(keep.map(::JsonPrimitive))) }
         return request(api("sessions", session.machineId, session.sessionId, "queue"), "POST",
             body.toString().toRequestBody("application/json; charset=utf-8".toMediaType())).use {
             if (!it.isSuccessful) throw HubFailure.from(it)
-            (JsonCodec.parseToJsonElement(it.body!!.string()).jsonObject["queue"] as? JsonArray).orEmpty()
-                .mapNotNull { item -> (item as? JsonPrimitive)?.takeIf { value -> value.isString }?.content }
+            val answer = JsonCodec.parseToJsonElement(it.body!!.string()).jsonObject
+            // A queue entry that is not text drops alone; the photos (a Persona conversation's, base64) ride beside it.
+            val queue = (answer["queue"] as? JsonArray).orEmpty().filter { item -> item is JsonPrimitive && item.isString }
+            JsonCodec.decodeFromJsonElement<QueueEdit>(JsonObject(answer + ("queue" to JsonArray(queue))))
         }
     }
 

@@ -1,5 +1,6 @@
 package persona.core.designsystem
 
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -66,7 +67,8 @@ fun queueListCap(rowsHeight: Int, count: Int): Int? =
  * [onSendNow] (iOS Send Now). Brief (a paper card) and the board (a bordered ticket) stay always open, without Send now
  * (the alignment plan's ground rules: no new alignment work outside Glass). In every style a row with a note in [notes]
  * (by index) says it in the caption size under its words (iOS's "Arrives when this chat is free" under a message
- * relayed from another conversation); without notes Brief and Board draw as before.
+ * relayed from another conversation); without notes Brief and Board draw as before. Glass also says how many photos a row's
+ * message carries ([photos] by index, iOS's "N images" under the words); a row whose [items] words are empty draws just that.
  */
 @Composable
 fun QueueStrip(
@@ -80,9 +82,10 @@ fun QueueStrip(
     onSendNow: () -> Unit = {},
     notes: List<String?> = emptyList(),
     initiallyExpanded: Boolean = false,
+    photos: List<Int> = emptyList(),
 ) {
     if (items.isEmpty()) return
-    if (PersonaTheme.style == AppStyle.Glass) GlassQueueStrip(title, items, onItem, modifier, busy, enabled, sendNow, onSendNow, notes, initiallyExpanded)
+    if (PersonaTheme.style == AppStyle.Glass) GlassQueueStrip(title, items, onItem, modifier, busy, enabled, sendNow, onSendNow, notes, initiallyExpanded, photos)
     else PlainQueueStrip(title, items, onItem, modifier, busy, enabled, notes)
 }
 
@@ -90,7 +93,7 @@ fun QueueStrip(
 @Composable
 private fun GlassQueueStrip(
     title: String, items: List<String>, onItem: (Int) -> Unit, modifier: Modifier, busy: Boolean, enabled: Boolean,
-    sendNow: String?, onSendNow: () -> Unit, notes: List<String?>, initiallyExpanded: Boolean,
+    sendNow: String?, onSendNow: () -> Unit, notes: List<String?>, initiallyExpanded: Boolean, photos: List<Int>,
 ) {
     var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
     val spoken = stringResource(R.string.designsystem_with_state, title,
@@ -129,8 +132,11 @@ private fun GlassQueueStrip(
                     val itemActions = stringResource(R.string.designsystem_queue_actions)
                     items.forEachIndexed { index, text ->
                         val note = notes.getOrNull(index)
-                        val spoken = if (note == null) stringResource(R.string.designsystem_queue_item, index + 1, text)
-                            else stringResource(R.string.designsystem_queue_item_note, index + 1, text, note)
+                        val count = photos.getOrNull(index) ?: 0
+                        val photoWords = if (count > 0) pluralStringResource(R.plurals.designsystem_queue_photos, count, count) else null
+                        val said = listOfNotNull(photoWords, note).joinToString(". ").ifEmpty { null }
+                        val spoken = if (said == null) stringResource(R.string.designsystem_queue_item, index + 1, text)
+                            else stringResource(R.string.designsystem_queue_item_note, index + 1, text, said)
                         Row(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.Radius.card)).background(palette.sunken)
                                 .clickable(enabled = active, role = Role.Button, onClickLabel = itemActions) { onItem(index) }
@@ -140,7 +146,14 @@ private fun GlassQueueStrip(
                         ) {
                             QueueNumber(index + 1)
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
-                                Text(text, style = type.callout, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                if (text.isNotEmpty()) Text(text, style = type.callout, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                // iOS: the photos a message carries, as a caption with the photo mark under its words
+                                photoWords?.let {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs), verticalAlignment = Alignment.CenterVertically) {
+                                        JIcon(PersonaIcons.photo, null, size = Tokens.Space.m, tint = palette.ink2, decorative = true)
+                                        Text(it, style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
                                 note?.let { Text(it, style = type.caption, color = palette.ink2) }
                             }
                             if (enabled) JIcon(PersonaIcons.more, null, size = Tokens.Space.l, tint = palette.ink3,

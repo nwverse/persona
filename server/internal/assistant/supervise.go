@@ -96,6 +96,11 @@ type TaskReview struct {
 	Recommend     string           `json:"recommend,omitempty"`
 	Options       []DecisionOption `json:"options,omitempty"`
 	CostOfWaiting string           `json:"cost_of_waiting,omitempty"`
+	// Deadline and Reversible: the needs_user decision's deadline and whether its recommendation can be undone, as the
+	// supervisor's task_review said them (decision_deadline.go); absent when it gave none, and on reviews from before
+	// they were kept.
+	Deadline   *time.Time `json:"deadline,omitempty"`
+	Reversible *bool      `json:"reversible,omitempty"`
 	// A parked review's (parked.go): until when it waits, what kind of thing it waits on (Reason says what), how many
 	// parks in a row this one is with no agent turn in between, and when a supervision message carried its parked_due.
 	Until     time.Time `json:"until,omitzero"`

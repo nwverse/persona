@@ -62,7 +62,7 @@ data class AssistantConfig(
 object BackgroundSupervisor {
     /**
      * The model purpose it runs under (docs/assistant/model-config.md): it follows Main chat until given its own. The
-     * hub's catalog does not list it; it is read and saved through its own id.
+     * hub's catalog lists it since #5806; a hub from before answers it by its own id only.
      */
     const val PURPOSE = "assistant.supervise"
 }

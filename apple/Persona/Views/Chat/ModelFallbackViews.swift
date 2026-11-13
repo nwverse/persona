@@ -30,6 +30,24 @@ enum ModelFallbackText {
         return out
     }
 
+    /// A Persona conversation's one sentence for the refusal (#5202): the switch, by the model's short name, or only
+    /// that the upstream refused. The rest of the record goes under Details.
+    static func plainRefusal(_ r: ModelRefusal) -> String {
+        guard r.isFallback else { return refusalTitle }
+        let to = model(r.fallbackModel)
+        return String(localized: "The upstream refused this request, so it switched to \(to).")
+    }
+
+    /// A Persona conversation's card title while on the fallback model (#5202), naming the model that answers now.
+    static func plainCard(_ s: Session) -> String? {
+        guard let f = s.modelFallback, f.isFallback else { return nil }
+        let m = model(f.fallbackModel)
+        return String(localized: "After an upstream refusal, this conversation answers with \(m).")
+    }
+
+    /// The same word as `ReadinessCard`'s Details.
+    static var detailsLabel: String { String(localized: "Details [Readiness Card 979a33]") }
+
     /// The refusal's words when it has any (shown as they are).
     static func words(_ r: ModelRefusal) -> String? {
         guard let t = r.text, !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -40,7 +58,10 @@ enum ModelFallbackText {
 
     struct Card: Equatable {
         var title: String
+        /// Shown under the title; in a Persona conversation only the configured model while going back is pending.
         var lines: [String]
+        /// A Persona conversation's record, folded under Details (#5202); empty for a terminal session.
+        var details: [String] = []
         /// Back to configured model is offered: a Persona conversation not already going back.
         var offersRestore: Bool
     }
@@ -60,9 +81,16 @@ enum ModelFallbackText {
         lines.append(headless
             ? String(localized: "No message is resent; the same request may be refused again.")
             : String(localized: "For a terminal session, type /model in Claude Code yourself; it may also change the default model for new sessions."))
-        return Card(title: pending ? String(localized: "The next start will use the configured model")
-                        : String(localized: "After an upstream refusal, this session switched to a fallback model"),
-                    lines: lines, offersRestore: headless && !pending)
+        let pendingTitle = String(localized: "The next start will use the configured model")
+        guard headless else {
+            return Card(title: pending ? pendingTitle : String(localized: "After an upstream refusal, this session switched to a fallback model"),
+                        lines: lines, offersRestore: false)
+        }
+        // A Persona conversation is for everyday people (#5202): one sentence, the configured model while pending,
+        // and the record under Details.
+        let configured = pending ? s.modelRestore?.to.map { m in String(localized: "Configured model: \(model(m))") } : nil
+        return Card(title: pending ? pendingTitle : plainCard(s) ?? pendingTitle, lines: configured.map { [$0] } ?? [],
+                    details: lines.filter { $0 != configured }, offersRestore: !pending)
     }
 
     /// A refused going back, in words: the codes the hub documents, else its own words.
@@ -96,24 +124,30 @@ extension AppModel {
 }
 
 /// An upstream refusal in the transcript (#4489): a line of its own after the exchange, never folded into the work row.
-/// What happened (the switch, or that none is recorded), then the refusal's words as they are.
+/// What happened (the switch, or that none is recorded), then the refusal's words as they are. In a Persona
+/// conversation (`plainRefusals`, #5202) one sentence with the model's short name, the record under a closed Details.
 struct RefusalNotice: View {
     var refusal: ModelRefusal
+    @Environment(\.plainRefusals) private var plain
+    @State private var open = false
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
             ThemedIcon(Theme.Icon.error).font(Theme.Font.label).foregroundStyle(Theme.caution)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(ModelFallbackText.refusalTitle).font(Theme.Font.labelStrong).foregroundStyle(Theme.cautionText)
-                ForEach(ModelFallbackText.refusalFacts(refusal), id: \.self) { line in
-                    Text(line).font(Theme.Font.label).foregroundStyle(.secondary)
-                }
-                if let words = ModelFallbackText.words(refusal) {
-                    Text(ModelFallbackText.refusalTextLabel).font(Theme.Font.label).foregroundStyle(.tertiary)
-                        .padding(.top, Theme.Space.xxs)
-                    Text(words).font(Theme.Font.label).foregroundStyle(.secondary).textSelection(.enabled)
-                        .accessibilityIdentifier("refusal-text")
+                if plain {
+                    Text(ModelFallbackText.plainRefusal(refusal)).font(Theme.Font.labelStrong).foregroundStyle(Theme.cautionText)
+                    DisclosureGroup(isExpanded: $open) {
+                        VStack(alignment: .leading, spacing: Theme.Space.xxs) { record }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } label: {
+                        Text(ModelFallbackText.detailsLabel).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    .accessibilityIdentifier("refusal-details")
+                } else {
+                    Text(ModelFallbackText.refusalTitle).font(Theme.Font.labelStrong).foregroundStyle(Theme.cautionText)
+                    record
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -122,10 +156,28 @@ struct RefusalNotice: View {
         .padding(.horizontal, Theme.Space.m)
         .padding(.vertical, Theme.Space.s)
         .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: plain ? .contain : .combine)
         .accessibilityIdentifier("refusal-notice")
         .contextMenu { CopyButton(text: ModelFallbackText.words(refusal) ?? refusal.publicText) }
     }
+
+    /// The record: the switch or that none is recorded, later turns, category, explanation, then the words as they are.
+    @ViewBuilder private var record: some View {
+        ForEach(ModelFallbackText.refusalFacts(refusal), id: \.self) { line in
+            Text(line).font(Theme.Font.label).foregroundStyle(.secondary)
+        }
+        if let words = ModelFallbackText.words(refusal) {
+            Text(ModelFallbackText.refusalTextLabel).font(Theme.Font.label).foregroundStyle(.tertiary)
+                .padding(.top, Theme.Space.xxs)
+            Text(words).font(Theme.Font.label).foregroundStyle(.secondary).textSelection(.enabled)
+                .accessibilityIdentifier("refusal-text")
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// The chat is a Persona conversation, for everyday people: a refusal says one plain sentence (#5202).
+    @Entry var plainRefusals = false
 }
 
 /// Over the composer while the session still runs on a fallback model (#4489): which models, the error since, and what
@@ -145,10 +197,11 @@ struct ModelFallbackCard: View {
             let restore = card.offersRestore && !working && !busy
             let newMain = session.assistant == true && model.canStartNewMain(key)
             ReadinessCard(title: card.title, detail: card.lines.joined(separator: "\n"), tone: .caution,
-                          actionTitle: restore ? String(localized: "Back to Configured Model") : nil,
+                          actionTitle: restore ? String(localized: "Switch Back [Model Fallback Card]") : nil,
                           action: restore ? { go() } : nil,
-                          altTitle: newMain ? String(localized: "New Main Chat") : nil,
+                          altTitle: newMain ? String(localized: "New Main Chat [Model Fallback Card]") : nil,
                           alt: newMain ? { model.newMainAsked = true } : nil,
+                          details: card.details,
                           busy: busy)
                 .accessibilityIdentifier("model-fallback-card")
         }

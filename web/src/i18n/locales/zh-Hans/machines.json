@@ -34,5 +34,10 @@
   "rejected": "已删掉「{name}」",
   "answer_failed": "没有成功：{error}",
   "never_connected": "还没连上来过",
-  "not_connected_yet": "还没连上"
+  "not_connected_yet": "还没连上",
+  "network": "网络",
+  "load_value": "负载 {value}",
+  "memory_last_hour": "最近一小时内存",
+  "network_last_hour": "最近一小时网络：下载（橙色）、上传（紫色）",
+  "tokens_last_hour": "最近一小时 Tokens"
 }

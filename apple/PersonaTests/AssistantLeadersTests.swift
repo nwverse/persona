@@ -13,12 +13,13 @@ struct AssistantLeadersTests {
             {"id":"lead-b","name":"Infra","counts":{"working":0,"needs_you":0,"stuck":0,"review":0},"tasks":[]},
             {"id":"main","name":"","secretary":true,"counts":{"working":7,"needs_you":7},"tasks":[]}]}
         """#
-        let tree = try JSON.decoder.decode(APIClient.DirectionsTree.self, from: Data(raw.utf8))
-        #expect(APIClient.directions(tree).map(\.id) == ["lead-a", "lead-b"])
-        #expect(APIClient.directionNames(tree) == ["lead-a": "Product", "lead-b": "Infra"])
-        #expect(APIClient.directionCounts(tree) == [
-            "lead-a": APIClient.DirectionCounts(working: 3, needsYou: 1),
-            "lead-b": APIClient.DirectionCounts(working: 0, needsYou: 0),
+        // The one model the app holds (`AppModel.directionTree`, #4352): the lead rows read their counts from it.
+        let tree = try JSON.decoder.decode(DirectionTree.self, from: Data(raw.utf8))
+        #expect(tree.leaders.map(\.id) == ["lead-a", "lead-b"])
+        #expect(tree.leaderNames == ["lead-a": "Product", "lead-b": "Infra"])
+        #expect(tree.leaderCounts.mapValues { [$0.working, $0.needsYou] } == [
+            "lead-a": [3, 1],
+            "lead-b": [0, 0],
         ])
     }
 
