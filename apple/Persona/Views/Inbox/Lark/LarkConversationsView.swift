@@ -80,10 +80,12 @@ private struct LarkConversationsPage: View {
                 }
                 HStack(spacing: Theme.Space.s) {
                     FilterChip(title: String(localized: "lark.filter.all"), on: store.filter == .all) { select(.all, proxy: proxy) }
-                        .tapTargetOutset()
+                        .tapTargetHeight()
+                        .contentShape(.rect)
                         .accessibilityIdentifier("feishu-filter-all")
                     FilterChip(title: String(localized: "lark.filter.unread"), on: store.filter == .unread) { select(.unread, proxy: proxy) }
-                        .tapTargetOutset()
+                        .tapTargetHeight()
+                        .contentShape(.rect)
                         .accessibilityIdentifier("feishu-filter-unread")
                 }
                 .id("feishu-filters")
