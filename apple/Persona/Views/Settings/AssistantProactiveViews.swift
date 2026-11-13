@@ -721,7 +721,7 @@ struct AssistantTaskEditor: View {
         Section {
             SegmentedChoice(String(localized: "When Done, Put It in the Inbox"),
                             [(value: "", label: String(localized: "Don’t")),
-                             (value: APIClient.ScheduledTask.inboxWorthy, label: String(localized: "Only If Worth a Look")),
+                             (value: APIClient.ScheduledTask.inboxWorthy, label: String(localized: "Worth a Look")),
                              (value: APIClient.ScheduledTask.inboxEvery, label: String(localized: "Every Time"))],
                             selection: Binding { draft.inbox ?? "" } set: { new in withAnimation(Theme.Motion.standard) { draft.inbox = new } })
                 .accessibilityIdentifier("task-inbox")

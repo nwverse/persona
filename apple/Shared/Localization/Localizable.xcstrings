@@ -181424,25 +181424,25 @@
         }
       }
     },
-    "Only If Worth a Look" : {
+    "Worth a Look" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Only If Worth a Look"
+            "value" : "Worth a Look"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "見る価値があるときだけ"
+            "value" : "注目時のみ"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有值得看的才放"
+            "value" : "值得看才放"
           }
         }
       }
