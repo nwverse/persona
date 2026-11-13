@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -747,9 +748,13 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 	}
 	b.offerParent(it, thingParent(thing))
 	now := time.Now()
-	if reopened && it.Agent != nil && it.Agent.SessionID != "" {
-		// Looking makes handled() true, so escalate queues the new messages to this session regardless of tier.
-		b.setHandling(it, HandlingLooking, "", now)
+	if reopened && it.Agent != nil {
+		// A close note belongs to the filing that just ended, not to the conversation's new turn.
+		it.Agent.Pending = slices.DeleteFunc(it.Agent.Pending, func(n inboxNote) bool { return n.Name == prompts.NoteClosed })
+		if it.Agent.SessionID != "" {
+			// Looking makes handled() true, so escalate queues the new messages to this session regardless of tier.
+			b.setHandling(it, HandlingLooking, "", now)
+		}
 	}
 	if m != nil && it.open() {
 		b.fileMuted(it, now, m.Name)
