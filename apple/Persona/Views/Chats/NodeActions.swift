@@ -127,8 +127,10 @@ nonisolated struct PaneAgentResult: Decodable, Sendable {
 }
 
 extension APIClient {
-    func terminalPanes(machine: String) async throws -> TerminalPanes {
-        try await get("/api/v1/machines/\(machine)/panes", as: TerminalPanes.self)
+    /// `requestID`: sent as `X-Client-Request-Id` (the hub logs it), for a page that shows it.
+    func terminalPanes(machine: String, requestID: String? = nil) async throws -> TerminalPanes {
+        let headers = requestID.map { ["X-Client-Request-Id": $0] } ?? [:]
+        return try JSON.decoder.decode(TerminalPanes.self, from: try await request("GET", "/api/v1/machines/\(machine)/panes", extraHeaders: headers))
     }
 
     /// One of the node menu's routes, `POST /machines/{mid}/<path>`; only allowlisted fields and boolean flags reach the node.

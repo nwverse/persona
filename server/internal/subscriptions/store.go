@@ -35,6 +35,8 @@ type Store interface {
 	CommitRun(ctx context.Context, c RunCommit) error
 	// HeldItems are the subscription's held items q picks, in the order they were stored (#2039).
 	HeldItems(ctx context.Context, id string, q ItemQuery) ([]Held, error)
+	// HeldItem is the subscription's held item uid (the newest stored, if several); nil when it holds none (#6198).
+	HeldItem(ctx context.Context, id, uid string) (*Held, error)
 	// PruneItems removes the subscription's held items stored before before (their dedup keys stay).
 	PruneItems(ctx context.Context, id string, before time.Time) error
 }
@@ -65,7 +67,9 @@ type RunCommit struct {
 	Revision int64
 	Seen     []Seen
 	Items    []Item
-	Now      time.Time
+	// Read are uids of held items the run read as seen in the source (#6176): marked seen, never unmarked.
+	Read []string
+	Now  time.Time
 	// Baseline is the baseline mark the run took (Subscription.Baseline): it is cleared only while it is still that
 	// one, so a recipe changed again during the run keeps its own.
 	Baseline *time.Time
@@ -184,6 +188,11 @@ func (m *MemStore) CommitRun(_ context.Context, c RunCommit) error {
 		m.seq++
 		m.items = append(m.items, Held{Seq: m.seq, Stored: c.Now, Item: it})
 	}
+	for i := range m.items {
+		if h := &m.items[i]; h.SubscriptionID == c.Sub.ID && slices.Contains(c.Read, h.UID) {
+			h.Seen = true
+		}
+	}
 	m.pruneSeen(c.Sub.ID, c.Now)
 	applyRun(&cur, c, cur.Revision == c.Revision)
 	cur.LeaseUntil = nil
@@ -231,6 +240,17 @@ func (m *MemStore) HeldItems(_ context.Context, id string, q ItemQuery) ([]Held,
 		}
 	}
 	return slices.Clone(out), nil
+}
+
+func (m *MemStore) HeldItem(_ context.Context, id, uid string) (*Held, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.items) - 1; i >= 0; i-- {
+		if h := m.items[i]; h.SubscriptionID == id && h.UID == uid {
+			return &h, nil
+		}
+	}
+	return nil, nil
 }
 
 func (m *MemStore) PruneItems(_ context.Context, id string, before time.Time) error {

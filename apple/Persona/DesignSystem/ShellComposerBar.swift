@@ -291,7 +291,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                 .presentationSizing(.page) // the iPad's too: a page's height, not the small form
         }
         #endif
-        .onDisappear { if dictation.isListening { dictation.stop() } }
+        .onDisappear { dictation.stop() } // a start still asking for permission too (#3407)
     }
 
     #if os(iOS)
@@ -336,7 +336,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             // An unfocused field's selection is stale (a restored draft's, PathInsert.edit): the page starts at the end.
             selection = TextSelection(insertionPoint: text.endIndex)
         }
-        if dictation.isListening { dictation.stop() }
+        dictation.stop()
         enlarged = true
     }
 
@@ -503,8 +503,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         send()
     }
 
+    /// Ends dictation, and a start still asking for permission with it, so nothing writes into the emptied box (#3407).
     private func endDictation(then action: () -> Void) {
-        if dictation.isListening { dictation.stop() }
+        dictation.stop()
         action()
     }
 }

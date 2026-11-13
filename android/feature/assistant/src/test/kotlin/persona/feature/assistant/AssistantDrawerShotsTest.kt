@@ -31,6 +31,12 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import persona.core.contracts.Direction
+import persona.core.contracts.DirectionAgent
+import persona.core.contracts.DirectionCounts
+import persona.core.contracts.DirectionTask
+import persona.core.contracts.DirectionTaskState
+import persona.core.contracts.DirectionTree
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.LeaderCounts
@@ -251,6 +257,54 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("全部对话（2）").performClick()
         rule.onNodeWithText("整理收件箱").assertExists()
         capture("drawer-all-chats-glass-light")
+    }
+
+    // #4352 + #5860: an open 常驻 lead unfolds the hub's one tree — to-dos with their state words (Not started is the quiet
+    // grey for a piece no Agent has started), then a to-do's Agents and a sub-Agent. Drawn on the JVM with Robolectric, so
+    // the tree is checked here even with no emulator.
+    @Test fun drawsAnOpenDirectionTreeWithANotStartedPiece() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        val lead = Session(machineId = "hub", sessionId = "l1", title = "1110 | 探索 | 增长", status = "working",
+            updatedAt = minutesAgo(4), lastText = "正在整理增长实验的数据。")
+        val tree = DirectionTree(listOf(Direction("l1", "增长",
+            counts = DirectionCounts(working = 1, needsYou = 1, planned = 1),
+            tasks = listOf(
+                DirectionTask("t1", "上线支付", DirectionTaskState.Working, listOf(
+                    DirectionAgent("hub", "a1", title = "Agent 甲", state = "working",
+                        children = listOf(DirectionAgent("hub", "a1@sub", title = "子 Agent", state = "working"))))),
+                DirectionTask("t2", "核对账单", DirectionTaskState.NeedsYou),
+                DirectionTask("t3", "平板两栏布局", DirectionTaskState.Planned),
+            ))))
+        val groups = ConversationGroups(main, listOf(lead), emptyList(),
+            names = mapOf("l1" to "增长"), tree = tree)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1400.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onSettings = {})
+                }
+            }
+        }
+        // Fold the lead open, then its working to-do, through the real carets (the fold state is SharedPreferences-backed).
+        rule.onNodeWithContentDescription("增长 的待办").performClick()
+        rule.onNodeWithText("上线支付").assertExists()
+        rule.onNodeWithText("核对账单").assertExists()
+        rule.onNodeWithText("平板两栏布局").assertExists()
+        // Every open task says its state; the piece nobody started reads Not started, in the quiet tone.
+        rule.onNodeWithText("在做").assertExists()
+        rule.onNodeWithText("等你").assertExists()
+        rule.onNodeWithText("未开始").assertExists()
+        rule.onNodeWithContentDescription("上线支付 的 Agent").performClick()
+        rule.onNodeWithText("Agent 甲").assertExists()
+        // A sub-Agent is one more fold down: open the Agent's own caret, then the child shows.
+        rule.onNodeWithContentDescription("Agent 甲 的 Agent").performClick()
+        rule.onNodeWithText("子 Agent").assertExists()
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            capture("drawer-direction-open-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+        }
     }
 
     // #4922 / #5196: every newest chat, including automatic ones with their source mark, between 常驻 and All chats

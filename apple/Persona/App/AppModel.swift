@@ -2599,6 +2599,8 @@ final class AppModel {
         }
         var msg = PendingMessage(text: text, images: images)
         msg.via = via
+        // The composer says "queued" while the agent works: such a message is drawn in the queue strip (#1461).
+        if session(key)?.status.isActive == true { msg.queuedMode = true }
         chat(key).pending.append(msg)
         saveOutbox()
         Haptics.tap()

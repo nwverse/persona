@@ -9,6 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
+	"github.com/nwverse/persona/server/internal/textfmt"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -631,10 +632,7 @@ func readBodyFile(p, cwd string) string {
 	if err != nil {
 		return "（读不到 " + p + "）"
 	}
-	if len(b) > 4000 {
-		b = append(b[:4000], "…"...)
-	}
-	return string(b)
+	return textfmt.Clip(string(b), 4000)
 }
 
 var httpMethod = lazyre.New(`^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$`)
