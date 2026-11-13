@@ -80,7 +80,7 @@ The same definition as the app, from the same code (principle 4):
 | To-dos | the count | the To-dos page's Today filter: due today, plus open overdue ones | `TodoStore`, `TodoListLogic` |
 | Usage | a window's percent, reset time | `GET /api/v1/usage/windows`, the Machines page's numbers | `UsageWindowsStore` |
 | Usage | tokens today, by the hour | the island's Tokens Today; the hours from `GET /api/v1/usage`'s `hourly` (#5721) | `FleetState.stats`, the usage summary |
-| Usage | money spent today | only what a gateway reports (`LauncherQuota.Usage.costUSD`); never estimated from prices. Not read yet (phase 3, with the accounts in Edit Widget): until then the widget shows no money | launcher quotas |
+| Usage | money spent today | only what a gateway reports: the `cost_usd` of the quota report's usage entries whose `period` is `day`, over the launchers with a gateway, a key two launchers share counted once (`HomeUsage.spentToday`). Never estimated from prices, never an entry known only by its label. With no gateway saying, the widget shows no money | launcher quotas (`GET /api/v1/launchers/{name}/quota`) |
 | Computers | online, load | `Machine.online`; load from `FleetState.stats.loads` | `AppModel.machines` |
 | Health | steps, sleep, resting heart rate | Health's own numbers, with the user's permission | `HealthTool.daily` / `.summary` |
 | Inbox | Need You, Unread | open items the triage marks as yours (`InboxStore.actionCount`); the Inbox badge's number | `InboxStore` |
@@ -123,8 +123,9 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
   connects it for 25 seconds, and it writes before it lets go.
 - **What the app reads itself** (`HomeWidgetData`): today's calendar events (EventKit, off the main actor, only with
   the access Persona already has), Health's numbers (`HealthTool.daily`: steps for 8 days, sleep, resting heart rate,
-  active energy), the subscription windows (`UsageWindowsStore`) and today's tokens by the hour (`GET /api/v1/usage`'s
-  `hourly`). Each is read only while a widget that shows it is on a screen (`WidgetCenter`'s configurations, from the
+  active energy), the subscription windows (`UsageWindowsStore`), today's tokens by the hour (`GET /api/v1/usage`'s
+  `hourly`) and today's money at the gateways (each gateway launcher's quota, at most every 15 minutes, never sooner when
+  the hub wakes the app; a money read on another day is not shown). Each is read only while a widget that shows it is on a screen (`WidgetCenter`'s configurations, from the
   foreground), at most every 10, 15 and 5 minutes, and again when the hub wakes the app; a read that fails (Health is
   locked with the phone) keeps the last.
 - **Off the main thread** (P1): the file is written on a background task, protected until first unlock as
