@@ -3,7 +3,7 @@
 // items were opened on the way; an item with no list under it puts the list in its place instead of adding an entry.
 import { afterEach, describe, expect, it } from "vitest";
 import { openOverlay } from "./back-close";
-import { backToInboxList, openFromInbox, stepsToInbox } from "./inbox-nav";
+import { backToInboxList, inboxReturnTo, openFromInbox, stepsToInbox } from "./inbox-nav";
 import { navigate } from "./router";
 
 /** Runs `go`, then waits for the Back it causes (history.go() is asynchronous). */
@@ -65,10 +65,19 @@ describe("Back from an Inbox item", () => {
     expect(stepsToInbox(history.state)).toBe(2);
   });
 
-  it("carries nothing to a page that is not an item (a conversation, a to-do)", () => {
+  it("carries the item's address to a full page opened from it", () => {
     atList();
-    openFromInbox({ name: "inbox", id: "a" });
+    openFromInbox({ name: "inbox", id: "a", manager: "m2" });
     openFromInbox({ name: "session", mid: "m", sid: "s" });
-    expect(history.state).toBeNull();
+    expect(inboxReturnTo(history.state)).toEqual({ id: "a", manager: "m2" });
+    expect(stepsToInbox(history.state)).toBe(0);
+  });
+
+  it("carries no item address from the list, and ignores malformed state", () => {
+    atList();
+    openFromInbox({ name: "session", mid: "m", sid: "s" });
+    expect(inboxReturnTo(history.state)).toBeUndefined();
+    expect(inboxReturnTo({ personaInboxFrom: "/persona/c1" })).toBeUndefined();
+    expect(inboxReturnTo({ personaInboxFrom: 42 })).toBeUndefined();
   });
 });
