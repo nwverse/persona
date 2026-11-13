@@ -51,6 +51,11 @@ type InboxSource struct {
 	Things []connector.InboxThing
 	// ReadError says it is behind while its Inbox is on (readErrorOf): the short code a built-in's failed read has.
 	ReadError string
+	// Connector and SourceName are what it reads, for the AI twin; Chats the knowledge-base chat of each row's thread
+	// (deliverer.chatOf) while its knowledge base is on (#6222).
+	Connector  string
+	SourceName string
+	Chats      map[string]string
 }
 
 // InboxSources are the subscriptions as Inbox sources: one's items while its Inbox is on, its read error while it is
@@ -71,7 +76,11 @@ func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 		}
 		d := s.deliverer(sub, now)
 		d.replies = replying[sub.Connector] && sub.RunState != StateNotConnected
+		if kbFrom(sub) != nil {
+			d.chats = map[string]string{}
+		}
 		src.Things = append(src.Things, d.inboxThings(catchup, live)...)
+		src.Connector, src.SourceName, src.Chats = sub.Connector, cmpOr(sub.SourceName, sub.Source), d.chats
 		src.Things = append(src.Things, d.failing())
 		if inboxFrom(sub) != nil {
 			src.ReadError = readErrorOf(sub.RunState)
@@ -216,6 +225,8 @@ type deliverer struct {
 	// replies: the subscription's connector is on and answers an inbox reply (Service.replying), so a row whose newest
 	// item has reply_to can be replied to (#6198).
 	replies bool
+	// chats, while the subscription's knowledge base is on, gets each row's thread → its knowledge-base chat (#6222).
+	chats map[string]string
 }
 
 func (s *Service) deliverer(sub Subscription, now time.Time) deliverer {
@@ -432,6 +443,9 @@ func (d deliverer) threadThing(key string, items []Held) connector.InboxThing {
 	if last.ReplyTo != "" && d.replies && !strings.HasPrefix(last.UID, weakPrefix) {
 		t.ReplyTo, t.CanReply = last.ReplyTo, true // the reply goes to its connector with this item (Service.ReplyTarget)
 	}
+	if d.chats != nil {
+		d.chats[t.Thread] = d.chatOf(last).ID
+	}
 	if n := d.newestPull(items); n > 1 {
 		if t.Extra == nil {
 			t.Extra = &connector.ThingExtra{}
@@ -535,9 +549,13 @@ func (d deliverer) digestThing(items []Held) connector.InboxThing {
 
 // snapshotThing is a snapshot that changed: the state as the source answered it.
 func (d deliverer) snapshotThing(h Held) connector.InboxThing {
-	return connector.InboxThing{Thread: d.thread("snapshot"), Kind: cmpOr(h.Kind, wire.ConnectorSubscriptionKindSubUpdate),
+	t := connector.InboxThing{Thread: d.thread("snapshot"), Kind: cmpOr(h.Kind, wire.ConnectorSubscriptionKindSubUpdate),
 		Label: d.sub.Label, Title: cmpOr(h.Title, d.sub.Label), Preview: clip(oneLine(h.Body), previewMost),
 		Context: clip(h.Body, contextBodyMost), At: h.Stored, Last: h.UID, Rules: d.rules, Extra: d.fallback(false), Tags: d.tags(nil)}
+	if d.chats != nil {
+		d.chats[t.Thread] = d.chatOf(h).ID
+	}
+	return t
 }
 
 // failing is the subscription's failure notice: FYI by rule once it has not pulled for failingNotice (one a

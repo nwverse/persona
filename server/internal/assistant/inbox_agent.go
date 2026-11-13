@@ -305,7 +305,7 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		delete(b.listMemo.kept, it.ID) // saved once the start returns: listed as running meanwhile (inbox_list_memo.go)
 		a := b.inboxAgentFor(it, owner, linked[it.Agent.TodoID], larkDefault, loc)
 		a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
-		jobs = append(jobs, job{it, kbChatOf(it), func(kbc *prompts.KBContext) string { a.KB = kbc; return prompts.RenderInboxAgent(a) },
+		jobs = append(jobs, job{it, b.kbChatOf(it), func(kbc *prompts.KBContext) string { a.KB = kbc; return prompts.RenderInboxAgent(a) },
 			it.Agent.told})
 	}
 	b.mu.Unlock()
@@ -365,12 +365,18 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 }
 
 // kbChatOf is the knowledge base's chat of an item: its Feishu chat, or the mail's correspondent; "" for none.
-func kbChatOf(it *InboxItem) string {
+func (b *inboxBook) kbChatOf(it *InboxItem) string {
 	switch {
 	case it.Lark != nil:
 		return kb.ChatID("lark", it.Lark.FeedID)
 	case it.Mail != nil:
 		return kb.ChatID("mail", it.Mail.AccountID+"-"+strings.ToLower(it.Mail.From.Email))
+	case it.Connector != nil: // a subscription's row, while its knowledge base is on (#6222)
+		b.srcMu.RLock()
+		defer b.srcMu.RUnlock()
+		if chat := b.vias[it.Source].chats[it.Connector.Thread]; chat != "" {
+			return kb.ChatID(it.Source, chat)
+		}
 	}
 	return ""
 }
@@ -533,6 +539,11 @@ func (b *inboxBook) inboxAgentFor(it *InboxItem, owner string, linked *prompts.I
 		a.Moment = &prompts.InboxAgentMoment{PostID: it.Moment.PostID}
 	case it.Connector != nil:
 		a.Connector = &prompts.InboxAgentConnector{Source: it.Source, URL: it.Connector.URL, ReplyTo: it.Connector.ReplyTo}
+		b.srcMu.RLock()
+		if v, ok := b.vias[it.Source]; ok { // a subscription's: what it reads (#6222)
+			a.Connector.Name, a.Connector.Via, a.Connector.ViaSource = b.names[it.Source], v.connector, v.source
+		}
+		b.srcMu.RUnlock()
 	case it.Mail != nil && len(it.Mail.UIDs) > 0:
 		a.Mail = &prompts.InboxAgentMail{Account: it.Mail.AccountID, Mailbox: it.Mail.Mailbox, UID: it.Mail.UIDs[len(it.Mail.UIDs)-1]}
 	}
