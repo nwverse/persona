@@ -35,7 +35,9 @@ notifications still open their requested detail directly. Back from an Agent ope
 A conversation opened from an inbox item carries `RouteSource.InboxItem(itemId)`. An assistant conversation is a complete
 chat page pushed above the item's event or original page on the Persona stack, rather than a conversation embedded in the
 Persona home; Back returns to that item page. An Agent still opens on the Agents stack, and Back selects Persona without
-changing that stack, so it also returns to the item. Session-metadata repair and hub-group migration retain the sourced page.
+changing that stack, so it also returns to the item. A child conversation or request opened above that chat inherits the
+same source, so Back unwinds through the handling conversation to the item; an Agent child still opens under Agents.
+Session-metadata repair and hub-group migration retain the sourced page.
 Re-tapping an already selected Glass home segment retains its existing menu; that is not a selection from Assistant.
 `AgentsTabNavigationTest` checks prior task, app/hub link, notification and restored-detail stacks;
 `AgentsTabNavigationShotsTest` clicks the production home control and renders the Agents list and chat through Navigation 3

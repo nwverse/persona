@@ -282,6 +282,85 @@ class AppNavigatorTest {
         assertEquals(event, stacks.getValue(AppTab.Persona).last())
     }
 
+    @Test fun aChildAssistantChatInheritsTheSourceAndBackUnwindsToTheEvent() {
+        val event = InboxEventRoute("item")
+        val handling = ChatRoute("machine", "handling", ConversationKind.Assistant, RouteSource.InboxItem("item"))
+        val child = ChatRoute("machine", "child", ConversationKind.Assistant)
+        val sourcedChild = child.copy(source = handling.source)
+        val router = embeddedAssistantNavigator { ConversationKind.Assistant }
+        selected = AppTab.Persona
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, event))
+
+        router.navigate(handling)
+        router.navigate(child)
+        assertEquals(listOf(AssistantRoute, InboxRoute, event, handling, sourcedChild), stacks.getValue(AppTab.Persona))
+        router.back()
+        assertEquals(handling, stacks.getValue(AppTab.Persona).last())
+        router.back()
+        assertEquals(event, stacks.getValue(AppTab.Persona).last())
+    }
+
+    @Test fun anAgentAboveAnInboxAssistantStaysOnAgentsAndReturnsToTheHandlingChat() {
+        val event = InboxEventRoute("item")
+        val handling = ChatRoute("machine", "handling", ConversationKind.Assistant, RouteSource.InboxItem("item"))
+        val agent = ChatRoute("machine", "agent", ConversationKind.Agent)
+        val sourcedAgent = agent.copy(source = handling.source)
+        val router = embeddedAssistantNavigator {
+            if (it.sessionId == "agent") ConversationKind.Agent else ConversationKind.Assistant
+        }
+        selected = AppTab.Persona
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, event))
+
+        router.navigate(handling)
+        router.navigate(agent)
+        assertEquals(AppTab.Agents, selected)
+        assertEquals(listOf(AgentsRoute, sourcedAgent), stacks.getValue(AppTab.Agents))
+        assertEquals(listOf(AssistantRoute, InboxRoute, event, handling), stacks.getValue(AppTab.Persona))
+        router.back()
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(handling, stacks.getValue(AppTab.Persona).last())
+        router.back()
+        assertEquals(event, stacks.getValue(AppTab.Persona).last())
+    }
+
+    @Test fun aRequestInAChildAssistantChatKeepsTheSameReturnChain() {
+        val event = InboxEventRoute("item")
+        val handling = ChatRoute("machine", "handling", ConversationKind.Assistant, RouteSource.InboxItem("item"))
+        val request = InteractionRoute(ChatRoute("machine", "child", ConversationKind.Assistant), "request")
+        val sourcedRequest = request.copy(chat = request.chat.copy(source = handling.source))
+        val router = embeddedAssistantNavigator { ConversationKind.Assistant }
+        selected = AppTab.Persona
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, event))
+
+        router.navigate(handling)
+        router.navigate(request)
+        assertEquals(listOf(AssistantRoute, InboxRoute, event, handling, sourcedRequest), stacks.getValue(AppTab.Persona))
+        router.back()
+        assertEquals(handling, stacks.getValue(AppTab.Persona).last())
+        router.back()
+        assertEquals(event, stacks.getValue(AppTab.Persona).last())
+    }
+
+    @Test fun reopeningAnAgentFromAnotherItemReturnsToTheLatestHandlingChat() {
+        val first = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("first"))
+        val event = InboxEventRoute("second")
+        val handling = ChatRoute("machine", "handling", ConversationKind.Assistant, RouteSource.InboxItem("second"))
+        val router = embeddedAssistantNavigator {
+            if (it.sessionId == "agent") ConversationKind.Agent else ConversationKind.Assistant
+        }
+        stacks.getValue(AppTab.Agents).add(first)
+        selected = AppTab.Persona
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, event, handling))
+
+        router.navigate(first.copy(source = null))
+        assertEquals(AppTab.Agents, selected)
+        // Router.restore retains the existing Agent page and its UI state; the new origin is still recorded.
+        assertEquals(listOf(AgentsRoute, first), stacks.getValue(AppTab.Agents))
+        router.back()
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(handling, stacks.getValue(AppTab.Persona).last())
+    }
+
     /** Uses Root's production decision; only its selection side effect is reproduced here. */
     private fun embeddedAssistantNavigator(kind: (SessionKey) -> ConversationKind?) = AppNavigator(
         stacks, { selected }, { selected = it },

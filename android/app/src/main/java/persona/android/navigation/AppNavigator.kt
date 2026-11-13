@@ -38,48 +38,63 @@ internal class AppNavigator(
         // The route's type only, never its arguments (machine, session, item ids).
         ErrorBreadcrumbs.shared.navigation(key::class.simpleName ?: "route")
         val shown = stacks.mapValues { it.value.lastOrNull() }
-        open(key)
+        val opened = open(key)
         val to = selectedTab()
         val page = stacks.getValue(to).lastOrNull() ?: return
         // Not recorded: the tab's root, and a page that already topped the target tab's stack but is not the one asked
         // for (this call did not open it).
-        if (to != from && page != tabRoot(to) && (page != shown[to] || page == key)) openedFrom[page] = from
+        if (to != from && page != tabRoot(to) && (page != shown[to] || page == opened)) openedFrom[page] = from
     }
 
-    private fun open(key: NavKey) {
-        if (key == ConnectionSettingsRoute) {
-            open(SettingsPageRoute(SettingsPage.Diagnostics))
-            return
-        }
-        val chat = when (key) { is ChatRoute -> key; is InteractionRoute -> key.chat; else -> null }
-        if (chat != null && openAssistant(chat, true)) return
+    /** Returns the actual key opened, which may have inherited the visible inbox conversation's source. */
+    private fun open(key: NavKey): NavKey {
+        val route = inheritVisibleInboxSource(key)
+        if (route == ConnectionSettingsRoute) return open(SettingsPageRoute(SettingsPage.Diagnostics))
+        val chat = when (route) { is ChatRoute -> route; is InteractionRoute -> route.chat; else -> null }
+        if (chat != null && openAssistant(chat, true)) return route
         // A sourced assistant conversation belongs above the item that opened it, even when its kind is already known.
         // Router.restore would instead pop to an earlier copy and retain that copy's provenance. Agents keep that path.
-        val fromInbox = key is ChatRoute && key.source is RouteSource.InboxItem &&
-            (key.kind == ConversationKind.Assistant || chatTab(key) == AppTab.Persona)
+        val fromInbox = chat != null && chat.source is RouteSource.InboxItem &&
+            (chat.kind == ConversationKind.Assistant || chatTab(chat) == AppTab.Persona)
         if (chat != null && chat.kind != null && !fromInbox) {
-            Router().parse(RouteInput.Internal(key))?.let { onSelectTab(it.restore(stacks)); return }
+            Router().parse(RouteInput.Internal(route))?.let { resolved ->
+                val tab = resolved.restore(stacks)
+                onSelectTab(tab)
+                return stacks.getValue(tab).lastOrNull() ?: route
+            }
         }
-        val rootTab = when (key) {
+        val rootTab = when (route) {
             AssistantRoute -> AppTab.Persona
             AgentsRoute -> AppTab.Agents
             else -> null
         }
         if (rootTab != null) {
             onSelectTab(rootTab)
-            return
+            return route
         }
-        val target = if (key is ChatRoute) chatTab(key)
-            ?: stacks.entries.firstOrNull { key in it.value }?.key
+        val target = if (route is ChatRoute || fromInbox) chatTab(requireNotNull(chat))
+            ?: stacks.entries.firstOrNull { route in it.value }?.key
             ?: selectedTab().takeIf { it == AppTab.Persona }
             ?: AppTab.Agents else selectedTab()
         onSelectTab(target)
-        if (key is ChatRoute) stacks.filterKeys { it != target }.values.forEach { stack ->
-            stack.removeAll { page -> page.chat()?.let { sameConversation(it, key) } == true }
+        if (chat != null && (route is ChatRoute || fromInbox)) stacks.filterKeys { it != target }.values.forEach { stack ->
+            stack.removeAll { page -> page is ChatRoute && sameConversation(page, chat) }
         }
         val stack = stacks.getValue(target)
-        if (stack.last() != key) stack.add(key)
+        if (stack.last() != route) stack.add(route)
         restoreSecondaryParents(stack)
+        return route
+    }
+
+    /** A child conversation opened above an inbox conversation belongs to the same return chain. */
+    private fun inheritVisibleInboxSource(key: NavKey): NavKey {
+        if (selectedTab() != AppTab.Persona) return key
+        val source = stacks.getValue(AppTab.Persona).lastOrNull()?.chat()?.source as? RouteSource.InboxItem ?: return key
+        return when (key) {
+            is ChatRoute -> if (key.source == null) key.copy(source = source) else key
+            is InteractionRoute -> if (key.chat.source == null) key.copy(chat = key.chat.copy(source = source)) else key
+            else -> key
+        }
     }
 
     /** Repair restored entries once session metadata becomes available. */

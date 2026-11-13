@@ -17,7 +17,18 @@ class ShellPanesTest {
         AppTab.Persona to mutableListOf(AssistantRoute), AppTab.Agents to mutableListOf(AgentsRoute),
     )
     private var selected = AppTab.Persona
-    private val navigator = AppNavigator(stacks, { selected }, { selected = it })
+    private val navigator = AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
+        route.kind?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
+    }, openAssistant = { chat, select ->
+        assistantHomeTarget(chat, embeddedAssistant = true) { null }?.let {
+            if (select) {
+                val stack = stacks.getValue(AppTab.Persona)
+                while (stack.size > 1) stack.removeAt(stack.lastIndex)
+                selected = AppTab.Persona
+            }
+            true
+        } ?: false
+    })
     private fun marked(tab: AppTab) = detailOf(stacks.getValue(tab))
 
     @Test fun deepLinkedSettingsPagesAreMarkedInTheList() {
