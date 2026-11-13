@@ -5,36 +5,110 @@ enum TodosViewMode: String, CaseIterable {
     case list, calendar
 }
 
-/// The top of the to-dos page: List | Calendar, and in the calendar Day | Week | Month. Each device keeps its choice.
+/// How the to-dos list is grouped (#4352): by status section (the default), or by Pinned direction from the hub's
+/// direction tree, offered only by a hub that has one.
+enum TodosGrouping: String, CaseIterable {
+    case status, direction
+
+    var title: String {
+        switch self {
+        case .status: String(localized: "Status")
+        case .direction: String(localized: "Directions")
+        }
+    }
+
+    /// The Group By menu's mark for it, as the Agents page's groupings have one each.
+    var symbol: String {
+        switch self {
+        case .status: Theme.Icon.byState
+        case .direction: Theme.Icon.pin
+        }
+    }
+
+    /// The grouping the list shows: the stored choice, but by status from a hub without the tree (an older hub, or
+    /// before it is read), whatever was chosen against another hub.
+    static func resolved(_ stored: TodosGrouping, hasTree: Bool) -> TodosGrouping { hasTree ? stored : .status }
+}
+
+/// The top of the to-dos page: List | Calendar, and in the calendar Day | Week | Month; in the list, its grouping when
+/// `grouping` is given. Each device keeps its choice.
 struct TodosModeBar<ListControls: View>: View {
     @Binding var view: TodosViewMode
     @Binding var mode: TodoCalendarMode
+    var grouping: Binding<TodosGrouping>? = nil
     /// The list view's own controls at the trailing end, where the calendar has its day / week / month (the phone's
     /// filter and sort, #3740).
     @ViewBuilder var listControls: ListControls
     @StoredValue("todos.calendar.showDone") private var showDone = true
 
+    private var viewChoice: some View {
+        SegmentedChoice(String(localized: "View"), [(value: TodosViewMode.list, label: String(localized: "List")), (value: .calendar, label: String(localized: "Calendar"))], selection: $view)
+            .labelsHidden()
+            .fixedSize()
+            .accessibilityIdentifier("todos.view")
+    }
+
+    private var modeChoice: some View {
+        SegmentedChoice(String(localized: "Calendar"), TodoCalendarMode.allCases.map { (value: $0, label: $0.label) }, selection: $mode)
+            .labelsHidden()
+            .fixedSize()
+            .accessibilityIdentifier("todo.calendar.mode")
+    }
+
+    private var optionsMenu: some View {
+        Menu {
+            Toggle(String(localized: "Show Done"), isOn: $showDone)
+        } label: {
+            ThemedIcon(Theme.Icon.options)
+        }
+        .menuStyle(.button)
+        .themedButton()
+        .accessibilityLabel(Text("Calendar Options"))
+        .accessibilityIdentifier("todo.calendar.options")
+    }
+
     var body: some View {
+        if view == .calendar {
+            // At the interface's largest size the three controls do not fit one row: the day / week / month choice drops under.
+            ViewThatFits(in: .horizontal) {
+                bar
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    HStack(spacing: Theme.Space.m) { viewChoice; Spacer(minLength: Theme.Space.s); optionsMenu }
+                    modeChoice
+                }
+                .padding(.horizontal, Theme.Space.page)
+                .padding(.vertical, Theme.Space.xs)
+            }
+        } else {
+            bar
+        }
+    }
+
+    private var bar: some View {
         HStack(spacing: Theme.Space.m) {
-            SegmentedChoice(String(localized: "View"), [(value: TodosViewMode.list, label: String(localized: "List")), (value: .calendar, label: String(localized: "Calendar"))], selection: $view)
-                .labelsHidden()
-                .fixedSize()
-                .accessibilityIdentifier("todos.view")
+            viewChoice
             Spacer(minLength: Theme.Space.s)
-            if view == .calendar {
-                SegmentedChoice(String(localized: "Calendar"), TodoCalendarMode.allCases.map { (value: $0, label: $0.label) }, selection: $mode)
-                    .labelsHidden()
-                    .fixedSize()
-                    .accessibilityIdentifier("todo.calendar.mode")
+            if view == .list, let grouping {
+                // A grouping control, not a filter chip (docs/design/DESIGN_SYSTEM.md "List controls").
                 Menu {
-                    Toggle(String(localized: "Show Done"), isOn: $showDone)
+                    Picker("Group By", selection: grouping) {
+                        ForEach(TodosGrouping.allCases, id: \.self) { g in Text(g.title).tag(g) }
+                    }
                 } label: {
-                    ThemedIcon(Theme.Icon.options)
+                    HStack(spacing: Theme.Space.xs) {
+                        ThemedIcon(grouping.wrappedValue.symbol)
+                        Text(grouping.wrappedValue.title).lineLimit(1)
+                    }
                 }
                 .menuStyle(.button)
                 .themedButton()
-                .accessibilityLabel(Text("Calendar Options"))
-                .accessibilityIdentifier("todo.calendar.options")
+                .accessibilityLabel(Text("Group By"))
+                .accessibilityValue(Text(grouping.wrappedValue.title))
+                .accessibilityIdentifier("todos.grouping")
+            }
+            if view == .calendar {
+                modeChoice
+                optionsMenu
             } else {
                 listControls
             }
@@ -45,8 +119,8 @@ struct TodosModeBar<ListControls: View>: View {
 }
 
 extension TodosModeBar where ListControls == EmptyView {
-    init(view: Binding<TodosViewMode>, mode: Binding<TodoCalendarMode>) {
-        self.init(view: view, mode: mode) { EmptyView() }
+    init(view: Binding<TodosViewMode>, mode: Binding<TodoCalendarMode>, grouping: Binding<TodosGrouping>? = nil) {
+        self.init(view: view, mode: mode, grouping: grouping) { EmptyView() }
     }
 }
 
@@ -62,7 +136,8 @@ extension TodoCalendarMode {
 
 /// The to-dos as a calendar (#2029, docs/assistant/todos.md "Calendar"): a day, a week or a month of those with a due
 /// date, drawn as the list draws them (state, overdue, done, priority, reminder). Tapping one opens it, tapping the
-/// empty axis makes a new one due there; those without a due date are counted under it, a tap from the list.
+/// empty axis makes a new one due there; those without a due date are counted under it, a tap from the list. On iOS a
+/// to-do is moved by dragging it to another time or day (#2045, `TodoCalendarDrag.swift`).
 struct TodoCalendarView: View {
     @Environment(\.tabIsActive) private var inFront
     @Environment(\.locale) private var locale
@@ -80,6 +155,14 @@ struct TodoCalendarView: View {
 
     @StoredValue("todos.calendar.showDone") private var showDone = true
     @State private var adding: TodoCalendarSlot?
+    /// A to-do whose due date is set from its "Change Due Date…" (#2045).
+    @State private var rescheduling: TodoItem?
+    /// A to-do is being dragged: a sideways move carries it, it doesn't turn the page.
+    @State private var carrying = false
+    #if DEBUG
+    /// The `-openRescheduleTitled` sheet came up (then it isn't asked for again).
+    @State private var debugRescheduleShown = false
+    #endif
 
     private let calendar = TodoCalendar.userCalendar
 
@@ -95,7 +178,7 @@ struct TodoCalendarView: View {
                         Rectangle().fill(Theme.CalendarGrid.line).frame(height: pixel)
                     }
                     #if os(iOS)
-                    .simultaneousGesture(paging)
+                    .simultaneousGesture(paging, including: carrying ? .subviews : .all)
                     #endif
                 undatedBar
             }
@@ -103,6 +186,38 @@ struct TodoCalendarView: View {
         .sheet(item: $adding) { slot in
             TodoQuickAddSheet(slot: slot)
         }
+        .sheet(item: $rescheduling) { todo in
+            TodoRescheduleSheet(todo: todo)
+                #if DEBUG
+                .onAppear {
+                    debugRescheduleShown = true
+                    CalendarDragTrace.shared.note("sheet shown") // i18n-ignore: DEBUG trace
+                }
+                .onDisappear { CalendarDragTrace.shared.note("sheet gone") } // i18n-ignore: DEBUG trace
+                #endif
+        }
+        #if DEBUG
+        // `-openRescheduleTitled <text>`: the first to-do whose title has it opens its "Change Due Date…" (the UI test
+        // of the way without dragging, screenshots). A sheet asked for during the page's push or the switch to the
+        // calendar can be dropped: it is asked for again until it is up. Each way out is in the drag trace.
+        .task(id: todos.count) {
+            guard let match = UserDefaults.standard.string(forKey: "openRescheduleTitled") else { return }
+            let trace = CalendarDragTrace.shared
+            guard !debugRescheduleShown else { return trace.note("sheet: shown before") } // i18n-ignore: DEBUG trace
+            guard let todo = todos.first(where: { $0.title.contains(match) }) else {
+                return trace.note("sheet: no to-do of \(todos.count)") // i18n-ignore: DEBUG trace
+            }
+            for attempt in 1...10 {
+                try? await Task.sleep(for: .milliseconds(800))
+                if Task.isCancelled { return trace.note("sheet: stopped at \(attempt)") } // i18n-ignore: DEBUG trace
+                guard !debugRescheduleShown else { return }
+                trace.note("sheet asked \(attempt)") // i18n-ignore: DEBUG trace
+                rescheduling = nil
+                try? await Task.sleep(for: .milliseconds(100))
+                rescheduling = todo
+            }
+        }
+        #endif
     }
 
     // MARK: What is shown
@@ -124,17 +239,20 @@ struct TodoCalendarView: View {
                     .padding(.top, Theme.Space.s)
                 TodoCalendarTimeline(
                     days: [calendar.startOfDay(for: anchor)], entries: TodoCalendar.on(anchor, entries, calendar: calendar),
-                    narrow: false, showsDayHeader: false, open: openEntry, pickDay: { go(to: $0) }, add: { adding = $0 })
+                    narrow: false, showsDayHeader: false, open: openEntry, pickDay: { go(to: $0) }, add: { adding = $0 },
+                    moves: moves)
             }
             .id(TodoCalendar.range(.week, anchor: anchor, calendar: calendar).start)
         case .week:
             TodoCalendarTimeline(
                 days: TodoCalendar.days(.week, anchor: anchor, calendar: calendar), entries: entries,
-                narrow: !wide, showsDayHeader: true, open: openEntry, pickDay: { show(.day, $0) }, add: { adding = $0 })
+                narrow: !wide, showsDayHeader: true, open: openEntry, pickDay: { show(.day, $0) }, add: { adding = $0 },
+                moves: moves)
                 .padding(.top, Theme.Space.s)
                 .id(TodoCalendar.range(.week, anchor: anchor, calendar: calendar).start)
         case .month:
-            TodoCalendarMonth(anchor: anchor, entries: entries, wide: wide, open: openEntry, pickDay: { show(.day, $0) })
+            TodoCalendarMonth(anchor: anchor, entries: entries, wide: wide, open: openEntry, pickDay: { show(.day, $0) },
+                              moves: moves)
                 .padding(.top, Theme.Space.s)
                 .id(TodoCalendar.range(.month, anchor: anchor, calendar: calendar).start)
         }
@@ -146,6 +264,26 @@ struct TodoCalendarView: View {
         }
     }
 
+    // MARK: Moving one (#2045)
+
+    /// What the grids do with a to-do moved on them: iOS and iPadOS only (the Mac app is frozen).
+    private var moves: CalendarMoves? {
+        #if os(iOS)
+        return CalendarMoves(
+            drop: { entry, drop in
+                guard case .todo(let id) = entry.source, TodoCalendar.moves(entry, to: drop, calendar: calendar) else { return }
+                TodoCalendarMove.save(id, to: TodoCalendar.due(drop, calendar: calendar))
+            },
+            reschedule: { entry in
+                guard case .todo(let id) = entry.source else { return }
+                rescheduling = TodoStore.shared.todo(id: id)
+            },
+            carrying: { carrying = $0 })
+        #else
+        return nil
+        #endif
+    }
+
     // MARK: Moving around
 
     private var header: some View {
@@ -154,7 +292,7 @@ struct TodoCalendarView: View {
             // a phone's week ("Nov 8 – 14" with the buttons beside it) steps down a size rather than cut its dates
             ViewThatFits(in: .horizontal) {
                 Text(title).font(Theme.Font.title)
-                Text(title).font(Theme.Font.heading)
+                Text(title).font(Theme.Font.heading).minimumScaleFactor(0.6)
             }
             .lineLimit(1)
             .accessibilityElement(children: .ignore)
@@ -235,6 +373,7 @@ struct TodoCalendarView: View {
                 Rectangle().fill(Theme.CalendarGrid.line).frame(height: pixel)
             }
             .accessibilityIdentifier("todo.calendar.undated")
+            .debugDragTrace()
         }
     }
 }
@@ -271,8 +410,8 @@ struct TodoQuickAddSheet: View {
                         .accessibilityIdentifier("todo.calendar.newTitle")
                 }
                 Section {
-                    DatePicker(String(localized: "Due"), selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute])
-                        .accessibilityIdentifier("todo.calendar.newDue")
+                    FormDatePicker("Due", selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute],
+                                   identifier: "todo.calendar.newDue")
                     Toggle(String(localized: "All Day"), isOn: $allDay)
                         .accessibilityIdentifier("todo.calendar.newAllDay")
                 } footer: {
@@ -300,7 +439,7 @@ struct TodoQuickAddSheet: View {
             .macSheet()
             #endif
         }
-        .presentationDetents([.medium])
+        .formSheetDetents([.medium])
         .onAppear { typing = true }
     }
 

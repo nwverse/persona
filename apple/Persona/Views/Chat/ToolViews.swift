@@ -569,7 +569,7 @@ struct ToolCallRow: View {
 
     private var pad: CGFloat { grouped ? WorkCardSlice.inset : 10 }
     /// On the work timeline what a tool shows keeps right of the rail, under its words.
-    private var detailLeading: CGFloat { grouped && WorkCardSlice.timeline ? WorkCardSlice.textColumn : pad }
+    private var detailLeading: CGFloat { grouped && WorkCardSlice.timeline ? WorkCardSlice.textColumn(typeSize) : pad }
     private var onTimeline: Bool { grouped && WorkCardSlice.timeline }
 
     /// Around a chip row (`ToolChipRow`): in a work card it lines up with the card's other rows; alone, a little
@@ -596,26 +596,13 @@ struct ToolCallRow: View {
                             .foregroundStyle(tint)
                     }
                 }
-                if typeSize.isAccessibilitySize {
-                    // At the accessibility sizes the subject and a background task's badge each get a line under the
-                    // verb (as `NameWithChips` stacks a row's chips): side by side, the badge, which keeps its width,
-                    // left the verb nothing and ran off the screen, and the subject was cut to a sliver of a letter.
-                    let subject = ToolPresentation.subject(call)
-                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                        verbText.lineLimit(2)
-                        if !subject.isEmpty { subjectText(subject) }
-                        taskBadge
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    // One line: the verb first ("GitHub · Create issue" is long), the subject gives way.
-                    verbText
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    subjectText(ToolPresentation.subject(call))
-                    Spacer(minLength: 4)
-                    taskBadge
-                }
+                // One line: the verb first ("GitHub · Create issue" is long), the subject gives way.
+                verbText
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                subjectText(ToolPresentation.subject(call))
+                Spacer(minLength: 4)
+                taskBadge
                 ToolOutcomeMark(call: call)
                 ThemedIcon(Theme.Icon.disclosure)
                     .font(Theme.Font.labelStrong)
@@ -623,7 +610,8 @@ struct ToolCallRow: View {
                     .rotationEffect(.degrees(isOpen ? 90 : 0))
             }
             .padding(.vertical, onTimeline ? Theme.Space.s : grouped ? 10 : 7)
-            .padding(.horizontal, pad)
+            .padding(.leading, grouped ? WorkCardSlice.iconLeading : pad)
+            .padding(.trailing, pad)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -646,17 +634,13 @@ struct ToolCallRow: View {
     /// with nothing to name (Enter Plan Mode, List Agents) draws no empty box beside its verb.
     private var chipHeader: some View {
         let subject = ToolPresentation.subject(call)
-        let stacked = typeSize.isAccessibilitySize
         return VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             ToolChipRow(chip(subject), isOpen: isOpen, isRunning: call.isRunning, chipStyle: subject.isEmpty ? .plain : .boxed,
                         action: tapped) {
-                if !stacked { taskBadge }
+                taskBadge
                 ToolOutcomeMark(call: call)
             }
             .accessibilityIdentifier(headerID)
-            // At the accessibility sizes the badge, which keeps its width, left the verb nothing beside it: it gets a
-            // line of its own under the verb, past the row's 16 pt icon and its 8 pt gap.
-            if stacked { taskBadge.padding(.leading, Theme.Space.xl) }
         }
         .padding(Self.chipInsets(grouped: grouped))
     }
@@ -668,15 +652,7 @@ struct ToolCallRow: View {
             let b = TaskNoteText.badge(tasks.notes[id] ?? [])
             let text = Text(b.text).font(Theme.Font.label).foregroundStyle(b.failed ? Theme.danger : Color.secondary)
             if AppStyle.current.usesBeautifulUI {
-                BUIPill(b.text, tone: b.failed ? .red : .neutral, truncates: typeSize.isAccessibilitySize)
-            } else if typeSize.isAccessibilitySize {
-                // On a line of its own it can still be wider than the screen: then it wraps, in a box rather than a pill.
-                ViewThatFits(in: .horizontal) {
-                    badgePill(text)
-                    text.fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, Theme.Space.sm).padding(.vertical, Theme.Space.xxs)
-                        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-                }
+                BUIPill(b.text, tone: b.failed ? .red : .neutral, truncates: false)
             } else {
                 badgePill(text)
             }
@@ -755,14 +731,8 @@ struct ToolDetail: View {
                     #if os(macOS)
                     .textSelection(.enabled)
                     #endif
-            case "AskUserQuestion":
-                ForEach(Array((i["questions"]?.array ?? []).enumerated()), id: \.offset) { _, q in
-                    Text(q["question"]?.string ?? "").font(Theme.Font.captionMedium)
-                        #if os(macOS)
-                        .textSelection(.enabled)
-                        #endif
-                }
-            case "ask_user":
+            case "AskUserQuestion", "ask_user":
+                // Claude Code's dialog shows its options too (#5889): what it asked can be read where it can't be answered.
                 AskUserDetail(call: call)
             case SecretRun.tool:
                 SecretRunToolDetail(call: call)
@@ -823,19 +793,24 @@ struct ToolDetail: View {
     }
 }
 
-/// The Raw Input switch under a tool's detail in words, showing or hiding the JSON the tool was called with.
+/// The Raw Input switch under a tool's detail in words, showing or hiding the JSON the tool was called with. In the chat
+/// it stays under the finger, what it opens under it (`toggleInPlace`, #3757); elsewhere it animates as before.
 struct RawInputToggle: View {
     @Binding var raw: Bool
+    /// Its place for the chat's pin, unique in the chat (from the call's id).
+    var pinKey: String
+    @Environment(\.chatPin) private var pin
 
     var body: some View {
         Button {
-            withAnimation(Theme.Motion.state) { raw.toggle() }
+            toggleInPlace(pin, pinKey, animation: Theme.Motion.state, closing: raw) { raw.toggle() }
         } label: {
             Label(raw ? String(localized: "Hide Raw Input") : String(localized: "Raw Input"), systemImage: raw ? Theme.Icon.collapse : Theme.Icon.expand)
                 .font(Theme.Font.label).lineLimit(1)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
+        .chatPinned(pinKey)
     }
 }
 
@@ -868,7 +843,7 @@ struct ToolArgumentsDetail: View {
                     }
                 }
                 .accessibilityIdentifier("tool-arguments")
-                RawInputToggle(raw: $raw).accessibilityIdentifier("tool-raw")
+                RawInputToggle(raw: $raw, pinKey: "raw-" + item.id).accessibilityIdentifier("tool-raw")
                 if raw { CodeBlock(text: ToolTextMemo.input(item, scope: scope), maxLines: 14) }
             }
         }
@@ -936,9 +911,10 @@ nonisolated enum ToolTextMemo {
     }
 }
 
-/// What the user picked in an ask_user card, read back from the tool's result: the hub answers the model with
-/// "The user answered:\n- <question> → <answer>\n" per question (server/internal/assistant/tools.go), and with "The user did
-/// not answer …" when the card was dismissed or expired. A multi-select answer joins its labels with ", ".
+/// What the user picked in an ask_user card or a Claude Code AskUserQuestion, read back from the tool's result: the
+/// hub answers the model with "The user answered:\n- <question> → <answer>\n" per question
+/// (server/internal/assistant/tools.go), and with "The user did not answer …" when the card was dismissed or expired.
+/// A multi-select answer joins its labels with ", ".
 nonisolated enum AskUserAnswers {
     struct Question: Equatable, Sendable {
         var question: String
@@ -954,19 +930,39 @@ nonisolated enum AskUserAnswers {
         }
     }
 
-    /// Each question's answer; empty when the result says nobody answered (or is not the hub's answer at all).
+    /// Each question's answer; empty when the result says nobody answered (or is not an answer at all). Reads the
+    /// hub's ask_user result and Claude Code's AskUserQuestion one (#5937):
+    /// `User has answered your questions: "<q>"="<a>", "<q2>"="<b>". You can now continue …`.
     static func parse(_ result: String, questions: [Question]) -> [String: String] {
-        guard result.hasPrefix("The user answered:") else { return [:] }
+        let claude = result.hasPrefix("User has answered your questions:")
+        guard claude || result.hasPrefix("The user answered:") else { return [:] }
         let marks = questions.compactMap { q -> (String, Range<String.Index>)? in
-            result.range(of: "\n- \(q.question) → ").map { (q.question, $0) }
+            result.range(of: claude ? "\"\(q.question)\"=\"" : "\n- \(q.question) → ").map { (q.question, $0) }
         }.sorted { $0.1.lowerBound < $1.1.lowerBound }
         var out: [String: String] = [:]
         for (n, (question, mark)) in marks.enumerated() {
             let end = n + 1 < marks.count ? marks[n + 1].1.lowerBound : result.endIndex
-            let answer = result[mark.upperBound..<end].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !answer.isEmpty { out[question] = answer }
+            var answer = result[mark.upperBound..<end]
+            // Claude's answer closes with the last quote before the next question (or the closing sentence).
+            if claude { answer = answer.lastIndex(of: "\"").map { answer[..<$0] } ?? "" }
+            let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { out[question] = trimmed }
         }
         return out
+    }
+
+    /// The AskUserQuestion the agent waits on (#5889): its newest call, while it has no result; nil otherwise.
+    static func pending(_ items: [Item]) -> [Question]? {
+        var answered: Set<String> = []
+        for item in items.reversed() {
+            if item.kind == .toolResult, let id = item.toolUseID { answered.insert(id) }
+            guard item.kind == .toolUse else { continue }
+            guard ToolNaming.tableName(item.toolName ?? "") == "AskUserQuestion", let id = item.toolUseID,
+                  !answered.contains(id) else { return nil }
+            let qs = questions(item.toolInput ?? .object([:])).filter { !$0.question.isEmpty }
+            return qs.isEmpty ? nil : qs
+        }
+        return nil
     }
 
     /// Whether an option is among what was picked.
@@ -997,19 +993,20 @@ struct AskUserDetail: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text(q.question).font(Theme.Font.captionMedium)
                     ForEach(Array(q.options.enumerated()), id: \.offset) { _, label in
-                        choice(label, picked: AskUserAnswers.picked(label, answer: answer, multiSelect: q.multiSelect))
+                        Self.choice(label, picked: AskUserAnswers.picked(label, answer: answer, multiSelect: q.multiSelect))
                     }
-                    if let typed = AskUserAnswers.typed(q, answer: answer) { choice(typed, picked: true) }
+                    if let typed = AskUserAnswers.typed(q, answer: answer) { Self.choice(typed, picked: true) }
                 }
             }
-            if let result = call.result, result.isError != true, answers.isEmpty {
+            // Claude Code's result shows under it anyway (`ToolDetail`), so only ask_user says nobody answered.
+            if ToolNaming.tableName(call.name) == "ask_user", let result = call.result, result.isError != true, answers.isEmpty {
                 Text("No answer").font(Theme.Font.label).foregroundStyle(.secondary)
             }
         }
         .accessibilityIdentifier("ask-user-detail")
     }
 
-    private func choice(_ label: String, picked: Bool) -> some View {
+    static func choice(_ label: String, picked: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             ThemedIcon(picked ? Theme.Icon.successFilled : Theme.Icon.unchecked)
                 .font(Theme.Font.label)
@@ -1027,6 +1024,9 @@ struct CodeBlock: View {
     /// Clipped, the last `maxLines` lines show instead of the first (an output that ends with why it failed).
     var keepsEnd = false
     @State private var full = false
+    @Environment(\.chatPin) private var pin
+    /// What the chat's pin knows the block by: a block has no id of its own, and this view's is kept while it is drawn.
+    @State private var pinKey = "code-" + UUID().uuidString
 
     var body: some View {
         let lines = ToolTextMemo.codeLines(text)
@@ -1044,9 +1044,15 @@ struct CodeBlock: View {
                 MacHoverButton(title: String(localized: "Copy [Readiness Views d37380]"), symbol: Theme.Icon.copy) { MacHover.copy(text) }
             }
             if clipped {
-                Button("Show All \(lines.count) Lines [Tool Views 3aed77]") { withAnimation { full = true } }.font(Theme.Font.labelMedium)
+                // In the chat its top stays where it is and the rest opens under it (#3757): animated, the block grew
+                // around the tap and moved what was above it.
+                Button("Show All \(lines.count) Lines [Tool Views 3aed77]") {
+                    toggleInPlace(pin, pinKey, animation: Theme.Motion.standard) { full = true }
+                }
+                .font(Theme.Font.labelMedium)
             }
         }
+        .chatPinned(pinKey)
     }
 }
 
@@ -1119,19 +1125,40 @@ struct ResultBlock: View {
     }
 }
 
-/// A tool's whole output, fetched when opened (pages carry its first 4 KB). Monospaced, scrolls both ways.
+/// A tool's whole output, fetched when opened (pages carry its first 4 KB). Monospaced, scrolls both ways. A pending
+/// card's long command opens in it too, the text in hand (`init(text:title:)`, #6605).
 struct FullOutputSheet: View {
     var itemID: String
     var load: ((String) async throws -> String)?
+    /// The bar's title: Tool Output, or what the text is (a card's command: its tool's name).
+    var title: String = String(localized: "Tool Output")
     @Environment(\.dismiss) private var dismiss
     @State private var text: String?
     @State private var error: String?
+
+    init(itemID: String, load: ((String) async throws -> String)?) {
+        self.itemID = itemID
+        self.load = load
+    }
+
+    /// Text already in hand: nothing to fetch.
+    init(text: String, title: String) {
+        itemID = ""
+        load = nil
+        self.title = title
+        _text = State(initialValue: text)
+    }
 
     var body: some View {
         NavigationStack {
             Group {
                 if let text {
+                    #if os(macOS)
                     MonoTextView(text: MonoText.plain(text, color: .label, size: 12))
+                    #else
+                    // Every line read whole: long ones wrap (#6605); cut at the edge they did not say they scrolled.
+                    MonoTextView(text: MonoText.plain(text, color: .label, size: 12), wraps: true)
+                    #endif
                 } else if let error {
                     ContentUnavailableView("Couldn't Load", systemImage: Theme.Icon.error, description: Text(error))
                 } else {
@@ -1139,7 +1166,7 @@ struct FullOutputSheet: View {
                 }
             }
             .background(Theme.codeBackground)
-            .navigationTitle("Tool Output")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .pageToolbar {
                 #if os(macOS)
@@ -1509,17 +1536,20 @@ struct Base64Image: View {
     var index = 0
     /// The viewer's title for a picture alone (a file's name); a gallery's pictures go untitled.
     var title: String? = nil
+    /// Fills the width it is given instead of a thumbnail's height (`Theme.Size.box280`): a picture that is the page (#1331).
+    var fillsWidth = false
     @State private var image: UIImage?
     @State private var showViewer = false
     /// The last load gave no picture (no hub, a failed download, bytes that do not decode).
     @State private var failed = false
     /// Bumped by a tap on the retry: loads again (the loader keeps no failures).
     @State private var attempt = 0
-    init(payload: ImagePayload, gallery: [ImagePayload] = [], index: Int = 0, title: String? = nil) {
+    init(payload: ImagePayload, gallery: [ImagePayload] = [], index: Int = 0, title: String? = nil, fillsWidth: Bool = false) {
         self.payload = payload
         self.gallery = gallery
         self.index = index
         self.title = title
+        self.fillsWidth = fillsWidth
         _image = State(initialValue: ChatImageLoader.cached(payload, side: 900)) // back on screen: no placeholder flash
     }
     @Namespace private var zoom
@@ -1533,7 +1563,7 @@ struct Base64Image: View {
                 Image(uiImage: image).resizable().scaledToFit()
                     .clipShape(.rect(cornerRadius: Theme.Radius.control, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).stroke(Theme.cardStroke, lineWidth: 0.5))
-                    .scaledFrame(maxHeight: Theme.Size.box280)
+                    .scaledFrame(maxHeight: fillsWidth ? nil : Theme.Size.box280)
                     .contentShape(.rect)
                     .onTapGesture { open() }
                     #if os(macOS)
@@ -1669,7 +1699,7 @@ struct ComputerToolDetail: View {
             }
             ForEach(Array(call.images.enumerated()), id: \.offset) { i, img in Base64Image(payload: img, gallery: call.images, index: i) }
             ScreenEntry(call: call)
-            RawInputToggle(raw: $raw).accessibilityIdentifier("computer-raw")
+            RawInputToggle(raw: $raw, pinKey: "raw-" + call.id).accessibilityIdentifier("computer-raw")
             if raw {
                 CodeBlock(text: input, maxLines: 14)
                 if let result = call.result {

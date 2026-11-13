@@ -10,6 +10,8 @@ export interface HostWorkspace {
   parent_source_id?: string; project_id?: string; project_name?: string; project_path?: string;
   is_main?: boolean; unread?: boolean; sidebar_status?: string; workspace_kind?: string;
   head?: string; index?: number; branch?: string; online?: boolean; available?: boolean; last_seen?: string;
+  /** An engine runtime's worktree that the runtime made and removes with it (Paseo's, #6297): the ones it deletes. */
+  owned?: boolean;
 }
 /** Discovered targets always carry their credential/manager partition and human label. */
 export interface WorkspaceTarget extends RuntimeWorkspaceTarget {
@@ -18,6 +20,10 @@ export interface WorkspaceTarget extends RuntimeWorkspaceTarget {
   label: string;
 }
 export type WorkspaceCatalogOwner = Pick<WorkspaceTarget, "owner" | "manager">;
+/** How often a visible page re-reads the catalog while it is watched (#5168). Worktrees change rarely, and the web's own
+ *  changes (creating, renaming, removing one) refresh it at once (`refreshWorkspaceCatalog`), as does a page coming back
+ *  into view. Each read asks every online computer live (`workspaces.list`), so this is 60 s, as on Apple (#4685). */
+export const CATALOG_POLL_MS = 60_000;
 export interface WorkspaceCatalogSnapshot extends WorkspaceCatalogOwner { workspaces: HostWorkspace[] }
 export interface WorkspaceCatalogList { workspaces: HostWorkspace[]; errors?: { machine_id: string; source?: string; error: string }[] }
 
@@ -99,7 +105,7 @@ export class WorkspaceCatalog {
         if (page.visibilityState === "hidden") return;
         const poll = async () => {
           await this.refresh();
-          if (current === generation) timer = setTimeout(() => { void poll(); }, 10_000);
+          if (current === generation) timer = setTimeout(() => { void poll(); }, CATALOG_POLL_MS);
         };
         void poll();
       };

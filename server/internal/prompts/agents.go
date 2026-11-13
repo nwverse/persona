@@ -1,7 +1,22 @@
 package prompts
 
+func RenderAgentSessionName() string { return render("agents/session_name", nil) }
+
+// AgentSessionNameInput contains only bounded dialogue, never machine paths or credentials.
+type AgentSessionNameInput struct {
+	First  string
+	Recent string
+}
+
+func RenderAgentSessionNameInput(v AgentSessionNameInput) string {
+	return render("agents/session_name_input", v)
+}
+
 // RenderReadonlyTaskPlanExit keeps a read-only task from requesting writable implementation approval.
 func RenderReadonlyTaskPlanExit() string { return render("agents/readonly_plan_exit", nil) }
+
+// RenderReadonlyTaskConstraint carries a read-only task's limit in its first prompt.
+func RenderReadonlyTaskConstraint() string { return render("agents/readonly_task", nil) }
 
 // AgentTriage is the system prompt that reads a stopped agent's last reply and says where its work stands
 // (agents/triage, docs/assistant/agent-work.md).
@@ -210,6 +225,8 @@ func RenderTaskLeader() string { return render("agents/task_leader", struct{}{})
 
 // RenderTaskWorker is what follows the prompt of a worker a task leader handed out (agents/task_worker).
 func RenderTaskWorker() string { return render("agents/task_worker", struct{}{}) }
+
+func RenderTaskHandoff() string { return render("agents/task_handoff", struct{}{}) }
 
 // RenderWorkerSupervise is the supervision message a task leader's agent gets about its workers (agents/worker_supervise,
 // assistant/task_leader.go): what each task of its own needs, from the same entries a conversation's message lists.

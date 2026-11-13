@@ -30,7 +30,7 @@ struct PreviewChooser: View {
     private var machineName: String { machine?.name ?? key.machineID }
     private var ports: [ListeningPort] { session?.ports ?? [] }
     private var options: [PreviewOption] { preview.options(ports: ports) }
-    private var canStart: Bool { session?.workspaceID?.isEmpty == false }
+    private var canStart: Bool { PreviewLogic.canStart(session) }
 
     var body: some View {
         NavigationStack {
@@ -157,7 +157,7 @@ struct PreviewChooser: View {
     /// it waits for and can be cancelled; one with a url and no command is started by hand.
     @ViewBuilder private func row(_ o: PreviewOption) -> some View {
         let starting = preview.starting?.option.id == o.id
-        let label = HStack(spacing: Theme.Space.m) {
+        let label = HStack(alignment: .center, spacing: Theme.Space.m) {
             IconTile(o.from == .agent ? Theme.Icon.agents : o.command == nil && !o.listening ? Theme.Icon.document : o.listening ? Theme.Icon.servedPage : Theme.Icon.server,
                      tint: o.from == .agent ? Theme.Hue.purple : o.listening ? Theme.Hue.green : Theme.Hue.gray)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {

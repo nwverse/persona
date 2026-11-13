@@ -13,7 +13,7 @@
 import { setTransport } from "./api";
 import { installMockFollower, mockLogs, mockMetrics, mockOverview } from "./mock-metrics";
 import type { CatalogItem, Market } from "../lib/extension-market";
-import type { UsageSource, UsageSources, AdminMachine, AdminExtension, AssistantCards, AdminState, Device, DiscoveredHub, MeshView, MetricsWindow, NetworkView, Overview, Peer, PermissionLine, ExtensionPreview } from "./types";
+import type { UsageSource, UsageSources, AdminMachine, AdminExtension, AdminState, Device, DiscoveredHub, MeshView, MetricsWindow, NetworkView, Overview, Peer, PermissionLine, ExtensionPreview } from "./types";
 
 const SELF = "0d9e8f7a-6b5c-4d3e-8f2a-1b0c9d8e7f6a";
 const OFFICE = "6f1c2a9e-0b7d-4c55-9e3a-2b8f41d07c11";
@@ -159,7 +159,6 @@ export function installMock(scenario: string) {
     { hub_id: "a24d77c0-91e2-4f1b-8f2d-5c0b3e6a9d42", name: "书房 NAS", addresses: ["https://192.0.2.20:18662", "https://[2001:db8::20]:18662"], fp: "q3J8pX0m-Vb7kQ2sT9yH4eW1rL6uN5cD8fG0aZ3iK7o", version: "v1.4.0" },
     { hub_id: "c8e1f5b3-2d6a-4e9f-b7c0-1a3d5f7e9b24", name: "客厅迷你主机", addresses: ["https://192.0.2.31:18662"], fp: "M2nB5vC8xZ1aS4dF7gH0jK3lQ6wE9rT2yU5iO8pA1sD", version: "v1.3.8" },
   ];
-  const assistant: AssistantCards = { persona_view: false };
   const network: NetworkView = {
     listen: ":18660",
     public_url: "http://hub.example.com:18660",
@@ -321,6 +320,12 @@ export function installMock(scenario: string) {
             { level: "ok", item: "明文 listen", detail: ":18660；仅供内网或 VPN 使用" },
             { level: "ok", item: "public.tls_listen", detail: ":18662（配置值，尚未验证 TLS 监听）" },
             { level: "ok", item: "TLS 证书", detail: "SPKI SHA-256 钉扎值 Xk3v9QeR2mT8…；到期时间 2027-10-01T00:00:00Z" },
+            {
+              level: "ok",
+              item: "候选地址",
+              detail:
+                "已读取运行中的 hub 当前发布列表（不代表外部可达）\nhttps://[2001:db8::2]:18662（ipv6，端口 18662，发现时间 2026-11-13T08:00:00Z）\nhttps://192.0.2.10:18662（lan，端口 18662，发现时间 2026-11-13T08:00:00Z）",
+            },
             { level: "problem", item: "本机 IPv6", detail: "没有可确认稳定的全局 IPv6；请检查运营商 IPv6 和网卡地址" },
             { level: "info", item: "外部可达性", detail: "未验证。本机连自己的地址走环回，不能证明公网可达。" },
           ],
@@ -442,12 +447,6 @@ export function installMock(scenario: string) {
       case "POST /devices/pair":
         if (mesh.role === "member") return memberHub();
         return json({ pair_url: "persona://pair?url=http%3A%2F%2Fhub.example.com%3A18660&token=jp_mock", url: network.public_url, expires_at: later(10), fp: network.tls?.fp, qr: { size: 29, rows: fakeQr() } });
-      case "GET /assistant":
-        return json(assistant);
-      case "PUT /assistant":
-        if (typeof body.persona_view !== "boolean") return fail(400, "bad_request");
-        assistant.persona_view = body.persona_view;
-        return json(assistant);
       case "GET /network":
         return json({ ...network, restart });
       case "PUT /network/access":

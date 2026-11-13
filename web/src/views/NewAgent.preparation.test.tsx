@@ -8,6 +8,7 @@ import { credentialOwner, handleUnauthorized, setToken } from "../lib/api";
 import { onOpenNewAgent, openNewAgent, type NewAgentPreset, type WorkspaceTarget } from "../lib/new-agent";
 import { resetManagerChoice, setRosterDefault } from "../lib/manager-choice";
 import { NewAgent } from "./NewAgent";
+import { resetModelListsForTests } from "../lib/session-models";
 import { Toasts } from "../ui/atoms";
 import { t } from "../i18n";
 
@@ -81,6 +82,7 @@ async function attach(name: string, image = false) {
 }
 
 beforeEach(async () => {
+  resetModelListsForTests();
   vi.useFakeTimers();
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
   calls = []; pending = []; closes = 0; configured = false;
@@ -277,8 +279,16 @@ describe("New Agent preparation ownership", () => {
     await click(t("common.cancel")); await click("Reopen start"); await flush();
     await click("Orca");
     const request = await prepare();
+    // the engine it opens in says where its worktree goes, and makes it
+    expect(calls.filter((c) => c.url.endsWith("/worktree/status")).at(-1)?.body).toMatchObject({ kind: "orca" });
+    expect(request.body).toMatchObject({ kind: "orca" });
     await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="start-host"] button')!.click());
-    await click("claude");
+    // a model picked in the panel after admission changes the form, not the start on its way
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-testid=new-agent-model] [data-model-pill]")!.click());
+    await flush();
+    await act(async () => [...document.querySelectorAll<HTMLElement>("[data-panel-row]")].find((r) => r.dataset.panelRow === "model:claude\nsynthetic-model")!.click());
+    await flush();
+    expect(document.querySelector("[data-model-panel]")).toBeNull();
     await answer(request);
     expect(starts()).toHaveLength(1);
     expect(starts()[0].body).toMatchObject({ cwd: worktree.path, host: "orca" });

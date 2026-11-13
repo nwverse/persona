@@ -64,6 +64,10 @@ type Task struct {
 	// pushes itself (notify_user). Set where the request has it; a client that leaves it out keeps it (PUT, the old
 	// app's routines PUT, the tools without push).
 	Push string `json:"push,omitempty"`
+	// Inbox is what of a run goes into the Inbox (inbox_post.go): "" nothing, "worthy" what the run puts there itself
+	// when it finds something worth a look (inbox_post), "every" a row after every run. Independent of Push. Set where
+	// the request has it; a client that leaves it out keeps it.
+	Inbox string `json:"inbox,omitempty"`
 	// Facts: the run's fixed part is worked out by Persona (briefing.go): what waits for the owner, what happened in the last
 	// 12 hours and what is to be verified, listed in one Lark card and pushed as counts, while the model writes only a
 	// sentence or two on top. On for the default morning and evening routines (a hub set up before gets it with their
@@ -343,6 +347,8 @@ type schedule struct {
 	wake   chan struct{} // the list changed: scheduleLoop recomputes when to wake up
 	// sending: tasks whose run is being sent right now (runTask), so two can't go into one conversation at once.
 	sending map[string]bool
+	// held: by task, until when its due run waits for the owner (runDue, relay_presence.go runHold); in memory only.
+	held map[string]time.Time
 	// inflight: runs runDue started and that have not recorded their result yet.
 	inflight sync.WaitGroup
 	// waitTold: by task, the wait on the user its skip was pushed for (tellWaitingSkip, waitKey): a patrol every 30
@@ -703,7 +709,8 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 		Prompt          string          `json:"prompt"`
 		Title           string          `json:"title"`
 		NewConversation bool            `json:"new_conversation"`
-		Push            *string         `json:"push"` // left out: a new follow-up pushes every run, one rescheduled keeps its push
+		Push            *string         `json:"push"`  // left out: a new follow-up pushes every run, one rescheduled keeps its push
+		Inbox           *string         `json:"inbox"` // left out: a new follow-up puts nothing in the Inbox, one rescheduled keeps its setting
 		Until           json.RawMessage `json:"until"`
 		// The task's own model configuration (schedule_model.go): nil leaves it as it is, "" clears that part.
 		Launcher *string `json:"launcher"`
@@ -720,6 +727,14 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 			return "", err
 		}
 		push = &p
+	}
+	var inbox *string
+	if a.Inbox != nil {
+		m, err := inboxArg(*a.Inbox)
+		if err != nil {
+			return "", err
+		}
+		inbox = &m
 	}
 	prompt := stripScheduleHeader(a.Prompt)
 	if prompt == "" {
@@ -765,7 +780,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
 	// A one-off ignores until, even a bad one. An interval task takes it; scheduleOwn applies it when this run is
 	// rescheduling its own task (including a one-off this call turns into an interval).
-	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, rule, push, a.Until, a.Launcher, a.Model, a.Effort); ok || err != nil {
+	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, rule, push, inbox, a.Until, a.Launcher, a.Model, a.Effort); ok || err != nil {
 		if err == nil && id != "" {
 			err = s.setTaskModel(ctx, id, a.Launcher, a.Model, a.Effort)
 		}
@@ -796,6 +811,9 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	}
 	if push != nil {
 		t.Push = *push
+	}
+	if inbox != nil {
+		t.Inbox = *inbox
 	}
 	ownConversationIfQuiet(&t, s.mayBeMainNow(ctx))
 	if t.SessionID != "" && s.quietConversation(ctx, t.SessionID) {
@@ -837,7 +855,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 // repeats stays as it is (a changed prompt is taken). A task deleted while its run was going stays deleted: the run is
 // told so, nothing is scheduled (#4792). A one-off given a cron rule (`cron`, zero spec for none) runs on it from now on. ok is false when this conversation's latest run isn't one of the task's
 // (rawPrompt is what was asked, before stripScheduleHeader), or the title and prompt are another task's.
-func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, cron cronRule, push *string, untilRaw json.RawMessage, launcher, model, effort *string) (string, string, bool, error) {
+func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, cron cronRule, push, inbox *string, untilRaw json.RawMessage, launcher, model, effort *string) (string, string, bool, error) {
 	if sessionID == "" {
 		return "", "", false, nil
 	}
@@ -897,6 +915,9 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	t.Prompt = prompt
 	if push != nil { // left out: it keeps its push
 		t.Push = *push
+	}
+	if inbox != nil { // left out: it keeps its setting
+		t.Inbox = *inbox
 	}
 	ownConversationIfQuiet(t, mayBeMain)
 	var out string
@@ -1059,6 +1080,9 @@ func (s *Service) describeSchedule(ctx context.Context, space string) string {
 		if t.pushesOnlyAsked() {
 			b.WriteString(", " + pushText(t))
 		}
+		if t.Inbox != inboxOff {
+			b.WriteString(", " + inboxModeText(t))
+		}
 		if t.LastStatus != "" {
 			fmt.Fprintf(&b, ", last run %s %s", t.LastRun.In(loc).Format("01-02 15:04"), t.LastStatus)
 		}
@@ -1085,6 +1109,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 		Enabled  *bool           `json:"enabled"`
 		Report   *bool           `json:"report"` // left out: kept
 		Push     *string         `json:"push"`   // left out: a new routine pushes every run, an existing one keeps its push
+		Inbox    *string         `json:"inbox"`  // left out: a new routine puts nothing in the Inbox, an existing one keeps its setting
 		Until    json.RawMessage `json:"until"`
 		// The task's own model configuration (schedule_model.go): nil leaves it as it is, "" clears that part.
 		Launcher *string `json:"launcher"`
@@ -1106,6 +1131,14 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 			return "", err
 		}
 		push = &p
+	}
+	var inbox *string
+	if a.Inbox != nil {
+		m, err := inboxArg(*a.Inbox)
+		if err != nil {
+			return "", err
+		}
+		inbox = &m
 	}
 	loc := s.location(ctx)
 	now := time.Now()
@@ -1169,6 +1202,9 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 	}
 	if push != nil {
 		t.Push = *push
+	}
+	if inbox != nil {
+		t.Inbox = *inbox
 	}
 	applyUntil(&t, end, hasUntil, clearUntil)
 	dropStaleUntil(&t, hasUntil, now)
@@ -1272,13 +1308,21 @@ func checkTask(t *Task, now time.Time) error {
 	if err := checkPush(t.Push); err != nil {
 		return err
 	}
+	if err := checkInbox(t.Inbox); err != nil {
+		return err
+	}
 	if t.Launcher != "" && !launcherName.MatchString(t.Launcher) {
 		return i18n.Err("assistant-schedule.bad_launcher", i18n.Args{"launcher": strconv.Quote(t.Launcher)})
 	}
 	if t.PermissionMode != "" && !slices.Contains(proto.PermissionModes, t.PermissionMode) {
 		return i18n.Err("assistant-schedule.bad_permission_mode", i18n.Args{"mode": strconv.Quote(t.PermissionMode)})
 	}
-	if t.Effort != "" && !slices.Contains(proto.EffortLevels, t.Effort) {
+	// A codex task takes its launcher's own effort list (ultra included, #6181); everything else keeps Claude Code's.
+	efforts := proto.EffortLevels
+	if t.Launcher == "codex" {
+		efforts = proto.CodexEffortLevels
+	}
+	if t.Effort != "" && !slices.Contains(efforts, t.Effort) {
 		return i18n.Err("assistant-schedule.bad_effort", i18n.Args{"effort": strconv.Quote(t.Effort)})
 	}
 	return checkUntil(t, now)
@@ -1335,27 +1379,30 @@ func weekdayText(ds []int) string {
 // knowledge base.
 func (s *Service) Run(ctx context.Context) {
 	s.running.Store(&ctx)
+	go s.transcriptionReadyLoop(ctx)
 	recoverCtx, cancel := context.WithTimeout(ctx, taskFailTimeout)
 	if err := s.recoverTaskStarts(recoverCtx, s.tasks.recoverBefore); err != nil {
 		s.logf("recover interrupted task starts: %v", err)
 	}
 	cancel()
-	go s.taskCloseLoop(ctx)    // the agents of finished tasks (tasks_close.go)
-	go s.superviseLoop(ctx)    // the tasks the main conversation follows up (supervise_signals.go)
-	go s.workLoop(ctx)         // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
-	go s.replyLoop(ctx)        // questions the user looked at and left unanswered (agents_reply.go)
-	go s.nudgeLoop(ctx)        // the Lark bot's cards left unanswered (feishu_nudge.go)
-	go s.sourceReportLoop(ctx) // the reports back to where a todo was asked (todo_source.go)
-	go s.remindLoop(ctx)       // the todos' reminders (todo_plan.go)
-	go s.channelLoop(ctx)      // the channels' runs that lost their watcher (channels.go)
-	go s.kbLoop(ctx)           // the knowledge base (kb.go)
-	go s.kbHistoryLoop(ctx)    // importing chats' older history into it, off by default (kb_history.go)
-	go s.viewActionLoop(ctx)   // durable card reply outbox
-	go s.acceptLoop(ctx)       // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
+	go s.taskCloseLoop(ctx)      // the agents of finished tasks (tasks_close.go)
+	go s.superviseLoop(ctx)      // the tasks the main conversation follows up (supervise_signals.go)
+	go s.workLoop(ctx)           // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
+	go s.replyLoop(ctx)          // questions the user looked at and left unanswered (agents_reply.go)
+	go s.nudgeLoop(ctx)          // the Lark bot's cards left unanswered (feishu_nudge.go)
+	go s.sourceReportLoop(ctx)   // the reports back to where a todo was asked (todo_source.go)
+	go s.remindLoop(ctx)         // the todos' reminders (todo_plan.go)
+	go s.channelLoop(ctx)        // the channels' runs that lost their watcher (channels.go)
+	go s.kbLoop(ctx)             // the knowledge base (kb.go)
+	go s.kbHistoryLoop(ctx)      // importing chats' older history into it, off by default (kb_history.go)
+	go s.viewActionLoop(ctx)     // durable card reply outbox
+	go s.acceptLoop(ctx)         // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
+	go s.admissionQueueLoop(ctx) // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
 	// The leaders' tasks that got stuck (leader_reports.go).
 	go s.leaderReportsLoop(ctx)
 	go s.healthLoop(ctx)       // each machine's launchers (launcher_health.go)
 	go s.instructionsLoop(ctx) // the CLAUDE.md on the assistant's machine (start.go)
+	go s.searchLoop(ctx)       // the chat search index (search_index.go)
 	s.scheduleLoop(ctx)
 }
 
@@ -1413,7 +1460,11 @@ func (s *Service) nextDue(ctx context.Context, now time.Time) time.Time {
 	defer sc.mu.Unlock()
 	var next time.Time
 	for _, t := range sc.tasks {
-		if n := t.nextWithLeaderCadence(now, loc, open); !n.IsZero() && (next.IsZero() || n.Before(next)) {
+		n := t.nextWithLeaderCadence(now, loc, open)
+		if until, ok := sc.held[t.ID]; ok && until.After(now) {
+			n = until // held for the owner (runDue): looked at again when the hold ends
+		}
+		if !n.IsZero() && (next.IsZero() || n.Before(next)) {
 			next = n
 		}
 	}
@@ -1431,9 +1482,20 @@ type dueTask struct {
 func (s *Service) runDue(ctx context.Context, now time.Time) {
 	loc := s.location(ctx)
 	open := s.leaderOpenWork(ctx)
+	present := s.ownersPresent(now) // read before schedule.mu
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return // this turn is skipped: a task run now could not be marked as run
+	}
+	// A run that goes into a conversation the owner is talking in waits (relay_presence.go runHold): it stays due,
+	// nothing of it is consumed or recorded, and nextDue looks again when the hold ends.
+	held := map[string]time.Time{}
+	waits := func(t *Task, due time.Time) bool {
+		h := runHold(present, *t, due, now)
+		if h > 0 {
+			held[t.ID] = now.Add(h)
+		}
+		return h > 0
 	}
 	var due []dueTask
 	var skipped []ScheduleRun
@@ -1475,6 +1537,10 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 			if next.IsZero() || next.After(now) {
 				continue
 			}
+			// One that never ran is only looked back for two minutes (above): waiting would lose its first run.
+			if !t.LastRun.IsZero() && waits(t, next) {
+				continue
+			}
 			t.LastRun, changed = now.UTC(), true // saved before it starts: a restart in between loses the run rather than repeating it
 			if now.Sub(next) < dailyCatchUp {
 				due = append(due, dueTask{*t, next})
@@ -1502,6 +1568,9 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 			if next.IsZero() || next.After(now) {
 				continue
 			}
+			if !t.LastRun.IsZero() && waits(t, next) { // as a daily one
+				continue
+			}
 			// The times missed while the hub was down count once, as the latest of them: a run every 30 minutes
 			// back after an hour runs once now rather than skip.
 			for n := rule.next(next, loc); !n.IsZero() && !n.After(now); n = rule.next(n, loc) {
@@ -1516,14 +1585,14 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 					Status: runSkipped, Error: t.LastError, of: now.UTC()})
 			}
 		case repeatOnce:
-			if t.At.After(now) {
+			if t.At.After(now) || waits(t, t.At) {
 				continue
 			}
 			due = append(due, dueTask{*t, t.At})
 			t.LastRun, t.Enabled, changed = now.UTC(), false, true
 		case repeatInterval:
 			next := t.nextWithLeaderCadence(now, loc, open)
-			if next.After(now) {
+			if next.After(now) || waits(t, next) {
 				continue
 			}
 			dueAt := next
@@ -1542,6 +1611,7 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 			}
 		}
 	}
+	sc.held = held
 	// A one-off that ran a day ago is only history now.
 	kept := tasks[:0:0]
 	for _, t := range tasks {
@@ -1709,7 +1779,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			// conversation's launcher like a message from the phone does. On the task's category launcher (Agents
 			// then) it moved the main conversation onto another one (plain claude, not logged in there) for good (#1518).
 			params := map[string]any{"session_id": t.SessionID, "text": taskPrompt(t, due, now, loc, manual, kb, false), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode}
-			err := s.sendModel(ctx, t.MachineID, t.SessionID, params)
+			err := s.sendModel(ctx, t.MachineID, t.SessionID, params, s.lang(ctx))
 			if err == nil {
 				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
 			}
@@ -1752,7 +1822,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			params := map[string]any{"session_id": t.RunSessionID, "text": taskPrompt(t, due, now, loc, manual, kb, true), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode, "resume_only": true}
 			err := s.applyModel(ctx, "task."+t.ID, params)
 			if err == nil {
-				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
+				err = s.resumeOwn(ctx, m.ID, t.RunSessionID, params)
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.RunMachineID, t.RunSessionID
@@ -1782,6 +1852,26 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	}
 	s.startScheduledRun(run, t, m)
 	return sess, nil
+}
+
+// resumeOwn sends a run into the task's own conversation sid on machine (params: its assistant.send). A conversation
+// whose last turn ended "Not logged in" may have been made in a profile with no login, as every conversation the hub
+// started was until #6015; a conversation cannot move to another profile, so every later run there failed the same way.
+// It is resumed only in the profile the hub's conversations start in (meetingProfile): the node refuses it before
+// starting anything when it is in another one, and the run starts a new conversation, signed in (startConversation),
+// which the task keeps (#6186). One already in that profile is resumed as before, and so is any on a node too old to
+// be told a profile, whose conversations are all in that one. Only Claude Code has profiles: the node refuses a
+// config_dir for Codex or a runtime's conversation every time, so theirs are resumed as before.
+func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map[string]any) error {
+	if c, ok := s.session(ctx, machine, sid); ok && signedOut(c) && (c.Agent == "" || c.Agent == "claude") {
+		params["config_dir"] = meetingProfile
+	}
+	err := s.call(ctx, machine, DeviceAssistantSend, params, nil)
+	if _, asked := params["config_dir"]; asked && nodeOutdated(err) {
+		delete(params, "config_dir")
+		err = s.call(ctx, machine, DeviceAssistantSend, params, nil)
+	}
+	return err
 }
 
 // oneOffNotStarted: a one-off's scheduled run could not even start (its machine offline, the launcher not starting, no
@@ -1943,6 +2033,9 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		}
 	}
 	if text == "" {
+		if t.Facts {
+			s.briefReached(run.SessionID) // the briefing is in its conversation, whether or not a push follows
+		}
 		return
 	}
 	full := text
@@ -2331,7 +2424,7 @@ func (s *Service) forgetConversation(ctx context.Context, id string) (Task, bool
 // runs are above instead. The task's prompt is always there: it may have been edited, or compacted away.
 func taskPrompt(t Task, due, now time.Time, loc *time.Location, manual, kb, continued bool) string {
 	r := prompts.TaskRun{Label: t.label(), Once: t.Repeat == repeatOnce, Interval: t.Repeat == repeatInterval, Due: due.In(loc),
-		Prompt: t.Prompt, KBHint: kb && t.calendar(), KnowledgeDir: t.kbDir, Continued: continued, PushAsked: t.pushesOnlyAsked(), Facts: t.factsText}
+		Prompt: t.Prompt, KBHint: kb && t.calendar(), KnowledgeDir: t.kbDir, Continued: continued, PushAsked: t.pushesOnlyAsked(), InboxWorthy: t.inboxWorthy(), InboxEvery: t.inboxEvery(), Facts: t.factsText}
 	if r.Interval {
 		r.Every = everyText(t.EveryMinutes)
 		if t.cadenceEvery > 0 {
@@ -2495,6 +2588,11 @@ func (s *Service) scheduleRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		inbox, _, err := inboxIn(raw)
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		now := time.Now()
 		end, hasUntil, clearUntil, err := untilIn(raw["until"], now, s.location(r.Context()))
 		if err != nil {
@@ -2509,7 +2607,7 @@ func (s *Service) scheduleRoutes() {
 			return
 		}
 		t := editTask(Task{ID: "task_" + randomHex(4), CreatedAt: now.UTC()}, in, now)
-		t.SessionID, t.Push = "", push
+		t.SessionID, t.Push, t.Inbox = "", push, inbox
 		applyUntil(&t, end, hasUntil, clearUntil)
 		dropStaleUntil(&t, hasUntil, now)
 		if err := checkTask(&t, now); err != nil {
@@ -2581,6 +2679,13 @@ func (s *Service) scheduleRoutes() {
 		}
 		if has { // an app that does not know the field leaves it out: the task keeps its push
 			t.Push = push
+		}
+		if mode, has, err := inboxIn(raw); err != nil {
+			sc.mu.Unlock()
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		} else if has { // and its inbox setting
+			t.Inbox = mode
 		}
 		if v, ok := raw["facts"]; ok { // and its facts: set only when the body has them
 			if err := json.Unmarshal(v, &t.Facts); err != nil {

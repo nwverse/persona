@@ -72,6 +72,9 @@ func (s *Service) assistantTurnSettled(ctx context.Context, machine, sid string)
 			cmp.Or(sess.TurnErrorKind, "-"), cmp.Or(sess.TurnErrorCode, turnErrorCode(sess.TurnError), "-"))
 	}
 	s.spawnedTurnSettled(ctx, sess, failed)
+	if !failed {
+		s.inboxPostEvery(ctx, machine, sid) // a task set to put every run in the Inbox (inbox_post.go)
+	}
 }
 
 // spawnedTurnSettled tells the conversation that opened sess (conversation_new) once that sess failed, or that it
@@ -125,7 +128,7 @@ func (s *Service) spawnedTurnSettled(ctx context.Context, sess proto.Session, fa
 func (s *Service) relayOrQueue(ctx context.Context, to string, msg relayMsg) {
 	machine := s.settings(ctx).MachineID
 	c, ok := s.session(ctx, machine, to)
-	if !ok || c.Status == proto.StatusWorking || c.Starting || s.queuedFor(to) > 0 {
+	if !ok || c.Status == proto.StatusWorking || c.Starting || s.relayWaits(to, msg) {
 		if s.queueRelay(to, msg) > 0 {
 			s.publish(ctx) // shown waiting above its composer
 			if ok && c.Status != proto.StatusWorking && !c.Starting {

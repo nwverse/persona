@@ -4,6 +4,8 @@ import persona.core.contracts.CoreText
 import persona.core.contracts.Session
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.KeepGeneratedSerializer
+import kotlinx.serialization.json.*
 
 /** Bound to one hub and pairing generation; never reuse it after pairing changes. */
 interface AgentCreationService {
@@ -31,16 +33,23 @@ interface AgentCreationService {
 
     /**
      * What [cwd] is in Git terms (`POST …/worktree/status`, docs/protocol/protocol.md): null when the computer can't say
-     * (an older node or hub, offline, an error), and then New Agent offers no worktree.
+     * (an older node or hub, offline, an error), and then New Agent offers no worktree. [kind]: the engine the agent
+     * opens in or ran in, which makes its worktree (`Session.worktreeKind`); null, the computer's default.
      */
-    suspend fun worktreeStatus(machineId: String, cwd: String): WorktreeStatus? = null
+    suspend fun worktreeStatus(machineId: String, cwd: String, kind: String? = null): WorktreeStatus? = null
 
-    /** A worktree for a new agent from the repository [cwd] is in (`…/worktree/add`); an empty [branch] is the node's pick. */
-    suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String): WorktreeAdded =
+    /**
+     * A worktree for a new agent from the repository [cwd] is in (`…/worktree/add`); an empty [branch] is the node's pick,
+     * [kind] the engine the agent opens in, which makes it (null: the computer's default).
+     */
+    suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String? = null): WorktreeAdded =
         throw UnsupportedOperationException("Worktrees unavailable")
 
-    /** Removes a worktree Persona made (`…/worktree/remove`); [force] only after the user confirmed what it loses. */
-    suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean): WorktreeRemoved =
+    /**
+     * Removes a worktree Persona made (`…/worktree/remove`); [force] only after the user confirmed what it loses, by the
+     * engine the agent ran in ([kind]).
+     */
+    suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean, kind: String? = null): WorktreeRemoved =
         throw UnsupportedOperationException("Worktrees unavailable")
 }
 
@@ -94,6 +103,8 @@ data class AgentModel(
     /** The thinking efforts it takes, weakest first; empty: no effort setting. */
     val efforts: List<String> = emptyList(),
     @SerialName("default_effort") val defaultEffort: String? = null,
+    /** An id the user typed for this launcher before (feature `typed_models`, #1644): listed after its own models. */
+    val custom: Boolean = false,
 ) {
     val label: String get() = modelName(id, name)
 }
@@ -111,15 +122,76 @@ fun modelName(id: String?, name: String? = null): String {
     }.joinToString(" ")
 }
 
-@Serializable
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AgentLauncherSerializer::class)
 data class AgentLauncher(
     val name: String,
     @SerialName("base_url") val baseUrl: String? = null,
     val model: String? = null,
-    @SerialName("agent_type") val agentType: String = "claude",
+    @SerialName("agent") val agentType: String = "claude",
+    /** A runtime's own declaration that it can run the assistant; false or absent on other launchers. */
+    val assistant: Boolean = false,
     /** Its health on this computer (docs/server/launcher-health.md); null when never checked or from an older hub. */
     val health: LauncherHealth? = null,
+    /** A Persona-managed provider's own name (feature `launcher_auto_name`), shown over [name]; null for the others. */
+    @SerialName("display_name") val displayName: String? = null,
+    /** This computer can open Codex before its first message; absent on older nodes. */
+    @SerialName("prompt_optional") val promptOptional: Boolean = false,
+) {
+    /** What people read for it: its display name, else its startup name (the web's `providerTitle`). */
+    val title: String get() = displayName?.trim()?.takeIf(String::isNotEmpty) ?: name
+}
+
+/** Prefer the configured agent type, falling back to the hub's `agent` field, as on the web. */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+object AgentLauncherSerializer : JsonTransformingSerializer<AgentLauncher>(AgentLauncher.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        val fields = element as? JsonObject ?: return element
+        val agent = sequenceOf("agent_type", "agent").mapNotNull { fields[it] as? JsonPrimitive }
+            .firstOrNull { it != JsonNull && it.content.isNotEmpty() } ?: JsonPrimitive("claude")
+        return JsonObject((fields - "agent_type") + ("agent" to agent))
+    }
+}
+
+/**
+ * What the assistant's computer lists for Persona chats (`GET /api/v1/machines/{mid}/launchers?purpose=assistant`,
+ * docs/protocol/protocol.md): the launchers that can run them, the main chat's default (Model configuration › Main chat)
+ * and what can't run them there, with the hub's reason ([UnavailableLauncher], feature `assistant_model_pick`).
+ */
+@Serializable
+data class AssistantLaunchers(
+    val launchers: List<AgentLauncher> = emptyList(),
+    val default: LauncherDefault? = null,
+    val unavailable: List<UnavailableLauncher> = emptyList(),
 )
+
+/** The model a launcher names, short. Older nodes used the Chinese display placeholder for no model. */
+fun launcherModel(launcher: AgentLauncher): String? = launcher.model
+    ?.takeUnless { it == "默认" } // i18n-ignore: legacy wire value, never displayed
+    ?.substringAfterLast('/')
+    ?.takeIf(String::isNotBlank)
+
+/** A purpose's effective setup ([provider] is a launcher's name). */
+@Serializable
+data class LauncherDefault(val provider: String = "", val model: String? = null, val effort: String? = null)
+
+/**
+ * A launcher or provider that can't run Persona chats on that computer (#5033): [kind] `launcher` or `api`, [code] why
+ * (`not_main_chat`, `api_protocol`, `launcher_out_of_scope`, `launcher_own_service`) and [reason] in the request's language.
+ */
+@Serializable
+data class UnavailableLauncher(
+    val name: String,
+    @SerialName("display_name") val displayName: String? = null,
+    val kind: String = "",
+    val agent: String? = null,
+    val api: String? = null,
+    val code: String = "",
+    val reason: String = "",
+) {
+    val title: String get() = displayName?.trim()?.takeIf(String::isNotEmpty) ?: name
+}
 
 /**
  * A launcher's health on one computer as the hub records it (docs/server/launcher-health.md): [state] working, failing,

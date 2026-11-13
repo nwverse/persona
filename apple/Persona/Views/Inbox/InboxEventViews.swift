@@ -56,10 +56,15 @@ struct InboxEventBlocks: View {
     /// beside the detail's stack, not in it).
     var openItem: ((InboxItem) -> Void)?
     var openSource: ((InboxSourceRoute) -> Void)?
+    @State private var saying = false
+    @State private var words = ""
+
+    private var canSay: Bool { !item.isDone && item.currentSuggestion == nil }
+    private var failed: Bool { canSay && item.handling?.state == "failed" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.l) {
-            status
+            statusAndInstruction
             if let recap = item.recap, !recap.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     InboxBlockTitle(title: String(localized: "Recap"))
@@ -92,6 +97,37 @@ struct InboxEventBlocks: View {
         #endif
     }
 
+    /// The processing state, with the no-suggestion instruction in the same place as the web's status actions.
+    @ViewBuilder private var statusAndInstruction: some View {
+        if canSay {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                HStack(alignment: failed ? .top : .center, spacing: Theme.Space.s) {
+                    status
+                    Spacer(minLength: 0)
+                    if failed {
+                        InboxSuggestionButton(title: InboxEventText.tryAgain, symbol: Theme.Icon.retry, prominent: false,
+                                              spinning: model.busy == "instruct") { instruct(InboxEventText.retryInstruction) }
+                            .accessibilityIdentifier("inbox.instruction.retry")
+                    } else if !saying {
+                        InboxSuggestionButton(title: InboxEventText.saySomething, symbol: Theme.Icon.instructed, prominent: false, spinning: false) {
+                            saying = true
+                        }
+                        .accessibilityIdentifier("inbox.instruction.say")
+                    }
+                }
+                .disabled(model.busy != nil)
+                if saying && !failed { instructionEditor }
+                if let error = model.error {
+                    Label(error, systemImage: Theme.Icon.error)
+                        .font(Theme.Font.caption).foregroundStyle(Theme.danger)
+                        .accessibilityIdentifier("inbox.instruction.error")
+                }
+            }
+        } else {
+            status
+        }
+    }
+
     /// The processing conversation's state, when it has something to say: still at it, waiting, or failed (with why).
     @ViewBuilder private var status: some View {
         if let filed = InboxEventText.doneBy(item) {
@@ -108,6 +144,48 @@ struct InboxEventBlocks: View {
                 }
             default:
                 InboxEventMarkLine(mark: mark)
+            }
+        }
+    }
+
+    /// The same input pattern as the suggestion editor, but version zero addresses an item with no suggestion.
+    private var instructionEditor: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            TextField(String(localized: "Say a word, e.g. “Don't reply like that, ask about the time first”"), text: $words, axis: .vertical)
+                .lineLimit(1...3)
+                .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
+                .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control))
+                .disabled(model.busy != nil)
+                .onSubmit { instruct(words) }
+                .accessibilityIdentifier("inbox.instruction.text")
+            HStack(spacing: Theme.Space.s) {
+                Spacer(minLength: 0)
+                InboxSuggestionButton(title: String(localized: "Cancel"), prominent: false, spinning: false) {
+                    words = ""
+                    saying = false
+                }
+                .accessibilityIdentifier("inbox.instruction.cancel")
+                InboxSuggestionButton(title: InboxEventText.saySomething, prominent: true, spinning: model.busy == "instruct") {
+                    instruct(words)
+                }
+                .disabled(model.busy != nil || words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("inbox.instruction.send")
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func instruct(_ text: String) {
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return }
+        Task {
+            guard let outcome = await model.instruct(.withoutSuggestion, words) else { return }
+            switch outcome {
+            case .done(_), .stale(_):
+                self.words = ""
+                saying = false
+            case .failed:
+                break // the error stays beside the recoverable words
             }
         }
     }
@@ -207,6 +285,7 @@ struct InboxSuggestionCard: View {
 /// One of the card's buttons: one line always, in the current style's buttons.
 struct InboxSuggestionButton: View {
     var title: String
+    var symbol: String? = nil
     var prominent: Bool
     var spinning: Bool
     /// As wide as the column (stacked buttons).
@@ -217,6 +296,7 @@ struct InboxSuggestionButton: View {
         let button = Button(action: perform) {
             HStack(spacing: Theme.Space.xs) {
                 if spinning { InboxSpinner() }
+                if let symbol { ThemedIcon(symbol).font(Theme.Font.label) }
                 Text(title).lineLimit(1).fixedSize()
             }
             .frame(maxWidth: fill ? .infinity : nil)
@@ -328,7 +408,7 @@ struct InboxSuggestionEditor: View {
 
 // MARK: - chain
 
-/// The chain: collapsed to the newest entry with 'show all (N)'; each row time · icon · words, and a tap goes
+/// The chain: collapsed to the three newest entries with 'show all (N)'; each row time · source icon · words, and a tap goes
 /// where its link says (the source at that message, a conversation, another item) or opens its detail in place.
 struct InboxChainSection: View {
     @Environment(AppModel.self) private var model
@@ -340,16 +420,19 @@ struct InboxChainSection: View {
     var openSource: ((InboxSourceRoute) -> Void)?
     @State private var all = false
     @State private var opened: Set<String> = []
+    /// The whole chain of an item listed with part of it (`InboxItem.chainCut`, #4742), read when the section appears.
+    @State private var whole: [InboxItem.ChainEntry]?
 
     var body: some View {
-        let chain = item.chain ?? []
+        let chain = item.chainCut ? whole ?? item.chain ?? [] : item.chain ?? []
+        let count = max(chain.count, item.chainCount ?? 0)
         if !chain.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(spacing: Theme.Space.s) {
                     InboxBlockTitle(title: String(localized: "Timeline [Inbox Event Views 49991a]"))
                     Spacer(minLength: 0)
-                    if chain.count > 1 {
-                        Button(all ? String(localized: "Collapse") : String(localized: "Show all (\(chain.count))")) {
+                    if count > 3 {
+                        Button(all ? String(localized: "Collapse") : String(localized: "Show all (\(count))")) {
                             withAnimation(Theme.Motion.layout) { all.toggle() }
                         }
                         .font(Theme.Font.captionMedium)
@@ -358,12 +441,25 @@ struct InboxChainSection: View {
                         .accessibilityIdentifier("inbox.chain.all")
                     }
                 }
-                ForEach(all ? chain : Array(chain.suffix(1))) { e in
+                ForEach(InboxEventText.chainRows(chain, expanded: all)) { e in
                     entry(e)
                 }
             }
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("inbox.chain")
+            .task(id: CutChain(key: item.key, count: item.chainCount)) { await readWhole() }
         }
+    }
+
+    private struct CutChain: Hashable {
+        var key: String
+        var count: Int?
+    }
+
+    /// A cut chain's entries from the item itself; on failure the newest entry stays, as listed.
+    private func readWhole() async {
+        guard item.chainCut, let api = model.api?.manager(model.itemManager(item.manager)) else { return }
+        if let full = try? await api.inboxItem(item.id).chain, !Task.isCancelled { whole = full }
     }
 
     @ViewBuilder private func entry(_ e: InboxItem.ChainEntry) -> some View {
@@ -387,20 +483,25 @@ struct InboxChainSection: View {
             if open { expansion(e).transition(.opacity) }
         }
         .padding(.vertical, Theme.Space.xs)
+        .accessibilityValue(e.id)
     }
 
     private func line(_ e: InboxItem.ChainEntry, target: InboxChainTarget, open: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             Text(LarkTime.short(e.at)).font(Theme.Font.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize()
-            ThemedIcon(InboxEventText.symbol(e))
-                .font(Theme.Font.label)
-                .foregroundStyle(tint(e))
-                .scaledFrame(width: Theme.Size.iconXS)
+            chainIcon(e)
+            if e.kind == "reported" {
+                Chip(text: InboxEventText.assistantSays, look: .neutral, compact: true)
+                    .accessibilityIdentifier("inbox.chain.reported")
+            }
             Text(e.text.isEmpty ? e.kind : e.text)
                 .font(Theme.Font.secondary)
-                .foregroundStyle(.primary)
+                .foregroundStyle(e.kind == "reported" ? .secondary : .primary)
                 .lineLimit(open ? nil : 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if (e.kind == "agent" || e.kind == "agent_stopped"), let key = e.link?.sessionKey {
+                InboxChainAgentState(key: key)
+            }
             switch target {
             case .inline:
                 ThemedIcon(open ? Theme.Icon.collapse : Theme.Icon.expand).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
@@ -411,6 +512,23 @@ struct InboxChainSection: View {
             }
         }
         .contentShape(.rect)
+    }
+
+    @ViewBuilder private func chainIcon(_ e: InboxItem.ChainEntry) -> some View {
+        if let brand = sourceBrand(e) {
+            BrandMark(brand, side: Theme.Size.iconXS).foregroundStyle(tint(e))
+        } else {
+            ThemedIcon(InboxEventText.symbol(e))
+                .font(Theme.Font.label)
+                .foregroundStyle(tint(e))
+                .scaledFrame(width: Theme.Size.iconXS)
+        }
+    }
+
+    /// A `via` source id uses that source's own mark, not the item's by assumption; a generic source keeps its symbol.
+    private func sourceBrand(_ e: InboxItem.ChainEntry) -> String? {
+        guard InboxEventText.iconMeaning(e) == "source", let via = e.via else { return nil }
+        return via == "lark" ? Theme.Brand.lark : ConnectorText.brand(via)
     }
 
     /// The row as what it opens: a page pushed on the stack, a conversation, a link; or itself expanding.
@@ -481,6 +599,23 @@ struct InboxChainSection: View {
         case "confirmed", "sent", "concluded", "done": Theme.positive
         case "handling", "agent", "instructed": Theme.ai
         default: .secondary
+        }
+    }
+}
+
+/// One Agent step's live state, reading only its own session cell rather than the session list (performance P5).
+private struct InboxChainAgentState: View {
+    @Environment(AppModel.self) private var model
+    var key: SessionKey
+
+    var body: some View {
+        if let session = model.session(model.inHub(key)) {
+            Text(session.state.label)
+                .font(Theme.Font.caption)
+                .foregroundStyle(session.state.tone.text)
+                .lineLimit(1)
+                .fixedSize()
+                .accessibilityIdentifier("inbox.chain.agentState")
         }
     }
 }
@@ -560,6 +695,28 @@ struct InboxSourceRoute: Hashable {
 
 /// The source as the inbox detail drew it before events: 'view original', a chain entry's link.
 struct InboxSourcePage: View {
+    /// What the page draws, in the source's existing order. The native-chat branch skips the extension's intermediate page.
+    @MainActor enum Selection: Equatable {
+        case chat(LarkConversation)
+        case slot(Slot)
+
+        enum Slot: Equatable {
+            case document, connector, moment, mail, empty
+        }
+
+        static func of(item: InboxItem, position: String? = nil) -> Selection {
+            if item.doc != nil { return .slot(.document) }
+            if item.connector != nil { return .slot(.connector) }
+            if item.moment != nil { return .slot(.moment) }
+            if var conversation = item.larkConversation {
+                if let position { conversation.focus = position }
+                return .chat(conversation)
+            }
+            if item.mail != nil { return .slot(.mail) }
+            return .slot(.empty)
+        }
+    }
+
     var route: InboxSourceRoute
     var accounts: [MailAccount]
     @Environment(AppModel.self) private var model
@@ -572,33 +729,39 @@ struct InboxSourcePage: View {
     }
 
     private var item: InboxItem { route.item }
+    private var selection: Selection { .of(item: item, position: route.position) }
 
     var body: some View {
-        InboxItemSlotContent(item: item, slot: slot) { content }
-            .navigationTitle(item.title)
+        Group {
+            switch selection {
+            case .chat(let conversation):
+                LarkChatView(conversation: conversation, manager: model.linkManager(item.manager))
+            case .slot(let plain):
+                InboxItemSlotContent(item: item, slot: slot) { content(plain) }
+            }
+        }
+        .navigationTitle(item.title)
     }
 
-    @ViewBuilder private var content: some View {
-        if item.doc != nil {
+    @ViewBuilder private func content(_ body: Selection.Slot) -> some View {
+        switch body {
+        case .document:
             InboxDocDetailView(item: item)
-        } else if item.connector != nil {
+        case .connector:
             InboxConnectorDetailView(item: item)
-        } else if let m = item.moment {
-            LarkMomentsPostView(postID: m.postID, pushed: true, manager: model.linkManager(item.manager))
-        } else if let c = conversation {
-            LarkChatView(conversation: c, manager: model.linkManager(item.manager))
-        } else if let m = mail {
-            MailDetailView(summary: m, accounts: accounts)
-        } else {
+        case .moment:
+            if let moment = item.moment {
+                LarkMomentsPostView(postID: moment.postID, pushed: true, manager: model.linkManager(item.manager))
+            }
+        case .mail:
+            if let mail {
+                MailDetailView(summary: mail, accounts: accounts)
+            } else {
+                EmptyStateView(symbol: Theme.Icon.info, title: item.title, message: item.preview)
+            }
+        case .empty:
             EmptyStateView(symbol: Theme.Icon.info, title: item.title, message: item.preview)
         }
-    }
-
-    /// The Feishu chat, at the link's message when it names one.
-    private var conversation: LarkConversation? {
-        guard var c = item.larkConversation else { return nil }
-        if let p = route.position { c.focus = p }
-        return c
     }
 
     /// The mail the link names, else the thread's newest.

@@ -3,7 +3,9 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -415,14 +417,17 @@ func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (task
 // autoFinishTask: t's receipt went out (its agents all stopped). work is when one of them last started a turn. The
 // todo is marked done when the judge finds the work finished; otherwise it stays as it is.
 func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), taskDoneTimeout)
+	defer cancel()
 	if skip := autoDoneSkip(t, work, worked); skip != "" {
 		if skip == "reopened" {
 			s.logf("task %s: reopened by the user and no new turn since: not judged", t.ID)
 		}
+		s.turnJudged(ctx, t.ID, taskDoneCheck{}, nil, skip) // nothing to judge: the sweep does not ask again (task_turns.go)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), taskDoneTimeout)
-	defer cancel()
+	s.taskJudging(t.ID, 1) // the sweep leaves a turn alone while it is judged (resumeTurn)
+	defer s.taskJudging(t.ID, -1)
 	if !worked {
 		work = t.CreatedAt
 	}
@@ -444,7 +449,19 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 		s.logf("task %s: work changed while judged: left open", t.ID)
 		return
 	}
-	if err == nil {
+	s.applyTaskDone(ctx, t, work, worked, c, err)
+}
+
+// applyTaskDone writes judgment c (err: the judge could not say) of task t, whose agents last started a turn at work
+// (worked false: not known): the verdict on the todo, where its delivery is held, and then what follows a finished
+// stretch of work. A supervised task waits for its supervisor's review (never closed here); another is closed when
+// the judge found it done. autoFinishTask and Re-check with apply (doneCheckRoute) end here.
+func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, worked bool, c taskDoneCheck, err error) {
+	if ai.IsNotConfigured(err) {
+		// A missing provider is not a transient judge failure: keep the same localized explanation the settings row shows.
+		c = taskDoneCheck{Verdict: verdictWaiting, Reason: mc(s.lang(ctx), s.noAPIStatus(ctx))}
+	}
+	if err == nil || ai.IsNotConfigured(err) {
 		s.keepTaskCheck(ctx, t, work, c) // why it is (not) done, on the todo (task_check.go)
 	}
 	if err == nil && c.Delivery != nil && c.Verdict != verdictNotDone {
@@ -459,9 +476,11 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 		if !worked {
 			work = t.CreatedAt
 		}
+		s.turnJudged(ctx, t.ID, c, err, "")     // on the turn's ledger before its signal: judged once, told once (task_turns.go)
 		s.superviseJudged(ctx, t, work, c, err) // never closed here: its supervisor reviews it (supervise.go)
 		return
 	}
+	s.turnJudged(ctx, t.ID, c, err, "")
 	if err != nil {
 		if !ai.IsPaused(err) {
 			s.logf("task %s: done judge: %v (left open)", t.ID, err)
@@ -491,8 +510,11 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 	}
 }
 
-// doneCheckRoute: POST /api/v1/todos/{id}/done-check runs the judgment on a todo as it is and answers it; nothing is
-// written (for looking into why a task was or was not closed).
+// doneCheckRoute: POST /api/v1/todos/{id}/done-check runs the judgment on a todo as it is and answers it. Without
+// apply nothing is written (for looking into why a task was or was not closed). With {"apply": true} (Re-check, #4867)
+// it first moves the task's stage and delivery from its agents' last replies, as their turn's end would have
+// (advanceFromLastReplies: for a turn end the hub missed), then writes the judgment as a finished stretch of work's is
+// (applyTaskDone), when the hub would judge it at all (no skip) and its agents are still: applied says whether it did.
 func (s *Service) doneCheckRoute() {
 	s.handle("POST /api/v1/todos/{id}/done-check", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -513,11 +535,27 @@ func (s *Service) doneCheckRoute() {
 			apierr.Write(w, http.StatusNotFound, db.ErrTodoNotFound)
 			return
 		}
+		var in struct {
+			Apply bool `json:"apply"`
+		}
+		if r.ContentLength != 0 {
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+				apierr.Write(w, http.StatusBadRequest, err)
+				return
+			}
+		}
 		s.tasks.mu.Lock()
 		work, worked := s.tasks.working[id]
 		s.tasks.mu.Unlock()
 		ctx, cancel := context.WithTimeout(r.Context(), taskDoneTimeout)
 		defer cancel()
+		apply := in.Apply && autoDoneSkip(t, work, worked) == "" && s.taskRuntimeSettled(ctx, t)
+		if apply {
+			s.advanceFromLastReplies(ctx, t)
+			if cur, ok := s.todoNow(id); ok {
+				t = cur
+			}
+		}
 		c, err := s.judgeTaskDone(ctx, t)
 		if err != nil {
 			apierr.Write(w, http.StatusBadGateway, err)
@@ -527,6 +565,63 @@ func (s *Service) doneCheckRoute() {
 		if c.Skip != "" {
 			c.WouldClose = false
 		}
-		apierr.WriteJSON(w, c)
+		applied := false
+		if apply && c.Skip == "" {
+			since := work
+			if !worked {
+				since = t.CreatedAt
+			}
+			if s.taskCompletionCurrent(ctx, t, since) { // nothing started or changed while it was judged
+				s.applyTaskDone(context.WithoutCancel(ctx), t, since, worked, c, nil)
+				applied = true
+			}
+		}
+		if !in.Apply {
+			apierr.WriteJSON(w, c)
+			return
+		}
+		out := struct {
+			taskDoneCheck
+			Applied bool   `json:"applied"`
+			Stage   string `json:"stage,omitempty"`
+		}{taskDoneCheck: c, Applied: applied}
+		if cur, ok := s.todoNow(id); ok {
+			out.Stage = cur.Stage
+		}
+		apierr.WriteJSON(w, out)
 	})
+}
+
+// advanceFromLastReplies moves task t's stage and delivery from its agents' last replies, as the end of their turn
+// does (advanceTaskReply: a PR link, merged, deployed and verified words, any "deployed" checked against the running
+// hub), and asks for the deployed work to be verified as that does. For Re-check with apply: a turn whose end the hub
+// did not see (a restart in the middle of it) moved nothing, and the session list's last words are clipped.
+func (s *Service) advanceFromLastReplies(ctx context.Context, t Todo) {
+	for _, a := range t.Agents {
+		if a.ReleasedAt != nil || a.DismissedAt != nil {
+			continue
+		}
+		m, ok := s.device(ctx, a.MachineID)
+		if !ok {
+			continue
+		}
+		text := ""
+		if items, read := s.lastTurnItems(ctx, m.ID, a.SessionID); read {
+			_, text = turnExchange(items)
+		}
+		if text == "" {
+			if c, ok := s.session(ctx, m.ID, a.SessionID); ok && !strings.HasSuffix(c.LastText, "…") {
+				text = strings.TrimSpace(c.LastText)
+			}
+		}
+		if text == "" {
+			continue
+		}
+		if cur, ok := s.todoNow(t.ID); ok {
+			t = cur
+		}
+		if s.advanceTaskReply(ctx, t, m.ID, a.SessionID, text) {
+			go s.askAcceptance(t, m.ID, a.SessionID, text) // deployed: verified, by the supervising assistant or the owner
+		}
+	}
 }

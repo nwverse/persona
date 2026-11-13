@@ -2,10 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   agentRoot, agentRow, archivedUnderOwnId, codexThreadOf, backgroundOf, defaultProvider, interactionOf, launchersOf, linkedWorktree,
-  parentAgentId, paseoMode, providerRoots, responseOf, rowStatus, projectSpaces, sessionIdOf, slotNameOf, spaceIdOf, strayRecord,
-  timelineItems, toolCall, transcriptOf,
+  parentAgentId, paseoMode, promptKey, providerRoots, responseOf, rewindOf, rowStatus, projectSpaces, sessionIdOf, slotNameOf, spaceIdOf,
+  strayRecord, timelineItems, toolCall, transcriptOf, workspaceRow, paseoCheckouts,
 } from '../lib/map.js'
-import { agentSnapshot, entry } from './fake-paseo.js'
+import { agentSnapshot, entry, workspaceDescriptor } from './fake-paseo.js'
 
 const CLAUDE_SID = 'aaaaaaaa-0000-4000-8000-000000000001'
 
@@ -81,13 +81,15 @@ test('a row: its space, the agent the apps know, model, modes and transcript', (
   const a = agentSnapshot({
     provider: 'my-claude', cwd: '/w/proj', workspaceId: 'wks_9', title: '  修登录  ', model: 'claude-x[1m]', currentModeId: 'acceptEdits',
     effectiveThinkingOptionId: 'max', persistence: { sessionId: CLAUDE_SID, metadata: { provider: 'claude' } }, updatedAt: '2026-11-04T10:00:00.000Z',
+    createdAt: '2026-11-04T09:58:00.000Z',
   })
   const row = agentRow(a, { roots, project: { projectKey: 'prj', projectName: 'proj', workspaceName: '登录修复' } })
   assert.deepEqual(row, {
     session_id: CLAUDE_SID, title: '修登录', cwd: '/w/proj', status: 'idle', updated_at: '2026-11-04T10:00:00.000Z',
-    rev: Date.parse('2026-11-04T10:00:00.000Z'), space_id: 'prj', space_name: 'proj', slot_name: '登录修复',
-    agent: 'claude', launcher: 'my-claude',
+    rev: Date.parse('2026-11-04T10:00:00.000Z'), space_id: 'prj', space_name: 'proj', slot_name: '登录修复', workspace_id: 'wks_9',
+    agent: 'claude', launcher: 'my-claude', started_at: '2026-11-04T09:58:00.000Z',
     model: 'claude-x[1m]', permission_mode: 'acceptEdits', effort: 'max', transcript: CLAUDE_SID,
+    capabilities: { rewind: false, rewind_code: false },
   })
   const g = agentRow(agentSnapshot({ id: 'g1', provider: 'grok', cwd: '/w/x', currentModeId: 'yolo', status: 'error', lastError: 'boom' }),
     { roots, labels: { grok: 'Grok · Official' }, lastText: 'ignored' })
@@ -97,6 +99,20 @@ test('a row: its space, the agent the apps know, model, modes and transcript', (
   assert.equal(g.permission_mode, undefined, "a mode Persona does not have is not shown")
   assert.equal(g.last_text, '出错了：boom')
   assert.equal(agentRow(agentSnapshot({ provider: 'grok', archivedAt: '2026-01-01T00:00:00Z' }), { roots }), undefined)
+})
+
+test("a rewind's reach is the provider's, and a prompt compares as the user typed it", () => {
+  assert.deepEqual(rewindOf(agentSnapshot({ capabilities: { supportsRewindConversation: true, supportsRewindFiles: true, supportsRewindBoth: true } })),
+    { conversation: true, code: true }, 'Claude Code')
+  assert.deepEqual(rewindOf(agentSnapshot({ capabilities: { supportsRewindConversation: true } })), { conversation: true, code: false }, 'Codex, pi, omp')
+  assert.deepEqual(rewindOf(agentSnapshot({ capabilities: { supportsRewindBoth: true } })), { conversation: false, code: false }, 'OpenCode: both at once only')
+  assert.deepEqual(rewindOf(agentSnapshot({ capabilities: {} })), { conversation: false, code: false }, 'a Paseo that does not say')
+  assert.equal(promptKey('  fix  the\nbug '), 'fixthebug')
+  assert.equal(promptKey('<persona-context kind="selection" title="a.ts">const x = 1</persona-context>\n fix it'), 'fixit')
+  assert.equal(promptKey('<persona-context>\nnow: 10:00\n</persona-context>\nhi'), 'hi')
+  for (const typed of ['[Request interrupted by user]', '<command-name>/clear</command-name>', '<local-command-stdout></local-command-stdout>', '', undefined]) {
+    assert.equal(promptKey(typed), '', `not the user's own words: ${typed}`)
+  }
 })
 
 test("an archived agent keeps its row when its id is not its transcript's: a session Persona started, not one of Paseo's own (#4771)", () => {
@@ -113,12 +129,30 @@ test("an archived agent keeps its row when its id is not its transcript's: a ses
     "another agent created it: its creator's conversation says what it did")
   assert.equal(archivedUnderOwnId({ ...started, persistence: null }, roots), false, 'no transcript: nothing to read')
   assert.equal(archivedUnderOwnId(agentSnapshot({ id: 'c1', provider: 'my-codex', archivedAt: at, labels: { 'persona.session': 'paseo-c1' } }), roots),
-    false, 'not Claude Code: no transcript the node reads')
+    false, 'Codex without a known thread: no conversation to retain yet')
   // Its row: the session's own id, not running, its transcript the conversation.
   const row = agentRow(started, { roots, project: { projectKey: 'prj', projectName: 'proj' }, archived: true })
   assert.deepEqual([row.session_id, row.status, row.transcript, row.title, row.space_id, row.updated_at], ['paseo-a1', 'offline', CLAUDE_SID, 'T', 'prj', at])
   assert.equal(agentRow({ ...started, status: 'idle' }, { roots, archived: true }).status, 'offline', 'whatever its record says')
   assert.equal(agentRow(started, { roots }), undefined, 'without archived: no row, as before')
+})
+
+test('an archived Codex conversation keeps a Persona-owned id, without changing Paseo-originated agents (#5129)', () => {
+  const roots = providerRoots({ ...CONFIG, 'codex-alias': { extends: 'my-codex' } })
+  const thread = '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0003'
+  const codex = agentSnapshot({ id: 'cx1', provider: 'codex-alias', archivedAt: '2026-11-04T10:00:00.000Z',
+    labels: { 'persona.session': 'paseo-cx1' },
+    persistence: { sessionId: thread, metadata: { provider: 'codex', threadId: thread } } })
+  assert.equal(archivedUnderOwnId(codex, roots), true)
+  const row = agentRow(codex, { roots, archived: true })
+  assert.deepEqual([row.session_id, row.status, row.codex_thread, row.transcript], ['paseo-cx1', 'offline', thread, undefined])
+  assert.equal(archivedUnderOwnId({ ...codex, labels: {} }, roots), false, 'Paseo-originated agents keep their current archive behavior')
+  assert.equal(archivedUnderOwnId({ ...codex, labels: { 'persona.session': '../invalid' } }, roots), false, 'a rejected label is not Persona ownership')
+  assert.equal(archivedUnderOwnId({ ...codex, labels: { 'persona.session': thread } }, roots), false, 'no different id to preserve')
+  assert.equal(archivedUnderOwnId({ ...codex, archivedAt: null }, roots), false)
+  assert.equal(archivedUnderOwnId({ ...codex, labels: { ...codex.labels, 'paseo.parent-agent-id': 'boss' } }, roots), false)
+  assert.equal(archivedUnderOwnId({ ...codex, persistence: null }, roots), false, 'no known Codex thread yet')
+  assert.equal(archivedUnderOwnId({ ...codex, persistence: null, runtimeInfo: { sessionId: thread } }, roots), true, 'a known runtime thread also identifies the conversation')
 })
 
 test("a delegated agent is its creator's subtask: its parent, no waiting to be looked at; the unfinished ones are the creator's background work", () => {
@@ -141,6 +175,8 @@ test("a delegated agent is its creator's subtask: its parent, no waiting to be l
 
   const row = agentRow(child({ status: 'running' }), { roots, parent: CLAUDE_SID, quiet: true })
   assert.deepEqual([row.is_subagent, row.parent_session_id, row.status], [true, CLAUDE_SID, 'working'])
+  assert.equal(row.started_at, '2026-11-04T09:00:00.000Z', 'when it was created: its card counts its running time from it')
+  assert.equal(agentRow(child({ createdAt: undefined }), { roots }).started_at, undefined, 'never a time it was not created at')
   assert.equal(agentRow(child({ status: 'idle', requiresAttention: true }), { roots, parent: CLAUDE_SID, quiet: true }).status, 'idle')
   const own = agentRow(child({ status: 'running' }), { roots })
   assert.deepEqual([own.is_subagent, own.parent_session_id], [undefined, undefined], 'its creator is not listed beside it: a row of its own')
@@ -320,4 +356,28 @@ test("the phone's answers as Paseo's responses", () => {
   assert.deepEqual(responseOf(tool, { allow: true }), { response: { behavior: 'allow' } })
   assert.deepEqual(responseOf(tool, { allow: false, message: '不要' }), { response: { behavior: 'deny', message: '不要' } })
   assert.equal(responseOf(tool, { dismiss: true }), undefined, "handed back: Paseo's app answers it")
+})
+
+test("Paseo's workspaces as the node's rows: kind, branch, the space its agents name, the repository, a worktree Paseo made", () => {
+  const main = workspaceDescriptor({ id: 'wks_00000000000000c1', workspaceDirectory: '/w/app', projectId: 'prj_app', projectDisplayName: 'app' })
+  assert.deepEqual(workspaceRow(main), { workspace_id: main.id, title: 'main', cwd: '/w/app', kind: 'checkout', branch: 'main', space_id: 'prj_app', space_name: 'app', repo_root: '/w/app' },
+    "its placement's project is the space, as its agents' rows have it")
+  const tree = workspaceDescriptor({ id: 'wks_00000000000000c2', workspaceDirectory: '/w/trees/fix', workspaceKind: 'worktree', name: 'Fix', worktreeSlug: 'fix',
+    gitRuntime: { currentBranch: 'fix/login' }, project: { projectKey: 'prj_stray', projectName: 'fix', checkout: { cwd: '/w/trees/fix', isGit: true, worktreeRoot: '/w/trees/fix', mainRepoRoot: '/w/app', isPaseoOwnedWorktree: true } } })
+  assert.deepEqual(workspaceRow(tree, { spaceId: 'prj_app', spaceName: 'app', canon: (p) => `/real${p}` }),
+    { workspace_id: tree.id, title: 'Fix', cwd: '/w/trees/fix', kind: 'worktree', branch: 'fix/login', space_id: 'prj_app', space_name: 'app', repo_root: '/real/w/app', owned: true },
+    "a stray record's worktree in its repository's space; the main checkout physical")
+  const answer = { ...tree, project: undefined, projectId: 'prj_app', projectDisplayName: 'app', projectRootPath: '/w/app' }
+  assert.deepEqual([workspaceRow(answer).space_id, workspaceRow(answer).repo_root, workspaceRow(answer).owned], ['prj_app', '/w/app', true],
+    "Paseo's answer to workspace.create has no placement: its project and root")
+  const folder = workspaceDescriptor({ id: 'wks_00000000000000c3', workspaceDirectory: '/w/notes', workspaceKind: 'directory', name: 'notes' })
+  assert.deepEqual(workspaceRow(folder), { workspace_id: folder.id, title: 'notes', cwd: '/w/notes', kind: 'folder', space_id: 'prj_1', space_name: 'proj' })
+  assert.equal(workspaceRow({ ...main, archivingAt: '2026-11-12T00:00:00Z' }), undefined, 'being archived')
+  assert.equal(workspaceRow({ ...main, id: '../x' }), undefined)
+  // Paseo's utils/worktree.js: sha256 of the main checkout, its first 8 bytes in base 36, 8 characters.
+  assert.match(paseoCheckouts('/home/u/.paseo/worktrees', '/w/app'), /^\/home\/u\/\.paseo\/worktrees\/[0-9a-z]{8}$/)
+  assert.equal(paseoCheckouts('/b', '/w/app'), paseoCheckouts('/b', '/w/app'))
+  assert.notEqual(paseoCheckouts('/b', '/w/app'), paseoCheckouts('/b', '/w/app2'))
+  const row = agentRow(agentSnapshot({ id: 'a1', provider: 'grok', workspaceId: 'wks_00000000000000c2', title: 'x' }), { roots: {} })
+  assert.equal(row.workspace_id, 'wks_00000000000000c2', "an agent's row names its workspace")
 })

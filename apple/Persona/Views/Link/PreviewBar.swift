@@ -103,7 +103,7 @@ final class ElementPicker {
     /// appears (`PreviewPage`), so it has been read by the time Pick is tapped.
     static let pickFunction = Task.detached(priority: .utility) { () -> String in
         let file = Bundle.main.url(forResource: "preview_pick", withExtension: "js")
-        return file.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "function () { return null; }" // perf-ok: in its own Task.detached
+        return file.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "function () { return null; }"
     }
 
     /// A tap (a touch that did not scroll) picks the element under it, a pointer's click too; the page's own handlers
@@ -299,31 +299,41 @@ struct PreviewPage: View {
 
     private var bar: some View {
         HStack(spacing: Theme.Space.xs) {
-            barButton(Theme.Icon.back, String(localized: "Back"), id: "preview-back", enabled: nav.canGoBack) { nav.view?.goBack() }
-            barButton(Theme.Icon.forward, String(localized: "Forward"), id: "preview-forward", enabled: nav.canGoForward) { nav.view?.goForward() }
+            moveButtons
             address
-            Menu {
-                Section("Adds a picture to your message") {
-                    Button { shoot(whole: false) } label: { Label("Visible Area", systemImage: Theme.Icon.pageScreenshot) }
-                    Button { shoot(whole: true) } label: { Label("Whole Page", systemImage: Theme.Icon.document) }
-                }
-            } label: {
-                Group {
-                    if shooting { ProgressView() } else { ThemedIcon(Theme.Icon.pageScreenshot) }
-                }
-                .tapTargetFrame()
-            }
-            .disabled(shooting || !nav.attached)
-            .accessibilityLabel("Screenshot")
-            .accessibilityIdentifier("preview-shot")
-            barButton(Theme.Icon.pickElement, String(localized: "Pick an element to comment on"), id: "preview-pick", enabled: nav.attached) {
-                startPicking()
-            }
+            pageButtons
         }
         .font(Theme.Font.title)
         .padding(.horizontal, Theme.Space.s)
         .padding(.vertical, Theme.Space.xs)
         .background(Theme.pageBackground)
+    }
+
+    /// Back and Forward.
+    @ViewBuilder private var moveButtons: some View {
+        barButton(Theme.Icon.back, String(localized: "Back"), id: "preview-back", enabled: nav.canGoBack) { nav.view?.goBack() }
+        barButton(Theme.Icon.forward, String(localized: "Forward"), id: "preview-forward", enabled: nav.canGoForward) { nav.view?.goForward() }
+    }
+
+    /// Screenshot and Pick.
+    @ViewBuilder private var pageButtons: some View {
+        Menu {
+            Section("Adds a picture to your message") {
+                Button { shoot(whole: false) } label: { Label("Visible Area", systemImage: Theme.Icon.pageScreenshot) }
+                Button { shoot(whole: true) } label: { Label("Whole Page", systemImage: Theme.Icon.document) }
+            }
+        } label: {
+            Group {
+                if shooting { ProgressView() } else { ThemedIcon(Theme.Icon.pageScreenshot) }
+            }
+            .tapTargetFrame()
+        }
+        .disabled(shooting || !nav.attached)
+        .accessibilityLabel("Screenshot")
+        .accessibilityIdentifier("preview-shot")
+        barButton(Theme.Icon.pickElement, String(localized: "Pick an element to comment on"), id: "preview-pick", enabled: nav.attached) {
+            startPicking()
+        }
     }
 
     private func barButton(_ icon: String, _ label: String, id: String, enabled: Bool, run: @escaping () -> Void) -> some View {
@@ -387,8 +397,9 @@ struct PreviewPage: View {
 
     // MARK: Picking
 
-    private var banner: some View {
-        HStack(spacing: Theme.Space.m) {
+    /// What picking does, with Cancel.
+    @ViewBuilder private var banner: some View {
+        let row = HStack(spacing: Theme.Space.m) {
             ThemedIcon(Theme.Icon.pickElement).foregroundStyle(Theme.accent).accessibilityHidden(true)
             Text("Tap an element to comment on it").font(Theme.Font.secondary).lineLimit(2)
             Spacer(minLength: Theme.Space.s)
@@ -398,8 +409,8 @@ struct PreviewPage: View {
         }
         .padding(.horizontal, Theme.Space.l)
         .padding(.vertical, Theme.Space.m)
-        .surface(in: .capsule)
-        .padding(.horizontal, Theme.Space.m)
+        row.surface(in: .capsule)
+            .padding(.horizontal, Theme.Space.m)
         .padding(.top, Theme.Space.s)
         .accessibilityIdentifier("preview-pick-banner")
     }
@@ -428,14 +439,22 @@ struct PreviewPage: View {
 
     /// The element picked: what it is, where its code is, and the line to write about it.
     private func notePanel(_ el: PickedElement) -> some View {
+        noteForm(el)
+        .background(Theme.pageBackground)
+        .transition(reduceMotion ? AnyTransition.opacity : AnyTransition.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private func noteForm(_ el: PickedElement) -> some View {
         let path = PreviewLogic.address(URL(string: el.url), localPort: URL(string: el.url)?.port)
         let source = el.source.map { PreviewLogic.relativeSource($0.file, cwd: model.session(key)?.cwd ?? "") + (($0.line ?? 0) > 0 ? ":\($0.line!)" : "") }
         let origin = [el.component.flatMap { $0.isEmpty ? nil : $0 }, source.map { el.component?.isEmpty == false ? "(\($0))" : $0 }]
             .compactMap { $0 }.joined(separator: " ")
+        let icon = ThemedIcon(Theme.Icon.pickElement).foregroundStyle(Theme.accent).accessibilityHidden(true)
+        let what = Text(el.label).font(Theme.Font.code).lineLimit(1)
         return VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(spacing: Theme.Space.s) {
-                ThemedIcon(Theme.Icon.pickElement).foregroundStyle(Theme.accent).accessibilityHidden(true)
-                Text(el.label).font(Theme.Font.code).lineLimit(1)
+                icon
+                what
                 Text(verbatim: "· \(path)").font(Theme.Font.code).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             .accessibilityElement(children: .combine)
@@ -463,8 +482,6 @@ struct PreviewPage: View {
         }
         .padding(.horizontal, Theme.Space.l)
         .padding(.vertical, Theme.Space.m)
-        .background(Theme.pageBackground)
-        .transition(reduceMotion ? AnyTransition.opacity : AnyTransition.move(edge: .bottom).combined(with: .opacity))
     }
 
     private func add(_ el: PickedElement) {

@@ -11,19 +11,23 @@ import SwiftUI
 /// The Appearance section of Settings: one row per scene with what it is set to now.
 struct AppearanceSection: View {
     @Environment(AppModel.self) private var model
+    var settingsHome = true
     #if os(iOS)
     private let layoutDisplay = AgentListDisplayChoice()
+    @StoredValue(NavigationLayout.key) private var navigation: NavigationLayout = .separate
     #endif
     @StoredValue(ComposerGlowPrefs.enabledKey) private var composerGlow = false
 
     var body: some View {
         Section {
             Group {
-                NavigationLink(value: SettingsPage.persona) {
-                    SettingsRow(title: String(localized: "Avatar"), symbol: Theme.Icon.avatar, tint: Theme.persona, value: model.persona.cardTitle, look: .oneLine)
+                if settingsHome {
+                    NavigationLink(value: SettingsPage.persona) {
+                        SettingsRow(title: String(localized: "Avatar"), symbol: Theme.Icon.avatar, tint: Theme.persona, value: model.persona.cardTitle, look: .oneLine)
+                    }
+                    .settingsListRow(SettingsPage.persona)
+                    .accessibilityIdentifier("settings-persona")
                 }
-                .settingsListRow(SettingsPage.persona)
-                .accessibilityIdentifier("settings-persona")
                 NavigationLink(value: SettingsPage.themeColor) {
                     SettingsRow(title: String(localized: "Theme Color"), symbol: Theme.Icon.themeColor, tint: Theme.accent, value: model.themeColor.title, look: .oneLine)
                 }
@@ -34,15 +38,26 @@ struct AppearanceSection: View {
                 }
                 .settingsListRow(SettingsPage.style)
                 .accessibilityIdentifier("settings-style")
-                NavigationLink(value: SettingsPage.language) {
-                    SettingsRow(title: String(localized: "Language"), symbol: Theme.Icon.language, tint: Theme.Hue.green,
-                                value: AppLanguage.settingsSummary, look: .oneLine)
+                if settingsHome {
+                    NavigationLink(value: SettingsPage.language) {
+                        SettingsRow(title: String(localized: "Language"), symbol: Theme.Icon.language, tint: Theme.Hue.green,
+                                    value: AppLanguage.settingsSummary, look: .oneLine)
+                    }
+                    .accessibilityIdentifier("settings-language")
                 }
-                .accessibilityIdentifier("settings-language")
                 #if os(iOS)
+                // Separate or Sidebar (#6332): where the sidebar layout is built (`NavigationLayout.offered`).
+                if NavigationLayout.offered {
+                    NavigationLink(value: SettingsPage.navigation) {
+                        SettingsRow(title: String(localized: "Navigation"), symbol: Theme.Icon.sidebar, tint: Theme.Hue.teal,
+                                    value: navigation.title, look: .oneLine)
+                    }
+                    .settingsListRow(SettingsPage.navigation)
+                    .accessibilityIdentifier("settings-navigation")
+                }
                 // How the Agents list draws its agents on iPhone and iPad (#2530); the Mac and Vision Pro keep their look.
                 NavigationLink(value: SettingsPage.layout) {
-                    SettingsRow(title: String(localized: "Layout"), symbol: Theme.Icon.listView, tint: Theme.Hue.orange,
+                    SettingsRow(title: String(localized: "Agents List Layout"), symbol: Theme.Icon.listView, tint: Theme.Hue.orange,
                                 value: layoutDisplay.display.title, look: .oneLine)
                 }
                 .settingsListRow(SettingsPage.layout)
@@ -164,7 +179,10 @@ struct StyleSettingsPage: View {
                 }
                 .accessibilityIdentifier("text-size")
             } footer: {
-                Text("One step smaller or larger than the system's Text Size.")
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    Text("One step smaller or larger than the system's Text Size.")
+                    Text("Buttons and bars stop growing at the system's Extra Extra Extra Large size; messages and other reading text keep growing.")
+                }
             }
         }
         .themedGroupedPage()
