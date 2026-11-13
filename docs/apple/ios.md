@@ -85,6 +85,8 @@ Expanded Idle spaces in Agents reuse `AgentListOrder.ordered` across normal card
 | To-dos | List/details (sidebar To-dos with incomplete-count badge; new shell sidebar): priority Waiting for you > To review > In progress > Follow-up > Not started, completed at bottom; create title + description, tap circle or swipe right complete, swipe right reopen, swipe left delete. Details edit title/description, show current and past Agent sessions, remove failed starts; bottom Hand to Agent starts new or picks existing session with structured to-do context card |
 | Settings | Assistant (no model displayed/configured here; Model configuration › Main chat, #1291; Proactive work and memory pages, `AssistantProactiveViews.swift`: Scheduled tasks row-end toggles, existing edits save on leaving; new + with Meeting preparation / Weekly report / Agent check / End-of-day review templates uses Cancel / Add sheet so trying a template does not create it; Run now / View last result switches to Chat and opens that chat; one-time follow-ups, interval and scheduled tasks share page/editor; run settings model, permission mode, effort, Allow everything confirmation. Memory parses frontmatter, title prefers Chinese MEMORY.md index title, type badges, Markdown details, Edit whole file, swipe delete, read-only index row; About me edits notes, saves on leaving). Claude Code settings (allowlisted per-machine `~/.claude/settings.json`: exit recap, effort, always think, reply language etc., apply to all; then the computer's Live Replies switch, see "An agent's live reply", and Blocked Config Folders); Machines (online, session count, version, launchers, reconnect); Connectors (2026-11-01: This iPhone = old phone-data toggles/permissions; Email = old Inbox ⋯ account management; Lark = hub gateway status and purpose, `ConnectorsViews.swift`, `GET /api/v1/lark/status`; with hub `connectors`, add rows below Lark from `GET /api/v1/connectors` (2026-11-02, GitHub first: status, account, gh login from <machine>, last sync, generic `HubConnectorView`, DEBUG `-openConnectorGitHub YES`; in-App sign-in connectors (Telegram, `signsInHere`) add enable toggle, stepwise login, sign out, delete stored data, `ConnectorSignInSections`, DEBUG `-openConnectorTelegram YES`)); Notifications; Pair again |
 
+Inbox event detail (`InboxEventViews.swift`): the header's small line uses `InboxNow.meta` for **where · who: newest line** when `where` exists, and keeps the old source · title fallback otherwise. `InboxNow.text(for:)` supplies a state sentence for every known `now`, including done states and states with a suggestion; an absent or unknown key keeps the old status line. A state key alone opens the event page. `InboxNow.symbol(for:)` is the single row / detail mapping: waiting uses the still clock, only queued / looking / agent_working spin, action states use Needs you (failed is red), and done / FYI / folded draw no mark. The processing-state row offers **Say something** when an open item has no suggestion card, or **Try again** after processing fails. Both post `version: 0`, `action: "instruct"` through `InboxSuggestionModel`; Say something keeps the user's words on failure, Try again sends the localized "Please try again." A stale answer and a request error use the suggestion card's existing notice and error. The timeline folds to its newest three entries (all of them when there are at most three), oldest of the visible entries first, and **Show all (N)** restores the complete chain. Each icon follows `via`: a source id uses that source's brand or generic source mark; `assistant`, `agent` and `user` use the persona, Agents and person marks; without `via`, the existing kind icon stays. A `reported` entry always uses `Theme.Icon.reported`, a neutral compact **Assistant says** `Chip` and secondary text. Its words come from `detail` when present, otherwise `text`, so the server’s older-app prefix is not spoken twice. That detail is not repeated in the expansion; a reported row with only detail has no inline expander, while messages still expand on their own. Agent and Agent-stopped entries with a session link show that session's current `AgentState.label` in its `tone`, and nothing when the session is not listed. `InboxTimelineFixtureTests` replays every case in `spec/fixtures/inbox/timeline.json`; `InboxDetailTimelineUITests` covers folded / expanded chains and both instruction entries with `MOCK_INBOX_EVENTS=1`. `InboxDetailNowTests` checks the header fallback, now-only event selection and every status-symbol class; `InboxDetailNowUITests` checks waiting, suggestion and done details with `MOCK_INBOX_SHOWCASE=1`.
+
 Chat page:
 
 - Messages: user bubbles (coral), assistant Markdown (no bubble, reading first), thinking (one folded row), grouped tool steps (>2 fold into "N steps · Run 5 · Read 3",
@@ -254,7 +256,7 @@ Chat page:
   Space-top machine button ("Work computer ›") opens `MachineSpacesView`: online/state counts, active projects with newest sentence of most urgent Agent,
   idle projects opening spaces; Agents outside herdr spaces listed directly; top-right ⓘ machine details.
   DEBUG `-tab dev -openMachinePage <machine id>`.
-- Terminals (#4754, `TerminalsView.swift`, `docs/integrations/terminal.md` ("Not implemented")): Agents menu › Terminals, and Terminals on a computer's page. Every pane of each computer: the Agents' under their titles, plain ones as Terminal with the program in front and the folder, a stopped Agent's left behind as "Finished: <title>". A tap opens the terminal cover (a plain pane by its `pane:` address); the computer's header menu has New Terminal per workspace and Close Finished Terminals; a plain pane closes after a confirmation. A stopped Agent's chat shows one line where its composer was, with Terminal and Resume Session (#5521: it opens the terminal and resumes there), and its terminal page offers Resume Session. A computer never sits on a bare spinner (#6153): one whose hub isn't connected says so, and one with no answer after 15 s says "This computer hasn't answered yet." with the request's short id (`X-Client-Request-Id`; the hub reuses it as the request id but logs it only for a failed (400 or higher) or slow (over 2 s) request, so a quick 200 leaves no line: `docs/server/server.md` ("Operations")) and Retry; pull-to-refresh sends a new request for every computer and clears the old failure, keeping the list until the answer. The computer page pushes Terminals by value (`TerminalsRoute`), as the Agents menu does, so every stack that shows a computer's page declares that route. DEBUG `-tab dev -openTerminalsPage all|<machine id>`; `-showTerminalsUnlinked YES` shows every computer as not connected; the mock's `MOCK_PANES_DELAY=<seconds>` answers the panes late.
+- Terminals (#4754, `TerminalsView.swift`, `docs/integrations/terminal.md` ("Not implemented")): Agents menu › Terminals, and Terminals on a computer's page. Every pane of each computer: the Agents' under their titles, plain ones as Terminal with the program in front and the folder, a stopped Agent's left behind as "Finished: <title>". A tap opens the terminal cover (a plain pane by its `pane:` address); the computer's header menu has New Terminal per workspace and Close Finished Terminals; a plain pane closes after a confirmation. A plain terminal on herdr or Tern renames its tab (#6996, `TabRename`, the web's `tabs/rename`): its row's long press and its terminal page's ⋯ (in the bar's settings button's place, with Terminal Settings) open Rename Terminal, one field filled with the tab's name that takes up to 80 characters; an empty or unchanged name saves nothing (Save is never disabled: the alert would draw it enabled anyway, `docs/lessons/ios.md`). The new name shows in the list at once and goes back if the computer refuses it, with one plain sentence (offline, an engine that can't rename, a terminal already closed). An Agent's row offers the Agents list's Rename Agent… instead; a stopped Agent's leftover offers neither. The page reads the lists again every 8 seconds while it is in front (as the web's Terminal page does), keeping what is shown on a failure and redrawing nothing when nothing changed, so a rename on another device or on the computer shows up. A stopped Agent's chat shows one line where its composer was, with Terminal and Resume Session (#5521: it opens the terminal and resumes there), and its terminal page offers Resume Session. A computer never sits on a bare spinner (#6153): one whose hub isn't connected says so, and one with no answer after 15 s says "This computer hasn't answered yet." with the request's short id (`X-Client-Request-Id`; the hub reuses it as the request id but logs it only for a failed (400 or higher) or slow (over 2 s) request, so a quick 200 leaves no line: `docs/server/server.md` ("Operations")) and Retry; pull-to-refresh sends a new request for every computer and clears the old failure, keeping the list until the answer. The computer page pushes Terminals by value (`TerminalsRoute`), as the Agents menu does, so every stack that shows a computer's page declares that route. DEBUG `-tab dev -openTerminalsPage all|<machine id>`; `-showTerminalsUnlinked YES` shows every computer as not connected; the mock's `MOCK_PANES_DELAY=<seconds>` answers the panes late, and it refuses a rename to `offline`, `unsupported` or `closed` as the hub relays each. UI test `TerminalsRenameUITests`.
 - Resume in Terminal (#5521, `Session.terminalResume(on:)` in `Shared/Models.swift`, `docs/integrations/engines.md` "Agents run in a terminal"): the chat's ⋯ has it under Terminal for a stopped Agent, a Codex thread nothing has open included (`Session.isStopped`); it brings the terminal up over the page (`TerminalCover` with `resumeOnOpen`), where the resume shows its progress and the Agent comes up. Where the computer enables no terminal engine (`engine_hosts: []`) it is disabled with "No terminal engine on <computer>" under it, and the terminal page says the same instead of offering Resume. Not there while the session runs, here or in a terminal of its own, while it starts, for the assistant's chats, the desktop apps' sessions or rows of older nodes. Not on the frozen Mac app. UI test `ResumeInTerminalTests` (mock `MOCK_RESUME_TERMINAL=1 MOCK_TERMINAL_STREAM=1`).
 - Machines (`docs/server/machines.md` ("App")): all machines in one page, each card online/system/Agent counts (Needs you / Working / Idle), current CPU/memory/network,
   1-hour mini charts, alerts, Redeploy on version mismatch, urgent first. Details show Agents above (open chats), then charts
@@ -400,8 +402,22 @@ Chat page:
   Currently text parsing; Claude Code also provides `apiErrorStatus`, `error`, `requestId` fields, preferred once hub reads them. DEBUG `-showErrorDetails YES` opens by default.
   Screenshots mock `MOCK_API_ERRORS=1`, assistant main and review chats.
 - Refusal fallback (#4489, the iOS half of #2528; web #4487, Android #4488): a notice with `model_refusal` is a line of its own after the exchange (`RefusalNotice`; `ChatStore` puts it with the turn's trailing rows, never in the work row): the upstream refused, which model Claude Code switched from and to (or that no switch is recorded), "later turns may keep using it" for scope `session`, the category, the explanation and the refusal's own words. Models go by their short names (`SessionModes.modelName`), where the web shows ids. While the session has `model_fallback`, a card above the composer (`ModelFallbackCard`, a `ReadinessCard`) names both models and the error since: a terminal session gets only the "type /model in Claude Code" step; a Persona conversation gets **Switch Back** (zh-Hans 回到配置的模型, ja 元に戻す; `POST …/restore-model`, refusals said in words by `ModelFallbackText.restoreError`), and the main conversation also **New Main Chat** (the card's own key, ja 新しいチャット: at the largest text size, stacked, the longer Japanese and English words still ended in "…", `docs/design/DESIGN_SYSTEM.md` 1.2 rule 3 (a), #5202). While `model_restore` is pending the card says only that the next start uses the configured model, and names it. The API error card offers no Retry while `turn_error_code` is `model_fallback_unavailable`. Items keep the refusal's words as their text, never an older hub's whole record line (`Item.publicRefusal`); `ChatCache` went to `chats-v17` so notices cached without `model_refusal` are dropped. In a Persona conversation (`plainRefusals`, set by `ChatView` from `session.assistant`; #5202) the line is one sentence with the model's short name and the record under a closed Details, and the card's title says which model answers now, with the configured model while pending; the rest goes under `ReadinessCard`'s Details. Tests: `ModelFallbackTests`, `ModelFallbackUITests` (mock `MOCK_MODEL_FALLBACK=1 MOCK_MAIN_ACTIONS=1`).
-- Claude suggestions (`SuggestionPill`): session `suggestion`, not working, empty input shows "✦ Suggestion … Use" above (AI purple, not accent), also placeholder;
-  tap fills editable input, long-press Send now. Typing hides it. Headless assistant has no TUI/suggestions; mock `MOCK_SUGGESTION=1`, review session.
+- Suggested next message (`SuggestionPill`): with session `suggestion`, an idle chat and an empty input, the shared Agent / Persona
+  composer shows "✦ Suggestion … Use" above it (AI purple, not accent). This includes the main Persona conversation and other
+  assistant chats; there is no assistant-specific rendering path. Tap or Fill In puts the text in the editable composer without
+  sending. A non-risky suggestion also keeps long-press Send Now and its VoiceOver custom action / hint. With
+  `suggestion_risky: true`, it is fill-in only: no Send Now menu item or direct-send accessibility action, and the hint does not
+  advertise one; the ordinary composer Send still works after review. Missing, null or malformed risk values decode as false.
+  Typing hides the pill. Mock `MOCK_SUGGESTION=1` covers the review Agent; `MOCK_NEXT_SUGGESTIONS=1` covers a safe main-Persona
+  pill, a risky assistant pill, safe Agents and the native switch. Tests: `SuggestionRiskTests`, `SuggestionTests`.
+- Settings › Assistant › **Suggest the Next Message** (#4696) reads and sparsely writes `next_suggestions` through
+  `GET/PUT /api/v1/assistant`. It is off by default on a supporting hub; an older hub that omits the field keeps it nil and hides
+  the row. `NextSuggestionsModel` (an `@Observable` model with `AssistantDeps`, tested against `FakeHub`) loads the current
+  assistant's value, shows a change optimistically, accepts the response and rolls back on failure, fencing late work across an
+  assistant or hub switch. The English title uses Apple Title Case while the web keeps **Suggest the next message** in sentence
+  case; the zh-Hans and ja titles and the footer in all three languages match the web. Tests: `NextSuggestionsModelTests`,
+  `AssistantSettingsModelTests.testNextSuggestionsSwitch`; a separate untouched-mock run proves the default is off, and the
+  legacy-mock case waits for the app's successful-read probe before proving the row is absent.
 - Sending clears input immediately and displays Sending bubble (`ChatStore.pending`), request background; same text in transcript
   or queue replaces it, failure red with retry/delete. No waiting on network anywhere.
 - Sent images: hub appends paths in `<attached_images>`, App parses square thumbnails above text (file API from session computer,
@@ -496,6 +512,13 @@ Chat page:
     with `-showGitReload YES`.
     Branch-card Pull N fetches latest upstream in one tap, retained as Pull when synced for active remote checks; disable repeat taps while running, refresh status/files/history and show result.
     Clean-worktree fast-forward only, no auto stash/merge/rebase; existing stashes unchanged; explain no upstream/detached HEAD/uncommitted changes/divergence. Other Git views stay read-only.
+  - **Stage, commit, push** (#7013, the web's Git panel, `docs/protocol/protocol.md` `git/stage` · `git/commit` · `git/push`; `GitWriteModel.swift`, `GitWriteViews.swift`): only when the hub has `git_write`, on the iPhone and iPad (the Mac app is frozen); without it the tab is as before.
+    Each changed file has a tick box in front (`TickBox`: ticked all staged, a dash partly, empty none; `GitStageMark`, the web's `stageState`): a tap stages or unstages it at once, a swipe from the leading edge and the long-press menu do the same, a tap on the row still opens the diff.
+    While there are changes a bar floats over the bottom: every change's tick box (Stage All / Unstage All), how many are staged, and **Commit…**, which opens a sheet with the message and the staged files (off with nothing staged or a detached HEAD).
+    The message is the tab's, so it stays when the sheet closes or the commit is refused; the sheet can't be swiped away while hooks run (the hub waits up to five minutes).
+    **Push N** sits beside Pull when there are commits to send, no upstream yet, or an upstream deleted on the remote (`GitPushKind`, the web's `PushButton`; it takes the place of the ↑N count) and asks first in a system confirmation with the web's words (never forced; a new branch's upstream is made on origin).
+    One write at a time; the tapped box or button shows progress, the status comes from the write's answer, success buzzes and says so in a toast (Committed …, Pushed …), a refusal buzzes, says what happened in the web's words with the files and git's own words in an alert (`GitRefusal`), and reads the status again.
+    `GitWriteTests`, `GitWriteUITests` (mock hub `MOCK_FILES=1 MOCK_GIT_WRITE=1`; `MOCK_GIT_WRITE_FEATURE=0` keeps the repository without `git_write`, the tab as before).
   - Files (`FilesPane`): descend from session cwd, breadcrumbs jump levels, directories first, size/modification/Git flags (dot for changes within directory),
     hidden files off by default, menu toggle; tap file viewer.
     The machine page's Files row (below Agents, disabled when offline) opens that computer's home in the same pane (`cwd` is `~`).
@@ -548,7 +571,7 @@ Chat page:
   Other answer… first number for Type something then text+Enter (`Resolution.preKeys`), Chat instead sends Chat about this number; raw terminal,
   keys/input under View terminal; unparseable dialog shows terminal directly. DEBUG `-showSampleScreen YES`.
   A command's permission prompt (the hub's `dialog.command`, #5266) reads as a tool approval instead: "Claude Wants to Run a Command", the agent's words,
-  the command (`ScreenCommandAskBody`, three rows until Show All, two in Beautiful UI), the warning in plain words (Show Original: Claude Code's own), the countdown running
+  the command (`ScreenCommandAskBody`, eight lines until Show All N Lines opens it whole, fewer when the card is short, two in Beautiful UI; `CardCode`, #6605), the warning in plain words (Show Original: Claude Code's own), the countdown running
   (`ScreenCountdown`), Deny / Allow for its No / Yes (`ScreenParser.Dialog.allowDeny`). Mock: `MOCK_SCREEN_DANGER=before|after`.
 - Interaction panel above input: questions (`QuestionForm`, iOS grouped list, question + rounded choice group, terminal-style numbered circles become checks, "(Recommended)" shown as Recommended badge but original sent; Other answer… last row becomes input on tap; single-question single-choice submits immediately, multiple title "Heading · 1/2", small Previous / Next / Submit below, auto-next after single choice; `-showSampleQuestion YES`), plans (Markdown + full screen, Approve and run automatically /
   Approve and auto-accept edits / Request changes with feedback), permissions (Allow / Deny / Always allow this session), terminal (screen + parsed choices + keys + text).
@@ -611,6 +634,9 @@ Only at iPhone compact width; iPad, open iPhone Duo, Mac and watch remain unchan
 Routing stays unchanged: all navigation still writes `AppModel.selectedTab` (notifications, Siri, hand to Persona, Inbox rows…); the shell treats `.assistant` / `.chats` as its pages,
 `.mail` as "push Inbox on Assistant", `.settings` as "open Settings sheet", then returns to the original page. Foreground page has one source, `ShellState.page`;
 writing `selectedTab` forwards immediately to the shell (not through `onChange`), and switch segments and dragging use it too: see `docs/apple/shell.md`.
+
+Inbox-linked conversations use `InboxChatRoute` wherever `ShellDestinations` is enabled: the iPhone shell, regular-width iPad / open Duo (`padPlaces`), and the unified Sidebar layout (`embedded`). `pushInboxChat` is supplied under exactly the same condition and injected directly on every destination, as is `feishuOpen`, because an iPad split does not forward the root content's environment to those pages. It appends to `navPath` (the unified Sidebar's host path there, the current place's `NavigationPath` otherwise), so `ShellPlaces` saves that exact path, including `InboxChatRoute`, whenever the place is left. so `ShellPlaces` saves that exact path, including `InboxChatRoute`, whenever the place is left. The pushed `ChatView` does not yet expose the new place-sidebar button in its custom `devChrome`; that integration is follow-up work. This covers the timeline's handling and Agent rows, the draft's processing view, Hand to AI's View (main, new chat or Agent) and New Agent completion, Thread Agent rows (including an Agent inside a to-do sheet, which closes before the push), waiting-Agent rows in the inbox and on the new-chat page, and a summary started from an inbox source chat. Back, including the left-edge swipe, returns to the item, inbox list or new-chat page that opened it. A waiting card pushes only when its `ix.sessionKey.group` is the current hub's group and keeps that key unchanged; another group's card keeps `model.open`, which selects its own group's Persona for an assistant conversation. Sessionless cards still open as sheets, pushed chats keep `ChatView`'s default style, and Mac / Vision / classic layouts keep their previous destinations because the closure is nil.
+A chat pushed over the new-chat page is discarded when `assistantCurrent` changes, because New Chat is not a `ShellPlaces` place. `AssistantCurrentNavigation` keeps pushed pages when the app automatically changes no current conversation to the main one (`old == nil`, nonnil `new == assistantMain`), including manager reconnects; an explicit user reveal still goes to the root. A real hub-group change forgets every saved place and clears the old hub's inbox and item pages, while initial pairing (`nil → group`) and reconnects do not. `InboxBackNavigationTests` covers these rules and every route fallback; `InboxBackTests` covers phone and wide edge-swipe return paths.
 
 UI tests always use `launchPinned()` to fix the style (the run's, unless the test passes `-ui.style` itself, #5683) and `launchPersona()` for clean Demo Mode startup, without overriding the app's default navigation.
 Shell tests: `ShellTests`, `ShellAvatarTests` (top-left avatar and Inbox badge), `ShellPagerTests` (paging), `ShellSwitchTests`, `ShellSearchTests`. DEBUG: `-openShellPage inbox|machines|routines|knowledge|profile`; `-showShellPagerAt 0.3` holds the strip 30% across for screenshots; `-showHomeState empty|error` (new-chat page: nothing needs you / a failed-start notice, for screenshots).
@@ -710,7 +736,7 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   - `SplitDividerTests` (`-openSplitFresh YES` starts both lists at the system's width).
 - **Readable width**: chats and the Persona home page are at most 760pt wide (`ChatView.readableWidth`), centered when wider; the top bar still spans the full width.
 - **No screen dimensions**: the screens have different sizes and ratios; never use `UIScreen.main`. The long-press message action bar stays within the chat area (`MessageMenu.area`
-  coordinate space); interaction forms have a maximum height of 55% of their container (`containerRelativeFrame`), except a lone question card above the composer that grows past half the page (`docs/design/DESIGN_SYSTEM.md` 4.8, #6277); image scaling uses the view's `traitCollection.displayScale`.
+  coordinate space); interaction forms have a maximum height of 55% of their container (`containerRelativeFrame`) and never more than lets the card fit the cards' area, so a lone card never scrolls there too (#6605), except a lone question card above the composer that grows past half the page (`docs/design/DESIGN_SYSTEM.md` 4.8, #6277); question, permission, plan and terminal dialog forms keep their answers outside their one scroll area (`CardForm`); image scaling uses the view's `traitCollection.displayScale`.
 - **Toolbar buttons need both titles and icons** (`Label("新建会话", systemImage: …)`, "New chat"): vertical bars show only icons, and overflow menus show titles;
   icon-only buttons become blank menu items.
 - **Vertical side bars**: when the system places bars at the side (outer screen, inner landscape; non-nil `toolbarVerticalEdge`, iOS 27.1 onward), the Agents chat page no longer draws its own header buttons;
@@ -738,7 +764,7 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   hides the system tab bar, which iOS drew down the side with the switch at its foot, and the pages draw `ShellSwitch` at their top (`pageTabSwitch`): Assistant in its floating bar in the face's place
   (tapping the chosen Assistant opens the face's menu, as in the shell; the link's state and a copy's confirmation show under it), Agents and Messages as a row over the page column
   (`PageTabSwitchRow`; Agents' list options stay on the list's ⋯). Assistant's sidebar column has the button that folds it at its top trailing corner, where Search was (`collapse`); the page's
-  Chat History button only shows while it is folded, to bring it back. Search moves to the foot's row beside Persona's name and where it runs, and opens over the whole window as ChatGPT's (#3705, `AssistantFullSearch`): the field at the foot over the keyboard, × beside it, the conversations above, the latest first, narrowed as you type; a row opens its conversation. The main conversation's
+  Chat History button only shows while it is folded, to bring it back. Search moves to the foot's row beside Persona's name and where it runs, and opens over the whole window as ChatGPT's (#3705, `AssistantFullSearch`): the field at the foot over the keyboard, × beside it, the conversations above, the latest first, narrowed as you type; a row opens its conversation. Both searches (this one and the sidebar's own) also find a chat by what was said in it (#6284, `AssistantChatSearch.swift`): when the hub lists `assistant_search`, the current assistant's `GET /api/v1/assistant/search` is asked 200 ms after the last key, each query cancelling the one before (`docs/protocol/protocol.md` ("Assistant chat search (#6282)")); the local matches (title, last message, a direction's name) show at once and the manager's results come first once they arrive, archived chats included. A row found by a message shows that sentence under its title with the match in bold (`SearchSaidLine`), starting a few characters before the match, fewer as the text grows (8, then 5 above Large, 2 from xxxLarge: `AssistantSearchMerge.lead(for:)`), so the match stays on the line; VoiceOver reads the sentence in the last message's place. Opening it lands on that message through the hub link landing (`MessageJump`, paging back as a link's `?at=` does, opening a folded turn that holds it): it comes to the middle under the quote's accent band, held `Theme.Quote.landingHold` (1.6 s, a quote's tap holds 0.7 s) and then faded, as the web rings its hit (#6446); a row found by its title opens as usual. While the manager's index is still reading older chats a line under the heading says so; offline, without the feature or on a 404 (an older manager) the local matches are the whole answer. The main conversation's
   long press holds the face's long-press items: whose Persona (several hubs), Knowledge, Details, Copy Directory, Copy Info (`MainChatPlaceItems`); the switch's Assistant, tapped while chosen, keeps the
   whole menu, as in the shell. Persona's badge rides on the switch's Assistant; the link's state shows beside the switch, a copy's confirmation as a toast. Pushed pages of Persona's column
   have no switch: Back goes to it (Agents' and Messages' rows stay over their pushed chats). On Agents the empty page has the row as an inset of the column's stack, and each
@@ -789,6 +815,64 @@ One App for iPhone and iPad (`TARGETED_DEVICE_FAMILY` 1,2). Previously only 1, g
 - Tests: `IPadLayoutTests` (iPad simulator only: native full-screen portrait / landscape, wide enough sidebar, chats open on the right); `InboxSplitTests` (split layout:
   switching between Lark chats shows the new chat's own messages and draft on the right, switching back preserves the draft). XCUITest's own landscape screenshots are rotated;
   inspect landscape by holding with `TEST_RUNNER_PERSONA_HOLD=<seconds>` and capturing with `simctl io screenshot`.
+
+## Sidebar layout (#6332)
+
+Settings › Appearance › Navigation chooses how the app lays out Persona and the Agents (`NavigationLayout`, this device's
+own UserDefaults key `app.navigation`, applied at once, Settings staying on its page): **Separate**, the default and
+everything above unchanged (the Assistant | Agents switch on an iPhone, the Persona | Agents tabs on an iPad), or
+**Sidebar**, the web sidebar's structure in one column. The owner asked for it on 2026-11-13. On an iPhone (and at any
+compact width: iPhone Duo closed, an iPad's narrow split) the column is the drawer that slides in from the left; at
+regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro keep their own navigation.
+
+- **The column** (`UnifiedSidebarColumn`, `Persona/Views/Shell/UnifiedSidebar.swift`), in the web's order: the assistant
+  (its switcher) and Search; the main conversation held at the top while the rest scrolls (as the web's, #5581); one
+  list, the Agents list (`AgentsList`, `sidebarRows`) with the Persona sidebar's rows over its own
+  (`AssistantSidebar(part: .rows)`): **Pages** (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Health, Machines,
+  Messages when it is on, the extensions' pages) and **Persona Chats** (✎ New Chat on the heading, Pinned, Recent, All
+  Chats), each heading folding its section (remembered, `sidebar.fold.places` / `sidebar.fold.chats`; folded Pages keeps
+  the Inbox and To-dos counts); then the Agents' heading with the list's ⋯, Personal Agents and New Session, the quick
+  filters and the grouping, Needs You and the groups, the same rows as the Agents page. At the foot: "N need you ↓"
+  (`SidebarNeedsJump`, the count the Separate layout's switch and tabs show, `agentsWaiting`) in a band of its own above
+  the usage, so it never covers a row; a tap scrolls the list to the Agents' Needs You, the arrow says which way it is.
+  Then the two fullest subscription accounts (`SidebarUsageStrip`, `UsageWindows.top`; a tap opens Machines), New Chat
+  and Settings. The parts share their search and dialogs through `AssistantSidebarUI`, presented around the column
+  (`AssistantSidebarPresenters`): a sheet on a list row went with the row as it scrolled away. Search's words filter
+  Persona's chats and the Agents under them.
+- **The page beside it**: the Agents page's split (`ChatsView` under `\.unifiedSidebar`, `SidebarRoot` in `RootView`),
+  whose detail starts at the Persona conversation: `AssistantView` without a stack of its own (`embedded`), pushing on
+  the split's one path (`\.unifiedPath`). A pick in the sidebar replaces what is over the conversation, as the web's
+  routes: an Agent's chat (its row, a card), a place (`ShellRoute` / `SidebarRoute`, the split's first page without a back),
+  the conversation itself (its row, `ShellPage.conversation`). Every page the Persona page opens is a value there, never a
+  flag, so the next pick does not land under it. The conversation's sidebar button folds and brings back the split's
+  column (`SplitShowList.hide`). The shaded row follows what is beside the sidebar (`UnifiedSidebar.atRoot`,
+  `shownPlace`).
+- **On a phone** (`SplitNavigation`'s drawer layout, `\.splitDrawer`, `SplitDetail.drawer`): the same column in the
+  drawer (`AssistantDrawerLayout`, the shell's drawer: 82% of the width, at most 380 pt), the Persona conversation the root
+  of one stack under it, and what the drawer opens that stack's first page. The conversation's bar has no Assistant |
+  Agents switch: the persona's face opens the drawer (the inbox's mark on it, how many Agents need the user at its
+  corner, `SidebarWaitingBadge`), its name in the middle holds the face's menu, New Chat on the right
+  (`AssistantTopBar.drawerRow`). A first page has the same face where a back would be (`DrawerButtonItem`; an Agent's
+  chat in its own header), and a drag to the right on it opens the drawer as on the conversation (the drawer's pan only
+  yields to a second page's back swipe, `DrawerPan.firstPages`). A pick closes the drawer. Choosing Agents by itself
+  opens the drawer at the Agents. While the drawer is in, the Agents list holds its updates as a covered list does, and
+  the Persona rows keep the list they last showed (`SidebarFeed`). The conversation is the iPhone's (`shellChat`, the
+  shell's new-conversation page). Behind the drawer is the Agents list's own page color (`Theme.groupedPage`), so its
+  head, list and foot are one surface in dark mode too. Settings is the sheet the shell shows it in (`PadRoutes`: the
+  whole window only at a phone's regular width), so it opens and closes the same way in both layouts.
+- **Routes** (`PadRouter(unified: true)`): notifications, links, Live Activities, widgets, quick actions and Siri /
+  Shortcuts set `AppModel.selectedTab` and `openChat` as in the Separate layout and land on the same chat or page: an
+  Agent's chat opens beside the sidebar (the Agents list takes `openChat` as before); `.assistant` goes back to the
+  conversation (`ShellPage.conversation`); `.mail` opens the inbox and keeps it (the router's own tab change is only
+  noted); `.feishu` opens Messages; `.settings` is the sheet over what is in front. Choosing Agents by itself
+  (`agentsListReveal`) scrolls the sidebar to the Agents' heading and leaves the page beside it. `selectedTab` follows
+  what is in front, so a relaunch goes back to the Agent's chat that was open.
+- The Separate layout's views take the same code with the Sidebar layout's parts off: the whole `AssistantSidebar`,
+  `RootTabs` and the shell are drawn as before (pixel comparisons in #6332's PR).
+- Tests: `SidebarLayoutRoutingTests` (the router), `SidebarLayoutTests` (iPad UI: the column, a pick replacing the
+  page, the routes), `SidebarLayoutPhoneTests` (iPhone UI: the drawer, a pick replacing the page, the face where a back
+  would be, the setting switching both ways at once). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout; `-openAppearance navigation` opens
+  the setting's page.
 
 ## Home-screen quick actions (#3199)
 
@@ -1004,7 +1088,7 @@ the web's (`web/src/lib/live-text.ts`, `docs/web/web.md`).
   same pacer (`DeltaPacer`, at most 5 draws a second, an empty delta at once).
 - **Even reveal** (#6651): the model's text comes in bursts (a few dozen characters about every 350 ms, up to 2 s apart), so drawing what
   arrived showed a jump per burst. `StreamingText` reveals it a few characters a frame (`StreamReveal` in PersonaKit, driven by
-  `StreamRevealClock`'s display link, which runs only while text waits, at most 60 Hz): a little slower than the stream's average so far,
+  `StreamRevealClock`'s display link, which runs only while text waits, at most 30 Hz: each change re-measures the chat list, #7135): a little slower than the stream's average so far,
   faster when more waits (waiting / 0.6 s), never slower than 20 characters a second. Only that view redraws per frame; the store and the
   list see the deltas as before. A first text over 80 characters (a chat opened mid-stream) shows at once; when the stream ends
   (`ChatStore.liveDone`), or the user holds the list, or the reply's item replaces it, the whole text shows at once. The Mac shows text as
@@ -1063,6 +1147,25 @@ hub; what each rule and per-item setting means is in `docs/assistant/knowledge.m
   (`apple/Persona/Views/Settings/`), `KnowledgeSelectionTests`. Screenshots: the mock hub answers the routes (`MOCK_KB_SELECTION=missing|future|fail` for
   an old hub, an unknown field and a refused save); `-tab settings -openKnowledgeSelection YES` opens the page, `rule`, `chat` or `doc` instead of `YES`
   with that sheet up. Demo Mode keeps the document in memory.
+
+## Inbox rows
+
+For people scanning what needs them, one matter keeps its title, time and AI summary. Its metadata line says where it is
+happening, who wrote the newest line and what they wrote: `where · sender: preview` in English, with the localized colon
+in Chinese and Japanese. A direct chat whose `where` equals its sender names that person once. Without `where` (an older
+hub, or mail), the existing source-specific line is unchanged. Search includes `where` in addition to title, sender,
+preview and summary; it still does not search context or triage reasons.
+
+When the manager sends the optional `now` key, `InboxNow` resolves the shared `spec/fixtures/inbox/now.json` table and
+compose rules in the interface language. On an open item, the complete sentence takes the existing mark line below the
+metadata, in the mark's current font and color (failure red, other states secondary), rather than competing with the
+metadata or its count badge for width. Waiting has a static clock, only queued / looking / Agent-working spins, and states
+that need the owner use the existing Needs you mark (failure stays red); FYI and folded states do not spin. Done rows keep
+today's absence of a mark; their done_* words belong to the detail. Waiting includes its named person, short check time
+and next step when present; failure uses only `handling.error`. An unknown or missing key keeps the existing
+`InboxEventText.mark` line and draft behavior, including its row height. The frozen native Mac row keeps its previous
+metadata and mark. `InboxNowTests` checks every shared state and row case in en, zh-Hans and ja, optional-field decoding,
+fallback and `where` search.
 
 ## Translation (Settings › Translation, 2026-10-31)
 
@@ -1521,7 +1624,7 @@ and can wait and in progress when there are any.
   | `triage_decide`, `triage_auto_continue`, `triage_wake` | Settings › Session Triage (`SettingsPage.triage`) |
   | `supervisor_tier` | Settings › Models › the background supervisor's use (`ModelPurposeRoute`) |
   | `task_trust` | no button: a kind of task is remembered with a plan card's own checkbox, as the line says; Auto-Start Tasks only lists and removes them |
-  | `standing_authorizations` | no button: the line names a page of Settings that only the web app has, so the row adds "That page is in the web app's settings for Persona." (`BriefBody.Setup.isOnTheWebOnly`) |
+  | `standing_authorizations` | Assistant Profile › Standing Authorizations (`SettingsPage.standingAuthorizations`, after `SettingsPage.assistant`, so Back goes to the profile; #7002) |
   | `leaders`, `review_sample`, `delegate`, `independent_review`, a newer one | no button: the app has no page for it, and the line itself says where it is turned on |
 
   The hub's `link` is the web app's page and is not used. A hub from before sends no `setup` and the card is as it was.
@@ -1703,6 +1806,38 @@ switch and the model use are there without it, and `MOCK_LEGACY_HUB=1` has none 
 `MOCK_SUPERVISE_LISTED=1` is a hub since #5806: the catalog lists the use and every built-in use has a description.
 Tests: `BackgroundSupervisorTests`, and `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` against the mock hub.
 
+## Standing authorizations (#7002)
+
+The web's Settings › Assistant › Standing authorizations (`docs/web/web.md`, "Standing authorizations") on iPhone and
+iPad, in the assistant's profile: **Assistant Profile › On Its Own › Standing Authorizations**, after Auto-Start Tasks,
+with how many there are. Settings search finds it (`SettingsPage.standingAuthorizations`), and the briefing's setup line
+for `standing_authorizations` opens it. The frozen Mac app compiles the same views.
+
+- **Who it is for**: anyone who said "always go ahead" to an Agent's merge, push, deploy, send, delete or spend. A row
+  reads as a sentence: the actions in the web's words ("Merge changes and deploy to a test environment"), "In
+  weather on MacBook" (the folder's name and the computer's), then the conditions and the day it was granted. The full
+  folder, the owner's own words, the source and whether the authorized work can be undone are on the grant's page,
+  with **Lasts: Until you revoke it** (grants have no expiry). Unknown actions and conditions show as the hub wrote
+  them (`StandingAuthorizationText`). The source is words, not a code: the hub's own sentence for a suggested rule
+  confirmed with Always (in the owner's language when it was made) and the usual words the assistant writes (main chat,
+  a chat, Settings) are worded in the app's language whichever of en, zh-Hans or ja they were written in
+  (`StandingAuthorizationText.source`); anything else shows as written, as on the web.
+- **Requests**: `GET /api/v1/assistant/standing-authorizations` and `DELETE …/{id}` through the client of the assistant
+  the page first read for (`StandingAuthorizationsModel`, `currentAssistantSettings`). A 403 says only a device with
+  full access can see them; any other failure shows Retry, and a failed refresh with the list on screen is a toast.
+- **Revoke**: a trailing swipe, the row's menu or the grant's page, always behind a confirmation dialog that names the
+  scope, says done work is unaffected and that a new grant is asked for in the main chat (destructive **Revoke
+  Authorization** and Cancel; section 4.4 of `docs/design/DESIGN_SYSTEM.md`). Confirmed, the row leaves the list at
+  once (the grant's page closes first); a failed DELETE puts it back where it was with a toast saying it is still in
+  effect, and a read while the DELETE is out leaves it out. There is no Undo: the hub has no route to restore a grant,
+  and an old id can't be added again.
+- **Mock hub**: `MOCK_STANDING_AUTHORIZATIONS=1` seeds two synthetic grants (`MOCK_STANDING_AUTHORIZATIONS=forbidden`
+  answers 403, `=fail` makes every DELETE fail); with `MOCK_RULE_SUGGESTIONS=1`, Always adds one. DELETE answers as the
+  hub does, `{"ok":true,"revision"}`. Debug launch: `-openAssistantPage standing`.
+- **Tests**: `StandingAuthorizationsTests` (decoding, words, the model's read, revoke and rollback with `FakeHub`) and
+  `StandingAuthorizationsUITests` against the mock hub (list, page, confirmation, revoke; light / dark shots with
+  `TEST_RUNNER_PERSONA_SHOTS`).
+
 ## Suggested standing rule and held decisions (#5802, #5803)
 
 The Apple part of two follow-ups of `docs/design/proposals/main-chat-availability.md`, on iPhone, iPad, Mac and Vision
@@ -1728,8 +1863,7 @@ question a supervisor passed up. `RuleSuggestionLine` draws it as one quiet line
 - **Two buttons**, single-line: **Not Now** and **Always**
   (`POST /api/v1/assistant/rule-suggestions/{id}/not-now` / `always`). While one is out, neither takes a tap.
 - **After Always** the line becomes what was made and where it is listed and removed: Auto-Start Tasks in the
-  assistant's profile; for a standing authorization, the web app's settings for Persona (the Apple apps have no list
-  of them); for `delegate`, that nothing was stored or turned on and that it is turned on in the assistant's
+  assistant's profile; for a standing authorization, Standing Authorizations in the assistant's profile (#7002); for `delegate`, that nothing was stored or turned on and that it is turned on in the assistant's
   configuration file on the hub's computer, with the key in brackets, as the hub's recommended-setup line for the
   same mechanism words it. The result is kept by card with the suggestion it answered
   (`RuleSuggestions.made`), so it stays when the hub sends the card again without the line. A to-do's card is its
@@ -2098,6 +2232,16 @@ roster, none of this draws and the pages are as before.
   `ManagerGroupsUITests` against the mock hub's three managers (`MOCK_EXTENSIONS=1`, `TEST_RUNNER_PERSONA_MANAGERS_HUB`, shots with
   `TEST_RUNNER_PERSONA_SHOTS`; with `MOCK_MANAGERS=1` add `TEST_RUNNER_PERSONA_MANAGERS_ONE=1`). By hand: `-tab settings -openExtensions
   YES`, or `-openExtension <id> -openExtensionManager m-3fa21c` for 工作's copy.
+
+## Inbox lineage
+
+An item's **Thread** section reads `GET /api/v1/inbox/tree/inbox/{id}` and shows its ancestors followed by its direct children. A to-do or Agent-session row uses the title already known locally; without one it shows only its kind, never the raw id. A fallback title identical to the kind is likewise said once. Rows keep their existing destinations: another item, the to-do, or the Agent conversation. Tree responses do not carry merged-list manager stamps, so the loader applies the opened item's manager to every tree item before either action uses it.
+
+- **Not the same matter** appears on every ancestor and child row whose pair ends in an Inbox item. It sends `PUT /api/v1/inbox/{lower-item-id}/parent` with the body JSON `null`, without a confirmation step, then shows the success toast and rereads the visible tree. Failures use the app's existing error feedback.
+- **Same matter as…** appears below a nonempty Thread section and in the item detail's More menu. Its system sheet searches open items in the same manager, newest first, by title or `where`, excluding the item itself and its direct children. Each row shows the title and a second line of `where · sender` (one part when the other is absent, and no repeated name). A choice sends `PUT /api/v1/inbox/{current-item-id}/parent` with the bare body `{"kind":"inbox","id":"chosen-id"}`, shows the linked-title toast and rereads the tree. Neither body is wrapped in a `parent` field.
+- `InboxLineTests` covers row titles and the lower end of every relationship; `InboxSameMatterPickerTests` covers candidates and the second line; `InboxParentTests` pins both request-body shapes and manager routing. `InboxLineageTests` exercises the visible controls against the existing `MOCK_INBOX_LINE=1` fixture (`lark:f1:100 → lark:f2:200 → lark:f3:300`), with `TEST_RUNNER_PERSONA_SHOTS` captures on phone and wide layouts.
+
+The frozen Mac layout keeps its existing lineage rows and does not gain these two new actions.
 
 ## The inbox, notifications and computers of several managers (#1850, #1863, #1919, #1834)
 
