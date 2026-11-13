@@ -17,7 +17,7 @@ func Apply(t *Tree, d *Delta) (*Tree, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := next.check(); err != nil {
+	if err := next.check(nil); err != nil {
 		return nil, rejected(err)
 	}
 	return next, nil
