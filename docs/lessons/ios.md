@@ -9,7 +9,8 @@ bar's body about 30 times, the Agents list's 3–4 times and the chat page's 2�
 
 - **A window frame in `@State`.** `frame(in: .global)` changes on every frame a page slides. Kept in `@State` (the
   composer's 「+」, for the panel it opens), it redraws its view on each of them, menus and text field included. Keep a
-  frame only an action reads in an unobserved object; measure in the page's or the list's coordinate space.
+  frame only an action reads in an unobserved object, or go by sizes that a slide leaves alone (the row's width, the
+  page's). A named coordinate space set on a `List` is not seen from its rows: they fall back to the window's.
 - **`@Environment(\.dismiss)` on a page.** SwiftUI makes a new `DismissAction` when the presentation around the view
   changes, and a page going behind or coming back counts. Declare it in a small view that stores it (`DismissReader`).
 - **Observed values read for a side effect.** The Agents list read the app's tab, the strip's `moving` and the chat on

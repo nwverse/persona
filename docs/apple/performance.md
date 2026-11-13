@@ -36,7 +36,7 @@ repository's.
 | One main-thread work item during scrolling, typing or an animation | ≤ 16 ms (one frame at 60 Hz; 8 ms on 120 Hz ProMotion screens is the goal) | Time Profiler, Animation Hitches, `FrameStats` |
 | Any single main-thread block, anywhere (first tap, page open, push) | < 100 ms; Apple calls a delay over 100 ms noticeable | `MainThreadWatchdog`, Time Profiler, Hangs instrument, `sample <pid>` |
 | A hang | none ≥ 250 ms, the point where Apple's tools report a hang; one found is a bug to fix before release | Hangs instrument, Xcode Organizer, MetricKit |
-| Assistant ⇄ Agents switch (`PerfAssistantTests/testTabSwitchAssistantAgents`) | hitch < 10 ms/s and no frame over 100 ms; on 2026-11-12 the simulator measured 32–55 ms/s and a worst frame of 225–330 ms (optimized build, `assistant` suite data), over budget and tracked in #5438 | `scripts/app/perf-test.sh assistant`, `sample` while switching |
+| Assistant ⇄ Agents switch (`PerfAssistantTests/testTabSwitchAssistantAgentsByCue`: the app switches on a cue, nothing of XCTest's in the frames) | hitch < 10 ms/s and no frame over 100 ms. Simulator, optimized build, `assistant` suite data, 2026-11-13: 39–40 ms/s, longest frame 93–101 ms (median), main thread busy p95 8.3 ms; before #5438's fixes 74–91 ms/s, 121–135 ms and 17–19 ms. Still over: a switch swaps the pages' top bars for the moving one and back, glass and menus built each time, and the first visit to Agents builds the page (a frame of about 0.85 s in the tapping test). `testTabSwitchAssistantAgents` taps and waits through XCTest, whose accessibility snapshots are most of its 67–133 ms/s; it shows the tap's path, not this budget | `scripts/app/perf-test.sh assistant`, `sample` while switching |
 | Hitch time ratio while scrolling | < 5 ms/s (Apple: good under 5, warning 5–10, critical above 10) | `XCTHitchMetric`, `scripts/app/perf-test.sh` |
 | View bodies per hub push, page at rest | the numbers in `docs/apple/ios-state.md` ("Cost of one push"): Agents list 1 / 2, chats 0 | `RenderBudgetTests` |
 | Main-thread time per hub push | no regression against the tables in `docs/operations/testing.md` ("Whole App (any page)") | `-perfCounts YES`, `-showPagePerf YES` |
@@ -285,10 +285,14 @@ value written back into state that changes the layout loops for ever and hangs t
 - Fixed before: the composer kept where its 「+」 is in the window in `@State`
   (`.onGeometryChange { $0.frame(in: .global) } action: { plusFrame = $0 }`), for the panel a tap opens. While the
   shell's strip slides, every window frame on both pages changes on every frame: the bar's body ran about 30 times a
-  switch, each run building its menus and updating its text field again (the 195 ms `TextField` update the watchdog
-  caught, `PlatformTextFieldCoordinator.update` → `setSelection`). It is an unobserved `WindowFrame` now, read on the
-  tap. The Agents header's field did the same with its row's frame, and laid the row out again each frame; it measures
-  in the list's own coordinate space now (#5438).
+  switch, each run building its menus and updating its text field again (`PlatformTextFieldCoordinator.update` →
+  `setSelection`, where the watchdog once caught a 195 ms block). It is an unobserved `WindowFrame` now, read on the
+  tap. The Agents header's field did the same with its row's frame (about 60 runs a switch), and laid the row
+  out again each frame, the filters' `ViewThatFits` with it; it goes by the row's width and the page's now. A named
+  coordinate space on the `List` did not help: a row does not resolve it and falls back to the window's (#5438).
+- Fixed before: a `ViewThatFits` in a list row measured every candidate on every frame the row moved on screen (a row
+  has a view graph of its own, which works its size out again each time): the Agents filters, 53 ms of main-thread time
+  a switch. Each candidate is wrapped in `MeasuredOnce` (`apple/Persona/DesignSystem/Components.swift`).
 
 **Do.** A frame in the window (`.global`) moves whenever anything above the view moves: the shell's strip, the drawer, a
 sheet's drag, the keyboard. Measure in the coordinate space of what the value is about (`.named(…)` on the page or the
@@ -354,7 +358,7 @@ animations on the Mac in Core Animation (`MacBreathingRing`).
 
 **Check.** The ratchet counts `TimelineView(.animation…)` without `paused:`; `ContinuousMotionTests`; `HoldSourceTests`
 (no timers in model-following feeds). Leaks and the memory graph after leaving the page. Work that reruns on every return
-cannot be found by text: `PerfAssistantTests/testTabSwitchAssistantAgents` measures the Assistant ⇄ Agents switch against
+cannot be found by text: `PerfAssistantTests/testTabSwitchAssistantAgentsByCue` measures the Assistant ⇄ Agents switch against
 its budget ("Budgets"); a page with its own switch-back cost gets a test of the same shape.
 
 ### P10. Launch draws the first frame first
