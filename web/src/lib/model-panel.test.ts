@@ -192,6 +192,10 @@ describe("the setup a row sends", () => {
     expect(rowSetup(codex(), { ...gpt, efforts: [] }, state({ current })).effort).toBe("max");
   });
 
+  it("does not invent an unknown session effort from a browser customization", () => {
+    expect(rowSetup(codex(), gpt, state({ current: { provider: "codex", model: "gpt-5.5" } }), { effort: "low" }).effort).toBeUndefined();
+  });
+
   it("the model that runs now: what runs", () => {
     expect(rowSetup(claude(), opus, state())).toEqual({ provider: "claude", model: "opus", effort: "xhigh" });
     expect(rowSetup(codex(), gpt, state({ current: { provider: "codex", model: "gpt-5.5", effort: "low", fast: true } }))).toEqual({ provider: "codex", model: "gpt-5.5", effort: "low", fast: true });
