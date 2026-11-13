@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,7 +18,12 @@ import (
 func TestDialAtReadsMCPWaitUpdates(t *testing.T) {
 	for _, withReceiver := range []bool{false, true} {
 		t.Run(map[bool]string{false: "without receiver", true: "with receiver"}[withReceiver], func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "node.sock")
+			dir, err := os.MkdirTemp("/tmp", "pd")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(dir) })
+			path := filepath.Join(dir, "node.sock")
 			listener, err := net.Listen("unix", path)
 			if err != nil {
 				t.Fatal(err)
