@@ -184,7 +184,7 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
       )}
       {idLine && (
         <div data-row-id={idLine} className={cx("min-w-0 pt-px pl-[26px]", idLine === "touch" && "hidden [@media(hover:none)]:block")}>
-          <div title={model.id} className="line-clamp-2 font-mono text-[11px] leading-[1.4] break-all text-ink-2">
+          <div title={model.id} className="line-clamp-2 font-mono text-xs leading-[1.4] break-all text-ink-2">
             {model.id}
           </div>
         </div>

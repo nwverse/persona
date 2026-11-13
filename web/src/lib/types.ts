@@ -134,6 +134,7 @@ export interface EngineLeg {
 }
 
 export interface SessionCapabilities {
+  takeover?: { running: boolean; can_resume: boolean; reason?: string };
   read?: boolean;
   send?: boolean;
   interrupt?: boolean;
@@ -381,6 +382,11 @@ export interface Session {
    *  created), set by the hub's manager (docs/protocol/protocol.md "Session hierarchy", #5120): the web never lists or
    *  counts it on its own, and draws it as a card in that session's chat. */
   folded_under?: string;
+  /** The session on the same machine this one is drawn under while staying a session of its own (#5935): a Claude
+   *  desktop app's side chat, /btw question or spawned session names the one it was started from. Unlike `folded_under`
+   *  it folds nothing away: the row keeps its state and counts and only moves under its parent, a level in
+   *  (lib/side-sessions.ts). Set by the node while both are listed; older hubs leave it out. */
+  parent_agent_id?: string;
   /** How it folds under `folded_under`: `"worker"` for an Agent of a host tab whose lead (its first pane) is
    *  `folded_under` (#5180, a Claude Code agent team's teammate): it is in the lead's Team panel, not a card in its chat. */
   folded_as?: "worker";
@@ -857,6 +863,9 @@ export interface Launcher {
   /** A Codex launcher the computer starts in a shell pane the user picked (Run agent here), keeping that pane when the
    *  start fails (#5504); absent from an older computer, where Run agent here offers Claude Code only. */
   run_here?: boolean;
+  /** Where it starts the session when not in a terminal: "claude_desktop" (the launcher `claude-desktop`, Claude's desktop
+   *  app, #5480) or "codex_app" (`codex-app`, the Codex App, #5726); lib/desktop-start.ts. Absent for every other one. */
+  source?: string;
   /** How its last check or start went on the computer the list is for (GET /machines/{mid}/launchers,
    *  docs/server/launcher-health.md); absent: never checked, a failure too old to count, or an older hub. */
   health?: LauncherHealth;
