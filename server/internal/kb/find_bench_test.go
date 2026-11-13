@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -46,6 +47,23 @@ func benchStore(tb testing.TB) *Store {
 	}
 	return st
 }
+
+// benchIndexed is the bench archive with its search index built, as the manager's index lane keeps it: what the
+// benchmarks measure. (The tests that read the bench archive take it without one, benchStore.)
+func benchIndexed(tb testing.TB) *Store {
+	tb.Helper()
+	st := benchStore(tb)
+	benchIndexOnce.Do(func() { _, benchIndexErr = (&Engine{Store: st}).UpdateSearchIndex(context.Background()) })
+	if benchIndexErr != nil {
+		tb.Fatal(benchIndexErr)
+	}
+	return st
+}
+
+var (
+	benchIndexOnce sync.Once
+	benchIndexErr  error
+)
 
 func fillBenchStore(dir string) error {
 	return fillArchive(dir, archiveShape{chats: benchChats, days: benchDays, stride: 1, lines: benchLines,
@@ -178,10 +196,10 @@ func TestMain(m *testing.M) {
 
 // BenchmarkFind is search-as-you-type: the same engine answers one query after another (the app sends one per
 // keystroke), the archive unchanged in between. typing is the keystrokes of a rare word; the others repeat one query:
-// a rare word (about 1% of the days), a word on every message line (every chat far past foundCap) and a word no file
-// has (only the whole-file check runs).
+// a rare word (about 1% of the days: the index leaves only those to read), a word on every message line (every chat
+// far past foundCap: its newest days are read) and a word no file has (the index rules every file out).
 func BenchmarkFind(b *testing.B) {
-	e := &Engine{Store: benchStore(b)}
+	e := &Engine{Store: benchIndexed(b)}
 	if res := e.Find("周报", 80); len(res) == 0 {
 		b.Fatal("the rare word is not found")
 	}
@@ -203,9 +221,10 @@ func BenchmarkFind(b *testing.B) {
 	}
 }
 
-// BenchmarkFindCold is the first search of a new engine (nothing kept from an earlier one).
+// BenchmarkFindCold is the first search of a new engine (nothing kept from an earlier one; the index is the
+// store's, read once).
 func BenchmarkFindCold(b *testing.B) {
-	st := benchStore(b)
+	st := benchIndexed(b)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
@@ -213,11 +232,52 @@ func BenchmarkFindCold(b *testing.B) {
 	}
 }
 
-// BenchmarkSearch is kb_search over the same archive, messages included, on a warm engine (every file kept from an
-// earlier search): a rare word (the days that have it are spread over the year, so most files are read before the
-// limit is reached), a common one (the limit is reached in the first days) and a word no file has (every file read).
+// BenchmarkSearchIndex is the index lane's work (search_index_update.go): the first index of the archive (every file
+// read) and a run that finds nothing changed (the listing kept, every file stat-ed).
+func BenchmarkSearchIndex(b *testing.B) {
+	st := benchIndexed(b)
+	ctx := context.Background()
+	b.Run("first", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			b.StopTimer()
+			if err := os.RemoveAll(st.searchDir()); err != nil {
+				b.Fatal(err)
+			}
+			fresh, err := NewStore(st.Dir)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.StartTimer()
+			if stats, err := (&Engine{Store: fresh}).UpdateSearchIndex(ctx); err != nil || stats.Read == 0 {
+				b.Fatal(stats, err)
+			}
+		}
+	})
+	// The store of the other benchmarks may hold the index removed above: a new one reads what is there now.
+	fresh, err := NewStore(st.Dir)
+	if err != nil {
+		b.Fatal(err)
+	}
+	e := &Engine{Store: fresh}
+	if _, err := e.UpdateSearchIndex(ctx); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("unchanged", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if stats, err := e.UpdateSearchIndex(ctx); err != nil || stats.Read != 0 {
+				b.Fatal(stats, err)
+			}
+		}
+	})
+}
+
+// BenchmarkSearch is kb_search over the same archive, messages included, on a warm engine: a rare word (the days that
+// have it are spread over the year: the index leaves only those to read, until the limit is reached), a common one
+// (the limit is reached in the first days) and a word no file has (the index rules every file out).
 func BenchmarkSearch(b *testing.B) {
-	e := &Engine{Store: benchStore(b)}
+	e := &Engine{Store: benchIndexed(b)}
 	if hits := e.Search("周报 draft", true, 40); len(hits) == 0 {
 		b.Fatal("the rare word is not found")
 	}
@@ -234,9 +294,10 @@ func BenchmarkSearch(b *testing.B) {
 
 // BenchmarkMatches is opening a chat found by a search (GET /api/v1/kb/chats/<id>?q=, limit 40) in a chat with a year
 // of day files: a rare word (4 of the 365 days have it, so every day is looked at) and a common one (on every line: the
-// first days fill the limit). Warm is right after a Find, whose cache holds every file; cold is a new engine each time.
+// first days fill the limit). Warm is right after a Find, whose cache holds the files it read; cold is a new engine
+// each time.
 func BenchmarkMatches(b *testing.B) {
-	st := benchStore(b)
+	st := benchIndexed(b)
 	const chat = "lark-c000"
 	warm := &Engine{Store: st}
 	warm.Find("周报", 80)
