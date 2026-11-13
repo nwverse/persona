@@ -53,6 +53,9 @@ const (
 	ViaUser      = "user"      // the user, in Persona
 )
 
+// DoneByMuted is a done chain entry's By value for filing by a mute. It is not a done_by value: muted items keep done_by "read".
+const DoneByMuted = "muted"
+
 const (
 	chainMax         = 50  // entries kept, the newest
 	chainMessagesMax = 10  // messages a received entry carries
@@ -360,7 +363,7 @@ func (b *inboxBook) file(it *InboxItem, at time.Time, by string) {
 		key = "done_manager"
 	}
 	if key != "" {
-		b.chainAdd(it, InboxChainEntry{Kind: ChainDone, At: at.UTC(), Text: i18n.T(b.userLang(), "assistant-inbox_chain."+key)})
+		b.chainAdd(it, InboxChainEntry{Kind: ChainDone, At: at.UTC(), Text: i18n.T(b.userLang(), "assistant-inbox_chain."+key), By: by})
 	}
 }
 
