@@ -103,7 +103,7 @@ func (s *Service) startDue(ctx context.Context) *sync.WaitGroup {
 		if IsPush(sub) {
 			continue // filled by its device, never pulled
 		}
-		asked := s.asked[sub.ID]
+		asked := s.asked[sub.ID] || s.kicked[sub.ID] && pullScheduled(sub)
 		if !asked && (!pullScheduled(sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
 			continue
 		}
@@ -166,6 +166,7 @@ func (s *Service) runOne(ctx context.Context, id string) {
 	}
 	s.mu.Lock()
 	asked := s.asked[id]
+	kicked := s.kicked[id] && pullScheduled(*sub) // still on: a changed event brought its run forward
 	g := s.gateOf(sub.Connector)
 	now := s.now()
 	g.prune(now)
@@ -183,10 +184,16 @@ func (s *Service) runOne(ctx context.Context, id string) {
 		resume = g.calls[0].Add(time.Hour)
 	}
 	s.mu.Unlock()
-	if !asked && (!pullScheduled(*sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
+	if !asked && !kicked && (!pullScheduled(*sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
+		s.mu.Lock()
+		delete(s.kicked, id) // switched off since
+		s.mu.Unlock()
 		return
 	}
 	if paused || full {
+		s.mu.Lock()
+		delete(s.kicked, id) // held back by the connector's limits: the schedule runs it
+		s.mu.Unlock()
 		// Not a run: the connector's limits hold it back. A pause shows; the hourly budget only moves the run.
 		next := *sub
 		next.NextRunAt = &resume
@@ -205,6 +212,7 @@ func (s *Service) runOne(ctx context.Context, id string) {
 	}
 	s.mu.Lock()
 	delete(s.asked, id)
+	delete(s.kicked, id)
 	s.mu.Unlock()
 	s.execute(ctx, *sub, asked, now)
 }
@@ -277,6 +285,9 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 	pl := pull(ctx, c.Conn, sub.Source, sub.Recipe, since, until, s.o.Location(), sub.Label, sub.Continuation, tool.InputSchema)
 	ms := s.now().Sub(start).Milliseconds()
 	if pl.problem != nil {
+		// A page that fails is asked for again once (one transient error must not re-read every committed page); when
+		// the run before failed too, its position is dropped, as an expired page token is refused every time (#6310).
+		restart := sub.Continuation != nil && sub.FailCount > 0
 		switch {
 		case pl.problem.Code == CodeRateLimited:
 			until := s.now().Add(pl.retry)
@@ -292,11 +303,17 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 			n := s.nextRun(next, start, false)
 			next.NextRunAt = &n
 			s.commit(ctx, sub, next, nil, nil, start, false)
+		case pl.problem.Code == CodeNoList && restart:
+			// Not counted as a shape miss: a refused page says nothing of the recipe; the fresh pull will.
+			s.failed(ctx, sub, s.restarted(next), pl.problem, trigger, start, ms)
 		case pl.problem.Code == CodeNoList:
 			s.shapeMiss(ctx, sub, next, pl.problem, trigger, start, ms)
 		case pl.problem.Code == CodeNotReadOnly || pl.problem.Code == CodePagination:
 			s.needsRecipe(ctx, sub, next, pl.problem, trigger, start)
 		default:
+			if restart {
+				next = s.restarted(next)
+			}
 			s.connFailed(sub.Connector)
 			s.failed(ctx, sub, next, pl.problem, trigger, start, ms)
 		}
@@ -442,6 +459,19 @@ func (s *Service) connFailed(id string) {
 		g.paused = s.now().Add(d)
 		s.o.Logf("subscriptions: connector %s failed %d calls in a row: paused %s", id, g.fails, d)
 	}
+}
+
+// restarted is next without its continuation, whose page failed twice in a row: the next run pulls afresh from the
+// original window's start, and the dedup keys of the pages kept so far hold back what they delivered (#6310).
+func (s *Service) restarted(next Subscription) Subscription {
+	c := next.Continuation
+	s.o.Logf("subscription %s: page %d of a paginated pull failed twice in a row; pulling again from the start", next.ID, c.Pages+1)
+	if next.SinceAt == nil {
+		since := c.WindowSince.Add(overlap) // a first pull: the fresh one still reaches back to where it began
+		next.SinceAt = &since
+	}
+	next.Continuation = nil
+	return next
 }
 
 // failed records a failed run: retried after interval × 2^failures, at most backoffMax, never stopped.

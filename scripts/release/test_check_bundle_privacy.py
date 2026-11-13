@@ -211,6 +211,39 @@ class PublicConstantTests(unittest.TestCase):
         self.assertEqual(self.kinds(text, words=("secret-placeholder",)),
                          {"email", "private IP", "private value (18 chars)"})
 
+    def test_adjacent_go_constants_are_not_a_banned_name_or_email(self):
+        join = "applink.feishu.cn/client/chat/" + "open" + "Lark" + " via lark-cli"
+        self.assertEqual(self.kinds("edit_titlerecipe.other_tool" + join + "devices.reconnect"), set())
+        # The wrong dependency set, other joins and look-alikes still count, and the kind is named truthfully.
+        banned = self.kinds("x" + join + "y", dependencies=())
+        self.assertEqual(len(banned), 1)
+        self.assertTrue(next(iter(banned)).startswith("banned name"))
+        for text in (join.replace("feishu.cn", "example.cn"), join.replace(" via lark-cli", ""),
+                     "chat/open" + "Lark via other", join + " open" + "Lark"):
+            with self.subTest(text=text):
+                self.assertTrue(self.kinds(text))
+        # Gmail's source-domain constants next to a field name are not addresses; other domains still are.
+        gmail = "title_mail@" + "gmail.com" + "extension. updated" + "@googlemail.com" + "no extension"
+        self.assertEqual(self.kinds(gmail), set())
+        self.assertIn("email", self.kinds("title_mail@" + "company.com"))
+
+    def test_wireguard_identifier_needs_its_dependency_and_exact_text(self):
+        identifier = "WireGuard v1 zx2c4 Jason@" + "zx2c4.com"
+        text = "byte string" + identifier + "Received message with unknown type"
+        for dependency in ("github.com/tailscale/wireguard-go", "golang.zx2c4.com/wireguard"):
+            self.assertEqual(self.kinds(text, dependencies={dependency}), set())
+        spaced = "byte string " + identifier + " Received"
+        self.assertEqual(self.kinds(spaced, dependencies={"golang.zx2c4.com/wireguard"}), set())
+        for dependencies in (frozenset(), DEPENDENCIES):
+            self.assertIn("email", self.kinds(spaced, dependencies=dependencies))
+        wireguard = {"github.com/tailscale/wireguard-go"}
+        for other in ("Jason@" + "zx2c4.com", "WireGuard v1 zx2c4 Other@" + "zx2c4.com", identifier + ".cn",
+                      "x" + identifier, identifier.replace("zx2c4.com", "zx2c4.io")):
+            with self.subTest(text=other):
+                self.assertIn("email", self.kinds(other, dependencies=wireguard))
+        self.assertIn("private value (%d chars)" % len(identifier),
+                      self.kinds(text, words=(identifier,), dependencies=wireguard))
+
     def test_short_word_matching_remains_unchanged(self):
         self.assertEqual(self.kinds("foobar", words=("foo",)), set())
         self.assertEqual(self.kinds("FOO foo", words=("foo",)), {"private value (3 chars)"})
