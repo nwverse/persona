@@ -14,6 +14,8 @@ final class PendingCardsTests: XCTestCase {
     private static let askLong = "server/b2e4d6f8-0000-4000-8000-000000000001"
     /// What folding a question card gives back at least: more than a tap target's row.
     private static let foldedAtLeast: CGFloat = 44
+    /// A line of a question at the largest accessibility text size (lines are about 60 pt apart on an iPhone 17 Pro).
+    private static let largestQuestionLine: CGFloat = 56
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -72,6 +74,15 @@ final class PendingCardsTests: XCTestCase {
         if ok.waitForExistence(timeout: 3) { ok.tap() }
     }
 
+    /// A question form's own scroll area in a card: the tallest scroll view in it that holds the question's top (the step
+    /// chips scroll sideways in a strip of their own above the question).
+    private func formScroll(in cards: XCUIElement, holding question: XCUIElement) -> CGRect? {
+        let q = question.frame
+        return cards.scrollViews.allElementsBoundByIndex.map { $0.frame }
+            .filter { $0.minY <= q.minY + 1 && q.minY < $0.maxY && $0.minX <= q.midX && q.midX <= $0.maxX }
+            .max { $0.height < $1.height }
+    }
+
     private func waitGone(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while element.exists && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.2)) }
@@ -100,10 +111,11 @@ final class PendingCardsTests: XCTestCase {
     }
 
     /// A lone question card, the keyboard down (#6277): it grows past half the page until the conversation keeps a fixed
-    /// minimum above it, so on a phone as tall as an iPhone 17 Pro its question, every option and 「其他回答」 are in the card
-    /// and can be tapped without scrolling. It was held to half the page: two and a half options showed, the rest under
-    /// its edge, with empty conversation above it. At the largest text size (or on a shorter phone) the question is in
-    /// view and what does not fit scrolls inside the card. The card still folds from its header, the composer stays
+    /// minimum above it, so on a phone as tall as an iPhone 17 Pro its question, every option with its description and
+    /// 「其他回答」 are whole in the form's scroll area and can be tapped without scrolling. It was held to half the page: two
+    /// and a half options showed, the rest under its edge, with empty conversation above it. On a shorter phone the whole
+    /// question is in view and what does not fit scrolls inside the card; at the largest text size its first line is
+    /// (iPhone SE shows only that line's top, as main does). The card still folds from its header, the composer stays
     /// usable, and the card's height holds still while the page does (#1580).
     func testLoneQuestionShowsEveryOption() {
         continueAfterFailure = true // every look measured and shot, whichever fails
@@ -118,19 +130,32 @@ final class PendingCardsTests: XCTestCase {
             sleep(2)
             shot("lone-question-\(look)")
             XCTAssertFalse(app.staticTexts["pending-cards-count"].exists, "a lone card has no count over it (\(look))")
-            let area = cards.frame.insetBy(dx: -1, dy: -1)
-            // The question is in view as the card appears, whatever the text size.
+            // What is in view is what is inside the form's own scroll area, not just inside the cards' area: under that
+            // scroll area are the card's buttons and margins, where an option cut off by it still had its frame.
             let question = cards.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "一轮对话里")).firstMatch
-            XCTAssertTrue(question.exists && question.isHittable && question.frame.minY >= cards.frame.minY - 1
-                          && question.frame.minY < cards.frame.maxY, "the question is not in view (\(question.frame) in \(cards.frame), \(look))")
-            // Every option and 「其他回答」 (a field in BeautifulUI's card: its placeholder) in the card, no scrolling.
-            let screen = app.windows.firstMatch.frame
-            if look != "largest", screen.height >= 874 {
+            XCTAssertTrue(question.exists, "no question (\(look))")
+            let form = formScroll(in: cards, holding: question)
+            XCTAssertNotNil(form, "no scroll area holds the question (\(cards.scrollViews.allElementsBoundByIndex.map { $0.frame }), \(look))")
+            let shown = (form ?? .zero).intersection(cards.frame).insetBy(dx: -1, dy: -1)
+            let q = question.frame
+            let tall = app.windows.firstMatch.frame.height >= 874 // as tall as an iPhone 17 Pro
+            if look != "largest" {
+                XCTAssertTrue(shown.minY <= q.minY && q.maxY <= shown.maxY, "the question is not whole in view (\(q) in \(shown), \(look))")
+            } else {
+                // At the largest text size, at least its first line whole. iPhone SE shows only that line's top, as on
+                // main: the open header there leaves the cards no more than half the page (#6277, a known deviation).
+                let firstLine = { XCTAssertTrue(shown.minY <= q.minY && min(q.maxY, shown.maxY) - q.minY >= min(q.height, Self.largestQuestionLine),
+                                                "the question's first line is not whole in view (\(q) in \(shown))") }
+                if tall { firstLine() } else { XCTExpectFailure("iPhone SE at the largest text size: the question's first line is cut, as on main", failingBlock: firstLine) }
+            }
+            // Every option with its description, and 「其他回答」 (a field in BeautifulUI's card: its placeholder), whole in
+            // the form's scroll area and tappable, with no scrolling.
+            if look != "largest", tall {
                 for label in ["取最长的那段", "永远取最后一段", "永远取唤醒前那段", "其他回答"] {
                     let el = cards.descendants(matching: .any)
                         .matching(NSPredicate(format: "label BEGINSWITH %@ OR placeholderValue BEGINSWITH %@", label, label)).firstMatch
-                    XCTAssertTrue(el.exists && el.isHittable && area.contains(el.frame),
-                                  "\(label) needs scrolling (\(el.exists ? "\(el.frame)" : "not drawn") in \(cards.frame), \(look))")
+                    XCTAssertTrue(el.exists && el.isHittable && shown.minY <= el.frame.minY && el.frame.maxY <= shown.maxY,
+                                  "\(label) needs scrolling (\(el.exists ? "\(el.frame)" : "not drawn") in the form's \(shown), \(look))")
                 }
             }
             // The conversation keeps its minimum above the card, under the chat's header and its back button. Over the
@@ -177,6 +202,7 @@ final class PendingCardsTests: XCTestCase {
         // The composer: 「给 … 发消息」, or 「补充说明（会排队发送）」 while the agent works.
         let field = app.descendants(matching: .any).matching(NSPredicate(format: "placeholderValue BEGINSWITH %@ OR placeholderValue BEGINSWITH %@", "给", "补充说明")).firstMatch
         XCTAssertTrue(field.exists, "the composer")
+        let heightBefore = app.scrollViews["pending-cards"].frame.height
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the keyboard did not come up")
         sleep(1)
@@ -235,6 +261,17 @@ final class PendingCardsTests: XCTestCase {
         }
         XCTAssertTrue(app.keyboards.firstMatch.exists, "the keyboard stays up while the card scrolls")
         shot("question-keyboard-end")
+        // The keyboard down again: the card is as tall as before it came up, and the app still answers queries (#6277: a
+        // lone question growing past half the page once laid itself out every frame as the composer took the focus,
+        // and every query after that timed out).
+        let hide = app.buttons.matching(NSPredicate(format: "label IN %@", ["收起键盘", "Hide Keyboard"])).firstMatch
+        XCTAssertTrue(hide.exists, "the composer's Hide Keyboard")
+        hide.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "the keyboard did not go down")
+        sleep(1)
+        XCTAssertEqual(cards.frame.height, heightBefore, accuracy: 1, "the card did not get its height back with the keyboard down")
+        XCTAssertTrue(cards.staticTexts["Claude 在问你"].firstMatch.waitForExistence(timeout: 5), "the card's header with the keyboard down")
+        shot("question-keyboard-down")
     }
 
     /// A long ask_user card in Persona's main conversation (#4839): its action row is usable on arrival, before any

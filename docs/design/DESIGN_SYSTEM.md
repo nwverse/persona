@@ -1323,11 +1323,12 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   "N pending" is left off a lone card. One exception to the half page (iOS and iPadOS, #6277): a lone question card,
   with the keyboard down and no voice call, may grow past half the page until the conversation keeps
   `Theme.Size.cardThreadRoom` (72 pt, about two lines of a message) in view under the chat's header as it stands open
-  (more once an Agents header has folded to its slim bar), and never less than the half page it had. A short question
-  then shows its question, every option and Other without scrolling; what still does not fit (the smallest iPhone, the
-  largest text sizes) scrolls inside the card, which is laid out as fitting (no "N pending", no scrolling stack). The cap
-  is made only from values the card does not move (the page, the open header, what the footer holds besides the cards),
-  so it settles at once. Several cards, the keyboard up and a
+  (more once an Agents header has folded to its slim bar), and never less than the half page it had. On an iPhone 17 Pro
+  a question with three options with descriptions then shows whole, with 54 pt to spare. What still does not fit scrolls
+  inside the card: on iPhone SE at the default text size the third option's description and Other, a fourth described
+  option in a card of several questions, the largest text sizes. The card is laid out as fitting (no "N pending", no
+  scrolling stack). The cap is made only from values the card does not move (the page, the open header, what the footer
+  holds besides the cards), so it settles at once. Several cards, the keyboard up and a
   voice call keep their rules above. Each card folds on its own: a tap on its header folds it to one line, its title and
   what it asks, and another opens it; any can be folded to answer later. A message typed while a card waits is sent as
   any other, also while a permission holds the Agent (iOS sends it the same way). Each style keeps its own card: on

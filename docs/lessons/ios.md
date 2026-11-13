@@ -1713,9 +1713,11 @@ no initial Working row so the message shifted by one row, and pending local remo
   the cap's inputs in `body` and looking for two lines that alternate.
 - Measured against the open header, the conversation keeps `cardThreadRoom` only while that header is open; once an
   Agents header settles to its slim bar (40 pt, the open one is 90 pt with one row) the conversation keeps 50 pt more.
-- With a taller card the conversation overflows and the Agents header folds. XCUITest does not call the slim bar's back
-  button hittable (it reports the 8 x 13 pt chevron), yet a tap at its coordinate leaves the chat. Check it on screen and
-  tap it by coordinate rather than `isHittable` (`PendingCardsTests.testLoneQuestionShowsEveryOption`).
+- With a taller card the conversation overflows and the Agents header folds to its slim bar. XCUITest reports that bar's
+  back button as the 8 x 13 pt chevron and not hittable: a known limit of these tests, so
+  `PendingCardsTests.testLoneQuestionShowsEveryOption` checks it on screen and taps it by its coordinate. It is not a
+  way around the button itself: the slim bar's back is a plain button without `.contentShape(.rect)` (`ChatView`'s
+  `compactChrome`), so its real touch area may be little more than the chevron. That is on `main` and not fixed here.
 - `-ui.scheme light|dark` makes the app icon follow the appearance, and SpringBoard's "You have changed the icon"
   alert covers the screenshot and takes taps: dismiss it through `com.apple.springboard` after launch.
 
