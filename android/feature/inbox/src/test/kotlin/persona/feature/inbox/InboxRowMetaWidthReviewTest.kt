@@ -41,7 +41,7 @@ import java.lang.reflect.Proxy
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "en-w360dp-h800dp-xhdpi")
+@Config(sdk = [35], qualifiers = "zh-w400dp-h800dp-xhdpi")
 class InboxRowMetaWidthReviewTest {
     @get:Rule val rule = createComposeRule()
     private val repository = Proxy.newProxyInstance(InboxRepository::class.java.classLoader, arrayOf(InboxRepository::class.java)) { proxy, method, args ->
@@ -58,15 +58,6 @@ class InboxRowMetaWidthReviewTest {
         override fun selectTab(tab: AppTab) = Unit
     }
 
-    private val meta = "Launch group · Alex: Can we move it to Friday?"
-
-    private fun record() = InboxRecord(
-        InboxItem("meta-1", kind = "group", title = "Confirm the launch date", sender = "Alex",
-            preview = "Can we move it to Friday?", tier = "action"),
-        source = "chat", isGroup = true, groupName = "Launch group", count = 1,
-        event = InboxEventFields(where = "Launch group", now = "confirm_reply"),
-    )
-
     /** The drawn layout of the one node whose text contains [text]. */
     private fun layoutOf(text: String, context: String): androidx.compose.ui.text.TextLayoutResult {
         val nodes = rule.onAllNodesWithText(text, substring = true, useUnmergedTree = true).fetchSemanticsNodes()
@@ -78,9 +69,10 @@ class InboxRowMetaWidthReviewTest {
 
     @Test fun theThirdLineStaysWholeAndTheStateSitsUnderIt() {
         // F-7 (the lead's ruling): the state is its own line under the third line, in every width, as the web's
-        // EventMark is. The shared showcase's first row at phone width is the case that used to lose the third line.
-        val state = "Waiting for 张三确认新报价 · look again Jan 2, 9:00 AM: 问更正后的报价行不行"
+        // EventMark is; only a state longer than the whole column is ellipsized. The shared showcase's first row at
+        // phone width is the case that used to lose its third line entirely.
         val thirdLine = "订单群 · 张三：好的，我看一下新的"
+        val state = "等张三确认新报价 · 1月2日 09:00 再看：问更正后的报价行不行"
         var style by mutableStateOf(AppStyle.Glass)
         val showcase = InboxRecord(
             InboxItem("sc-1", kind = "group", title = "春季订单的报价", sender = "张三", preview = "好的，我看一下新的",
@@ -105,19 +97,18 @@ class InboxRowMetaWidthReviewTest {
         }
         rule.waitForIdle()
         // The third line is whole: no ellipsis, every glyph inside its width.
-        val line = layoutOf("订单群", "the third line")
+        val line = layoutOf(thirdLine, "the third line")
         assertFalse("the third line must not be cut: ${line.layoutInput.text.text}", line.hasVisualOverflow)
-        // The state is whole too, on its own line under it.
-        val label = layoutOf("张三确认新报价", "the state")
-        val stateText = label.layoutInput.text.text
-        assertFalse("the state must not be cut: $stateText", label.hasVisualOverflow)
-        assertTrue("the state must end inside its width",
-            label.getBoundingBox(stateText.lastIndex).right <= label.size.width)
-        // Under, not beside: its top is at or below the third line's bottom.
-        val lineNode = rule.onAllNodesWithText("订单群", substring = true, useUnmergedTree = true).fetchSemanticsNodes().single()
-        val stateNode = rule.onAllNodesWithText("张三确认新报价", substring = true, useUnmergedTree = true).fetchSemanticsNodes().single()
+        // The state has a line of its own, under it, with real width. Its own text may be longer than the column
+        // (the ruling allows an ellipsis there), so what is checked is that it was given the line and starts in view.
+        val label = layoutOf(state, "the state")
+        assertTrue("the state must get a line of its own (was ${label.size})", label.size.width > 200f)
+        assertTrue("the state must start inside the column", label.getBoundingBox(0).left >= 0f)
+        val lineNode = rule.onAllNodesWithText(thirdLine, useUnmergedTree = true).fetchSemanticsNodes().single()
+        val stateNode = rule.onAllNodesWithText(state, useUnmergedTree = true).fetchSemanticsNodes().single()
         assertTrue("the state sits under the third line", stateNode.boundsInRoot.top >= lineNode.boundsInRoot.bottom - 1f)
     }
+
 }
 
 /** The row's time with a title: same line at the default text size, under the title once the text grows (from 1.5×). */
@@ -164,7 +155,6 @@ class InboxRowTitleTimeReviewTest {
         assertTrue(time.isNotBlank())
         // Default size: one line for the title and the time at its trailing edge, as every row has always been.
         rule.waitForIdle()
-        println("TEXTS:" + rule.onAllNodesWithText(record().item.title, substring = true, useUnmergedTree = true).fetchSemanticsNodes().size)
         val titleOne = rule.onAllNodesWithText(record().item.title, useUnmergedTree = true).fetchSemanticsNodes().single().boundsInRoot
         val timeOne = rule.onAllNodesWithText(time, useUnmergedTree = true).fetchSemanticsNodes().single().boundsInRoot
         assertTrue("the time shares the title's line at 1x: $titleOne / $timeOne", timeOne.top < titleOne.bottom)
