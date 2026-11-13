@@ -2425,3 +2425,14 @@ different flags (testable imports), so each rebuilds swift-syntax from scratch a
 (Xcode 27.2), which is why `scripts/ci/apple.sh` builds the lint from a fixed copy beside its build output. An editor
 that opens the package (`scripts/test/isolation-lint`) leaves a `.build` folder inside it; git ignores that folder, but
 `scripts/test/test_script_layout.py` walks ignored files too and fails on the git hook samples in it, so delete it.
+
+## An alert's buttons keep the state they came up with (2026-11-14, #6996)
+
+- Rename Terminal (`RenameTerminalAlert` in `apple/Persona/Views/Chats/TerminalsView.swift`) first had
+  `Button("Save") { … }.disabled(!TabRename.canSave(name, …))`, reading the alert's own `TextField`. On iPhone (iOS 27
+  simulator) a tap on Save after typing a new name did nothing, and the alert stayed up with the new text, though the
+  accessibility tree called Save enabled. Save was drawn in the same blue while it was disabled too, so the system alert
+  never showed the state either. The same test passed on iPad.
+- Don't gate an alert's actions on what is typed into it. Check in the action instead (an empty or unchanged name saves
+  nothing, as Rename Space and Rename Agent do), and limit the length with `.onChange` on the field's text.
+- A UI test that types and taps Save, then checks what reached the mock, catches it; asserting `isEnabled` does not.

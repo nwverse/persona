@@ -613,7 +613,7 @@ nonisolated enum TabRename {
     /// The name as the computer keeps it: each run of white space one space, none at the ends.
     static func cleaned(_ name: String) -> String { name.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
 
-    /// Save is on for a name the computer takes that isn't the one it has.
+    /// A name the computer takes that isn't the one it has: anything else saves nothing.
     static func canSave(_ name: String, current: String) -> Bool {
         let c = cleaned(name)
         return !c.isEmpty && c.count <= maxLength && c != cleaned(current)
@@ -652,7 +652,9 @@ nonisolated enum TabRename {
     }
 }
 
-/// Rename Terminal… (#6996): one field filled with the tab's name; Save once it is a new name the computer takes.
+/// Rename Terminal… (#6996): one field filled with the tab's name, taking up to `TabRename.maxLength` characters. Save is
+/// never dimmed: an alert on iPhone keeps the state its buttons came up with, so a Save disabled by the starting name
+/// ignored the tap once a new one was typed. As Rename Space does, an empty or unchanged name saves nothing.
 private struct RenameTerminalAlert: ViewModifier {
     @Binding var target: TabRename.Target?
     var save: (TabRename.Target, String) -> Void
@@ -664,12 +666,14 @@ private struct RenameTerminalAlert: ViewModifier {
                 TextField(String(localized: "Terminal name"), text: $name)
                     .accessibilityIdentifier("terminals.renameField")
                 Button("Cancel", role: .cancel) {}
-                Button("Save") { save(t, name) }
-                    .disabled(!TabRename.canSave(name, current: t.name))
+                Button("Save") { if TabRename.canSave(name, current: t.name) { save(t, name) } }
             } message: { _ in
                 Text("The name changes on the computer too.")
             }
             .onChange(of: target) { _, t in if let t { name = t.name } }
+            .onChange(of: name) { _, typed in
+                if typed.count > TabRename.maxLength { name = String(typed.prefix(TabRename.maxLength)) }
+            }
     }
 }
 

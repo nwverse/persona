@@ -35,7 +35,6 @@ final class TerminalsRenameUITests: XCTestCase {
 
             let field = prompt(app)
             XCTAssertEqual(field.value as? String, "shell", "the prompt does not start from the tab's name")
-            XCTAssertFalse(app.alerts.buttons["保存"].isEnabled, "Save is on for the name it has")
             shot(app, "prompt-\(scheme)")
             let before = try actions().count
             retype(field, "  dev   server ")
