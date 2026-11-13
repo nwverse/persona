@@ -305,7 +305,6 @@
  "web/src/views/settings/ProviderPaste.tsx": 13,
  "web/src/views/settings/ProviderScope.tsx": 8,
  "web/src/views/settings/ProviderWizard.tsx": 56,
- "web/src/views/settings/Repositories.tsx": 15,
  "web/src/views/settings/SentSettings.tsx": 20,
  "web/src/views/settings/SettingsParts.tsx": 10,
  "web/src/views/settings/ShortcutSettings.tsx": 2,
