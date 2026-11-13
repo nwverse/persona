@@ -267,22 +267,22 @@ function TodoSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
     await suggestionAct(item, action, action === "confirm" && title.trim() !== s.text ? title.trim() : undefined, action === "confirm" ? dueOf(day, allDay ? "" : time) : undefined);
     setActing("");
   };
-  const field = "h-8 rounded-control bg-field px-2.5 text-[13px] text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
+  const field = "h-8 rounded-control bg-field px-2.5 text-meta text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
   return (
     <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion="todo">
-      <p className="flex items-center gap-1.5 text-[11.5px] font-medium whitespace-nowrap text-accent-ink"><span><Spark />{suggestionTitle(s)}</span></p>
+      <p className="flex items-center gap-1.5 text-label font-medium whitespace-nowrap text-accent-ink"><span><Spark />{suggestionTitle(s)}</span></p>
       <input value={title} onChange={(e) => setTitle(e.target.value)} aria-label={t("inbox-inboxevent.todo_title")} className={cx(field, "mt-2 w-full")} data-todo-title />
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <input type="date" value={day} onChange={(e) => setDay(e.target.value)} aria-label={t("inbox-inboxevent.todo_day")} className={field} data-todo-day />
         {day && !allDay && <input type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label={t("inbox-inboxevent.todo_time")} className={field} data-todo-time />}
         {day && (
-          <label className="flex items-center gap-2 text-[12.5px] whitespace-nowrap text-ink-2">
+          <label className="flex items-center gap-2 text-meta whitespace-nowrap text-ink-2">
             <Switch on={allDay} onChange={setAllDay} label={t("inbox-inboxevent.todo_all_day")} />
             {t("inbox-inboxevent.todo_all_day")}
           </label>
         )}
       </div>
-      {s.note && <p className="mt-1.5 text-[12px] leading-relaxed text-ink-3">{s.note}</p>}
+      {s.note && <p className="mt-1.5 text-label leading-relaxed text-ink-3">{s.note}</p>}
       <div className="mt-3 flex flex-wrap justify-end gap-2">
         <Button tone="quiet" disabled={busy && acting !== "reject"} busy={acting === "reject"} onClick={() => void act("reject")}>{t("inbox-inboxevent.reject")}</Button>
         <Button tone="accent" icon="check" disabled={!title.trim() || (busy && acting !== "confirm")} busy={acting === "confirm"} onClick={() => void act("confirm")}>{t("lib-inbox-events.add_todo")}</Button>
