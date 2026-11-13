@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/lcuconfirm"
+	"github.com/nwverse/persona/server/internal/mcpwait"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -65,7 +66,11 @@ func (n *Node) elicitLCU(ctx context.Context, conversation string, params json.R
 		return map[string]any{"action": "cancel"}, nil
 	}
 	var out map[string]any
-	if err := n.peer.Call(ctx, "computer.elicit", map[string]any{"conversation": conversation, "params": json.RawMessage(params)}, &out); err != nil {
+	request := map[string]any{"conversation": conversation, "params": json.RawMessage(params)}
+	if callID := mcpwait.CallFrom(ctx); callID != "" {
+		request["call_id"] = callID
+	}
+	if err := n.peer.Call(ctx, "computer.elicit", request, &out); err != nil {
 		return map[string]any{"action": "cancel"}, nil
 	}
 	return out, nil
@@ -82,6 +87,7 @@ func (n *Node) lcuComputerCall(ctx context.Context, params json.RawMessage) (*pr
 		Tool         string          `json:"tool"`
 		Args         json.RawMessage `json:"args"`
 		KeepAwake    bool            `json:"keep_awake"`
+		CallID       string          `json:"call_id"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
@@ -95,7 +101,7 @@ func (n *Node) lcuComputerCall(ctx context.Context, params json.RawMessage) (*pr
 	}
 	ctx, cancel := context.WithTimeout(ctx, lcuCallTimeout)
 	defer cancel()
-	return n.lcuSession().call(ctx, name, args, p.Session, p.Conversation)
+	return n.lcuSession().call(mcpwait.WithCall(ctx, p.CallID), name, args, p.Session, p.Conversation)
 }
 
 func (s *lcuSession) call(ctx context.Context, name string, args map[string]any, session, conversation string) (*proto.ComputerResult, error) {

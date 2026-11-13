@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/mcpwait"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -32,6 +33,7 @@ type computerCallSeen struct {
 	Args       map[string]any `json:"args"`
 	KeepAwake  bool           `json:"keep_awake"`
 	ClickSound string         `json:"click_sound"`
+	CallID     string         `json:"call_id"`
 }
 
 // computerMac is a Mac whose node answers computer.status and computer.call as a node with Cua Driver set up does, and
@@ -268,6 +270,9 @@ func TestComputerToolsCallTheNode(t *testing.T) {
 		if !c.KeepAwake {
 			t.Fatalf("「操作或开着 VNC 时保持唤醒」 is on unless turned off: %+v", c)
 		}
+		if c.CallID != "" {
+			t.Fatalf("a non-opted-in computer call carried an MCP correlator: %+v", c)
+		}
 	}
 	if err := h.extensions.reg.SetConfig(ctx, cuaExtensionID, json.RawMessage(`{"machines": ["mac"], "keep_awake": false, "app_approval": false}`), "test"); err != nil {
 		t.Fatal(err)
@@ -275,6 +280,11 @@ func TestComputerToolsCallTheNode(t *testing.T) {
 	h.callComputerTool(ctx, "conv1234-5678", "computer_run", json.RawMessage(`{"machine": "mac", "steps": `+steps+`}`))
 	if _, calls = seen(); calls[len(calls)-1].KeepAwake {
 		t.Fatal("turned off: the node keeps nothing awake")
+	}
+	res = h.callComputerTool(mcpwait.WithCall(ctx, "call-computer"), "conv1234-5678", "computer_run",
+		json.RawMessage(`{"machine": "mac", "steps": `+steps+`}`))
+	if _, calls = seen(); res.IsError || calls[len(calls)-1].CallID != "call-computer" {
+		t.Fatalf("an opted-in computer call lost its MCP correlator: %+v, %+v", calls[len(calls)-1], res)
 	}
 	if got := stepActions(json.RawMessage(steps)); strings.Join(got, " ") != "click press_key" {
 		t.Fatalf("the log names the actions only: %v", got)

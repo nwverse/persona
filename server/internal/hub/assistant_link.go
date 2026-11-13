@@ -285,6 +285,7 @@ func (h *Hub) appTool(ctx context.Context, from, app string, params json.RawMess
 		Arguments json.RawMessage `json:"arguments"`
 		MachineID string          `json:"machine_id"`
 		SessionID string          `json:"session_id"`
+		CallID    string          `json:"call_id"`
 	}
 	if err := json.Unmarshal(params, &a); err != nil {
 		return nil, err
@@ -300,7 +301,7 @@ func (h *Hub) appTool(ctx context.Context, from, app string, params json.RawMess
 		if m == nil {
 			return nil, fmt.Errorf("%w %q", assistantwire.ErrNoDevice, a.MachineID)
 		}
-		res, err = h.toolPersonaSettings(ctx, from, m, a.SessionID, a.Arguments)
+		res, err = h.toolPersonaSettings(ctx, from, m, a.SessionID, a.Arguments, h.mcpWaitReporter(from, a.MachineID, a.CallID))
 	default:
 		return nil, fmt.Errorf("app %s has no tool %s", app, a.Name)
 	}

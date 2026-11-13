@@ -216,7 +216,7 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 		}
 		var res proto.ToolResult
 		params := map[string]any{"name": name, "args": args}
-		mcpWaitPhone(ctx, params)
+		mcpWaitParams(ctx, params)
 		if err := s.appCall(ctx, assistantwire.AppPhone, assistantwire.PhoneCall, params, &res); err != nil {
 			return proto.TextResult(err.Error(), true)
 		}

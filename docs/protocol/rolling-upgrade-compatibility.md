@@ -95,8 +95,10 @@ before. An old manager ignores the optional fields and publishes no updates, so 
 A new node never sends an interim line to a client that did not opt in.
 
 Live updates use the existing `devices.notify` event `mcp.wait {call_id, kind}` and local interim lines
-`{"wait_kind":kind}`. Managers that accept phone-confirmation relays declare `mcp_wait_v1` in `manager.hello`; the hub
-checks the current connection before each such relay. No peer is required to understand a new event: absent updates
+`{"wait_kind":kind}`. Managers that accept hub-mediated approval relays declare `mcp_wait_v1` in `manager.hello`; the hub
+checks the current connection before each such relay. The optional `call_id` on `computer.call` and `computer.elicit`
+correlates a nested LCU interaction without another connection; old peers omit or ignore it and publish no nested update.
+No peer is required to understand a new event: absent updates
 mean `unknown`, and every receiver normalizes an unrecognized enum to `unknown`. The four terminal messages are a
 presentation mapping only; `unknown | approval | answer | computer` is the entire wire state. Nothing is persisted,
 and removing the pending call before its final socket write prevents late updates after the answer.

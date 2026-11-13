@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/mcpwait"
 )
 
 func TestLCUElicitationIsAnsweredOnTheCardAndNeverImplied(t *testing.T) {
@@ -17,6 +19,9 @@ func TestLCUElicitationIsAnsweredOnTheCardAndNeverImplied(t *testing.T) {
 	sess := newLCUSession(func(ctx context.Context, conv string, raw json.RawMessage) (map[string]any, error) {
 		if conv != "conv-1" {
 			t.Errorf("conversation %q", conv)
+		}
+		if callID := mcpwait.CallFrom(ctx); callID != "call-lcu" {
+			t.Errorf("MCP call ID %q", callID)
 		}
 		if string(raw) == "" {
 			t.Error("empty elicitation")
@@ -32,6 +37,7 @@ func TestLCUElicitationIsAnsweredOnTheCardAndNeverImplied(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	ctx = mcpwait.WithCall(ctx, "call-lcu")
 	res, err := sess.call(ctx, "js", map[string]any{"code": "return 1"}, "persona-abcd", "conv-1")
 	if err != nil {
 		t.Fatal(err)

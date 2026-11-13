@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/mcpwait"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -37,6 +38,7 @@ func (s *Service) mcpWaitContext(ctx context.Context, machine, callID string, en
 	r.mu.Lock()
 	r.publishLocked(proto.MCPWaitComputer)
 	r.mu.Unlock()
+	ctx = mcpwait.WithCall(ctx, callID)
 	return context.WithValue(ctx, mcpWaitContextKey{}, r)
 }
 
@@ -82,9 +84,9 @@ func pushMCPWait(ctx context.Context, kind proto.MCPWaitKind) func() {
 	}
 }
 
-// mcpWaitPhone adds only the correlators the hub needs to relay a phone confirmation's wait kind back through the
-// existing devices.notify channel. The tool name and arguments stay in their existing fields, never in the signal.
-func mcpWaitPhone(ctx context.Context, params map[string]any) {
+// mcpWaitParams adds only the correlators the hub needs to relay an approval's wait kind back through the existing
+// devices.notify channel. The tool name and arguments stay in their existing fields, never in the signal.
+func mcpWaitParams(ctx context.Context, params map[string]any) {
 	if r := mcpWaitFrom(ctx); r != nil {
 		params["call_id"], params["machine_id"] = r.callID, r.machine
 	}

@@ -42,7 +42,7 @@ Turning off the extension or a machine removes the tools and entry points; Cua D
 
 When LCU's runtime actually touches an App (and a website origin when Chrome is open), it asks the client through MCP `elicitation/create`: allow once, allow for this session, always allow, deny; high-risk actions carry its own warning, and websites offer allow or deny. Official adapters hand these to Claude, Codex and Pi's own interfaces.
 
-Persona doesn't register those adapters. The node handles this elicitation itself as the MCP client, and the hub's `computer.elicit` turns it into the **existing** phone and web approval cards (the same `permission` cards used by Ask Before First Operating an App and Confirm on Phone Before Acting; `question` when there are more options):
+Persona doesn't register those adapters. The node handles this elicitation itself as the MCP client, and the hub's `computer.elicit` turns it into the **existing** phone and web approval cards (the same `permission` cards used by Ask Before First Operating an App and Confirm on Phone Before Acting; `question` when there are more options). For an MCP call that opted into wait updates, the existing `computer.call` and `computer.elicit` requests carry only the node's opaque `call_id` so the terminal's progress also follows this nested card; older calls omit it:
 
 | Runtime request | Card |
 | --- | --- |

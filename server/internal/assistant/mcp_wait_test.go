@@ -15,6 +15,15 @@ type mcpWaitDevices struct {
 	events chan devicewire.NodeEvent
 }
 
+type mcpWaitElicitExtension struct {
+	ExtensionTools
+	answer func(context.Context) (map[string]any, error)
+}
+
+func (e *mcpWaitElicitExtension) AnswerComputerElicit(ctx context.Context, _ string, _ json.RawMessage) (map[string]any, error) {
+	return e.answer(ctx)
+}
+
 func (d *mcpWaitDevices) Notify(event devicewire.NodeEvent) { d.events <- event }
 
 func newMCPWaitTest(t *testing.T) (*fleetTest, chan devicewire.NodeEvent) {
@@ -75,6 +84,36 @@ func TestMCPWaitPermissionPublishesApprovalThenComputer(t *testing.T) {
 	}
 }
 
+func TestMCPWaitDirectPermissionPublishesApprovalThenComputer(t *testing.T) {
+	ft, events := newMCPWaitTest(t)
+	ctx := ft.s.mcpWaitContext(context.Background(), "mac", "call-direct-permission", true)
+	nextMCPWaitEvent(t, events, "call-direct-permission", proto.MCPWaitComputer)
+	ix := proto.Interaction{ID: "ix_direct_permission", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission,
+		ToolName: "todo_delete", Summary: "permission text must not be relayed", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ft.s.ask(ctx, ix)
+		done <- err
+	}()
+	nextMCPWaitEvent(t, events, "call-direct-permission", proto.MCPWaitApproval)
+	var answer chan proto.Resolution
+	waitFor(t, "the direct permission", func() bool {
+		ft.s.questions.mu.Lock()
+		defer ft.s.questions.mu.Unlock()
+		if q := ft.s.questions.m[ix.ID]; q != nil {
+			answer = q.answer
+			return true
+		}
+		return false
+	})
+	allow := true
+	answer <- proto.Resolution{Allow: &allow}
+	nextMCPWaitEvent(t, events, "call-direct-permission", proto.MCPWaitComputer)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMCPWaitQuestionPublishesAnswerThenComputer(t *testing.T) {
 	ft, events := newMCPWaitTest(t)
 	ctx := ft.s.mcpWaitContext(context.Background(), "mac", "call-question", true)
@@ -124,6 +163,53 @@ func TestMCPWaitNodeRequestRequiresOptIn(t *testing.T) {
 	select {
 	case event := <-events:
 		t.Fatalf("a call without wait_updates published %s", event.Params)
+	default:
+	}
+}
+
+func TestMCPWaitComputerElicitUsesSeparateRPCCorrelator(t *testing.T) {
+	ft, events := newMCPWaitTest(t)
+	ix := proto.Interaction{ID: "ix_lcu", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission,
+		ToolName: "computer_run", Summary: "permission text must not be relayed", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
+	ft.s.SetExtensions(&mcpWaitElicitExtension{answer: func(ctx context.Context) (map[string]any, error) {
+		_, err := ft.s.askHub(ctx, ix)
+		return map[string]any{"action": "accept"}, err
+	}})
+	type answer struct {
+		handled bool
+		err     error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		_, handled, err := ft.s.NodeRequest(context.Background(), "mac", "computer.elicit",
+			json.RawMessage(`{"conversation":"session","params":{},"call_id":"call-lcu"}`))
+		done <- answer{handled: handled, err: err}
+	}()
+	nextMCPWaitEvent(t, events, "call-lcu", proto.MCPWaitComputer)
+	nextMCPWaitEvent(t, events, "call-lcu", proto.MCPWaitApproval)
+	ft.waitPending(1)
+	allow := true
+	if err := ft.s.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+		t.Fatal(err)
+	}
+	nextMCPWaitEvent(t, events, "call-lcu", proto.MCPWaitComputer)
+	if got := <-done; !got.handled || got.err != nil {
+		t.Fatalf("computer.elicit handled = %v, err = %v", got.handled, got.err)
+	}
+
+	ft.s.SetExtensions(&mcpWaitElicitExtension{answer: func(ctx context.Context) (map[string]any, error) {
+		if mcpWaitFrom(ctx) != nil {
+			t.Error("an old computer.elicit received a live reporter")
+		}
+		return map[string]any{"action": "cancel"}, nil
+	}})
+	if _, handled, err := ft.s.NodeRequest(context.Background(), "mac", "computer.elicit",
+		json.RawMessage(`{"conversation":"session","params":{}}`)); !handled || err != nil {
+		t.Fatalf("old computer.elicit handled = %v, err = %v", handled, err)
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("an old computer.elicit published %s", event.Params)
 	default:
 	}
 }

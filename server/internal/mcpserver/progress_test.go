@@ -1,15 +1,20 @@
 package mcpserver
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -27,40 +32,108 @@ func (t *manualProgressTicker) ticks() <-chan time.Time { return t.ch }
 func (t *manualProgressTicker) Stop()                   { t.once.Do(func() { close(t.stopped) }) }
 func (t *manualProgressTicker) beat()                   { t.ch <- time.Time{} }
 
-// waitingCall is a node whose tool call waits until release, or until its caller hangs up. Its ticker is advanced by
-// the test, so no assertion depends on a wall-clock sleep.
+// waitingCall is a real local node socket whose tool call waits until release, or until its caller hangs up. Its ticker
+// is advanced by the test, so no assertion depends on a wall-clock sleep. Updates travel through nodeclient's interim
+// line decoder exactly as they do in production.
 type waitingCall struct {
-	tick    *manualProgressTicker
-	state   atomic.Pointer[mcpWaitState]
-	release chan struct{}
-	once    sync.Once
+	tick      *manualProgressTicker
+	state     atomic.Pointer[mcpWaitState]
+	requested atomic.Bool
+	requests  chan map[string]any
+	updates   chan proto.MCPWaitKind
+	release   chan struct{}
+	done      chan struct{}
+	once      sync.Once
 }
 
 func waitingNode(t *testing.T) *waitingCall {
 	t.Helper()
-	call := &waitingCall{tick: newManualProgressTicker(), release: make(chan struct{})}
+	t.Setenv("HOME", t.TempDir())
+	path := nodeclient.SocketPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := &waitingCall{tick: newManualProgressTicker(), requests: make(chan map[string]any, 1),
+		updates: make(chan proto.MCPWaitKind), release: make(chan struct{}), done: make(chan struct{})}
 	oldDial, oldTicker := dialNode, newProgressTicker
 	newProgressTicker = func(time.Duration) progressTicker { return call.tick }
-	dialNode = func(ctx context.Context, _ any) ([]byte, error) {
+	dialNode = func(ctx context.Context, req any) ([]byte, error) {
 		call.state.Store(mcpWaitFrom(ctx))
-		select {
-		case <-call.release:
-			return []byte(`{"content":[{"type":"text","text":"saved"}]}`), nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+		return nodeclient.DialInterruptible(ctx, req)
 	}
-	t.Cleanup(func() { dialNode, newProgressTicker = oldDial, oldTicker })
-	t.Cleanup(call.stop)
+	go func() {
+		defer close(call.done)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		line, err := bufio.NewReader(conn).ReadBytes('\n')
+		if err != nil {
+			return
+		}
+		var request map[string]any
+		if json.Unmarshal(line, &request) != nil {
+			return
+		}
+		call.requests <- request
+		call.requested.Store(true)
+		for {
+			select {
+			case kind := <-call.updates:
+				line, _ := json.Marshal(map[string]any{"wait_kind": kind})
+				if _, err := conn.Write(append(line, '\n')); err != nil {
+					return
+				}
+			case <-call.release:
+				_, _ = conn.Write([]byte(`{"content":[{"type":"text","text":"saved"}]}` + "\n"))
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		dialNode, newProgressTicker = oldDial, oldTicker
+		call.stop()
+		_ = listener.Close()
+		select {
+		case <-call.done:
+		case <-time.After(5 * time.Second):
+			t.Error("the fake node socket did not stop")
+		}
+	})
 	return call
 }
 
 func (c *waitingCall) stop() { c.once.Do(func() { close(c.release) }) }
 func (c *waitingCall) ready() bool {
-	return c.state.Load() != nil
+	return c.requested.Load()
 }
-func (c *waitingCall) set(kind proto.MCPWaitKind) {
-	c.state.Load().set(kind)
+func (c *waitingCall) request(t *testing.T) map[string]any {
+	t.Helper()
+	select {
+	case request := <-c.requests:
+		return request
+	case <-time.After(5 * time.Second):
+		t.Fatal("the MCP call did not reach the node socket")
+		return nil
+	}
+}
+func (c *waitingCall) set(t *testing.T, kind proto.MCPWaitKind) {
+	t.Helper()
+	select {
+	case c.updates <- kind:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fake node did not accept a wait update")
+	}
+	want := proto.NormalizeMCPWaitKind(kind)
+	waitFor(t, "the MCP receiver to apply "+string(want), func() bool {
+		state := c.state.Load()
+		return state != nil && state.current() == want
+	})
 }
 
 // serve runs Serve on a pipe: send writes a line to it, out is what it wrote, end closes its input and waits.
@@ -201,6 +274,9 @@ func TestServeProgressMessagesFollowWaitKind(t *testing.T) {
 	send, out, end := serve(t)
 	send(`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"ask_user","arguments":{},"_meta":{"progressToken":"tok-8"}}}`)
 	waitFor(t, "the node call", call.ready)
+	if optedIn, _ := call.request(t)["wait_updates"].(bool); !optedIn {
+		t.Fatal("a token-bearing MCP call did not opt into wait updates")
+	}
 	steps := []struct {
 		kind proto.MCPWaitKind
 		want string
@@ -211,7 +287,7 @@ func TestServeProgressMessagesFollowWaitKind(t *testing.T) {
 		{proto.MCPWaitKind("a future value with text that must not be echoed"), "Still waiting"},
 	}
 	for i, step := range steps {
-		call.set(step.kind)
+		call.set(t, step.kind)
 		call.tick.beat()
 		waitFor(t, step.want, func() bool {
 			got := progressMessages(t, out)
@@ -233,6 +309,10 @@ func TestServeSendsNoProgressWithoutAToken(t *testing.T) {
 	call := waitingNode(t)
 	send, out, end := serve(t)
 	send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask_user","arguments":{}}}`)
+	waitFor(t, "the tokenless node call", call.ready)
+	if _, optedIn := call.request(t)["wait_updates"]; optedIn {
+		t.Fatal("a call without a progress token opted into wait updates")
+	}
 	for range 3 {
 		call.tick.beat()
 	}

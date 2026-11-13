@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lcuconfirm"
+	"github.com/nwverse/persona/server/internal/mcpwait"
 	"github.com/nwverse/persona/server/internal/protectedapps"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -584,10 +585,14 @@ func (h *Manager) computerCall(ctx context.Context, m *Machine, session, convers
 	var res proto.ComputerResult
 	s := h.cua()
 	backend := h.callBackend(m)
-	if err := m.callBuiltin(ctx, "computer.call", map[string]any{
+	params := map[string]any{
 		"session": session, "conversation": conversation, "tool": tool, "args": args,
 		"backend": backend, "keep_awake": s.awake(), "click_sound": s.ClickSound,
-	}, &res); err != nil {
+	}
+	if callID := mcpwait.CallFrom(ctx); callID != "" {
+		params["call_id"] = callID
+	}
+	if err := m.callBuiltin(ctx, "computer.call", params, &res); err != nil {
 		if backend == "lcu" && strings.Contains(err.Error(), "is not a tool") {
 			return nil, errors.New(i18n.T(h.userLang(), "hub-computer.err_outdated_lcu"))
 		}

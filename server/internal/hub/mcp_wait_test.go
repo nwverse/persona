@@ -55,6 +55,36 @@ func TestMCPWaitReporterUsesCurrentManagerCapability(t *testing.T) {
 	}
 }
 
+func TestHubApprovalWaitReportsApprovalThenComputer(t *testing.T) {
+	h := newTestHub(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	h.askVia = func(context.Context, proto.Interaction) (proto.Resolution, error) {
+		close(started)
+		<-release
+		allow := true
+		return proto.Resolution{Allow: &allow}, nil
+	}
+	kinds := make(chan proto.MCPWaitKind, 2)
+	done := make(chan proto.Resolution, 1)
+	go func() {
+		res, _ := h.waitMCPApproval(context.Background(), proto.Interaction{ID: "ix_settings", Kind: proto.IxPermission},
+			func(kind proto.MCPWaitKind) { kinds <- kind })
+		done <- res
+	}()
+	<-started
+	if kind := <-kinds; kind != proto.MCPWaitApproval {
+		t.Fatalf("pending settings card kind = %q", kind)
+	}
+	close(release)
+	if kind := <-kinds; kind != proto.MCPWaitComputer {
+		t.Fatalf("resolved settings card kind = %q", kind)
+	}
+	if res := <-done; !res.UserAllowed() {
+		t.Fatalf("settings resolution = %+v", res)
+	}
+}
+
 func TestCallPhoneReportsApprovalThenComputer(t *testing.T) {
 	h := newTestHub(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

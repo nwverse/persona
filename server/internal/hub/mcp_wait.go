@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -8,7 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// mcpWaitReporter relays a phone confirmation's enum through the manager that owns the pending call's machine. It
+// mcpWaitReporter relays an approval's enum through the manager that owns the pending call's machine. It
 // checks the current connection on every send and stops if that manager is replaced or no longer owns the machine.
 // No state is kept after the call.
 func (h *Hub) mcpWaitReporter(from, machine, callID string) func(proto.MCPWaitKind) {
@@ -28,4 +29,13 @@ func (h *Hub) mcpWaitReporter(from, machine, callID string) func(proto.MCPWaitKi
 			MachineID: machine, Event: proto.EventMCPWait, Params: params,
 		})
 	}
+}
+
+// waitMCPApproval reports the hub's own permission card while it is pending, then restores remote execution on every exit.
+func (h *Hub) waitMCPApproval(ctx context.Context, ix proto.Interaction, report func(proto.MCPWaitKind)) (proto.Resolution, error) {
+	if report != nil {
+		report(proto.MCPWaitApproval)
+		defer report(proto.MCPWaitComputer)
+	}
+	return h.waitInteraction(ctx, ix)
 }
