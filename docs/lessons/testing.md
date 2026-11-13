@@ -1032,3 +1032,13 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - Don't detect a missing tool by one wording of its error: ask it directly in the test's own environment
   (`scripts/test/compose_cli.py` runs `docker compose version`) and skip with how to enable the check
   (`PERSONA_TEST_DOCKER_CONFIG`, `docs/operations/hub-update.md`).
+
+## A throw-away HOME also hides the login keychain from codesign (2026-11-13, #6368)
+
+- `codesign -s <certificate>` looks for the identity in the keychains of `$HOME`: under the temporary `HOME` the
+  nodeupdate tests set in `TestMain`, a certificate that signs fine from the same shell says `no identity found`. The
+  real-certificate test (`TestRealCertificateSigning`) sets `HOME` back to the user's home (`os/user`) for itself.
+- And the keychain must be open to the process: run from a `Background` session (an ssh login, a terminal an Agent
+  drives) codesign fails with `errSecInternalComponent`. Run such a test where the resident node runs, in the login
+  session: a one-shot job in `gui/$(id -u)` (`launchctl bootstrap`, then `bootout`); `launchctl managername` says `Aqua`
+  there.
