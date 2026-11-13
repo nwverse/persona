@@ -483,7 +483,7 @@ func (s *Service) appCall(ctx context.Context, app, method string, params, out a
 // sessions are a machine's sessions as the apps get them; ErrNoDevice when the hub has no such machine.
 func (s *Service) sessions(ctx context.Context, machine string) ([]proto.Session, error) {
 	list, _, err := s.sessionsMuted(ctx, machine)
-	return list, err
+	return s.deletionRows(ctx, machine, list, false), err
 }
 
 // sessionsMuted is sessions, and which of them are muted (the agent or its space: pushes off), by session id, as

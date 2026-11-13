@@ -11,12 +11,19 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-const deletedConversationsKey = "assistant.deleted_conversations"
+const deletedConversationsKey = db.ConversationDeletionsKey
+
+type durableConversationDeletions interface {
+	PutConversationDeletion(context.Context, string, string, json.RawMessage) error
+	ConversationDeletion(context.Context, string, string) (json.RawMessage, bool, error)
+	ConversationDeletedID(context.Context, string) (bool, error)
+}
 
 // A tombstone keeps reference identity, never the deleted conversation's words.
 // The computer's transcript, task origins and previously derived records remain.
@@ -35,7 +42,8 @@ type conversationDeleteBook struct {
 
 func (s *Service) loadDeletedConversations(ctx context.Context) error {
 	b := &s.deletedConversations
-	if b.loaded {
+	_, durable := s.store().(durableConversationDeletions)
+	if b.loaded && !durable {
 		return nil
 	}
 	rows := map[string]deletedConversation{}
@@ -52,6 +60,17 @@ func (s *Service) loadDeletedConversations(ctx context.Context) error {
 }
 
 func (s *Service) deletedConversation(ctx context.Context, machine, id string) (deletedConversation, bool, error) {
+	if st, ok := s.store().(durableConversationDeletions); ok {
+		raw, found, err := st.ConversationDeletion(ctx, machine, id)
+		if err != nil || !found {
+			return deletedConversation{}, false, err
+		}
+		var row deletedConversation
+		if err := json.Unmarshal(raw, &row); err != nil {
+			return row, false, err
+		}
+		return row, true, nil
+	}
 	b := &s.deletedConversations
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -185,6 +204,17 @@ func (s *Service) deleteConversation(ctx context.Context, machine, id string) er
 	if st == nil {
 		return errors.New("no database")
 	}
+	row := deletedConversation{Machine: machine, ID: id, Space: spaceOf(c), At: time.Now().UTC()}
+	if durable, ok := st.(durableConversationDeletions); ok {
+		raw, err := json.Marshal(row)
+		if err != nil {
+			return err
+		}
+		if err := durable.PutConversationDeletion(ctx, machine, id, raw); err != nil {
+			return err
+		}
+		return s.finishDeletedConversation(ctx, machine, id)
+	}
 	b := &s.deletedConversations
 	b.mu.Lock()
 	if err := s.loadDeletedConversations(ctx); err != nil {
@@ -195,7 +225,7 @@ func (s *Service) deleteConversation(ctx context.Context, machine, id string) er
 	for key, row := range b.rows {
 		next[key] = row
 	}
-	next[runtimeListID(machine, id)] = deletedConversation{Machine: machine, ID: id, Space: spaceOf(c), At: time.Now().UTC()}
+	next[runtimeListID(machine, id)] = row
 	if err := st.PutSetting(ctx, deletedConversationsKey, next); err != nil {
 		b.mu.Unlock()
 		return err
@@ -266,6 +296,16 @@ func (s *Service) conversationIDAvailable(ctx context.Context, id string) error 
 }
 
 func (s *Service) conversationIDAvailableLocked(ctx context.Context, id string) error {
+	if st, ok := s.store().(durableConversationDeletions); ok {
+		deleted, err := st.ConversationDeletedID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if deleted {
+			return &rpc.Error{Code: "conversation_deleted", Message: i18n.T(s.lang(ctx), "assistant-conversation_delete.deleted")}
+		}
+		return nil
+	}
 	if err := s.loadDeletedConversations(ctx); err != nil {
 		return err
 	}
@@ -296,13 +336,16 @@ func conversationWrite(method string) bool {
 // Check every referenced identity: a resume may name both a new session id and
 // the old transcript it would copy, and neither may bypass a tombstone.
 func (s *Service) conversationParamsAvailable(ctx context.Context, machine string, params any) error {
-	b := &s.deletedConversations
-	b.mu.Lock()
-	err := s.loadDeletedConversations(ctx)
-	marked := len(b.rows) > 0
-	b.mu.Unlock()
-	if err == nil && !marked {
-		return nil
+	var err error
+	if _, durable := s.store().(durableConversationDeletions); !durable {
+		b := &s.deletedConversations
+		b.mu.Lock()
+		err = s.loadDeletedConversations(ctx)
+		marked := len(b.rows) > 0
+		b.mu.Unlock()
+		if err == nil && !marked {
+			return nil
+		}
 	}
 	var ids [3]string
 	if p, ok := params.(map[string]any); ok {

@@ -111,7 +111,7 @@ func (s *Service) ownConversations(ctx context.Context, archived bool) ([]proto.
 	}
 	var out []proto.Session
 	for _, c := range all {
-		if !c.Assistant || c.Deleted || s.conversationAvailable(ctx, here.MachineID, c.SessionID) != nil || spaceOf(c) != "" || c.Archived && !archived || s.isGuest(ctx, c.MachineID, c.SessionID) {
+		if !c.Assistant || c.Deleted || spaceOf(c) != "" || c.Archived && !archived || s.isGuest(ctx, c.MachineID, c.SessionID) {
 			continue
 		}
 		out = append(out, c)

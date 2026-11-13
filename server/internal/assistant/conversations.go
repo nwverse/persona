@@ -611,7 +611,7 @@ func (s *Service) conversations(ctx context.Context, withArchived bool, space st
 	here := s.settings(ctx)
 	all, _ := s.sessions(ctx, here.MachineID) // none on no machine
 	for _, c := range all {
-		if c.Assistant && !c.Deleted && s.conversationAvailable(ctx, here.MachineID, c.SessionID) == nil && spaceOf(c) == space && (withArchived || !c.Archived) {
+		if c.Assistant && !c.Deleted && spaceOf(c) == space && (withArchived || !c.Archived) {
 			list = append(list, c)
 		}
 	}

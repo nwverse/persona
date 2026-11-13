@@ -66,6 +66,9 @@ func (d *DB) SearchCursors(ctx context.Context) ([]SearchCursorRow, error) {
 // reset drops the conversation's rows first: its transcript was rewritten, so the page starts it over.
 func (d *DB) PutSearchItems(ctx context.Context, machine, session, history string, afterSeq int, items []SearchItemRow, reset bool) error {
 	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		if err := searchConversationAvailableTx(ctx, tx, machine, session); err != nil {
+			return err
+		}
 		b := &pgx.Batch{}
 		if reset {
 			b.Queue(`DELETE FROM assistant_search_items WHERE machine_id = $1 AND session_id = $2`, machine, session)
@@ -93,11 +96,15 @@ func (d *DB) PutSearchItems(ctx context.Context, machine, session, history strin
 // DropSearchConversation removes a conversation from the index: its rows and its cursor.
 func (d *DB) DropSearchConversation(ctx context.Context, machine, session string) error {
 	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
-		b := &pgx.Batch{}
-		b.Queue(`DELETE FROM assistant_search_items WHERE machine_id = $1 AND session_id = $2`, machine, session)
-		b.Queue(`DELETE FROM assistant_search_cursors WHERE machine_id = $1 AND session_id = $2`, machine, session)
-		return tx.SendBatch(ctx, b).Close()
+		return dropSearchConversationTx(ctx, tx, machine, session)
 	})
+}
+
+func dropSearchConversationTx(ctx context.Context, tx pgx.Tx, machine, session string) error {
+	b := &pgx.Batch{}
+	b.Queue(`DELETE FROM assistant_search_items WHERE machine_id = $1 AND session_id = $2`, machine, session)
+	b.Queue(`DELETE FROM assistant_search_cursors WHERE machine_id = $1 AND session_id = $2`, machine, session)
+	return tx.SendBatch(ctx, b).Close()
 }
 
 // PurgeSearch empties the index: every row and every cursor.

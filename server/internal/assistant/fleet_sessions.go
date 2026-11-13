@@ -23,9 +23,8 @@ import (
 // setSessions takes a node's session list: the turns it shows starting and ending (the finished push, the
 // assistant's own business), then the list the apps get.
 func (s *Service) setSessions(machine string, list []proto.Session) {
-	list = slices.DeleteFunc(list, func(row proto.Session) bool {
-		return s.conversationAvailable(context.Background(), machine, row.SessionID) != nil
-	})
+	list = s.deletionRows(context.Background(), machine, list, false)
+	list = slices.DeleteFunc(list, func(row proto.Session) bool { return row.Deleted })
 	before := s.fleetPrevious(machine)
 	now := time.Now()
 	for i := range list {
