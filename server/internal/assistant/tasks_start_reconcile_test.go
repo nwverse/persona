@@ -119,17 +119,33 @@ func startReconcileTask(t *testing.T, s *Service, machine, policy string) Todo {
 	return todo
 }
 
+// lateSessionAfterTheWait has the node on machine show the task's session only after the hub stopped waiting for the
+// start and listed the machine once without it: the session appears from the second sessions.list after
+// session.start, as a tab the node creates after the hub's wait ran out (#6540). slowStart holds the fake until the
+// start's context ends, so every list after the start comes after the wait.
+func lateSessionAfterTheWait(f *fakeHub, machine string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	started, lists := false, 0
+	f.onStart = func(*fakeHub, map[string]any) { started = true }
+	f.onList = func(f *fakeHub, m string) {
+		if m != machine || !started {
+			return
+		}
+		if lists++; lists == 2 {
+			f.sessions[machine] = []proto.Session{{
+				SessionID: "s-late", MachineID: machine, Cwd: "/code/app", Agent: "claude", Launcher: "claude",
+				StartedByPersona: true, Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now().UTC(),
+			}}
+		}
+	}
+}
+
 // The node spends the hub's whole wait but creates the tab afterwards: the hub reconciles the session from the
 // machine's own list and links it to the task — no failure, no receipt, no second start (#6540).
 func TestTaskStartAdoptsTheSessionThatStartedLate(t *testing.T) {
 	s, f := reconcileHub(t, "box")
-	go func() {
-		time.Sleep(250 * time.Millisecond) // after taskStartTimeout, while the reconciliation is still listing
-		f.setSessions("box", proto.Session{
-			SessionID: "s-late", MachineID: "box", Cwd: "/code/app", Agent: "claude", Launcher: "claude",
-			StartedByPersona: true, Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now().UTC(),
-		})
-	}()
+	lateSessionAfterTheWait(f, "box")
 	todo := startReconcileTask(t, s, "box", machineFixed)
 	waitFor(t, "the late session to be linked", func() bool { return len(todoNow(s, todo.ID).Agents) == 1 })
 
@@ -161,13 +177,7 @@ func TestTaskStartAdoptionLinksOnADetachedContext(t *testing.T) {
 	st := newCtxAwareLinkStore()
 	s := newServiceOn(t, f, st)
 	ctx := context.Background()
-	go func() {
-		time.Sleep(250 * time.Millisecond) // after taskStartTimeout, while the reconciliation is still listing
-		f.setSessions("box", proto.Session{
-			SessionID: "s-late", MachineID: "box", Cwd: "/code/app", Agent: "claude", Launcher: "claude",
-			StartedByPersona: true, Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now().UTC(),
-		})
-	}()
+	lateSessionAfterTheWait(f, "box")
 	todo, err := s.createTodo(ctx, "超时对账", "把活干完", "conv1", "plan_x")
 	if err != nil {
 		t.Fatal(err)
@@ -242,13 +252,7 @@ func TestUnknownTaskStartNeverReroutesAFlexibleTask(t *testing.T) {
 		// box carries a failing record (what used to justify the detour); alt is healthy and has the directory.
 		s.recordHealth(ctx, "box", "claude", healthResult{err: "context deadline exceeded", source: healthSourceStart})
 		s.recordHealth(ctx, "alt", "claude", healthResult{ok: true, source: healthSourceCheck})
-		go func() {
-			time.Sleep(250 * time.Millisecond)
-			f.setSessions("box", proto.Session{
-				SessionID: "s-late", MachineID: "box", Cwd: "/code/app", Agent: "claude", Launcher: "claude",
-				StartedByPersona: true, Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now().UTC(),
-			})
-		}()
+		lateSessionAfterTheWait(f, "box")
 		todo := startReconcileTask(t, s, "box", machineFlexible)
 		waitFor(t, "the late session to be linked", func() bool { return len(todoNow(s, todo.ID).Agents) == 1 })
 
