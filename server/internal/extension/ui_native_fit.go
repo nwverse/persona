@@ -16,11 +16,9 @@ func FitNative(raw []byte, slot UISlot, version int, lang i18n.Lang) (json.RawMe
 	if err := wire.ValidateJSON("UIStreamView", raw); err != nil {
 		return nil, err
 	}
-	if err := wire.CheckViewJSON(raw); err != nil {
-		return nil, err
-	}
-	var view View
-	if err := json.Unmarshal(raw, &view); err != nil {
+	// The View CheckViewJSON decoded and checked is the one fitted.
+	view, err := wire.DecodeCheckedViewJSON(raw)
+	if err != nil {
 		return nil, err
 	}
 	before, err := json.Marshal(view)

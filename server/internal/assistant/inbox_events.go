@@ -26,6 +26,7 @@ const (
 // Chain entry kinds (InboxChainEntry.Kind).
 const (
 	ChainReceived    = "received"
+	ChainMerged      = "merged" // rows merged by hand, or split again (inbox_merge.go)
 	ChainTriaged     = "triaged"
 	ChainHandling    = "handling"
 	ChainSent        = "sent"
@@ -68,6 +69,7 @@ const (
 	LinkSource  = "source"
 	LinkSession = "session"
 	LinkItem    = "item"
+	LinkTodo    = "todo" // a to-do the row was turned into (inbox_todo.go, #6480)
 )
 
 // InboxChainEntry is one key call on an event.
@@ -401,7 +403,7 @@ func (b *inboxBook) noteSelfReplied(it *InboxItem, at time.Time) {
 
 // noteSent records a message Persona sent for the item. Under b.mu.
 func (b *inboxBook) noteSent(it *InboxItem, at time.Time) {
-	key := "sent_other"
+	key := "sent_reply"
 	switch {
 	case it.Lark != nil:
 		key = "sent_lark"
