@@ -143,8 +143,10 @@ Server packages with database tests call `dbtest.Main` in their `TestMain`: the 
 
 ## Bounded server package verification
 
-An external PR verifier that calls `go -C server test` directly does not use the node partitions. From the repository
-root, the existing runner can verify either reported package set under one 600-second outer deadline:
+Since #6286, a plain `go -C server test` uses the node package's own partitions (see "Hosted CI" above).
+Diagnostic runs with `-json` or `-v` keep their normal event stream and do not use that automatic split.
+The existing runner also supports those diagnostic flags and can verify either reported package set under one
+600-second outer deadline:
 
 ```sh
 cd server
@@ -159,8 +161,9 @@ Use an isolated test environment, with a disposable database when database cover
 prepares Postgres 18). The deadline includes discovery, compilation and execution. Exit 124 is a timeout; another
 nonzero exit is a failure, even when every partition finishes. Report existing opt-in/platform skips separately.
 The runner preserves caller flags, including `-skip` and `-race`; a caller's `-run` keeps the command unpartitioned.
-Compare like commands: a partitioned result does not establish that direct `go test` passed. Adopting this command
-in a verifier outside the repository requires its maintainer to update that verifier.
+Compare like commands: an explicit runner result does not establish that direct `go test` passed. A verifier
+needs a maintainer change only to adopt this explicit entrypoint or diagnostic flags; the plain node split is
+part of the test binary. Earlier measurements from before #6286 describe the serial plain command.
 
 Shared node fixtures declare their scripted shell ready immediately; shell-readiness tests use `watchShell` to
 exercise observation instead. Scripted Claude and Codex hosts poll every 20 ms; timing-sensitive start tests use

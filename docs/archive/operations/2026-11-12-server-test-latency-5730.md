@@ -1,10 +1,11 @@
 # Shared server test latency: fixed-revision verification (#5730)
 
 > Historical measurements: the November 12 comparisons use their explicitly recorded sources, not the
-> branch after synchronizing main on November 13. That synchronization incorporates main
-> `5474a23c63c7abd61a3d1126f675796987fc7bbe`, including later upstream test fixes. The old timing and failure
-> data remains evidence for those earlier sources only. Current-source results are recorded in
-> "Main synchronization on November 13" below.
+> branch after synchronizing main on November 13. The first synchronization incorporates main
+> `5474a23c63c7abd61a3d1126f675796987fc7bbe`; a later synchronization incorporates
+> `a74f49300d54054d28c4ca1549a41a9ffa31c6fb`, including #6286's automatic plain-run partitions and resident
+> test isolation. Each timing and failure measurement describes only its recorded source.
+> See the dated synchronization and recent-PR comparison sections below.
 
 Audience: contributors and maintainers running bounded server verification. This record concerns shared test cost,
 independently of the Web skill picker (#5473) and ZIP importer (#5581). It does not establish either feature's merge readiness.
@@ -54,8 +55,9 @@ The same validation exposed a race in `TestCodexStartAndTurns`: it reassigned th
 turn-completed notification was still listing sessions. Fixed main reproduces the identical write/read race.
 Configuring the test directory before starting its transport preserves the image/turn assertions and removes that race.
 
-This reuses the partition runner already merged in #5615/#5675; those changes are not part of this delivery. Direct `go test`
-still does not select partitions automatically. See `docs/operations/testing.md` ("Bounded server package verification") for adoption.
+This reuses the partition runner already merged in #5615/#5675; those changes are not part of this delivery. At the
+November 12 sources, direct `go test` did not select partitions automatically. The later synchronization retains
+that behavior's upstream replacement from #6286. See `docs/operations/testing.md` ("Bounded server package verification").
 
 ## Before/after measurements
 
@@ -376,3 +378,119 @@ Raw output and dynamic subtest names remain private.
 - No shell/workflow/UI implementation differs from synchronized main, so additional shell/workflow lint or UI/native
   screenshots are not applicable to this merge resolution. Nothing was merged upstream or deployed, and no new
   GitHub comment/review was sent. External verification remains separate from the local results above.
+
+## Recently merged PR comparison on November 13
+
+Merge status alone is not evidence that the same external command passed. The following public records were
+read when investigating why recently merged PRs appeared unaffected:
+
+| PR | Available verification evidence |
+| --- | --- |
+| [#6264](https://github.com/nwverse/persona/pull/6264) | The external plain `go test -count=1 ./internal/node` timed out at 600 s. The author's local two-partition runs completed in 321/375 s; the follow-up explains the merge used that local verification. |
+| [#6261](https://github.com/nwverse/persona/pull/6261) | The external assistant/node/proto command timed out at 600 s. The author reports a 673.3 s local node run with a larger Go timeout; the reviewer reports focused validation. This is not a 600 s full-command pass. |
+| [#6233](https://github.com/nwverse/persona/pull/6233) | The external seven-package command timed out at 600 s. The author's partitioned node verification retains two failures also seen on their main. |
+| [#6290](https://github.com/nwverse/persona/pull/6290) | Its reported eight affected packages do not include `internal/node`, so they do not exercise the real-browser test. |
+| [#6286](https://github.com/nwverse/persona/pull/6286) | The verifier finished node in 160.028 s, then 149.897 s, both FAIL. The later report names `TestResidentReloadReapsIdleProcessesBeforeTransportEnds`. The final version fixes that test's home isolation. |
+
+The [#6264 timeout](https://github.com/nwverse/persona/pull/6264#issuecomment-6843933661),
+[#6261 timeout](https://github.com/nwverse/persona/pull/6261#issuecomment-6843855473),
+[#6233 timeout](https://github.com/nwverse/persona/pull/6233#issuecomment-6843303871), and
+[#6286 named failure](https://github.com/nwverse/persona/pull/6286#issuecomment-6844165003) are different outcomes
+from #5845's [493.632 s package FAIL at 96c1deb30](https://github.com/nwverse/persona/pull/5845#issuecomment-6842853882).
+The older #5845 reports do not name a failed assertion. Their cause remains unknown; the named failure on another
+PR is not proof of the same cause here. No additional external logs are requested or awaited.
+
+`liveTab` already skips in short mode or when no browser is found; when one is found, startup must succeed.
+Those merged PRs do not supply per-test terminal evidence distinguishing a browser pass from an existing skip.
+Locally, an independent launch probe with the same CDP pipe arguments, an owned profile and the sandbox enabled
+aborts with `No usable sandbox!`, before `Browser.getVersion` answers. The Playwright browser's user-namespace
+UID mapping fails, and its installed helper is not a setuid sandbox. This explains the local failure, not the
+external #5845 FAIL. Browser/CDP/launcher/live-test source is identical between the fixed main and this PR;
+no sandbox bypass, host permission or global policy change was made.
+
+The resident-test comparison uses only disposable homes. A parent holds a real `flock` on the fixture's
+`.persona/node-attach.sock.run` while running the existing reload test three times in a child test binary.
+On both main `5474a23c63c7` and PR code `d875f617235a` (also the code at docs-only `96c1deb30`), the test passes
+3/3 without the held lock and fails 3/3 with `a resident node is already running (...run is locked)` when it is held.
+An overlay containing only #6286's `shortHome(t)` addition passes 3/3 in either case. The parent's lock remains
+held throughout; there is no live-node access, socket deletion or leftover owned process. This demonstrates an
+existing test-isolation defect and validates the upstream correction without attributing the old external failure.
+
+The next synchronization pins main `a74f49300d54054d28c4ca1549a41a9ffa31c6fb` and merges it into the original
+PR branch as `c428e8bfcdbb13b55a7f169ae48a8201769fae14`, without conflicts. It retains #6286's automatic plain-run
+partitions, failure summary and resident isolation, #6264's machine-Claude isolation, and #6261's Codex validation
+alongside this PR's fixtures. These are upstream fixes, not new work claimed by #5845. No new scheduler or
+production browser change is introduced by this PR. Older timing samples remain tied to their recorded sources.
+
+
+## Verification after retaining the upstream plain-run partitions
+
+Fixed baseline: `a74f49300d54054d28c4ca1549a41a9ffa31c6fb`. Optimized code:
+`c428e8bfcdbb13b55a7f169ae48a8201769fae14`. Documentation commits after that code source do not change its
+test implementation. The baseline is an isolated archive of that exact main tree. Both sources use Go 1.27.1,
+Linux/amd64, 32 allowed CPUs, the same warm shared Go caches and a fresh owned HOME/temp/runtime per command.
+The host is shared; the receipts preserve load samples rather than claiming exclusive resources.
+Major Go jobs execute sequentially. Each command keeps the 600 s outer deadline, including its Go invocation.
+
+| Complete command | Fixed main | Optimized code |
+| --- | --- | --- |
+| Direct eight-package `go test -count=1` | 218.692 s / exit 1 / no outer timeout | 218.549 s / exit 1 / no outer timeout |
+| Direct five-package `go test -count=1` | 218.736 s / exit 1 / no outer timeout | 218.869 s / exit 1 / no outer timeout |
+| Eight-package existing explicit runner, `-json -count=1` | 409.955 s / exit 1 / no outer timeout | 327.483 s / exit 1 / no outer timeout |
+
+Every completed direct run names only `TestPreviewDrivesARealBrowser` as failing. The original resident reload
+test is present and no longer fails; it retains the upstream home isolation. These are full failure outcomes,
+not green suites. Direct runs now use #6286's six automatic node partitions. Their complete node inventories
+are 2,558 roots on main and 2,571 after this PR's 13 added regressions. The diagnostic `-json` runs explicitly
+use the pre-existing two-partition Python entrypoint, since `-json` disables automatic splitting.
+
+In the direct eight-package comparison, node execution is 182.216 s on main and 122.165 s
+after the fixture changes (33.0% lower). Overall direct wall time is essentially
+unchanged because assistant, at about 216 s in both runs, is now the longer package. The automatic scheduler
+belongs to upstream #6286; this PR's contribution remains the measured fixture cost reduction. These observations
+do not reinterpret the historical 600 s direct timeouts from earlier sources.
+
+The JSON audit is separate from raw direct output, which contains package results and named failures but not
+a complete per-test event stream:
+
+| Diagnostic terminal audit | Fixed main | Optimized code |
+| --- | --- | --- |
+| Root outcomes | 7,069 pass / 405 existing skip / 1 fail | 7,081 pass / 405 existing skip / 2 fail |
+| Inventoried roots | 7,475 | 7,488 |
+| Sum of root elapsed times | 1141.930 s | 944.280 s |
+
+Of 17,445 common terminal identities, 17,444 retain identical states. There are
+25 added identities in this PR's 13 regression roots,
+0 removed identities and 1 common identity with a changed state.
+Both inventories have zero missing/unexpected roots, duplicate runs/terminals or unfinished identities.
+
+The one changed state is `TestAgentsSwitchFilterBusyAndMovedMeanwhile` in assistant: main passes, while this
+head's diagnostic run fails at `agents_switch_test.go:154` with `moved meanwhile, switched anyway` and two
+`session.modes, session.switch, session.modes` call sequences. Assistant passes in all four direct commands.
+The assistant and related package source is identical to fixed main. This root was introduced by upstream
+#6233 and is absent at `96c1deb30`, so it cannot explain that older external verifier failure. Its cause remains
+unresolved; this single difference is not classified as a regression, known main failure, environment error or
+flake. Further targeted main/head reproduction is required before attributing this difference to any change;
+the full head result is not green.
+
+Private nested manifests have published SHA-256 digests; dynamic subtest names and raw logs remain private.
+No new skip or timeout increase is introduced relative to this fixed main.
+
+Compilation is recorded separately: main 28.803 s, head
+24.512 s, before matched execution. Supervisor cleanup is recorded separately in every
+receipt, with zero remaining owned processes. The full exact argv, package results, partition summaries, source
+SHAs, guard outcomes and diagnostic reconciliation are in the
+[fixed-main partition receipts](2026-11-13-server-test-main-partitions-5730.json).
+
+- All 13 fixture regression roots passed 20 repetitions: 25 identities and exactly 500 pass terminals.
+- The affected selection, extended with the upstream partition/log/failure-summary tests and resident reload root,
+  passed `-race -count=3` (143.614 s wall); the exact pattern is in the receipts.
+- The full server build lane passed (88.695 s): formatting/vet, Linux/Windows build checks,
+  release-tag programs, tagged tests, schema/SDK checks and Go SDK tests.
+- Complete `herdrlive` node test compilation passed (12.114 s); no live agent started.
+- Repository guards, four document checks and existing Python partition/environment suites passed. No sleep
+  baseline, shell/workflow implementation, UI or native code differs from this fixed main because of this PR.
+- No database URL was provided; existing database/platform/opt-in skips remain visible. Local Chrome still lacks
+  a usable sandbox, as independently diagnosed above. That environment failure is not fixed or skipped here,
+  and it does not identify the older external verifier failures on #5845. No hosted CI green result, upstream
+  merge or deployment is claimed.
