@@ -534,9 +534,25 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_assistant_config_dir")}
 		}
 	}
+	if method == "session.send" && !nodeHas(info, nodeproto.LauncherSwitchNow) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			SwitchNow bool `json:"switch_now"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if fields.SwitchNow {
+			// An older node would take it as apply_switch alone: typed on the launcher the agent runs on while it is
+			// busy, the switch left waiting for the user (the assistant's agent_switch, #5973).
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_launcher_switch_now")}
+		}
+	}
 	if method == proto.MethodModelHTTP && !nodeHas(info, nodeproto.ModelHTTP) {
 		// An older node would answer "unknown method": an API connection that sends through it says to update it.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_http")}
+	}
+	if method == proto.MethodModelRun && !nodeHas(info, nodeproto.ModelRun) {
+		// The same for an API purpose that runs on a launcher there.
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_run")}
 	}
 	if method == proto.MethodSecretRun && !nodeHas(info, nodeproto.SecretRun) {
 		// An older node would answer "unknown method"; this says what to do about it before the user types anything.

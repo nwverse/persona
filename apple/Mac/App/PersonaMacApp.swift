@@ -108,7 +108,7 @@ extension AppModel {
         guard let cfg = ServerConfig(pairURL: url.absoluteString) else { return }
         guard MacPairing.accepts(isPaired: isPaired, isDemo: isDemo) else {
             let host = config?.url.host() ?? String(localized: "a hub")
-            toast = Toast(String(localized: "Already connected to \(host). To switch hubs, disconnect in Settings › Server first."), style: .error)
+            toast = Toast(String(localized: "Already connected to \(host). To switch hubs, disconnect in Settings › Hub › Devices & Pairing first."), style: .error)
             return
         }
         Task {
@@ -227,6 +227,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationC
         #endif
         AppModel.shared.start()
         MacAttentionWatcher.shared.start(AppModel.shared)
+        AppIconBadgeWatcher.shared.start(AppModel.shared) // the Dock badge (#5824)
         MacMenuBarState.shared.start(AppModel.shared)
         MacShellState.shared.watchKeyWindow()
         #if DEBUG

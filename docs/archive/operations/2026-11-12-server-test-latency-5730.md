@@ -1,5 +1,10 @@
 # Shared server test latency: fixed-revision verification (#5730)
 
+> Historical measurements: the comparisons below use the explicitly recorded November 12 sources, not the
+> branch after synchronizing main on November 13. That synchronization incorporates main
+> `5474a23c63c7abd61a3d1126f675796987fc7bbe`, including later upstream test fixes. The old timing and failure
+> data remains evidence for those earlier sources only; it is not a current-head performance or verification claim.
+
 Audience: contributors and maintainers running bounded server verification. This record concerns shared test cost,
 independently of the Web skill picker (#5473) and ZIP importer (#5581). It does not establish either feature's merge readiness.
 

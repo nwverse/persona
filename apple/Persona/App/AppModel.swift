@@ -195,10 +195,30 @@ final class AppModel {
     /// What a chat's model last did on each Mac (`ComputerActivity`), kept by the open chat: the live screen shows it
     /// over the picture.
     var computerActivities: [MachineRef: ComputerActivity] = [:]
-    var openChat: SessionKey?
+    var openChat: SessionKey? {
+        didSet { if openChat != nil { agentsNavigationRevision += 1 } }
+    }
+    /// Cancels deferred list resets even after a newer targeted open has already been consumed.
+    @ObservationIgnored private(set) var agentsNavigationRevision = 0
+    /// An explicit Agents-tab selection returns to its list; targeted opens do not change this request.
+    var agentsListReveal = 0
+
+    /// User navigation, unlike `open` (notifications / links): choosing Agents discards its retained detail.
+    func selectHomeTab(_ tab: AppTab) {
+        if tab == .chats {
+            openChat = nil
+            openPersonalAgent = nil
+            Self.rememberChat(nil)
+            agentsNavigationRevision += 1
+            agentsListReveal = agentsNavigationRevision
+        }
+        if selectedTab != tab { selectedTab = tab }
+    }
     /// A personal agent's conversation to open on the Agents page, over its list (a Spotlight result, #4519): ChatsView
     /// takes it as it takes `openChat`.
-    var openPersonalAgent: PersonalAgentSession?
+    var openPersonalAgent: PersonalAgentSession? {
+        didSet { if openPersonalAgent != nil { agentsNavigationRevision += 1 } }
+    }
     /// A chat to open at its latest answer, like a finished one from the list (ChatView takes it): a tap on a
     /// "Done" notification. From the background the session list is stale (the agent still reads as working until the
     /// hub's next list), so the chat cannot tell by itself that this turn finished unseen (2026-10-31).
@@ -421,11 +441,14 @@ final class AppModel {
             guard let self, self.isPaired, !self.isDemo else { return }
             WatchSync.shared.push(persona: self.personas.chosenID)
             self.pushWatchConfigs()
-            WatchSync.shared.push(summary: self.watchSummary())
+            summariesChanged()
         }
         personas.onChange = { [weak self] in
             self?.applyPersonaPalette()
             self?.followAppIcon()
+            #if os(iOS)
+            HomeWidgetWriter.shared.schedule()
+            #endif
         }
         applyPersonaPalette()
         connection.onCaughtUp = { [weak self] in self?.flushOutbox() }
@@ -436,9 +459,17 @@ final class AppModel {
         #endif
         for name in leaving {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { @Sendable [weak self] _ in
-                MainActor.assumeIsolated { self?.flushSnapshot() }
+                MainActor.assumeIsolated {
+                    self?.flushSnapshot()
+                    #if os(iOS)
+                    HomeWidgetWriter.shared.flush() // the widgets keep what the app last showed
+                    #endif
+                }
             }
         }
+        #if os(iOS)
+        HomeWidgetWriter.shared.source = { [weak self] in self?.homeSnapshotSource() }
+        #endif
         #if os(iOS) || os(visionOS)
         if registryUnreadable {
             NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil,
@@ -1714,7 +1745,7 @@ final class AppModel {
             let asked = Date.now
             guard let ixs = try? await api(group)?.interactions() else { return }
             replaceInteractions(group, ixs, askedAt: asked)
-            WatchSync.shared.push(summary: watchSummary())
+            summariesChanged()
         }
     }
 
@@ -1872,7 +1903,7 @@ final class AppModel {
             olds.append((old, list))
         }
         if lists != sessionsByMachine { sessionsByMachine = lists }
-        WatchSync.shared.push(summary: watchSummary())
+        summariesChanged()
         for (old, new) in olds {
             for session in new where session.assistant == true {
                 chats[session.key]?.updateQueuePhotoMarks(queued: session.queued, own: session.ownQueuedCount)
@@ -1962,9 +1993,17 @@ final class AppModel {
             }
             #endif
             Task { await refreshInAppTunnel(group) }
-            Task { await refreshManagerRoster(group) }
+            let rosterRead = Task { await refreshManagerRoster(group) }
             // Back on the hub: an install that moved on while the connection was down shows where it is now (#3307).
-            if isHub, Set(hello.features).hasExtensionFeature("operations") { Task { await ExtensionOperations.shared.reload() } }
+            if isHub, Set(hello.features).hasExtensionFeature("operations") {
+                Task {
+                    await ExtensionOperations.shared.reload()
+                    await rosterRead.value
+                    if managerRoster != nil, let manager = assistantManagerID {
+                        await ExtensionOperations.shared.reload(manager: manager)
+                    }
+                }
+            }
             if isHub { flushErrorReports(group) } // the feature may have come or gone with this hello (#5621)
             if isHub, link(group)?.isDemo == false { learnedRecordingDay(hello) }
             #if DEBUG && (os(iOS) || os(visionOS))
@@ -2155,14 +2194,14 @@ final class AppModel {
             interactions[ix.uid] = ix
             noteScreenCard(ix, live: true)
             if announces { Haptics.attention() }
-            WatchSync.shared.push(summary: watchSummary())
+            summariesChanged()
         case .interactionResolved(let id, let assistant):
             let uid = group.isEmpty ? id : group + "|" + id
             endedInteractionIDs.insert(uid)
             answering.hubEnded(uid)
             if let assistant, let ix = interactions[uid] { keepDelegated(ix, assistant) }
             interactions[uid] = nil
-            WatchSync.shared.push(summary: watchSummary())
+            summariesChanged()
         case .interactionReanswered(let id, let answers):
             noteReanswer(group.isEmpty ? id : group + "|" + id, answers)
         case .toolCall(let callID, let name, let args):
@@ -3734,6 +3773,15 @@ final class AppModel {
         Haptics.attention()
     }
 
+    /// What the watch's summary and the Home Screen widgets show may have changed: the watch gets the summary, and
+    /// the widgets' snapshot is written soon, coalesced (`HomeWidgetWriter`, docs/apple/home-widgets.md).
+    func summariesChanged() {
+        WatchSync.shared.push(summary: watchSummary())
+        #if os(iOS)
+        HomeWidgetWriter.shared.schedule()
+        #endif
+    }
+
     func watchSummary() -> WatchSummary {
         // A quiet task's agent and its questions are the main conversation's (#1731).
         let (live, asking) = QuietTasks.leavingOut(sessions: allSessions.filter { $0.status.isLive }, interactions: pendingInteractions,
@@ -3796,6 +3844,7 @@ struct Toast: Identifiable, Equatable {
 /// No taptic engine on Apple Vision Pro: the system's own sounds and the hover effect are the feedback.
 enum Haptics {
     static func tap() {}
+    static func selection() {}
     static func success() {}
     static func error() {}
     static func attention() {}
@@ -3803,6 +3852,8 @@ enum Haptics {
 #else
 enum Haptics {
     static func tap() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    /// A tick as something dragged reaches a new place (a to-do on the calendar at the next quarter hour or day).
+    static func selection() { UISelectionFeedbackGenerator().selectionChanged() }
     static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
     static func error() { UINotificationFeedbackGenerator().notificationOccurred(.error) }
     static func attention() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }

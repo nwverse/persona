@@ -9,8 +9,8 @@ const claude = (permission_mode?: string, extra: Partial<Session> = {}): Session
 describe("header mode", () => {
   it("draws each mode with the composer picker's symbol (#5324)", () => {
     expect(["default", "acceptEdits", "plan", "auto", "bypassPermissions"].map(pickerIcon)).toEqual(["palm", "code", "list", "sparkles", "warning"]);
-    // the picker reads a mode not reported yet as Default permissions, as its label does
-    expect(pickerIcon(undefined)).toBe("palm");
+    // a mode not reported yet, however it comes, keeps the raised hand; the label names no mode (#5756)
+    expect([undefined, "", null].map(pickerIcon)).toEqual(["palm", "palm", "palm"]);
   });
 
   it("asks first into Allow all, and out of it where the agent can't come back", () => {
