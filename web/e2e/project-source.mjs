@@ -24,8 +24,9 @@ const switchTo = async (name) => {
 };
 const snapshot = async (page, name) => {
   if (!shots) return;
+  await page.bringToFront();
   await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
-  await page.screenshot({ path: join(shots, name + ".png") });
+  await page.screenshot({ path: join(shots, name + ".png"), timeout: 60000 });
 };
 try {
   for (const width of [1280, 390]) {
@@ -51,6 +52,10 @@ try {
       assert.equal((await (await ready).json()).ready, true);
       await page.getByText("先接上模型", { exact: true }).first().waitFor({ state: "hidden", timeout: 20000 });
       await noStar(page);
+      // The switch restarted the mock; reload to retire the former scenario's cached model-error turn before capture.
+      await page.reload();
+      await page.waitForSelector("main", { timeout: 20000 });
+      await noStar(page);
       await snapshot(page, `setup-complete-${width}-${theme}`);
       console.log(`PASS setup transition: ${width} ${theme}, no star toast or milestone`);
       await page.goto(`${base}/settings?tab=general`);
@@ -70,6 +75,16 @@ try {
       const popup = await popupPromise;
       await popup.waitForURL("https://github.com/nwverse/persona", { timeout: 30000, waitUntil: "domcontentloaded" });
       console.log(`PASS settings link: ${width} ${theme}, opened https://github.com/nwverse/persona`);
+      if (width === 390) {
+        await page.evaluate(() => localStorage.setItem("persona.text-size", "large"));
+        await page.reload();
+        await link.waitFor({ timeout: 20000 });
+        await link.scrollIntoViewIfNeeded();
+        const large = await link.boundingBox();
+        assert.ok(large && large.x >= 0 && large.x + large.width <= width);
+        await snapshot(page, `settings-source-${width}-${theme}-large`);
+        console.log(`PASS largest text size: ${width} ${theme}, link fits`);
+      }
       // Leave attached-browser pages available for inspection; never touch existing tabs.
       if (!args.includes("--cdp")) await context.close();
     }
