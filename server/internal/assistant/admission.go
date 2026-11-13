@@ -333,11 +333,11 @@ func (s *Service) admitTaskStart(ctx context.Context, t *PlanTask) (func(), erro
 	lim := s.limitsFor(ctx, t.Machine, direction, t.Project, cfg)
 	if violation := s.machineViolation(ctx, t.Machine, lim); violation != nil {
 		if t.MachinePolicy != machineFlexible {
-			return nil, s.admissionRefused(ctx, t.Machine, violation)
+			return nil, s.admissionRefused(ctx, t.Machine, direction, violation)
 		}
 		alt, ok := s.rerouteTarget(ctx, t)
 		if !ok {
-			return nil, s.admissionRefused(ctx, t.Machine, violation)
+			return nil, s.admissionRefused(ctx, t.Machine, direction, violation)
 		}
 		from, _ := s.machineByName(ctx, t.Machine)
 		s.reroutePlanTask(ctx, t, from, alt, violation.Text(s.lang(ctx)))
@@ -347,7 +347,7 @@ func (s *Service) admitTaskStart(ctx context.Context, t *PlanTask) (func(), erro
 	// concurrent starts cannot both observe room and both take the last slot.
 	release, violation := s.claimIfAllowed(ctx, t.Machine, direction, lim)
 	if violation != nil {
-		return nil, s.admissionRefused(ctx, t.Machine, violation)
+		return nil, s.admissionRefused(ctx, t.Machine, direction, violation)
 	}
 	return release, nil
 }
@@ -385,8 +385,18 @@ func (s *Service) reroutePlanTask(ctx context.Context, t *PlanTask, from, alt De
 	t.noteWhy(note)
 }
 
-// admissionRefused words a fixed-policy denial, naming the least-loaded alternative when one exists.
-func (s *Service) admissionRefused(ctx context.Context, machineID string, reason *i18n.Message) error {
+// admissionRefused words a fixed-policy denial, naming the least-loaded alternative when one exists, and records one
+// structured log line so a blocked dispatch is visible in the hub log without reading the todo ledger. The line carries
+// only the machine id, the direction id (empty for an agent_start check), the reason's stable i18n key and its numeric
+// args; the user-facing sentence stays in the returned error.
+func (s *Service) admissionRefused(ctx context.Context, machineID, direction string, reason *i18n.Message) error {
+	if reason != nil {
+		if direction != "" {
+			s.logf("admission: refused: machine=%s direction=%s reason=%s args=%v", machineID, direction, reason.Key, reason.Args)
+		} else {
+			s.logf("admission: refused: machine=%s reason=%s args=%v", machineID, reason.Key, reason.Args)
+		}
+	}
 	machine := machineID
 	if d, ok := s.device(ctx, machineID); ok {
 		machine = firstNonEmpty(d.Name, machineID)
@@ -408,7 +418,7 @@ func (s *Service) checkAgentStart(ctx context.Context, machineID string) error {
 	}
 	cfg := s.admissionSettings(ctx)
 	if violation := s.machineViolation(ctx, machineID, s.limitsFor(ctx, machineID, "", "", cfg)); violation != nil {
-		return s.admissionRefused(ctx, machineID, violation)
+		return s.admissionRefused(ctx, machineID, "", violation)
 	}
 	return nil
 }
@@ -424,7 +434,7 @@ func (s *Service) admitAgentStart(ctx context.Context, machineID string) (func()
 	lim := s.limitsFor(ctx, machineID, "", "", cfg)
 	release, violation := s.claimIfAllowed(ctx, machineID, "", lim)
 	if violation != nil {
-		return nil, s.admissionRefused(ctx, machineID, violation)
+		return nil, s.admissionRefused(ctx, machineID, "", violation)
 	}
 	return release, nil
 }
