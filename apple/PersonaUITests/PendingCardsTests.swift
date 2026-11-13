@@ -12,6 +12,8 @@ final class PendingCardsTests: XCTestCase {
     private static let photos = "studio/a1f3c2d4-0000-4000-8000-000000000005"
     private static let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
     private static let askLong = "server/b2e4d6f8-0000-4000-8000-000000000001"
+    /// What folding a question card gives back at least: more than a tap target's row.
+    private static let foldedAtLeast: CGFloat = 44
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -62,6 +64,20 @@ final class PendingCardsTests: XCTestCase {
         }
     }
 
+    /// 「你已更改“Persona”的图标」: the app's icon follows the appearance a launch asks for (`-ui.scheme`), and SpringBoard's
+    /// alert covered the card in the screenshots and took the taps.
+    private func dismissIconAlert() {
+        let ok = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons
+            .matching(NSPredicate(format: "label IN %@", ["OK", "好"])).firstMatch
+        if ok.waitForExistence(timeout: 3) { ok.tap() }
+    }
+
+    private func waitGone(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while element.exists && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.2)) }
+        return !element.exists
+    }
+
     /// The chat's back button, on screen and in reach.
     private func assertBackInReach(file: StaticString = #filePath, line: UInt = #line) {
         let backs = app.buttons.matching(NSPredicate(format: "label == %@", "返回")).allElementsBoundByIndex
@@ -81,6 +97,73 @@ final class PendingCardsTests: XCTestCase {
         XCTAssertTrue(outside.isEmpty, "cut off: \(outside.map { $0.label }) outside \(cards.frame)")
         assertBackInReach()
         shot("one")
+    }
+
+    /// A lone question card, the keyboard down (#6277): it grows past half the page until the conversation keeps a fixed
+    /// minimum above it, so on a phone as tall as an iPhone 17 Pro its question, every option and 「其他回答」 are in the card
+    /// and can be tapped without scrolling. It was held to half the page: two and a half options showed, the rest under
+    /// its edge, with empty conversation above it. At the largest text size (or on a shorter phone) the question is in
+    /// view and what does not fit scrolls inside the card. The card still folds from its header, the composer stays
+    /// usable, and the card's height holds still while the page does (#1580).
+    func testLoneQuestionShowsEveryOption() {
+        continueAfterFailure = true // every look measured and shot, whichever fails
+        for look in ["light", "dark", "largest"] {
+            let extra = look == "largest" ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+                : ["-ui.scheme", look]
+            launch(chat: Self.widget, ["-showSampleQuestion", "YES"] + extra)
+            // Not the turn's work line: at the largest text size it is scrolled out of the short conversation.
+            let cards = app.scrollViews["pending-cards"]
+            XCTAssertTrue(cards.waitForExistence(timeout: 15), "the cards' area (\(look))")
+            dismissIconAlert()
+            sleep(2)
+            shot("lone-question-\(look)")
+            XCTAssertFalse(app.staticTexts["pending-cards-count"].exists, "a lone card has no count over it (\(look))")
+            let area = cards.frame.insetBy(dx: -1, dy: -1)
+            // The question is in view as the card appears, whatever the text size.
+            let question = cards.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "一轮对话里")).firstMatch
+            XCTAssertTrue(question.exists && question.isHittable && question.frame.minY >= cards.frame.minY - 1
+                          && question.frame.minY < cards.frame.maxY, "the question is not in view (\(question.frame) in \(cards.frame), \(look))")
+            // Every option and 「其他回答」 (a field in BeautifulUI's card: its placeholder) in the card, no scrolling.
+            let screen = app.windows.firstMatch.frame
+            if look != "largest", screen.height >= 874 {
+                for label in ["取最长的那段", "永远取最后一段", "永远取唤醒前那段", "其他回答"] {
+                    let el = cards.descendants(matching: .any)
+                        .matching(NSPredicate(format: "label BEGINSWITH %@ OR placeholderValue BEGINSWITH %@", label, label)).firstMatch
+                    XCTAssertTrue(el.exists && el.isHittable && area.contains(el.frame),
+                                  "\(label) needs scrolling (\(el.exists ? "\(el.frame)" : "not drawn") in \(cards.frame), \(look))")
+                }
+            }
+            // The conversation keeps its minimum above the card, under the chat's header and its back button. Over the
+            // longer conversation the header folds to its slim bar, and XCUITest does not call that bar's back hittable:
+            // here it is checked on screen, and the tap at the end checks that it still leaves the chat.
+            let back = app.buttons.matching(NSPredicate(format: "label == %@", "返回")).firstMatch
+            XCTAssertTrue(back.exists && back.frame.minY >= 0 && back.frame.maxY < cards.frame.minY,
+                          "the back button is not on screen over the card (\(back.frame), \(look))")
+            let titles = ["chat.compactTitle", "chat.title"].map { app.buttons[$0].firstMatch }.filter { $0.exists }
+            let head = (titles.map { $0.frame.maxY } + [back.frame.maxY]).max() ?? 0
+            XCTAssertGreaterThanOrEqual(cards.frame.minY - head, 72, "the card leaves the conversation \(cards.frame.minY - head) pt (\(look))")
+            // The composer under the card and usable.
+            let field = app.descendants(matching: .any).matching(NSPredicate(format: "placeholderValue BEGINSWITH %@ OR placeholderValue BEGINSWITH %@", "给", "补充说明")).firstMatch
+            XCTAssertTrue(field.exists && field.isHittable, "the composer (\(look))")
+            XCTAssertLessThanOrEqual(cards.frame.maxY, field.frame.minY + 1, "the card ends above the composer (\(look))")
+            // Still while the page is: its height does not move from one moment to the next (#1580's cap changed every frame).
+            let heights = (0..<5).map { _ -> CGFloat in usleep(200_000); return cards.frame.height }
+            XCTAssertEqual(Set(heights).count, 1, "the card's height moves on a still page: \(heights) (\(look))")
+            // Folded from its header, it gives the conversation its room back.
+            let title = cards.staticTexts["Claude 在问你"].firstMatch
+            XCTAssertTrue(title.exists, "the card's header (\(look))")
+            let open = cards.frame.height
+            title.tap()
+            sleep(1)
+            // Its options go (at the largest text size the folded header still takes three lines).
+            let option = cards.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "取最长的那段")).firstMatch
+            XCTAssertFalse(option.exists && option.isHittable, "folded, the card still shows its options (\(look))")
+            XCTAssertLessThan(cards.frame.height, open - Self.foldedAtLeast, "folded, the card is \(cards.frame.height) pt (was \(open), \(look))")
+            shot("lone-question-folded-\(look)")
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: back.frame.midX, dy: back.frame.midY)).tap()
+            XCTAssertTrue(waitGone(cards), "a tap on the back button did not leave the chat (\(look))")
+            app.terminate()
+        }
     }
 
     /// The keyboard up to answer (#1912): the question card is whole above the composer, or scrolls in all the room the
