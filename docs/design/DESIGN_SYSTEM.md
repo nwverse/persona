@@ -2215,3 +2215,13 @@ as finished without verifying a star, and opens GitHub outside the app.
   and waits three days. It stays away while requests or sessions need the user, or a search is active.
 - **Onboarding toast**: once per device on Android's setup **Done** (proposed iOS **Get started**), unless Star was
   already tapped. It uses the platform's timed toast and action.
+
+## Repository link preview
+
+Settings › Assistant › Repositories reuses the existing `Dialog`, form controls, inset preview and `Loading`.
+A local parse of each link/provider change immediately replaces the provider, full path and canonical web root in
+an announced status region. Invalid input clears that preview and disables Save; it never leaves the old identity
+visible. The preview explicitly says remote existence is unconfirmed. Check and save is a separate explicit action,
+keeps the draft on failure, and a browser timeout asks the user to refresh because persistence is unconfirmed.
+This serves people binding a repository reference in advanced assistant settings; it adds no primary-screen
+options, style, theme or motion. See `docs/assistant/managers.md` for provider semantics and verification boundaries.
