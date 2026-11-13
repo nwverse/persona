@@ -18652,18 +18652,20 @@ _PLAIN_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+")
 _PLAIN_QUOTE = re.compile(r"^[ \t]{0,3}>[ \t]?")
 _PLAIN_LIST = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?")
 _PLAIN_ESCAPE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~<])")
-_PLAIN_INLINE = [
+_PLAIN_LINKS = [
     (re.compile(r"!\[([^\]\n]*)\]\([^)\n]*\)"), r"\1"),
     (re.compile(r"\[([^\]\n]+)\]\([^)\n]*\)"), r"\1"),
     (re.compile(r"\[([^\]\n]+)\]\[[^\]\n]*\]"), r"\1"),
     (re.compile(r"<((?:https?|mailto):[^> \t\n]+)>"), r"\1"),
-    (re.compile(r"\*\*([^ \t\n*]|[^ \t\n*][^\n]*?[^ \t\n*])\*\*"), r"\1"),
+]
+_PLAIN_EMPHASIS = [
     (re.compile(r"(^|[^0-9A-Za-z_])__([^ \t\n_]|[^ \t\n_][^\n]*?[^ \t\n_])__($|[^0-9A-Za-z_])"), r"\1\2\3"),
     (re.compile(r"~~([^~\n]+?)~~"), r"\1"),
     (re.compile(r"\*([^ \t\n*]|[^ \t\n*][^*\n]*?[^ \t\n*])\*"), r"\1"),
     (re.compile(r"(^|[^0-9A-Za-z_])_([^ \t\n_]|[^ \t\n_][^_\n]*?[^ \t\n_])_($|[^0-9A-Za-z_])"), r"\1\2\3"),
 ]
 _PLAIN_ESCAPED = 0xE000
+_PLAIN_CODE = 0xF0000  # a line's i-th code span while the markup around it goes (searchCode, #7195)
 
 
 def search_plain(md):
@@ -18721,29 +18723,85 @@ def search_code_span(s):
 
 
 def search_marks(s):
-    for r, w in _PLAIN_INLINE:
+    for r, w in _PLAIN_LINKS:
+        s = r.sub(w, s)
+    s = search_strong(s)
+    for r, w in _PLAIN_EMPHASIS:
         s = r.sub(w, s)
         if w.endswith("\\3"):
             s = r.sub(w, s)
     return s
 
 
+def _plain_space(c):
+    return c in " \t"
+
+
+def _plain_operand(c):
+    return c.isascii() and c.isalnum()
+
+
+def search_strong(s):
+    """A line without `**` (searchStrong, #7195): a run not after a space closes the nearest open one, one not before a
+    space opens; a pair loses two stars on its inner side each; a run left alone goes, unless it reads as `2 ** 3` or
+    `a**b`."""
+    if "**" not in s:
+        return s
+    runs, i = [], 0  # [at, end, cut_from, cut_to, paired]
+    while i < len(s):
+        if s[i] != "*":
+            i += 1
+            continue
+        j = i
+        while j < len(s) and s[j] == "*":
+            j += 1
+        if j - i >= 2:
+            runs.append([i, j, i, j, False])
+        i = j
+    opened = []
+    for k, r in enumerate(runs):
+        before = r[0] > 0 and not _plain_space(s[r[0] - 1])
+        after = r[1] < len(s) and not _plain_space(s[r[1]])
+        if before and opened:
+            o = runs[opened.pop()]
+            o[2], o[3], o[4] = o[1] - 2, o[1], True
+            r[2], r[3], r[4] = r[0], r[0] + 2, True
+            continue
+        if after:
+            opened.append(k)
+    out, frm = [], 0
+    for at, end, cut_from, cut_to, paired in runs:
+        if not paired and at > 0 and end < len(s) and (
+                _plain_space(s[at - 1]) and _plain_space(s[end]) or _plain_operand(s[at - 1]) and _plain_operand(s[end])):
+            continue  # an expression: it stays
+        out.append(s[frm:cut_from])
+        frm = cut_to
+    out.append(s[frm:])
+    return "".join(out)
+
+
 def search_inline(line):
     line = _PLAIN_ESCAPE.sub(lambda m: chr(_PLAIN_ESCAPED + ord(m.group(1))), line)
-    out = []
+    code, out = [], []
     while line:
         span = search_code_span(line)
         if not span:
-            out.append(search_marks(line))
+            out.append(line)
             break
         at, n, end = span
-        out.append(search_marks(line[:at]))
-        code = line[at + n:end]
-        if len(code) >= 2 and code[0] == " " and code[-1] == " " and code.strip(" "):
-            code = code[1:-1]
-        out.append(code)
+        out.append(line[:at])
+        c = line[at + n:end]
+        if len(c) >= 2 and c[0] == " " and c[-1] == " " and c.strip(" "):
+            c = c[1:-1]
+        out.append(chr(_PLAIN_CODE + len(code)))
+        code.append(c)
         line = line[end + n:]
-    return "".join(chr(ord(c) - _PLAIN_ESCAPED) if _PLAIN_ESCAPED <= ord(c) < _PLAIN_ESCAPED + 128 else c for c in "".join(out))
+
+    def unescape(s):
+        return "".join(chr(ord(c) - _PLAIN_ESCAPED) if _PLAIN_ESCAPED <= ord(c) < _PLAIN_ESCAPED + 128 else c for c in s)
+
+    return "".join(unescape(code[ord(c) - _PLAIN_CODE]) if 0 <= ord(c) - _PLAIN_CODE < len(code) else unescape(c)
+                   for c in search_marks("".join(out)))
 
 
 def search_fold(s):
