@@ -88,3 +88,22 @@ func TestUpdateWaitsOnlyForWhatTheRestartCuts(t *testing.T) {
 		t.Fatal("a launch still starting did not hold the update back")
 	}
 }
+
+// sessions.list carries the commit check as update_busy: the manager waits on it, since a headless conversation's row
+// does not say it is busy (#6364).
+func TestSessionsListReportsUpdateBusy(t *testing.T) {
+	n := assistantNode(t)
+	p := &assistantProc{id: "chat", busy: true, exited: make(chan struct{})}
+	liveAssistants.Store(p, struct{}{})
+	defer liveAssistants.Delete(p)
+	out, err := request(t, n, "sessions.list", map[string]any{})
+	if err != nil || out["update_busy"] != true {
+		t.Fatalf("an answering conversation did not report update_busy: %v %v", out["update_busy"], err)
+	}
+	p.mu.Lock()
+	p.busy = false
+	p.mu.Unlock()
+	if out, _ := request(t, n, "sessions.list", map[string]any{}); out["update_busy"] != false {
+		t.Fatalf("an idle conversation reported update_busy: %v", out["update_busy"])
+	}
+}

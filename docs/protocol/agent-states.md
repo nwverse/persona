@@ -86,6 +86,8 @@ before the hook and transcript rules below:
 - `waiting` (a question, permission or other dialog of its own has the keyboard) → `blocked`: Needs you, and the manager makes its screen card as for herdr's `blocked`.
 - `idle` → `done` once the session has a transcript (`idle` before its first message). Tern has nothing like herdr's "seen in the terminal", so a finished
   turn is Unread until it is opened in an app, and its finished push follows the usual rules.
+- `shell` (Claude Code 2.1.31x and later: the turn is over while a background command or Monitor still runs) is read like `idle`: `done` once
+  there is a transcript, and the row then shows Working (background) from the transcript's background tasks.
 - No status to go by (no pid found for the block yet, an older Claude Code, a file that already names another session after `/clear`): the rules below,
   as for herdr's `unknown`; a resting Claude's screen is read for a dialog as in a herdr pane.
 

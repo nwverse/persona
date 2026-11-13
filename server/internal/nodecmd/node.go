@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/clitext"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/node"
+	"github.com/nwverse/persona/server/internal/nodesign"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/sysmon"
@@ -95,6 +96,18 @@ func residentArgs(args []string) (supervised bool, err error) {
 	return supervised, nil
 }
 
+// residentSigner is this Mac's node signing setting (nodesign): nil without one, or when it cannot be read (logged).
+func residentSigner(program string) nodeupdate.Signer {
+	s, err := nodesign.FromFile(program)
+	if err != nil {
+		log.Printf("node signing: %v; builds run with the signature they come with", err)
+	}
+	if s == nil {
+		return nil // a nil *Signer in the interface would be a Signer
+	}
+	return s
+}
+
 // runResident is `personad node --attach`: it serves local/SSH relays and optional tailcat connections.
 // Deployment and update requests drain idle work before exec retains the Unix listener and run lock.
 // supervised describes an external supervisor other than systemd or launchd (nodeupdate.Options).
@@ -114,9 +127,12 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 		default: // repeated deploys coalesce while waiting for idle work
 		}
 	}
-	updater := nodeupdate.New(b.Version, func() { askRestart("update") }, nodeupdate.Options{Supervised: supervised, RequireResidentHandover: node.ResidentHandoverSupported})
+	updater := nodeupdate.New(b.Version, func() { askRestart("update") }, nodeupdate.Options{Supervised: supervised, RequireResidentHandover: node.ResidentHandoverSupported, Signer: residentSigner(b.Program)})
 	defer updater.Close()
-	if updater.RestartRequired() {
+	// A build another path put here (the hub's ssh deploy script, deploy.sh, install.sh) with a signing certificate set
+	// up on this Mac: signed now, and run again before serving, as a rollback is (docs/operations/mac-node-signing.md).
+	signed := !updater.RestartRequired() && updater.SignInstalled(ctx)
+	if updater.RestartRequired() || signed {
 		check, err := residentReplacementInfo(ctx, updater.Executable(), b.Program)
 		if err != nil {
 			return err
@@ -156,6 +172,8 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 			case <-ctx.Done():
 				return
 			}
+			// A build a deployment or tailcat put in place runs signed too; an update's commit signed its own.
+			updater.SignInstalled(ctx)
 			if err := checkResidentReplacement(ctx, updater.Executable(), b.Program); err != nil {
 				logger.Printf("resident reload: replacement did not pass preflight; keeping the current node")
 				continue

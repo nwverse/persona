@@ -36,9 +36,10 @@ import (
 )
 
 type Node struct {
-	Version string
-	updater *nodeupdate.Manager // resident-owned, shared across attach connections
-	reload  *ResidentReload     // admission/draining while the attach transport stays available
+	Version      string
+	skillImports assistantskills.Importer
+	updater      *nodeupdate.Manager // resident-owned, shared across attach connections
+	reload       *ResidentReload     // admission/draining while the attach transport stays available
 
 	// dataDirOnce finds the data folder the path guard refuses the credentials of (pathguard.go dataDirs).
 	dataDirOnce sync.Once
@@ -756,8 +757,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		case "session.keys", "session.screen", "session.screen.before", "terminal.watch", "session.close", "session.queue.edit", "session.queue.send_now", "session.rename", "assistant.send":
 			return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 		case "session.modes":
-			// Its effort, on the app-server running it (codex_effort.go); nothing else.
+			// Its effort, on the app-server running it (codex_effort.go), or in the Codex App window that has it
+			// (codex_desktop_effort.go); nothing else.
 			if _, _, driven := n.codexEffortThread(p.SessionID); !driven {
+				if src, found := n.codexSource(p.SessionID); found && codexDesktopChat(src) {
+					return ok(n.codexDesktopModes(ctx, p.SessionID, src, p.Model, p.PermissionMode, p.Effort))
+				}
 				return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
 			}
 			if p.Model != "" {
@@ -1049,7 +1054,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		n.configured()          // a hub that lists without engine.use keeps herdr (engine.go)
 		n.useBotmux(true, true) // and one that lists without saying botmux keeps it, as before (hostbotmux.go)
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
-		return map[string]any{"sessions": n.sessionList(ctx, true)}, nil
+		list := n.sessionList(ctx, true)
+		// update_busy: node.update.commit would refuse now; the manager waits on it before sending a build (node_update_idle).
+		return map[string]any{"sessions": list, "update_busy": updateWouldCut(AssistantsBusy(), list)}, nil
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, "", p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
@@ -1756,6 +1763,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"commits": list}, err
 	case "git.stage", "git.commit", "git.push", "git.branches", "git.switch", "git.stash", "git.pr", "git.pr_create", "git.pr_merge":
 		return n.gitWrite(ctx, method, params) // the Git panel's writes and pull request (gitwrite.go, gitpr.go)
+	case "skills.import":
+		return n.importSkill(ctx, params)
 	case "skills.list": // the skills the assistant gets on this machine (docs/operations/hub-update.md "Skills move out of the binary")
 		var catalog struct {
 			skillCatalogRequest
