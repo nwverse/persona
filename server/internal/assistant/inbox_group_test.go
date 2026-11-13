@@ -1162,7 +1162,7 @@ func TestInboxGroupReopensADoneEvent(t *testing.T) {
 		string(g.appends[0].Meta) != `{"messages":["m900"]}` || !slices.Equal(g.appends[0].Messages, []string{"m1060", "m1061"}) {
 		t.Fatalf("appends %+v", g.appends)
 	}
-	if h.inbox.items["lark:F1:1060"] != nil || len(h.inbox.items) != 3 {
+	if h.inbox.items["lark:F1:1060"] != nil || len(h.inbox.items) != 2 {
 		t.Fatalf("a continuation was opened instead: %v", h.inbox.items)
 	}
 	if !it.open() || it.DoneBy != "" || it.Title != "示例发布跟进" || it.Summary != "对方补充了时间" ||
@@ -1281,7 +1281,8 @@ func TestInboxGroupReopenReturnsToHandlingConversation(t *testing.T) {
 			h, _ := groupHub(t, g, nil)
 			it := h.inbox.items["lark:F1:900"]
 			it.Count = 1
-			it.Agent = &InboxAgent{State: AgentSkipped, MachineID: "server", SessionID: "s1", Of: it.Last}
+			it.Agent = &InboxAgent{State: AgentSkipped, MachineID: "server", SessionID: "s1", Of: it.Last,
+				Pending: []inboxNote{{Name: prompts.NoteClosed}}}
 			it.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingDone, MachineID: "server", SessionID: "s1"}
 			h.inbox.items = map[string]*InboxItem{it.ID: it}
 			thing, err := g.GroupAppend(context.Background(), connector.GroupAppend{Thread: "chat:F1", Event: it.ID, Meta: it.Meta, Messages: []string{"m1060"}})
@@ -1291,6 +1292,9 @@ func TestInboxGroupReopenReturnsToHandlingConversation(t *testing.T) {
 			planned := plannedEvent{existing: it.ID, messages: []string{"m1060"}, title: "示例重开", summary: "示例新进展", tier: tier, reason: "继续"}
 			if got := h.putEvent(sourceOf(g), "chat:F1", planned, thing, true); got != it {
 				t.Fatalf("putEvent %p, want %p", got, it)
+			}
+			if len(it.Agent.Pending) != 0 {
+				t.Fatalf("the old close note survived reopening: %+v", it.Agent.Pending)
 			}
 			now := time.Now()
 			writes := h.inbox.escalate(now.Add(-time.Hour), now)
@@ -1387,5 +1391,146 @@ func TestInboxGroupFoldNoiseSkipsDoneEvents(t *testing.T) {
 		if plan.events[i].existing != id || len(plan.events[i].messages) != 1 || plan.events[i].messages[0] != fmt.Sprintf("m%d", i+1) {
 			t.Errorf("plan %d %+v, want only %s's own message", i, plan.events[i], id)
 		}
+	}
+}
+
+// A connector that keeps no meta reopens a done event the same way: the hub composes the append from the batch, the
+// event takes the model's words, clears completion and records received then reopened; no continuation is opened.
+func TestInboxGroupReopensDoneEventWithoutMeta(t *testing.T) {
+	answer := `{"assign":[{"message":"m2","event":"examplechat:chat:C1#m1"},{"message":"m3","event":"examplechat:chat:C1#m1"}],
+		"events":[{"event":"examplechat:chat:C1#m1","title":"示例 A 方案回到评审","summary":"丙说周四下午可以","tier":"action","reason":"等你定"}]}`
+	g := &groupChat{batch: chatBatch()}
+	_, client := newGroupModel(t, answer)
+	h := chatHub(t, g, client)
+	it := h.inbox.items["examplechat:chat:C1#m1"]
+	done := time.Now().Add(-2 * time.Hour)
+	it.DoneAt, it.DoneBy, it.Count, it.Tier = &done, "user", 1, TierFYI
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+
+	if !it.open() || it.DoneBy != "" || it.Title != "示例 A 方案回到评审" || it.Summary != "丙说周四下午可以" ||
+		it.Tier != TierAction || it.Reason != "等你定" || it.TriagedBy != "model" || it.TitleBy != TitleByModel ||
+		it.Count != 3 || it.Meta != nil || !strings.Contains(it.Context, "m2") || !strings.Contains(it.Context, "m3") {
+		t.Fatalf("reopened event %+v", it)
+	}
+	if kinds := chainKinds(it); len(kinds) != 3 || kinds[0] != ChainReceived || kinds[1] != ChainReopened || kinds[2] != ChainTriaged {
+		t.Fatalf("chain %v", kinds)
+	}
+	if len(h.inbox.items) != 1 || h.inbox.items["examplechat:chat:C1#m3"] != nil {
+		t.Fatalf("a continuation was opened instead: %d items", len(h.inbox.items))
+	}
+}
+
+// reopen has no effect on an open event: the model's words apply as before and no reopened entry is recorded.
+func TestInboxGroupReopenFalseOnAnOpenEvent(t *testing.T) {
+	answer := `{"assign":[{"message":"m1060","event":"lark:F1:1051"},{"message":"m1061","event":"new:1"}],
+		"events":[{"event":"lark:F1:1051","title":"示例 A 方案周四下午","summary":"丙说周四下午可以","tier":"fyi","reason":"同步","reopen":false},
+		{"event":"new:1","title":"示例 B 接口变更","summary":"丁说接口改了","tier":"fyi","reason":"同步"}]}`
+	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
+	_, client := newGroupModel(t, answer)
+	h, _ := groupHub(t, g, client)
+	it := h.inbox.items["lark:F1:1051"]
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+
+	if !it.open() || it.Title != "示例 A 方案周四下午" || it.Tier != TierFYI || it.Reason != "同步" || it.TriagedBy != "model" {
+		t.Fatalf("open event %+v", it)
+	}
+	if kinds := chainKinds(it); slices.Contains(kinds, ChainReopened) {
+		t.Fatalf("an open event was reopened: %v", kinds)
+	}
+}
+
+// The model saw an open event the user filed before its append, and the fallback wrote it (the model was unavailable
+// between the two steps): the fallback keeps its structural title and rule tier as it does for open events, and the
+// event reopens rather than gaining a continuation.
+func TestInboxGroupFallbackReopensAnEventDoneMeanwhile(t *testing.T) {
+	g := &groupLark{placed: map[string]bool{}}
+	h, _ := groupHub(t, g, nil)
+	it := h.inbox.items["lark:F1:1051"]
+	now := time.Now()
+	it.DoneAt, it.DoneBy, it.Count = &now, "user", 1
+	plan := &groupPlan{events: []plannedEvent{{existing: it.ID, messages: []string{"m1060"}}}}
+	h.writeGroup(context.Background(), sourceOf(g), *groupBatch(), plan)
+
+	if len(g.appends) != 1 || g.appends[0].Event != it.ID || g.appends[0].Continues != "" {
+		t.Fatalf("appends %+v", g.appends)
+	}
+	if !it.open() || it.Title != "示例 A 方案评审" || it.Summary != "等你定时间" || it.Tier != TierAction ||
+		it.TriagedBy != "model" || !slices.Contains(chainKinds(it), ChainReopened) {
+		t.Fatalf("fallback race %+v", it)
+	}
+}
+
+// A batch written twice (the connector hands it again) reopens the event once: the second write is the same last.
+func TestInboxGroupReopenOnce(t *testing.T) {
+	g := &groupLark{placed: map[string]bool{}}
+	h, _ := groupHub(t, g, nil)
+	it := h.inbox.items["lark:F1:900"]
+	it.Count = 1
+	plan := &groupPlan{model: true, events: []plannedEvent{{existing: it.ID, messages: []string{"m1060"},
+		title: "示例重开", summary: "示例进展", tier: TierAction, reason: "继续"}}}
+	h.writeGroup(context.Background(), sourceOf(g), *groupBatch(), plan)
+	h.writeGroup(context.Background(), sourceOf(g), *groupBatch(), plan)
+	n := 0
+	for _, k := range chainKinds(it) {
+		if k == ChainReopened {
+			n++
+		}
+	}
+	if n != 1 || it.Count != 2 {
+		t.Fatalf("%d reopened entries, count %d, chain %v", n, it.Count, chainKinds(it))
+	}
+}
+
+// A close note still queued when the event reopens is dropped with it: the conversation's next delivery carries the
+// new messages alone, never a stop followed by them.
+func TestInboxGroupReopenDropsTheClosedNote(t *testing.T) {
+	g := &groupLark{placed: map[string]bool{}}
+	h, _ := groupHub(t, g, nil)
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
+	it := h.inbox.items["lark:F1:900"]
+	it.Count, it.Context = 1, "示例群：m900"
+	it.Agent = &InboxAgent{State: AgentRunning, MachineID: "server", SessionID: "s1", Of: it.Last,
+		Pending: []inboxNote{{Name: prompts.NoteClosed, Text: "user"}}}
+	it.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingDone, MachineID: "server", SessionID: "s1"}
+	thing, err := g.GroupAppend(context.Background(), connector.GroupAppend{Thread: "chat:F1", Event: it.ID, Meta: it.Meta,
+		Messages: []string{"m1060", "m1061"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planned := plannedEvent{existing: it.ID, messages: []string{"m1060", "m1061"}, title: "示例发布跟进",
+		summary: "对方补充了时间", tier: TierAction, reason: "继续追问"}
+	// The batch the connector hands over is the one groupBatch's messages make: the append's answer carries its last.
+	thing.Last = "1061"
+	if got := h.putEvent(sourceOf(g), "chat:F1", planned, thing, true); got != it {
+		t.Fatalf("putEvent %p, want %p", got, it)
+	}
+	h.inbox.mu.Lock()
+	for _, n := range it.Agent.Pending {
+		if n.Name == prompts.NoteClosed {
+			h.inbox.mu.Unlock()
+			t.Fatalf("the stop note is still queued: %+v", it.Agent.Pending)
+		}
+	}
+	h.inbox.mu.Unlock()
+	now := time.Now()
+	if writes := h.inbox.escalate(now.Add(-time.Hour), now); len(writes) != 1 {
+		t.Fatalf("escalated %d", len(writes))
+	}
+	h.deliverPending(context.Background())
+	sent := notesOf(h.f, "s1")
+	if len(sent) != 1 || !strings.Contains(sent[0], "有了新消息") {
+		t.Fatalf("the conversation was told %v", sent)
+	}
+	for _, txt := range sent {
+		if strings.Contains(txt, "不用再做") || strings.Contains(txt, "停下") {
+			t.Fatalf("the filed event's stop note was sent after the reopen:\n%s", txt)
+		}
+	}
+	h.inbox.mu.Lock()
+	defer h.inbox.mu.Unlock()
+	if !it.open() || it.Handling.State != HandlingLooking {
+		t.Fatalf("reopened event %+v, handling %+v", it, it.Handling)
 	}
 }
