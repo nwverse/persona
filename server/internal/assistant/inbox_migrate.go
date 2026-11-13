@@ -104,10 +104,14 @@ func (b *inboxBook) applyMigrated(id string, things []connector.InboxThing, now 
 				open.Read = false
 				changed = append(changed, open)
 			case blocksDiffer(open, t.Extra):
-				// The same move, read further (a chat's read position) or read again (a document's rows): blocks only.
+				// The same move, read further (a chat's read position) or read again (a document's rows): blocks and a
+				// renamed chat, not a new move.
 				b.roundWrite(open)
 				wrote = true
 				setBlocks(open, t.Extra)
+				if where := whereOf(t.Tags); where != "" {
+					open.Where = where
+				}
 				changed = append(changed, open)
 			}
 			if t.Tier != "" && (open.Tier != string(t.Tier) || open.Reason != t.Why) {
