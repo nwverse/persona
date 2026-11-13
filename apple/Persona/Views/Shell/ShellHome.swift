@@ -431,13 +431,13 @@ struct ShellDestinations: ViewModifier {
             content
                 // ☰ beside Back on a place's pages: the sidebar opens at any depth, so a place is changed without
                 // popping it (docs/design/sidebar-navigation.md).
-                .navigationDestination(for: ShellRoute.self) { route in place(route).modifier(ShellPlaceSidebarButton()) }
-                .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id).modifier(ShellPlaceSidebarButton()) }
-                .modifier(InboxDestinations(accounts: accounts.accounts))
-                .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).modifier(ShellPlaceSidebarButton()) }
-                .navigationDestination(for: TerminalsRoute.self) { r in TerminalsView(only: r.machine).modifier(ShellPlaceSidebarButton()) }
-                .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key) }
-                .navigationDestination(for: InboxChatRoute.self) { r in ChatView(key: r.key, itemManager: r.manager).id(r.key) }
+                .navigationDestination(for: ShellRoute.self) { route in routed(place(route).modifier(ShellPlaceSidebarButton())) }
+                .navigationDestination(for: TodoDetailRoute.self) { r in routed(TodoDetailView(todoID: r.id).modifier(ShellPlaceSidebarButton())) }
+                .modifier(InboxDestinations(accounts: accounts.accounts, inboxChat: inboxChat, openFeishu: { path.append($0) }))
+                .navigationDestination(for: MachineDetailRoute.self) { r in routed(MachineDetailView(ref: r.ref).modifier(ShellPlaceSidebarButton())) }
+                .navigationDestination(for: TerminalsRoute.self) { r in routed(TerminalsView(only: r.machine).modifier(ShellPlaceSidebarButton())) }
+                .navigationDestination(for: SessionKey.self) { key in routed(ChatView(key: key).id(key)) }
+                .navigationDestination(for: InboxChatRoute.self) { r in routed(ChatView(key: r.key, itemManager: r.manager).id(r.key)) }
                 .environment(\.feishuOpen) { path.append($0) }
                 .environment(\.pushInboxChat, inboxChat)
                 #if DEBUG
@@ -449,6 +449,11 @@ struct ShellDestinations: ViewModifier {
         } else {
             content
         }
+    }
+
+    /// Injects on each returned destination, not only the stack's root content (the iPad split drops the latter).
+    private func routed<Content: View>(_ content: Content) -> some View {
+        content.modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: { path.append($0) }))
     }
 
     @ViewBuilder private func place(_ route: ShellRoute) -> some View {
