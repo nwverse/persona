@@ -50,5 +50,21 @@
   "mirror_response_invalid": "助手返回的镜像设置格式不正确，请重试读取后再修改。",
   "mirror_saved": "镜像设置已保存。",
   "mirror_clear": "清空镜像",
-  "mirror_save": "保存"
+  "mirror_save": "保存",
+  "source": "更新来源",
+  "web_dev": "Web 开发版",
+  "dev_setup": "请先在 hub 机器上配置可信 Git 来源和备份写入协调，再启用开发版更新。",
+  "dev_scope": "从同一提交编译网页、hub 和电脑服务。开发版以编译成功作为验证门槛。",
+  "branch": "来源分支",
+  "master_mapping": "此远端没有 master 分支，将使用已核验的远端默认分支。",
+  "current_commit": "当前提交",
+  "target_commit": "目标提交",
+  "dev_auto_footer": "默认关闭。开启后每小时检查，编译固定提交，备份历史后在空闲时更新。切换渠道会关闭此选项。",
+  "backups": "历史备份",
+  "backup_footer": "在 hub 的 update/development-backups 中保留最新三份已校验快照。恢复前须停止所有写入，详见开发版更新指南。",
+  "backup_count": "保留的有效快照：{count} / 3",
+  "no_backup": "首次开发版更新前必须成功生成并校验快照。",
+  "backup_pruned": "已清理较早快照：{count}",
+  "computer_auto": "自动更新电脑服务",
+  "computer_auto_footer": "默认关闭。开启后，hub 确认成功及电脑重连时会更新匹配的电脑服务。否则请逐台使用“重新部署”。"
 }

@@ -40,7 +40,11 @@ func (u *updater) nodesEnabledLocked() bool {
 // stageNodes never fetches or recreates the node package directory unless fleet
 // updates are explicitly enabled. Hub-only releases can contain just one platform.
 func (u *updater) stageNodes(ctx context.Context, m *update.Manifest, staged, bin string) (string, error) {
-	if !u.nodesEnabled() {
+	return u.stageNodesFrom(ctx, m, staged, bin, u.h.updateURL(), false)
+}
+
+func (u *updater) stageNodesFrom(ctx context.Context, m *update.Manifest, staged, bin, source string, development bool) (string, error) {
+	if !u.nodesEnabled() && !development {
 		return "", nil
 	}
 	nodes := filepath.Join(staged, "nodes")
@@ -62,7 +66,7 @@ func (u *updater) stageNodes(ctx context.Context, m *update.Manifest, staged, bi
 			}
 			continue
 		}
-		if _, err := update.Download(ctx, u.client, u.h.updateURL(), m.Files[plat], nodes); err != nil {
+		if _, err := update.Download(ctx, u.client, source, m.Files[plat], nodes); err != nil {
 			return "", err
 		}
 	}

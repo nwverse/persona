@@ -50,5 +50,21 @@
   "mirror_response_invalid": "The assistant returned invalid mirror settings. Retry before making changes.",
   "mirror_saved": "Mirror settings saved.",
   "mirror_clear": "Clear mirrors",
-  "mirror_save": "Save"
+  "mirror_save": "Save",
+  "source": "Update source",
+  "web_dev": "Web development",
+  "dev_setup": "To enable development updates, configure a trusted Git source and backup coordination on the hub machine.",
+  "dev_scope": "Builds the web app, hub and computer services from one commit. Development updates require successful compilation.",
+  "branch": "Source branch",
+  "master_mapping": "This remote has no master branch. Its verified default branch is used instead.",
+  "current_commit": "Installed commit",
+  "target_commit": "Target commit",
+  "dev_auto_footer": "Off by default. When enabled, checks hourly, builds the selected commit and backs up history before updating when idle. Switching channels turns this off.",
+  "backups": "History backups",
+  "backup_footer": "Keeps the newest three verified snapshots in update/development-backups on the hub machine. Restore with all writers stopped; see the development update guide.",
+  "backup_count": "Verified snapshots retained: {count} / 3",
+  "no_backup": "A verified snapshot is required before the first development update.",
+  "backup_pruned": "Older snapshots cleaned up: {count}",
+  "computer_auto": "Update computers automatically",
+  "computer_auto_footer": "Off by default. When enabled, matching computer services update after hub confirmation and when they reconnect. Otherwise use Redeploy for each computer."
 }
