@@ -10233,7 +10233,15 @@ def node_action(h, p, body):
     elif area == "tabs" and verb == "close":
         CLOSED_TABS.add(body.get("tab_id"))
     elif area == "tabs" and verb == "rename":
-        TAB_NAMES[body.get("tab_id")] = body.get("label")
+        # A name that is a refusal's word is refused as the hub relays it (#6996; as "taken" refuses a worktree): "offline"
+        # (503 node_unreachable), "unsupported" (an engine without rename) and "closed" (the tab gone), the node's words as 502
+        label = str(body.get("label", ""))
+        if label == "offline":
+            return h.send_json({"error": "machine %s is offline" % mid, "code": "node_unreachable", "retryable": True, "delivered": "none"}, 503)
+        if label in ("unsupported", "closed"):
+            words = "unsupported: orca cannot do this" if label == "unsupported" else "tab %s is not running" % body.get("tab_id")
+            return h.send_json({"error": words, "code": "internal"}, 502)
+        TAB_NAMES[body.get("tab_id")] = label
     elif area == "panes" and verb == "split":
         n = len(SPLIT_PANES.setdefault(mid, [])) + 20
         src = body.get("pane", "w1:p2")
@@ -12273,6 +12281,17 @@ if MOCK_INBOX_EVENTS:
 # side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
 # fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
 # now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
+# MOCK_INBOX_TODO=1: a to-do suggestion (#6480) on the mail "Can we move the design review?": title, and a due day two days on
+# (MOCK_INBOX_TODO=time: with a time, so All Day is off).
+if os.environ.get("MOCK_INBOX_TODO"):
+    _td = next((x for x in INBOX if x["id"] == "mail:acc1:t4:504"), None)
+    if _td is not None:
+        _due = (NOW + timedelta(days=2)).astimezone()
+        _td["suggestion"] = {"version": 1, "kind": "todo", "text": "确认设计评审改到周二下午", "at": ago(minutes=2),
+                             "due": _due.replace(hour=15, minute=0, second=0, microsecond=0).isoformat() if os.environ["MOCK_INBOX_TODO"] == "time" else _due.strftime("%Y-%m-%d")}
+        _td["status"] = "action"
+
+
 MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
 if MOCK_INBOX_SHOWCASE:
     _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
@@ -12313,6 +12332,68 @@ if MOCK_HANDOFF_CARD:
     if MOCK_TASKS:
         TASK_FEED.setdefault(ASK1, []).append({"id": "feed_handoff", "conversation": ASK1, "at": ago(minutes=0.4), "kind": "inbox_suggestion",
                                                "ref": _hid, "body": _hcard})
+
+
+# Merge and Add to to-dos (#6480): POST /api/v1/inbox/merge, /merge/undo, /todo, /todo/undo as the hub answers them. A merge takes the
+# newest row as the survivor and hides the others (kept in MERGED for Undo); a to-do files its row as done_by=todo with a todo link.
+# What each asked for is kept at /mock/inbox_actions.
+INBOX_ACTIONS = []
+MERGED = {}
+
+
+def inbox_merge(body):
+    INBOX_ACTIONS.append(dict(body, route="merge"))
+    ids = [t.get("id") for t in body.get("items") or []]
+    rows = [x for x in INBOX if x["id"] in ids and not x.get("done_at")]
+    if len(ids) < 2: return {"error": "请至少选两行再合并", "code": "bad_request"}, 400
+    if len(rows) < 2: return {"error": "没有可合并的内容", "code": "merge_none"}, 409
+    rows.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+    top, rest = rows[0], rows[1:]
+    top["merged_from"] = [{"id": x["id"], "source": x["source"], "account_name": x.get("account_name"), "title": x.get("title")} for x in rest]
+    top["count"] = sum(x.get("count", 1) for x in rows)
+    MERGED[top["id"]] = rest
+    for x in rest: INBOX.remove(x)
+    _chain_add(top, "merged", "由 %d 行合并" % len(rows))
+    return {"item": dict({k: v for k, v in top.items() if k != "context"}, version=inbox_version(top)), "members": [x["id"] for x in rest], "undo": {"id": top["id"]}}, 200
+
+
+def inbox_unmerge(body):
+    INBOX_ACTIONS.append(dict(body, route="merge/undo"))
+    top = next((x for x in INBOX if x["id"] == body.get("id")), None)
+    if top is None or top["id"] not in MERGED: return {"error": "没有可拆开的合并", "code": "bad_request"}, 400
+    rest = MERGED.pop(top["id"])
+    INBOX.extend(rest)
+    top.pop("merged_from", None)
+    top["count"] = max(1, top.get("count", 1) - sum(x.get("count", 1) for x in rest))
+    return {"changed": [top] + rest}, 200
+
+
+def inbox_todo(body):
+    INBOX_ACTIONS.append(dict(body, route="todo"))
+    out = {"changed": [], "unchanged": [], "skipped": [], "failed": [], "todos": [], "undo": {"items": []}}
+    for t in body.get("items") or []:
+        x = next((x for x in INBOX if x["id"] == t.get("id")), None)
+        if x is None: out["skipped"].append({"id": t.get("id"), "reason": "missing"}); continue
+        if x.get("done_at"): out["unchanged"].append(x["id"]); continue
+        if t.get("version") and t["version"] != inbox_version(x): out["skipped"].append({"id": x["id"], "reason": "changed"}); continue
+        todo_id = "todo-%s-%d" % (x["id"], len(INBOX_ACTIONS))
+        x["done_at"], x["done_by"] = ago(minutes=0), "todo"
+        _chain_add(x, "done", "已转成待办", link={"type": "todo", "id": todo_id})
+        out["changed"].append(dict({k: v for k, v in x.items() if k != "context"}, version=inbox_version(x)))
+        out["todos"].append({"item": {"id": x["id"]}, "todo": {"id": todo_id, "title": t.get("title") or x.get("title")}})
+        out["undo"]["items"].append({"id": x["id"], "todo_id": todo_id})
+    return out, 200
+
+
+def inbox_todo_undo(body):
+    INBOX_ACTIONS.append(dict(body, route="todo/undo"))
+    changed = []
+    for t in body.get("items") or []:
+        x = next((x for x in INBOX if x["id"] == t.get("id")), None)
+        if x is not None and x.get("done_by") == "todo":
+            x.pop("done_at", None), x.pop("done_by", None)
+            changed.append(x)
+    return {"changed": changed}, 200
 
 
 def _chain_add(x, kind, text, **more):
@@ -12358,6 +12439,10 @@ def inbox_suggestion(iid, body):
         elif s["kind"] == "agent":
             _chain_add(x, "agent", "开了子会话：" + text[:40], link={"type": "session", "machine_id": "m1", "session_id": "s-mock-agent"})
             h.update(state="agent", since=ago()); x["status"] = "working"
+        elif s["kind"] == "todo":  # Add to to-dos (#6480): the row is filed with a link to the to-do
+            INBOX_ACTIONS.append({"route": "suggestion", "text": body.get("text"), "due": body.get("due")})
+            _chain_add(x, "done", "已转成待办", link={"type": "todo", "id": "todo-" + x["id"]})
+            x["done_at"], x["done_by"] = ago(), "todo"
         else:  # a conclusion: Got it files it (the chain says so)
             _chain_add(x, "done", "你标了已处理")
             x["done_at"], x["done_by"] = ago(), "user"
@@ -18652,18 +18737,20 @@ _PLAIN_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+")
 _PLAIN_QUOTE = re.compile(r"^[ \t]{0,3}>[ \t]?")
 _PLAIN_LIST = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?")
 _PLAIN_ESCAPE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~<])")
-_PLAIN_INLINE = [
+_PLAIN_LINKS = [
     (re.compile(r"!\[([^\]\n]*)\]\([^)\n]*\)"), r"\1"),
     (re.compile(r"\[([^\]\n]+)\]\([^)\n]*\)"), r"\1"),
     (re.compile(r"\[([^\]\n]+)\]\[[^\]\n]*\]"), r"\1"),
     (re.compile(r"<((?:https?|mailto):[^> \t\n]+)>"), r"\1"),
-    (re.compile(r"\*\*([^ \t\n*]|[^ \t\n*][^\n]*?[^ \t\n*])\*\*"), r"\1"),
+]
+_PLAIN_EMPHASIS = [
     (re.compile(r"(^|[^0-9A-Za-z_])__([^ \t\n_]|[^ \t\n_][^\n]*?[^ \t\n_])__($|[^0-9A-Za-z_])"), r"\1\2\3"),
     (re.compile(r"~~([^~\n]+?)~~"), r"\1"),
     (re.compile(r"\*([^ \t\n*]|[^ \t\n*][^*\n]*?[^ \t\n*])\*"), r"\1"),
     (re.compile(r"(^|[^0-9A-Za-z_])_([^ \t\n_]|[^ \t\n_][^_\n]*?[^ \t\n_])_($|[^0-9A-Za-z_])"), r"\1\2\3"),
 ]
 _PLAIN_ESCAPED = 0xE000
+_PLAIN_CODE = 0xF0000  # a line's i-th code span while the markup around it goes (searchCode, #7195)
 
 
 def search_plain(md):
@@ -18721,29 +18808,85 @@ def search_code_span(s):
 
 
 def search_marks(s):
-    for r, w in _PLAIN_INLINE:
+    for r, w in _PLAIN_LINKS:
+        s = r.sub(w, s)
+    s = search_strong(s)
+    for r, w in _PLAIN_EMPHASIS:
         s = r.sub(w, s)
         if w.endswith("\\3"):
             s = r.sub(w, s)
     return s
 
 
+def _plain_space(c):
+    return c in " \t"
+
+
+def _plain_operand(c):
+    return c.isascii() and c.isalnum()
+
+
+def search_strong(s):
+    """A line without `**` (searchStrong, #7195): a run not after a space closes the nearest open one, one not before a
+    space opens; a pair loses two stars on its inner side each; a run left alone goes, unless it reads as `2 ** 3` or
+    `a**b`."""
+    if "**" not in s:
+        return s
+    runs, i = [], 0  # [at, end, cut_from, cut_to, paired]
+    while i < len(s):
+        if s[i] != "*":
+            i += 1
+            continue
+        j = i
+        while j < len(s) and s[j] == "*":
+            j += 1
+        if j - i >= 2:
+            runs.append([i, j, i, j, False])
+        i = j
+    opened = []
+    for k, r in enumerate(runs):
+        before = r[0] > 0 and not _plain_space(s[r[0] - 1])
+        after = r[1] < len(s) and not _plain_space(s[r[1]])
+        if before and opened:
+            o = runs[opened.pop()]
+            o[2], o[3], o[4] = o[1] - 2, o[1], True
+            r[2], r[3], r[4] = r[0], r[0] + 2, True
+            continue
+        if after:
+            opened.append(k)
+    out, frm = [], 0
+    for at, end, cut_from, cut_to, paired in runs:
+        if not paired and at > 0 and end < len(s) and (
+                _plain_space(s[at - 1]) and _plain_space(s[end]) or _plain_operand(s[at - 1]) and _plain_operand(s[end])):
+            continue  # an expression: it stays
+        out.append(s[frm:cut_from])
+        frm = cut_to
+    out.append(s[frm:])
+    return "".join(out)
+
+
 def search_inline(line):
     line = _PLAIN_ESCAPE.sub(lambda m: chr(_PLAIN_ESCAPED + ord(m.group(1))), line)
-    out = []
+    code, out = [], []
     while line:
         span = search_code_span(line)
         if not span:
-            out.append(search_marks(line))
+            out.append(line)
             break
         at, n, end = span
-        out.append(search_marks(line[:at]))
-        code = line[at + n:end]
-        if len(code) >= 2 and code[0] == " " and code[-1] == " " and code.strip(" "):
-            code = code[1:-1]
-        out.append(code)
+        out.append(line[:at])
+        c = line[at + n:end]
+        if len(c) >= 2 and c[0] == " " and c[-1] == " " and c.strip(" "):
+            c = c[1:-1]
+        out.append(chr(_PLAIN_CODE + len(code)))
+        code.append(c)
         line = line[end + n:]
-    return "".join(chr(ord(c) - _PLAIN_ESCAPED) if _PLAIN_ESCAPED <= ord(c) < _PLAIN_ESCAPED + 128 else c for c in "".join(out))
+
+    def unescape(s):
+        return "".join(chr(ord(c) - _PLAIN_ESCAPED) if _PLAIN_ESCAPED <= ord(c) < _PLAIN_ESCAPED + 128 else c for c in s)
+
+    return "".join(unescape(code[ord(c) - _PLAIN_CODE]) if 0 <= ord(c) - _PLAIN_CODE < len(code) else unescape(c)
+                   for c in search_marks("".join(out)))
 
 
 def search_fold(s):
@@ -24044,6 +24187,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"close": ARCHIVE_CLOSE["mode"], "archived": [x["session_id"] for x in ARCHIVED_AGENTS]})
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
             BOTMUX_ON.clear()
+            TAB_NAMES.clear()  # TerminalsRenameUITests: the tabs' own names again
             wire_reset()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
             COOKIES_FAILED[0] = False  # MOCK_COOKIES_FAIL: the next read fails again
@@ -24169,6 +24313,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/kb_updates": return self.send_json({"updates": KB_UPDATES})
         if p == "/mock/inbox_drafts": return self.send_json({"drafts": INBOX_DRAFTS})
         if p == "/mock/inbox_bulk": return self.send_json({"requests": INBOX_BULK})
+        if p == "/mock/inbox_actions": return self.send_json({"requests": INBOX_ACTIONS})
         if p == "/mock/prefs_fail":  # MOCK_PREFS_FAIL at run time: ?on=1 fails Settings › Notifications' read, ?on=0 lets Retry through
             PREFS_FAIL[0] = q.get("on", ["1"])[0] == "1"
             return self.send_json({"fail": PREFS_FAIL[0]})
@@ -25723,6 +25868,14 @@ class H(BaseHTTPRequestHandler):
                 try: send({"type": "inbox"})
                 except Exception: pass
             return self.send_json(res)
+        if p in ("/api/v1/inbox/merge", "/api/v1/inbox/merge/undo", "/api/v1/inbox/todo", "/api/v1/inbox/todo/undo") and self.command == "POST":
+            body = json.loads(self.last_body or b"{}")
+            res, code = {"/api/v1/inbox/merge": inbox_merge, "/api/v1/inbox/merge/undo": inbox_unmerge, "/api/v1/inbox/todo": inbox_todo,
+                         "/api/v1/inbox/todo/undo": inbox_todo_undo}[p](body)
+            for send, _ in list(LIVE):
+                try: send({"type": "inbox"})
+                except Exception: pass
+            return self.send_json(res, code)
         if p == "/api/v1/inbox/mutes" and self.command == "POST":
             body = json.loads(self.last_body or b"{}")
             other = other_manager(self)
