@@ -21,7 +21,7 @@ import SwiftUI
             let scope = AssistantSettingsRequestScope(app)
             return Deps(api: { scope.api(app) },
                         held: { AssistantSettingsRequestScope(app) == scope ? app.assistantConfig : nil },
-                        saved: { state in if AssistantSettingsRequestScope(app) == scope { app.assistantConfig = state } },
+                        saved: { state in if AssistantSettingsRequestScope(app) == scope { app.assistantSettingsSaved(state) } },
                         toast: { app.toast = $0 })
         }
     }

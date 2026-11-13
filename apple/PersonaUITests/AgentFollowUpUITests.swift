@@ -110,6 +110,7 @@ final class AgentFollowUpUITests: XCTestCase {
         // The switch is on the new page now, not on the profile.
         for _ in 0..<8 { app.swipeUp() }
         XCTAssertFalse(app.switches["assistant-main-supervises-own-tasks"].exists)
+        try shot(app, "profile-lower")
         for _ in 0..<8 { app.swipeDown() }
         reveal(row, in: app)
         row.tap()
