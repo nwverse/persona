@@ -40,6 +40,19 @@ final class GitWriteUITests: XCTestCase {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
     }
 
+    /// Taps e once it stops moving: on an iPad the form sheet slides up as the keyboard comes, and a tap aimed at
+    /// where the button will be lands outside the sheet while it is still on its way.
+    @MainActor private func tapSettled(_ e: XCUIElement) {
+        var last = e.frame
+        for _ in 0..<20 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            let now = e.frame
+            if now == last && e.isHittable { break }
+            last = now
+        }
+        e.tap()
+    }
+
     @MainActor func testStageCommitAndPushAfterAsking() async throws {
         try await control("reset=1")
         let app = launch()
@@ -58,7 +71,7 @@ final class GitWriteUITests: XCTestCase {
         XCTAssertTrue(message.waitForExistence(timeout: 10), app.debugDescription)
         message.typeText("小组件：逐小时预报的数据和视图")
         try shot(app, "2-commit")
-        app.buttons["git.commit.go"].tap()
+        tapSettled(app.buttons["git.commit.go"])
         XCTAssertTrue(toast(app, "已提交 eeeeeee").waitForExistence(timeout: 10), app.debugDescription)
         try shot(app, "3-committed")
 
@@ -72,7 +85,7 @@ final class GitWriteUITests: XCTestCase {
         let asked = try await control("")
         XCTAssertEqual(asked["ahead"] as? Int, 3, "nothing is pushed before the yes")
         // the dialog's button: by its identifier, or its word where the system drops identifiers in dialogs
-        app.buttons.matching(NSPredicate(format: "identifier == 'git.push.confirm' OR (label == '推送' AND identifier != 'git-push')")).firstMatch.tap()
+        tapSettled(app.buttons.matching(NSPredicate(format: "identifier == 'git.push.confirm' OR (label == '推送' AND identifier != 'git-push')")).firstMatch)
         XCTAssertTrue(toast(app, "已推送 widget-hourly").waitForExistence(timeout: 10), app.debugDescription)
         let pushed = try await control("")
         XCTAssertEqual(pushed["ahead"] as? Int, 0)
@@ -87,7 +100,7 @@ final class GitWriteUITests: XCTestCase {
         let message = app.descendants(matching: .any)["git.commit.message"].firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 10))
         message.typeText("先试一版")
-        app.buttons["git.commit.go"].tap()
+        tapSettled(app.buttons["git.commit.go"])
         let title = app.staticTexts["提交被拒绝了（通常是 pre-commit 之类的 hook）"]
         XCTAssertTrue(title.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Line Length Violation")).firstMatch.exists)
