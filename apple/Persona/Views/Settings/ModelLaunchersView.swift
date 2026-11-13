@@ -134,7 +134,7 @@ struct ModelLaunchersView: View {
             }
         }
         #endif
-        .sheet(item: $adding) { step in
+        .sheet(item: $adding, onDismiss: { importWizard = nil }) { step in
             // Saving moves `launchersRevision`, which reloads this list below.
             if debugOldEditor { LauncherEditor(existing: nil) {} } else { ProviderWizard(start: step, wizard: importWizard) }
         }

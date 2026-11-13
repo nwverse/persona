@@ -57,6 +57,7 @@ class ProviderPasteShotsTest {
         val previews = mutableListOf<Pair<String, String?>>()
         val imports = mutableListOf<Triple<String, List<String>, String?>>()
         val added = mutableListOf<NewProvider>()
+        val parsed = mutableListOf<String>()
         override suspend fun presets() = emptyList<ProviderPreset>()
         override suspend fun add(provider: NewProvider) { added += provider }
         override suspend fun launchers() = listOf(
@@ -76,7 +77,7 @@ class ProviderPasteShotsTest {
             skippedHeaders = listOf(ProviderPasteSkipped("X-Api-Key", "credential")),
             matches = listOf(ProviderPasteMatch("work", "Work", sameKey = true)),
             notes = listOf(ProviderPasteNote("args_left_out", line = 2)),
-        )), notes = listOf(ProviderPasteNote("not_claude", name = "other")))
+        )), notes = listOf(ProviderPasteNote("not_claude", name = "other"))).also { parsed += text }
         override suspend fun importPreview(machine: String, alias: String?): List<ImportedProvider> {
             previews += machine to alias
             return listOf(ImportedProvider("cc-work", "https://work.example.com", "new-model", hasKey = true, aliases = listOf("cc_work")))
@@ -132,7 +133,8 @@ class ProviderPasteShotsTest {
 
     private fun importLinkOpensReviewAndPrefill(dark: Boolean) {
         val api = Providers()
-        val link = "persona://provider/import?v=1&data=FAKE-EXAMPLE-KEY"
+        val firstLink = "persona://provider/import?v=1&data=FAKE-EXAMPLE-KEY"
+        var link by mutableStateOf(firstLink)
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true) {
                 Box(Modifier.testTag("shot").width(400.dp).height(1450.dp).background(PersonaTheme.palette.background)) {
@@ -148,6 +150,12 @@ class ProviderPasteShotsTest {
         rule.onNodeWithText(link, substring = true).assertDoesNotExist()
         assertTrue("nothing is added before Save", api.added.isEmpty())
         capture("provider-import-link-review-$suffix")
+
+        val secondLink = "persona://provider/import?v=1&data=ANOTHER-FAKE-KEY"
+        link = secondLink
+        rule.waitForIdle()
+        assertEquals("a newer external link replaces the old review", listOf(firstLink, secondLink), api.parsed)
+        rule.onNodeWithText(secondLink, substring = true).assertDoesNotExist()
 
         rule.onNodeWithText("Add as a new provider").performClick()
         rule.onNodeWithText("Continue").performClick()

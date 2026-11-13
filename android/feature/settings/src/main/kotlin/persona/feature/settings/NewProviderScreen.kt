@@ -81,7 +81,7 @@ internal fun NewProviderPage(
     var sub by rememberSaveable { mutableStateOf(if (startAtComputers) ProviderSub.Computers else null) }
     var discarding by remember { mutableStateOf(false) }
     var foundImport by remember { mutableStateOf<FoundAlias?>(null) }
-    LaunchedEffect(model) {
+    LaunchedEffect(model, importLink) {
         if (existing != null) { model.prepare(existing, existing.hasScope, machines); return@LaunchedEffect }
         // "Computers" needs the computers to choose from: opened where none are known (Model configuration), it waits
         // for the provider's page, and the hub's defaults apply meanwhile.
