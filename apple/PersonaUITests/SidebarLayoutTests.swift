@@ -10,6 +10,11 @@ final class SidebarLayoutTests: XCTestCase {
     private var hub = ""
     private let agent = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
 
+    override func tearDown() {
+        XCUIDevice.shared.orientation = .portrait
+        super.tearDown()
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
         guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("iPad only") }
@@ -108,6 +113,61 @@ final class SidebarLayoutTests: XCTestCase {
         XCTAssertTrue(more.waitForExistence(timeout: 20), "no inbox:\n\(app.debugDescription)")
         sleep(2) // a route back to the conversation would come in this time
         XCTAssertTrue(more.isHittable, "the inbox went away:\n\(app.debugDescription)")
+    }
+
+    /// Screenshots for review (TEST_RUNNER_PERSONA_SHOTS, #6332): light and dark, the default and the largest text size,
+    /// landscape and portrait: the column at its top, then the Agents' Needs You reached from the foot's jump with an
+    /// Agent open beside it; and the Navigation setting. XCUITest saves landscape screenshots turned; turn them back.
+    @MainActor func testShots() throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_SHOTS"] != nil else { throw XCTSkip("screenshots only") }
+        for look in ["light", "dark"] {
+            for size in ["default", "largest"] {
+                for (turn, orientation) in [("landscape", UIDeviceOrientation.landscapeLeft), ("portrait", .portrait)] {
+                    XCUIDevice.shared.orientation = orientation
+                    var extra = ["-tab", "assistant", "-ui.scheme", look]
+                    if size == "largest" {
+                        extra += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+                    }
+                    launch(extra)
+                    XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 20), "\(look) \(size): no sidebar")
+                    settle()
+                    dismissIconNotice()
+                    shot("\(look)-\(size)-\(turn)-home")
+                    let jump = element("sidebar-needs-jump")
+                    if jump.exists {
+                        jump.tap()
+                        settle()
+                        let row = app.buttons.matching(identifier: "agents.row").firstMatch
+                        if row.exists, row.isHittable { row.tap() }
+                        settle()
+                        shot("\(look)-\(size)-\(turn)-agents")
+                    }
+                    app.terminate()
+                }
+            }
+            XCUIDevice.shared.orientation = .portrait
+            launch(["-tab", "settings", "-openAppearance", "navigation", "-ui.scheme", look])
+            XCTAssertTrue(element("navigation-layout-separate").waitForExistence(timeout: 20), "\(look): no Navigation page")
+            settle()
+            dismissIconNotice()
+            shot("\(look)-setting")
+            app.terminate()
+        }
+    }
+
+    @MainActor private func settle() { usleep(1_500_000) }
+
+    /// Changing the look switches the app icon, and the system says so over the screen (`ChatBottomGapTests`).
+    @MainActor private func dismissIconNotice() {
+        let notice = NSPredicate(format: "label CONTAINS[c] 'icon' OR label CONTAINS '图标'")
+        for source in [app!, XCUIApplication(bundleIdentifier: "com.apple.springboard")] {
+            let alert = source.alerts.containing(notice).firstMatch
+            if alert.waitForExistence(timeout: 2), alert.buttons.firstMatch.exists {
+                alert.buttons.firstMatch.tap()
+                settle()
+                return
+            }
+        }
     }
 
     /// Settings › Appearance › Navigation: Separate brings the tabs back at once, Settings still open on its page.

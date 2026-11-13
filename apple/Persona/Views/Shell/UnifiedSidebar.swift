@@ -40,6 +40,23 @@ extension EnvironmentValues {
     @Entry var unifiedPath: Binding<NavigationPath>? = nil
 }
 
+/// How many Agents need the user, on the Sidebar layout's sidebar button while the column is folded away (#6332): the
+/// count the Separate layout's switch and tabs show (`agentsWaiting`), in the same badge. Its own view, so only it is
+/// drawn again as the count changes.
+struct SidebarWaitingBadge: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let waiting = model.agentsWaiting
+        if waiting > 0 {
+            CountBadge(count: waiting, look: .needs, label: StateName.count(.needsYou, waiting))
+                .offset(x: Theme.Space.xs, y: -Theme.Space.xs)
+                .allowsHitTesting(false)
+                .accessibilityIdentifier("sidebar-button-needs")
+        }
+    }
+}
+
 /// The pages the Sidebar layout opens beside its sidebar by value, which the Persona page registers (they need its
 /// state): pushed onto the one path the page beside the sidebar has, a pick replacing what was there (as the web's
 /// routes). In the Separate layout these are presented by flag, as before.

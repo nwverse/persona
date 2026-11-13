@@ -255,6 +255,7 @@ struct AssistantView: View {
             AssistantTopBar(key: pending == nil ? current : nil,
                             sidebarIsColumn: widthClass == .regular,
                             sidebarShown: sidebarColumnShown,
+                            sidebarCounts: embedded,
                             openSidebar: toggleSidebar,
                             // In a health conversation New opens Health's new conversation page, whose list has the
                             // space's past ones (#4329); elsewhere the assistant's.
