@@ -295,7 +295,9 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     if (pickedMenu) picked.singleOrNull()?.let { one ->
         val record = records[one]
         JActionSheet(title = record?.item?.title ?: conversationRows[one]?.title.orEmpty(), onDismiss = { pickedMenu = false }, actions = buildList {
-            add(JAction(res.getString(R.string.inbox_hand_to_ai), PhIcons.Robot) { handingOff = conversationRows[one]?.itemId ?: one; endSelection() })
+            if (record?.isAssistantRow != true) {
+                add(JAction(res.getString(R.string.inbox_hand_to_ai), PhIcons.Robot) { handingOff = conversationRows[one]?.itemId ?: one; endSelection() })
+            }
             if (record != null) addAll(muteAndRuleActions(res, record, { mute(record, it); endSelection() },
                 { ruleTarget = InboxPolicyTarget.of(record, it); endSelection() }))
         })

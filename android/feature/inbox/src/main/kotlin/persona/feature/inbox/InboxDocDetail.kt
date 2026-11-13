@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.InboxItemUiRoute
@@ -108,6 +109,12 @@ internal fun docKindLabel(res: Resources, doc: InboxDocRef?): String =
 fun InboxItemDetailScreen(repository: InboxRepository, route: InboxItemDetailRoute, navigator: Navigator) {
     val inbox by repository.snapshot.collectAsStateWithLifecycle()
     val record = inbox.records.inboxRecord(route.itemId)
+    var contextRevision by remember { mutableIntStateOf(0) }
+    var assistantContext by remember(record?.item, contextRevision) { mutableStateOf<String?>(null) }
+    LaunchedEffect(repository, record?.item, contextRevision) {
+        val current = record ?: return@LaunchedEffect
+        assistantContext = if (current.isAssistantRow) repository.personaContext(current.item.id) else null
+    }
     val open = LocalLarkLinkOpener.current
     val scope = rememberCoroutineScope()
     var refreshing by remember { mutableStateOf(false) }
@@ -116,18 +123,36 @@ fun InboxItemDetailScreen(repository: InboxRepository, route: InboxItemDetailRou
         onRefresh = {
             scope.launch {
                 refreshing = true
-                try { repository.refreshNow() } catch (e: CancellationException) { throw e } catch (_: Exception) { } finally { refreshing = false }
+                try { repository.refreshNow() } catch (e: CancellationException) { throw e } catch (_: Exception) { } finally {
+                    refreshing = false
+                    contextRevision++
+                }
             }
         }) {
         item("item-extension-notice") { InboxExtensionNotice(route.itemId, route) }
         if (record == null) item("item-missing") { StatusText(stringResource(R.string.inbox_item_missing)) }
-        else inboxItemBody(record) { url -> open?.invoke(url, inbox.contentSource) }
+        else inboxItemBody(record, assistantContext) { url -> open?.invoke(url, inbox.contentSource) }
     }
 }
 
-internal fun LazyListScope.inboxItemBody(record: InboxRecord, onOpen: (String) -> Unit) {
+internal fun LazyListScope.inboxItemBody(record: InboxRecord, context: String? = null, onOpen: (String) -> Unit) {
     val doc = record.doc
     if (doc == null) {
+        if (record.isAssistantRow) {
+            record.connector?.url?.takeIf { it.isNotBlank() }?.let { url ->
+                item("assistant-open-chat") {
+                    JButton(stringResource(R.string.inbox_open_chat), { onOpen(url) }, kind = JButtonKind.Secondary,
+                        size = JButtonSize.Medium, icon = PersonaIcons.openExternal)
+                }
+            }
+            if (!record.onlyTitleAndSummary(context)) {
+                (context?.takeIf { it.isNotBlank() } ?: record.item.preview).takeIf { it.isNotBlank() }?.let { text ->
+                    item("assistant-content-header") { JSectionHeader(stringResource(R.string.inbox_content)) }
+                    item("item-preview") { Text(text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                }
+            }
+            return
+        }
         record.item.preview.takeIf { it.isNotBlank() }?.let { text ->
             item("item-preview") { Text(text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
         }
