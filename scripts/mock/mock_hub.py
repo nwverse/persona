@@ -1349,6 +1349,13 @@ if MOCK_CODEX_WAITING:
     SESSIONS.append(sess("macbook", CODEX_WAITING, "weather-app", "/Users/me/code/weather-app", "idle", "idle", "weather-app", 7, "codex", 3, 1,
                          "", agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS))
 
+# MOCK_TERMINAL_ONLY=1 (#6170): a Kiro CLI in a herdr pane, an Agent whose chat Persona cannot draw (no transcript): its empty
+# chat offers Open Terminal. Open it with -openSession macbook/<TERMINAL_ONLY>.
+TERMINAL_ONLY = "c0de0000-0000-4000-8000-000000000002"
+if os.environ.get("MOCK_TERMINAL_ONLY") == "1":
+    SESSIONS.append(sess("macbook", TERMINAL_ONLY, "kiro-demo", "/Users/me/code/kiro-demo", "idle", "idle", "kiro-demo", 8, "kiro", 1, 1,
+                         "", agent="kiro", launcher="kiro"))
+
 
 # MOCK_RUN_HERE_CODEX=<mid,…> (#5504): those computers start Codex in a shell pane the user picked and keep that pane when
 # the start fails (run_here), so Run agent here offers their Codex launchers; the others' stay out, as an older node's.
@@ -12023,6 +12030,10 @@ IMPORT_ONLY = ("aliases", "existing", "create_as", "sources", "differs", "varian
 PROVIDER_DISCOVERED = [{"id": "example-opus", "name": "Example Opus", "context_window": 1000000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
                        {"id": "example-sonnet", "name": "Example Sonnet", "context_window": 200000, "efforts": ["low", "medium", "high"]},
                        {"id": "example-haiku", "context_window": 200000}]
+# MOCK_DISCOVER_MODELS=<n>: "Fetch models" finds n models, the three above and then made-up ones, like a gateway that
+# lists dozens (more than the wizard checks by itself, AUTO_CHECK in web/src/lib/providers.ts).
+PROVIDER_DISCOVERED += [{"id": "example-model-%02d" % i, "context_window": 200000}
+                        for i in range(1, int(os.environ.get("MOCK_DISCOVER_MODELS") or 0) - len(PROVIDER_DISCOVERED) + 1)]
 if MOCK_PROVIDERS:
     LAUNCHERS[:0] = [
         {"name": "gw_full", "display_name": "Team gateway", "source": "persona", "base_url": "https://gw.example.com", "model": "example-opus", "has_key": True,

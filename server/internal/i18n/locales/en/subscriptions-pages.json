@@ -113,6 +113,7 @@
   "field.due_date": "Due date",
   "field.id": "ID (for duplicates)",
   "field.link": "Link",
+  "field.reply_to": "Reply goes to",
   "field.sender": "Sender",
   "field.sender_id": "Sender ID (for muting)",
   "field.seen": "Seen (read state)",

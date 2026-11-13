@@ -112,6 +112,8 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
         var events: [Event] = []
         /// Where they came from: nil when neither can be read (the widget says how to allow the calendar).
         var source: EventSource?
+
+        static let cap = 8
     }
 
     nonisolated enum EventSource: String, Codable, Hashable, Sendable {

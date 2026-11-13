@@ -634,15 +634,19 @@ private struct HomeTodoBadge: View {
     }
 }
 
-/// A to-do with its box. Ticked on the widget it shows done at once; refused by the hub, it says so in red (the box
-/// becomes a button with the ticking PR, docs/apple/home-widgets.md「Ticking off a to-do」).
+/// A to-do with its box: a tap ticks it (`CompleteTodoIntent`, which runs in the app and tells the hub). Ticked, it
+/// shows done at once; refused, it says so in red and a tap tries again (docs/apple/home-widgets.md「Ticking off a to-do」).
 private struct HomeTodoRow: View {
     var todo: HomeSnapshot.Todo
     var large = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: HomeWidgetTokens.gap) {
-            HomeWidgetTokens.symbol(mark).font(large ? HomeWidgetTokens.headline : HomeWidgetTokens.body).modifier(MarkTone(todo: todo))
+            Button(intent: CompleteTodoIntent(todoID: todo.id)) {
+                HomeWidgetTokens.symbol(mark).font(large ? HomeWidgetTokens.headline : HomeWidgetTokens.body).modifier(MarkTone(todo: todo))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Complete [Home Widgets]"))
             VStack(alignment: .leading, spacing: 0) {
                 Text(verbatim: todo.title).font(large ? HomeWidgetTokens.headline : HomeWidgetTokens.body).lineLimit(1)
                     .strikethrough(todo.tick == .ticking).homeInk(todo.tick == .ticking ? .tertiary : .primary)
@@ -987,10 +991,12 @@ private struct HomeComputerLine: View {
     var machine: HomeSnapshot.Machine
     var body: some View {
         let state = computerState(machine)
-        HStack(spacing: HomeWidgetTokens.gap * 1.5) {
+        HStack(spacing: HomeWidgetTokens.gap) {
             HomeComputerRing(machine: machine, side: HomeWidgetTokens.ringMedium, named: false)
+            // The words take the rest of the row; beside a `Spacer` they would get only half of it and cut the name.
             VStack(alignment: .leading, spacing: 0) {
-                Text(verbatim: machine.name).font(HomeWidgetTokens.headline).lineLimit(1).homeInk(machine.online ? .primary : .tertiary)
+                Text(verbatim: machine.name).font(HomeWidgetTokens.headline).lineLimit(1).minimumScaleFactor(HomeWidgetTokens.nameMinScale)
+                    .homeInk(machine.online ? .primary : .tertiary)
                 Group {
                     if let color = state.color { Text(verbatim: state.words).homeTone(color) } else { Text(verbatim: state.words).homeInk(.secondary) }
                 }
@@ -999,7 +1005,7 @@ private struct HomeComputerLine: View {
                     Text("Load \(load)% [Home Widgets]").font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.tertiary)
                 }
             }
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

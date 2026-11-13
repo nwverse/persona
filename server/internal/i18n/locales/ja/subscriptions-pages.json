@@ -111,6 +111,7 @@
   "field.due_date": "期限",
   "field.id": "重複判定の ID",
   "field.link": "リンク",
+  "field.reply_to": "返信先",
   "field.sender": "差出人",
   "field.sender_id": "差出人 ID（ミュート用）",
   "field.seen": "既読状態",

@@ -413,6 +413,8 @@ type Item struct {
 	// Seen: the item was seen in the source (#6176), when the pull that stored it or a later one read it so; never
 	// turned off again.
 	Seen bool `json:"seen,omitempty"`
+	// ReplyTo says where a reply goes, for people (#6198): with it the row can be replied to (deliverer.replies).
+	ReplyTo string `json:"reply_to,omitempty"`
 }
 
 // Seen is a dedup key kept for a subscription (subscription_seen).

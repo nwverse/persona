@@ -111,6 +111,7 @@
   "field.due_date": "截止时间",
   "field.id": "去重 ID",
   "field.link": "链接",
+  "field.reply_to": "回复发往",
   "field.sender": "发件人",
   "field.sender_id": "发件人 ID（用于静音）",
   "field.seen": "已读状态",

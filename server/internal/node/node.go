@@ -188,6 +188,8 @@ type Node struct {
 	adoptedFailures []adoptedFailure
 	// fallbacks: each conversation's last model switch that answered, and the hold on it (assistant_fallback_hold.go).
 	fallbacks map[string]*assistantFallback
+	// unavailable: launcher + "\x00" + model a recovery found the gateway does not serve, and until when it is skipped.
+	unavailable map[string]time.Time
 
 	// runtimes: agent runtimes without a terminal, connected on runtime.sock (runtimes.go); runtimeSock overrides the
 	// socket path (tests).
@@ -1229,6 +1231,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return n.assistantMemory(a)
+	case "session.switch": // the switch picked a moment before, carried out now with no message (launcher_switch.go)
+		var to struct {
+			From string `json:"from"`
+		}
+		_ = json.Unmarshal(params, &to)
+		return ok(n.switchIdle(ctx, p.SessionID, p.Launcher, to.From, p.Model))
 	case "session.send":
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
