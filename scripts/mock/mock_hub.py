@@ -14747,8 +14747,79 @@ def mock_peer_fold():
                          "有一件要你定：版本切换后搜索的范围。"))
 
 
+# Also with MOCK_PEER_FOLD=1: work lines right under a long message from another session, folded to a few lines with Expand
+# (#6645: the folded words still took the taps and long presses below the card, so the work line under it never opened
+# and a long press on the answer lifted the card). A working Agent chat: a finished exchange under a 2 KB message, a
+# tool and a reply in its work line, 37 minutes long; one with tools only; one with a reply only; then the running one,
+# its last tool still going. Synthetic text.
+PEER_FOLD = "a1f3c2d4-0000-4000-8000-000000006645"
+PEER_REPORT = ("合并队列的进展：\n"
+               "- 发布分支已经合上最新的主干，只有一个说明文件冲突，已经解决，不用变基。\n"
+               "- 打包脚本拆成构建和上传两步以后，构建在本机 3 分钟内跑完，上传单独重试。\n"
+               "- 弹窗的单测现在是 62 个，全部通过；界面测试还差两条，在跑。\n"
+               "- 要不要放进下一个小版本，由你和它定；我这边可以随时排进队列。\n"
+               "- 截图在 PR 里，深浅色各一套。\n"
+               "- 下一步：等界面测试跑完再报一次。\n"
+               "最后一行在这里。")
+# The reported one was about 2 KB: folded, its hidden words ran on about a screen below the card.
+PEER_LONG_REPORT = ("今天的合并队列和发版准备，按顺序说一遍：\n\n"
+                    "**合并队列**\n"
+                    "- 发布分支已经合上最新的主干，只有一个说明文件冲突，已经按主干的写法解决，不用变基，也不用重跑前面的检查。\n"
+                    "- 打包脚本拆成构建和上传两步以后，构建在本机 3 分钟内跑完；上传失败只重试上传，不再从头构建。\n"
+                    "- 弹窗的单测现在是 62 个，全部通过；界面测试还差两条，一条是深色下的对比度，一条是横屏时按钮换行。\n"
+                    "- 设置页的两个改动排在队列第三、第四位，前面两个合完大约还要四十分钟。\n\n"
+                    "**发版准备**\n"
+                    "- 说明文字的中英日三份已经对齐，日文里有两处语气偏硬，改成了更口语的说法。\n"
+                    "- 截图在 PR 里，深浅色各一套，窄屏和宽屏各一套；旧截图里有一张还是上个版本的图标，已经换掉。\n"
+                    "- 崩溃统计里上周那条启动时的崩溃没有再出现，我把对应的修复也写进了说明。\n"
+                    "- 商店页的关键词按上次的数据调了三个，把搜索量最低的两个换掉了，标题和副标题没动。\n\n"
+                    "**要你定的事**\n"
+                    "- 要不要把弹窗的改动放进下一个小版本：放进去，发版要晚半天；不放，就等再下一个版本。\n"
+                    "- 设置页的新开关默认开还是关：我倾向默认关，第一次用到时再提示。\n\n"
+                    "**风险**\n"
+                    "- 上传那一步依赖的签名证书下个月到期，这次发版没问题，但下一次之前要换新的，我已经记进待办。\n"
+                    "- 横屏按钮换行那条如果改布局，可能会碰到另一个车道正在改的工具栏，合之前需要和它对一下。\n"
+                    "- 队列里有一个依赖升级的改动，单测全过，但还没有在真机上试过，建议这次先不放。\n\n"
+                    "**下一步**\n"
+                    "- 等界面测试跑完再报一次；如果那两条还是不过，我先把弹窗的改动从这次发版里拿出来。\n"
+                    "- 队列空了以后，我会把发布分支再和主干对一次，确认没有漏掉的提交。\n"
+                    "最后一行在这里。")
+
+
+def mock_peer_fold_work():
+    items = [it("user", "text", 70, text="把发布脚本拆成构建和上传两步"),
+             *tool("Edit", {"file_path": "/Users/me/code/shop-app/scripts/release.sh", "old_string": "build && upload",
+                            "new_string": "build\nupload"}, "ok", 69),
+             it("assistant", "text", 68, text="拆好了：构建和上传现在是两步，上传失败只重试上传。")]
+    # The case reported: a long message (about 2 KB), then a tool and a reply, and the answer 37 minutes after it.
+    items += [it("user", "text", 62, text=PEER_LONG_REPORT, **{"from": "release-worker"}),
+              it("assistant", "text", 61.8, text="先回它一句，说收到了。"),
+              *tool("SendMessage", {"to": "release-worker", "message": "收到，界面测试跑完再报。"}, "sent", 61.5),
+              it("assistant", "text", 24.6, text="已经回复 release-worker，等它的界面测试结果。")]
+    # Tools only.
+    items += [it("user", "text", 20, text=PEER_REPORT, **{"from": "docs-worker"}),
+              *tool("Read", {"file_path": "/Users/me/code/shop-app/docs/release.md"}, "# 发布", 19.6),
+              *tool("Bash", {"command": "git log --oneline -3", "description": "看最近的提交"}, "a1b2c3d 拆分发布脚本", 19.2),
+              it("assistant", "text", 18, text="发布文档和最近的提交都对得上，不用改。")]
+    # A reply only.
+    items += [it("user", "text", 15, text=PEER_REPORT, **{"from": "release-worker"}),
+              it("assistant", "text", 14.6, text="这条只是进展，不需要动手。"),
+              it("assistant", "text", 14, text="记下了，等它下一次报告。")]
+    # Running: a reply, a tool, then a tool still going.
+    items += [it("user", "text", 4, text=PEER_REPORT, **{"from": "docs-worker"}),
+              it("assistant", "text", 3.8, text="先跑一遍界面测试确认。"),
+              *tool("Bash", {"command": "npm run test:ui -- popup", "description": "跑弹窗的界面测试"}, "60 passed", 3.5),
+              it("assistant", "text", 3, text="还差两条，接着跑。"),
+              it("assistant", "tool_use", 2.9, tool_use_id="toolu_peer_fold_running", tool_name="Bash",
+                 tool_input={"command": "npm run test:ui -- popup --last-two", "description": "跑剩下两条"})]
+    ITEMS[PEER_FOLD] = items
+    SESSIONS.append(sess("macbook", PEER_FOLD, "发布脚本拆分", "/Users/me/code/shop-app", "working", "working", "shop-app", 22,
+                         "peers", 1, 0, "还差两条，接着跑。"))
+
+
 if os.environ.get("MOCK_PEER_FOLD") == "1":
     mock_peer_fold()
+    mock_peer_fold_work()
 
 
 # MOCK_LONG_INPUT=1: your own long message folds (#5676): an Agent chat with a long pasted report (past 14 lines on a

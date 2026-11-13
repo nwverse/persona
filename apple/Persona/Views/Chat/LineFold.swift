@@ -28,7 +28,13 @@ struct LineFold<Words: View>: View {
             measured
                 .frame(height: folds && !open ? cut : nil, alignment: .top)
                 .clipped()
+                // What is folded away takes no touches: the words run on past the fold, and the chat's upside-down list
+                // draws this row over the one below it, whose taps they took (#6645: a work line there never opened).
+                .contentShape(.rect)
                 .mask { if folds && !open { fade } else { Rectangle() } }
+                // Folded, one element as tall as what shows (its words all read out), as `BubbleFold`'s.
+                .accessibilityElement(children: folds && !open ? .combine : .contain)
+                .accessibilityAddTraits(folds && !open ? .isStaticText : [])
                 .background(alignment: .top) { probe }
             if folds { FoldToggle(open: open, prefix: "message", action: { flip(open) }) }
         }

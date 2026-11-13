@@ -2,6 +2,19 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Words cut off by a clip still take touches, over the rows below them (2026-11-13, #6645)
+
+- `.clipped()`, `.clipShape` and `.mask` hide what is drawn, not what takes touches. A long message folded with
+  `.frame(height:)` + `.clipped()` still lays all of its words out, and the ones past the fold kept taking touches.
+  The chat's list is drawn upside down (newest first, flipped back), so an older row is drawn over the newer rows under
+  it: the message from another session folded to three lines (`LineFold`) took the taps meant for the work line right
+  under it, which never opened, and its long-press recognizer took the long presses on the answer under that, so the
+  card lifted instead. A 2 KB message hid about a screen of words.
+- Anything that cuts its content off by a clip takes `.contentShape(.rect)` right after the clip (`BubbleFold`,
+  `LineFold`, `ReplyQuote`). VoiceOver has the same trap: folded, make the words one element as tall as what shows.
+- Prove it with a touch at the row's own spot, not by its element: `WorkLineUnderFoldUITests` taps and long-presses
+  each row under a folded message (mock `MOCK_PEER_FOLD=1`). An element-based tap can't tell what lies on top.
+
 ## An edit menu needs the selection's rect, not just a point (#6005)
 
 - If `UIEditMenuInteraction.presentEditMenu(with:)` gets only a `sourcePoint` and its delegate has no
