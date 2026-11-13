@@ -113,6 +113,47 @@ def pr_snapshot(repo, number, timeout=90, environ=None):
     return data
 
 
+def verification_env():
+    """Allow only non-secret process/toolchain inputs into PR-controlled builds."""
+    import shutil
+    import tempfile
+    original_home = Path(os.environ.get("HOME", str(Path.home())))
+    home = Path(tempfile.mkdtemp(prefix="pr-watch-verification-home-"))
+    env = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "GIT_TERMINAL_PROMPT": "0",
+        "GH_PROMPT_DISABLED": "1",
+        "CI": "1",
+    }
+    # Explicitly non-secret locale, display, toolchain and proxy routing inputs.
+    for key in ("LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TERM", "DISPLAY",
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+                "NODE_ENV", "NPM_CONFIG_REGISTRY", "GOPROXY", "GOSUMDB", "GOFLAGS",
+                "GRADLE_USER_HOME", "GOCACHE", "GOMODCACHE", "GOPATH", "GOENV",
+                "ANDROID_HOME", "ANDROID_SDK_ROOT", "JAVA_HOME"):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    # The host's Go build caches may be shared read/write by the trusted Go tool;
+    # no GitHub config or credentials are carried with them.
+    for key, relative in (("GOCACHE", ".cache/go-build"), ("GOMODCACHE", "go/pkg/mod"),
+                          ("GOPATH", "go"), ("GRADLE_USER_HOME", ".gradle")):
+        if key not in env and (original_home / relative).exists():
+            env[key] = str(original_home / relative)
+    go = shutil.which("go")
+    if go:
+        result = run([go, "env", "-json", "GOCACHE", "GOMODCACHE", "GOPATH", "GOENV"], timeout=30)
+        if result.returncode == 0:
+            values = json.loads(result.stdout)
+            for key in ("GOCACHE", "GOMODCACHE", "GOPATH", "GOENV"):
+                if values.get(key):
+                    env[key] = values[key]
+    return env
+
+
 def atomic_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
