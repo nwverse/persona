@@ -213,8 +213,8 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
               key={`${it.market}/${it.id}`}
               type="button"
               onClick={() => onOpen(it)}
-              aria-busy={updating || undefined}
-              className={cx("flex w-full items-center gap-3 px-4 py-3 text-left transition-[colors,opacity] hover:bg-hover", updating && "opacity-50")}
+              aria-busy={updating || undefined} // a filter, not opacity: the row's fade-up animation holds opacity at 1
+              className={cx("flex w-full items-center gap-3 px-4 py-3 text-left transition-[colors,filter] hover:bg-hover", updating && "[filter:opacity(0.5)]")}
               style={{ animation: `fade-up 320ms ${EASE} ${Math.min(i, 8) * 30}ms both` }}
             >
               <ExtensionLogo url={it.icon_url} manager="" iconSize={16} className={cx("flex size-9 shrink-0 items-center justify-center rounded-[9px]", it.installed ? "bg-accent-tint text-accent-ink" : "bg-inset text-ink-3 shadow-hairline")} />
