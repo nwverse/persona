@@ -545,8 +545,8 @@ export function TodosView({
               <span className="text-[12px] whitespace-nowrap text-ink-3 max-sm:hidden">
                 {byStatus
                   ? listFilter === "all"
-                    ? t("todos.summary_triage", { open: triageAll.open, shelved: triageAll.shelved, done: triageAll.finished })
-                    : t("todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, shelved: triageAll.shelved, done: triageAll.finished })
+                    ? t("todos.summary_triage", { open: triageAll.open, parked: triageAll.todoCounts.parked, shelved: triageAll.shelved, done: triageAll.finished })
+                    : t("todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: triageAll.todoCounts.parked, shelved: triageAll.shelved, done: triageAll.finished })
                   : t("todos.summary", { open: uncompleted.length, done: completed.length })}
               </span>
             )}
@@ -1110,7 +1110,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
         <Icon name={direction.secretary ? "person" : "target"} size={12} stroke={2} className="shrink-0 text-ink-3" />
         <span className="min-w-0 flex-1 truncate font-semibold">{title}</span>
-        <DirectionCountsText counts={direction.counts} />
+        <DirectionCountsText direction={direction} />
       </button>
       {!folded && (
         <div className="flex flex-col gap-1 pl-2 pt-0.5">
@@ -1128,6 +1128,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
 const SECTION_TONE: Record<TriageSection, string> = {
   waiting: "text-attention",
   working: "text-orange",
+  parked: "text-ink-2",
   just_done: "text-green",
   pr: "text-accent-ink",
   other: "text-ink-2",
