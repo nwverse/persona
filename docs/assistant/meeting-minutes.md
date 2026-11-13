@@ -160,21 +160,21 @@ After the meeting, the minutes read as one summary card, the way good minutes to
   "groups": [                            // at least one: a single group titled "", or 2–4 titled groups
     {"title": "Project progress", "topics": [
       {"title": "Export", "icon": "progress", "bullets": [
-        {"text": "Entries over 4 MB are dropped", "strong": ["4 MB"], "at": 312.0, "who": "Ada"},
-        {"text": "Size-limit message is done", "strong": ["done"], "at": 655.0},
-        {"text": "Keep the cap, with a warning when an entry is skipped", "strong": ["Keep the cap"], "at": 1504.5, "decision": true}
+        {"text": "Export drops entries over 4 MB", "strong": ["4 MB"], "at": 312.0, "who": "Ada"},
+        {"text": "The export size-limit message is done", "strong": ["done"], "at": 655.0},
+        {"text": "Export keeps the cap, with a warning when an entry is skipped", "strong": ["keeps the cap"], "at": 1504.5, "decision": true}
       ]},
       {"title": "Release date", "icon": "schedule", "bullets": [
-        {"text": "The 20th is at risk", "strong": ["at risk"], "at": 1810.0},
+        {"text": "The release on the 20th is at risk", "strong": ["at risk"], "at": 1810.0},
         {"text": "The release moves a week unless the cache bug is fixed by Wednesday", "strong": ["a week"], "at": 2290.0, "decision": true}
       ]}
     ]},
     {"title": "Tooling and performance", "topics": [
       {"title": "Load testing", "icon": "performance", "bullets": [
-        {"text": "QPS raised to 40K", "strong": ["40K"], "at": 1830.0, "who": "Bo"}
+        {"text": "Load-test QPS raised to 40K", "strong": ["40K"], "at": 1830.0, "who": "Bo"}
       ]},
       {"title": "Cache bug", "icon": "quality", "bullets": [
-        {"text": "Reproduced once on a weak network", "strong": ["once"], "at": 1950.0, "photo": 2}
+        {"text": "The cache bug reproduced once on a weak network", "strong": ["once"], "at": 1950.0, "photo": 2}
       ]}
     ]}
   ]
@@ -223,31 +223,32 @@ The hub keeps an entry only when this rule finds the exact place the model marke
   - `conclusions`: 2 to 4 entries, each `{text, line}` (or `photo`), saying where the meeting landed.
   - `topics`: 2 to 8 of them (at most 10), in the order they were first discussed. Each is `{title, group, icon, points, decisions}`, and its points and decisions are written as before (`{text, line, who}`, `{text, line}`).
 
-  Each point or decision is one short line that says what it is and marks its key figure or status with `**…**`. It marks at most two places of a few words each, such as "module X **done**" or "QPS raised to **40K**". A topic has 2 to 4 of these lines, and one with more than 5 is split into two topics. `group` is a short name (about 8 Chinese characters), given only when there are 4 or more topics that fall into 2 to 4 groups. `icon` is one of the list above, always written in English.
+  Each point or decision is one short, self-contained line that names its subject and reads right without its topic or group heading (older apps and the meeting material show it on its own), and marks its key figure or status with `**…**`. Actions and open questions stay plain text, with no markers. It marks at most two places of a few words each, such as "module X **done**" or "QPS raised to **40K**". A topic has 2 to 4 of these lines, and one with more than 5 is split into two topics. `group` is a short name (about 8 Chinese characters), given only when there are 4 or more topics that fall into 2 to 4 groups. `icon` is one of the list above, always written in English.
 - **Checking it.** `buildMinutes` checks every point and decision in every topic exactly as it checks items today: an allowed citation, a name that was spoken or is on the calendar, no duplicates. It takes the `**` markers out of the text. The plain text goes into `points` or `decisions`, and the marked places into `strong`. The legacy lists are sorted and capped as before, and action ids (`a1`…) are numbered as before.
-- **Conclusions** need an allowed citation too, lose their markers the same way, and are capped at 4. They never count as the citation that makes an answer usable: minutes still need an item that cites the transcript.
+- **Conclusions** need an allowed citation too, lose their markers the same way, and are capped at 4. They never count as the citation that makes an answer usable: minutes still need an item that cites the transcript. A conclusion may cite a photo only when a bullet of the overview cites the same photo; otherwise its photo citation does not count, and it is dropped unless it also cites a line. So the photos the items cite are all the photos the minutes cite, which an older hub's photo delete and trim also see.
 - **Titles and icons.** The headline and the topic and group titles are put on one line, stripped of markers and clipped to their limits. An icon not in the list becomes `general`. Two topics with the same title (ignoring case) are merged into one.
 - **Groups.** Topics keep their groups only when there are at least 4 topics, every topic names a group, and there are 2 to 4 distinct groups. Otherwise all topics go into one group without a title.
+- **What the counts count.** The gates below, the 12-topic limit and the group rule count what is kept: items that passed the citation, name and duplicate checks (an unsupported name is cleared, as today, without dropping the point), topics with at least one kept item after their titles are cleaned, and same-titled topics merged (ignoring case: the first one in the answer gives the merged topic its title, `group` and `icon`; its place follows its first bullet's time). Group names are compared after cleaning, ignoring case.
 - **When there is no overview.** The overview is written only when every point and decision belongs to a titled topic. The hub leaves it out, writes the minutes exactly as before, and logs why when:
   - the answer has no point or decision;
   - it has points or decisions outside `topics` (the old shape, or a mix of both);
   - a topic with items has no title;
   - there are more than 12 topics.
 
-  A malformed `headline`, `conclusions`, `title`, `group` or `icon` never costs the minutes; it is dropped. But if `topics` is not a list, or an item in it is malformed, the answer is unusable, just as a malformed `points` is today. It counts towards `failed` ("How the hub generates them").
-- **Long meetings.** Each part's notes carry the topic of every point and decision, so the merging call reads lines like `[12]〈Export〉 text`. The merging call is asked to:
+  A malformed `headline` or `conclusions` (or one entry of them), or a topic's malformed `title`, `group` or `icon`, never makes the answer unusable: that value is dropped (an icon becomes `general`, a topic left without a title leaves the overview out, as above), and the topic's points and decisions are kept. The answer is unusable only when `topics` is not a list, a topic is not an object, or a topic's `points` or `decisions` are malformed the way a malformed `points` is today; that counts towards `failed` ("How the hub generates them"). The minutes' own `title` is decoded as today.
+- **Long meetings.** Each part's notes keep every point and decision the part gives, inside `topics` or not. Those under a titled topic carry its title, so the merging call reads lines like `[12]〈Export〉 text`; the others carry no tag. Before the per-part cap (`max(2, 60/parts)` per section, as today), the notes are put in the order of the line or photo they cite, so the cap drops a part's latest lines rather than whole topics. The merging call is asked to:
   - merge the parts' topics (the same topic may have a different name in each part);
-  - put every point and decision into one merged topic;
+  - put every point and decision, tagged or not, into one merged topic;
   - write the headline and conclusions for the whole meeting from the notes, with later parts overriding earlier ones.
 
   A part writes no headline and no conclusions. Notes carry no `**`; the merging call marks the texts again. Its answer is checked as above, and it can still cite only the lines and photos that appear in the notes.
 - **Live topics and highlights.** The overview is made from the transcript and photos only. It does not read the room's topics and highlights ("Phase 2: live view", "Phase 2b: highlights"): they exist only for meetings Persona attended, they are made from the live lines rather than the final transcript, and they are deleted with the transcript.
-- **Photos.** Deleting a photo also removes the conclusions and bullets that cite it, together with their items ("Phase 3: photos"). A topic left without bullets is removed, then a group left without topics, and the group rule above is applied again. The overview is removed when no topic is left. A photo cited by a conclusion counts as cited, so it is kept at the transcript cut.
-- **Older minutes and regenerating.** Minutes written before #6563 have no overview and are never rewritten automatically to add one. Regenerate writes new minutes with it; to-dos carry over by `who` and `what`, as with every rewrite. If an older hub rewrites minutes that have an overview (a to-do confirmed, a photo deleted), the overview is dropped and clients show the minutes as before.
+- **Photos.** Before the recording is trimmed, deleting a photo also removes the conclusions and bullets that cite it, together with their items ("Phase 3: photos"). A topic left without bullets is removed, then a group left without topics, and the group rule above is applied again; the overview is removed when no topic is left. On a trimmed recording the minutes stay as they are, the overview included, and are not made again; a citation of the deleted photo shows "Photo removed", as Phase 3 says. A photo a conclusion cites is also cited by a bullet (above), so it is kept at the transcript cut.
+- **Older minutes and regenerating.** Minutes written before #6563 have no overview and are never rewritten automatically to add one. Regenerate writes new minutes with it; to-dos carry over by `who` and `what`, as with every rewrite. If an older hub (after a rollback) rewrites minutes that have an overview, it drops the overview, since it does not know the field, and clients show the minutes as before. Confirming a to-do there does not render the Markdown again, so `markdown` and `minutes.md` keep the summary-card layout until the minutes are next rendered (a photo deleted, new minutes); every photo the minutes cite is still cited by an item, so its photo delete and trim work as today.
 
 ### Markdown
 
-`markdown` and `minutes.md` follow the overview when there is one. Minutes without one are written byte for byte as before. Headings and fixed words come from `kb-minutes.json` in the minutes' language, which gains `conclusions`, `decided` and `ai_note`:
+`markdown` and `minutes.md` follow the overview when there is one. Minutes this hub renders without one are written byte for byte as before (a write that only links to-dos keeps the stored Markdown, as today). Headings and fixed words come from `kb-minutes.json` in the minutes' language, which gains `conclusions`, `decided` and `ai_note`:
 
 ```
 # Sprint review
@@ -268,29 +269,29 @@ Export ships with the size cap; the release date waits on the cache fix
 
 ### Export
 
-- [14:05:12] Entries over **4 MB** are dropped (Ada)
-- [14:10:55] Size-limit message is **done**
-- [14:25:04] Decided: **Keep the cap**, with a warning when an entry is skipped
+- [14:05:12] Export drops entries over **4 MB** (Ada)
+- [14:10:55] The export size-limit message is **done**
+- [14:25:04] Decided: Export **keeps the cap**, with a warning when an entry is skipped
 
 ### Release date
 
-- [14:30:10] The 20th is **at risk**
+- [14:30:10] The release on the 20th is **at risk**
 - [14:38:10] Decided: The release moves **a week** unless the cache bug is fixed by Wednesday
 
 ## Tooling and performance
 
 ### Load testing
 
-- [14:30:30] QPS raised to **40K** (Bo)
+- [14:30:30] Load-test QPS raised to **40K** (Bo)
 
 ### Cache bug
 
-- [14:32:30] Reproduced **once** on a weak network (photo 2)
+- [14:32:30] The cache bug reproduced **once** on a weak network (photo 2)
 
 ## Action items
 
-- [ ] [14:35:00] Bo: Add the warning text and the regression test (Friday)
-- [ ] [14:39:10] Cy: Share the load-test report
+- [14:35:00] Bo: Add the warning text and the regression test (Friday)
+- [14:39:10] Cy: Share the load-test report
 
 ## Open questions
 
@@ -301,20 +302,22 @@ Export ships with the size cap; the release date waits on the cache fix
 
 - With one group, each topic is a `##` heading and there are no `###` headings. The headline line is left out when there is no headline.
 - There is no "Key points" or "Decisions" section. Decisions sit in their topic after `decided`, so `kb_get` and `kb_search` still find them.
-- Action items are written as `- [ ]` for the reader's copy, and never as `[x]`. The minutes do not know a to-do's state, and `kb_get` prints the real state right after the minutes.
+- Action items are written as in minutes without an overview, with no checkbox: the minutes do not know a to-do's state, and `minutes.md` is also what a follow-up's seed and `kb_search` read, so a `[ ]` would say the action is still open. `kb_get` prints the real state right after the minutes.
 - A literal `*` in the text is written as `\*`. Bold places are wrapped according to the rule above.
 - If the minutes are partial, the partial note comes before the AI note.
 
 ### Clients
 
-A client shows the summary card when `overview` decodes and, after cleaning, still has a topic with a bullet. In every other case (absent, `null`, a wrong type, nothing left after cleaning) it shows the minutes as before, from the same payload.
+A client decodes `overview` on its own, apart from the legacy fields, and shows the summary card only when a bullet is left after this cleaning; in every other case it shows the minutes as before, from the same payload. The mock hub, the iPhone and the web check the same malformed cases against one shared fixture.
 
-Cleaning means:
-- Blank texts are dropped, then empty topics and empty groups.
+- A missing, `null` or non-object `overview`, or a missing or non-array `groups`, means no overview.
+- In `groups`, `topics` and `bullets`, members that are not objects are dropped. A group without an array `topics`, and a topic without an array `bullets` or without a non-blank string `title`, are dropped. A group `title` that is missing or not a string is `""`.
+- Bullets and conclusions without a non-blank string `text` are dropped. A missing or wrong-typed `headline`, `conclusions`, `who` or `strong` counts as absent; in `conclusions` and `strong`, invalid entries are dropped. Only the boolean `true` marks a decision.
 - An unknown `icon` becomes `general`.
 - An `at` that is not a non-negative number shows no time.
 - A `photo` that is not a positive whole number counts as absent.
 - A `strong` entry that is not found bolds nothing.
+- Then empty topics and empty groups are dropped.
 
 The choice between the two layouts is made where the minutes are prepared for display, never while drawing. A broken overview never stops the rest of the minutes from decoding.
 
@@ -351,11 +354,12 @@ Both clients follow these rules:
   o Project progress                               group heading, dot in its tint
 +-----------------------------------------------+
 | [tile] Export                                 |  icon tile in the group's tint
-| .  Entries over *4 MB* are dropped            |
+| .  Export drops entries over *4 MB*           |
 |    Ada                          [5:12]  (v)   |
-| .  Size-limit message is *done* [10:55] (v)   |
-| #  *Keep the cap*, with a warning when an     |  # = the decision mark
-|    entry is skipped                           |
+| .  The export size-limit message is *done*    |
+|                                [10:55]  (v)   |
+| #  Export *keeps the cap*, with a warning     |  # = the decision mark
+|    when an entry is skipped                   |
 |    Decision                    [25:04]  (v)   |
 +-----------------------------------------------+
 +-----------------------------------------------+
@@ -404,12 +408,12 @@ Both clients follow these rules:
 | Project progress                                                   |
 | +-------------------------------+ +------------------------------+ |
 | | [trend] Export                | | [calendar] Release date      | |
-| | . Entries over *4 MB* are     | | . The 20th is *at risk*      | |
-| |   dropped  Ada          14:05 | |                        14:30 | |
-| | . Size-limit message is       | | # The release moves *a week* | |
-| |   *done*                14:10 | |   unless the cache bug is    | |
-| | # *Keep the cap*, with a      | |   fixed by Wednesday         | |
-| |   warning ...  Decision 14:25 | |   Decision             14:38 | |
+| | . Export drops entries over   | | . The release on the 20th is | |
+| |   *4 MB*  Ada           14:05 | |   *at risk*            14:30 | |
+| | . The export size-limit       | | # The release moves *a week* | |
+| |   message is *done*     14:10 | |   unless the cache bug is    | |
+| | # Export *keeps the cap*, ... | |   fixed by Wednesday         | |
+| |   Decision              14:25 | |   Decision             14:38 | |
 | +-------------------------------+ +------------------------------+ |
 | Tooling and performance                                            |
 | +-------------------------------+ +------------------------------+ |
@@ -429,8 +433,8 @@ Both clients follow these rules:
 ```
 
 - On a narrow screen everything is one column: the conclusions box, then each card under its group's heading.
-- Headings: "Minutes" is the section's h2, the headline (or title) h3, Core conclusions, each group, Action items and Open questions h4, each topic h5. A group is a `section` labelled by its heading and a topic an `article` labelled by its title; the reading order runs row by row.
-- Times and photos use the page's existing citations (a transcript time, or the photo), disabled after the trim as today.
+- Headings: "Minutes" is the section's h2 and the headline (or title) h3. Core conclusions, Action items and Open questions are h4. With named groups, each group is a `section` labelled by its h4 heading and its topics have h5 headings; with the single untitled group there is no group heading, the grid is a plain `div`, and each topic has an h4 heading. Each topic is an `article` labelled by its title. The reading order runs row by row.
+- Times and photos use the page's existing citations, as items do today: the cited photo, otherwise the transcript time. A time is disabled when there is no transcript line to jump to, as after the trim; a photo the trim kept still opens under Photos, and a deleted one shows "Photo removed".
 - Topic tints are design tokens with light and dark values; the bold text and the times keep their contrast on every tint.
 
 ### Compatibility
@@ -440,7 +444,7 @@ Both clients follow these rules:
 | Older | Any | No `overview`, so the minutes look as before. |
 | This one | Older (any platform, the watch) | `overview` is ignored. The client gets the same `points`, `decisions`, `actions` and `open`, now short card-style lines. Copy on the web and on Android sends the new Markdown. |
 | This one | This one | The summary card when `overview` is present. Minutes from before it, and those the hub wrote without one, look as before. |
-| Rolled back to an older one | This one | The first rewrite by the older hub drops `overview`, and the page falls back. Nothing else is lost. |
+| Rolled back to an older one | This one | The first rewrite by the older hub drops `overview`, and the page falls back. A to-do confirmed there leaves the summary-card Markdown in place until the minutes are next rendered. Photo deletes and the trim work as today, since every cited photo is also cited by an item. |
 
 ## Privacy
 
