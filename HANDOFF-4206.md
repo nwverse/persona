@@ -41,6 +41,7 @@ The commits of the last stretch (`git log --first-parent`):
 | `234ba0b59` | **The column follows the handle while it is dragged** on the Duo too (below). Refs #2624. |
 | `d2b2bf465` | Handoff: the branch quit at launch on a real iPhone Duo. |
 | `ea58226d4` | **The Agents list no longer overflows a device's main-thread stack** ("On a real iPhone Duo" below). |
+| `fed07d1bd` | **One width, slide only, beside the page on its side** ("The column's one width" below): the handle and its drag-to-resize are gone, `SplitTilePin`. |
 
 ### The color fix (`3570fe23a`)
 
@@ -115,6 +116,10 @@ On `234ba0b59` (the drag fix, `SplitNavigation.swift` only), the tests it touche
 | iPhone Duo, Open, upright | `SplitDividerTests` and the two upright `OneSidebarTests` (they depend on the posture reading) | 4 run: **4 passed** |
 
 ## Known issue, not fixed: on its side, a drag puts the page under the column
+
+> **2026-11-13: addressed in `fed07d1bd`**: there is no drag any more, the column has one width, and `SplitTilePin` keeps a
+> phone's split side by side while it is wider than tall. Checked on the iPad on its side; **not yet on the open Duo on its
+> side** (its posture needs the Device Hub window, and the Mac was locked). Kept below as the record of the problem.
 
 On the open Duo **on its side**, after the handle is dragged once, the split shows the column **over** the page: the page goes
 full width under the column and is dimmed, and stays so (folding and unfolding the column brings it back beside the page until
@@ -231,6 +236,51 @@ tasks. The whole list once, not a row, so `docs/apple/performance.md` P6 still h
   (its posture needs the Device Hub window).
 
 **The phone now** has a Debug build of this branch, which runs; reinstall the release app from TestFlight to go back.
+
+## The column's one width (`fed07d1bd`, 2026-11-13)
+
+The owner's call: no drag-to-resize. The column is shown or hidden, at one width, and only slides; Feishu and ChatGPT never
+resize theirs. Why: dragging laid every row out again on every frame.
+
+- **Widths**: iPad `Theme.Size.sidebar` (400 pt), open Duo `Theme.Size.sidebarPhone` (320 pt, the existing value that fits the
+  Duo on its side: 951 pt across, the page keeps most of it). A Mac window keeps its range (frozen).
+- **Removed**: `SplitDividerHandle` (handle, drags, double tap, VoiceOver resize), the `splitListWidth` environment value,
+  `Theme.Split`, `Theme.Size.splitDetailMin`. `<key>.width` is no longer read (old values are simply ignored).
+- **Kept**: `<key>.closed` through `SplitListMemory` (the closed state's rules, overlay posture included, are unchanged), and
+  `SplitTilePin` (`.tile` while a phone's split is wider than tall; SwiftUI's own behavior back upright, where the overlay is
+  by design, #4852).
+- **Measured** (iPad Pro 13-inch simulator, iPadOS 27.2, on its side; optimized build `-O`, whole module; mock with
+  `MOCK_AGENTS=1 MOCK_LONG_ASSISTANT=1 MOCK_ASSISTANT_SIDEBAR=1 MOCK_TASKS=1`; 5 measured runs, medians, from `FrameStats`,
+  as `XCTHitchMetric` gives nothing on a simulator):
+
+  | | fps | hitch ms/s | p95 frame | worst frame | main thread busy p95 | busy frames over 16 ms |
+  |---|---|---|---|---|---|---|
+  | Before, dragging the handle 100 pt and back ×3 | 28.8 | 519 | 63.3 ms | 711 ms | 54.4 ms | 17 |
+  | Before, Hide / Show Sidebar ×3 | 42.2 | 294 | 26.9 ms | 317 ms | 8.6 ms | 30 |
+  | After, Hide / Show Sidebar ×3 | 42.5 | 291 | 25.8 ms | 361 ms | 6.7 ms | 29 |
+
+  Hiding and showing was never the slow part and measures the same; the drag, which was, is gone. The simulator's hitch
+  numbers are high in every row (its renderer); the main thread's busy time is the app's own share. Not measured on a device.
+- **Tests on `fed07d1bd`** (iPad, on its side where it matters): `SplitListTests` 2/2, `PerfSidebarTests` 1/1,
+  `OneSidebarTests` 8 passed and 2 skipped (upright Duo only), `IPadSidebarTests` 1/1, `IPadLayoutTests` 3/3,
+  `StoredValueTests` passed. `DuoSplitTests` fails 4 of 5 **on `77bf246d8` too** (it expects the system's close-list button
+  and search field, which the one sidebar replaced); not from this change, left for whoever owns it.
+- **Pending**: the open Duo on its side (Device Hub: Open, Rotate Right), then `SplitListTests` and `OneSidebarTests` with
+  `TEST_RUNNER_PERSONA_ORIENTATION=landscape`, and a look at the real phone.
+
+## Right-edge tabs and "Separate sidebars": HTML demo only (2026-11-13)
+
+Not built in Swift yet; an HTML demo for the owner's review is kept outside the repository. Decided so far: icon-only tabs
+(助手 = the Persona mark, Agents = `terminal`, 消息 = `bubble.left.and.bubble.right`; badges; tooltips), on the right edge on
+its side and on the iPad, a vertical strip in the folded shell (today's `ShellSideRail`, with the face and the page's action),
+none upright; tapping a tab on its side opens the column if needed, scrolls to that section and pins it magnetically (80 pt
+threshold), and shows that tab's remembered page; the selected tab follows the scroll. 消息 follows Settings › Lark › Show
+Messages on Home (`LarkHomePreference.enabled`, `integrations.lark.enabled`). Folded, an opened session keeps Back in the side
+column (`ChatView.sideBarItems`), as it already does.
+
+Proposed for review: Settings › Appearance › **Sidebar: Merged / Separate** (default Merged; `AppearanceSection` in
+`apple/Persona/Views/Settings/AppearanceSettingsView.swift`, after Agents List Layout, only where there is a sidebar).
+Separate = main's layout: each tab its own sidebar, remembered shown or hidden per tab.
 
 ## 4. Status
 
