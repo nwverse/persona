@@ -54,12 +54,28 @@ struct AssistantChatSearchTests {
         #expect(oddBold.count == 1)
     }
 
+    @Test func startsTheLineJustBeforeTheMatch() throws {
+        // the manager's snippet can start 40 characters before the match: the row keeps `lead` of them, "…" in front
+        let lead = String(repeating: "早", count: 30) + "😀 前面的话 "
+        let hit = AssistantSearchAnswer.Hit(itemID: "x", seq: 1, role: "user", snippet: "…" + lead + "BlueLane 看看",
+                                            ranges: [[("…" + lead).utf16.count, ("…" + lead + "BlueLane").utf16.count]])
+        let text = AssistantSearchMerge.snippet(hit)
+        let shown = String(text.characters)
+        #expect(shown == "…" + String(lead.suffix(AssistantSearchMerge.lead)) + "BlueLane 看看")
+        let bold = text.runs.filter { $0.inlinePresentationIntent == .stronglyEmphasized }.map { String(text[$0.range].characters) }
+        #expect(bold == ["BlueLane"])
+        // a match near the start is left as it is
+        let near = AssistantSearchAnswer.Hit(itemID: "y", seq: 1, role: "user", snippet: "我想去 BlueLane", ranges: [[4, 12]])
+        #expect(String(AssistantSearchMerge.snippet(near).characters) == "我想去 BlueLane")
+    }
+
     @Test func asksOnceTheKeysSettleAndNeverAgainOfAManagerWithoutIt() async throws {
         let calls = Calls()
+        let body = Data(Self.answerJSON.utf8)
         let client = APIClient(config: ServerConfig(url: URL(string: "https://fake.invalid")!, token: "t"), transport: { req in
             await calls.add(req.path + "?" + (req.query["q"] ?? ""))
             if await calls.missing { throw APIError(status: 404, message: "not found") }
-            return Data(Self.answerJSON.utf8)
+            return body
         })
         let search = AssistantChatSearch()
         search.search("Blue", api: client, on: true)

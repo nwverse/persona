@@ -26,6 +26,9 @@ final class AssistantChatSearchUITests: XCTestCase {
         let open = app.buttons["assistant-sidebar-button"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 20), "no sidebar button:\n\(app.debugDescription)")
         open.tap()
+        // the drawer's search sits behind its button (a split's list column has it open already)
+        let reveal = app.buttons["搜索对话"].firstMatch
+        if reveal.waitForExistence(timeout: 5), reveal.isHittable { reveal.tap() }
         let field = app.textFields.matching(NSPredicate(format: "placeholderValue == %@ OR label == %@", "搜索对话", "搜索对话")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5), "no search field:\n\(app.debugDescription)")
         field.tap()

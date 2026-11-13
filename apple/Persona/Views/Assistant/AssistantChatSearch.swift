@@ -61,18 +61,36 @@ nonisolated enum AssistantSearchMerge {
         return out
     }
 
-    /// The snippet with its matches strongly emphasized (the ranges clipped to it, in order).
+    /// Characters kept before the first match. A row's snippet is one line of about 17 characters on a phone, and the
+    /// manager's snippet can start up to 40 characters before the match, which would cut the match itself off.
+    static let lead = 8
+
+    /// The snippet with its matches strongly emphasized (the ranges clipped to it, in order), starting `lead`
+    /// characters before the first match.
     static func snippet(_ hit: AssistantSearchAnswer.Hit) -> AttributedString {
-        var text = AttributedString(hit.snippet)
-        let utf16 = hit.snippet.utf16
-        for r in hit.ranges where r.count == 2 {
+        let (shown, ranges) = led(hit.snippet, hit.ranges)
+        var text = AttributedString(shown)
+        let utf16 = shown.utf16
+        for r in ranges where r.count == 2 {
             let lo = min(max(0, r[0]), utf16.count), hi = min(max(lo, r[1]), utf16.count)
-            guard lo < hi, let a = String.Index(utf16.index(utf16.startIndex, offsetBy: lo), within: hit.snippet),
-                  let b = String.Index(utf16.index(utf16.startIndex, offsetBy: hi), within: hit.snippet),
+            guard lo < hi, let a = String.Index(utf16.index(utf16.startIndex, offsetBy: lo), within: shown),
+                  let b = String.Index(utf16.index(utf16.startIndex, offsetBy: hi), within: shown),
                   let range = Range(a..<b, in: text) else { continue }
             text[range].inlinePresentationIntent = .stronglyEmphasized
         }
         return text
+    }
+
+    /// `s` from `lead` characters before its first match, "…" in front when cut, with the ranges (UTF-16) moved to match.
+    static func led(_ s: String, _ ranges: [[Int]]) -> (String, [[Int]]) {
+        let utf16 = s.utf16
+        guard let first = ranges.filter({ $0.count == 2 }).map({ $0[0] }).min(), first > 0, first <= utf16.count,
+              let at = String.Index(utf16.index(utf16.startIndex, offsetBy: first), within: s) else { return (s, ranges) }
+        let before = s[..<at]
+        guard before.count > lead + 1 else { return (s, ranges) }
+        let from = before.index(before.endIndex, offsetBy: -lead)
+        let shift = utf16.distance(from: utf16.startIndex, to: from) - 1 // "…" is one UTF-16 unit
+        return ("…" + s[from...], ranges.map { $0.count == 2 ? [$0[0] - shift, $0[1] - shift] : $0 })
     }
 }
 
