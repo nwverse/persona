@@ -260,6 +260,108 @@ struct FolderTransfersTests {
         #expect(second["conflict"] as? String == "keep")
     }
 
+    /// A remote copy and a serial upload whose names are both taken (#6113 review A): each copy answer goes to its own
+    /// request; "c.txt" is the copy's question, "u.txt" the upload's.
+    @MainActor private struct TwoQuestions {
+        let hub = FakeHub()
+        let model = AppModel()
+        let transfers = FolderTransfers()
+        let machine = MachineRef(group: "", id: "m1")
+
+        @MainActor init() {
+            hub.on("POST", "/api/v1/machines/m1/files/copy") { req in
+                let body = try JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any]
+                if body?["conflict"] == nil { throw APIError(status: 409, message: "taken", fields: ["code": "exists", "name": "c.txt"]) }
+                return Data(#"{"copied":[{"from":"~/c.txt","to":"~/dest/c 2.txt"}]}"#.utf8)
+            }
+            hub.on("POST", "/api/v1/machines/m1/files") { req in
+                if req.query["conflict"] == nil { throw APIError(status: 409, message: "taken", fields: ["code": "exists", "name": "u.txt"]) }
+                return Data(#"{"path": "/home/me/dest/u 2.txt", "name": "u 2.txt", "size": 5}"#.utf8)
+            }
+            model.apiForTests = hub.client
+        }
+
+        func uploadAsking(_ file: URL, uploaded: @escaping (String) -> Void) async {
+            transfers.upload([file], into: "~/dest", cwd: "~", machine: machine, model: model, uploaded: uploaded)
+            for _ in 0..<200 where transfers.items.first(where: { $0.kind == .upload })?.asking != true {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+        }
+
+        func copyAsking(done: @escaping () -> Void) async {
+            transfers.copy(["~/c.txt"], into: "~/dest", cwd: "~", machine: machine, model: model, done: done)
+            for _ in 0..<200 where transfers.items.first(where: { $0.kind == .copy })?.asking != true {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+        }
+    }
+
+    @Test func copyThenUploadQuestionsBothResume() async throws {
+        let t = TwoQuestions()
+        var copied = false, uploaded = ""
+        await t.copyAsking { copied = true }
+        await t.uploadAsking(try file("u.txt")) { uploaded = $0 }
+        #expect(t.transfers.items.filter(\.asking).count == 2)
+        #expect(t.transfers.conflict?.name == "c.txt", "the second question replaced the first")
+        t.transfers.answer(.keep)
+        await waitUntil { copied }
+        #expect(t.transfers.conflict?.name == "u.txt", "the upload's question was lost")
+        t.transfers.answer(.keep)
+        await waitUntil { !uploaded.isEmpty }
+        await waitUntil { t.transfers.items.isEmpty }
+        #expect(copied && uploaded == "/home/me/dest/u 2.txt")
+        #expect(t.transfers.items.isEmpty && t.transfers.conflict == nil)
+    }
+
+    @Test func uploadThenCopyQuestionsBothResume() async throws {
+        let t = TwoQuestions()
+        var copied = false, uploaded = ""
+        await t.uploadAsking(try file("u.txt")) { uploaded = $0 }
+        await t.copyAsking { copied = true }
+        #expect(t.transfers.items.filter(\.asking).count == 2)
+        #expect(t.transfers.conflict?.name == "u.txt", "the second question replaced the first")
+        t.transfers.answer(.keep)
+        await waitUntil { !uploaded.isEmpty }
+        #expect(t.transfers.conflict?.name == "c.txt", "the copy's question was lost")
+        t.transfers.answer(.keep)
+        await waitUntil { copied }
+        await waitUntil { t.transfers.items.isEmpty }
+        #expect(copied && uploaded == "/home/me/dest/u 2.txt")
+        #expect(t.transfers.items.isEmpty && t.transfers.conflict == nil)
+        // The serial queue is free again: a later upload is not stuck behind the answered one.
+        var later = ""
+        t.transfers.upload([try file("u.txt")], into: "~/dest", cwd: "~", machine: t.machine, model: t.model) { later = $0 }
+        await waitUntil { t.transfers.conflict != nil }
+        t.transfers.answer(.keep)
+        await waitUntil { !later.isEmpty }
+        #expect(!later.isEmpty)
+    }
+
+    /// Cancel on one row and leaving the page answer only their own questions; nobody's request is left hanging.
+    @Test func cancelAndStopAnswerEveryWaitingQuestion() async throws {
+        let t = TwoQuestions()
+        var copied = false, uploaded = ""
+        await t.copyAsking { copied = true }
+        await t.uploadAsking(try file("u.txt")) { uploaded = $0 }
+        let upload = try #require(t.transfers.items.first { $0.kind == .upload })
+        t.transfers.cancel(upload.id)
+        #expect(t.transfers.conflict?.name == "c.txt", "cancelling the upload took the copy's question with it")
+        t.transfers.answer(.keep)
+        await waitUntil { copied }
+        await waitUntil { t.transfers.items.isEmpty }
+        #expect(copied && uploaded.isEmpty)
+        #expect(t.transfers.conflict == nil)
+
+        await t.uploadAsking(try file("u.txt")) { uploaded = $0 }
+        copied = false
+        await t.copyAsking { copied = true }
+        t.transfers.stop()
+        await waitUntil { t.transfers.items.isEmpty }
+        #expect(t.transfers.items.isEmpty, "a question left after leaving the page strands its transfer")
+        #expect(t.transfers.conflict == nil && !copied && uploaded.isEmpty)
+        #expect(t.hub.sent("POST", "/api/v1/machines/m1/files/copy").count == 3) // asked + kept, then asked again
+    }
+
     @Test func failuresInWords() {
         let e = { (code: String) in APIError(status: 409, message: "raw", fields: ["code": code]) }
         #expect(FolderTransfers.message(e("read_only"), name: "a.txt")?.contains("home") == true)

@@ -144,6 +144,32 @@ final class FolderEditTests: XCTestCase {
         XCTAssertFalse(app.staticTexts["notes 2.txt"].waitForExistence(timeout: 2), "the cancelled copy left its output")
     }
 
+    /// The app switcher, Control Center or a call only pause the browser's progress polling (#6113): the system's Save to
+    /// Files (.fileMover) and the downloaded file it moves are still there after the app goes to the background and back.
+    func testSaveToFilesSurvivesTheAppGoingToTheBackground() {
+        openHome()
+        app.staticTexts["notes.txt"].press(forDuration: 1.2)
+        let save = app.buttons["存到「文件」"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5), "no 存到「文件」 in the menu")
+        save.tap()
+        // The place picker runs in another process: its buttons are not in this app's tree, but it covers the browser.
+        let upload = app.buttons["files.upload"]
+        let covered = expectation(for: NSPredicate(format: "hittable == false"), evaluatedWith: upload)
+        wait(for: [covered], timeout: 30)
+        sleep(2)
+        shot("save-picker")
+
+        XCUIDevice.shared.press(.home) // active → inactive → background
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10) || app.wait(for: .runningBackgroundSuspended, timeout: 10),
+                      "the app did not go to the background")
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "the app did not come back")
+        sleep(3)
+        shot("save-picker-after-background")
+        XCTAssertTrue(upload.exists, "the browser went away")
+        XCTAssertFalse(upload.isHittable, "going to the background closed Save to Files and dropped the download")
+    }
+
     /// MOCK_FILE_OP_DELAY keeps the original POST open: the bar appears after one second and Cancel leaves no output.
     private func remoteProgress(_ scheme: String, copying: Bool, largestText: Bool = false) {
         app.terminate()

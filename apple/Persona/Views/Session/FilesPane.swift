@@ -213,15 +213,8 @@ struct FilesPane: View {
                 upload(got.urls, owned: true)
             }
         }
-        // An alert, not a confirmation dialog: from a list that one is a popover with no Cancel (lessons/ios.md, #1830).
-        .alert(String(localized: "“\(transfers.conflictName)” already exists"),
-               isPresented: Binding(get: { transfers.conflict != nil }, set: { if !$0 { transfers.answer(.cancel) } })) {
-            Button("Replace") { transfers.answer(.replace) }
-            Button("Keep Both") { transfers.answer(.keep) }
-            Button("Cancel", role: .cancel) { transfers.answer(.cancel) }
-        } message: {
-            Text("This folder already has a file with that name. Replace overwrites it; Keep Both saves the new file as “name 2”.")
-        }
+        // The transfers' "already exists" questions, one after another in the order asked (#6113).
+        .background { FolderTransferQuestion(transfers: transfers) }
         .fileMover(isPresented: Binding(get: { transfers.saving != nil }, set: { if !$0 { transfers.saved() } }),
                    file: transfers.saving) { _ in transfers.saved() }
         .alert("Rename [Chats View 0d0cba]", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
@@ -283,7 +276,10 @@ struct FilesPane: View {
                 }
             }
         }
-        .onTabVisibility(sceneAware: true, appear: { transfers.resumePolling() }, disappear: { transfers.stop() })
+        // Control Center, a call or the app switcher change the scene, not the page: they only pause progress polling.
+        // Leaving the page is what answers questions, stops downloads and drops a file waiting for Save to Files (#6113).
+        .onTabVisibility(sceneAware: true, appear: { transfers.resumePolling() }, disappear: { transfers.pausePolling() })
+        .onTabVisibility(appear: {}, disappear: { transfers.stop() })
         #if DEBUG
         .task { // `-showFilesDrop YES`: the folder looks as it does with files dragged over it (iPad), for screenshots
             if UserDefaults.standard.bool(forKey: "showFilesDrop") { dropping = true }
@@ -954,6 +950,45 @@ struct FilesPane: View {
             if listed != target { listing = nil }
             self.error = error.shown
         }
+    }
+}
+
+/// The "already exists" alert for the transfers' first question, one question at a time. Its buttons answer the question
+/// it shows, never the next one in line; the next one opens the alert again after `Theme.Motion.alertHandoff`, once the
+/// alert before it has closed (UIKit presents one at a time).
+private struct FolderTransferQuestion: View {
+    let transfers: FolderTransfers
+    /// The question the alert is open for.
+    @State private var shown: FolderTransfers.Conflict?
+
+    var body: some View {
+        let question = shown.flatMap { transfers.conflict?.id == $0.id ? $0 : nil }
+        // An alert, not a confirmation dialog: from a list that one is a popover with no Cancel (lessons/ios.md, #1830).
+        // Closing it answers nothing: SwiftUI also writes false when UIKit drops a presentation, and that must not turn
+        // into Cancel. Every answer is a button, the row's Cancel, or leaving the page.
+        Color.clear
+            .allowsHitTesting(false)
+            .task(id: transfers.conflict?.id) {
+                guard let next = transfers.conflict else {
+                    shown = nil
+                    return
+                }
+                if shown != nil { // the alert before it is closing
+                    try? await Task.sleep(for: Theme.Motion.alertHandoff)
+                    guard !Task.isCancelled, transfers.conflict?.id == next.id else { return }
+                }
+                shown = next
+            }
+            .alert(String(localized: "“\(shown?.name ?? "")” already exists"),
+                   isPresented: Binding(get: { question != nil }, set: { _ in })) {
+                if let question {
+                    Button("Replace") { transfers.answer(.replace, to: question.id) }
+                    Button("Keep Both") { transfers.answer(.keep, to: question.id) }
+                    Button("Cancel", role: .cancel) { transfers.answer(.cancel, to: question.id) }
+                }
+            } message: {
+                Text("This folder already has a file with that name. Replace overwrites it; Keep Both saves the new file as “name 2”.")
+            }
     }
 }
 

@@ -52,11 +52,13 @@ final class FolderTransfers {
         }
     }
 
-    /// A name already in the folder, waiting for the user's answer.
+    /// A name already in the folder, waiting for the user's answer. Each one has its own continuation: a remote copy
+    /// and a serial upload can ask at once, and neither question replaces the other (#6113).
     struct Conflict: Identifiable {
         let id = UUID()
         var name: String
-        fileprivate var answer: (Choice) -> Void
+        /// The transfer (`Item.id`) that asked.
+        var item: UUID
     }
 
     enum Choice { case replace, keep, cancel }
@@ -75,11 +77,11 @@ final class FolderTransfers {
             syncVisible()
         }
     }
-    var conflict: Conflict? {
-        didSet { if let conflict { conflictName = conflict.name } }
-    }
-    /// The last conflict's name, kept after the answer so the alert's title does not go blank as it closes.
-    private(set) var conflictName = ""
+    /// Questions in the order they were asked; the alert shows the first, then the next.
+    private var conflicts: [Conflict] = []
+    /// The question the alert shows.
+    var conflict: Conflict? { conflicts.first }
+    @ObservationIgnored private var answers: [Conflict.ID: CheckedContinuation<Choice, Never>] = [:]
     /// A finished download, for Save to Files; set back to nil when the picker is done.
     var saving: URL?
     private struct RemotePoll {
@@ -195,7 +197,7 @@ final class FolderTransfers {
             } catch let e as APIError where e.code == "exists" && policy == nil {
                 let name = e.fields["name"] ?? (paths[0] as NSString).lastPathComponent
                 update(id) { $0.asking = true }
-                let choice = await ask(name)
+                let choice = await ask(name, for: id)
                 update(id) {
                     $0.asking = false
                     $0.done = 0
@@ -281,19 +283,27 @@ final class FolderTransfers {
         pollTasks.removeValue(forKey: id)?.cancel()
         pollRequests[id] = nil
         tasks.removeValue(forKey: id)?.cancel()
+        answerQuestions(of: id) // a cancelled transfer waiting on its question is a no; other transfers' questions stay
         items.removeAll { $0.id == id }
         syncVisible()
     }
 
-    /// When the browser goes away: a question nobody will answer is a no, downloads nobody will save stop. Uploads and
-    /// remote copy / zip POSTs go on; only their progress polling pauses until the file page is in front again.
+    /// When the browser goes away (the page, not the scene: see `pausePolling`): a question nobody will answer is a
+    /// no, downloads nobody will save stop. Uploads and remote copy / zip POSTs go on; only their progress polling
+    /// pauses until the file page is in front again.
     func stop() {
-        answer(.cancel)
-        for task in pollTasks.values { task.cancel() }
-        pollTasks.removeAll()
+        answerQuestions()
+        pausePolling()
         for item in items where item.kind == .download { cancel(item.id) }
         if let saving { MachineFileDownload.remove(saving) }
         saving = nil
+    }
+
+    /// Control Center, a call, the app switcher: the scene, not the page, went away. Only progress polling pauses;
+    /// downloads, a file waiting in Save to Files and questions stay for the user (`resumePolling` on return).
+    func pausePolling() {
+        for task in pollTasks.values { task.cancel() }
+        pollTasks.removeAll()
     }
 
     /// After Save to Files (moved, or not): the temporary folder goes.
@@ -333,7 +343,7 @@ final class FolderTransfers {
             let out = try await Self.send(staged, name: name, dir: dir, cwd: cwd, machine: machine.id, api: api,
                                           ask: { [weak self] name in
                                               self?.update(id) { $0.asking = true }
-                                              return await self?.ask(name) ?? .cancel
+                                              return await self?.ask(name, for: id) ?? .cancel
                                           },
                                           restart: { [weak self] in self?.update(id) { $0.done = 0; $0.asking = false } }) { sent in
                 Task { @MainActor [weak self] in self?.update(id) { $0.done = max($0.done, sent) } }
@@ -411,22 +421,30 @@ final class FolderTransfers {
         }
     }
 
-    private func ask(_ name: String) async -> Choice {
-        await withCheckedContinuation { (c: CheckedContinuation<Choice, Never>) in
-            var answered = false
-            conflict = Conflict(name: name) { choice in
-                guard !answered else { return }
-                answered = true
-                c.resume(returning: choice)
-            }
+    /// Waits for the answer to transfer `item`'s question, queued behind any question already asked.
+    private func ask(_ name: String, for item: UUID) async -> Choice {
+        guard !Task.isCancelled else { return .cancel } // its row is gone: nobody will be asked
+        return await withCheckedContinuation { (c: CheckedContinuation<Choice, Never>) in
+            let question = Conflict(name: name, item: item)
+            answers[question.id] = c
+            conflicts.append(question)
         }
     }
 
-    /// The answer to the "already exists" question.
+    /// The answer to the "already exists" question the alert shows.
     func answer(_ choice: Choice) {
-        let c = conflict
-        conflict = nil
-        c?.answer(choice)
+        if let conflict { answer(choice, to: conflict.id) }
+    }
+
+    /// The answer to one question; nothing once it has been answered, so a late call never answers the next one.
+    func answer(_ choice: Choice, to id: Conflict.ID) {
+        conflicts.removeAll { $0.id == id }
+        answers.removeValue(forKey: id)?.resume(returning: choice)
+    }
+
+    /// Cancel for every waiting question (nil), or only those of one transfer.
+    private func answerQuestions(of item: UUID? = nil) {
+        for question in conflicts where item == nil || question.item == item { answer(.cancel, to: question.id) }
     }
 
     private func update(_ id: UUID, _ change: (inout Item) -> Void) {
