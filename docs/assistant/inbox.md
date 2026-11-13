@@ -735,7 +735,10 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   ended (replied as you, the user answered at the source, handled without it, or no longer current). An Agent suggestion, a handback and a recap alone
   get no card. While items handed to the main conversation are open, its composer shows "Wrap up: <title>" for the two most recently handed (web
   `views/assistant/HandoffCard.tsx`, iOS `HandoffCardView.swift`): it hands the item over again with a fixed ask for the final summary and reply, so the
-  block naming the item goes with it and nothing goes to anyone else. `prompts/inbox/handoff.md` tells the conversation to write back when the user wants
+  block naming the item goes with it and nothing goes to anyone else. On the web (#6431, `lib/handoff-card.ts` `wrapUpItems` / `wrapUpWait`)
+  an item whose handling is done with no suggestion waiting gets no chip (nothing is left to wrap up; it stays in the Inbox), and a chip whose item has
+  a suggestion waiting says so: "To send" for a reply, "To confirm" for anything else. Needs you still counts the item once, in the Inbox; iOS still
+  shows a chip for every open item handed over. `prompts/inbox/handoff.md` tells the conversation to write back when the user wants
   a reply or a conclusion or the matter is settled, and again whenever it changes. The web's card has "Open in Inbox"; iOS has no way yet to open an
   item from the chat, so its card leaves rejecting and instructing to the item's page. Mock: `MOCK_TASKS=1 MOCK_HANDOFF_CARD=1` (`sent`: the reply went).
   "Also mark as done" is off by default for the main chat (it may still write back) and on for the other targets; switching targets follows that default until the user sets the box,
