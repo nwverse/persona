@@ -266,6 +266,7 @@ type StoragePermission struct {
 type Contributes struct {
 	Connectors      []ConnectorItem      `json:"connectors,omitempty"`
 	Voice           []NamedItem          `json:"voice,omitempty"`
+	Transcription   []NamedItem          `json:"transcription,omitempty"`
 	Computer        []NamedItem          `json:"computer,omitempty"`
 	Browser         []NamedItem          `json:"browser,omitempty"`
 	Iphone          []NamedItem          `json:"iphone,omitempty"`
@@ -300,7 +301,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -332,7 +333,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
+		case "connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -628,7 +629,7 @@ type ConnectorItem struct {
 	SendsAsUser bool `json:"sends_as_user,omitempty"`
 }
 
-// NamedItem: A contribution with only an id and a name: voice, computer, browser.
+// NamedItem: A contribution with only an id and a name: voice, transcription, computer, browser.
 type NamedItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
@@ -3054,14 +3055,17 @@ type ConnectorCatalogCallParams struct {
 	Args         json.RawMessage `json:"args,omitempty"`
 }
 
-// Values of ConnectorSubscriptionMode.
+// ConnectorSubscriptionMode: items: new items, each kept once; snapshot: the answer as one state, kept when it
+// changes; things: the answer lists Inbox rows ready-made (ConnectorInboxThing), kept and handed to the Inbox as they
+// are.
 const (
 	ConnectorSubscriptionModeItems    = "items"
 	ConnectorSubscriptionModeSnapshot = "snapshot"
+	ConnectorSubscriptionModeThings   = "things"
 )
 
 // ConnectorSubscriptionModes are the values of ConnectorSubscriptionMode, in order.
-var ConnectorSubscriptionModes = []string{"items", "snapshot"}
+var ConnectorSubscriptionModes = []string{"items", "snapshot", "things"}
 
 // Values of ConnectorSubscriptionGroup.
 const (
@@ -3113,11 +3117,12 @@ type ConnectorSubscriptionFields struct {
 	ReplyTo string `json:"reply_to,omitempty"`
 }
 
-// ConnectorSubscriptionRecipe: A pull recipe, not a schedule. args is an object (default {}); strings may contain
-// {{since}} or {{since_date}}. cursor_arg and next_cursor_path opt into cursor pagination; page_arg and optional
-// next_page_path opt into page pagination (without next_page_path, a full requested page continues). items_path
-// defaults to $; fields are relative to one item. Text results require snapshot mode. Runtime argument/schema and
-// mapped-value validation belongs to the subscription runner.
+// ConnectorSubscriptionRecipe: A pull recipe, not a schedule. In things mode the rows bring their own threads and
+// kinds: group_by is thread, kind is a row's when it has none, and fields and pagination are not used. args is an
+// object (default {}); strings may contain {{since}} or {{since_date}}. cursor_arg and next_cursor_path opt into
+// cursor pagination; page_arg and optional next_page_path opt into page pagination (without next_page_path, a full
+// requested page continues). items_path defaults to $; fields are relative to one item. Text results require snapshot
+// mode. Runtime argument/schema and mapped-value validation belongs to the subscription runner.
 type ConnectorSubscriptionRecipe struct {
 	Mode           string                       `json:"mode"`
 	Tool           string                       `json:"tool"`
@@ -4602,6 +4607,9 @@ type KBRecordingSegment struct {
 	// An all-day recording's line number: the segment's 1-based position in its uploads (docs/assistant/day-recap.md);
 	// absent on other recordings.
 	N int `json:"n,omitempty"`
+	// Whose text the segment is in a meeting transcribed on the hub (docs/assistant/meeting-minutes.md "The transcript
+	// of record"): hub or device; absent means device.
+	Source string `json:"source,omitempty"`
 	// The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md
 	// "Persona's echo"): kept in the transcript but not what the meeting said, so leave it out of anything read as the
 	// meeting's words; absent (false) on every other line.

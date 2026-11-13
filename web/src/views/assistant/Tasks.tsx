@@ -25,6 +25,7 @@ import {
   removeTask,
   retryKey,
   retryTask,
+  routeTodoId,
   startFailure,
   setRoute,
   startPlan,
@@ -279,7 +280,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   if (plan.state !== "open") {
     const failed = plan.tasks.filter((t) => t.error);
     return (
-      <div className="flex flex-col gap-1 text-[13px] text-ink-2">
+      <div className="flex flex-col gap-1 text-meta text-ink-2">
         <span className="flex items-center gap-1.5">
           <Icon name={plan.state === "started" ? "check" : "x"} size={13} />
           {plan.state === "started" ? t("assistant-tasks.plan_started", { count: plan.tasks.length }) : t("assistant-tasks.plan_dismissed", { count: plan.tasks.length })}
@@ -305,7 +306,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
     // an open plan may carry a suggested rule: its line goes under the card (#5802)
     <>
     <div className="flex flex-col gap-3 rounded-card bg-surface p-4 shadow-card">
-      <div className="flex items-center gap-1.5 text-[12px] font-medium text-ink-2">
+      <div className="flex items-center gap-1.5 text-label font-medium text-ink-2">
         <Icon name="list" size={13} />
         {plan.tasks.length > 1 ? t("assistant-tasks.plan_split", { count: plan.tasks.length }) : t("assistant-tasks.plan_single")}
       </div>
@@ -367,25 +368,25 @@ function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; t
   ];
   return (
     <div className={cx("flex flex-col gap-1.5", n > 1 && "border-t border-line pt-3")}>
-      <div className="flex items-baseline gap-2 text-[14.5px] font-semibold">
+      <div className="flex items-baseline gap-2 text-card-title font-semibold">
         {numbered && <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full bg-accent-tint text-[11px] font-bold text-accent">{n}</span>}
         {task.title}
       </div>
       <div className="flex flex-wrap gap-1.5">
         {chips.map((c) => (
-          <span key={c.icon} title={c.title} className="inline-flex h-6 items-center gap-1 rounded-full bg-field px-2 text-[12px] text-ink-2">
+          <span key={c.icon} title={c.title} className="inline-flex h-6 items-center gap-1 rounded-full bg-field px-2 text-label text-ink-2">
             <Icon name={c.icon} size={12} />
             {c.text}
           </span>
         ))}
-        <span className={cx("inline-flex h-6 items-center rounded-full px-2 text-[12px]", task.readonly ? "bg-accent-tint text-accent" : "bg-field text-ink-2")}>
+        <span className={cx("inline-flex h-6 items-center rounded-full px-2 text-label", task.readonly ? "bg-accent-tint text-accent" : "bg-field text-ink-2")}>
           {task.readonly ? t("assistant-tasks.readonly") : PERMISSION[task.permission || "default"] ?? task.permission}
         </span>
         {ultra && <UltracodeChip on={ultra.on} blocked={ultra.blocked} disabled={busy} onChange={onUltra} />}
       </div>
       {/* it is asked for where it can't run: say it starts without */}
-      {ultra?.blocked && ultra.on && <div className="text-[12px] text-orange">{t("ultracode.plan_blocked", { reason: ultra.blocked })}</div>}
-      {task.why && <div className="text-[12px] text-ink-2">{task.why}</div>}
+      {ultra?.blocked && ultra.on && <div className="text-label text-orange">{t("ultracode.plan_blocked", { reason: ultra.blocked })}</div>}
+      {task.why && <div className="text-label text-ink-2">{task.why}</div>}
       {/* what the task will be held to, shown before "Start" confirms it (#3822) */}
       {task.brief && (
         <Suspense fallback={null}>
@@ -452,11 +453,11 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
       return (
         <div className="flex flex-col gap-2">
           <div className="flex flex-col items-end gap-1 pl-10">
-            <span className="inline-flex items-center gap-1 text-[12px] font-medium text-accent">
+            <span className="inline-flex items-center gap-1 text-label font-medium text-accent">
               <Icon name={item.body?.interrupted === true ? "stop" : "send"} size={11} />
               {item.body?.interrupted === true ? t("assistant-tasks.said_to_interrupting", { title }) : t("assistant-tasks.say_to", { title })}
             </span>
-            <div className="rounded-[18px] bg-field px-3.5 py-2 text-[14.5px]">{field(item, "text")}</div>
+            <div className="rounded-[18px] bg-field px-3.5 py-2 text-card-title">{field(item, "text")}</div>
           </div>
           {/* every Agent of the task had stopped, so the message started a new one for it (#4754): its hand-off card */}
           {newAgent && <NewAgentHandoff sid={newAgent} mid={field(item, "new_agent_machine") || newAgentMachine} title={title} todo={known ? item.ref : undefined} />}
@@ -474,7 +475,7 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
       // a line the hub wrote (#4305): small and centered, as the chat's own notices
       const text = feedNotice(item);
       return text ? (
-        <p data-testid="feed-notice" className="px-6 text-center text-[12px] text-ink-2 [overflow-wrap:anywhere]">
+        <p data-testid="feed-notice" className="px-6 text-center text-label text-ink-2 [overflow-wrap:anywhere]">
           {text}
         </p>
       ) : null;
@@ -500,7 +501,7 @@ export function AnsweredLine({ item, title, onOpenTask }: { item: FeedItem; titl
   const items = answeredItems(item);
   const expandable = items.length > 0;
   return (
-    <div className={cx("flex max-w-full flex-col self-start bg-field text-[12px] text-ink-2", open ? "w-full rounded-card" : "rounded-full")}>
+    <div className={cx("flex max-w-full flex-col self-start bg-field text-label text-ink-2", open ? "w-full rounded-card" : "rounded-full")}>
       <div className="flex min-w-0 items-center gap-1.5 px-3 py-1.5">
         <Icon name="check" size={12} className="shrink-0" />
         {onOpenTask ? (
@@ -528,7 +529,7 @@ export function AnsweredLine({ item, title, onOpenTask }: { item: FeedItem; titl
           {items.map((x, i) => (
             <div key={i} className="flex flex-col gap-0.5 whitespace-pre-wrap [overflow-wrap:anywhere]">
               {x.question && <div className="font-medium text-ink-3">{x.question}</div>}
-              {x.answer && <div className="text-[13px] leading-[1.55] text-ink">{x.answer}</div>}
+              {x.answer && <div className="text-meta leading-[1.55] text-ink">{x.answer}</div>}
             </div>
           ))}
         </div>
@@ -569,11 +570,11 @@ function InterruptHandledLine({ todoId, title, resolution }: { todoId?: string; 
     </>
   );
   return known && todoId ? (
-    <button type="button" data-interrupt="handled" onClick={() => openTask(todoId)} className="flex max-w-full items-center gap-1.5 self-start text-left text-[13px] text-ink-2 hover:text-ink">
+    <button type="button" data-interrupt="handled" onClick={() => openTask(todoId)} className="flex max-w-full items-center gap-1.5 self-start text-left text-meta text-ink-2 hover:text-ink">
       {body}
     </button>
   ) : (
-    <div data-interrupt="handled" className="flex max-w-full items-center gap-1.5 self-start text-[13px] text-ink-2">{body}</div>
+    <div data-interrupt="handled" className="flex max-w-full items-center gap-1.5 self-start text-meta text-ink-2">{body}</div>
   );
 }
 
@@ -593,8 +594,8 @@ export function InterruptBatchCard({ batch }: { batch: InterruptBatch }) {
       <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex items-start gap-3 p-4 text-left">
         <Icon name="info" size={18} stroke={2.4} className={cx("shrink-0", pending ? "text-red" : "text-ink-3")} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className={cx("text-[14.5px] font-semibold", !pending && "text-ink-2")}>{title}</div>
-          <div className={cx("text-[13px]", pending ? "text-ink" : "text-ink-2")}>{counts}</div>
+          <div className={cx("text-card-title font-semibold", !pending && "text-ink-2")}>{title}</div>
+          <div className={cx("text-meta", pending ? "text-ink" : "text-ink-2")}>{counts}</div>
         </div>
         <Icon name="chevronRight" size={14} stroke={2.2} className="mt-1 shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : "none" }} />
       </button>
@@ -609,7 +610,7 @@ export function InterruptBatchCard({ batch }: { batch: InterruptBatch }) {
                 type="button"
                 disabled={!known}
                 onClick={() => known && openTask(known.id)}
-                className="flex min-w-0 items-center gap-2 rounded-control px-2 py-1.5 text-left text-[13px] enabled:hover:bg-hover"
+                className="flex min-w-0 items-center gap-2 rounded-control px-2 py-1.5 text-left text-meta enabled:hover:bg-hover"
               >
                 <span className="min-w-0 flex-1 truncate">{known?.title || task.title}</span>
                 <span className={cx("shrink-0 whitespace-nowrap", waiting ? "font-semibold text-ink" : "text-ink-2")}>{resolutionLabel(task.resolution)}</span>
@@ -638,8 +639,8 @@ function InterruptedReceipt({ item }: { item: FeedItem }) {
       <div className="flex gap-3 rounded-card bg-field p-4">
         <Icon name="clock" size={18} stroke={2.4} className="text-orange" />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="text-[14.5px] font-semibold">{title}</div>
-          <div className="text-[13px] text-ink-2">{usageLimitLabel(task.lead, clock) ?? t("lib-usage-limit.short")}</div>
+          <div className="text-card-title font-semibold">{title}</div>
+          <div className="text-meta text-ink-2">{usageLimitLabel(task.lead, clock) ?? t("lib-usage-limit.short")}</div>
           <div className="mt-1 flex gap-2">
             {!goesOn && (
               <Button icon="retry" busy={retrying} disabled={retrying} onClick={() => retryTaskNow(todo, "continue")}>
@@ -654,7 +655,7 @@ function InterruptedReceipt({ item }: { item: FeedItem }) {
   }
   if (todo && status && status !== "interrupted") {
     return (
-      <button type="button" onClick={() => openTask(todo.id)} className="flex items-center gap-1.5 self-start text-left text-[13px] text-ink-2 hover:text-ink">
+      <button type="button" onClick={() => openTask(todo.id)} className="flex items-center gap-1.5 self-start text-left text-meta text-ink-2 hover:text-ink">
         <Icon name={status === "done" ? "check" : "retry"} size={13} />
         {status === "done" ? t("assistant-tasks.receipt_done", { title }) : t("assistant-tasks.receipt_continued", { title })}
       </button>
@@ -668,8 +669,8 @@ function InterruptedReceipt({ item }: { item: FeedItem }) {
     <div className="flex gap-3 rounded-card bg-danger-wash p-4">
       <Icon name="info" size={18} stroke={2.4} className="text-red" />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <div className="text-[14.5px] font-semibold">{t("assistant-tasks.interrupted_title", { title })}</div>
-        <Clamped wash className="text-[13px] text-ink">{reason ? t("assistant-tasks.interrupted_reason", { reason }) : t("assistant-tasks.interrupted")}</Clamped>
+        <div className="text-card-title font-semibold">{t("assistant-tasks.interrupted_title", { title })}</div>
+        <Clamped wash className="text-meta text-ink">{reason ? t("assistant-tasks.interrupted_reason", { reason }) : t("assistant-tasks.interrupted")}</Clamped>
         <div className="mt-1 flex gap-2">
           {canContinue && (
             <Button icon="retry" busy={retrying} disabled={retrying} onClick={() => retryTaskNow(todo, "continue")}>
@@ -704,7 +705,7 @@ function OutcomeReceipt({ item, failed }: { item: FeedItem; failed: boolean }) {
   if (failed && todo && status && status !== "failed") {
     const again = status === "not_started" ? t("assistant-tasks.receipt_restarting", { title }) : t("assistant-tasks.receipt_restarted", { title });
     return (
-      <button type="button" onClick={() => openTask(todo.id)} className="flex items-center gap-1.5 self-start text-left text-[13px] text-ink-2 hover:text-ink">
+      <button type="button" onClick={() => openTask(todo.id)} className="flex items-center gap-1.5 self-start text-left text-meta text-ink-2 hover:text-ink">
         <Icon name={status === "not_started" ? "retry" : "check"} size={13} />
         {again}
       </button>
@@ -723,7 +724,7 @@ function OutcomeReceipt({ item, failed }: { item: FeedItem; failed: boolean }) {
       <div className={cx("flex gap-3 rounded-card p-4", failed ? "bg-danger-wash" : stopped ? "bg-field" : "bg-green-tint")} data-receipt>
         <Icon name={failed ? "info" : stopped ? "clock" : "check"} size={18} stroke={2.4} className={failed ? "text-red" : stopped ? "text-ink-2" : "text-green"} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="text-[14.5px] font-semibold">{heading}</div>
+          <div className="text-card-title font-semibold">{heading}</div>
           {summary && <ReceiptSummary text={summary} plain={failed} wash={failed} />}
           <div className="mt-1 flex gap-2">
             {failed && todo && (
@@ -755,7 +756,7 @@ function OutcomeReceipt({ item, failed }: { item: FeedItem; failed: boolean }) {
 /** What the task's agent said last, as Markdown (a start error is plain text), in about four lines (#1508); "Show all"
  *  shows the rest in place when it is cut (#4715). */
 export function ReceiptSummary({ text, plain, wash }: { text: string; plain?: boolean; wash?: boolean }) {
-  if (plain) return <Clamped wash={wash} className={cx("text-[13px]", wash ? "text-ink" : "text-ink-2")}>{text}</Clamped>;
+  if (plain) return <Clamped wash={wash} className={cx("text-meta", wash ? "text-ink" : "text-ink-2")}>{text}</Clamped>;
   return (
     <Clamped wash={wash} className={wash ? "text-ink" : "text-ink-2"}>
       <Markdown text={text} compact />
@@ -777,7 +778,7 @@ function Clamped({ className, children, wash }: { className: string; children: R
           type="button"
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
-          className={cx("-ml-1 w-fit rounded-[6px] px-1 text-[12px] font-medium whitespace-nowrap transition-colors hover:bg-hover-2", wash ? "text-ink" : "text-ink-3 hover:text-ink-2")}
+          className={cx("-ml-1 w-fit rounded-[6px] px-1 text-label font-medium whitespace-nowrap transition-colors hover:bg-hover-2", wash ? "text-ink" : "text-ink-3 hover:text-ink-2")}
         >
           {open ? t("assistant-tasks.summary_collapse") : t("assistant-tasks.summary_expand")}
         </button>
@@ -795,7 +796,7 @@ export function QuickResultCard({ result }: { result: QuickResult }) {
       </span>
       <div className="min-w-0 flex-1">
         <div className="text-[13.5px] font-semibold">{result.kind === "reminder" ? t("assistant-tasks.reminder_added") : t("assistant-tasks.calendar_added")}</div>
-        <div className="truncate text-[12px] text-ink-2">{[when, result.title, result.place].filter(Boolean).join(" · ")}</div>
+        <div className="truncate text-label text-ink-2">{[when, result.title, result.place].filter(Boolean).join(" · ")}</div>
       </div>
       <span className="shrink-0 text-[11.5px] text-ink-3">{t("assistant-tasks.on_iphone")}</span>
     </div>
@@ -860,11 +861,11 @@ function TodayCard({ body, conversation }: { body: TodayBody; conversation: stri
     });
   return (
     <div className="flex flex-col rounded-card bg-surface p-4 shadow-card">
-      <div className="mb-2 flex items-center gap-1.5 text-[12px] font-medium text-ink-2">
+      <div className="mb-2 flex items-center gap-1.5 text-label font-medium text-ink-2">
         <Icon name="sun" size={13} />
         {t("assistant-tasks.today_title")}
       </div>
-      {rows.length === 0 && <div className="text-[13px] text-ink-2">{t("assistant-tasks.today_empty")}</div>}
+      {rows.length === 0 && <div className="text-meta text-ink-2">{t("assistant-tasks.today_empty")}</div>}
       {rows.map((r, i) => (
         <div key={i} className={cx("flex items-center gap-3 py-2", i > 0 && "border-t border-line")}>
           <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-control", r.tint)}>
@@ -872,9 +873,9 @@ function TodayCard({ body, conversation }: { body: TodayBody; conversation: stri
           </span>
           <div className="min-w-0 flex-1">
             <div className="text-[13.5px] font-medium">{r.title}</div>
-            {r.detail && <div className="line-clamp-2 whitespace-pre-line text-[12px] text-ink-2">{r.detail}</div>}
+            {r.detail && <div className="line-clamp-2 whitespace-pre-line text-label text-ink-2">{r.detail}</div>}
             {r.lines?.map((l, j) => (
-              <div key={j} data-today-line className="truncate text-[12px] text-ink-2" title={l}>
+              <div key={j} data-today-line className="truncate text-label text-ink-2" title={l}>
                 {l}
               </div>
             ))}
@@ -940,7 +941,7 @@ export const TaskQuestions = memo(function TaskQuestions({ conversation }: { con
       ))}
       {first && (
         <>
-          <div className="flex items-center gap-1.5 px-1 text-[12px] font-semibold text-attention">
+          <div className="flex items-center gap-1.5 px-1 text-label font-semibold text-attention">
             <Icon name="hand" size={13} />
             <span className="truncate">{first.todo.title}</span>
             <span className="flex-1" />
@@ -1153,8 +1154,8 @@ function openKey(item: NeedsYouItem): string {
   return item.key;
 }
 
-/** A Needs you row. The ones with something to answer are folded to a line until opened; a click on the line, or its
- *  chevron, opens the whole card where it is, and the card leaves with the answer. */
+/** A Needs you row. Open the folded line to answer in place; its expanded title opens the asking Agent (or the task
+ *  for a task-level decision), while the chevron folds it again. */
 function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boolean; onToggle: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const opened = useRef(open);
@@ -1167,7 +1168,30 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
   // is summed from this same flag, so the trays and the header tell one number.
   const countsOpenAttr = item.kind === "task" ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
   if (!folded) return <NeedsYouBody item={item} />;
-  const head = (
+  const openTitle = item.kind === "agent" ? () => openAgent(item.session.machine_id, item.session.session_id)
+    : item.kind === "task" ? () => {
+      const ask = item.asks[0];
+      if (ask) openAgent(ask.machine_id, ask.session_id);
+      else openTask(item.todo.id);
+    } : undefined;
+  const label = <>
+    <StatusMark state="needs_you" />
+    <span className="min-w-0 flex-1">
+      <span className="block truncate font-semibold">{folded.title}</span>
+      {!open && folded.line && folded.line !== folded.kicker && <span className="block truncate text-xs text-ink-2">{folded.line}</span>}
+    </span>
+  </>;
+  const chevron = <Icon name="chevronRight" size={14} className="shrink-0 text-ink-3 transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />;
+  const head = open && openTitle ? (
+    <div className="flex min-w-0 items-center rounded-control px-3 py-2 text-sm">
+      <button type="button" data-needs-title onClick={openTitle} className="flex min-w-0 flex-1 items-center gap-2 text-left hover:underline">
+        {label}
+      </button>
+      <button type="button" aria-expanded={open} aria-label={t("assistant-tasks.summary_collapse")} onClick={onToggle} className="touch-hit ml-2 flex size-6 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover">
+        {chevron}
+      </button>
+    </div>
+  ) : (
     <button
       type="button"
       data-needs-row={open ? undefined : item.key}
@@ -1176,13 +1200,9 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
       onClick={onToggle}
       className={cx("flex w-full min-w-0 items-center gap-2 rounded-control px-3 py-2 text-left text-sm hover:bg-hover", open ? "" : "bg-field")}
     >
-      <StatusMark state="needs_you" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate font-semibold">{folded.title}</span>
-        {!open && folded.line && folded.line !== folded.kicker && <span className="block truncate text-xs text-ink-2">{folded.line}</span>}
-      </span>
+      {label}
       {!open && <span className="max-w-[40%] shrink-0 truncate text-right text-xs text-attention">{folded.kicker}</span>}
-      <Icon name="chevronRight" size={14} className="shrink-0 text-ink-3 transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />
+      {chevron}
     </button>
   );
   if (!open) return head;
@@ -1190,6 +1210,17 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
     <div ref={ref} data-needs-row={item.key} data-needs-open {...countsOpenAttr} className="flex flex-col gap-1">
       {head}
       <NeedsYouBody item={item} nested />
+    </div>
+  );
+}
+
+/** An additional way to the task or Agent page at the end of an opened Needs you row. */
+function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
+  return (
+    <div className="flex justify-end px-1 pt-1">
+      <button type="button" data-needs-open-entry onClick={onOpen} title={t("assistant-brief.open_row", { title })} className="inline-flex min-h-8 items-center text-xs font-semibold text-accent hover:underline [@media(pointer:coarse)]:min-h-10">
+        {t("assistant-brief.open")}
+      </button>
     </div>
   );
 }
@@ -1203,17 +1234,17 @@ function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: b
     const { session, asks } = item;
     const open = () => openAgent(session.machine_id, session.session_id);
     if (!asks.length) return <button type="button" data-needs-row={rowKey} onClick={open} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><StatusMark state="needs_you" /><span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("needs_you")}</span></button>;
-    return <div data-needs-row={rowKey}>{!nested && <button type="button" onClick={open} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{sessionTitle(session)}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
+    return <div data-needs-row={rowKey}>{!nested && <button type="button" onClick={open} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{sessionTitle(session)}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}{nested && <OpenEntry title={sessionTitle(session)} onOpen={open} />}</div>;
   }
   const { todo, asks, status } = item;
   // Unfolded task rows carry the open flag themselves; a nested one's opened head already has it.
   const taskOpenAttr = !nested ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
-  if (asks.length) return <div data-needs-row={rowKey} {...taskOpenAttr}>{!nested && <button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
+  if (asks.length) return <div data-needs-row={rowKey} {...taskOpenAttr}>{!nested && <button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}{nested && <OpenEntry title={todo.title} onOpen={() => openTask(todo.id)} />}</div>;
   const ask = openAsk(todo);
   // Both structured decisions and older review-only decisions have the same deferral controls.
   if (isDecision(todo))
     return (
-      <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-[12px] text-ink-2">{todo.title}</div>}>
+      <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-label text-ink-2">{todo.title}</div>}>
         <NeedsYouPart key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} hideTitle={nested} decision={todo} />
       </Suspense>
     );
@@ -1506,24 +1537,26 @@ export const TaskDock = memo(function TaskDock({ conversation }: { conversation:
 
 /** "Talking to "xx"" while the next message goes straight to a task; × gives it back to Persona. */
 export const RouteChip = memo(function RouteChip({ conversation }: { conversation: string }) {
-  const todoId = useFeed((s) => s.routes[conversation]);
+  const route = useFeed((s) => s.routes[conversation]);
+  const todoId = routeTodoId(route);
   const todo = useTodo(todoId);
   if (!todo) return null;
   return (
-    <div className="flex">
-      <span className="inline-flex h-7 items-center gap-1.5 rounded-full bg-accent-tint pl-3 pr-1 text-[12.5px] font-semibold text-accent">
+    <div className="flex flex-col items-start gap-1">
+      <span title={typeof route === "object" ? t("todos.ask_chat_hint") : undefined} className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-full bg-accent-tint pl-3 pr-1 text-[12.5px] font-semibold text-accent">
         <Icon name="send" size={12} />
-        {t("assistant-tasks.say_to", { title: todo.title })}
+        <span className="min-w-0 truncate">{t(typeof route === "object" ? "todos.ask_chat_route" : "assistant-tasks.say_to", { title: todo.title })}</span>
         <button type="button" aria-label={t("assistant-tasks.give_back")} onClick={() => setRoute(conversation, null)} className="flex size-5 items-center justify-center rounded-full hover:bg-hover">
           <Icon name="x" size={11} />
         </button>
       </span>
+      {typeof route === "object" && <span className="text-xs text-ink-2">{t("todos.ask_chat_hint")}</span>}
     </div>
   );
 });
 
 export function DayLine({ date }: { date: Date }) {
-  return <div className="py-1 text-center text-[12px] text-ink-3">{dayLabel(date)}</div>;
+  return <div className="py-1 text-center text-label text-ink-3">{dayLabel(date)}</div>;
 }
 
 /** A task's state for other views (the side panel's header). */
