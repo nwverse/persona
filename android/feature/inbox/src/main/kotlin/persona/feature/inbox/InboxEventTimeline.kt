@@ -104,7 +104,7 @@ internal fun LazyListScope.eventChain(
 @Composable
 private fun ChainSourceIcon(via: String, record: InboxRecord) {
     when {
-        via == "chat" -> JIcon(PersonaIcons.channels, null, size = Tokens.Space.l, tint = PersonaTheme.palette.ink2, decorative = true)
+        via == "chat" -> JSourceMark(record.sourceLabel.ifBlank { via }, brand = channelBrand(via), size = MarkSize.Inline)
         via == "mail" || via == record.source && record.isMail ->
             JIcon(PersonaIcons.mail, null, size = Tokens.Space.l, tint = PersonaTheme.palette.ink2, decorative = true)
         via in setOf("lark", "feishu") || via == record.source && record.isLark ->

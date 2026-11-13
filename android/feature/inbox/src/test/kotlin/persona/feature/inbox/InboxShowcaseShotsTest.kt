@@ -152,10 +152,10 @@ class InboxShowcaseShotsTest {
             val english = language == Locale.ENGLISH
             val separator = if (english) ": " else "："
             for (words in listOf(
-                "春季订单的报价", "订单群 · 张三$separator好的，我看一下新的", "张三发现税率错了，正在等他确认更正后的报价",
+                "春季订单的报价", "订单群 · 张三${separator}好的，我看一下新的", "张三发现税率错了，正在等他确认更正后的报价",
                 if (english) "Waiting for 张三确认新报价" else "等张三确认新报价", "问更正后的报价行不行",
-                "周五午饭", "李四$separator周五还约吗？", if (english) "Waiting for you to confirm a reply" else "等你确认回复",
-                "全员群 · 行政${separator}提醒：周一关闭", "发布群 · 王五${separator}我晚点回你", "赵六$separator收到，谢谢",
+                "周五午饭", "李四${separator}周五还约吗？", if (english) "Waiting for you to confirm a reply" else "等你确认回复",
+                "全员群 · 行政${separator}提醒：周一关闭", "发布群 · 王五${separator}我晚点回你", "赵六${separator}收到，谢谢",
                 if (english) "You replied" else "你回过了", displayTime("2026-01-01T11:21:00Z", language, ZoneOffset.UTC),
             )) {
                 val found = rule.onAllNodes(hasText(words, substring = true), useUnmergedTree = true).fetchSemanticsNodes()

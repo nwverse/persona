@@ -202,8 +202,7 @@ internal fun EventStateLine(mark: EventMark, modifier: Modifier = Modifier) {
         EventMark.Preparing -> JInlineStatus(stringResource(R.string.inbox_handling_preparing), modifier, tone = InlineTone.Busy)
         is EventMark.Failed -> JInlineStatus(mark.reason?.let { stringResource(R.string.inbox_handling_failed_reason, it) }
             ?: stringResource(R.string.inbox_handling_failed), modifier, tone = InlineTone.Failed)
-        is EventMark.Suggests -> JInlineStatus(stringResource(R.string.inbox_suggestion_row, stringResource(mark.kind), mark.line),
-            modifier, tone = InlineTone.Caution)
+        is EventMark.Suggests -> Unit
         is EventMark.Now -> JInlineStatus(mark.text, modifier, tone = when {
             mark.problem -> InlineTone.Failed
             mark.status == Status.Working -> InlineTone.Busy
