@@ -130,7 +130,7 @@ func TestInboxTextTriagedKeepsUnknownAndModelWords(t *testing.T) {
 	const detail = "assistant-inbox_chain.triaged_detail"
 	for _, from := range Langs {
 		for _, to := range Langs {
-			for _, reason := range []string{"A model-written reason", "需要你", "按你的规则：发布"} { // i18n-ignore: opaque model/user text
+			for _, reason := range []string{"A model-written reason", "需要你", "模型觉得这不重要"} { // i18n-ignore: opaque model/user text
 				args := Args{"tier": T(from, "assistant-inbox_chain.tier_fyi"), "reason": reason}
 				wantArgs := Args{"tier": T(to, "assistant-inbox_chain.tier_fyi"), "reason": reason}
 				if got, want := InboxText(to, T(from, detail, args)), T(to, detail, wantArgs); got != want {
