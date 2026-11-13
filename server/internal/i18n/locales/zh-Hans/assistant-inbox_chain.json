@@ -36,5 +36,7 @@
   "suggested_handback": "助手给了建议，等你拿主意",
   "confirmed_agent": "你确认了，开了 Agent",
   "failed_agent": "Agent 没有开起来",
-  "handed_main": "交给了 Persona 主对话"
+  "handed_main": "交给了 Persona 主对话",
+  "waiting_who": "等{who} · {at} 再看",
+  "waiting_reply": "等对方回复 · {at} 再看"
 }

@@ -40,5 +40,7 @@
   "suggested_handback": "Assistant suggests a next step for you to decide",
   "confirmed_agent": "You confirmed: an Agent started",
   "failed_agent": "The Agent couldn’t start",
-  "handed_main": "Handed to Persona’s main chat"
+  "handed_main": "Handed to Persona’s main chat",
+  "waiting_who": "Waiting for {who} · look again {at}",
+  "waiting_reply": "Waiting for a reply · look again {at}"
 }
