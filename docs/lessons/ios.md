@@ -2426,13 +2426,13 @@ different flags (testable imports), so each rebuilds swift-syntax from scratch a
 that opens the package (`scripts/test/isolation-lint`) leaves a `.build` folder inside it; git ignores that folder, but
 `scripts/test/test_script_layout.py` walks ignored files too and fails on the git hook samples in it, so delete it.
 
-## An alert's buttons keep the state they came up with (2026-11-14, #6996)
+## A disabled alert button is not drawn disabled (2026-11-14, #6996)
 
 - Rename Terminal (`RenameTerminalAlert` in `apple/Persona/Views/Chats/TerminalsView.swift`) first had
-  `Button("Save") { … }.disabled(!TabRename.canSave(name, …))`, reading the alert's own `TextField`. On iPhone (iOS 27
-  simulator) a tap on Save after typing a new name did nothing, and the alert stayed up with the new text, though the
-  accessibility tree called Save enabled. Save was drawn in the same blue while it was disabled too, so the system alert
-  never showed the state either. The same test passed on iPad.
-- Don't gate an alert's actions on what is typed into it. Check in the action instead (an empty or unchanged name saves
-  nothing, as Rename Space and Rename Agent do), and limit the length with `.onChange` on the field's text.
-- A UI test that types and taps Save, then checks what reached the mock, catches it; asserting `isEnabled` does not.
+  `Button("Save") { … }.disabled(!TabRename.canSave(name, …))`. On the iOS 27 simulator the accessibility tree called
+  Save disabled for the starting name, but the alert drew it in the same blue as Cancel: a button that looks ready and
+  does nothing. Check in the action instead (an empty or unchanged name saves nothing, as Rename Space and Rename Agent
+  do), and limit the length with `.onChange` on the field's text.
+- UI tests: right after typing into an alert's field, a tap on its button can be lost while the alert settles (every
+  time on an iPhone simulator here; once in `FilesActionsTests`). Tap again while the alert stays up, then check what
+  reached the mock; a single tap reads as an app bug that isn't there.

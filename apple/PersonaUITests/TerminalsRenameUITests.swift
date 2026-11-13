@@ -38,7 +38,7 @@ final class TerminalsRenameUITests: XCTestCase {
             shot(app, "prompt-\(scheme)")
             let before = try actions().count
             retype(field, "  dev   server ")
-            app.alerts.buttons["保存"].tap()
+            save(app)
 
             XCTAssertTrue(self.row(app, "dev server · npm run dev").waitForExistence(timeout: 10), "the row kept the old name")
             XCTAssertTrue(self.row(app, "dev server · zsh").exists, "the tab's other terminal kept the old name")
@@ -65,7 +65,7 @@ final class TerminalsRenameUITests: XCTestCase {
             XCTAssertEqual(again.value as? String, "dev server")
             shot(app, "cover-prompt-\(scheme)")
             retype(again, "logs")
-            app.alerts.buttons["保存"].tap()
+            save(app)
             XCTAssertTrue(text(app, containing: "已改名为「logs」").waitForExistence(timeout: 10), "no toast over the terminal")
             shot(app, "cover-renamed-\(scheme)")
             XCTAssertEqual(try actions().last?["label"], "logs")
@@ -99,7 +99,7 @@ final class TerminalsRenameUITests: XCTestCase {
             XCTAssertTrue(rename.waitForExistence(timeout: 5))
             rename.tap()
             retype(prompt(app), word)
-            app.alerts.buttons["保存"].tap()
+            save(app)
             XCTAssertTrue(text(app, containing: said).waitForExistence(timeout: 10), "no plain sentence for \(word)")
             shot(app, "refused-\(word)")
             XCTAssertTrue(self.row(app, "shell · npm run dev").waitForExistence(timeout: 5), "the old name did not come back after \(word)")
@@ -145,6 +145,17 @@ final class TerminalsRenameUITests: XCTestCase {
         let tip = app.buttons.matching(NSPredicate(format: "label IN %@", ["Continue", "继续"])).firstMatch
         if tip.waitForExistence(timeout: 1) { tip.tap() }
         return field
+    }
+
+    /// Save, until the prompt goes: a tap while the alert is still settling after typing can be lost (on iPhone every time
+    /// here; FilesActionsTests saw it too), so tap again while it stays up.
+    @MainActor private func save(_ app: XCUIApplication) {
+        let alert = app.alerts["重命名终端"]
+        for _ in 0..<3 where alert.exists {
+            alert.buttons["保存"].tap()
+            if alert.waitForNonExistence(timeout: 5) { break }
+        }
+        XCTAssertFalse(alert.exists, "Save did not close the prompt")
     }
 
     /// Clears the field and types `text` (the field has the keyboard as the prompt comes up).

@@ -653,8 +653,8 @@ nonisolated enum TabRename {
 }
 
 /// Rename Terminal… (#6996): one field filled with the tab's name, taking up to `TabRename.maxLength` characters. Save is
-/// never dimmed: an alert on iPhone keeps the state its buttons came up with, so a Save disabled by the starting name
-/// ignored the tap once a new one was typed. As Rename Space does, an empty or unchanged name saves nothing.
+/// never disabled: the alert draws a disabled button as an enabled one (`docs/lessons/ios.md`), so as Rename Space does,
+/// an empty or unchanged name saves nothing.
 private struct RenameTerminalAlert: ViewModifier {
     @Binding var target: TabRename.Target?
     var save: (TabRename.Target, String) -> Void
