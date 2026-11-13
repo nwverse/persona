@@ -229,6 +229,9 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 			}
 		}
 	}
+	if _, ok := s.store().(todoRepositoryStore); ok {
+		fmt.Fprintf(&b, "repository associations: todo_repositories_get {\"id\":%q}\n", t.ID)
+	}
 	return b.String(), nil
 }
 
@@ -236,16 +239,21 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 
 func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	var a struct {
-		Title    string `json:"title"`
-		Notes    string `json:"notes"`
-		Due      string `json:"due"`
-		Remind   string `json:"remind"`
-		Priority string `json:"priority"`
-		Project  string `json:"project"`
-		Kind     string `json:"kind"`
+		Title              string          `json:"title"`
+		Notes              string          `json:"notes"`
+		Due                string          `json:"due"`
+		Remind             string          `json:"remind"`
+		Priority           string          `json:"priority"`
+		Project            string          `json:"project"`
+		Kind               string          `json:"kind"`
+		RepositoryBindings json.RawMessage `json:"repository_bindings"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %w", err)
+	}
+	bindings, err := parseCreateBindings(a.RepositoryBindings)
+	if err != nil {
+		return "", err
 	}
 	title := strings.TrimSpace(a.Title)
 	if title == "" {
@@ -275,10 +283,13 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		return "", err
 	}
 	if t, ok := s.openTodoLike(title, kind, plan); ok {
+		if bindings != nil {
+			return "", fmt.Errorf("to-do %s already exists; associations were not changed: read todo_repositories_get and edit with todo_repositories_set", t.ID)
+		}
 		return "Already there, not created again: " + todoLine(t, now, loc), nil
 	}
 	if kind == db.KindConcern {
-		t, err := s.createConcern(ctx, title, strings.TrimSpace(a.Notes), plan)
+		t, err := s.createConcern(ctx, title, strings.TrimSpace(a.Notes), plan, bindings)
 		if err != nil {
 			return "", fmt.Errorf("the concern could not be saved, nothing changed: %w", err)
 		}
@@ -288,14 +299,14 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		return todoNotAllowed(err)
 	}
 	if s.isLeader(ctx, self) {
-		t, err := s.createDirectionTodo(ctx, self, title, strings.TrimSpace(a.Notes), plan)
+		t, err := s.createDirectionTodo(ctx, self, title, strings.TrimSpace(a.Notes), plan, bindings)
 		if err != nil {
 			return "", fmt.Errorf("the to-do could not be saved, nothing changed: %w", err)
 		}
 		return "Created under your direction (you supervise it; to have an Agent do it, use task_plan with todo_id " + t.ID +
 			"): " + todoLine(t, now, loc), nil
 	}
-	t, err := s.createPlainTodo(ctx, title, strings.TrimSpace(a.Notes), plan)
+	t, err := s.createPlainTodo(ctx, title, strings.TrimSpace(a.Notes), plan, bindings)
 	if err != nil {
 		return "", fmt.Errorf("the to-do could not be saved, nothing changed: %w", err)
 	}

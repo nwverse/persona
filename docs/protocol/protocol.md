@@ -4524,3 +4524,14 @@ gets 501 `assistant_service_tier_manager_outdated` before relaying an explicit o
 Resumed sends and non-Codex starts return coded 409 refusals; a native refusal returns
 `assistant_service_tier_refused`, stops the unused new process and persists no conversation before the first turn.
 New Agent starts do not take a speed setting.
+
+### Optional Todo repository metadata
+
+The manager relays `GET /api/v1/todos/{id}/repositories` with `todos.read`, and
+`PUT /api/v1/todos/{id}/repositories` plus
+`PUT /api/v1/todos/{id}/repositories/{repo_id}/links` with `todos.write`.
+Routing uses the Todo owner, including explicit-manager conflicts, just like
+existing Todo detail routes. `POST /api/v1/todos` accepts optional atomic
+`repository_bindings`; omitted fields preserve all legacy creation behavior.
+The full request, revision and source-snapshot contract is in
+`docs/assistant/todos.md` ("Repository associations").

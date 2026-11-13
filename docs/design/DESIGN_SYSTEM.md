@@ -2340,3 +2340,21 @@ visible. The preview explicitly says remote existence is unconfirmed. Check and 
 keeps the draft on failure, and a browser timeout asks the user to refresh because persistence is unconfirmed.
 This serves people binding a repository reference in advanced assistant settings; it adds no primary-screen
 options, style, theme or motion. See `docs/assistant/managers.md` for provider semantics and verification boundaries.
+
+## Optional repository associations
+
+Coding-work metadata belongs in the existing Web to-do editor's collapsed
+**Repositories and links (optional)** group. Ordinary to-dos still require only a
+title. `TaskRepositoryBindingsEditor` is the controlled metadata editor;
+`TodoRepositoryBindings` owns existing-Todo requests and `NewTodoRepositoryBindings`
+contributes a draft to the parent's single creation request. These reuse `Button`,
+`Loading`, shared settings inputs, semantic tokens and toast Undo for draft
+removal. There is no new page or workspace control.
+
+Repository links are one URL per line. Directory aliases and source refs are in
+per-repository **Source options** disclosure. Empty aliases and default branches
+need no setup. Saved-source changes are explained beside that repository, while
+legacy PR display remains separate. Controls have labels, action groups wrap at
+narrow widths, and saving disables edits. Failed saves keep input; conflicts offer
+explicit **Discard edits and reload**. Manager/Todo/credential changes retire old
+results. New copy ships in English, Simplified Chinese and Japanese.
