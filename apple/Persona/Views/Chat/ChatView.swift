@@ -6316,7 +6316,7 @@ struct QueueStrip: View {
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         ThemedIcon(Theme.Icon.expand)
-                            .font(Theme.Font.caption.weight(.semibold))
+                            .font(Theme.Font.captionStrong)
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(relayedExpanded ? 180 : 0))
                     }

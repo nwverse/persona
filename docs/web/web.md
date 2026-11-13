@@ -111,6 +111,16 @@ with each setting, and the setting's row on the Settings page:
 - Full page: each card opens its Agent's page, with no side panel; "Came from Persona · click to return" brings the chat
   back; a task still starting opens its to-do.
 
+A full Agent page or a non-main Persona conversation that belongs to an Inbox item shows **Back to “&lt;item title&gt;”**
+(or **Back to this Inbox item** when its title is not loaded) in the same strip position. A hand-off strip takes
+precedence; side panels, Team panels and the main conversation do not show this Inbox strip. The item is identified from data
+already in the client, in this order: the current runtime session's `origin: "inbox"` and `origin_ref`; up to three
+`origin: "spawned"` parent-session links, resolving each parent through the session or assistant-conversation lists; then
+an exact computer-and-session match in an item's `chain` session link or `handling`, choosing the matching item with the
+newest `updated_at`. The title comes from the Inbox list or loaded Done history. Opening a non-item route through
+`openFromInbox` records the item's address in the new history entry: the strip goes Back when that address names the same
+item, and otherwise pushes the item's route. ✕ dismisses the strip only for that mounted conversation page.
+
 ## Color hierarchy and quiet surfaces
 
 Approvals, plan decisions, permissions and **Needs you** are routine work, not errors. This rule is shared with the Apple and Android clients:
