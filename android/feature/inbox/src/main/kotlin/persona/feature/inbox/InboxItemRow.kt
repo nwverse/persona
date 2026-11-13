@@ -33,7 +33,8 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
     val metaText = inboxRowThirdLine(record, res, translated?.preview?.ifBlank { null })
     val oldMark = if (!done) eventMark(record) else null
     val nowMark = nowText?.let {
-        EventMark.Now(it, inboxNowStatus(record.event.now), problem = record.event.now == "failed", accent = oldMark is EventMark.Suggests)
+        EventMark.Now(it, inboxNowStatus(record.event.now), problem = record.event.now == "failed", accent = oldMark is EventMark.Suggests,
+            key = record.event.now)
     }
     val doneLabel = stringResource(if (done) R.string.inbox_move_back else R.string.inbox_done)
     val handOffLabel = stringResource(R.string.inbox_hand_to_ai)

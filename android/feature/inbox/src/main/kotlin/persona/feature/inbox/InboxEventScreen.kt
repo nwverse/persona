@@ -127,7 +127,7 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
         if (suggestion == null || record.item.isDone) {
             if (nowText != null) item("event-state") {
                 EventStateLine(EventMark.Now(nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
-                    accent = oldMark is EventMark.Suggests), Modifier.padding(bottom = Tokens.Space.s))
+                    accent = oldMark is EventMark.Suggests, key = record.event.now), Modifier.padding(bottom = Tokens.Space.s))
             } else if (oldMark != null) item("event-state") {
                 EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s))
             } else item("event-state") {
@@ -205,12 +205,10 @@ internal fun EventStateLine(mark: EventMark, modifier: Modifier = Modifier) {
         is EventMark.Failed -> JInlineStatus(mark.reason?.let { stringResource(R.string.inbox_handling_failed_reason, it) }
             ?: stringResource(R.string.inbox_handling_failed), modifier, tone = InlineTone.Failed)
         is EventMark.Suggests -> Unit
-        is EventMark.Now -> JInlineStatus(mark.text, modifier, tone = when {
-            mark.problem -> InlineTone.Failed
-            mark.status == Status.Working -> InlineTone.Busy
-            mark.status == Status.NeedsYou -> InlineTone.Caution
-            else -> InlineTone.Done
-        })
+        is EventMark.Now -> {
+            val icon = inboxNowIcon(mark.key)
+            JInlineStatus(mark.text, modifier, tone = icon.tone, icon = icon.icon)
+        }
     }
 }
 

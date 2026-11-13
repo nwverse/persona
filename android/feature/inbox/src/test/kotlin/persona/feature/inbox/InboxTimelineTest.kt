@@ -16,6 +16,8 @@ import persona.core.contracts.InboxChainEntry
 import persona.core.contracts.InboxChainLink
 import persona.core.contracts.Session
 import persona.core.contracts.inboxEventFields
+import persona.core.designsystem.InlineTone
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.resolve
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.stateWord
@@ -41,6 +43,17 @@ class InboxTimelineTest {
                 assertEquals("$name/${entry.id}/reported", step.getValue("reported").jsonPrimitive.content == "true", entry.kind == "reported")
             }
         }
+    }
+
+    @Test fun nowIconsDistinguishWaitingWorkNeedsYouFailureAndStaticStates() {
+        assertEquals(InboxNowIcon(InlineTone.Busy, PersonaIcons.time), inboxNowIcon("waiting"))
+        for (key in listOf("queued", "looking", "agent_working")) assertEquals(InboxNowIcon(InlineTone.Busy, null), inboxNowIcon(key))
+        for (key in listOf("confirm_reply", "confirm_agent", "decide", "follow_up_ask", "check_due", "needs_you")) {
+            assertEquals(InboxNowIcon(InlineTone.Caution, null), inboxNowIcon(key))
+        }
+        assertEquals(InboxNowIcon(InlineTone.Failed, null), inboxNowIcon("failed"))
+        for (key in listOf("done_replied", "done_manager", "done_user", "done_read", "done_dismissed", "done_muted",
+            "done_superseded", "fyi", "folded")) assertEquals(InboxNowIcon(InlineTone.Done, null), inboxNowIcon(key))
     }
 
     private fun agent(machine: String, session: String, state: String, awaits: Boolean = false) = AgentSession(

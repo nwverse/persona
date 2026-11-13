@@ -7,8 +7,10 @@ import kotlinx.serialization.Serializable
 import persona.core.contracts.InboxChainEntry
 import persona.core.contracts.InboxHandling
 import persona.core.contracts.InboxSuggestion
+import persona.core.designsystem.InlineTone
 import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.Status
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.ChatRoute
@@ -49,7 +51,21 @@ internal sealed interface EventMark {
     /** The manager failed or timed out: back in Needs you without a suggestion. */
     data class Failed(val reason: String?) : EventMark
     /** The shared `now` words; an unknown key never reaches this variant and keeps the old mark. */
-    data class Now(val text: String, val status: Status, val problem: Boolean = false, val accent: Boolean = false) : EventMark
+    data class Now(val text: String, val status: Status, val problem: Boolean = false, val accent: Boolean = false,
+        val key: String? = null) : EventMark
+}
+
+/** The detail's leading icon for a shared state key; tone keeps the existing state colors. */
+internal data class InboxNowIcon(val tone: InlineTone, val icon: PhIcon?)
+
+internal fun inboxNowIcon(key: String?): InboxNowIcon = when (key) {
+    // Waiting on the other side is a static clock, not AI work in progress.
+    "waiting" -> InboxNowIcon(InlineTone.Busy, PersonaIcons.time)
+    "queued", "looking", "agent_working" -> InboxNowIcon(InlineTone.Busy, null)
+    "failed" -> InboxNowIcon(InlineTone.Failed, null)
+    "confirm_reply", "confirm_agent", "decide", "follow_up_ask", "check_due", "needs_you" ->
+        InboxNowIcon(InlineTone.Caution, null)
+    else -> InboxNowIcon(InlineTone.Done, null)
 }
 
 internal fun eventMark(record: InboxRecord): EventMark? {
