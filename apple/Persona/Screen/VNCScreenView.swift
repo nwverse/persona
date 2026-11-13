@@ -34,6 +34,10 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
     var interactive = false { didSet { if interactive != oldValue { enable() } } }
     /// Zoomed in or back to fitted, for ⋯'s Zoom In / Zoom to Fit (after the change, never during the page's update).
     var onZoom: (Bool) -> Void = { _ in }
+    /// Where the Mac's whole picture is drawn, in screen points, as it moves (the page's, for the small window's
+    /// transition, #6333); nil: not reported.
+    var onPicture: ((CGRect) -> Void)?
+    private var reported: CGRect?
     /// The part of the framebuffer shown, in pixels; nil: all of it. A new one starts unzoomed, with the pointer on it
     /// (moved to its middle when it was elsewhere): Trackpad Mode clicks and drags where the pointer is.
     var region: CGRect? {
@@ -163,6 +167,13 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
             video.frame = port.frame(of: v.rect ?? CGRect(origin: .zero, size: screenSize))
         }
         #endif
+        if let onPicture, let window, bounds.width > 0 {
+            let whole = convert(display.frame.offsetBy(dx: port.rect.minX, dy: port.rect.minY), to: window.windowScene?.screen.coordinateSpace ?? window)
+            if whole != reported {
+                reported = whole
+                onPicture(whole)
+            }
+        }
         if let s = session {
             let at = toView(s.pointer)
             // The Mac's pointer at a size that reads, with the rings it needs (VNCPointerArt, #3075); the app's own arrow
@@ -431,11 +442,14 @@ struct VNCScreen: UIViewRepresentable {
     var onView: (VNCScreenUIView) -> Void = { _ in }
     /// Zoomed in or back to fitted.
     var onZoom: (Bool) -> Void = { _ in }
+    /// Where the whole picture is drawn, in screen points (VNCScreenUIView.onPicture).
+    var onPicture: ((CGRect) -> Void)? = nil
 
     func makeUIView(context: Context) -> VNCScreenUIView {
         let v = VNCScreenUIView()
         v.session = session
         v.onZoom = onZoom
+        v.onPicture = onPicture
         session.show(in: v.display)
         #if os(iOS) && canImport(PersonaScreenKit)
         session.video.show(in: v.video)
@@ -446,6 +460,7 @@ struct VNCScreen: UIViewRepresentable {
 
     func updateUIView(_ v: VNCScreenUIView, context: Context) {
         v.onZoom = onZoom
+        v.onPicture = onPicture
         v.mode = mode
         v.interactive = interactive
         v.region = region
