@@ -69,6 +69,18 @@ func checkViewJSON(raw []byte, hubNames bool) error {
 // from raw and checked, for a caller that would decode raw again.
 func DecodeCheckedViewJSON(raw []byte) (View, error) { return decodeCheckedView(raw, false) }
 
+// CheckValidatedViewJSON is CheckViewJSON for raw that already holds to View,
+// such as the view of a frame validated as UIStreamSnapshot (whose view is
+// UIStreamView, View narrowed): it decodes raw and checks its semantics
+// without walking the View schema again.
+func CheckValidatedViewJSON(raw []byte) error {
+	var v View
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	return checkViewSemantics(&v, false)
+}
+
 // DecodeCheckedStreamViewJSON validates raw as a UI stream's view
 // (UIStreamView), then decodes and checks it as DecodeCheckedViewJSON does.
 // UIStreamView is View ($ref) narrowed by sibling keywords, and check holds a

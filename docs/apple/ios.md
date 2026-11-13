@@ -1067,7 +1067,7 @@ the web's (`web/src/lib/live-text.ts`, `docs/web/web.md`).
   same pacer (`DeltaPacer`, at most 5 draws a second, an empty delta at once).
 - **Even reveal** (#6651): the model's text comes in bursts (a few dozen characters about every 350 ms, up to 2 s apart), so drawing what
   arrived showed a jump per burst. `StreamingText` reveals it a few characters a frame (`StreamReveal` in PersonaKit, driven by
-  `StreamRevealClock`'s display link, which runs only while text waits, at most 60 Hz): a little slower than the stream's average so far,
+  `StreamRevealClock`'s display link, which runs only while text waits, at most 30 Hz: each change re-measures the chat list, #7135): a little slower than the stream's average so far,
   faster when more waits (waiting / 0.6 s), never slower than 20 characters a second. Only that view redraws per frame; the store and the
   list see the deltas as before. A first text over 80 characters (a chat opened mid-stream) shows at once; when the stream ends
   (`ChatStore.liveDone`), or the user holds the list, or the reply's item replaces it, the whole text shows at once. The Mac shows text as
@@ -2180,6 +2180,16 @@ roster, none of this draws and the pages are as before.
   `ManagerGroupsUITests` against the mock hub's three managers (`MOCK_EXTENSIONS=1`, `TEST_RUNNER_PERSONA_MANAGERS_HUB`, shots with
   `TEST_RUNNER_PERSONA_SHOTS`; with `MOCK_MANAGERS=1` add `TEST_RUNNER_PERSONA_MANAGERS_ONE=1`). By hand: `-tab settings -openExtensions
   YES`, or `-openExtension <id> -openExtensionManager m-3fa21c` for 工作's copy.
+
+## Inbox lineage
+
+An item's **Thread** section reads `GET /api/v1/inbox/tree/inbox/{id}` and shows its ancestors followed by its direct children. A to-do or Agent-session row uses the title already known locally; without one it shows only its kind, never the raw id. A fallback title identical to the kind is likewise said once. Rows keep their existing destinations: another item, the to-do, or the Agent conversation. Tree responses do not carry merged-list manager stamps, so the loader applies the opened item's manager to every tree item before either action uses it.
+
+- **Not the same matter** appears on every ancestor and child row whose pair ends in an Inbox item. It sends `PUT /api/v1/inbox/{lower-item-id}/parent` with the body JSON `null`, without a confirmation step, then shows the success toast and rereads the visible tree. Failures use the app's existing error feedback.
+- **Same matter as…** appears below a nonempty Thread section and in the item detail's More menu. Its system sheet searches open items in the same manager, newest first, by title or `where`, excluding the item itself and its direct children. Each row shows the title and a second line of `where · sender` (one part when the other is absent, and no repeated name). A choice sends `PUT /api/v1/inbox/{current-item-id}/parent` with the bare body `{"kind":"inbox","id":"chosen-id"}`, shows the linked-title toast and rereads the tree. Neither body is wrapped in a `parent` field.
+- `InboxLineTests` covers row titles and the lower end of every relationship; `InboxSameMatterPickerTests` covers candidates and the second line; `InboxParentTests` pins both request-body shapes and manager routing. `InboxLineageTests` exercises the visible controls against the existing `MOCK_INBOX_LINE=1` fixture (`lark:f1:100 → lark:f2:200 → lark:f3:300`), with `TEST_RUNNER_PERSONA_SHOTS` captures on phone and wide layouts.
+
+The frozen Mac layout keeps its existing lineage rows and does not gain these two new actions.
 
 ## The inbox, notifications and computers of several managers (#1850, #1863, #1919, #1834)
 
