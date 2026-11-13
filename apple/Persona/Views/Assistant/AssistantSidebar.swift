@@ -921,6 +921,13 @@ struct AssistantSidebar: View {
             }
         }
         #endif
+        #if DEBUG && os(iOS)
+        .task { // `-openFullSearch YES`: Search over the window on any phone; only an open iPhone Duo has it otherwise (#6577)
+            guard UserDefaults.standard.bool(forKey: "openFullSearch") else { return }
+            try? await Task.sleep(for: .seconds(2))
+            fullSearch = true
+        }
+        #endif
         .background {
             if let drawer {
                 SidebarClosed(drawer: drawer) {
