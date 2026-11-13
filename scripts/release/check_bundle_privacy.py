@@ -88,6 +88,17 @@ SSH_ALGORITHM_NAMES = frozenset(name + "@" + domain for name, domain in (
     ("ecdsa-sha2-nistp521-cert-v01", "openssh.com"), ("ssh-ed25519-cert-v01", "openssh.com"),
 ))
 TAILSCALE_CONTACT = re.compile(r'<a href="mailto:support\+webclient@tailscale[.]com" class="link">contact us</a>')
+# Upstream WireGuard's version/author string, accepted only in a build with the
+# unmodified wireguard-go dependency (go_dependencies checks its go.sum entry).
+WIREGUARD_AUTHOR = re.compile(r'(?<![A-Za-z0-9._%+-])WireGuard v1 zx2c4 Jason@zx2c4[.]com(?![A-Za-z0-9._%+-])')
+# Go rodata joins the unrelated field identifier title_mail with the domain
+# constant @gmail.com. Remove that exact concatenation only; a person's address,
+# title_mail@gmail[.]com.cn or any other local part still fails.
+GO_ADJACENT_MAIL_FIELD = re.compile(r'(?<![A-Za-z0-9._%+-])title_mail@gmail[.]com(?![A-Za-z0-9._%+-])')
+# Exact public connector/product identifier in the committed node-larkgate
+# localization. It is not an account or internal service endpoint. Keep the
+# complete phrase only, so a host, address or other variant is still rejected.
+PUBLIC_LARK_CONNECTOR = "open" + "Lark via lark-cli"
 RFC1918_NETWORKS = tuple(ipaddress.ip_network((address, prefix)) for address, prefix in (
     (0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16),
 ))
@@ -156,6 +167,10 @@ def generic_text(text, dependencies, original_text=None):
         if text in SSH_ALGORITHM_NAMES or ("," in text and all(name in SSH_ALGORITHM_NAMES for name in text.split(","))):
             return ""
     text = pc.EMAIL.sub(lambda m: "" if binary_noise_email(m.group(1)) else m.group(0), text)
+    text = GO_ADJACENT_MAIL_FIELD.sub("", text)
+    text = text.replace(PUBLIC_LARK_CONNECTOR, "")
+    if "github.com/tailscale/wireguard-go" in dependencies:
+        text = WIREGUARD_AUTHOR.sub("", text)
     if "golang.org/x/crypto" in dependencies:
         text = GO_SSH_IDENTIFIERS.sub("", text)
     if "github.com/tailscale/web-client-prebuilt" in dependencies:

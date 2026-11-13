@@ -162,6 +162,32 @@ class PublicConstantTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIn("email", self.kinds(text))
 
+    def test_adjacent_public_mail_constants_and_wireguard_author(self):
+        field = "title_mail@" + "gmail.com"
+        author = "WireGuard v1 zx2c4 Jason@" + "zx2c4.com"
+        wireguard = "github.com/tailscale/wireguard-go"
+        for text in ("constant" + field + "nextConstant", "constant" + author + "Received handshake"):
+            with self.subTest(text=text):
+                self.assertEqual(self.kinds(text, dependencies={wireguard}), set())
+        for text in (field + ".cn", "person@" + "company.com", author,
+                     author.replace("Jason", "someone")):
+            with self.subTest(text=text):
+                self.assertIn("email", self.kinds(text, dependencies=()))
+                if text != author:
+                    self.assertIn("email", self.kinds(text, dependencies={wireguard}))
+        for text, word in ((field, field), (author, author)):
+            with self.subTest(text=text):
+                self.assertIn(f"private value ({len(word)} chars)",
+                              self.kinds(text, words=(word,), dependencies={wireguard}))
+
+    def test_public_lark_connector_name_is_not_an_account(self):
+        self.assertEqual(self.kinds("title" + cbp.PUBLIC_LARK_CONNECTOR + "next"), set())
+        for text in ("person@open" + "lark.com", "https://open" + "lark.example", "open" + "Lark@" + "company.com"):
+            with self.subTest(text=text):
+                self.assertIn("email", self.kinds(text))
+        self.assertIn("private value (%d chars)" % len(cbp.PUBLIC_LARK_CONNECTOR),
+                      self.kinds(cbp.PUBLIC_LARK_CONNECTOR, words=(cbp.PUBLIC_LARK_CONNECTOR,)))
+
     def test_full_rfc1918_networks_are_not_host_addresses(self):
         for network in NETWORKS:
             with self.subTest(network=str(network)):
