@@ -244,8 +244,11 @@ func TestInboxRecordHandoffReplaysNormalizedClientID(t *testing.T) {
 
 func TestInboxRecordHandoffDerivesStableClientID(t *testing.T) {
 	h, _, it := handoffHub(t)
-	first := recordedHandoffBody("server", "derived-target", "agent", "第一次", "")
-	mustRecordSessionHandoff(t, h, it.ID, first)
+	first := recordedHandoffBody(" server ", " derived-target ", "agent", "第一次", "")
+	firstOut := mustRecordSessionHandoff(t, h, it.ID, first)
+	if target := recordedHandoffTarget(t, firstOut); target.MachineID != "server" || target.SessionID != "derived-target" {
+		t.Fatalf("the session ids were not trimmed: %+v", target)
+	}
 	_, chainBefore := recordedHandoffCounts(h, it)
 	h.inbox.mu.Lock()
 	derived := it.Handoffs[0].Op

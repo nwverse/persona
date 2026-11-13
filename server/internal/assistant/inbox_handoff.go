@@ -130,7 +130,7 @@ func (s *Service) handOff(ctx context.Context, id string, in handoffReq) (InboxI
 // the item's processing conversation and state alone. A replay answers with the originally recorded target.
 func (s *Service) recordHandoff(ctx context.Context, id string, in handoffReq) (InboxItem, SessionRef, error) {
 	b := &s.inbox
-	to := *in.Session
+	to := SessionRef{MachineID: strings.TrimSpace(in.Session.MachineID), SessionID: strings.TrimSpace(in.Session.SessionID)}
 	op := strings.ToLower(strings.TrimSpace(in.ClientID))
 	if !validClientID(op) {
 		op = namedClientID("inbox handoff record\n" + id + "\n" + to.MachineID + "\n" + to.SessionID + "\n" + in.Kind)
