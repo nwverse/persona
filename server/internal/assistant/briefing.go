@@ -159,14 +159,13 @@ func briefFollowing(items []InboxItem, now time.Time, loc *time.Location) (waiti
 		if !it.open() {
 			continue
 		}
-		waitingState := inboxFollowWaiting(it)
-		if waitingState && it.Handling != nil && it.Handling.Since != nil && it.Handling.Since.Before(waitedBefore) {
+		if it.Now == NowWaiting && it.Handling != nil && it.Handling.Since != nil && it.Handling.Since.Before(waitedBefore) {
 			waitingItems = append(waitingItems, it)
 		}
 		isDue := it.Now == NowCheckDue || it.Now == NowFollowUpAsk
-		if waitingState && it.Follow != nil && it.Follow.CheckAt != nil {
+		if it.Now == NowWaiting && it.Follow != nil && it.Follow.CheckAt != nil {
 			at := it.Follow.CheckAt
-			isDue = !at.Before(day) && at.Before(nextDay)
+			isDue = isDue || !at.Before(day) && at.Before(nextDay)
 		}
 		if isDue {
 			dueItems = append(dueItems, it)

@@ -405,16 +405,12 @@ func (s *Service) followingInboxItems(ctx context.Context) []InboxItem {
 			continue
 		}
 		listed := it.listed()
-		if inboxFollowWaiting(listed) || listed.Now == NowFollowUpAsk || listed.Now == NowCheckDue {
+		switch listed.Now {
+		case NowWaiting, NowFollowUpAsk, NowCheckDue:
 			out = append(out, listed)
 		}
 	}
 	return out
-}
-
-// inboxFollowWaiting is the handling state's waiting, including when a current suggestion gives Now a confirmation key.
-func inboxFollowWaiting(it InboxItem) bool {
-	return it.Now == NowWaiting || it.Handling != nil && it.Handling.State == HandlingWaiting
 }
 
 // snapshotFollowing is the main conversation's short view of the matters being followed, earliest check first and

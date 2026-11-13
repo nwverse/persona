@@ -67,6 +67,8 @@ func TestBriefFollowingWaitingAgeThreshold(t *testing.T) {
 		{ID: "25h", Title: "25h", Now: NowWaiting, Handling: &InboxHandling{Since: briefFollowingTestTime(now.Add(-25 * time.Hour))}},
 		{ID: "done", Title: "done", Now: NowWaiting, DoneAt: &now, Handling: &InboxHandling{Since: briefFollowingTestTime(now.Add(-48 * time.Hour))}, Follow: &InboxFollow{CheckAt: &today}},
 		{ID: "looking", Title: "looking", Now: NowLooking, Handling: &InboxHandling{Since: briefFollowingTestTime(now.Add(-48 * time.Hour))}, Follow: &InboxFollow{CheckAt: &today}},
+		{ID: "folded", Title: "folded", Now: NowFolded, Handling: &InboxHandling{State: HandlingWaiting, Since: briefFollowingTestTime(now.Add(-48 * time.Hour))}, Follow: &InboxFollow{CheckAt: &today}},
+		{ID: "confirm", Title: "confirm", Now: NowConfirmReply, Handling: &InboxHandling{State: HandlingWaiting, Since: briefFollowingTestTime(now.Add(-48 * time.Hour))}, Follow: &InboxFollow{CheckAt: &today}},
 		{ID: "nil-handling", Title: "nil-handling", Now: NowWaiting},
 		{ID: "nil-since", Title: "nil-since", Now: NowWaiting, Handling: &InboxHandling{}},
 	}
@@ -208,8 +210,7 @@ func TestBriefFactsIncludeInboxFollowUps(t *testing.T) {
 	since, checkAt := now.Add(-25*time.Hour), now.Add(time.Hour)
 	item := &InboxItem{
 		ID: "inbox-follow", Title: "Inbox reply", Handling: &InboxHandling{State: HandlingWaiting, Since: &since},
-		Suggestion: &InboxSuggestion{Kind: SuggestReply}, // Now is confirm_reply; handling waiting still belongs in both lists.
-		Follow:     &InboxFollow{Who: "Reviewer", Next: "Ask for a reply", CheckAt: &checkAt, Checks: 2},
+		Follow: &InboxFollow{Who: "Reviewer", Next: "Ask for a reply", CheckAt: &checkAt, Checks: 2},
 	}
 	before := briefFollowingTestCopy([]InboxItem{*item})[0]
 	e.s.inbox.items[item.ID] = item

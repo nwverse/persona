@@ -53,6 +53,10 @@ func snapshotFollowingFilterItems() []*InboxItem {
 			Follow: &InboxFollow{CheckAt: &at},
 		},
 		{
+			ID: "folded-waiting", Title: "已折叠", Tier: TierNoise,
+			Handling: &InboxHandling{State: HandlingWaiting}, Follow: &InboxFollow{CheckAt: &at},
+		},
+		{
 			ID: "done", Title: "已经了结", Tier: TierAction, DoneAt: &doneAt, DoneBy: "user",
 			Handling: &InboxHandling{State: HandlingWaiting},
 		},
@@ -80,13 +84,13 @@ func TestFollowingInboxItemsFiltersAndDoesNotMutate(t *testing.T) {
 	for _, it := range got {
 		states[it.ID] = it.Now
 	}
-	want := map[string]string{"waiting": NowWaiting, "ask": NowFollowUpAsk, "due": NowCheckDue, "waiting-suggestion": NowConfirmReply}
+	want := map[string]string{"waiting": NowWaiting, "ask": NowFollowUpAsk, "due": NowCheckDue}
 	if !reflect.DeepEqual(states, want) {
 		t.Fatalf("following items = %v, want %v", states, want)
 	}
 	rows, total := s.snapshotFollowing(context.Background(), time.UTC)
-	if len(rows) != 4 || total != 4 {
-		t.Fatalf("snapshot has %d rows and total %d, want 4 and 4", len(rows), total)
+	if len(rows) != 3 || total != 3 {
+		t.Fatalf("snapshot has %d rows and total %d, want 3 and 3", len(rows), total)
 	}
 	if !reflect.DeepEqual(s.inbox.items, before) {
 		t.Fatal("reading the following snapshot changed the inbox items")
