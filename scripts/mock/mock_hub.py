@@ -14,6 +14,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from persona_identity import CONTEXT_TAG_PATTERN, FILE_TAG_PATTERN
+
 PORT = int(os.environ.get("PORT", "18760"))
 # MOCK_CHILD_SESSIONS=1 (#5120) builds on the Paseo computer: its agent's created agents are its children.
 if os.environ.get("MOCK_CHILD_SESSIONS"):
@@ -17586,8 +17589,8 @@ def features():
 
 
 _SEARCH_DROP = [re.compile(r"(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>\s*"),
-                re.compile(r"(?s)<(?:persona|jarvis)-context\b[^>]*>.*?</(?:persona|jarvis)-context>\s*"),
-                re.compile(r"<(?:persona|jarvis)-file\b[^>]*?/?>(?:\s*</(?:persona|jarvis)-file>)?")]
+                re.compile(r"(?s)<" + CONTEXT_TAG_PATTERN + r"\b[^>]*>.*?</" + CONTEXT_TAG_PATTERN + r">\s*"),
+                re.compile(r"<" + FILE_TAG_PATTERN + r"\b[^>]*?/?>(?:\s*</" + FILE_TAG_PATTERN + r">)?")]
 _SEARCH_PASTED = re.compile(r"(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>")
 _SEARCH_IMAGES = [re.compile(r"(?s)<attached_images>.*?</attached_images>"), re.compile(r"\[Image #\d+\]\s?")]
 _SEARCH_ACTION = re.compile(r'\n<persona-action view="[^"<>]*" action="[^"<>]*">\{[^<>]*\}</persona-action>$')
