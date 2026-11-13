@@ -484,7 +484,7 @@ fun TodosScreen(
                                 onDone = setDone,
                                 onDelete = delete,
                                 onRestore = { restored = restores.restore(todo.id, System.currentTimeMillis()) },
-                                onSeen = if (seenOn && triage.section == TriageSection.JustDone) ({
+                                onSeen = if (seenOn && triage.section == TriageSection.JustDone && todo.seenCanFile) ({
                                     gotIt(todo, triage.last)
                                 }) else null,
                             )

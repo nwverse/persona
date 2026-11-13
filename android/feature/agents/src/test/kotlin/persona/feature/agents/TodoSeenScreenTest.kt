@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -37,6 +38,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import persona.core.contracts.Direction
+import persona.core.contracts.DirectionTask
+import persona.core.contracts.DirectionTaskState
+import persona.core.contracts.DirectionTree
 import persona.core.contracts.FeedItem
 import persona.core.contracts.FeedResponse
 import persona.core.contracts.ServerEvent
@@ -117,7 +122,8 @@ class TodoSeenScreenTest {
     private var shotHeight by mutableStateOf(900)
     private var detailId by mutableStateOf<String?>(null)
 
-    private fun openList(api: Api, style: AppStyle = AppStyle.Glass, dark: Boolean = false, height: Int = 900) {
+    private fun openList(api: Api, style: AppStyle = AppStyle.Glass, dark: Boolean = false, height: Int = 900,
+                         directions: DirectionTree? = null) {
         store = TasksStore(api, Connection(), CoroutineScope(Dispatchers.Unconfined))
         store.reloadTodos()
         shotStyle = style
@@ -132,7 +138,8 @@ class TodoSeenScreenTest {
                         detailId?.let { id ->
                             TodoDetailScreen(id, todos, emptyList(), listOf(noteSession), store, onBack = {}, onOpenSession = {},
                                 onHandOff = {}, now = now)
-                        } ?: TodosScreen(todos, listOf(noteSession), store, onBack = {}, onOpenTodo = {}, now = now)
+                        } ?: TodosScreen(todos, listOf(noteSession), store, onBack = {}, onOpenTodo = {}, now = now,
+                            directions = directions)
                     }
                 }
             }
@@ -208,6 +215,20 @@ class TodoSeenScreenTest {
         assertTrue("Seen is not acceptance", sectionAbsent("Got it"))
         assertEquals(listOf("notes" to true), api.sent)
         assertTrue("still awaiting review", !sectionAbsent("Delivered · awaiting review"))
+    }
+
+    @Test fun directionGroupingOffersSeenOnlyForAnOrdinaryDelivery() {
+        val supervised = notes.copy(id = "supervised", title = "Supervised delivery",
+            supervision = Supervision(supervisor = "main", state = "pending_review"))
+        val tree = DirectionTree(listOf(Direction("main", secretary = true, tasks = listOf(
+            DirectionTask(notes.id, state = DirectionTaskState.Review),
+            DirectionTask(supervised.id, state = DirectionTaskState.Review),
+        ))))
+        openList(Api(listOf(notes, supervised)), directions = tree)
+        rule.onNodeWithTag("todos-filter").performClick()
+        rule.onNodeWithText("Pinned").performClick()
+        rule.waitForIdle()
+        rule.onAllNodesWithText("Got it").assertCountEquals(1)
     }
 
     @Test fun englishCopy() {
