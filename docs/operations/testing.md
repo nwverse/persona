@@ -20,10 +20,10 @@ commands in "Build and verify" locally, inspect required screenshots and run `sc
 not a PR gate. A scheduler explicitly dispatches full CI on the latest `main`; a failure is fixed separately. Local PR verification
 and scheduled post-merge CI are both required operational checks, not substitutes for one another.
 
-`ci.yml` accepts only `workflow_dispatch`. Its `full` boolean defaults to **true**, so a plain dispatch runs all six required
+`ci.yml` accepts only `workflow_dispatch`. Its `full` boolean defaults to **true**, so a plain dispatch runs all seven required
 platform lanes plus the independently reported Mac lane even on unchanged `main`; path filtering cannot silently turn a default run
 into a collection of skipped jobs. Set `full=false` to use `lanes`: `all`, `auto` (diff against `origin/main`), or comma-separated
-`server,web,android,apple,runtimes,scripts`. `base` overrides the comparison for `auto`. Unknown lane names fail.
+`server,web,android,apple,core,runtimes,scripts`. `base` overrides the comparison for `auto`. Unknown lane names fail.
 Inspect selection locally with `python3 scripts/ci/paths.py --all` or `python3 scripts/ci/paths.py --base origin/main`.
 
 ```sh
@@ -36,7 +36,7 @@ gh workflow run apple-test.yml --ref main -f lane=macos
 gh workflow run pr-needs-issue.yml --ref main -f pr_number=<number>  # metadata enforcement
 ```
 
-The six required lanes have independent reusable workflows. **CI required** rejects failed, cancelled, missing or unexpectedly skipped
+The seven required lanes have independent reusable workflows. **CI required** rejects failed, cancelled, missing or unexpectedly skipped
 selected jobs. iOS/Watch contributes to that aggregate; **Mac (non-blocking)** reports its actual independent result without
 `continue-on-error` and is not part of the aggregate. An unselected lane is never claimed as tested.
 All workflows except the image publisher accept only `workflow_dispatch` and, for reusable platform workflows, `workflow_call`.
@@ -85,6 +85,7 @@ profiles and test/lint reports are uploaded for diagnosis. Local entry points wi
 | Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token checker tests, translations/literals, token ratchet, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056) |
 | Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | PersonaKit/iOS/Watch/HTML and Mac build/unit tests; synthetic configuration, no distribution signing; real results remain visible | macos-26 runners, Xcode 26.0.1 (Swift 6.2) | queue and execution measured separately |
 | Scripts/docs / `.github/workflows/scripts-tests.yml` | `scripts/ci/scripts.sh` | every Python script test, doc/code paths and index, layout/shell/Python compatibility, privacy-rule regression, catalog/translation/token checks, actionlint, issue-link logic, website worker | ubuntu-latest | 2–4 / 4–7 min |
+| Rust core / `.github/workflows/core-test.yml` | `scripts/ci/core.sh` | rustfmt, clippy, the shared core's unit tests and the fixtures it implements (directly and through its runtime), generated codecs up to date, release library; the Android lane also builds it for `:core:rustcore`'s binding tests | ubuntu-latest | measured on the first runs |
 | Runtimes / `.github/workflows/runtimes-test.yml` | `scripts/ci/runtimes.sh` | TypeScript SDK typecheck/test/portability, Agent SDK build, every runtime integration's npm tests | ubuntu-latest | 2–4 / 4–7 min |
 | Container and Release / `.github/workflows/release.yml` | `scripts/ci/hub-image.sh` | amd64 build; isolated Compose Postgres, HTTP/TLS health, pairing, web, admin isolation, file ownership/0600; publication remains amd64+arm64, then a version-tag run creates the GitHub Release | ubuntu-latest | 8–15 / 15–30 min |
 
@@ -483,6 +484,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - GitHub thread page (#1055): `MOCK_GITHUB_INBOX=1`, `-tab mail -openInboxItem github:review12` opens fictional example-org/example-repo#12:
   header (status/branches/three labels), Markdown description, request-changes/approve reviews, inline comment/reply, three checks (failed test logs), events.
   Comments are in `/mock/sent` and appended to timeline. `github:ci7` (CI failure) isn't a PR, opens hub-collected text. Data: `gh_thread_page` in `mock_hub.py`.
+- Lark via lark-cli (飞书 · 我的消息): `MOCK_LARKCLI_INBOX=1`, `-tab mail -openInboxItem larkcli:example_oncall` opens a mention in a made-up on-call group as its conversation: a post's Markdown with a picture by image key, an interactive message's `<card title=…>` and an untitled one, plain text. `MOCK_LARKCLI_INBOX=legacy` gives the page as an older hub did (empty kind and name), which the apps still draw as a chat. Data: `larkcli_thread_page` in `mock_hub.py`.
 - Lark conversation page: `-tab mail -openInboxItem lark:f3:300` (Weekend hiking group) opens full chat: three days/date separators, over a page before first unread (scroll up, `has_older`),
   images, quoted/emoji replies, bots, 75-reply thread with paged sheet; 12 unread from message 300, read through 299 (`read_position`).
   `MOCK_LARK_LOGGED_OUT=1` makes lists/chats/threads return 502 "Lark gateway isn't signed in to Lark" (`code: lark_not_logged_in`, like hub), testing errors. Fictional `_lark_f3` in `mock_hub.py`.
@@ -802,7 +804,7 @@ Long-scroll uses `XCTOSSignpostMetric`; simulator reports duration, not dropped 
 - `-openAgentsFresh YES` clears remembered filter/grouping/compact/collapse at launch. Tests must change these via UI, not fixed launch args which override saved values.
 - Grouping menu and long-run cap (`AgentsGroupingTests`, #5766): `PORT=<port> MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_GROUPING_HUB=<mock URL>`; each grouping from the capsule beside the quick filters, By Status kept after a restart, Unread's Show all; `TEST_RUNNER_PERSONA_SHOTS=<directory>` + `TEST_RUNNER_PERSONA_SCHEME=light|dark` + `TEST_RUNNER_PERSONA_STYLE=<name>` for the shots.
 - Touch targets (`AgentsTouchTargetUITests`, #3753): `PORT=<port> MOCK_AGENTS=1 MOCK_WORKTREES=1 MOCK_ORCA_CHILDREN=1 MOCK_DESKTOP_APPS=1 python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_TOUCH_HUB=<mock URL>`; every grouping in every display, scrolled from the top, checks that each row, heading and fold control is at least 44 pt tall (the fold chevron 44 pt wide too) and prints the heights it found; a second test taps 3 pt inside the top and bottom edges of a repository header, the machine heading, a state's heading, a Codex chat's Subtasks row and N more idle. `TEST_RUNNER_PERSONA_TOUCH_GROUPINGS=repo,state` and `TEST_RUNNER_PERSONA_TOUCH_DISPLAYS=avatar,list` narrow the matrix (28 lists, 7 groupings × 4 displays, take about 15 minutes); it launches in English.
-- Inbox title targets (`InboxTitleTargetUITests`, #6576): `PORT=<port> MOCK_MANAGERS=0 python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_MOCK_HUB=<mock URL>`; from the top of the inbox to the end of Done, checks that each section title, Mark All Seen / Clear All, group title, Done's title and Jump To is at least 44 pt tall, and each group's tick while selecting; a second test taps 20 pt from the middle of Needs You's, FYI's, Done's and a group's titles, Jump To and a group's tick, and checks that a tap on Jump To opens its menu without folding Done. It undoes the folds it makes. `TEST_RUNNER_PERSONA_UI_SCHEME=dark`, `TEST_RUNNER_PERSONA_TEXT_SIZE=<UIContentSizeCategory name>` and `TEST_RUNNER_PERSONA_SHOTS=<dir>` for screenshots; about 2 minutes.
+- Inbox title targets (`InboxTitleTargetUITests`, #6576): `PORT=<port> MOCK_MANAGERS=0 python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_MOCK_HUB=<mock URL>`; from the top of the inbox to the end of Done, checks that each section title, Mark All Seen / Clear All, group title, Done's title and Jump To is at least 44 pt tall, and each group's tick while selecting (also at least 44 pt wide, #6658); a second test taps 20 pt from the middle of Needs You's, FYI's, Done's and a group's titles, Jump To and a group's tick (and 18 pt left of the tick's middle), and checks that a tap on Jump To opens its menu without folding Done. It undoes the folds it makes. `TEST_RUNNER_PERSONA_UI_SCHEME=dark`, `TEST_RUNNER_PERSONA_TEXT_SIZE=<UIContentSizeCategory name>` and `TEST_RUNNER_PERSONA_SHOTS=<dir>` for screenshots; about 2 minutes.
 - Recent flat mode (`RecentAgentsTests`): ordinary mock (no `MOCK_AGENTS`), `TEST_RUNNER_PERSONA_RECENT_HUB=<mock URL>`,
   `-only-testing:PersonaUITests/RecentAgentsTests`. Real menu switch; cross-project activity order, persistence, read/return, idle/offline history, live reorder, machine filter/search.
   Light/dark on default navigation; per-step `TEST_RUNNER_PERSONA_SHOTS=<directory>`, `TEST_RUNNER_PERSONA_STYLE=light|dark` names.

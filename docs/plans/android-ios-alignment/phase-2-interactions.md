@@ -1,6 +1,6 @@
 # Phase 2: interactions (#4210)
 
-Part of the [Android alignment plan](README.md) (#4194). Status: plan, 2026-11-11.
+Part of the [Android alignment plan](README.md) (#4194). Status: T6 done (11-12) and T1, T2, T3 and T5 (11-13); T4 left out for now and T7 waiting for the owner's answer to Q6 (see their sections).
 
 ## Requirements
 
@@ -100,6 +100,8 @@ Done (11-13): on Glass the composer's send and stop move as on iOS, in every cha
 
 Risks: offset arithmetic in a reversed list; a header that is off screen; steps streaming in while open; the saved reading position during a hold.
 
+Not done (11-13): left out of this round, decided on 2026-11-13. The design above stands for when it is picked up; until then the rows of an opened step or tool call still push its header up.
+
 ### T5. Selecting in place
 
 **Today.** iOS (`apple/Persona/Views/Chat/LiftSelection.swift`) redraws the lifted message in a text view, because its Markdown renderer can't select. Android's Select opens `FullTextReader.kt`, full screen, with the raw Markdown.
@@ -132,12 +134,16 @@ Done (11-12), after Q4 was decided as follow iOS: in every style (the stack is b
 
 Risks: overriding density inside the theme instead would compound and could lose Android 14's non-linear font scaling; fixed-height layouts may clip; the switcher already scales with font size and must not scale twice; the floating capsule's window needs the override too.
 
+Not started (11-13): Q6 is still open with the owner (#4208), and T7 was left out of this round on 2026-11-13.
+
 ### Order of work
 
 1. T2 and T1: small, independent PRs.
 2. T3, after the motion tokens of phase 1.
 3. T4, then T5.
 4. T6 (Q4 was decided on 2026-11-12: follow iOS), then T7 after the owner answers Q6.
+
+On 2026-11-13 T2, T1, T3 and T5 were built in that order (#6606, #6633, #6665, #6669); T4 and T7 were not.
 
 ### Verification
 
