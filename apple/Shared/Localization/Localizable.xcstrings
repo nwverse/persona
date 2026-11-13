@@ -1,48 +1,68 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Import into To-dos": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Import into To-dos"
+    "About %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About “%@”"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ToDo に取り込む"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于「%@」"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "导入到待办"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」について"
           }
         }
       }
     },
-    "Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open."
+    "Agents you opened yourself in the terminal, on no to-do. Touch and hold one › Link to To-do… to file it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agents you opened yourself in the terminal, on no to-do. Touch and hold one › Link to To-do… to file it."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "選んだリストの未完了のリマインダーが ToDo になり、その後のタイトル、メモ、期限の変更も反映されます。リマインダーには書き戻しません。リマインダーを完了または削除しても ToDo はそのままです。取り込みは Persona を開いている間に行われます。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你自己在终端里开的、没挂在待办上的 Agent。长按一行 › 关联到待办… 可以归过去。"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "所选列表中未完成的提醒事项会成为待办，之后它们的标题、备注或截止时间改动也会同步过来。不会写回提醒事项；完成或删除提醒事项不影响对应的待办。只在 Persona 打开时导入。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルで自分で開いた、どのToDoにも関連付けられていないエージェントです。行を長押し ›「ToDoに関連付け…」で関連付けられます。"
+          }
+        }
+      }
+    },
+    "On no to-do; often started from Lark, the phone or elsewhere. Touch and hold one › Link to To-do… to file it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On no to-do; often started from Lark, the phone or elsewhere. Touch and hold one › Link to To-do… to file it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没挂在任何待办上，常是从飞书、手机或别的入口开的。长按一行 › 关联到待办… 可以归过去。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "どのToDoにも関連付けられていないエージェントです。多くはLarkやスマートフォンなど、ほかの場所から開始されたものです。行を長押し ›「ToDoに関連付け…」で関連付けられます。"
           }
         }
       }
@@ -33192,6 +33212,74 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Change the assistant's name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アシスタントの名前を変更"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修改助手的名字"
+          }
+        }
+      }
+    },
+    "Edit name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名前を編集"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑名字"
+          }
+        }
+      }
+    },
+    "Name saved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名前を保存しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名字已保存"
+          }
+        }
+      }
+    },
+    "Name your assistant" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アシスタントの名前を入力"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "给助手起个名字"
+          }
+        }
+      }
     },
     "Cancel" : {
       "localizations" : {
@@ -94950,6 +95038,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "回到 App 时提示发送剪贴板"
+          }
+        }
+      }
+    },
+    "Import into To-dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import into To-dos"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDo に取り込む"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入到待办"
+          }
+        }
+      }
+    },
+    "Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選んだリストの未完了のリマインダーが ToDo になり、その後のタイトル、メモ、期限の変更も反映されます。リマインダーには書き戻しません。リマインダーを完了または削除しても ToDo はそのままです。取り込みは Persona を開いている間に行われます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选列表中未完成的提醒事项会成为待办，之后它们的标题、备注或截止时间改动也会同步过来。不会写回提醒事项；完成或删除提醒事项不影响对应的待办。只在 Persona 打开时导入。"
           }
         }
       }
