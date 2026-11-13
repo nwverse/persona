@@ -21,9 +21,10 @@ import (
 	"github.com/nwverse/persona/server/internal/update"
 )
 
-// Assistant is `assistant [drop-shared-tables …]`: the built-in manager on the hub's bus (the hub starts it, token on
-// stdin), or the cleanup of its old tables in the hub's database (docs/server/server.md "The default manager's own
-// database").
+// Assistant is `assistant [drop-shared-tables … | north-star … | search-reindex]`: the built-in manager on the hub's
+// bus (the hub starts it, token on stdin), the cleanup of its old tables in the hub's database (docs/server/server.md
+// "The default manager's own database"), its north-star readout, or its chat search index emptied to be read again
+// (docs/assistant/assistant.md "Chat search (#6282)").
 func Assistant(ctx context.Context, build update.Build, args []string, stdin io.Reader) error {
 	if len(args) > 0 && args[0] == "drop-shared-tables" {
 		return assistant.DropSharedCommand(ctx, args[1:], os.Stdout, os.Stderr)
@@ -31,8 +32,11 @@ func Assistant(ctx context.Context, build update.Build, args []string, stdin io.
 	if len(args) > 0 && args[0] == "north-star" {
 		return assistant.NorthStarCommand(ctx, args[1:], os.Stdout, os.Stderr)
 	}
+	if len(args) > 0 && args[0] == "search-reindex" {
+		return assistant.SearchReindexCommand(ctx, args[1:], os.Stdout, os.Stderr)
+	}
 	if len(args) > 0 {
-		return clitext.UsageError("usage: " + clitext.CommandName() + " assistant [drop-shared-tables [--yes] | north-star [--date D] [--split T] [--tz Z]]")
+		return clitext.UsageError("usage: " + clitext.CommandName() + " assistant [drop-shared-tables [--yes] | north-star [--date D] [--split T] [--tz Z] | search-reindex]")
 	}
 	// What a parent left inheritable (an older hub's listening socket) stops here, not in every node, extension and
 	// agent the manager starts. Here, not in main: the sandbox's launcher hands its descriptors on by exec.

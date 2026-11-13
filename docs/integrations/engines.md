@@ -178,7 +178,7 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
 - **Agents**: Tern does not say what runs in a block (a block's `program` is the shell it started), so a look asks `tern process` for each terminal
   block's foreground process, four at a time: `claude`, `codex` (also behind `node` / `bun`). A shell or classic herdr's client in front is no agent
   of Tern's (herdr run in a Tern tab keeps its own panes). Tern reports no agent state, and its own `working` flag misses Claude thinking quietly:
-  a Claude's state is the status Claude Code keeps in its `sessions/<pid>.json` (busy, idle, or waiting on a dialog of its own), else its transcript
+  a Claude's state is the status Claude Code keeps in its `sessions/<pid>.json` (busy, idle, shell when idle with a background command running, or waiting on a dialog of its own), else its transcript
   and hooks as on the other hosts (`docs/protocol/agent-states.md`, "Claude in a Tern block").
 - **Changes**: `tern events` for the first window (blocks spawned, exited or closed, layouts, titles, working directories, bells; a bell is urgent).
   The node still snapshots every 10 seconds, which covers other windows. Every `tern` call is a client of its own, so the `client_*` events are

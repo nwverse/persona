@@ -181331,6 +181331,52 @@
           }
         }
       }
+    },
+    "Direction Expand Help [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expand the open tasks of this direction"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この方向の進行中タスクを開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开这个方向的在办任务"
+          }
+        }
+      }
+    },
+    "Direction Collapse Help [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collapse the open tasks of this direction"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この方向の進行中タスクを閉じる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起这个方向的在办任务"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

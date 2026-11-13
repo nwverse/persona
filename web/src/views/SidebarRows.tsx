@@ -224,7 +224,10 @@ function SecondLine({ line, draft }: { line: { lead?: string; text: string; tone
 }
 
 // `prefix`: a word before the title (a tab's name, a pane's agent), in `prefixClass`
-type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; tab?: boolean; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** The hint is whole, never cut (a lead's counts). */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while the Agents under it work: draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean };
+type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; tab?: boolean; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** The hint is whole, never cut (a lead's counts). */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while the Agents under it work: draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
+  /** 常驻 rows (#6214): the "在做 N · 等你 N" counts never fade on hover and the ⋯ sits in a reserved end slot instead
+   * of covering them, so hovering removes no information. */
+  keepTrailing?: boolean };
 
 // Every sessions push re-renders the sidebar and the Agents list, while lib/sessions-delta.ts keeps the object of each
 // session that did not change: a row renders again only when one of its props did. The props compare by identity
@@ -235,7 +238,7 @@ function sameProps<P extends { to: Route }>(a: P, b: P): boolean {
   return keys.every((key) => (key === "to" ? routePath(a.to) === routePath(b.to) : Object.is(a[key], b[key])));
 }
 
-export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, hintFull, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat", workingMark = false }: SessionRowProps) {
+export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, hintFull, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat", workingMark = false, keepTrailing = false }: SessionRowProps) {
   // a parent of child sessions in its folded state (#5120): one of them waiting makes it need you, one working makes it
   // work; the rows of the paged list come as the hub sends them, the other lists' folded already (lib/folded-rows.ts)
   const given = foldedRow(row);
@@ -297,6 +300,8 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const childLine = children ? t("assistant-tasks.subagents_count_running", { count: backgroundWork(s)?.subagents ?? children }) : "";
   // what sits at the row's end steps aside for the hover ⋯; the open row leaves room for its ⋯ instead
   const aside = active ? undefined : "group-hover/row:invisible";
+  // A 常驻 row's counts stay on screen while the ⋯ fades in beside them (#6214): only its date can yield.
+  const hintAside = keepTrailing ? undefined : aside;
   // behind a prefix (a tab's name, a pane's agent) the title keeps room for a few characters: the prefix shrinks first
   const titleMin = prefix ? ROW_TITLE_MIN : "min-w-0";
   // with words at the end (where it came from, a hint) the title keeps its own width first: those words give way before it does
@@ -325,7 +330,10 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       // a touch screen: rows a finger can hit (44), and room at the end for the ⋯ that is always there; the open row
       // keeps its ⋯ too, so it has room for it
       className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active && CURRENT_ROW, // room for "N agents" and the ⋯ beside it (instead of the ⋯'s own)
-        endRoom ? "pr-[108px] [@media(hover:none)]:pr-[120px]" : cx(onMenu && active && "pr-8", onMenu && "[@media(hover:none)]:pr-11"))}
+        endRoom ? "pr-[108px] [@media(hover:none)]:pr-[120px]" : keepTrailing
+          // the ⋯ is an in-flow slot of its own, so the anchor itself leaves no room for an overlay
+          ? "pr-1 [@media(hover:none)]:pr-1"
+          : cx(onMenu && active && "pr-8", onMenu && "[@media(hover:none)]:pr-11"))}
     >
       {/* the agent's mark before its state (#6390): what runs there, then how it is doing */}
       {showState && !s.assistant && <SessionMark s={s} size={14} />}
@@ -395,28 +403,42 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       {source && <SourceTag s={s} className={aside} />}
       {origin && <OriginMark origin={origin} size={16} className={aside} />}
       {/* the row's ⋯ takes the end on hover: what is there steps aside instead of showing half under it */}
-      {tailShown && <span className={cx(hintFull ? "shrink-0 whitespace-nowrap tabular-nums" : "max-w-[72px] min-w-6 shrink-[20] truncate", "text-[11px] text-ink-3", aside)}>{tail}</span>}
+      {tailShown && <span className={cx(hintFull ? "shrink-0 whitespace-nowrap tabular-nums" : "max-w-[72px] min-w-6 shrink-[20] truncate", "text-[11px] text-ink-3", hintAside)}>{tail}</span>}
       {ageAtEnd && <span data-row-age className={cx("shrink-0 text-[11px] text-ink-3", aside)}>{ago(s.updated_at, Date.now(), "narrow")}</span>}
       {pendingCount > 0 && <span className={cx("flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-attention tabular-nums", aside)}>{pendingCount}</span>}
     </a>
   );
   if (!onMenu) return link;
-  // the ⋯ shows over the row's end on hover (a pointer); on the open row and on a touch screen it stays, in the room
-  // the row leaves for it
+  // 常驻 rows keep their counts on hover (#6214): the ⋯ lives in a reserved end slot that fades in instead of an
+  // absolute button covering the row's words. Other rows keep the overlay they always had.
+  const menuButton = (inFlow: boolean) => (
+    <button
+      type="button"
+      aria-label={menuLabel}
+      aria-haspopup="menu"
+      title={t("sidebar.more")}
+      tabIndex={-1}
+      onClick={(e) => onMenu(s, e.currentTarget.parentElement ?? e.currentTarget)}
+      className={inFlow
+        ? cx("relative z-20 my-1 flex size-6 shrink-0 items-center justify-center self-center rounded-[6px] text-ink-3 transition-opacity hover:bg-hover hover:text-ink [@media(hover:none)]:size-11",
+          active ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 [@media(hover:none)]:opacity-100")
+        : cx("absolute top-1/2 right-1 z-20 size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-ink-3 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent", active ? "flex hover:bg-hover" : "hidden bg-hover hover:bg-hover-2")}
+    >
+      <Icon name="more" size={14} />
+    </button>
+  );
+  if (keepTrailing) {
+    return (
+      <div className="group/row relative flex items-center">
+        <span className="min-w-0 flex-1">{link}</span>
+        {menuButton(true)}
+      </div>
+    );
+  }
   return (
     <div className="group/row relative">
       {link}
-      <button
-        type="button"
-        aria-label={menuLabel}
-        aria-haspopup="menu"
-        title={t("sidebar.more")}
-        tabIndex={-1}
-        onClick={(e) => onMenu(s, e.currentTarget.parentElement ?? e.currentTarget)}
-        className={cx("absolute top-1/2 right-1 z-20 size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-ink-3 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent", active ? "flex hover:bg-hover" : "hidden bg-hover hover:bg-hover-2")}
-      >
-        <Icon name="more" size={14} />
-      </button>
+      {menuButton(false)}
     </div>
   );
 }, sameProps);
