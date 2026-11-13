@@ -29,7 +29,7 @@ func TestInboxTaskURLRouting(t *testing.T) {
 		{name: "completed", field: "pr_url", link: pr, done: true, noMatch: true},
 		{name: "different repository", field: "pr_url", link: "https://github.com/other/project/pull/123", noMatch: true},
 		{name: "different host", field: "pr_url", link: "https://git.example.com/example/project/pull/123", noMatch: true},
-		{name: "issue and PR differ", field: "pr_url", link: "https://github.com/example/project/issues/123", noMatch: true},
+		{name: "issue and PR share GitHub's numbers", field: "pr_url", link: "https://github.com/example/project/issues/123"},
 		{name: "number boundary", field: "pr_url", link: pr + "4", noMatch: true},
 		{name: "bare number", field: "pr_url", link: "#123", noMatch: true},
 		{name: "ambiguous tasks", field: "pr_url", link: pr, ambiguous: true, noMatch: true},

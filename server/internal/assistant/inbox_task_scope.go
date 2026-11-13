@@ -101,7 +101,7 @@ func dirOfRepo(path, name string) bool {
 
 // taskOfRepo: task t names repository repo (owner/repo, lower case), or one of its Agents or spaces works in it.
 func taskOfRepo(t Todo, repo string) bool {
-	if namesRepo(strings.ToLower(t.Title+"\n"+t.Notes+"\n"+t.PRURL), repo) {
+	if namesRepo(strings.ToLower(taskText(t)), repo) {
 		return true
 	}
 	name := repo[strings.IndexByte(repo, '/')+1:]
