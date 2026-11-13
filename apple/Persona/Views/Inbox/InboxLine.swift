@@ -88,6 +88,8 @@ struct InboxLineSection: View {
     var tree: InboxTree?
     var openItem: ((InboxItem) -> Void)?
     @State private var todo: TodoDetailRoute?
+    /// An Agent chosen inside the to-do sheet: its chat pushes only after that sheet has finished closing.
+    @State private var pendingAgent: SessionKey?
 
     var body: some View {
         let rows = tree.map {
@@ -102,16 +104,15 @@ struct InboxLineSection: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("inbox.line")
-            .sheet(item: $todo) { r in
+            .sheet(item: $todo, onDismiss: {
+                guard let key = pendingAgent else { return }
+                pendingAgent = nil
+                InboxLineOpen.agent(key, owner: tree?.item?.manager, model: model, push: pushChat)
+            }) { r in
                 NavigationStack {
-                    TodoDetailView(todoID: r.id, openAgent: pushChat.map { push in
-                        { (key: SessionKey) in
-                            todo = nil
-                            Task { @MainActor in
-                                await Task.yield()
-                                InboxLineOpen.agent(key, owner: tree?.item?.manager, model: model, push: push)
-                            }
-                        }
+                    TodoDetailView(todoID: r.id, openAgent: pushChat == nil ? nil : { key in
+                        pendingAgent = key
+                        todo = nil
                     }).macSheetDone { todo = nil }
                 }
                 #if os(macOS)
