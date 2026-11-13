@@ -53,6 +53,14 @@ import Testing
         #expect(!TerminalsList.hasFinished(list))
     }
 
+    @Test func anEngineWithNoWorkspaceOffersTheHomeFolder() {
+        let list = panes(#"{"hosts":[{"kind":"herdr","new_tab":true,"workspaces":[],"panes":[]},{"kind":"orca","new_tab":false,"workspaces":[],"panes":[]}]}"#)
+        let spaces = TerminalsList.spaces(list)
+        #expect(spaces.map(\.id) == [""], "one home-folder entry, for the host that opens tabs only")
+        #expect(spaces.first?.kind == "herdr")
+        #expect(TerminalsList.rows(list).isEmpty)
+    }
+
     @Test func aStoppedAgentIsReadOnly() {
         let stopped = session(#","capabilities":{"read":true,"terminal":true},"read_only_reason":"stopped""#)
         #expect(stopped.isStopped)

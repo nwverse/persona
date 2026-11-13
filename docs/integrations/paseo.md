@@ -81,7 +81,10 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
   | `idle`: has not run yet | Idle |
   | `closed`: not running, process exited | Not running (Paseo reloads it when a message is sent). While Agents it created have not finished: Working (background), since their reports wake it |
 
-  Read state is one-way, as with herdr (#2831): viewed in Paseo means Seen in Persona; views in Persona are tracked by hub and not written back to Paseo.
+  Read state goes both ways: viewed in Paseo means Seen in Persona (#2831), and seen in Persona clears Paseo's own mark (#6299): when you see a session Paseo flags
+  (Unread here), the manager tells the node (`session.seen`), and the bridge clears `requiresAttention` in Paseo. A loaded agent's with `clear_agent_attention`; one Paseo
+  has not loaded (Not running) through its workspace (`workspace.clear_attention`), and only when no other agent of that workspace is flagged, since
+  `clear_agent_attention` would start a stored agent. One waiting for an answer stays flagged until it is answered.
 
 - **Spaces and workspaces** (#2784, #2802, #4493): the space is Paseo's project; the workspace names where in it an Agent is.
   - **A space is a Paseo project**: a repository's main checkout and its worktrees form one group in the App, named after the project.
@@ -252,7 +255,7 @@ no launcher. Permission mode, workspace and the first message keep their existin
 - Unit tests: `cd integrations/paseo && npm test`. Use a fake Paseo daemon (`test/fake-paseo.js`) and the SDK's fake node to test lists, content,
   streaming, sending, cards, creation, takeover, mode changes, Paseo restart, and disconnection.
 - End to end: first `cd server && go generate ./internal/runtimepkg && go build -o /tmp/personad ./cmd/personad`, then run
-  `PERSONAD=/tmp/personad CLAUDE_BIN=<a Claude Code executable> node integrations/paseo/e2e/run.mjs`. There are 44 checks; `paseo` must be installed locally.
+  `PERSONAD=/tmp/personad CLAUDE_BIN=<a Claude Code executable> node integrations/paseo/e2e/run.mjs`. There are 45 checks; `paseo` must be installed locally.
   - Start a real Paseo daemon with its own home and an unused port. The provider uses `extends: "claude"`; the model is a scripted
     Anthropic API in `e2e/model.mjs`.
   - Start a real `personad node --stdio`, with the SDK test tools acting as hub. After setting the engine to Paseo, node runs the bridge itself.

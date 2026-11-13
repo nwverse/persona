@@ -1032,3 +1032,13 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - Don't detect a missing tool by one wording of its error: ask it directly in the test's own environment
   (`scripts/test/compose_cli.py` runs `docker compose version`) and skip with how to enable the check
   (`PERSONA_TEST_DOCKER_CONFIG`, `docs/operations/hub-update.md`).
+
+## Swift 6.2 `swift test` copies `.xcstrings` without compiling `.lproj` (2026-11-13, #6258)
+
+- Under Xcode 26.0 (Swift 6.2), `xcrun swift test` copies `Localizable.xcstrings` into `Bundle.module` as-is
+  (`Copying Localizable.xcstrings`) without generating `.lproj` directories, whereas newer toolchains and `xcodebuild`
+  (`scripts/app/mac-link.sh`) compile it at build time.
+- SwiftPM tests that point a bundle override at `<language>.lproj`
+  (`apple/PersonaLink/Tests/PersonaLinkTests/LinkTextTests.swift`) fall back to compiling `Localizable.xcstrings` on
+  demand with `/usr/bin/xcrun xcstringstool compile`, and cover that path with a synthetic uncompiled `.bundle` test so
+  newer local Xcode versions still exercise it.
