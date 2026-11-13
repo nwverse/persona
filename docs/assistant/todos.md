@@ -930,3 +930,66 @@ empty set. Digests exclude links and association revision. Consumers retain the
 operation's snapshot for retries; no permanent business-association seal or
 legacy-start hook exists. Physical records, paths, resolved commits and cleanup
 belong to the workspace preparation service.
+
+
+## Backend workspace naming
+
+People configuring coding tasks can open **Backend workspace naming** in advanced
+Assistant settings or a to-do's details. It applies only to explicitly selected
+backend preparation. It does not change Engine creation, legacy `new`, `existing`
+or `none`, existing preferences, task progress or cleanup.
+
+The fields are `base_directory` (default `{home}/workspace`),
+`task_directory_template` (`task-{task-id}`), and `branch_template`
+(`persona/{task-id}`). Each field inherits task override → Assistant → product
+default. Omitted patch fields preserve saved values; `null` removes an override;
+empty strings are invalid. Assistant writes still require the explicit manager.
+Task overrides have their own CAS revision, independent of legacy Todo edits.
+
+Folder templates support `{task-id}`, `{task-slug}`, `{yyyy}` and `{mmdd}`.
+Branches also support `{repo}`, `{branch}` and `{base-branch}`. The last two
+require an explicit branch; default, tag, commit and arbitrary typed refs are
+preserved without guessing a branch. Only a template using an unavailable field
+fails. A root repository maps to `.`, while containers use each repository's
+explicit alias or the shared repository-name default. Duplicate names fail.
+
+| Route | Contract |
+| --- | --- |
+| `GET/PUT /api/v1/assistant` | `workspace_rules`, `effective_workspace_rules`, `workspace_naming_version` (`workspace-naming/v1`); PUT patches rules with explicit manager ownership. |
+| `GET/PUT /api/v1/todos/{id}/workspace-rules` | `{todo_id, revision, workspace_rules}`; PUT requires `expected_revision` and a rule patch. |
+| `POST /api/v1/assistant/workspace-naming/preview` | Clearly labeled sample, using selected computer and layout; optional draft rules. |
+| `POST /api/v1/todos/{id}/workspace-naming/preview` | Trusted saved Todo/repositories, explicit `machine_id`, `layout` (`root` or `container`) and `selected_repo_ids`, optional draft rules. |
+| `POST /api/v1/todos/{id}/workspace-naming/plans` | Same selection plus required stable `operation_id`, without draft rules; saves one immutable snapshot for this operation. |
+| `GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}` | Reads a saved snapshot, including after a lost save response. |
+
+Preview calls the selected computer's read-only `workspace.naming.resolve` RPC.
+It supplies its own home and native path semantics; no browser-provided home or
+resolved path is trusted. It checks lexical paths, existing credential-folder
+restrictions and local branch format. No directory is created, no repository is
+queried or fetched, and no Engine is opened. `.persona` and `.git` task path
+segments and private state directories are unavailable; `{persona-home}` has no
+registered public workspace subtree in this version and is unsupported.
+
+The sole resolver and wire contract are in
+`server/internal/workspacenaming/naming.go`, with an exact shared vector in
+`spec/fixtures/workspace-naming/contract.json`. It freezes the instant, assistant
+timezone (explicit UTC fallback), title slug, effective rules, T1 selected source
+snapshot, paths and task branches. `digest` is SHA-256 of the Go JSON encoding
+with its own digest cleared; repositories are ordered by repository ID.
+
+The manager persists `todo_workspace_rules` and `workspace_naming_plans` in
+PostgreSQL. Snapshot saves check the current override revision and selected source
+digest in the same Todo transaction. Link-only edits do not alter that source
+digest. Retrying an existing operation returns its original snapshot without
+rereading settings, title, clock or computer context. Changing input requires a
+new operation; associations and overrides remain editable, including after a
+snapshot. Preparation can call `db.ReadWorkspaceNamingPlanTx` in its own
+transaction. This read does not permanently bind the Todo or attest readiness;
+preparation owns cancellation, intent checks, physical ownership, Git source
+resolution, recovery and existing cleanup semantics.
+
+Web reuses `WorkspaceRulesEditor`, `WorkspaceNamingPreview`, settings inputs,
+Group and Button. Saves confirm returned values; failures keep drafts and can
+reload the saved baseline without discarding local edits. Edits and computer or
+assistant changes invalidate pending preview responses. These controls never
+select a creation mode or start an Agent.

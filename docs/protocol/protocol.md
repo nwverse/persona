@@ -4535,3 +4535,18 @@ existing Todo detail routes. `POST /api/v1/todos` accepts optional atomic
 `repository_bindings`; omitted fields preserve all legacy creation behavior.
 The full request, revision and source-snapshot contract is in
 `docs/assistant/todos.md` ("Repository associations").
+
+
+### Backend workspace naming metadata
+
+Manager routes and the operation snapshot contract are documented in
+`docs/assistant/todos.md` ("Backend workspace naming").
+
+| Node method | Input and result |
+| --- | --- |
+| `workspace.naming.resolve` | `workspacenaming.Source` → `Preview {status, sample, plan?, diagnostics[]}`. The target supplies `NodeContext`; paths may be absent on disk. Version `workspace-naming/v1`. Local format validation only, with no resource creation, Git network access or Engine call. |
+
+Legacy workspace resolution and `new/existing/none` do not call this method.
+The new Assistant view field `workspace_naming_version` advertises manager
+support; an unavailable computer or unsupported method never falls back to an
+Engine naming path.

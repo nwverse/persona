@@ -1,3 +1,4 @@
+import { WorkspaceNaming } from "../ui/WorkspaceNaming";
 import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
 import { createTodoWithRepositories, type CreateRepositoryBindings } from "../lib/task-repositories";
 import { defaultManager, useShownManager } from "../lib/manager-choice";
@@ -2009,6 +2010,7 @@ function TodoDetail({
       </div>
 
       <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
+      <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
 
       <ThreadSection todo={todo} />
 
