@@ -167,18 +167,22 @@ func (s *Service) sendDigest(ctx context.Context) {
 func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, list []superviseSignal, web string, now, prev time.Time) bool {
 	b := &s.supervise
 	var entries []prompts.SuperviseEntry
-	var kept []superviseSignal
+	var kept, moot []superviseSignal
 	s.remedyGoesTo(to, list) // a failed start is ended by this conversation's turn, no other's (start_remedy.go)
 	for _, g := range list {
 		if e, ok := s.digestEntry(ctx, g, web); ok {
 			entries = append(entries, e)
 			kept = append(kept, g)
+		} else {
+			moot = append(moot, g)
 		}
 	}
+	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either (task_turns.go)
 	if len(entries) == 0 {
 		s.ackSupervisePending(list) // every signal no longer holds, as the in-memory digest already decided
 		return false
 	}
+	holds := kept
 	entries, kept, rollback, err := s.reserveSupervision(ctx, entries, kept, now)
 	if err != nil {
 		s.logf("supervise: deduplication unavailable; retrying: %v", err)
@@ -187,6 +191,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}
 	if len(entries) == 0 {
 		s.ackSupervisePending(list) // already covered by the deduplication history
+		s.turnsTold(ctx, holds)     // said the same within the window: told
 		b.mu.Lock()
 		if b.last.Equal(now) {
 			b.last = prev
@@ -206,6 +211,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		}
 		s.ackSupervisePending(list)
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
+		s.turnsTold(ctx, holds)    // and how a turn ended: kept went, the rest of them was said the same within the window
 	}()
 	leader := background || to != here.Main && s.isLeader(ctx, to)
 	render := func(list []prompts.SuperviseEntry) string {

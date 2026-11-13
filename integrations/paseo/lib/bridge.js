@@ -47,6 +47,9 @@ const TIMEOUT = Symbol('timeout')
 // workspace.create waits for git worktree add (Paseo gives it 2 minutes), not for the workspace's setup, within the node's
 // 140 s for the call.
 const CREATE_WAIT = 135_000 // ms
+// workspace.archive waits for Paseo to remove a worktree it made (its worktree removal takes 2 minutes at most, then
+// its teardown), within the node's 140 s for the call.
+const ARCHIVE_WAIT = 135_000 // ms
 const WORKSPACES_DELAY = 200 // ms: workspace updates come in bursts (each agent's turn moves its workspace's status)
 // What Paseo 0.13 says when an agent config has MCP servers and its provider takes none (agent-manager requireExternalMcpSupport).
 const MCP_UNSUPPORTED = /does not support MCP servers/i
@@ -134,7 +137,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   }
   const rt = createRuntime({
     listSessions, unlistedTranscripts, items, cursor, item, send, interrupt, start, rename, close, modes, rewind, check, models, seen, watchChanged,
-    createWorkspace, prepareWorkspace,
+    createWorkspace, prepareWorkspace, renameWorkspace, archiveWorkspace,
   }, meta)
 
   // ---- Paseo's state ----
@@ -1433,6 +1436,67 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const row = rowOfWorkspace(workspaces.get(d.id) ?? d)
     if (!row) throw new RpcError('Paseo did not report the created worktree', 'create_failed')
     return { workspace: row }
+  }
+
+  /**
+   * A workspace's title (workspace_id: workspace.title.set.request) or a space's name (space_id, a Paseo project:
+   * project.rename.request, its custom name). Paseo sends the workspaces' descriptors again but not the agents' placements,
+   * which name the space and the workspace too: they are brought up to date here, so the rows say the new name at
+   * once. Neither renames a branch, a folder or an agent.
+   */
+  async function renameWorkspace(params) {
+    if (!paseo.connected) throw new RpcError('Paseo is not connected (not running, or restarting). Nothing was renamed.', 'unavailable')
+    const title = typeof params.title === 'string' ? params.title.trim() : ''
+    if (!title) throw new RpcError('workspace.rename: the name is required', 'bad_request')
+    const placed = () => [...agents.values(), ...archived.values()]
+    if (typeof params.workspace_id === 'string' && params.workspace_id) {
+      const id = params.workspace_id
+      if (!workspaces.has(id)) throw new RpcError(`Paseo no longer has this workspace (${id}): refresh the list and choose again. Nothing was renamed.`, 'workspace_missing')
+      const res = await paseo.request('workspace.title.set.request', { workspaceId: id, title }, { timeoutMs: 30_000 })
+      if (!res?.accepted) throw new RpcError(`Paseo did not rename the workspace: ${res?.error || 'no reason given'}`, 'rename_failed')
+      const name = res.title ?? title
+      const d = workspaces.get(id)
+      if (d) workspaces.set(id, { ...d, title: name, name, ...(d.project ? { project: { ...d.project, workspaceName: name } } : {}) })
+      for (const e of placed()) if (e.agent?.workspaceId === id && e.project) e.project = { ...e.project, workspaceName: name }
+      rt.sessionsChanged()
+      scheduleWorkspaces(0)
+      const row = workspaces.get(id) && rowOfWorkspace(workspaces.get(id))
+      return row ? { workspace: row } : {}
+    }
+    const space = typeof params.space_id === 'string' ? params.space_id : ''
+    const s = spaces()
+    const known = [...placed(), ...[...workspaces.values()].map((d) => ({ project: d.project }))].some(({ project }) => spaceIdOf(project) === space)
+    if (!space || (!s.names.has(space) && !known)) {
+      throw new RpcError(`Paseo has no project ${space || '(none)'} Persona knows of: refresh the list and try again. Nothing was renamed.`, 'workspace_missing')
+    }
+    const res = await paseo.request('project.rename.request', { projectId: space, customName: title }, { timeoutMs: 30_000 })
+    if (!res?.accepted) throw new RpcError(`Paseo did not rename the project: ${res?.error || 'no reason given'}`, 'rename_failed')
+    const name = res.customName ?? title
+    for (const e of placed()) if (spaceIdOf(e.project) === space) e.project = { ...e.project, projectName: name }
+    for (const [id, d] of workspaces) {
+      if (spaceIdOf(d.project) === space || (!d.project && d.projectId === space)) {
+        workspaces.set(id, { ...d, projectDisplayName: name, ...(d.project ? { project: { ...d.project, projectName: name } } : {}) })
+      }
+    }
+    rt.sessionsChanged()
+    scheduleWorkspaces(0)
+    return { space_name: spaces().names.get(space) ?? name }
+  }
+
+  /**
+   * A workspace archived in Paseo (archive_workspace_request): its agents archived, the workspace off its list, and a
+   * worktree Paseo made removed from the disk, its branch kept (Paseo's archiveByScope). Paseo removes such a folder
+   * whatever is in it: the node has had the user confirm what would be lost before it asks.
+   */
+  async function archiveWorkspace(params) {
+    if (!paseo.connected) throw new RpcError('Paseo is not connected (not running, or restarting). Nothing was archived.', 'unavailable')
+    const id = typeof params.workspace_id === 'string' ? params.workspace_id : ''
+    if (!id || !workspaces.has(id)) throw new RpcError(`Paseo no longer has this workspace (${id || '(none)'}): refresh the list. Nothing was archived.`, 'workspace_missing')
+    const res = await paseo.request('archive_workspace_request', { workspaceId: id }, { timeoutMs: ARCHIVE_WAIT })
+    if (res?.error || !res?.archivedAt) throw new RpcError(`Paseo did not archive the workspace: ${res?.error || 'no reason given'}`, 'archive_failed')
+    workspaces.delete(id)
+    scheduleWorkspaces(0)
+    return { archived_at: res.archivedAt }
   }
 
   /**

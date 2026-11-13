@@ -324,8 +324,9 @@ struct ChatsView: View {
         // Closing the search before a push from its results redraws the navigation with it, as when the list was
         // drawn here: drawn by the list alone, the chat came up under the system navigation bar again (SearchOpenTests).
         let _ = searching
+        let destinations = AgentsDestinations(path: pushing, unifiedPath: unified == nil ? nil : pushing)
         SplitNavigation(path: pushing, listKey: unified == nil ? "agents.list" : "sidebar.list",
-                        destinations: AgentsDestinations(path: pushing, unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch) {
+                        destinations: destinations, pageSwitch: pageTabSwitch) {
             agentsColumn
                 #if os(iOS) || os(visionOS)
                 .environment(header)
@@ -3561,6 +3562,7 @@ nonisolated struct AgentsListShown: Encodable, Equatable {
             var x = s
             x.rev = nil
             x.suggestion = nil
+            x.suggestionRisky = false
             x.ports = nil
             x.queued = nil
             x.permissionMode = nil
