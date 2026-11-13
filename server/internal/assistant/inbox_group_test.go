@@ -325,6 +325,56 @@ func TestInboxGroupFallbackKeepsExistingTriage(t *testing.T) {
 	}
 }
 
+// A connector that keeps no meta (the hub composes its events): fallback messages joining an existing event keep its
+// words and triage as well, and the rule tier the connector's thing carries is not recorded as a retriage.
+func TestInboxGroupFallbackKeepsExistingTriageWithoutMeta(t *testing.T) {
+	batch := chatBatch()
+	batch.Tier, batch.Why = connector.TierNoise, "示例来源规则：这是噪音"
+	g := &groupChat{batch: batch, fallback: connector.GroupFallbackResult{
+		Assign: []connector.GroupAssign{{Message: "m2", Event: "examplechat:chat:C1#m1"}, {Message: "m3", Event: "examplechat:chat:C1#m1"}}}}
+	model, client := newGroupModel(t, chatAnswer)
+	model.down = true
+	h := chatHub(t, g, client)
+	it := h.inbox.items["examplechat:chat:C1#m1"]
+	it.Summary, it.Reason = "示例总结：等你定时间", "示例理由：等你定时间"
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+
+	if g.fallbacks != 1 {
+		t.Fatalf("%d fallback call(s)", g.fallbacks)
+	}
+	if it.Title != "示例 A 方案评审" || it.Summary != "示例总结：等你定时间" || it.Tier != TierAction || it.Reason != "示例理由：等你定时间" ||
+		it.TriagedBy != "model" || it.Count != 3 || it.Last != "3" || it.TriagedAt != it.Last {
+		t.Fatalf("existing event %+v", it)
+	}
+	if k := chainKinds(it); slices.Contains(k, ChainTriaged) {
+		t.Fatalf("the event's rule tier was recorded as a retriage: %v", k)
+	}
+}
+
+// A policy the user set still gives an existing event its tier when fallback messages join it: the words and the
+// triager stay, the tier and reason are the policy's.
+func TestInboxGroupFallbackKeepsPolicyTier(t *testing.T) {
+	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, fallback: connector.GroupFallbackResult{
+		Assign: []connector.GroupAssign{{Message: "m1060", Event: "lark:F1:1051"}, {Message: "m1061", Event: "lark:F1:1051"}}}}
+	h, _ := groupHub(t, g, nil)
+	it := h.inbox.items["lark:F1:1051"]
+	it.Tier, it.Reason = TierFYI, "示例理由：同步"
+	h.inbox.mu.Lock()
+	h.inbox.policies = []InboxPolicy{{ID: "p1", Source: "lark", Tag: connector.TagChat, Value: "F1", Name: "示例项目群", Tier: TierAction}}
+	h.inbox.mu.Unlock()
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+
+	if it.Tier != TierAction || it.Reason == "示例理由：同步" || it.Title != "示例 A 方案评审" || it.Summary != "等你定时间" ||
+		it.TriagedBy != "model" || it.Count != 3 || it.TriagedAt != it.Last {
+		t.Fatalf("existing event %+v", it)
+	}
+	if k := chainKinds(it); k[len(k)-1] != ChainTriaged {
+		t.Fatalf("the policy's tier was not recorded: %v", k)
+	}
+}
+
 // The model down (or none set up): the fallback groups it. A model that only ever wants tools stops after four.
 func TestInboxGroupFallsBackWithoutTheModel(t *testing.T) {
 	fallback := connector.GroupFallbackResult{New: []connector.GroupNew{{Key: "k1", Messages: []string{"m1060", "m1061"}, RuleTier: connector.TierAction}}}
