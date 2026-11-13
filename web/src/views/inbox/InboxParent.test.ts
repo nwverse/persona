@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "../../lib/api";
+import { ApiError, errorText } from "../../lib/api";
 import type { InboxItem } from "../../lib/inbox";
 
 const calls = vi.hoisted(() => ({ requests: [] as { path: string; init?: { method?: string; json?: unknown; headers?: Record<string, string> } }[], fail: null as unknown }));
@@ -58,19 +58,23 @@ describe("线索的父子关系请求", () => {
     }
   });
 
-  it("shows the localized cycle explanation for the exact link conflict", async () => {
-    const error = "that parent would make a cycle";
-    calls.fail = new ApiError(409, error, { code: "conflict", error });
+  it.each([
+    new ApiError(409, "that parent would make a cycle", { code: "conflict", error: "that parent would make a cycle" }),
+    new ApiError(409, "HTTP 409", {}),
+    new ApiError(409, "different wording", { code: "other", error: "different wording" }),
+  ])("shows the localized cycle explanation for every 409", async (error) => {
+    calls.fail = error;
 
     await expect(linkInboxParent({ id: "child" }, item("parent", "发布准备"))).resolves.toBe(false);
-    expect(toast).toHaveBeenCalledExactlyOnceWith("连不上：那件事已经在这件事下面了。", "error");
+    expect(toast).toHaveBeenCalledExactlyOnceWith("这个关联会形成循环，请选择其他内容。", "error");
   });
 
-  it("keeps the existing error text for another link conflict", async () => {
-    calls.fail = new ApiError(409, "another conflict", { code: "conflict", error: "another conflict" });
+  it.each([400, 404])("keeps the existing error text for HTTP %i", async (status) => {
+    const error = new ApiError(status, `failure ${status}`, { code: "conflict", error: `failure ${status}` });
+    calls.fail = error;
 
     await expect(linkInboxParent({ id: "child" }, item("parent", "发布准备"))).resolves.toBe(false);
-    expect(toast).toHaveBeenCalledExactlyOnceWith("another conflict", "error");
+    expect(toast).toHaveBeenCalledExactlyOnceWith(errorText(error), "error");
   });
 
   it.each(["detach", "link"] as const)("uses the existing error toast on %s failure and does not claim success", async (action) => {

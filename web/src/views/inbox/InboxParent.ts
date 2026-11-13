@@ -39,8 +39,7 @@ export async function linkInboxParent(item: InboxItemRef, parent: Pick<InboxItem
     toast(t("inbox-inboxline.linked", { title: parent.title }), "ok");
     return true;
   } catch (e) {
-    const cycle = e instanceof ApiError && e.status === 409 && e.code === "conflict"
-      && e.body.error === "that parent would make a cycle";
+    const cycle = e instanceof ApiError && e.status === 409;
     toast(cycle ? t("inbox-inboxline.link_cycle") : errorText(e), "error");
     return false;
   }
