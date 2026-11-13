@@ -18,5 +18,6 @@
   "end_leader": "取消常驻",
   "leader_made": "已设为常驻「{title}」",
   "leader_ended": "已取消常驻「{title}」，它派出的任务不变",
-  "leader_failed": "没能改常驻：{error}"
+  "leader_failed": "没能改常驻：{error}",
+  "delete": "删除…"
 }

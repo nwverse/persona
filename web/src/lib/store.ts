@@ -1,3 +1,4 @@
+import { availableConversation, clearConversationDeletions, conversationDeleted, conversationKeyDeleted, deletedConversation, hasDeletedConversations, rememberConversationDeleted } from "./conversation-deleted";
 import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 // App-wide state: what the hub pushes over the WebSocket (machines, sessions, interactions), plus the assistant.
 // Views read it with useStore(selector); per-session item streams go to listeners (ChatView subscribes).
@@ -156,7 +157,16 @@ function notifySoon() {
 }
 
 function set(patch: Partial<State>) {
-  state = holdSeen({ ...state, ...patch }, patch);
+  const next = { ...state, ...patch };
+  // Most sessions never encounter a deletion: only filter affected collections once one is known.
+  if (hasDeletedConversations()) {
+    for (const [mid, list] of Object.entries(patch.sessions ?? {})) {
+      if (list.some((s) => !availableConversation(s))) next.sessions = { ...next.sessions, [mid]: list.filter(availableConversation) };
+    }
+    if (patch.sessionSummaries?.some((s) => !availableConversation(s))) next.sessionSummaries = next.sessionSummaries.filter(availableConversation);
+    if (patch.assistant?.conversations.some((s) => !availableConversation(s))) next.assistant = { ...patch.assistant, conversations: patch.assistant.conversations.filter(availableConversation) };
+  }
+  state = holdSeen(next, patch);
   if (viewed.size && ("sessions" in patch || "sessionSummaries" in patch || "assistant" in patch)) seeViewed(false);
   if (pushing) notifySoon();
   else notify();
@@ -321,6 +331,8 @@ async function lookUpCardSessions() {
 
 /** A clicked filtered row may not belong to the unfiltered first page. Keep a small hint until exact lookup finishes. */
 export function rememberSessionRow(row: Session) {
+  if (row.deleted) { markConversationDeleted(row.machine_id, row.session_id); return; }
+  if (!availableConversation(row)) return;
   const id = runtimeIdentity(row);
   rowHints.delete(id);
   rowHints.set(id, row);
@@ -340,7 +352,7 @@ export function getState() {
 }
 
 export function getSession(mid: string, sid: string): Session | undefined {
-  return (state.sessions[mid] ?? []).find((s) => s.session_id === sid)
+  return deletedConversation(mid, sid) ?? (state.sessions[mid] ?? []).find((s) => s.session_id === sid)
     ?? state.assistant?.conversations.find((s) => s.machine_id === mid && s.session_id === sid)
     ?? state.sessionSummaries.find((s) => s.machine_id === mid && s.session_id === sid)
     ?? rowHints.get(runtimeIdentity({ machine_id: mid, session_id: sid } as Session));
@@ -349,6 +361,8 @@ export function getSession(mid: string, sid: string): Session | undefined {
 /** Complete snapshots replace optional fields as well: omitted task arrays must not survive from an older snapshot.
  *  `also` goes in the same update (one render for both). */
 export function applyCompleteSessions(rows: Session[], remove: string[] = [], also: Partial<State> = {}) {
+  for (const row of rows) if (row.deleted) markConversationDeleted(row.machine_id, row.session_id);
+  rows = rows.filter(availableConversation);
   if (!rows.length && !remove.length) return;
   const by = { ...state.sessions };
   const updates = new Map<string, Map<string, Session>>();
@@ -838,8 +852,12 @@ function onMessage(msg: Record<string, unknown>) {
     case "interaction_reanswered":
       noteReanswer(msg.id as string, answersIn((msg.resolution as { answers?: unknown } | undefined)?.answers));
       break;
+    case "conversation_deleted":
+      markConversationDeleted(msg.machine_id as string, msg.session_id as string);
+      break;
     case "items": {
       const e = msg as unknown as ItemsEvent;
+      if (conversationDeleted(e.machine_id, e.session_id)) break;
       sessionListeners.get(key(e.machine_id, e.session_id))?.forEach((l) => l.items?.(e));
       break;
     }
@@ -861,6 +879,7 @@ function onMessage(msg: Record<string, unknown>) {
       todosPushed();
       break;
     case "delta":
+      if (conversationDeleted(msg.machine_id as string, msg.session_id as string)) break;
       sessionListeners.get(key(msg.machine_id as string, msg.session_id as string))?.forEach((l) => l.delta?.(msg.text as string));
       break;
   }
@@ -960,10 +979,26 @@ export function putLaunch(launch: AgentLaunch) {
 }
 
 export function setOutbox(key: string, list: OutboxEntry[]) {
+  if (conversationKeyDeleted(key)) list = [];
   const next = { ...state.outbox };
   if (list.length) next[key] = list;
   else delete next[key];
   set({ outbox: next });
+}
+
+/** Applies only the hub's successful deletion or its authoritative tombstone/event. */
+export function markConversationDeleted(mid: string, sid: string) {
+  rememberConversationDeleted(mid, sid);
+  const id = runtimeIdentity({ machine_id: mid, session_id: sid } as Session);
+  rowHints.delete(id);
+  const outbox = { ...state.outbox };
+  delete outbox[key(mid, sid)];
+  const taskRows = { ...state.taskRows };
+  delete taskRows[id];
+  for (const [manager, info] of assistantByManager) assistantByManager.set(manager, { ...info, conversations: info.conversations.filter(availableConversation) });
+  send({ type: "unsubscribe", machine_id: mid, session_id: sid });
+  sessionListeners.delete(key(mid, sid));
+  set({ outbox, taskRows, sessions: state.sessions, sessionSummaries: state.sessionSummaries, assistant: state.assistant });
 }
 
 // A deleted conversation leaves the list right away; the hub's next sessions push agrees (docs/protocol/protocol.md DELETE /sessions).
@@ -974,6 +1009,8 @@ export function dropSession(mid: string, sid: string) {
 }
 
 export function upsertSession(s: Session) {
+  if (s.deleted) { markConversationDeleted(s.machine_id, s.session_id); return; }
+  if (!availableConversation(s)) return;
   const list = state.sessions[s.machine_id] ?? [];
   const i = list.findIndex((x) => x.session_id === s.session_id);
   const next = i < 0 ? [...list, s] : list.map((x, j) => {
@@ -1332,7 +1369,7 @@ export async function refreshAssistant() {
   try {
     const a = await asked.answer;
     if (!asked.fresh() || from !== pageOf()) return;
-    const assistant = { ...a, conversations: a.conversations ?? [] };
+    const assistant = { ...a, conversations: (a.conversations ?? []).filter(availableConversation) };
     const scope = feedCacheScope();
     const cached = readFeedCache(scope);
     if (cached && (cached.manager ?? "") === from && (cached.machineID !== mainConversationMachine(assistant) || cached.sessionID !== assistant.main)) discardFeedCache(scope);
@@ -1497,6 +1534,7 @@ function resendSeen() {
 
 export function reset() {
   disconnect();
+  clearConversationDeletions();
   resetMessageFeedback();
   cursor = NO_CURSOR; // another login: another stream
   ixChanges.clear();

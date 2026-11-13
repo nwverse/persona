@@ -542,7 +542,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 			list, _ = s.sessions(ctx, d.ID)
 		}
 		for _, c := range list {
-			if c.Assistant && spaceOf(c) == sp && (withArchived || !c.Archived) {
+			if c.Assistant && !c.Deleted && s.conversationAvailable(ctx, d.ID, c.SessionID) == nil && spaceOf(c) == sp && (withArchived || !c.Archived) {
 				out.Conversations = append(out.Conversations, c)
 			}
 		}

@@ -8,7 +8,7 @@ import { closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
 // to them, as every other source is: a stopped Agent's row says read and terminal only (#4754). A native row without
 // them (every row from an older node) keeps its existing behavior: it may do everything.
 export function sessionCan(s: Session | undefined, operation: keyof SessionCapabilities): boolean {
-  if (!s) return false;
+  if (!s || s.deleted) return false;
   if (operation === "attach") return Boolean(s.source_kind && s.capabilities?.attach === true && !s.attached);
   if (operation === "close") return s.capabilities?.close ?? sessionCan(s, "terminal");
   if (!s.source_kind && !s.capabilities) return true;

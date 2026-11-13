@@ -1,3 +1,4 @@
+import { conversationDeletionScope, deletedConversationID, onConversationDeleted } from "./conversation-deleted";
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md, iOS TasksStore / Shared/Tasks.swift): the plans,
 // each conversation's feed (what the hub inserted into it), where those go among the chat's lines, the day lines and
 // the quick results. A task is a todo whose `origin` is the conversation; its state is the todo's (lib/todos.ts).
@@ -431,6 +432,7 @@ export function draftPlaceholder(text: string): string | undefined {
 }
 
 function received(items: FeedItem[], plans?: Record<string, TaskPlan>) {
+  items = items.filter((it) => !deletedConversationID(it.conversation));
   const feeds = { ...st.feeds };
   // one merge per conversation: merging item by item re-sorted the whole feed once per item of a 500-item page
   const byConversation = new Map<string, Map<string, FeedItem>>();
@@ -463,6 +465,7 @@ const FEED_PAGES = 40;
 /** A conversation's feed: what came since the newest item it has. A read asked for while one is out runs once more
  *  after it (a reconnect's hello during the first read on open was dropped, and what was pushed meanwhile stayed missing). */
 export async function loadFeed(conversation: string) {
+  if (deletedConversationID(conversation)) return;
   if (loading.has(conversation)) {
     again.add(conversation);
     return;
@@ -483,6 +486,7 @@ export async function loadFeed(conversation: string) {
 
 /** One bounded feed traversal. New hubs return a snapshot cursor; older hubs retain the timestamp fallback. */
 async function readFeedPages(conversation: string) {
+  const scope = conversationDeletionScope();
   let last = st.feeds[conversation]?.at(-1)?.at;
   let cursor: string | undefined;
   const endpoint = `/assistant/conversations/${enc(conversation)}/feed`;
@@ -497,6 +501,7 @@ async function readFeedPages(conversation: string) {
     const readingAt = feedRevision;
     const query = cursor ? `?cursor=${enc(cursor)}` : `?paginate=1${last ? `&since=${enc(last)}` : ""}`;
     const res = await api<{ items: FeedItem[]; next_cursor?: string; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(endpoint + query, { headers });
+    if (scope !== conversationDeletionScope() || deletedConversationID(conversation)) return;
     if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
     const items = res.items ?? [];
     if (owner) for (const it of items) draftOwners.set(it, owner);
@@ -544,7 +549,7 @@ onHubEvent("hello", (m) => {
 });
 onHubEvent("task_plan", (m) => {
   const p = m.plan as TaskPlan | undefined;
-  if (p) set({ plans: { ...st.plans, [p.id]: p } });
+  if (p && !deletedConversationID(p.conversation)) set({ plans: { ...st.plans, [p.id]: p } });
 });
 
 // ── actions ──
@@ -970,3 +975,11 @@ export function dayLabel(date: Date, now = new Date()): string {
 export function isToday(iso: string, now = new Date()): boolean {
   return new Date(iso).toDateString() === now.toDateString();
 }
+
+onConversationDeleted((_mid, sid) => {
+  const feeds = { ...st.feeds }, taskCards = { ...st.taskCards }, routes = { ...st.routes };
+  delete feeds[sid]; delete taskCards[sid]; delete routes[sid];
+  again.delete(sid); todayAsked.delete(sid);
+  const plans = Object.fromEntries(Object.entries(st.plans).filter(([, plan]) => plan.conversation !== sid));
+  set({ feeds, taskCards, routes, plans });
+});

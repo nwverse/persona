@@ -126,10 +126,13 @@ type Hub struct {
 	others    managerStates // the other managers' (manager_state.go)
 	moving    moves         // who carries what changing (ownership_moves.go)
 	// userLocale: the user's language, an i18n.Lang; langs: each device's language that decides it (locale.go)
-	userLocale   atomic.Value
-	langs        userLangs
-	apps         clientApps   // the apps' versions as they last said (client_apps.go)
-	deleted      deletedBook  // conversations taken out of the apps' lists (deleted_sessions.go)
+	userLocale atomic.Value
+	langs      userLangs
+	apps       clientApps  // the apps' versions as they last said (client_apps.go)
+	deleted    deletedBook // conversations taken out of the apps' lists (deleted_sessions.go)
+
+	deletedConversationContent map[[2]string]bool // Manager/conversation transport tombstones; guarded by mu.
+
 	secret       secretState  // secretkey.go
 	devtok       devTokens    // device token lookups (devicetokens.go)
 	shareIngress shareIngress // anonymous admission limits; no sharing business state

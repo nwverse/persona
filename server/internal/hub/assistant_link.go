@@ -76,7 +76,7 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 		switch {
 		case strings.Contains(pattern, "/machines/{mid}/"):
 			by = h.byMachine
-		case strings.Contains(pattern, "/assistant/conversations/{id}/"):
+		case strings.Contains(pattern, "/assistant/conversations/{id}"):
 			by = h.byConversation
 		case strings.Contains(pattern, "/todos/{id}"):
 			by = h.byTodo

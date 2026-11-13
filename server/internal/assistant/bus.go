@@ -620,7 +620,31 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		return out, err
 	}
 	if d := b.opts.Devices; d != nil {
+		if method == devicewire.MethodCall {
+			var p devicewire.NodeCall
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, err
+			}
+			if conversationWrite(p.Method) {
+				s.conversationWrites.RLock()
+				defer s.conversationWrites.RUnlock()
+			}
+			if p.Method != "session.unwatch" {
+				if err := s.conversationParamsAvailable(ctx, d.Canonical(p.MachineID), p.Params); err != nil {
+					return nil, err
+				}
+			}
+		}
 		if out, ok, err := d.Request(ctx, method, params); ok { // devices.* (devices.go)
+			if err == nil && method == devicewire.MethodCall {
+				var p devicewire.NodeCall
+				_ = json.Unmarshal(params, &p)
+				if p.Method != "session.unwatch" {
+					if err := s.conversationParamsAvailable(ctx, d.Canonical(p.MachineID), p.Params); err != nil {
+						return nil, err
+					}
+				}
+			}
 			if err == nil && method == devicewire.MethodCall {
 				s.nodeCallDone(ctx, params) // an effort set on a conversation with a model pick (model_pick.go)
 			}

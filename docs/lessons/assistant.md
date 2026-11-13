@@ -410,3 +410,13 @@ by newer mail, left its item open for good: nothing else files an open item, so 
 returns needs a second path for what it no longer returns: here past-window items are filed without asking, and the rest are
 looked up by UID once a round (`inbox.mail_flags`), bounded, with a failed lookup changing nothing. Tests of such a round
 must wait for the background triage pass (`waitTriage`) before setting a tier by hand, or the fallback tier overwrites it.
+
+## Deleting a chat is more than removing its list row (#6172)
+
+Keep the tombstone in the owning manager and carry an identity-only row through the existing fleet transport. Persisted
+map keys use the existing JSON tuple encoding, since Postgres jsonb rejects NUL separators; test the database roundtrip.
+List filtering alone leaves direct transcript requests, WebSocket replay, already open subscriptions, tool reads and runtime
+resume paths reachable. Check every referenced identity on a start, including `resume_session_id` alongside a new id,
+and discard a read that finishes after deletion. A fleet notification is not an applied acknowledgement: apply the manager's successful deletion to the hub before returning HTTP 200. Fence the final HTTP header commit per session, suppress late broadcasts at enqueue, and redact retained replay entries; do not claim to retract bytes already committed before the acknowledgement. A pending main-chat handoff also contains old turns: suppress it when
+its source is deleted. Task origins and previously saved knowledge remain separate records; deletion must not stop the
+Agents those tasks started. Tests use synthetic conversations, references and node events, never a live user's history.

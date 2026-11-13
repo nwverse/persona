@@ -69,6 +69,9 @@ func (h *Hub) rememberLiveText(machineID, sessionID, text string) {
 // under h.mu, as the deltas forwarded to subscribers are (toSubscribersWith): a clear forwarded between the read and the
 // queue reached the client before the text it cleared, which then stayed (#1966).
 func (h *Hub) sendLiveText(c *client, machineID, sessionID string) {
+	if h.conversationDeleted(machineID, sessionID) {
+		return
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if text := h.deltas[[2]string{machineID, sessionID}]; text != "" {

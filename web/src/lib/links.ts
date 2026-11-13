@@ -1,3 +1,4 @@
+import { conversationKeyDeleted, onConversationDeleted } from "./conversation-deleted";
 import { APP_SCHEMES, assistantPath } from "./compatibility";
 // Where a link opens (CLAUDE.md "Links open inside the app", docs/web/web.md "Links"). In a browser the browser is the app:
 // ordinary pages open in a new tab (most sites refuse to be framed and the page cannot tell it was refused, so a
@@ -358,6 +359,7 @@ export function getContexts(key: string): ContextRef[] {
 }
 
 export function addContext(key: string, ref: ContextRef) {
+  if (conversationKeyDeleted(key)) return;
   const cur = getContexts(key);
   // the same passage of the same page once
   if (cur.some((c) => c.url === ref.url && c.text === ref.text && c.kind === ref.kind)) return;
@@ -441,3 +443,8 @@ export function whenComposer(key: string | undefined, run: (c: ComposerHandle) =
     expired?.();
   }, ms);
 }
+
+onConversationDeleted((mid, sid) => {
+  pending.delete(`${mid}/${sid}`);
+  emitContexts();
+});

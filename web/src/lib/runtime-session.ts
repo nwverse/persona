@@ -1,7 +1,7 @@
 // Complete metadata for one active chat. List projection/cursors never become chat detail state.
 import { useEffect, useState } from "react";
 import { api, ApiError, errorText, sessionPath } from "./api";
-import { applyCompleteSessions, getSession, getState, onHubEvent, subscribe, useStore } from "./store";
+import { applyCompleteSessions, getSession, getState, markConversationDeleted, onHubEvent, subscribe, useStore } from "./store";
 import { SESSIONS_LOOKUP_FEATURE } from "./runtime-list";
 import type { ListPage } from "./session-list";
 import type { Session } from "./types";
@@ -112,6 +112,11 @@ export class SessionDetailLoader {
     clearTimeout(this.retryTimer);
   }
   private failed(error: unknown, legacy: boolean) {
+    if (error instanceof ApiError && error.code === "conversation_deleted") {
+      markConversationDeleted(this.mid, this.sid);
+      this.stop();
+      return;
+    }
     this.last = errorText(error);
     this.emit({ loading: false, error: this.last, missing: this.gone, legacy });
     clearTimeout(this.retryTimer);

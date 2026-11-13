@@ -684,7 +684,7 @@ func (s *Service) taskRoutes() {
 		if paginated {
 			out["next_cursor"] = nextCursor
 		}
-		apierr.WriteJSON(w, out)
+		s.writeConversationJSON(r.Context(), w, r.PathValue("id"), out)
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {

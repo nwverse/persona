@@ -457,6 +457,13 @@ func (h *Hub) withMachine(fn func(http.ResponseWriter, *http.Request, *Machine))
 			writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
 			return
 		}
+		if m.conversationDeleted(r.PathValue("sid")) {
+			writeErrCode(w, http.StatusGone, "conversation_deleted", i18n.Err("assistant-conversation_delete.deleted"))
+			return
+		}
+		if sid := r.PathValue("sid"); sid != "" {
+			w = &conversationResponseWriter{ResponseWriter: w, machine: m, id: sid, header: w.Header().Clone()}
+		}
 		fn(w, r, m)
 	}
 }
@@ -1071,6 +1078,9 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.deletedConversationEventLocked(typ, b) {
+		return
+	}
 	if h.events == nil {
 		h.events = newEventLog()
 	}
@@ -1097,6 +1107,9 @@ func (h *Hub) toSubscribers(machineID, sessionID string, v any) {
 // URL's ?features= or in client_hello. v is encoded only once some client follows the session: most streamed deltas
 // are for sessions no app has open.
 func (h *Hub) toSubscribersWith(machineID, sessionID, feature string, v any) {
+	if h.conversationDeleted(machineID, sessionID) {
+		return
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.toSubscribersLocked(machineID, sessionID, feature, v)
@@ -1150,6 +1163,9 @@ type (
 // itemsToSubscribers fans new items out, without image data to clients that load images on demand. moreAfter marks
 // a producer's capped replay batch, whose remaining items the client must fetch.
 func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item, span itemSpan, moreAfter bool) {
+	if h.conversationDeleted(machineID, sessionID) {
+		return
+	}
 	if items == nil {
 		items = []proto.Item{}
 	}
@@ -1440,6 +1456,10 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		if m == nil {
 			return
 		}
+		if m.conversationDeleted(msg.SessionID) {
+			c.sendJSON(deletedConversationEvent(m.cfg.ID, msg.SessionID))
+			return
+		}
 		// Kept under the computer's own id, which is what its pushes carry (a page may have asked by an absorbed one).
 		key := [2]string{m.cfg.ID, msg.SessionID}
 		c.mu.Lock()
@@ -1577,6 +1597,10 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			more = false
 		}
 		if b, err := marshalItems(out); err == nil {
+			if m.conversationDeleted(sid) {
+				c.sendJSON(deletedConversationEvent(m.cfg.ID, sid))
+				return
+			}
 			c.queue(b)
 		}
 		if !more {

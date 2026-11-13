@@ -219,6 +219,8 @@ export interface Port {
 }
 
 export interface Session {
+  /** Explicit references to a deleted Assistant conversation return a scrubbed tombstone. */
+  deleted?: boolean;
   /** The engine host it lives in (herdr, herdr-core, orca, paseo…), and the other hosts it is live in at once (#2576). */
   host?: string;
   also_open_in?: string[];

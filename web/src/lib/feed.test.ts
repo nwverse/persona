@@ -25,7 +25,7 @@ import {
 } from "./feed";
 import { conversationCards } from "./assistant-views";
 import { getPanel, openPanel } from "./panel";
-import { refreshTodos } from "./store";
+import { markConversationDeleted, refreshTodos, reset } from "./store";
 import type { Todo } from "./todos";
 import type { ChatLine, Segment } from "./turns";
 import type { Item } from "./types";
@@ -450,4 +450,19 @@ describe("loading a conversation's feed (docs/protocol/protocol.md: since, oldes
     expect(cards.actions["item-1/0"]?.client_msg_id).toBe("cid-1");
     expect(cards.blocks["item-1/0"]).toBe(true);
   });
+});
+
+it("discards a feed response arriving after deletion, including its plan and cards", async () => {
+  const sid = "deleted-feed-race";
+  let release!: (r: Response) => void;
+  vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((r) => { release = r; })));
+  const read = loadFeed(sid);
+  markConversationDeleted("hub", sid);
+  release(Response.json({ items: [{ id: "late", conversation: sid, kind: "plan", at: new Date().toISOString() }], plans: { late: { id: "late", conversation: sid, tasks: [], state: "open" } }, task_cards: [] }));
+  await read;
+  expect(getFeedState().feeds[sid]).toBeUndefined();
+  expect(getFeedState().plans.late).toBeUndefined();
+  expect(getFeedState().taskCards[sid]).toBeUndefined();
+  reset();
 });

@@ -1,3 +1,4 @@
+import { conversationDeletionScope, conversationKeyDeleted } from "../../lib/conversation-deleted";
 import { storedValue } from "../../lib/compatibility";
 // Beautiful UI's Prompt Bar, wired to a session: multi-line input, / commands, @ files and sessions, image attachments
 // (paste, drop, pick; click one to mark it up), files uploaded to the session's machine, send — and stop while the
@@ -10,7 +11,7 @@ import { useQuickPrompts } from "../../lib/extension-declared";
 import { promptCommands, type ComposerCommand as Command } from "../../lib/extension-prompts";
 import { LOOP_TEXT, loopHint } from "../../lib/loop-command";
 import { WORKFLOWS_COMMAND } from "../../lib/background-panel";
-import { ApiError, errorText } from "../../lib/api";
+import { ApiError, credentialOwner, errorText } from "../../lib/api";
 import { composerEntryDrop, dragHasEntry, droppedEntry } from "../../lib/entry-drag";
 import { uuid } from "../../lib/format";
 import { lazyPage } from "../../lib/lazy-page";
@@ -188,6 +189,11 @@ export const Composer = memo(function Composer({
    *  cindy's pending queue, #5327). Keep it the same object while nothing in it changes, as `footer`. */
   top?: React.ReactNode;
 }) {
+  // Deferred saves and failed sends still belong to this account and conversation after unmount.
+  const canWriteDraft = useMemo(() => {
+    const owner = credentialOwner(), scope = conversationDeletionScope();
+    return () => owner === credentialOwner() && scope === conversationDeletionScope() && !conversationKeyDeleted(draftKey);
+  }, [draftKey]);
   const [draft, setDraft] = useState(() => storedValue(`draft:${draftKey}`) ?? "");
   const [atts, setAtts] = useState<Attachment[]>([]);
   // The suggestion just sent with its arrow: it stays on the hub until the agent starts, and each tap would be a new message.
@@ -288,6 +294,7 @@ export const Composer = memo(function Composer({
   useEffect(
     () =>
       onDraftEvent(draftKey, (e) => {
+        if (!canWriteDraft()) return;
         // a send from an earlier box of this conversation failed: its words come back even while sending is off
         if (e.type === "unsent") {
           setDraft((cur) => withUnsent(cur, e.text));
@@ -329,6 +336,7 @@ export const Composer = memo(function Composer({
           toast(t("chat-composer.replaced"), "ok", {
             label: t("chat-composer.undo"),
             run: () => {
+              if (!canWriteDraft()) return;
               if (startsEdit) editNow.current?.cancel();
               setQuotes(draftKey, kept.quotes);
               // the box went away or shows another conversation: the words go back to this one's stored draft
@@ -359,18 +367,18 @@ export const Composer = memo(function Composer({
           setCaret(next.length);
         });
       }),
-    [draftKey],
+    [draftKey, canWriteDraft],
   );
 
   // What is typed goes into the conversation's stored draft 250 ms after the last key; one still waiting is written at
   // once when the box goes away or moves to another conversation, and when the page is hidden (closed, reloaded,
   // left), so the last words typed before switching are not lost (#4591).
-  const unsaved = useRef<{ key: string; text: string } | null>(null);
+  const unsaved = useRef<{ key: string; text: string; current: () => boolean } | null>(null);
   const saveDraft = useCallback(() => {
     const u = unsaved.current;
     if (!u) return;
     unsaved.current = null;
-    storeDraft(u.key, u.text);
+    if (u.current()) storeDraft(u.key, u.text);
   }, []);
   // The render that moves the box to another conversation still holds the old words: they are not that one's draft
   // (the box reads its own next, and this runs again if it differs).
@@ -380,10 +388,10 @@ export const Composer = memo(function Composer({
       savedFor.current = draftKey;
       return;
     }
-    unsaved.current = { key: draftKey, text: draft };
+    unsaved.current = { key: draftKey, text: draft, current: canWriteDraft };
     const t = setTimeout(saveDraft, 250);
     return () => clearTimeout(t);
-  }, [draft, draftKey, saveDraft]);
+  }, [draft, draftKey, saveDraft, canWriteDraft]);
   useEffect(() => {
     addEventListener("pagehide", saveDraft);
     return () => {
@@ -638,6 +646,7 @@ export const Composer = memo(function Composer({
     count(draftKey, 1);
     try {
       const path = await sendFile(machineId!, f, { dest: uploadDest });
+      if (!canWriteDraft()) return;
       const p = quotePath(path);
       // finished after the box closed or moved to another conversation: into the draft it was picked for (its open
       // box, else the stored draft), not into the one shown now
@@ -685,6 +694,7 @@ export const Composer = memo(function Composer({
   const roundVoice = voice?.mode === "start" && !canSend && !showStop && !blocked && !disabled;
 
   const submit = async (text = draft) => {
+    if (!canWriteDraft()) return;
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
     if (disabled || blocked || loadingDraft || (!text.trim() && !atts.length && !refs.length && !q.length)) return;
@@ -696,7 +706,7 @@ export const Composer = memo(function Composer({
     let committed: Outgoing["edit"];
     if (edit) {
       const done = await edit.commit();
-      if (!done) return;
+      if (!done || !canWriteDraft()) return;
       if (typeof done === "object") committed = done;
       // the box went away or shows another conversation: the words wait in this one's stored draft
       if (!mounted.current || keyNow.current !== draftKey) return;
@@ -719,6 +729,7 @@ export const Composer = memo(function Composer({
     if (hasFinePointer() && (!at || at === document.body || box.current?.contains(at))) input.current?.focus({ preventScroll: true });
     // picked contexts ride in front as <persona-context> tags (docs/protocol/protocol.md "Tags in messages"), the quote as `> ` lines
     const ok = await onSend({ text: withContexts(refs, withQuoteBlock(q, text), sent.length > 0), images: sent.map((a) => ({ mime: a.mime, data: a.data })), ...(committed ? { edit: committed } : {}) });
+    if (!canWriteDraft()) { releaseAttachments(sent); return; }
     if (ok) {
       history.record(text);
       releaseAttachments(sent);

@@ -1,3 +1,4 @@
+import { conversationKeyDeleted, onConversationDeleted } from "./conversation-deleted";
 import { storedValue, storeValue, removeStoredValue } from "./compatibility";
 // Changes to a composer's draft from outside it: the message menu's "Quote" / "Edit", a queued message pulled back, an
 // edited image put in for the next message (iOS: ChatView.bindMenu, AppModel.editQueued, ImageViewer's attach).
@@ -130,6 +131,7 @@ function validQuote(q: unknown): q is DraftQuote {
 
 /** The quotes kept for a composer's draft key (read on mount, like the draft). An older build kept just one object. */
 export function storedQuotes(key: string): DraftQuote[] {
+  if (conversationKeyDeleted(key)) return [];
   try {
     const v: unknown = JSON.parse(localStorage.getItem(quoteKey(key)) ?? "null");
     return (Array.isArray(v) ? v : [v]).filter(validQuote).map((q) => (q.id ? q : { ...q, id: uuid() }));
@@ -139,6 +141,7 @@ export function storedQuotes(key: string): DraftQuote[] {
 }
 
 export function storeQuotes(key: string, list: readonly DraftQuote[]) {
+  if (conversationKeyDeleted(key)) list = [];
   if (list.length) localStorage.setItem(quoteKey(key), JSON.stringify(list));
   else localStorage.removeItem(quoteKey(key));
 }
@@ -168,6 +171,7 @@ export function getQuotes(key: string): QuoteState {
 }
 
 function putQuotes(key: string, st: QuoteState) {
+  if (conversationKeyDeleted(key)) st = EMPTY;
   quoteStates.set(key, st.list.length ? st : EMPTY);
   storeQuotes(key, st.list);
   quoteListeners.forEach((l) => l());
@@ -293,6 +297,7 @@ export function draftListenerKeysForTests() {
 }
 
 export function storeDraft(key: string, text: string) {
+  if (conversationKeyDeleted(key)) text = "";
   if (text) storeValue(`draft:${key}`, text);
   else removeStoredValue(`draft:${key}`);
   tellRows();
@@ -311,6 +316,7 @@ export function useLeftDraft(key: string | null): { text: string; quoted: boolea
 
 /** Sends an event to the composer of `key`. False when none is mounted and it could not be kept (an image). */
 export function sendDraft(key: string, e: DraftEvent): boolean {
+  if (conversationKeyDeleted(key)) return false;
   const ls = listeners.get(key);
   if (ls?.size) {
     ls.forEach((l) => l(e));
@@ -329,3 +335,9 @@ export function sendDraft(key: string, e: DraftEvent): boolean {
   storeDraft(key, next);
   return true;
 }
+
+onConversationDeleted((mid, sid) => {
+  const key = `${mid}/${sid}`;
+  try { storeDraft(key, ""); } catch { /* Storage can be unavailable. */ }
+  try { setQuotes(key, []); } catch { /* Its memory copy was already cleared. */ }
+});

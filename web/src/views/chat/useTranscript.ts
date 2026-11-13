@@ -1,8 +1,9 @@
+import { conversationDeleted, onConversationDeleted } from "../../lib/conversation-deleted";
 // A session's items: the newest page over HTTP, then live over the WebSocket (docs/protocol/protocol.md "Continuity of items").
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errorText, isAbort, sessionPath } from "../../lib/api";
+import { api, ApiError, errorText, isAbort, sessionPath } from "../../lib/api";
 import { sessionLoadError } from "../../lib/session-link";
-import { getState, listenSession, send, type ItemsEvent } from "../../lib/store";
+import { getState, listenSession, markConversationDeleted, send, type ItemsEvent } from "../../lib/store";
 import { afterPull, afterPush, FRESH_TALLY, newestItemAt, notLive as tallyNotLive, RevWatch, shouldPull, type StaleTally } from "../../lib/stale-page";
 import { mergeItems, withoutFolded } from "../../lib/turns";
 import { chosenManager } from "../../lib/manager-choice";
@@ -118,6 +119,17 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   useEffect(() => {
     let dead = false;
     const ctl = new AbortController();
+    const offDeleted = onConversationDeleted((machine, session) => {
+      if (machine !== mid || session !== sid) return;
+      dead = true;
+      ctl.abort();
+      generation.current++;
+      snapshot.current = null;
+      setItems([]);
+      setStreaming("");
+      deltas.current.cancel();
+      send({ type: "unsubscribe", machine_id: mid, session_id: sid });
+    });
     // Older pages and folds still on their way were asked for from what is shown now: they must not land on what replaces it.
     const disownReads = () => {
       generation.current++;
@@ -205,7 +217,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       showLive();
     };
 
-    const subscribe = () => send({ type: "subscribe", machine_id: mid, session_id: sid, since_seq: covered.current || undefined, lazy_images: true, fold_work: true });
+    const subscribe = () => !conversationDeleted(mid, sid) && send({ type: "subscribe", machine_id: mid, session_id: sid, since_seq: covered.current || undefined, lazy_images: true, fold_work: true });
 
     // Items after what we have, a page at a time (past 8 the newest page is cheaper); how many of them were new.
     const pull = async (): Promise<number> => {
@@ -346,6 +358,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         covered.current = Math.max(covered.current, p.to_seq ?? Math.max(0, ...batch.map((i) => i.seq)));
       } catch (e) {
         if (dead) return;
+        if (e instanceof ApiError && e.code === "conversation_deleted") { markConversationDeleted(mid, sid); return; }
         // a session that is still starting has no transcript yet
         if (!opts.starting) setError(sessionLoadError(errorText(e)));
       } finally {
@@ -362,6 +375,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     return () => {
       dead = true;
       ctl.abort();
+      offDeleted();
       off();
       deltas.current.cancel();
       clearTimeout(gapTimer.current);

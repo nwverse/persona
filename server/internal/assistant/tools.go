@@ -54,6 +54,9 @@ func toolsNamed(names []string) []proto.Tool {
 
 // Tool runs one of the assistant's MCP tools for the conversation call.SessionID on machine call.MachineID.
 func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
+	if err := s.conversationAvailable(ctx, call.MachineID, call.SessionID); err != nil {
+		return proto.TextResult(err.Error(), true)
+	}
 	call.Name = compat.Tool(call.Name)
 	args := call.Arguments
 	if len(args) == 0 {

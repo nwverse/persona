@@ -201,6 +201,23 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 		writeErr(w, http.StatusBadGateway, fmt.Errorf("the manager answered HTTP status %d", res.Status))
 		return
 	}
+	if err := h.acceptConversationDeletionReply(id, r, body, res); err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	if path, ok := strings.CutPrefix(r.URL.Path, "/api/v1/assistant/conversations/"); ok {
+		sid, child, _ := strings.Cut(path, "/")
+		if sid != "" && (r.Method != http.MethodDelete || child != "") {
+			for _, m := range h.machinesNow() {
+				if h.machineOwner(m.cfg.ID) == id {
+					if _, known := m.session(sid); known {
+						w = &conversationResponseWriter{ResponseWriter: w, machine: m, id: sid, header: w.Header().Clone()}
+						break
+					}
+				}
+			}
+		}
+	}
 	for k, v := range res.Header {
 		if !hopHeaders[http.CanonicalHeaderKey(k)] {
 			w.Header()[http.CanonicalHeaderKey(k)] = v

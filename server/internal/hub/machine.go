@@ -55,7 +55,10 @@ type Machine struct {
 	lastSeen  time.Time
 	// sessions is the manager's last list. A list once kept is never changed in place, only replaced (a change copies
 	// it first): keptSessions hands it out without a copy, to be read after m.mu is let go.
-	sessions []proto.Session
+	sessions             []proto.Session
+	deletedConversations map[string]proto.Session // Permanent manager tombstones, overlaid on delayed inventories; guarded by mu.
+	responseMu           sync.Mutex
+	responseFences       map[string]*conversationResponseFence
 	// lists decodes the manager's lists (fleet.sessions), only the sessions whose bytes changed (fleet_link.go).
 	lists proto.SessionListDecoder
 	// raws are the bytes each session of the list rawsOf names came in, by id ("" for an id the list names twice),
@@ -224,6 +227,9 @@ func (m *Machine) reconnect() {
 }
 
 func (m *Machine) call(ctx context.Context, method string, params any, out any) error {
+	if err := m.deletedCall(method, params); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	p := m.peer
 	info := m.info
@@ -251,7 +257,10 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	default:
 	}
-	return p.Call(ctx, method, params, out)
+	if err := p.Call(ctx, method, params, out); err != nil {
+		return err
+	}
+	return m.deletedCall(method, params)
 }
 
 // reachable: a call would go out now (call answers errOffline otherwise).
@@ -361,7 +370,30 @@ func (m *Machine) setSessionList(list []proto.Session) { m.setSessionListRaws(li
 // came in (proto.SessionListDecoder), by which a push tells which sessions' rows it can send again (encodeKept); nil
 // for a list that came another way.
 func (m *Machine) setSessionListRaws(list []proto.Session, raws []string) {
+	var newDeletions []string
+	for _, row := range list {
+		if row.Deleted && !m.conversationDeleted(row.SessionID) {
+			newDeletions = append(newDeletions, row.SessionID)
+		}
+	}
+	slices.Sort(newDeletions)
+	newDeletions = slices.Compact(newDeletions)
+	for _, id := range newDeletions {
+		defer m.lockConversationResponse(id)()
+	}
 	m.mu.Lock()
+	for _, row := range list {
+		if row.Deleted {
+			if m.deletedConversations == nil {
+				m.deletedConversations = map[string]proto.Session{}
+			}
+			m.deletedConversations[row.SessionID] = row
+		}
+	}
+	if len(m.deletedConversations) > 0 {
+		list = m.overlayDeletedLocked(list)
+		raws = nil // A delayed row's original bytes must not bypass the tombstone.
+	}
 	m.sessions = list
 	m.raws, m.rawsOf = nil, keptList{}
 	if len(raws) == len(list) && len(list) > 0 {

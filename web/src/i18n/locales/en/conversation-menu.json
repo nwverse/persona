@@ -18,5 +18,6 @@
   "end_leader": "Unpin",
   "leader_made": "Pinned “{title}”",
   "leader_ended": "Unpinned “{title}”: its tasks keep their lead",
-  "leader_failed": "Couldn't change it: {error}"
+  "leader_failed": "Couldn't change it: {error}",
+  "delete": "Delete…"
 }

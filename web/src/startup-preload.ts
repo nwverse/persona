@@ -231,7 +231,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * the sidebar's milestone line is a lazy component; the rule, the pill, the line and their strings stay off the first
  * screen).
  */
-export const FIRST_SCREEN_BUDGET = 474_554;
+// Confirmed Assistant conversation deletion (#6172): 471,293 B en / 474,996 B ja / 472,288 B zh-Hans,
+// against 470,317 / 474,025 / 471,264 B at 481e7023d with the same Node and dependencies. The 971 B ja
+// increase uses 529 B of existing room and adds 442 B to this budget. The confirmation, tombstone page and their
+// strings load on intent; only the menu eligibility and shared deletion/cache/draft guards join the first screen.
+export const FIRST_SCREEN_BUDGET = 474_996;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

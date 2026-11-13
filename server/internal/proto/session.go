@@ -299,6 +299,7 @@ type Session struct {
 	// push, deploy, send…): the apps fill it in but offer no one-tap send (#4644). Set by the manager; kept beside
 	// the flags above, where it fits in their padding: a larger Session costs every copy of a list.
 	SuggestionRisky bool `json:"suggestion_risky,omitempty"`
+	Deleted         bool `json:"deleted,omitempty"` // Manager tombstone; identity only. Kept beside bools to preserve the row's allocation class.
 	// TurnError: the agent's latest turn ended in a model API error (the connection lost mid-response, overloaded,
 	// rate limited, the model service down…). The node sets it when the agent's own record says the turn failed
 	// (Codex: a rollout's task_complete.error, an app-server's failed turn, #2185); otherwise the hub reads it off the

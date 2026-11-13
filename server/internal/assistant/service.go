@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -141,6 +142,9 @@ type Service struct {
 	preempt    preemptBook     // owner_preempt.go
 	tbriefs    taskBriefBook   // task_brief.go
 
+	deletedConversations conversationDeleteBook // conversation_delete.go
+	conversationWrites   sync.RWMutex
+
 	modelPicks modelPickBook // model_pick.go
 	// noBackground: there is no background supervisor whatever the setting says, so the main conversation gets its
 	// own tasks' signals. Only the tests of what the main conversation's own supervision does set it; the hub never does.
@@ -247,6 +251,7 @@ func New(o Options) *Service {
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)
 	s.archiveRoutes()
+	s.conversationDeleteRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
@@ -301,7 +306,13 @@ func (s *Service) handle(pattern string, fn http.HandlerFunc) {
 
 func (s *Service) Routes() []string { return append([]string(nil), s.routes...) }
 
-func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
+func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if err := s.deletedConversationRequest(r); err != nil {
+		apierr.Call(w, err)
+		return
+	}
+	s.mux.ServeHTTP(w, r)
+}
 
 // fullRole: the request came from a device that may do everything (RoleHeader; none: a test's own request).
 func fullRole(r *http.Request) bool {
@@ -349,6 +360,15 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
+	if conversationWrite(method) {
+		s.conversationWrites.RLock()
+		defer s.conversationWrites.RUnlock()
+	}
+	if method != DeviceSessionGet && method != "session.unwatch" {
+		if err := s.conversationParamsAvailable(ctx, device, params); err != nil {
+			return err
+		}
+	}
 	roundKind := "" // the round the message starts, when it is one the owner did not start (owner_preempt.go)
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
 		if text, ok := p["text"].(string); ok {
@@ -415,6 +435,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	res, ok, err := s.localFleetDeviceCall(ctx, p) // what the hub answered before the nodes' events were the manager's
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)
+	}
+	if err == nil && method != DeviceSessionGet && method != "session.unwatch" {
+		err = s.conversationParamsAvailable(ctx, device, params)
 	}
 	if err == nil {
 		round.sent(s, res) // whose round it is, for the owner's next message (owner_preempt.go)
@@ -538,6 +561,12 @@ func (s *Service) push(ctx context.Context, n Notification) {
 
 // event tells the apps what changed (ws.broadcast: the hub sends ev to them as it is).
 func (s *Service) event(ctx context.Context, ev map[string]any) {
+	if kind, _ := ev["type"].(string); conversationContentEvent(kind) {
+		id, _ := ev["conversation"].(string)
+		if err := s.conversationIDAvailable(ctx, id); err != nil {
+			return
+		}
+	}
 	raw, err := json.Marshal(ev)
 	if err != nil {
 		return

@@ -118,6 +118,8 @@ var Features = []string{
 	// A model provider's key (and a computer's key for it) may be such a reference: api_key_reference /
 	// machine_key_references on POST / PUT /api/v1/launchers, key_reference / machine_key_references in its view.
 	"launcher_secret_references",
+
+	"assistant_conversation_delete", // Delete ordinary and archived former main chats; retain task references and computer transcripts.
 }
 
 // CodeWorktreeUnsupported: worktree.prepare / worktree.create on an engine that has no checkouts (a runtime such as

@@ -461,6 +461,11 @@ func (s *Service) loadHandoff(ctx context.Context) mainHandoff {
 		if ok, err := st.Setting(ctx, mainHandoffKey, &h); err != nil || !ok {
 			return mainHandoff{}
 		}
+		// A previously prepared handoff can contain verbatim turns. Deleting its
+		// source must not replay them into the next main conversation.
+		if h.From != "" && s.conversationAvailable(ctx, h.MachineID, h.From) != nil {
+			return mainHandoff{Pick: h.Pick}
+		}
 		return h
 	}
 	return s.main.handoff
@@ -958,6 +963,9 @@ func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any,
 // messageParams is SendParams for a message that is the owner's own (owner), or one the manager writes in their
 // place (a channel's "answer again"), which preempts nothing.
 func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (map[string]any, error) {
+	if err := s.conversationAvailable(ctx, p.MachineID, p.SessionID); err != nil {
+		return nil, err
+	}
 	if p.Params == nil {
 		p.Params = map[string]any{}
 	}

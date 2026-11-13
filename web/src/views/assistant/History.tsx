@@ -1,3 +1,6 @@
+import { shownManager, useShownManager } from "../../lib/manager-choice";
+import { availableConversation, conversationDeletionRevision } from "../../lib/conversation-deleted";
+import { useCanDeleteConversation } from "../../lib/conversation-delete";
 // "All chats" (docs/assistant/assistant.md "Managing its own conversations", the iOS app's sidebar + ArchivedConversationsView): every conversation
 // Persona has, the main one first, the rest newest first by day; search on the title and the last message; a row's menu
 // renames it, copies its id, archives it (the main one can't be). The archived ones are folded at the end. The background
@@ -5,7 +8,7 @@
 // copies its id.
 import { conversationChannel, useChannels } from "../../lib/channels";
 import { ChannelMark, OriginMark } from "../../ui/ChannelMark";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import { ago, stateOf } from "../../lib/format";
 import { plainMarkdown } from "../../lib/plain-markdown";
@@ -13,7 +16,7 @@ import { conversationPage } from "../../lib/conversation-page";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { refreshAssistant, useStore } from "../../lib/store";
 import type { AssistantInfo, Session } from "../../lib/types";
-import { leaderItem } from "../ConversationMenu";
+import { ConversationDeleteConfirmation, leaderItem } from "../ConversationMenu";
 import { Button, Collapse, copyText, cx, Dialog, IconButton, Loading, Menu, StatePill, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { arrange, conversationTitle, filterConversations, mergeConversations, splitTitle, type Conversation } from "./conversations";
@@ -26,6 +29,9 @@ import { t } from "../../i18n";
 const NONE: Session[] = [];
 
 export function History({ origin, onToggleSidebar }: { origin?: string; onToggleSidebar: () => void }) {
+  const deletionRevision = useStore(conversationDeletionRevision);
+  const manager = useShownManager();
+  const reads = useRef(0);
   const filter = parseOriginFilter(origin);
   const assistant = useStore((s) => s.assistant);
   const mid = assistant?.machine_id;
@@ -55,26 +61,33 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   const nowMs = useNow(60_000);
 
   const load = useCallback(async () => {
+    const read = ++reads.current;
     try {
       const a = await api<AssistantInfo & { conversations: Conversation[] }>("/assistant?archived=1");
+      if (read !== reads.current || manager !== shownManager()) return;
       setFetched(a.conversations ?? []);
       setError("");
     } catch (e) {
+      if (read !== reads.current || manager !== shownManager()) return;
       setError(errorText(e));
     }
-  }, []);
+  }, [manager]);
+  useLayoutEffect(() => {
+    reads.current++;
+    setFetched(null); setError(""); setTitles({}); setMarked({}); setRenaming(null);
+  }, [manager]);
   useEffect(() => {
     void load();
   }, [load]);
 
   const all = useMemo(
     () =>
-      mergeConversations(fetched ?? [], assistant?.conversations ?? [], live.filter((s) => s.assistant)).map((s) => {
+      mergeConversations(fetched ?? [], assistant?.conversations ?? [], live.filter((s) => s.assistant)).filter(availableConversation).map((s) => {
         const title = titles[s.session_id];
         const archived = marked[s.session_id];
         return title || archived !== undefined ? { ...s, ...(title ? { title } : {}), ...(archived !== undefined ? { archived } : {}) } : s;
       }),
-    [fetched, assistant?.conversations, live, titles, marked],
+    [fetched, assistant?.conversations, live, titles, marked, deletionRevision],
   );
   const background = assistant?.background_supervisor;
   const hits = useMemo(() => filterConversations(all.filter((s) => matchesOrigin(s, filter, background)), query), [all, query, filter, background]);
@@ -261,6 +274,8 @@ function ConvRow({ s, main, now, onRename, onArchive }: { s: Conversation; main?
   // the chats outside the sidebar live here: 设为常驻 puts one in its 常驻 group (#4331)
   const leader = useStore((x) => !!x.assistant?.leaders?.includes(s.session_id));
   const own = !main && !builtIn;
+  const canDelete = useCanDeleteConversation(s, main, builtIn);
+  const [deleting, setDeleting] = useState(false);
   const items: MenuItem[] = [
     ...(own && !s.archived ? [leaderItem(s, leader)] : []),
     ...(own ? [{ key: "rename", label: t("assistant-history.rename_ellipsis"), icon: "pencil" as const, onSelect: () => onRename(s) }] : []),
@@ -270,6 +285,7 @@ function ConvRow({ s, main, now, onRename, onArchive }: { s: Conversation; main?
           ? { key: "unarchive", label: t("assistant-history.unarchive"), icon: "archive" as const, onSelect: () => onArchive(s, false) }
           : { key: "archive", label: t("assistant-history.archive"), icon: "archive" as const, onSelect: () => onArchive(s, true) }]
       : []),
+    ...(canDelete ? [{ key: "delete", label: t("conversation-menu.delete"), icon: "trash" as const, danger: true, divider: true, onSelect: () => setDeleting(true) }] : []),
   ];
   return (
     <div className={cx("group relative flex items-center gap-1 pr-2 transition-colors hover:bg-hover", menu.anchor && "bg-hover")}>
@@ -312,6 +328,7 @@ function ConvRow({ s, main, now, onRename, onArchive }: { s: Conversation; main?
         active={!!menu.anchor}
         className={menu.anchor ? "" : "sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"}
       />
+      {deleting && <ConversationDeleteConfirmation s={s} onClose={() => setDeleting(false)} />}
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} items={items} align="right" width={180} />}
     </div>
   );
