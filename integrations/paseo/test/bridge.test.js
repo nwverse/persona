@@ -457,7 +457,7 @@ test("a new Claude Code session gets the Agent's own Persona tools preapproved; 
   await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' })
   assert.deepEqual(fake.requestsOf('agent.create.request').at(-1).config.toolPolicy, { preapproved: [
     { kind: 'mcp', server: 'persona', tool: 'report_to_supervisor' }, { kind: 'mcp', server: 'persona', tool: 'todo_decision_add' },
-  ] }, "only the servers it is given (no jarvis server here)")
+  ] }, "only the servers it is given (none under the former name here)")
   await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-codex' })
   assert.equal(fake.requestsOf('agent.create.request').at(-1).config.toolPolicy, undefined, 'Codex: Paseo would limit the server to those tools')
   fake.handlers['agent.create.request'] = (msg) => msg.config.toolPolicy
