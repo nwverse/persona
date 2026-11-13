@@ -46,6 +46,7 @@ const documentItem = (id: string): InboxItem => ({
   id, source: "docs", kind: "doc", account: "docs", account_name: "Documents", title: "Release plan", preview: "Document preview", count: 1,
   updated_at: "2026-11-09T04:00:00Z", tier: "action", version: `v-${id}`,
   doc: { url: "https://example.com/document", type: "doc", notice: "mention", rows: [{ ref: "row-1", title: "Original document row" }] },
+  mutes: [{ tag: "sender", value: "u1", name: "Someone" }],
   chain: [{ id: "chain-1", kind: "received", text: "Open the document", link: { type: "source" } }],
 });
 
