@@ -93,6 +93,22 @@ func TestInboxTextChainCatalogRoundTrip(t *testing.T) {
 	}
 }
 
+func TestInboxTextStoredSentReplyRoundTrip(t *testing.T) {
+	// Stored chains carry these rendered strings, not the old sent_other key. Renaming that key must not strand them.
+	stored := map[Lang]string{
+		En:     "Sent a reply",
+		ZhHans: "发了回复", // i18n-ignore: stored text predates the sent_reply key
+		Ja:     "返信を送信",
+	}
+	for _, from := range Langs {
+		for _, to := range Langs {
+			if got, want := InboxText(to, stored[from]), stored[to]; got != want {
+				t.Errorf("%s -> %s stored sent reply: %q, want %q", from, to, got, want)
+			}
+		}
+	}
+}
+
 func TestInboxTextTriagedKeepsUnknownAndModelWords(t *testing.T) {
 	const detail = "assistant-inbox_chain.triaged_detail"
 	for _, from := range Langs {
