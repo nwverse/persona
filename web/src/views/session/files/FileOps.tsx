@@ -750,10 +750,10 @@ function UploadTray({ uploads, operations, onCancel, onCancelRemote, onRetry }: 
 }
 
 function RemoteOperationRow({ operation: op, onCancel }: { operation: RemoteOperation; onCancel: () => void }) {
-  const pct = op.state === "done" ? 100 : op.bytesTotal > 0 ? Math.min(100, Math.round((op.bytesDone / op.bytesTotal) * 100)) : 0;
+  const pct = op.state === "done" ? 100 : op.bytesTotal > 0 ? Math.min(100, Math.round((op.bytesDone / op.bytesTotal) * 100)) : op.filesTotal > 0 ? Math.min(100, Math.round((op.filesDone / op.filesTotal) * 100)) : 0;
   const name = op.kind === "zip" ? op.name : op.targets[0]?.name ?? op.name;
-  const files = op.filesTotal > 0 ? `${op.filesDone} / ${op.filesTotal} · ` : "";
-  const detail = op.state === "done" ? t("files-ops.operation_done") : op.bytesTotal > 0 ? `${files}${bytes(op.bytesDone)} / ${bytes(op.bytesTotal)}` : t("files-ops.operation_preparing");
+  const files = op.filesTotal > 0 ? `${op.filesDone} / ${op.filesTotal}` : "";
+  const detail = op.state === "done" ? t("files-ops.operation_done") : op.bytesTotal > 0 ? `${files}${files ? " · " : ""}${bytes(op.bytesDone)} / ${bytes(op.bytesTotal)}` : files || t("files-ops.operation_preparing");
   return (
     <li className="flex items-center gap-2">
       <FileGlyph name={name} />

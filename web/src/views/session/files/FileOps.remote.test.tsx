@@ -16,6 +16,7 @@ window.matchMedia ??= ((media: string) => ({ matches: false, media, addEventList
 type Call = { path: string; body: Record<string, unknown>; signal?: AbortSignal | null; answer: (body: unknown, status?: number) => void };
 let host: HTMLDivElement, root: Root, ops: FileOps, calls: Call[];
 let pendingRemote = false;
+let remoteBytes = { done: 32, total: 100 };
 const changed = vi.fn();
 const target: OpTarget = { path: "/work/from/sample.txt", name: "sample.txt", dir: false };
 const originalFeatures = getState().features;
@@ -38,6 +39,7 @@ function Harness() {
 beforeEach(async () => {
   calls = [];
   pendingRemote = false;
+  remoteBytes = { done: 32, total: 100 };
   changed.mockReset();
   resetManagerChoice(); setRosterDefault("manager-a"); chooseManager("manager-a");
   setToken("jd_synthetic-a");
@@ -49,7 +51,7 @@ beforeEach(async () => {
     if (url.pathname === "/api/v1/machines") return Promise.resolve(Response.json({ machines: [] }));
     if (url.pathname.includes("/files/operations/")) {
       calls.push({ path: url.pathname, body: {}, signal: init?.signal, answer: () => {} });
-      return Promise.resolve(Response.json({ id: "synthetic-operation", kind: "copy", state: "running", files_done: 1, files_total: 2, bytes_done: 32, bytes_total: 100 }));
+      return Promise.resolve(Response.json({ id: "synthetic-operation", kind: "copy", state: "running", files_done: 1, files_total: 2, bytes_done: remoteBytes.done, bytes_total: remoteBytes.total }));
     }
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     const result = url.pathname.endsWith("/files/zip")
@@ -105,6 +107,19 @@ describe("remote file operations", () => {
     expect(host.querySelector('[role="progressbar"]')).toBeNull();
     await answer(byRoute("copy")[0], { copied: [{ from: target.path, to: "/work/from/late.txt" }] });
     expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("uses file progress when an operation has no source bytes", async () => {
+    vi.useFakeTimers();
+    pendingRemote = true;
+    remoteBytes = { done: 0, total: 0 };
+    await act(async () => ops.duplicate([target])); await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100); }); await flush();
+    const progress = host.querySelector<HTMLElement>('[role="progressbar"][aria-label="sample.txt"]');
+    expect(progress?.getAttribute("aria-valuenow")).toBe("50");
+    expect(progress?.getAttribute("aria-valuetext")).toContain("1 / 2");
+    expect(progress?.getAttribute("aria-valuetext")).not.toContain(t("files-ops.operation_preparing"));
+    await click(t("files-ops.copy_cancel", { name: target.name }));
   });
 
   it("closes Copy To on start and retries a conflict with a fresh operation", async () => {
