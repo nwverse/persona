@@ -56,6 +56,20 @@ Settings shows `main` and the installed/target commits. A detached private check
 exact object even if the remote advances while building. There are no repository/branch overrides
 or default-branch mappings.
 
+For Web development only, **Update version** combines the latest `main` candidate and retained
+program backup versions in one selector. Current and historical versions show their commit and
+successful installation time. An unknown installation time is shown as unknown; the separate
+backup creation time is not presented as an update time. Selecting a backup exposes **Apply backup**:
+after confirmation it disables development auto-update and installs the saved programs and embedded
+Web, keeping the **current database, configuration, keys and history data**. It does not check out
+Git, rebuild, extract the history archive or restore a database dump. Preparation verifies the
+snapshot, stages private program copies, then reuses the ordinary idle wait, fresh pre-install
+backup, binary checks, service switch and confirmation/rollback. A snapshot rotated during the new
+backup does not invalidate those staged copies. Missing/damaged selections fail before adoption.
+`GET /api/v1/hub/update/backups` lists program-version metadata;
+`POST /api/v1/hub/update/backups/{id}/apply` accepts an owned retained ID, never an arbitrary path.
+Only snapshots with complete program version/build/commit/platform metadata are selectable.
+
 Ordinary automatic/manual updates wait for the shared Hub idle check before backup and switching:
 working turns, conversations needing user action, and active redeploys can hold the update.
 A manual attempt stops waiting after two hours; it does not force a restart at that deadline.
@@ -90,7 +104,8 @@ a recovery point under `<runtime>/update/development-backups`. It includes:
   Only `update`, `bin`, `cache`, `logs`, sockets and FIFOs are excluded. Escaping/absolute
   symlinks fail closed; they need an explicit storage layout change before this path is usable.
 - Separate compressed copies of the current `personad` and existing Hub/Manager programs,
-  with hashes, original paths and the installed version/commit. Each of the three snapshots
+  with hashes, original paths, installed version/build/commit and installation/backup times.
+  Matching locally available Node packages for registered platforms are saved too. Each snapshot
   retains its own matching programs rather than depending on the single latest `.prev`.
 
 Writers remain paused across **all** database dumps and the file archive. A dump must have its
@@ -109,14 +124,17 @@ oldest timestamp/name first, retaining the newest **three**. Unknown directories
 manifests, symlinks, additional user files, damaged archives and other backup systems are left
 alone. A failed/incomplete snapshot is not counted and removes no valid recovery point. Cleanup
 failure stops adoption; it can temporarily leave more than three valid snapshots rather than
-discard recovery evidence. Settings reports the last verified snapshot, retained count and
-cleanup count. Private phase logs are `update/development/{resolve,build,backup}.log`.
+discard recovery evidence. The API retains the last snapshot/rotation receipt; the Web selector
+lists available program versions. Private phase logs are `update/development/<operation>.log`.
 
 The existing standalone `web/` override is set aside in the same update transaction so the new
 embedded UI actually serves; rollback restores that override and all swapped programs. After
 Hub confirmation, compiled node packages are installed locally even with automatic fleet updates
 off, so **Redeploy** can use the matching build. Fleet installation still requires the separate
-`auto_update_nodes` choice. Online/offline Link nodes, SSH/tailcat, busy checks, old capabilities,
+`auto_update_nodes` choice. Applying a backup with fleet auto-update enabled requires saved packages
+for all currently known platforms; otherwise it stops before adoption. With fleet updates off,
+remote Nodes keep their current programs and available saved packages are installed locally.
+Online/offline Link nodes, SSH/tailcat, busy checks, old capabilities,
 fresh ownership and guardian rollback retain their original behavior in [node-update.md](node-update.md).
 There is no platform configuration or fixed platform matrix. Offline computers with a known
 platform are included. A computer that has never reported its platform supplies no build target;
@@ -134,7 +152,8 @@ unsupported installation boundary; no immutable release pointer is rewritten.
 Build, backup and known adoption failures leave the running build unchanged or restore it
 through the existing transaction. A migration/startup failure uses the existing binary rollback;
 **it never automatically overwrites databases with a snapshot**. Database migrations may require
-the following operator recovery. No restore operation runs against a live installation here.
+the following operator recovery. **Apply backup** is program-only and does not perform this data
+recovery procedure; use the offline procedure only when data recovery is actually intended.
 
 1. Disable development automation. Stop every data writer and the Hub through their original
    service controls (including its socket/edge), and preserve the failed attempt's markers/logs.

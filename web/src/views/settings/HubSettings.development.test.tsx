@@ -11,6 +11,13 @@ vi.mock("../../lib/hub-update", async (original) => ({
   ...await original<typeof import("../../lib/hub-update")>(),
   hubUpdate: async () => status,
   hubUpdateHistory: async () => [],
+  hubUpdateBackups: async () => [{ id: "snapshot-fixture", version: "web-dev-backup", build: 202611120001,
+    commit: "c".repeat(40), updated_at: "2026-11-12T10:00:00Z", created_at: "2026-11-13T10:00:00Z" }],
+  applyHubUpdateBackup: async (id: string) => {
+    saved.push({ backup: id });
+    status = { ...status, state: "applying_backup", auto: false };
+    return status;
+  },
   setHubUpdateSettings: async (input: { source?: "release" | "web-dev" }) => {
     saved.push(input);
     status = { ...status, ...input, auto: false };
@@ -34,31 +41,54 @@ async function mount(state = "available") {
   status = {
     version: "web-dev-old", build: 202611130000, channel: "release", source: "web-dev", can_update: true,
     state, busy: [], auto: false, auto_notice: false, confirmed: true, auto_update_nodes: false,
-    development: { configured: true, branch: "main", current_commit: "a".repeat(40) },
-    latest: { version: "web-dev-new", build: 202611130001, newer: true, bad: false, commit: "b".repeat(40), branch: "main" },
+    development: { configured: true, branch: "main", current_commit: "a".repeat(40), current_updated_at: "2026-11-13T10:00:00Z" },
+    latest: { version: "web-dev-new", build: 202611130001, newer: true, bad: false, commit: "b".repeat(40), branch: "main",
+      backup_id: state === "applying_backup" ? "snapshot-fixture" : undefined },
     backup: { id: "snapshot-fixture", retained: 3, pruned: ["snapshot-old"] }
   };
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   await act(async () => root!.render(<HubSettings />));
 }
 
-it("shows actual source/commits and verified retention, and switches only after the save", async () => {
+it("puts historical program versions in the development update selector and hides them on release", async () => {
   await mount();
   expect(host.textContent).toContain("main");
   expect(host.textContent).toContain("a".repeat(12));
   expect(host.textContent).toContain("b".repeat(12));
-  expect(host.textContent).toContain("3 / 3");
+  expect(host.querySelector('select[aria-label="Update version"]')?.textContent).toContain("c".repeat(12));
   const automatic = host.querySelector('[role="switch"]') as HTMLButtonElement;
   expect(automatic.getAttribute("aria-checked")).toBe("false");
   const source = host.querySelector('select[aria-label="Update source"]') as HTMLSelectElement;
   await act(async () => { source.value = "release"; source.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(saved).toEqual([{ source: "release" }]);
   expect(host.textContent).not.toContain("snapshot-fixture");
+  expect(host.querySelector('select[aria-label="Update version"]')).toBeNull();
 });
 
-it.each(["building", "backing_up"])("keeps channel and duplicate actions disabled while %s", async state => {
+it("confirms program-only restoration and applies the selected backup", async () => {
+  await mount();
+  const version = host.querySelector('select[aria-label="Update version"]') as HTMLSelectElement;
+  expect(version).not.toBeNull();
+  await act(async () => { version.value = "snapshot-fixture"; version.dispatchEvent(new Event("change", { bubbles: true })); });
+  const apply = [...host.querySelectorAll("button")].find(b => b.textContent === "Apply backup")!;
+  await act(async () => apply.click());
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("current database and history");
+  expect(saved).toEqual([]);
+  const confirm = [...dialog.querySelectorAll("button")].find(b => b.textContent === "Apply backup")!;
+  await act(async () => confirm.click());
+  expect(saved).toEqual([{ backup: "snapshot-fixture" }]);
+  expect((host.querySelector('select[aria-label="Update version"]') as HTMLSelectElement).disabled).toBe(true);
+});
+
+it.each(["building", "backing_up", "applying_backup"])("keeps channel and duplicate actions disabled while %s", async state => {
   await mount(state);
   expect((host.querySelector("select") as HTMLSelectElement).disabled).toBe(true);
   expect([...host.querySelectorAll("button")].some(button => button.textContent === "Update hub")).toBe(false);
-  expect(host.textContent).toContain(state === "building" ? "Building" : "Backing up");
+  expect(host.textContent).toContain(state === "building" ? "Building" : state === "backing_up" ? "Backing up" : "Preparing backup");
+  if (state === "applying_backup") {
+    const version = host.querySelector('select[aria-label="Update version"]') as HTMLSelectElement;
+    expect(version.value).toBe("snapshot-fixture");
+    expect(version.options[0].textContent).not.toContain("b".repeat(12));
+  }
 });

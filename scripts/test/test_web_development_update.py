@@ -1,5 +1,6 @@
 """Isolated Git, process and history fixtures for Web development updates."""
 import importlib.util
+import gzip
 import json
 import os
 from pathlib import Path
@@ -133,6 +134,54 @@ if pathlib.Path(sys.argv[0]).name == 'go' and args[0] == 'build':
         self.assertTrue((unrelated/"keep").exists())
         self.assertTrue((self.root/"events").read_text().endswith("pause\nresume\n"))
         self.assertFalse((store/"coordination-pending.json").exists())
+
+    def test_apply_backup_stages_only_saved_programs_and_preserves_live_data(self):
+        request = self.history_fixture()
+        request.update(from_version="web-dev-old", from_commit="b"*40, from_build=202611120001,
+                       from_updated_at="2026-11-12T10:00:00Z", platform="linux-amd64")
+        node = self.root / "node-arm64"
+        node.write_bytes(b"old arm64 node")
+        request["node_packages"] = {"linux-arm64": str(node)}
+        receipt = webdev.snapshot(request)
+        for _ in range(2):
+            webdev.snapshot(request)
+        runtime = Path(request["runtime"])
+        current = {runtime/"data/history.txt": b"new messages", runtime/"secret.key": b"current key",
+                   self.root/"database.json": b"current database", self.root/"personad": b"current program"}
+        for file, content in current.items():
+            file.write_bytes(content)
+        versions = webdev.backups(request)["backups"]
+        self.assertEqual(len(versions), 3)
+        self.assertEqual(versions[0]["commit"], "b"*40)  # Saved version, not the attempted target.
+        self.assertEqual(versions[0]["updated_at"], request["from_updated_at"])
+        self.assertNotIn("effective-fixture-database", json.dumps(versions))
+        work = self.root/"prepare"
+        work.mkdir()
+        # Preparation must neither restore a database nor pause current writers.
+        self.tool("pg_restore", "raise SystemExit('must not restore data')\n")
+        events = (self.root/"events").read_bytes()
+        built = webdev.prepare_backup(dict(request, work=str(work), backup_id=receipt["id"],
+                                           candidate={"commit":"b"*40}, version="web-dev-old", build=202611120001,
+                                           platforms=["linux-amd64", "linux-arm64"]))
+        artifacts = Path(built["artifacts"])
+        self.assertEqual(gzip.decompress((artifacts/"personad-linux-amd64.gz").read_bytes()), b"fixture installed program")
+        self.assertEqual(gzip.decompress((artifacts/"personad-linux-arm64.gz").read_bytes()), b"old arm64 node")
+        self.assertEqual((self.root/"events").read_bytes(), events)
+        for file, content in current.items():
+            self.assertEqual(file.read_bytes(), content)
+        with self.assertRaisesRegex(ValueError, "required Node platform"):
+            webdev.prepare_backup(dict(request, work=str(work), backup_id=receipt["id"],
+                                       platforms=["darwin-arm64"], candidate=None))
+        self.tool("pg_restore", "import pathlib,sys\nassert pathlib.Path(sys.argv[-1]).read_bytes().startswith(b'PGDMP')\n")
+        webdev.snapshot(request)  # Rotating the selected oldest snapshot keeps staged programs usable.
+        self.assertFalse((runtime/"update/development-backups"/receipt["id"]).exists())
+        self.assertEqual(gzip.decompress((artifacts/"personad-linux-amd64.gz").read_bytes()), b"fixture installed program")
+        with self.assertRaises(ValueError):
+            webdev.prepare_backup(dict(request, work=str(work), backup_id="../outside"))
+        snapshot = runtime/"update/development-backups"/versions[0]["id"]
+        (snapshot/"program-personad.gz").write_bytes(b"corrupt")
+        with self.assertRaisesRegex(ValueError, "checksum"):
+            webdev.prepare_backup(dict(request, work=str(work), backup_id=snapshot.name))
 
     def test_resume_failure_and_unknown_coordination_block_retry(self):
         request = self.history_fixture()

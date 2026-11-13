@@ -142,7 +142,7 @@ def verify(path):
         item = path / name
         if item.is_symlink() or not item.is_file() or digest(item) != expected:
             raise ValueError("snapshot checksum mismatch")
-    for program in manifest.get("programs", {}).values():
+    for program in list(manifest.get("programs", {}).values()) + list(manifest.get("nodes", {}).values()):
         if program["file"] not in files:
             raise ValueError("recovery program is missing")
         native = hashlib.sha256()
@@ -158,6 +158,76 @@ def verify(path):
             if (member.issym() or member.islnk()) and (member.linkname.startswith("/") or ".." in Path(member.linkname).parts):
                 raise ValueError("unsafe history archive link")
     return manifest
+
+
+def backup_store(request):
+    store = Path(request["runtime"]).resolve(strict=True) / "update/development-backups"
+    if store.is_symlink():
+        raise ValueError("linked backup directory")
+    return store
+
+
+def backup_version(path):
+    # Listing reads only metadata. Full payload verification happens before use.
+    if path.is_symlink() or not path.is_dir() or not NAME.fullmatch(path.name):
+        raise ValueError("not an owned snapshot directory")
+    file = path / "manifest.json"
+    if file.is_symlink():
+        raise ValueError("linked snapshot manifest")
+    m = json.loads(file.read_text())
+    if (not isinstance(m, dict) or m.get("owner") != OWNER or m.get("id") != path.name or
+            not isinstance(m.get("from_commit"), str) or not re.fullmatch(r"[a-f0-9]{40}", m["from_commit"]) or
+            not m.get("from_version") or not isinstance(m.get("from_build"), int) or m["from_build"] <= 0 or
+            not isinstance(m.get("platform"), str) or m["platform"] not in PLATFORMS or
+            not isinstance(m.get("programs"), dict) or "personad" not in m["programs"]):
+        raise ValueError("snapshot has no installable program version")
+    return {"id": path.name, "version": m["from_version"], "build": m["from_build"],
+            "commit": m["from_commit"], "updated_at": m.get("from_updated_at", ""),
+            "created_at": m["created_at"]}
+
+
+def backups(request):
+    store = backup_store(request)
+    versions = []
+    if store.exists():
+        for path in sorted(store.iterdir(), reverse=True):
+            try:
+                versions.append(backup_version(path))
+            except (ValueError, OSError, KeyError, json.JSONDecodeError):
+                pass
+    return {"backups": versions}
+
+
+def prepare_backup(request):
+    ident = request["backup_id"]
+    if not NAME.fullmatch(ident):
+        raise ValueError("invalid snapshot ID")
+    store = backup_store(request)
+    with (store / ".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        path = store / ident
+        version = backup_version(path)
+        m = verify(path)
+        if m["platform"] != request["platform"]:
+            raise ValueError("snapshot belongs to a different Hub platform")
+        if request.get("candidate") and (version["commit"] != request["candidate"]["commit"] or
+                version["version"] != request["version"] or version["build"] != request["build"]):
+            raise ValueError("snapshot version changed")
+        packages = {"personad-" + p: v for p, v in m.get("nodes", {}).items() if p in PLATFORMS}
+        packages.update({name + "-" + m["platform"]: v for name, v in m["programs"].items()
+                         if name in ("personad", "persona-hub", "persona-manager")})
+        if any("personad-" + p not in packages for p in request.get("platforms", [])):
+            raise ValueError("snapshot is missing a required Node platform")
+        artifacts = Path(request["work"]) / "artifacts"
+        artifacts.mkdir()
+        # Copy only programs, never database dumps, configuration or history.
+        # These private copies also survive rotation of the selected snapshot.
+        for name, info in packages.items():
+            target = artifacts / (name + ".gz")
+            shutil.copyfile(path / info["file"], target)
+            if digest(target) != m["files"][info["file"]]:
+                raise ValueError("staged program checksum mismatch")
+        return {"artifacts": str(artifacts)}
 
 
 def inventory(request):
@@ -212,7 +282,9 @@ def snapshot(request):
         published = store / ident
         manifest = {"owner": OWNER, "id": ident, "commit": request["candidate"]["commit"],
                     "from_version": request.get("from_version", ""), "from_commit": request.get("from_commit", ""),
-                    "roots": [str(p) for p in roots], "databases": len(databases), "programs": {}, "files": {}}
+                    "from_build": request.get("from_build", 0), "from_updated_at": request.get("from_updated_at", ""),
+                    "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "platform": request.get("platform", ""),
+                    "roots": [str(p) for p in roots], "databases": len(databases), "programs": {}, "nodes": {}, "files": {}}
         write_json(coordination, {"owner": OWNER, "snapshot": ident, "phase": "quiescing"})
         try:
             try:
@@ -278,6 +350,14 @@ def snapshot(request):
                             dst.write(chunk)
                     manifest["files"][artifact.name] = digest(artifact)
                     manifest["programs"][name] = {"file": artifact.name, "target": path, "sha256": native.hexdigest()}
+                for platform, path in request.get("node_packages", {}).items():
+                    if platform not in PLATFORMS:
+                        raise ValueError("unknown Node platform")
+                    artifact = temporary / ("node-" + platform + ".gz")
+                    with Path(path).open("rb") as src, gzip.open(artifact, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    manifest["files"][artifact.name] = digest(artifact)
+                    manifest["nodes"][platform] = {"file": artifact.name, "sha256": digest(Path(path))}
                 write_json(temporary / "manifest.json", manifest)
             finally:
                 # Even partially failed quiesce hooks can have stopped a writer.
@@ -323,7 +403,8 @@ def main():
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(InterruptedError()))
     operation = request["operation"]
-    result = {"resolve": lambda r: resolve(), "build": build, "backup": snapshot}[operation](request)
+    result = {"resolve": lambda r: resolve(), "build": build, "backup": snapshot,
+              "backups": backups, "prepare_backup": prepare_backup}[operation](request)
     write_json(Path(request["result"]), result)
 
 

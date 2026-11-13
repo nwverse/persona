@@ -100,6 +100,9 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		u.mu.Lock()
 		u.running, u.now = false, false
 		u.busy = nil
+		if r.Development != nil && r.Development.BackupID != "" {
+			u.release = nil // A failed restore is not the latest main candidate.
+		}
 		u.mu.Unlock()
 		why := i18n.Localize(err, u.h.userLang())
 		if swapped {
@@ -133,7 +136,7 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		fail(i18n.Err("hub-selfupdate.err_no_binary", i18n.Args{"platform": runtime.GOOS + "/" + runtime.GOARCH}))
 		return
 	}
-	if err := u.unreplaced(m); err != nil {
+	if err := u.unreplacedCandidate(r); err != nil {
 		fail(err)
 		return
 	}
@@ -215,7 +218,7 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		fail(err)
 		return
 	}
-	if err := u.unreplaced(m); err != nil { // a service pointed at a program meanwhile
+	if err := u.unreplacedCandidate(r); err != nil { // a service pointed at a program meanwhile
 		fail(err)
 		return
 	}

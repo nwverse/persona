@@ -50,6 +50,9 @@ func (u *updater) wantsAuto() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	r := u.release
+	if r != nil && r.Development != nil && r.Development.BackupID != "" {
+		return false // Applying a backup is always an explicit manual operation.
+	}
 	hold := ""
 	if r != nil && (r.Development == nil || r.Manifest.Ancestors != "") {
 		hold = u.h.build.Hold(r.Manifest)

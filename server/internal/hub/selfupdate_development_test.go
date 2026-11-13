@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,6 +17,119 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
+
+func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprint(corrupt), func(t *testing.T) {
+			p := newPublisher(t, "unused", 202611021700)
+			h, machine, target, execs := updatingHub(t, p, "release")
+			u := h.upd
+			u.client = newUpdater(h).client
+			t.Setenv("PERSONA_NODE_BINARIES", t.TempDir())
+			u.loaded, u.settings.Source, u.settings.DevelopmentAuto = true, "web-dev", true
+			h.build.Commit = strings.Repeat("a", 40)
+			h.cfg.Update.Development = &update.DevelopmentConfig{Backup: update.DevelopmentBackupConfig{Quiesce: []string{"pause"}, Resume: []string{"resume"}}}
+			data := filepath.Join(h.cfg.dir, "current-history")
+			os.WriteFile(data, []byte("messages created after the backup"), 0600)
+			version := update.DevelopmentVersion{ID: "snapshot-fixture", Version: "web-dev-older", Build: 202611010001, Commit: strings.Repeat("b", 40), UpdatedAt: "2026-11-01T10:00:00Z"}
+			phases := make(chan string, 8)
+			u.devRun = func(ctx context.Context, cfg *update.DevelopmentConfig, dir, operation string, input map[string]any, result any) error {
+				phases <- operation
+				var response any
+				switch operation {
+				case "backups":
+					response = map[string]any{"backups": []update.DevelopmentVersion{version}}
+				case "prepare_backup":
+					if corrupt {
+						return errors.New("corrupt snapshot")
+					}
+					if input["backup_id"] != version.ID {
+						return errors.New("wrong backup")
+					}
+					artifacts := t.TempDir()
+					script := []byte(fmt.Sprintf("#!/bin/sh\necho %s\necho 'channel release, build %d'\n", version.Version, version.Build))
+					os.WriteFile(filepath.Join(artifacts, "personad-"+runtime.GOOS+"-"+runtime.GOARCH+".gz"), gz(script), 0600)
+					response = map[string]any{"artifacts": artifacts}
+				case "backup":
+					response = update.DevelopmentBackup{ID: "snapshot-current", Retained: 3}
+				default:
+					return fmt.Errorf("unexpected Git/build phase: %s", operation)
+				}
+				encoded, _ := json.Marshal(response)
+				return json.Unmarshal(encoded, result)
+			}
+			setSessions(machine, proto.Session{SessionID: "busy", Status: proto.StatusWorking})
+			api := http.NewServeMux()
+			u.routes(api)
+			request := func(path string) *httptest.ResponseRecorder {
+				w := httptest.NewRecorder()
+				api.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
+				return w
+			}
+			if w := request("/api/v1/hub/update/backups/missing/apply"); w.Code != 409 {
+				t.Fatal(w.Code)
+			}
+			if !u.view().Auto {
+				t.Fatal("missing selection changed automatic policy")
+			}
+			if w := request("/api/v1/hub/update/backups/" + version.ID + "/apply"); w.Code != 200 {
+				t.Fatal(w.Body.String())
+			}
+			if u.view().Auto {
+				t.Fatal("backup application left automatic upgrades on")
+			}
+			if corrupt {
+				waitFor(t, "preparation failure", func() bool { return u.view().State == "failed" })
+				if len(execs()) != 0 {
+					t.Fatal("restarted with corrupt backup")
+				}
+				old, _ := os.ReadFile(target)
+				if !strings.Contains(string(old), "echo old") {
+					t.Fatal("current program changed")
+				}
+			} else {
+				waitFor(t, "idle wait", func() bool {
+					v := u.view()
+					if v.State == "failed" {
+						t.Fatalf("preparation failed: %s", v.Error)
+					}
+					return v.State == "waiting_idle"
+				})
+				if w := request("/api/v1/hub/update/backups/" + version.ID + "/apply"); w.Code != 409 {
+					t.Fatal("duplicate application accepted")
+				}
+				setSessions(machine)
+				waitFor(t, "shared restart", func() bool { return len(execs()) == 1 })
+				var pending update.Pending
+				if ok, err := update.Load(update.PendingPath(u.dir), &pending); !ok || err != nil {
+					t.Fatal(err)
+				}
+				if pending.ToBuild >= pending.FromBuild || pending.Backup == nil || pending.Development.BackupID != version.ID || pending.Auto {
+					t.Fatalf("wrong restoration journal: %+v", pending)
+				}
+				h.version, h.build.Number, h.build.Commit = pending.ToVersion, pending.ToBuild, version.Commit
+				u.confirm(context.Background(), pending)
+				if u.view().State != "updated" || u.view().Development.CurrentUpdatedAt == "" {
+					t.Fatal("missing successful installation time")
+				}
+			}
+			if got, _ := os.ReadFile(data); string(got) != "messages created after the backup" {
+				t.Fatal("current history overwritten")
+			}
+			close(phases)
+			var got []string
+			for phase := range phases {
+				got = append(got, phase)
+			}
+			if slices.Contains(got, "build") || slices.Contains(got, "resolve") {
+				t.Fatal(got)
+			}
+			if !corrupt && !slices.Contains(got, "backup") {
+				t.Fatal("current state was not backed up")
+			}
+		})
+	}
+}
 
 func TestDevelopmentPlatformsFollowRegisteredMachines(t *testing.T) {
 	h := newTestHub(t)

@@ -33,5 +33,6 @@
   "notice_dismiss": "Don't show again",
   "notice_open": "Open Settings › Hub",
   "state_building": "Building…",
-  "state_backing_up": "Backing up…"
+  "state_backing_up": "Backing up…",
+  "state_applying_backup": "Preparing backup programs…"
 }

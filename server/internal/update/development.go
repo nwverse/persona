@@ -29,8 +29,19 @@ type DevelopmentBackupConfig struct {
 }
 
 type DevelopmentCandidate struct {
-	Branch string `json:"branch"`
-	Commit string `json:"commit"`
+	Branch   string `json:"branch"`
+	Commit   string `json:"commit"`
+	BackupID string `json:"backup_id,omitempty"`
+}
+
+// DevelopmentVersion describes the programs saved before an update, not its target.
+type DevelopmentVersion struct {
+	ID        string `json:"id"`
+	Version   string `json:"version"`
+	Build     int64  `json:"build"`
+	Commit    string `json:"commit"`
+	UpdatedAt string `json:"updated_at"`
+	CreatedAt string `json:"created_at"`
 }
 
 type DevelopmentBackup struct {
@@ -141,7 +152,7 @@ func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, ope
 		return err
 	}
 	err = json.Unmarshal(data, result)
-	keep = err == nil && operation == "build"
+	keep = err == nil && (operation == "build" || operation == "prepare_backup")
 	return err
 }
 

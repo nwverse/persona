@@ -4,10 +4,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, errorText } from "../../lib/api";
 import { ago } from "../../lib/format";
-import { t } from "../../i18n";
+import { formatDate, t } from "../../i18n";
 import {
-  channelTitle, checkHubUpdate, dockerSteps, hubUpdate, hubUpdateHistory, latestWarning, recordTitle, recordTone, setHubUpdateSettings, startHubUpdate,
-  updateFinished, updateStateTitle, updateView, updateWorking, type HubUpdateRecord, type HubUpdateStatus,
+  applyHubUpdateBackup, channelTitle, checkHubUpdate, dockerSteps, hubUpdate, hubUpdateBackups, hubUpdateHistory, latestWarning, recordTitle, recordTone, setHubUpdateSettings, startHubUpdate,
+  updateFinished, updateStateTitle, updateView, updateWorking, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus,
 } from "../../lib/hub-update";
 import { navigate } from "../../lib/router";
 import { isResumed } from "../../lib/reconnect";
@@ -31,6 +31,11 @@ function HubUpdates() {
   const [savingSource, setSavingSource] = useState(false);
   const [savingAuto, setSavingAuto] = useState(false);
   const [confirmNow, setConfirmNow] = useState(false);
+  const [backups, setBackups] = useState<HubUpdateBackup[]>([]);
+  const [backupError, setBackupError] = useState("");
+  const [loadingBackups, setLoadingBackups] = useState(false);
+  const [selectedVersion, setSelectedVersion] = useState("");
+  const [confirmBackup, setConfirmBackup] = useState(false);
   const last = useRef<string | undefined>(undefined);
 
   const apply = useCallback((s: HubUpdateStatus) => {
@@ -50,6 +55,22 @@ function HubUpdates() {
       })
       .catch((e) => (e instanceof ApiError && e.status === 404 ? setUnsupported(true) : setError(errorText(e))));
   }, [apply]);
+
+  const loadBackups = useCallback(async () => {
+    setLoadingBackups(true);
+    try {
+      const versions = await hubUpdateBackups();
+      setBackups(versions);
+      setSelectedVersion(id => versions.some(v => v.id === id) ? id : "");
+      setBackupError("");
+    } catch (e) { setBackupError(errorText(e)); }
+    finally { setLoadingBackups(false); }
+  }, []);
+
+  useEffect(() => {
+    if (status?.source === "web-dev") void loadBackups();
+    else { setBackups([]); setSelectedVersion(""); setConfirmBackup(false); }
+  }, [status?.source, status?.build, status?.backup?.id, loadBackups]);
 
   useEffect(() => {
     void load();
@@ -84,6 +105,15 @@ function HubUpdates() {
     } finally {
       setStarting(false);
     }
+  };
+
+  const restore = async () => {
+    setStarting(true);
+    try {
+      apply(await applyHubUpdateBackup(selectedVersion));
+      setConfirmBackup(false);
+    } catch (e) { toast(t("settings-hubsettings.start_failed", { error: errorText(e) }), "error"); }
+    finally { setStarting(false); }
   };
 
   const setAuto = async (on: boolean, computers = false) => {
@@ -122,6 +152,10 @@ function HubUpdates() {
   const working = updateWorking(status);
   const view = updateView(status);
   const warning = latestWarning(status);
+  const activeBackup = working ? status.latest?.backup_id : undefined;
+  const selectedID = activeBackup || selectedVersion;
+  const selectedBackup = status.source === "web-dev" ? backups.find(v => v.id === selectedID) : undefined;
+  const dateTime = (value?: string) => value ? formatDate(value, { dateStyle: "medium", timeStyle: "short" }) : t("settings-hubsettings.unknown");
 
   return (
     <>
@@ -156,7 +190,7 @@ function HubUpdates() {
           <SettingsHint>{t("settings-hubsettings.dev_scope")}</SettingsHint>
           <Row label={t("settings-hubsettings.branch")} wrapValue>{status.development?.branch}</Row>
           <Row label={t("settings-hubsettings.current_commit")} mono wrapValue>{status.development?.current_commit?.slice(0, 12) || t("settings-hubsettings.unknown")}</Row>
-          {status.latest?.commit && <Row label={t("settings-hubsettings.target_commit")} mono wrapValue>{status.latest.commit.slice(0, 12)}</Row>}
+          <Row label={t("settings-hubsettings.updated_at")} wrapValue>{dateTime(status.development?.current_updated_at)}</Row>
         </>}
         {status.last_check && <Row label={t("settings-hubsettings.last_check")}>{ago(status.last_check)}</Row>}
         <div className="flex justify-end px-4 py-2.5">
@@ -167,9 +201,33 @@ function HubUpdates() {
       </Group>
 
       <Group title={t("settings-hubsettings.update")} anchor="hub-update" footer={status.can_update ? t("settings-hubsettings.update_footer") : undefined}>
+        {status.source === "web-dev" && status.can_update && <>
+          <Row label={t("settings-hubsettings.update_version")} stackOnNarrow>
+            <select aria-label={t("settings-hubsettings.update_version")} className={cx(settingsInputClass, "min-w-0 max-w-full")}
+              value={selectedID} disabled={working || checking || starting || savingSource || loadingBackups}
+              onChange={e => setSelectedVersion(e.target.value)}>
+              <option value="">{t("settings-hubsettings.latest_main")}{status.latest?.commit && !status.latest.backup_id ? ` · ${status.latest.commit.slice(0, 12)}` : ""}</option>
+              {backups.map(v => <option key={v.id} value={v.id}>{t("settings-hubsettings.backup_version")} · {v.commit.slice(0, 12)} · {dateTime(v.updated_at)}</option>)}
+              {activeBackup && !backups.some(v => v.id === activeBackup) && <option value={activeBackup}>{t("settings-hubsettings.backup_version")} · {status.latest?.commit?.slice(0, 12)}</option>}
+            </select>
+          </Row>
+          {backupError && <div className="flex items-center gap-3 px-4 py-2.5">
+            <p role="alert" className="min-w-0 flex-1 text-[12px] break-words text-red">{t("settings-hubsettings.backup_error", { error: backupError })}</p>
+            <Button disabled={loadingBackups} onClick={() => void loadBackups()}>{t("settings-hubsettings.retry")}</Button>
+          </div>}
+          {selectedBackup && <>
+            <Row label={t("settings-hubsettings.target_commit")} mono wrapValue>{selectedBackup.commit.slice(0, 12)}</Row>
+            <Row label={t("settings-hubsettings.updated_at")} wrapValue>{dateTime(selectedBackup.updated_at)}</Row>
+            <Row label={t("settings-hubsettings.backup_created_at")} wrapValue>{dateTime(selectedBackup.created_at)}</Row>
+            <SettingsHint>{t("settings-hubsettings.program_backup_hint")}</SettingsHint>
+            {!working && <div className="flex justify-end px-4 py-2.5">
+              <Button tone="accent" busy={starting} disabled={starting || checking || savingSource || loadingBackups} onClick={() => setConfirmBackup(true)}>{t("settings-hubsettings.apply_backup")}</Button>
+            </div>}
+          </>}
+        </>}
         {view.kind === "docker" && <DockerRows s={status} />}
         {view.kind === "cannot" && <p className="px-4 py-3 text-[12.5px] leading-relaxed text-ink-3">{view.why}</p>}
-        {view.kind === "newer" && status.latest && (
+        {!selectedBackup && view.kind === "newer" && status.latest && (
           <>
             <div className="px-4 py-3">
               <div className="flex items-center gap-2">
@@ -195,8 +253,8 @@ function HubUpdates() {
             )}
           </>
         )}
-        {view.kind === "working" && <Progress s={status} onNow={() => setConfirmNow(true)} />}
-        {view.kind === "current" && !status.error && (status.source !== "web-dev" || status.last_check) && (
+        {(view.kind === "working" || (selectedBackup && working)) && <Progress s={status} onNow={() => setConfirmNow(true)} />}
+        {!selectedBackup && view.kind === "current" && !status.error && (status.source !== "web-dev" || status.last_check) && (
           <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-green">
             <Icon name="check" size={14} stroke={2.4} />
             {t("settings-hubsettings.up_to_date")}
@@ -212,11 +270,6 @@ function HubUpdates() {
           </Row>
         </Group>
       )}
-      {status.source === "web-dev" && <Group title={t("settings-hubsettings.backups")} footer={t("settings-hubsettings.backup_footer")}>
-        <SettingsHint>{status.backup ? t("settings-hubsettings.backup_count", { count: status.backup.retained }) : t("settings-hubsettings.no_backup")}</SettingsHint>
-        {status.backup && <SettingsHint>{status.backup.id}</SettingsHint>}
-        {!!status.backup?.pruned?.length && <SettingsHint>{t("settings-hubsettings.backup_pruned", { count: status.backup.pruned.length })}</SettingsHint>}
-      </Group>}
       {status.source === "web-dev" && status.auto_update_nodes !== undefined && <Group footer={t("settings-hubsettings.computer_auto_footer")}>
         <Row label={t("settings-hubsettings.computer_auto")} wrapHint>
           <Switch on={status.auto_update_nodes} disabled={working || savingSource || savingAuto} label={t("settings-hubsettings.computer_auto")}
@@ -230,19 +283,28 @@ function HubUpdates() {
         <Group title={t("settings-hubsettings.history")}>
           {history.slice(0, 10).map((r, i) => (
             <div key={`${r.to_build}/${r.started ?? i}`} className="px-4 py-2.5">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className={cx("text-[13px] font-medium", { green: "text-green", orange: "text-orange", red: "text-red" }[recordTone(r.result)])}>{recordTitle(r.result)}</span>
                 {r.auto && <Pill>{t("settings-hubsettings.auto")}</Pill>}
                 {r.source === "web-dev" && <Pill>{t("settings-hubsettings.web_dev")}</Pill>}
                 <span className="flex-1" />
-                {(r.ended || r.started) && <span className="shrink-0 text-[11.5px] text-ink-3">{ago(r.ended || r.started)}</span>}
+                {(r.ended || r.started) && <span className="shrink-0 text-[11.5px] text-ink-3">{dateTime(r.ended || r.started)}</span>}
               </div>
               <div className="mt-0.5 truncate font-mono text-[11.5px] text-ink-3">{`${r.from_version} → ${r.to_version}`}</div>
+              {r.commit && <div className="mt-0.5 font-mono text-[11.5px] text-ink-3">{r.commit.slice(0, 12)}</div>}
               {r.reason && <p className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{r.reason}</p>}
             </div>
           ))}
         </Group>
       )}
+
+      <Dialog open={confirmBackup} onClose={() => setConfirmBackup(false)} title={t("settings-hubsettings.apply_backup")} width={400}
+        footer={<>
+          <Button tone="quiet" onClick={() => setConfirmBackup(false)}>{t("common.cancel")}</Button>
+          <Button tone="accent" busy={starting} disabled={starting || working || !selectedBackup} onClick={() => void restore()}>{t("settings-hubsettings.apply_backup")}</Button>
+        </>}>
+        <p className="text-[12.5px] leading-relaxed text-ink-2">{t("settings-hubsettings.apply_backup_confirm")}</p>
+      </Dialog>
 
       <Dialog
         open={confirmNow}

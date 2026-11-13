@@ -32,5 +32,6 @@
   "notice_dismiss": "今後表示しない",
   "notice_open": "設定 › ハブを開く",
   "state_building": "ビルド中…",
-  "state_backing_up": "バックアップ中…"
+  "state_backing_up": "バックアップ中…",
+  "state_applying_backup": "バックアップのプログラムを準備中…"
 }

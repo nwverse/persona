@@ -671,6 +671,7 @@ type updateView struct {
 type latestView struct {
 	Commit   string     `json:"commit,omitempty"`
 	Branch   string     `json:"branch,omitempty"`
+	BackupID string     `json:"backup_id,omitempty"`
 	Version  string     `json:"version"`
 	Build    int64      `json:"build"` // 0 for an image (tags have no build numbers)
 	Released *time.Time `json:"released,omitempty"`
@@ -695,7 +696,7 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		AutoUpdateNodes: u.nodesEnabledLocked(), UpdateURL: source.url, UpdateFrom: source.from, UpdateProxy: proxyShown(source.proxy)}
 	v.Source = "release"
 	v.Backup = u.settings.DevelopmentBackup
-	v.Development = &developmentView{Configured: u.developmentConfig() != nil, Branch: "main", CurrentCommit: u.h.build.Commit}
+	v.Development = &developmentView{Configured: u.developmentConfig() != nil, Branch: "main", CurrentCommit: u.h.build.Commit, CurrentUpdatedAt: u.currentUpdatedAtLocked()}
 	if u.developmentLocked() {
 		v.Source, v.CanUpdate, v.Auto, v.AutoNotice = "web-dev", u.developmentAvailable(), u.settings.DevelopmentAuto, false
 	}
@@ -718,6 +719,7 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		if r.Development != nil {
 			v.Latest.Released = nil // checked Git candidates have no publication date
 			v.Latest.Commit, v.Latest.Branch = r.Development.Commit, r.Development.Branch
+			v.Latest.BackupID = r.Development.BackupID
 			v.Latest.Newer = r.Development.Commit != u.h.build.Commit
 			v.Latest.Bad = v.Latest.Bad || slices.Contains(u.settings.DevelopmentBad, r.Development.Commit)
 			if r.Manifest.Ancestors != "" {

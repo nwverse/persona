@@ -18,9 +18,22 @@ import (
 )
 
 type developmentView struct {
-	Configured    bool   `json:"configured"`
-	Branch        string `json:"branch"`
-	CurrentCommit string `json:"current_commit,omitempty"`
+	Configured       bool   `json:"configured"`
+	Branch           string `json:"branch"`
+	CurrentCommit    string `json:"current_commit,omitempty"`
+	CurrentUpdatedAt string `json:"current_updated_at,omitempty"`
+}
+
+// Installation time is recorded by confirmation, never inferred from a build or Git date.
+// Caller holds u.mu.
+func (u *updater) currentUpdatedAtLocked() string {
+	for i := len(u.settings.History) - 1; i >= 0; i-- {
+		r := u.settings.History[i]
+		if r.Result == "updated" && r.ToVersion == u.h.version && r.ToBuild == u.h.build.Number && !r.Ended.IsZero() {
+			return r.Ended.Format(time.RFC3339)
+		}
+	}
+	return ""
 }
 
 func (u *updater) developmentConfig() *update.DevelopmentConfig {
@@ -71,6 +84,19 @@ func (u *updater) developmentHold(m *update.Manifest) string {
 	return u.h.build.Hold(m)
 }
 
+func (u *updater) unreplacedCandidate(r *update.Published) error {
+	if r.Development == nil {
+		return u.unreplaced(r.Manifest)
+	}
+	// A rollback can have a lower build number, but must still replace every active split service.
+	target, err := u.target()
+	if err != nil {
+		return err
+	}
+	self, _ := u.self()
+	return unreplaced(r.Manifest, target, self, u.services)
+}
+
 func (u *updater) runDevelopment(ctx context.Context, operation string, input map[string]any, result any) error {
 	if err := u.devRun(ctx, u.developmentConfig(), filepath.Join(u.dir, "development"), operation, input, result); err != nil {
 		return i18n.Err("hub-selfupdate.err_development_phase", i18n.Args{"phase": operation})
@@ -100,7 +126,7 @@ func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, erro
 	u.mu.Lock()
 	// A repeated check of the same object retains the attempt identity (including
 	// its bad-build marker), rather than creating a new build to bypass rollback.
-	if u.release != nil && u.release.Development != nil && u.release.Development.Commit == candidate.Commit {
+	if u.release != nil && u.release.Development != nil && u.release.Development.BackupID == "" && u.release.Development.Commit == candidate.Commit {
 		r = u.release
 	}
 	for _, record := range u.settings.History {
@@ -133,20 +159,34 @@ func (u *updater) developmentPlatforms() []string {
 }
 
 func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) error {
-	u.set("building", "web/hub/node", "")
+	operation := "build"
+	state := "building"
+	if r.Development.BackupID != "" {
+		operation, state = "prepare_backup", "applying_backup"
+	}
+	u.set(state, "web/hub/node", "")
 	var built struct {
 		Artifacts string   `json:"artifacts"`
 		Ancestors []string `json:"ancestors"`
 	}
-	err := u.runDevelopment(ctx, "build", map[string]any{
+	platforms := u.developmentPlatforms()
+	if operation == "prepare_backup" && !u.nodesEnabled() {
+		platforms = []string{runtime.GOOS + "-" + runtime.GOARCH}
+	}
+	err := u.runDevelopment(ctx, operation, map[string]any{
 		"candidate": r.Development, "version": r.Manifest.Version, "build": r.Manifest.Build,
-		"platform": runtime.GOOS + "-" + runtime.GOARCH, "platforms": u.developmentPlatforms(), "release_url": u.h.updateURL()}, &built)
+		"backup_id": r.Development.BackupID, "runtime": u.h.cfg.dir,
+		"platform": runtime.GOOS + "-" + runtime.GOARCH, "platforms": platforms, "release_url": u.h.updateURL()}, &built)
 	if err != nil {
 		return err
 	}
-	ancestors, err := update.EncodeAncestors(built.Ancestors)
-	if err != nil {
-		return err
+	r.Source = (&url.URL{Scheme: "file", Path: built.Artifacts}).String()
+	var ancestors string
+	if operation == "build" {
+		ancestors, err = update.EncodeAncestors(built.Ancestors)
+		if err != nil {
+			return err
+		}
 	}
 	m, err := update.BuildManifest(built.Artifacts, *r.Manifest)
 	if err != nil {
@@ -154,7 +194,6 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 	}
 	m.Ancestors = ancestors
 	r.Manifest = m
-	r.Source = (&url.URL{Scheme: "file", Path: built.Artifacts}).String()
 	return nil
 }
 
@@ -178,9 +217,36 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 		}
 	}
 	var backup update.DevelopmentBackup
+	nodes := map[string]string{}
+	for _, platform := range u.developmentPlatforms() {
+		path := filepath.Join(identity.NodeBinaryDir(), "personad-"+platform)
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		version, err := os.ReadFile(path + ".version")
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		if err == nil && strings.TrimSpace(string(version)) != u.h.version {
+			continue
+		}
+		nodes[platform] = path
+	}
+	u.mu.Lock()
+	updatedAt := u.currentUpdatedAtLocked()
+	u.mu.Unlock()
 	err := u.runDevelopment(ctx, "backup", map[string]any{
 		"runtime": u.h.cfg.dir, "candidate": r.Development, "hub_database": u.h.cfg.DatabaseURL,
-		"from_version": u.h.version, "from_commit": u.h.build.Commit, "executables": programs}, &backup)
+		"from_version": u.h.version, "from_commit": u.h.build.Commit, "from_build": u.h.build.Number,
+		"from_updated_at": updatedAt, "platform": runtime.GOOS + "-" + runtime.GOARCH,
+		"executables": programs, "node_packages": nodes}, &backup)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +322,7 @@ func (u *updater) removeDevelopmentBuild(r *update.Published) {
 		return
 	}
 	root := filepath.Dir(parsed.Path)
-	if filepath.Dir(root) == filepath.Join(u.dir, "development") && strings.HasPrefix(filepath.Base(root), "build-") {
+	if filepath.Dir(root) == filepath.Join(u.dir, "development") && (strings.HasPrefix(filepath.Base(root), "build-") || strings.HasPrefix(filepath.Base(root), "prepare_backup-")) {
 		_ = os.RemoveAll(root)
 	}
 }

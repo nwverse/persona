@@ -37,5 +37,6 @@
   "err_development_topology": "Development updates require the built-in child assistant. Computers owned by independent assistants need their original update channel.",
   "err_computer_packages": "The hub updated, but computer packages could not be prepared. Their staged files are retained on the hub machine; inspect the update logs before redeploying computers.",
   "err_development_recovery": "An interrupted development update needs recovery. Inspect update/development/adopting.json and the retained snapshot on the hub machine before updating or changing sources.",
-  "err_development_phase": "Could not prepare the development update. Inspect update/development/{phase}.log on the hub machine. The previous build and verified snapshots are retained."
+  "err_development_phase": "Could not prepare the development update. Inspect update/development/{phase}.log on the hub machine. The previous build and verified snapshots are retained.",
+  "err_development_backup": "This program backup is no longer available. Refresh the backup versions."
 }

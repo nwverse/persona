@@ -36,5 +36,6 @@
   "err_development_topology": "开发版更新需要 hub 内置子进程助手。由独立助手管理的电脑须使用其原有更新渠道。",
   "err_computer_packages": "hub 已更新，但电脑程序包准备失败。暂存文件仍保留在 hub 机器上，请检查更新日志后再部署电脑。",
   "err_development_recovery": "上次开发版更新中断，需要先恢复。请在 hub 机器上检查 update/development/adopting.json 和保留的快照，再更新或切换来源。",
-  "err_development_phase": "开发版更新准备失败。请在 hub 机器上检查 update/development/{phase}.log，原版本及有效快照仍保留。"
+  "err_development_phase": "开发版更新准备失败。请在 hub 机器上检查 update/development/{phase}.log，原版本及有效快照仍保留。",
+  "err_development_backup": "此程序备份已不可用，请刷新历史备份版本。"
 }
