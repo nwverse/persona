@@ -191,7 +191,8 @@ export function chainTap(e: ChainEntry, conversation: (mid: string, sid: string)
 }
 
 export function canExpand(e: ChainEntry): boolean {
-  return Boolean(e.detail || e.messages?.length);
+  // A reported entry's detail is already its row text; only its messages can expand.
+  return Boolean((e.kind !== "reported" && e.detail) || e.messages?.length);
 }
 
 /** The time of an entry: 10:03 today, else the day and the time (Oct 28 10:03). */

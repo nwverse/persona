@@ -182,6 +182,30 @@ describe("收件箱事件：详情", () => {
     await press("收起");
     expect(ids()).toEqual(["c5", "c6", "c7"]);
   });
+  it("uses trimmed reported detail, falls back to legacy text, and keeps other details expandable", async () => {
+    const item: InboxItem = {
+      ...plain(reply),
+      chain: [
+        { id: "reported-detail", kind: "reported", text: "Assistant says: duplicated legacy words", detail: "  Sent the correction.  " },
+        { id: "reported-legacy", kind: "reported", text: "Assistant says: legacy words" },
+        { id: "other-detail", kind: "triaged", text: "Sorted", detail: "The basis" },
+      ],
+    };
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    const row = (id: string) => host.querySelector(`[data-chain-id="${id}"]`)!;
+    expect(row("reported-detail").querySelector("button span.truncate")?.textContent).toBe("Sent the correction.");
+    expect(row("reported-detail").textContent).not.toContain("Assistant says: duplicated legacy words");
+    expect(row("reported-detail").querySelector("button")!.disabled).toBe(true);
+    expect(row("reported-detail").querySelector("[aria-expanded]")).toBeNull();
+    expect(row("reported-legacy").querySelector("button span.truncate")?.textContent).toBe("Assistant says: legacy words");
+    expect(row("reported-legacy").querySelector("button")!.disabled).toBe(true);
+    const other = row("other-detail");
+    expect(other.querySelector("button")!.disabled).toBe(false);
+    await act(async () => other.querySelector("button")!.click());
+    expect(other.querySelector("[data-chain-detail]")?.textContent).toBe("The basis");
+    act(() => root.render(<EventBody item={{ ...item, chain: [{ id: "reported-legacy", kind: "reported", text: "Assistant says: legacy words", detail: " \n " }] }} onSource={() => {}} />));
+    expect(row("reported-legacy").querySelector("button span.truncate")?.textContent).toBe("Assistant says: legacy words");
+  });
   it("labels each kind's buttons", () => {
     act(() => root.render(<EventBody item={agentSuggestion} onSource={() => {}} />));
     expect(buttons()).toEqual(expect.arrayContaining(["驳回", "修改", "开始"]));
