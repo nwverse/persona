@@ -77,10 +77,11 @@ final class PerfLaunchTests: PerfTestCase {
 
     /// Probes are enabled only for this unmeasured seed: encoding them would otherwise become launch work of its own.
     @MainActor private func waitForLargeSeedData() {
-        eventually("the long Assistant history", within: 60) {
+        // 60 added exchanges plus the base exchange: fold_work=1 gives each a user, work and answer item (3 × 61).
+        eventually("the full folded Assistant history", within: 60) {
             let value = app.probeEnvelope("chat-rows", page: "assistant")?["v"] as? [String: Any]
             let items = (value?["items"] as? NSNumber)?.intValue ?? 0
-            return items >= 360 ? [] : ["only \(items) of at least 360 long-history items are present"]
+            return items >= 183 ? [] : ["only \(items) of all 183 folded long-history items are present"]
         }
         see(app.buttons["shell-agents"].firstMatch, "the Agents switch").tap()
         eventually("the large Agents data set", within: 60) {

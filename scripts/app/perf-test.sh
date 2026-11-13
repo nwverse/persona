@@ -147,10 +147,13 @@ for s in "${SUITES[@]}"; do
   log "suite $s: waiting for the simulator lock, then testing…"
   # The lock covers the boot, the run and the shutdown of this suite only.
   lockf -k -t "${PERF_LOCK_TIMEOUT:-1800}" "$LOCK" /bin/bash -c '
-    UDID="$1"; shift
+    UDID="$1"; APP="$2"; SUITE="$3"; shift 3
     trap '\''xcrun simctl shutdown "$UDID" 2>/dev/null'\'' EXIT
     "'"$ROOT"'/scripts/app/sim-boot.sh" "$UDID" >/dev/null || exit 1
-    "$@"' _ "$UDID" \
+    if [ "$SUITE" = launch ]; then
+      xcrun simctl install "$UDID" "$APP" || exit 1
+    fi
+    "$@"' _ "$UDID" "$DD/Build/Products/Debug-iphonesimulator/Persona.app" "$s" \
     env TEST_RUNNER_PERSONA_PERF_HUB="http://127.0.0.1:$port" \
       TEST_RUNNER_PERSONA_PERF_ITERATIONS="$ITER" \
       TEST_RUNNER_PERSONA_PERF_SIM="$UDID" \
