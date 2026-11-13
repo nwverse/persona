@@ -17,7 +17,6 @@ import { stateName } from "../../lib/state-labels";
 import { openLink } from "../../lib/links";
 import { type Route } from "../../lib/router";
 import { openFromInbox } from "../../lib/inbox-nav";
-import { nowText } from "../../lib/inbox-now";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
 import { Button, cx, Shimmer, Spinner, toast } from "../../ui/atoms";
