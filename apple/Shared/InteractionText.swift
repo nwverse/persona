@@ -154,6 +154,28 @@ nonisolated extension Interaction {
     /// allows (`canApprove`; a read-only Codex history does not), and not while that session is unknown.
     func canAnswer(session: Session?) -> Bool { isSessionless || session?.canApprove == true }
 
+    /// A manager's work card on an Agent (`persona_triage`). Its put-off choices and its dismiss send nothing to the Agent,
+    /// so they stay open once the Agent has stopped and the rest of the card can't be answered (#6839, web #6753).
+    var isManagerWork: Bool { kind == .question && toolName == "persona_triage" }
+
+    /// A choice that only clears the card on the hub: a manager work card's single-choice option marked `defer`.
+    func isLocalChoice(_ option: QuestionOption, in question: Question) -> Bool {
+        isManagerWork && !question.multiSelect && option.action == "defer"
+    }
+
+    /// An answer that sends nothing to the Agent (web `workCardLocalResolution`): on a manager work card, a bare dismiss, or
+    /// only put-off choices. Continue, retry and typed answers still need `canAnswer`.
+    func isLocalResolution(_ r: Resolution) -> Bool {
+        guard isManagerWork else { return false }
+        if r == .dismissed { return true }
+        guard r == Resolution(answers: r.answers), let answers = r.answers?.filter({ !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }),
+              !answers.isEmpty else { return false }
+        return answers.allSatisfy { question, answer in
+            guard let q = questions?.first(where: { $0.question == question }) else { return false }
+            return q.options.contains { $0.label == answer.trimmingCharacters(in: .whitespaces) && isLocalChoice($0, in: q) }
+        }
+    }
+
     /// Where a sessionless card comes from, for its list row: the title the node gave it, else its directory's name.
     var sessionlessPlace: String? {
         if let t = sessionTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { return t }
