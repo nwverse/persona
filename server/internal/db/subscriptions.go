@@ -230,6 +230,21 @@ func (d *DB) SubscriptionItems(ctx context.Context, id string, q SubscriptionIte
 	return out, rows.Err()
 }
 
+// SubscriptionItem is subscription id's held item uid, the newest stored if several are; nil when it holds none (a
+// reply to its row looks up the item it answers, #6198).
+func (d *DB) SubscriptionItem(ctx context.Context, id, uid string) (*SubscriptionItemRow, error) {
+	var r SubscriptionItemRow
+	err := d.pool.QueryRow(ctx, `SELECT seq, uid, data, created_at FROM subscription_items WHERE subscription_id = $1 AND uid = $2
+		ORDER BY seq DESC LIMIT 1`, id, uid).Scan(&r.Seq, &r.UID, &r.Data, &r.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
 // PruneSubscriptionItems removes subscription id's held items stored before before: the destinations are past them.
 // Their dedup keys stay in subscription_seen, so pulling them again keeps nothing.
 func (d *DB) PruneSubscriptionItems(ctx context.Context, id string, before time.Time) error {

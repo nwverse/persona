@@ -386,7 +386,6 @@ struct CalendarCarryStyle: PrimitiveButtonStyle {
 /// calendar, saved as a drop is, with Undo.
 struct TodoRescheduleSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.dynamicTypeSize) private var typeSize
     var todo: TodoItem
     @State private var allDay: Bool
     @State private var due: Date
@@ -403,7 +402,8 @@ struct TodoRescheduleSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    duePicker
+                    FormDatePicker("Due", selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute],
+                                   identifier: "todo.calendar.rescheduleDue")
                     Toggle(String(localized: "All Day"), isOn: $allDay)
                         .accessibilityIdentifier("todo.calendar.rescheduleAllDay")
                 } header: {
@@ -431,29 +431,6 @@ struct TodoRescheduleSheet: View {
                 }
             }
         }
-        // the wheel and the large words need the whole height
-        .presentationDetents([typeSize.isAccessibilitySize ? .large : .medium])
-    }
-
-    /// The due date and time. At the accessibility sizes the compact picker's date and time are wider than the row
-    /// (its label and both ends were cut off): the label over a wheel, whose words don't grow.
-    @ViewBuilder private var duePicker: some View {
-        let picker = DatePicker(String(localized: "Due"), selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute])
-        #if os(iOS)
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                Text("Due")
-                picker
-                    .labelsHidden()
-                    .datePickerStyle(.wheel)
-                    .frame(maxWidth: .infinity)
-                    .accessibilityIdentifier("todo.calendar.rescheduleDue")
-            }
-        } else {
-            picker.accessibilityIdentifier("todo.calendar.rescheduleDue")
-        }
-        #else
-        picker.accessibilityIdentifier("todo.calendar.rescheduleDue")
-        #endif
+        .formSheetDetents([.medium])
     }
 }

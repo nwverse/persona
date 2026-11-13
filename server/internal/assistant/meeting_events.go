@@ -90,6 +90,9 @@ func (s *Service) meetingLiveFlush(id string) {
 		if slices.Contains(parts, kb.PartPhotos) { // kept in photos.json, not meeting.json
 			revs[kb.PartPhotos] = e.PhotosRev(id)
 		}
+		if slices.Contains(parts, kb.PartInterim) { // the latest caption's time in milliseconds, never stored
+			revs[kb.PartInterim] = s.hubInterimRev(id)
+		}
 	}
 	s.event(context.WithoutCancel(ctx), map[string]any{"type": "meeting_live", "recording_id": id, "changed": parts, "revs": revs})
 }

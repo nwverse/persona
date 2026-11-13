@@ -206,6 +206,7 @@ var rpcFailureKeys = map[string]string{
 	"rewind_mismatch":    "rpc-errors.rewind_mismatch",
 	"rewind_nothing":     "rpc-errors.rewind_nothing",
 	"rewind_failed":      "rpc-errors.rewind_failed",
+	"skill_unavailable":  "rpc-errors.skill_unavailable",
 	"timeout":            "rpc-errors.timeout",
 	"node_unreachable":   "rpc-errors.unreachable",
 	"internal":           "rpc-errors.failed",
