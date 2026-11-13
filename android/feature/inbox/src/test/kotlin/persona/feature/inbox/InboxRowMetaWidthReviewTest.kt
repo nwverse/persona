@@ -72,7 +72,7 @@ class InboxRowMetaWidthReviewTest {
         // EventMark is; only a state longer than the whole column is ellipsized. The shared showcase's first row at
         // phone width is the case that used to lose its third line entirely.
         val thirdLine = "订单群 · 张三：好的，我看一下新的"
-        val state = "等张三确认新报价 · 1月2日 09:00 再看：问更正后的报价行不行"
+        val state = "等张三确认新报价 · 明天 09:00 再看：问更正后的报价行不行"
         var style by mutableStateOf(AppStyle.Glass)
         val showcase = InboxRecord(
             InboxItem("sc-1", kind = "group", title = "春季订单的报价", sender = "张三", preview = "好的，我看一下新的",
@@ -131,8 +131,9 @@ class InboxRowTitleTimeReviewTest {
         override fun selectTab(tab: AppTab) = Unit
     }
 
-    // The row formats in the device's zone (utils), so the expected string is computed the same way.
-    private val time = displayTime("2026-11-05T14:30:00Z", java.util.Locale.ENGLISH)
+    // The row formats in the device's zone and clock, so the expected string is computed the same way.
+    private val res = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().resources
+    private val time = displayTime("2026-11-05T14:30:00Z", java.util.Locale.ENGLISH, res)
     private fun record() = InboxRecord(
         InboxItem("time-1", kind = "group", title = "Approve the spring launch checklist and confirm every owner",
             sender = "Alex", preview = "Can we move it to Friday?", tier = "action", updatedAt = "2026-11-05T14:30:00Z"),

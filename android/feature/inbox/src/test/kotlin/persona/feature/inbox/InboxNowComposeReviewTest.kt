@@ -88,23 +88,25 @@ class InboxNowComposeReviewTest {
         assertEquals("AI couldn't handle it", inboxNowText(blank, enRes, en, clock, zone))
     }
 
-    @Test fun theTimeToLookAgainIsALocalDateNotTheWireTime() {
-        // A look-again time on another day: the language's own month and day, never the hub's RFC 3339 string.
+    @Test fun theTimeToLookAgainIsTheAppsOwnShortTime() {
+        // Tomorrow is said in words (four clients agree on this wording, as the web's followTime does), never the wire string.
         val event = waiting(InboxFollow(checkAt = "2026-01-02T09:00:00Z"))
         val enText = inboxNowText(event, enRes, en, clock, zone)!!
         val zhText = inboxNowText(event, zhRes, zh, clock, zone)!!
         val jaText = inboxNowText(event, jaRes, ja, clock, zone)!!
         for (text in listOf(enText, zhText, jaText)) assertFalse(text, text.contains("2026-01-02T"))
-        assertTrue(enText, enText.startsWith("Waiting for a reply · look again Jan 2"))
-        assertTrue(zhText, zhText.startsWith("等对方回复 · 1月2日"))
-        assertTrue(jaText, jaText.startsWith("相手の返信待ち · 1月2日"))
-        // A date is enough for a moment still to come; the time of day is not repeated in the middle of a sentence.
-        assertTrue(enText, enText.substringAfter("look again ").trim().contains("Jan 2"))
+        assertEquals("Waiting for a reply · look again tomorrow 09:00", enText)
+        assertEquals("等对方回复 · 明天 09:00 再看", zhText)
+        assertEquals("相手の返信待ち · 明日 09:00に再確認", jaText)
 
-        // The same day it is the clock alone, as the app's other short times are.
+        // Further ahead, the language's own date and the 24-hour clock.
+        val later = waiting(InboxFollow(checkAt = "2026-01-05T09:00:00Z"))
+        assertTrue(inboxNowText(later, enRes, en, clock, zone)!!.startsWith("Waiting for a reply · look again Jan 5 09:00"))
+        assertTrue(inboxNowText(later, zhRes, zh, clock, zone)!!.startsWith("等对方回复 · 1月5日 09:00 再看"))
+
+        // Today is the clock alone, in 24-hour time in every language.
         val today = waiting(InboxFollow(checkAt = "2026-01-01T15:30:00Z"))
-        assertTrue(inboxNowText(today, enRes, en, clock, zone)!!.startsWith("Waiting for a reply · look again 3:30"))
-        // Chinese keeps a space between the number and the word (the wording every app writes; the shared fixture follows in its own change).
+        assertEquals("Waiting for a reply · look again 15:30", inboxNowText(today, enRes, en, clock, zone))
         assertTrue(inboxNowText(today, zhRes, zh, clock, zone)!!.startsWith("等对方回复 · 15:30 再看"))
     }
 
