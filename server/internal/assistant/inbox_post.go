@@ -168,7 +168,7 @@ func (s *Service) postToInbox(ctx context.Context, machine, session string, a in
 	}
 	thread := machine + "/" + session
 	sum := sha1.Sum([]byte(thread + "\n" + now.UTC().Format(time.RFC3339Nano)))
-	thing := connector.InboxThing{Thread: thread, Kind: inboxPostKind, Label: label, Title: title, Sender: label,
+	thing := connector.InboxThing{Thread: thread, Kind: inboxPostKind, Label: label, Title: title,
 		Preview: clip(summary, 120), Context: title + "\n" + summary, At: now, Last: hex.EncodeToString(sum[:8]), URL: link,
 		Tier: connector.Tier(tier), Why: clip(oneLine(strings.TrimSpace(a.Reason)), inboxPostReasonMax)}
 
@@ -199,7 +199,7 @@ func (s *Service) postToInbox(ctx context.Context, machine, session string, a in
 		b.items[it.ID] = it
 		w = newWrite(it)
 	}
-	it.Summary, it.TriagedBy, it.Urgent = clip(summary, 120), "rules", false
+	it.Summary, it.TriagedBy, it.Urgent = summary, "rules", false
 	b.noteTriaged(it)
 	b.applyPolicyTier(it) // the user's own rule for the source wins over what the post asked
 	b.settle(w)

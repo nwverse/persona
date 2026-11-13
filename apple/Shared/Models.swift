@@ -660,6 +660,7 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var terminal = false
     var attach = false
     var modes: Bool?
+    var takeover: CodexTakeoverCapability? = nil
     /// The node's word on closing, renaming, switching the model and rewinding (#6294; docs/protocol/protocol.md "Codex
     /// sources and capabilities"): a runtime's session has no terminal, yet does these where its runtime can. Nil from an
     /// older node, or a value this app cannot read: the app keeps its terminal rules (`Session.canClose`, `canRename`,
@@ -672,7 +673,7 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var rewindCode: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case read, send, interrupt, approve, terminal, attach, modes, close, rename, model, rewind
+        case read, send, interrupt, approve, terminal, attach, modes, takeover, close, rename, model, rewind
         case rewindCode = "rewind_code"
     }
 
@@ -685,12 +686,20 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
         terminal = try c.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
         attach = try c.decodeIfPresent(Bool.self, forKey: .attach) ?? false
         modes = try c.decodeIfPresent(Bool.self, forKey: .modes)
+        takeover = try c.decodeIfPresent(CodexTakeoverCapability.self, forKey: .takeover)
         close = try? c.decodeIfPresent(Bool.self, forKey: .close)
         rename = try? c.decodeIfPresent(Bool.self, forKey: .rename)
         model = try? c.decodeIfPresent(Bool.self, forKey: .model)
         rewind = try? c.decodeIfPresent(Bool.self, forKey: .rewind)
         rewindCode = try? c.decodeIfPresent(Bool.self, forKey: .rewindCode)
     }
+}
+
+nonisolated struct CodexTakeoverCapability: Codable, Hashable, Sendable {
+    var running: Bool
+    var canResume: Bool
+    var reason: String?
+    enum CodingKeys: String, CodingKey { case running, reason; case canResume = "can_resume" }
 }
 
 /// Resume in Terminal (#5521, docs/integrations/engines.md "Agents run in a terminal"): what the chat's ⋯ offers for an Agent

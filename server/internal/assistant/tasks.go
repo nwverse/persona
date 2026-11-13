@@ -121,6 +121,8 @@ type PlanTask struct {
 	inPane    string
 	planID    string
 	planIndex int
+	// task_spawn preserves the caller's mode instead of applying a fresh task's Claude-family permission default.
+	preservePermission bool
 }
 
 // Readonly starts conservatively in plan. The launcher fit changes Claude to bypassPermissions while preserving Codex's sandbox.

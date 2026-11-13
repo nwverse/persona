@@ -91,14 +91,19 @@ func (n *Node) codexAppEfforts(home, model string) []string {
 // codexDesktopEffortRow lets the phone change the effort of a chat of the Codex App (setCodexDesktopEffort) as on a
 // thread of an app-server (codexEffortRow): the levels its model takes, which the apps take for effort alone (no
 // capabilities.modes: that would offer the permission mode too), and the effort its next turn runs with — the phone's
-// choice until a turn starts after it, else what the rollout's last turn ran with (m: its meta; "" when no rollout
-// says, as for a chat whose history is the App's database).
+// choice until a turn starts after it, else what the rollout's last turn ran with (m: its meta), else what the App's
+// database keeps for the chat (a chat whose history is there has no turn_context to read, #6501). The row's model
+// comes from the database too when nothing else said it.
 func (n *Node) codexDesktopEffortRow(s *proto.Session, src codexSource, m quickMeta) {
+	app := codexAppThreads(src.home)[src.thread]
+	if s.Model == "" {
+		s.Model = app.Model
+	}
 	levels := n.codexAppEfforts(src.home, firstNonEmpty(s.Model, m.model))
 	if len(levels) == 0 {
 		return
 	}
-	s.Efforts, s.Effort = levels, m.effort
+	s.Efforts, s.Effort = levels, firstNonEmpty(m.effort, app.Effort)
 	if p := n.codexAppPickOf(s.SessionID); p != nil && p.at.After(m.effortAt) {
 		s.Effort = p.effort
 	}
