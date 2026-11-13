@@ -127,8 +127,8 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
                 }
             }
         }
-        if (!record.item.isDone) eventMark(record)?.takeIf { it !is EventMark.Suggests }?.let { mark ->
-            item("event-state") { EventStateLine(mark, Modifier.padding(bottom = Tokens.Space.s)) }
+        if (!record.item.isDone) item("event-state") {
+            InboxSaySomething(repository, record, eventMark(record)?.takeIf { it !is EventMark.Suggests }, onStale = { stale = it })
         }
         // "Suggestion updated" stays over the new suggestion until the user answers again (the card is drawn anew for it).
         if (stale && !record.item.isDone) item("event-stale") {

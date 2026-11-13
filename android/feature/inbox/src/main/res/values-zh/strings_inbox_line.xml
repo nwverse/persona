@@ -13,4 +13,8 @@
     <string name="inbox_line_search_placeholder">搜索标题和位置</string>
     <string name="inbox_line_empty">没有符合的未处理事项</string>
     <string name="inbox_line_legacy_meta">%1$s：%2$s</string>
+    <string name="inbox_line_say">说一句</string>
+    <string name="inbox_line_retry">再试一次</string>
+    <string name="inbox_line_retry_text">请再试一次。</string>
+    <string name="inbox_line_instructed">已交给 AI，等它重新出建议</string>
 </resources>

@@ -13,4 +13,8 @@
     <string name="inbox_line_search_placeholder">Search titles and places</string>
     <string name="inbox_line_empty">No open matters match</string>
     <string name="inbox_line_legacy_meta">%1$s: %2$s</string>
+    <string name="inbox_line_say">Say something</string>
+    <string name="inbox_line_retry">Try again</string>
+    <string name="inbox_line_retry_text">Please try again.</string>
+    <string name="inbox_line_instructed">Sent to the AI for a new suggestion</string>
 </resources>

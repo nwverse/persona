@@ -14,4 +14,8 @@
     <string name="inbox_line_search_placeholder">タイトルと場所を検索</string>
     <string name="inbox_line_empty">一致する未処理の項目はありません</string>
     <string name="inbox_line_legacy_meta">%1$s：%2$s</string>
+    <string name="inbox_line_say">ひとこと伝える</string>
+    <string name="inbox_line_retry">もう一度試す</string>
+    <string name="inbox_line_retry_text">もう一度試してください。</string>
+    <string name="inbox_line_instructed">AI に伝えました。新しい提案を待っています</string>
 </resources>
