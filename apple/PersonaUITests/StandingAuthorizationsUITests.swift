@@ -9,20 +9,20 @@ import XCTest
 final class StandingAuthorizationsUITests: XCTestCase {
     private var hub: String!
 
-    override func setUp() async throws {
+    override func setUpWithError() throws {
         continueAfterFailure = false
         guard let value = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
             throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_STANDING_AUTHORIZATIONS=1 (PERSONA_MOCK_HUB)")
         }
         hub = value
+    }
+
+    /// Each test starts from the mock's two grants (a revoke in an earlier test is undone).
+    @MainActor private func prepare() async throws {
         _ = try await call("/mock/reset")
         guard try await grants().contains("sa_mock_weather") else {
             throw XCTSkip("this mock hub has no standing authorizations: start it with MOCK_STANDING_AUTHORIZATIONS=1")
         }
-    }
-
-    override func tearDown() async throws {
-        if hub != nil { _ = try? await call("/mock/reset") }
     }
 
     @MainActor private func call(_ path: String, method: String = "GET") async throws -> Data {
@@ -75,6 +75,7 @@ final class StandingAuthorizationsUITests: XCTestCase {
     }
 
     @MainActor func testTheProfileListsThemAndARevokeConfirmsFirstThenTheRowLeaves() async throws {
+        try await prepare()
         let app = launch("standing")
         let weather = element(app, "standing.sa_mock_weather")
         XCTAssertTrue(weather.waitForExistence(timeout: 20), "no standing authorizations:\n\(app.debugDescription)")
@@ -109,6 +110,7 @@ final class StandingAuthorizationsUITests: XCTestCase {
     }
 
     @MainActor func testASwipeAsksFirstAndCancelKeepsIt() async throws {
+        try await prepare()
         let app = launch("standing")
         let blog = element(app, "standing.sa_mock_blog")
         XCTAssertTrue(blog.waitForExistence(timeout: 20), "no standing authorizations:\n\(app.debugDescription)")
@@ -127,6 +129,7 @@ final class StandingAuthorizationsUITests: XCTestCase {
     }
 
     @MainActor func testTheProfileRowCountsThemAndAnEmptyListSaysPersonaAsksFirst() async throws {
+        try await prepare()
         let app = launch("assistant")
         let row = element(app, "assistant-standing-authorizations")
         for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp() }
