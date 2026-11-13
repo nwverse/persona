@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -162,6 +163,11 @@ func TestInboxAddressedPollDeduplicatesAndKeepsAlertContext(t *testing.T) {
 	if items[0].Kind != "bot_handoff" || items[0].Tier != connector.TierFYI ||
 		!strings.Contains(items[0].Context, "An isolated test alert") || !strings.Contains(items[0].Context, "@Example Bot check this alert") {
 		t.Fatalf("handoff lost its source context: %+v", items[0])
+	}
+	if !slices.ContainsFunc(items[0].Tags, func(tag connector.Tag) bool {
+		return tag.Key == connector.TagSender && tag.Value == request.Sender.ID && tag.Name == request.Sender.Name
+	}) {
+		t.Fatalf("handoff inherited a context sender's mute target: %+v", items[0].Tags)
 	}
 	if moved, err := c.pollChat(context.Background()); err != nil || moved {
 		t.Fatalf("duplicate poll moved=%v err=%v", moved, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -42,6 +43,15 @@ func TestInboxReplayOnlySelectedMessagesPreservesLiveState(t *testing.T) {
 		}
 		if !strings.Contains(it.Context, "another request") {
 			t.Fatalf("unselected context should still be readable: %+v", it)
+		}
+		wantSender := card.Sender.ID
+		if it.Last == request.MessageID {
+			wantSender = request.Sender.ID
+		}
+		if !slices.ContainsFunc(it.Tags, func(tag connector.Tag) bool {
+			return tag.Key == connector.TagSender && tag.Value == wantSender
+		}) {
+			t.Fatalf("selected activity inherited an unselected sender's mute target: last=%q tags=%+v", it.Last, it.Tags)
 		}
 	}
 	if string(store.raw) != string(raw) || !reflect.DeepEqual(c.inboxState, state) ||

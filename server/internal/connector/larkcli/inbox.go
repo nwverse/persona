@@ -777,7 +777,15 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, auth a
 		name = p2pName(group, contextMessages, me)
 	}
 	tags := []connector.Tag{{Key: connector.TagChat, Value: latest.ChatID, Name: title}}
-	if senderTag, ok := latestSenderTag(contextMessages, me); ok {
+	tagMessages, excludedSender := contextMessages, me
+	if group.handoff || group.pinned {
+		// Context senders do not own an explicit handoff or a selected recovery.
+		tagMessages = []adapter.Message{latest}
+	}
+	if group.handoff {
+		excludedSender = "" // The owner is the sender of this explicit request.
+	}
+	if senderTag, ok := latestSenderTag(tagMessages, excludedSender); ok {
 		tags = append(tags, senderTag)
 	}
 	thing := connector.InboxThing{

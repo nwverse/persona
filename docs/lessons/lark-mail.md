@@ -47,6 +47,10 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 - A historical bot mention may have a later completion reply from the bot even when the owner never replied.
   Inspect the full topic and the processing conclusion before calling its automatic completion a bug or treating
   initial Needs You admission as proof that an unresolved request remains there.
+- Context is not source identity: an owner's explicit bot request must not inherit the alert sender's mute tag,
+  and exact-ID recovery must not inherit a newer, unselected context sender. Test source tags together with the
+  manager's existing mutes, not only the connector's tier. A muted card and an incorrectly muted owner request
+  need different diagnoses; do not clear mutes or reopen real handled rows to make acceptance pass.
 
 - An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
 
