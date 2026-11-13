@@ -964,6 +964,13 @@ final class AppModel {
         if let b = m.browser, b.enabled, b.screenSharing { return b.displays }
         return []
     }
+    /// Whether this Mac's node advertises the live-screen hardware video channel (#3954), from whichever extension shows
+    /// its screen. The Picture / Quality switcher appears only then, so no Mac shows a control it cannot use.
+    func screenVideoAdvertised(_ ref: MachineRef) -> Bool { machine(ref).map(Self.advertisesVideo) ?? false }
+    nonisolated static func advertisesVideo(_ m: Machine) -> Bool {
+        (m.computer.map { $0.enabled && $0.screenSharing && ($0.screenVideo?.advertised ?? false) } ?? false)
+            || (m.browser.map { $0.enabled && $0.screenSharing && ($0.screenVideo?.advertised ?? false) } ?? false)
+    }
     nonisolated static func showsScreen(_ m: Machine) -> Bool {
         (m.computer.map { $0.enabled && $0.screenSharing } ?? false) || (m.browser.map { $0.enabled && $0.screenSharing } ?? false)
     }
