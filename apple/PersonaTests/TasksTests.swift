@@ -253,6 +253,13 @@ struct TasksTests {
         #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: #"{"error":"Maps did not open"}"#, error: true)) == nil)
         #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: #"{"opened":"maps","latitude":120,"longitude":121.4}"#)) == nil)
         #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: nil)) == nil) // still running
+        #expect(walk.inPersona == false)
+        // A walk Persona guides itself (#6672) is a hand-off card that says so; anything else opened is not drawn.
+        let guided = try #require(PlaceMapResult(toolCall("phone_maps_navigate",
+            result: #"{"opened":"persona","destination":"安静书房咖啡","latitude":31.2291,"longitude":121.4769,"mode":"walking"}"#)))
+        #expect(guided.kind == .handoff && guided.inPersona && guided.mode == .walking)
+        #expect(PlaceMapText.handoff(.walking, inPersona: true) != PlaceMapText.handoff(.walking))
+        #expect(PlaceMapResult(toolCall("phone_maps_navigate", result: #"{"opened":"browser","latitude":31.2,"longitude":121.4}"#)) == nil)
         // Only a route or a hand-off carries a mode.
         #expect(PlaceMapResult(toolCall("phone_location_current", result: #"{"latitude":31.2,"longitude":121.4,"mode":"walking"}"#))?.mode == nil)
     }

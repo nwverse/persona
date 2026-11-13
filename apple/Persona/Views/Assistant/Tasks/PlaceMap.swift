@@ -9,7 +9,7 @@ import SwiftUI
 /// from the tool call's result.
 nonisolated struct PlaceMapResult: Hashable, Sendable {
     /// `route`: `phone_maps_route` worked out the way to a place without opening anything (#5544). `handoff`:
-    /// `phone_maps_navigate` opened directions in Apple Maps (#5545); Maps does the navigating.
+    /// `phone_maps_navigate` opened directions in Apple Maps (#5545), or started a walk Persona guides (#6672).
     enum Kind: Sendable { case here, places, route, handoff }
 
     /// How a route or the directions handed to Maps go, as the maps tools name it.
@@ -46,6 +46,8 @@ nonisolated struct PlaceMapResult: Hashable, Sendable {
     var line: [Point] = []
     /// How long a route takes, in seconds.
     var seconds: Double?
+    /// A hand-off Persona guides itself, not Maps (`opened: persona`, a walk, #6672).
+    var inPersona = false
 
     /// The calls drawn this way, by the tool's own name (an MCP name ends in it: mcp__<server>__<name>).
     static func kind(of name: String) -> Kind? {
@@ -78,8 +80,9 @@ nonisolated struct PlaceMapResult: Hashable, Sendable {
             // The destination, with the route's length as its distance.
             found = Self.place(obj, name: obj["destination"] as? String, address: nil).map { [$0] } ?? []
         case .handoff:
-            // Only directions Maps really opened: the tool says so with `opened: maps`.
-            guard obj["opened"] as? String == "maps" else { return nil }
+            // Only directions really opened: in Maps (`opened: maps`) or a walk Persona guides (`opened: persona`).
+            guard let opened = obj["opened"] as? String, opened == "maps" || opened == "persona" else { return nil }
+            inPersona = opened == "persona"
             found = Self.place(obj, name: obj["destination"] as? String, address: nil).map { [$0] } ?? []
         }
         guard !found.isEmpty else { return nil }
@@ -170,10 +173,29 @@ nonisolated enum PlaceMapText {
                                                              fractionalPart: .hide(rounded: .toNearestOrAwayFromZero)))
     }
 
-    /// The line under a hand-off's destination: "Walking · Opened in Maps", the mode left out when the result has none.
-    static func handoff(_ how: PlaceMapResult.Mode?) -> String {
-        let opened = String(localized: "Opened in Maps [Place Map]")
+    /// The line under a hand-off's destination: "Walking · Opened in Maps" or "Walking · Guided by Persona", the mode
+    /// left out when the result has none.
+    static func handoff(_ how: PlaceMapResult.Mode?, inPersona: Bool = false) -> String {
+        let opened = inPersona ? String(localized: "Guided by Persona [Place Map]") : String(localized: "Opened in Maps [Place Map]")
         return how.map { mode($0) + " · " + opened } ?? opened
+    }
+
+    /// Persona guides walks itself on the iPhone (#6672); the Mac hands them to Maps.
+    static var guidesWalks: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    /// Walks to a place with Persona's own navigation, or brings back the walk already going there (#6672).
+    @MainActor static func walk(to place: PlaceMapResult.Place, named name: String) {
+        #if os(iOS)
+        WalkNavigation.shared.start(to: place.coordinate, name: name)
+        #else
+        directions(to: place, named: name, mode: .walking)
+        #endif
     }
 
     /// Hands a place to Apple Maps, with directions there from wherever the phone is: by `mode` when given (a hand-off
@@ -335,14 +357,16 @@ struct PlaceMapCard: View {
             return String(localized: "Map: route to \(destination), \(PlaceMapText.route(result) ?? "") [Place Map]")
         case .handoff:
             let destination = result.places.first.map(PlaceMapText.destination) ?? ""
+            if result.inPersona { return String(localized: "Map: walking to \(destination), guided by Persona [Place Map]") }
             return String(localized: "Map: directions to \(destination), opened in Maps [Place Map]")
         }
     }
 }
 
 /// A place's number (or the phone's dot), name and distance, and Directions, which hands it to Maps. A route's row is
-/// the destination with its mode, time and distance (#5544), with a labeled Start in Maps under it (#6177); a
-/// hand-off's is Maps' icon, the destination, the mode, and a button that opens the same directions again (#5545).
+/// the destination with its mode, time and distance (#5544), with a labeled Start in Maps under it (#6177), or for a
+/// walk Navigate, which Persona guides, and Maps beside it (#6672); a hand-off's is Maps' icon (Persona's walk icon when
+/// Persona guides it), the destination, the mode, and a button that opens the same directions again (#5545).
 private struct PlaceMapRow: View {
     var result: PlaceMapResult
     var place: PlaceMapResult.Place
@@ -366,7 +390,11 @@ private struct PlaceMapRow: View {
                 case .route:
                     ThemedIcon(Theme.Icon.place).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.accent)
                 case .handoff:
-                    BrandMark(Theme.Brand.iosMaps, side: Theme.Size.iconS)
+                    if result.inPersona {
+                        ThemedIcon(Theme.Icon.walk).font(Theme.Font.secondaryStrong).foregroundStyle(Theme.accent)
+                    } else {
+                        BrandMark(Theme.Brand.iosMaps, side: Theme.Size.iconS)
+                    }
                 }
             }
             .scaledFrame(width: Theme.Size.iconS)
@@ -385,6 +413,14 @@ private struct PlaceMapRow: View {
             case .places:
                 directions(String(localized: "Directions [Place Map]"),
                            spoken: String(localized: "Directions to \(title) [Place Map]"), mode: nil)
+            case .handoff where result.inPersona:
+                Button { PlaceMapText.walk(to: place, named: title) } label: {
+                    Label(String(localized: "Navigate [Place Map]"), systemImage: Theme.Icon.walk).labelStyle(.iconOnly)
+                }
+                .font(Theme.Font.captionStrong)
+                .themedButton()
+                .tapTargetFrame()
+                .accessibilityLabel(String(localized: "Walk to \(title) with Persona [Place Map]"))
             case .handoff:
                 directions(String(localized: "Open in Maps [Place Map]"),
                            spoken: String(localized: "Open directions to \(title) in Maps [Place Map]"), mode: result.mode)
@@ -405,7 +441,7 @@ private struct PlaceMapRow: View {
         case .here: place.address
         case .places: PlaceMapText.detail(place)
         case .route: PlaceMapText.route(result)
-        case .handoff: PlaceMapText.handoff(result.mode)
+        case .handoff: PlaceMapText.handoff(result.mode, inPersona: result.inPersona)
         }
     }
 
@@ -420,14 +456,33 @@ private struct PlaceMapRow: View {
         .accessibilityLabel(spoken)
     }
 
-    /// A route's main action, labeled across the card: it is what the card is for (#6177). One line: the icon goes
-    /// first when the words don't fit (the largest text sizes), then the words scale down, never truncated.
-    private var start: some View {
-        Button { PlaceMapText.directions(to: place, named: title, mode: result.mode) } label: {
-            let words = String(localized: "Start in Maps [Place Map]")
+    /// A route's main action, labeled across the card: it is what the card is for (#6177). A walk is guided by Persona
+    /// (Navigate), with Maps one tap away beside it (#6672); any other route starts in Maps.
+    @ViewBuilder private var start: some View {
+        if result.mode == .walking, PlaceMapText.guidesWalks {
+            HStack(spacing: Theme.Space.s) {
+                wide(String(localized: "Navigate [Place Map]"), symbol: Theme.Icon.walk,
+                     spoken: String(localized: "Walk to \(title) with Persona [Place Map]"), id: "place-map.walk") {
+                    PlaceMapText.walk(to: place, named: title)
+                }
+                directions(String(localized: "Open in Maps [Place Map]"),
+                           spoken: String(localized: "Open directions to \(title) in Maps [Place Map]"), mode: .walking)
+            }
+        } else {
+            wide(String(localized: "Start in Maps [Place Map]"), symbol: Theme.Icon.directions,
+                 spoken: String(localized: "Start directions to \(title) in Maps [Place Map]"), id: "place-map.start") {
+                PlaceMapText.directions(to: place, named: title, mode: result.mode)
+            }
+        }
+    }
+
+    /// A labeled button across the row. One line: the icon goes first when the words don't fit (the largest text
+    /// sizes), then the words scale down, never truncated.
+    private func wide(_ words: String, symbol: String, spoken: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             ViewThatFits(in: .horizontal) {
                 // titleAndIcon: inside the sheet's List a Label otherwise drops its icon.
-                Label(words, systemImage: Theme.Icon.directions).labelStyle(.titleAndIcon)
+                Label(words, systemImage: symbol).labelStyle(.titleAndIcon)
                 Text(words)
             }
             .lineLimit(1).minimumScaleFactor(0.5)
@@ -435,8 +490,8 @@ private struct PlaceMapRow: View {
         }
         .font(Theme.Font.labelStrong)
         .themedButton(prominent: true)
-        .accessibilityLabel(String(localized: "Start directions to \(title) in Maps [Place Map]"))
-        .accessibilityIdentifier("place-map.start")
+        .accessibilityLabel(spoken)
+        .accessibilityIdentifier(id)
     }
 }
 

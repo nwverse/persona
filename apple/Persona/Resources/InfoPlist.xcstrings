@@ -237,19 +237,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona shares your current location with Claude only when you ask, for example to find what time it is where you are or which office you are in."
+            "value": "Persona shares your current location with Claude only when you ask, for example to find what time it is where you are or which office you are in. While it guides a walk you started, Persona uses your location to show the way, also with the screen locked."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "依頼したときだけ、Personaは現在地をClaudeに伝えます。たとえば今いる場所の時刻や、どのオフィスにいるかを調べます。"
+            "value": "依頼したときだけ、Personaは現在地をClaudeに伝えます。たとえば今いる場所の時刻や、どのオフィスにいるかを調べます。開始した徒歩ナビでは、画面をロックしていても現在地を使って道案内します。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "只有你让 Claude 用位置时，Persona 才把当前位置告诉它，比如查你所在地的时间，或者你在哪个办公室。"
+            "value": "只有你让 Claude 用位置时，Persona 才把当前位置告诉它，比如查你所在地的时间，或者你在哪个办公室。你开始步行导航后，Persona 用位置给你带路，锁屏时也继续。"
           }
         }
       }

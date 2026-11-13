@@ -66,8 +66,8 @@ final class PlaceMapUITests: XCTestCase {
         XCTAssertTrue(route.exists, "no card for the walk worked out as a route")
         sleep(2)
         try shot(app, "route")
-        // The route's main action is a labeled button under its row (#6177).
-        XCTAssertTrue(app.buttons["place-map.start"].firstMatch.exists, "the route card has no Start in Maps")
+        // The route's main action is a labeled button under its row (#6177); a walk's is Navigate, guided by Persona (#6672).
+        XCTAssertTrue(app.buttons["place-map.walk"].firstMatch.exists, "the walking route card has no Navigate")
         route.tap()
         let routeSheet = any["place-map-sheet.map"].firstMatch
         XCTAssertTrue(routeSheet.waitForExistence(timeout: 5), "tapping the route did not open the full map")
@@ -82,7 +82,7 @@ final class PlaceMapUITests: XCTestCase {
         let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: routeSheet)
         XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 5), .completed, "Done did not close the route's full map")
         // The route card's Start in Maps itself: at large text sizes it is below the map's screen (#6177).
-        let start = app.buttons["place-map.start"].firstMatch
+        let start = app.buttons["place-map.walk"].firstMatch
         for _ in 0..<20 where !clear(start, in: app) { nudge(app, older: false) }
         sleep(1)
         try shot(app, "route-start")

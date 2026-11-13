@@ -147,6 +147,19 @@ struct RootView: View {
             .id(model.look) // outlives RootView's rebuild for a new look, as Settings' sheet does
         }
         .onChange(of: pagesShown) { _, shown in if !shown { newAgentShown = false } }
+        // Walking navigation (#6672), over whatever is open: started from a chat's route card or a phone tool, and
+        // brought back from the card while the walk goes on behind the chat.
+        .fullScreenCover(isPresented: Bindable(WalkNavigation.shared).isPresented) {
+            WalkNavigationView(session: .shared).id(model.look)
+        }
+        #if DEBUG
+        .task {
+            // -showWalkNavigation <meters along | end>: a walk on the sample route (WalkNavigation.simulate).
+            guard let at = UserDefaults.standard.string(forKey: "showWalkNavigation") else { return }
+            try? await Task.sleep(for: .seconds(1))
+            WalkNavigation.shared.simulate(at: at)
+        }
+        #endif
         // Which tree is shown: one built before, still alive a moment after a swap, leaves the window to it.
         .environment(\.shownTree, shownTree)
         // While the app is away its pages keep the width class it had while it was the active one (#2836): the widths iOS

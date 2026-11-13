@@ -346,6 +346,21 @@ extension Theme {
         static let currentLocation = "location"
         /// Directions to a place, handed to Apple Maps (the chat's place map, #5543).
         static let directions = "arrow.triangle.turn.up.right.diamond"
+        /// A walk Persona guides itself (#6672): Navigate on a walking route card.
+        static let walk = "figure.walk"
+        /// Walking navigation's maneuvers (#6672). A right-hand one draws its left-hand symbol mirrored
+        /// (`WalkManeuverIcon`), so each kind of turn has one symbol.
+        static let turn = "arrow.turn.up.left"
+        static let slightTurn = "arrow.up.left"
+        static let uTurn = "arrow.uturn.left"
+        /// Walking navigation: keep going this way.
+        static let goStraight = "location.north.fill"
+        /// Walking navigation: the destination is here.
+        static let arrive = place
+        /// Walking navigation's voice, off (on: `voiceSpeaking`).
+        static let guidanceMuted = "speaker.slash.fill"
+        /// Walking navigation: leave the screen for the chat while the walk goes on.
+        static let backToChat = expand
         /// The phone's own health trends (steps, sleep, weight drawn from Apple Health, #3272).
         static let healthTrends = "chart.line.uptrend.xyaxis"
         /// Persona itself (the brand's four-point star).

@@ -2,8 +2,8 @@ import CoreLocation
 import Foundation
 import MapKit
 
-/// Nearby search and handing a destination to Maps (#2281). Navigation happens in the Maps app: the tool says it opened
-/// Maps, never that Persona navigates.
+/// Nearby search and handing a destination to Maps (#2281). Driving and transit navigation happen in the Maps app: the
+/// tool says it opened Maps, never that Persona navigates. A walk Persona guides itself (#6672, `WalkNavigation`).
 enum MapsTool {
     static var tools: [PhoneTool] {
         #if os(iOS)
@@ -33,9 +33,10 @@ enum MapsTool {
                 spec: ToolSpec(
                     name: "phone_maps_navigate",
                     description: """
-                    Open directions to a place in the Apple Maps app, with a transport mode. Navigation then runs in \
-                    Maps, not in Persona: tell the user Maps has opened, do not say you are navigating. Persona must \
-                    be open on the iPhone.
+                    Start directions to a place, with a transport mode. Walking is guided inside Persona on the \
+                    iPhone (map, next turn and voice), so the user stays in the app; driving and transit open the \
+                    Apple Maps app, which then navigates, not you. Say which happened, as the result's `opened` tells. \
+                    Persona must be open on the iPhone.
                     """,
                     inputSchema: Schema.object([
                         "latitude": Schema.number("Destination latitude."),
@@ -188,6 +189,20 @@ enum MapsTool {
 
     static func navigate(_ args: JSONValue) async throws -> [ToolContent] {
         let destination = try Destination.parse(args)
+        if destination.mode == .walking {
+            try Foreground.require("start walking navigation")
+            let coordinate = CLLocationCoordinate2D(latitude: destination.latitude, longitude: destination.longitude)
+            let name = destination.name ?? String(localized: "Destination [Place Map]")
+            await MainActor.run { WalkNavigation.shared.start(to: coordinate, name: name) }
+            return Output.json(Output.object([
+                ("opened", .string("persona")),
+                ("destination", Output.opt(destination.name)),
+                ("latitude", .number(destination.latitude)),
+                ("longitude", .number(destination.longitude)),
+                ("mode", .string(destination.mode.rawValue)),
+                ("note", .string("Persona is guiding the walk on the iPhone: its map, the next turn and spoken directions. Maps was not opened.")),
+            ]))
+        }
         try Foreground.require("open Maps")
         let coordinate = CLLocationCoordinate2D(latitude: destination.latitude, longitude: destination.longitude)
         let item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))

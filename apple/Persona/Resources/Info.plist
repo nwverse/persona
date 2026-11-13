@@ -66,7 +66,7 @@
 	<key>NSHomeKitUsageDescription</key>
 	<string>Persona controls your Home accessories and scenes only when you ask and approve each change on your iPhone, for example to turn off the living room light.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Persona shares your current location with Claude only when you ask, for example to find what time it is where you are or which office you are in.</string>
+	<string>Persona shares your current location with Claude only when you ask, for example to find what time it is where you are or which office you are in. While it guides a walk you started, Persona uses your location to show the way, also with the screen locked.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Persona records audio when you start a recording or dictate a message, for example a meeting or a spoken note. Recordings are transcribed on your iPhone and only the text is saved to the knowledge base on your hub; the audio stays on your iPhone. In a voice conversation you start — on the phone or in CarPlay — your voice is streamed through your hub to the realtime speech service it is set up with, only while the conversation is open.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
@@ -115,6 +115,7 @@
 		<string>remote-notification</string>
 		<string>audio</string>
 		<string>processing</string>
+		<string>location</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict>
