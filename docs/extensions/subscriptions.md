@@ -36,8 +36,11 @@ A built-in connector of this kind can also implement `connector.ReadJSON` (found
 | `github` | `checks` | `checks`: the check runs, a failed Actions job's log end as `body` | the run's id |
 | `imessage` | `chats` | `chats`: one item per chat's latest message | the chat's id and that message's time; `thread` is the chat |
 | `imessage` | `read`, `search` | `messages`, `hits` | the message's id; `thread` is the chat |
+| `imessage` | `inbox_things` | `things`: the Inbox's rows ready-made, for a `things` recipe | each row's `thread` (the chat) and `last` (its newest message's time) |
 | `mail` | `accounts` | `accounts` | the account's id |
 | `mail` | `search` | `messages` | the Message-ID, else `account:mailbox:uid` |
+
+iMessage declares a catalog of its own (`connector.Catalog`, #6317): the three tools above as the derived catalog had them (same names, descriptions and schemas, so existing subscriptions keep theirs), and `inbox_things`, which answers the rows its `Collect` has, computed by the same function (`rows` in `connector/imessage/persona.go`). `inbox_things` is a catalog tool only, not one of the assistant's. `connector/imessage/inbox_things_test.go` compares the rows field by field: `Collect`'s with the tool's, and with what iMessage's default things subscription hands the Inbox once its feed is switched (P5a).
 
 `mail` `read` stays text: one message has no list to follow. The answers are pinned in each connector's `testdata/readjson`, and `server/internal/subscriptions/builtin_test.go` dry-runs them item by item. A snapshot subscription already made on one of these tools keeps working; its state is now the JSON.
 
@@ -144,7 +147,7 @@ A run writes its seen keys, its items and the cursor or bounded page continuatio
 ### Running
 
 - The manager looks for due subscriptions every 30 seconds, and at once after a change or Run now, after waiting a random 0–60 seconds at startup. A run holds a 5-minute lease. A run that died is made again once its lease ends, and the seen keys keep it from adding anything twice.
-- Each run reads from an hour before the newest item it has, or a day back the first time. A paginated recipe reads one page per leased run, resumes the same original window after a restart and schedules the next page immediately after each commit; its window advances only after the terminal page. A legacy recipe reads one page, and a full page of new items is reported as `maybe_more` by the dry run.
+- Each run reads from an hour before the newest item it has, or a day back the first time. A paginated recipe reads one page per leased run, resumes the same original window after a restart and schedules the next page immediately after each commit; its window advances only after the terminal page. A page that fails is tried again from the same position once; when it fails in the run before too (an expired page token is refused every time), the position is dropped and the next run pulls afresh from the window's start, the seen keys holding back what earlier pages delivered (#6310). A rate limit or an unreachable connector is no such failure and keeps the position; turning the subscription off drops it. A legacy recipe reads one page, and a full page of new items is reported as `maybe_more` by the dry run.
 - Limits are per connector, shared by its subscriptions:
   - one call at a time, at least 20 seconds apart with jitter;
   - at most `max_calls_per_hour` calls an hour (default 120); a run over the budget moves to when the budget allows;

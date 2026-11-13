@@ -119,21 +119,29 @@ func isDesktopLauncher(name string) bool {
 	return name == claudeDesktopLauncher && !shellLauncherNames()[name]
 }
 
-// errDesktopLauncherInTerminal refuses the desktop app's launcher where a terminal would run it.
-var errDesktopLauncherInTerminal = errors.New("claude-desktop 只在 Claude 桌面版里新开会话，不能在终端里运行；换一个启动器。")
+// errDesktopLauncherInTerminal refuses the desktop app's launcher where a terminal would run it; errCodexAppLauncherInTerminal
+// the Codex App's (codexapp_new.go).
+var (
+	errDesktopLauncherInTerminal  = errors.New("claude-desktop 只在 Claude 桌面版里新开会话，不能在终端里运行；换一个启动器。")
+	errCodexAppLauncherInTerminal = errors.New("codex-app 只在 Codex App 里新开对话，不能在终端里运行；换一个启动器。")
+)
 
-// terminalLauncher is the launcher a start in a terminal runs (control.go start): the desktop app's runs nowhere but in
-// the app. A resume naming it (New Agent's launcher, which the hub sends for a session nothing says the launcher of)
-// runs plain claude; a new start with it is refused (session.start sends it to the app before this; Run Agent Here and
-// a work session would type it into a shell).
+// terminalLauncher is the launcher a start in a terminal runs (control.go start): an app's (the desktop app's, the Codex
+// App's) runs nowhere but in its app. A resume naming one (New Agent's launcher, which the hub sends for a session
+// nothing says the launcher of) runs plain claude or codex; a new start with one is refused (session.start sends it to
+// its app before this; Run Agent Here and a work session would type it into a shell).
 func terminalLauncher(launcher, resume string) (string, error) {
-	if !isDesktopLauncher(launcher) {
-		return launcher, nil
-	}
-	if resume == "" {
+	switch {
+	case isDesktopLauncher(launcher) && resume == "":
 		return "", errDesktopLauncherInTerminal
+	case isDesktopLauncher(launcher):
+		return "claude", nil
+	case isCodexAppLauncher(launcher) && resume == "":
+		return "", errCodexAppLauncherInTerminal
+	case isCodexAppLauncher(launcher):
+		return "codex", nil
 	}
-	return "claude", nil
+	return launcher, nil
 }
 
 // startInDesktopApp starts a new session in the desktop app for a start with its launcher; handled false for any

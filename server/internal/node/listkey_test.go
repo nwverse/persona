@@ -39,6 +39,9 @@ func listKeyFmt(list []proto.Session) string {
 		if len(s.Efforts) > 0 {
 			fmt.Fprintf(&b, "effort:%s/%v\n", s.Effort, s.Efforts)
 		}
+		if s.Model != "" || s.PermissionMode != "" || s.Effort != "" {
+			fmt.Fprintf(&b, "modes:%q/%q/%q\n", s.Model, s.PermissionMode, s.Effort)
+		}
 		fmt.Fprintf(&b, "source:%s/%s/%s/%s/%v/%v/%s/%s\n", s.SourceKind, s.SourceThreadID, s.SourceInstanceID, s.ReadOnlyReason, capsFmt(s.Capabilities), s.Attached, s.CodexRoute, s.CodexRouteNote)
 		for _, t := range s.Background {
 			b.WriteString(t.ID + ",")
@@ -212,6 +215,9 @@ func listKeyVariants() (proto.Session, map[string]proto.Session) {
 		"compact_at":       func(s *proto.Session) { s.Compaction = &proto.Compaction{State: "running", StartedAt: act} },
 		"compact_none":     func(s *proto.Session) { s.Compaction = nil },
 		"effort":           func(s *proto.Session) { s.Effort = "low" },
+		"model":            func(s *proto.Session) { s.Model = "claude-opus-5" },        // #6334
+		"permission_mode":  func(s *proto.Session) { s.PermissionMode = "plan" },        // #6334
+		"effort_alone":     func(s *proto.Session) { s.Efforts, s.Effort = nil, "max" }, // #6334
 		"efforts":          func(s *proto.Session) { s.Efforts = []string{"low", "medium", "high"} },
 		"efforts_none":     func(s *proto.Session) { s.Efforts = nil },
 		"source_kind":      func(s *proto.Session) { s.SourceKind = "claude" },
