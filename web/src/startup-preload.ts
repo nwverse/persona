@@ -230,9 +230,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * browser started share one on-demand import of the rule, lib/star-prompt-load.ts, which a failed load only skips, and
  * the sidebar's milestone line is a lazy component; the rule, the pill, the line and their strings stay off the first
  * screen). And 128 B for recent main changes (#6346: ja 474,617 B on main at 2010e8229f, 63 B over the old budget,
- * with 65 B of room).
+ * with 65 B of room). And 27 B for recent main changes (#6395: ja 474,709 B on main at 822ba62fdb, 27 B over the
+ * old budget, with 0 B of room; the existing screen is unchanged by this accounting). And 36 B for the main changes
+ * through #6395's row-title restoration: ja 474,718 B, with 0 B of room.
  */
-export const FIRST_SCREEN_BUDGET = 474_682;
+export const FIRST_SCREEN_BUDGET = 474_718;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
