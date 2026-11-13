@@ -232,30 +232,6 @@
         }
       }
     },
-    "Live Transcript" : {
-      "comment" : "The meeting page's Highlights card: opens or closes the newest transcript lines in place (#3862 phase 2b)",
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Live Transcript"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "实时文字稿"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ライブ文字起こし"
-          }
-        }
-      }
-    },
     "Open a Talk Window": {
       "extractionState": "manual",
       "localizations": {
@@ -298,6 +274,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Persona には何も聞こえませんでした。話している間は「話す」を押し続けてください。"
+          }
+        }
+      }
+    },
+    "Persona is listening. Highlights come after a few minutes." : {
+      "comment" : "The meeting page's Highlights card before the room's first highlights, while Persona attends the meeting (#3862 phase 2b)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona is listening. Highlights come after a few minutes."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 正在听，几分钟后会出现要点。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が聞いています。数分後に要点が表示されます。"
           }
         }
       }

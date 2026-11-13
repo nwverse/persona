@@ -1696,14 +1696,14 @@ page the user watches during the meeting is the page they keep writing in after 
 
 - **Structure, live**: a header (title in `Theme.Font.title`, the page menu, **Hide**), a state line (the recording dot,
   the system-ticked clock, the state word), a subtitle (the role, "On this iPhone", "Private" when marked), a problem as a
-  caution `NoticeBanner` when the room can't take part, **Topics** (phase 2, below), the top card (the **Live** box, or
-  **Highlights** in phase 2b, below), the thread's section header, the thread, and the bar pinned through
+  caution `NoticeBanner` when the room can't take part, **Topics** (phase 2, below), the top card (**Highlights** in
+  phase 2b, below, or else the **Live** box), the thread's section header, the thread, and the bar pinned through
   `safeAreaInset`. While the field has the keyboard the top of the page steps aside as the bar's controls do: the
-  subtitle and Topics hide and the top card is the Live box with only its newest line (a Highlights card too, open or
-  closed: a typed question is usually about what was just said), so the thread keeps its height (the structure stays
-  the same, so the thread's scroll position holds); it changes on `Theme.Motion.state`, and when the keyboard goes down
-  the card is as the owner left it. At accessibility sizes a one-line header (dot, time, menu, Hide) stays fixed, the
-  rest scrolls as one, nothing folds, and the bar stays pinned.
+  subtitle and Topics hide and the top card keeps only its newest part (the Live box its newest line; the Highlights
+  card its newest highlight, the latest `at`, or its waiting line; neither with Full Transcript), so the thread keeps its
+  height (the structure stays the same, so the thread's scroll position holds); it changes on `Theme.Motion.state`, and
+  when the keyboard goes down the card is whole again. At accessibility sizes a one-line header (dot, time, menu, Hide)
+  stays fixed, the rest scrolls as one, nothing folds, and the bar stays pinned.
 - **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
   **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action; in the
   sheet and where the minutes push opened the page, not when pushed from the recording's page, whose Back returns there) kept
@@ -1744,29 +1744,28 @@ page the user watches during the meeting is the page they keep writing in after 
 - **Live box**: a `.surface` card with the radius `Theme.Radius.card`: "Live" and, on the right, how far the transcript
   is behind ("About N s behind", or "Listening…" before any line), then the last `Theme.Recording.liveLines` sentences
   (time in monospaced digits, secondary; two lines of text at most) and **Full Transcript**, which pushes the whole
-  timeline. It is the top card while the meeting has no highlights (before the first, or started on a hub without
-  `meeting_highlights`).
-- **Highlights card (phase 2b)**: in a meeting started while the hub listed `meeting_highlights`, once the room set any,
-  the top card in the Live box's place, the same `.surface` card: "Highlights" (caption strong, secondary, a header for
-  VoiceOver), then each highlight, earliest first, all of them (at most four): its time from the recording's start as
-  the minutes cards' time (`RecordingFormat.clock` in a compact accent `Chip` inside a 44 pt hit area, read as "Show
-  at m:ss in the transcript") and its words in `Theme.Font.body`, at most `Theme.Recording.highlightLines` (2) lines at
-  the regular sizes, cut at the end (VoiceOver reads them whole); the words are not a button. At the accessibility sizes
-  the words take what they need and the time goes under them. The last row has **Live Transcript** (one line, the
-  `Theme.Icon.expand` / `collapse` chevron after it, read with Expanded / Collapsed) on the leading side and **Full
-  Transcript** on the trailing side while both fit there at their full width, at that text size and in that language
-  (`ViewThatFits`); otherwise, and always at the accessibility sizes, one under the other, so neither label is cut (1.2,
-  rule 3). Live Transcript opens the card in place, closed by default and kept while the page is open, also across the
-  switch to or from the accessibility layout (on `Theme.Motion.reveal` / `conceal`): in the regular layout, where only
-  the thread scrolls, only the newest highlight (the latest `at`) stays above it; then Live Transcript with how far
-  behind on the right (stacked the same way when they don't fit), the Live box's newest lines drawn as the Live box
-  draws them, and Full Transcript. At the accessibility sizes every highlight stays above the lines. A time pushes the
-  whole timeline scrolled to the first of the phone's lines in that highlight's minute (`at` to `end`), every such line
-  lit for two seconds with `Theme.accentTint` (cleared on `Theme.Motion.standard`) and read by VoiceOver as selected
-  meanwhile, or the line `RecordingMinutes.sentenceIndex` picks when none starts there. The Live box and the Highlights
-  card cross-fade in place, one over the other, on `Theme.Motion.state` when the card changes (the first highlights,
-  the keyboard; at once with Reduce Motion), never as the page opens; a new or changed highlight is never announced.
-  Reason: the owner sees what the meeting has come to at a glance, and the transcript stays one tap away, closed or open.
+  timeline. It is the top card only where there can be no highlights: a meeting started on a hub without
+  `meeting_highlights`, or one that has none while Persona doesn't attend (the Highlights card's rule, below).
+- **Highlights card (phase 2b)**: in a meeting started while the hub listed `meeting_highlights`, the top card in the
+  Live box's place, the same `.surface` card, the gist of the meeting so far in the room's words (they may differ from
+  what was said): "Highlights" (caption strong, secondary, a header for VoiceOver), then each highlight, earliest first,
+  all of them (at most four): its time from the recording's start as the minutes cards' time (`RecordingFormat.clock`
+  in a compact accent `Chip` inside a 44 pt hit area, read as "Show at m:ss in the transcript") and its words in
+  `Theme.Font.body`, at most `Theme.Recording.highlightLines` (2) lines at the regular sizes, cut at the end (VoiceOver
+  reads them whole); the words are not a button. At the accessibility sizes the words take what they need and the time
+  goes under them. The last row has **Full Transcript** at the trailing side. The card shows no transcript lines: during
+  the meeting the owner reads the points, not the words as said, which are one tap away. Before the room's first
+  highlights, while Persona attends and its room still gets the meeting (the role isn't off and the hub took it, the
+  phone still sends the meeting's lines, and the room isn't unavailable, nor missing on an older manager: never under a
+  banner saying Persona can't take part), the card holds one waiting line in their place, "Persona is listening.
+  Highlights come after a few minutes." (`Theme.Font.secondary`, secondary), above Full Transcript; it cross-fades to the first highlights in place, one over the other, on `Theme.Motion.state`
+  (at once with Reduce Motion). Highlights already shown stay after the role turns off; a meeting with none by then
+  shows the Live box, cross-fading in place the same way. A time pushes the whole timeline scrolled to the first of the
+  phone's lines in that highlight's minute (`at` to `end`), every such line lit for two seconds with `Theme.accentTint`
+  (cleared on `Theme.Motion.standard`) and read by VoiceOver as selected meanwhile, or the line
+  `RecordingMinutes.sentenceIndex` picks when none starts there. Nothing animates as the page opens; a new or changed
+  highlight is never announced. Reason: the owner sees what the meeting has come to at a glance, and the words as said
+  stay one tap away on the Full Transcript page.
 - **The thread**: rows read as one element each. The room's first message is a quiet centered line ("Persona joined the
   meeting"); each batch of live lines is a collapsed capsule ("N lines from the meeting") that expands to its `[m:ss]`
   lines; a heard question is a capsule "What was just said (m:ss)"; the owner's questions are labelled **You**, answers
@@ -1888,8 +1887,8 @@ page the user watches during the meeting is the page they keep writing in after 
   new room answers are announced to VoiceOver as the live view's are.
 - Identifiers for tests: `meeting-page-menu`, `meeting-role`, `meeting-private`, `meeting-page-subtitle`,
   `meeting-room-problem`, `meeting-live`, `meeting-transcript`, the highlights card `meeting-highlights` with each
-  highlight `meeting-highlight` (its words and its time), its time `meeting-highlight-time` and Live Transcript
-  `meeting-live-transcript`, on the transcript a lit row `recording-timeline-sentence-lit` (selected while lit),
+  highlight `meeting-highlight` (its words and its time), its time `meeting-highlight-time` and its waiting line
+  `meeting-highlights-waiting`, on the transcript a lit row `recording-timeline-sentence-lit` (selected while lit),
   `meeting-thread-header`,
   `meeting-thread-earlier`,
   one `meeting-thread-<kind>` per row kind (`lines`, `heard`, `question`, `answer` and the others),
@@ -1910,7 +1909,9 @@ page the user watches during the meeting is the page they keep writing in after 
   `recording-bookmark`, `recording-stop`, `recording-wrapup-title`, `recording-wrapup-open`, `recording-wrapup-done`)
   keep their names. UI tests: `MeetingConversationUITests`, `MeetingLiveViewUITests` (the topics),
   `MeetingHighlightsUITests` (the highlights card in light, dark and the largest text size, a time opening the
-  transcript lit, Live Transcript, the keyboard, a hub without the flag, a meeting started without it),
+  transcript lit, the keyboard, the waiting line before the first highlights and with the keyboard, a hub without the
+  flag, a meeting started without it, a room that is unavailable, Persona turned off before any; no transcript on the
+  card),
   `TalkAboutMeetingUITests`.
 - Platforms: the web shows the same thread on the recording detail (**Conversation**, with **Talk about this meeting**
   from phase 6); Android has no meeting page yet.

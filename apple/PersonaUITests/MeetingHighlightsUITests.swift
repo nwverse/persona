@@ -3,10 +3,11 @@ import XCTest
 /// The highlights on the iPhone's meeting page (#3862 phase 2b; contract docs/assistant/meeting-minutes.md「Phase 2b:
 /// highlights」 and 「The meeting card」, the phone's side docs/apple/recording.md「Highlights (phase 2b)」), end to end
 /// against a mock hub (PERSONA_MOCK_HUB): a room meeting started with the highlights shows the room's highlights at the
-/// top of its page, earliest first, each time opening the transcript at its minute with those lines lit; Live Transcript
-/// opens the newest lines in place; with the keyboard up the card is phase 2's folded Live box; a hub without the flag,
-/// and a meeting started without it on a hub with it, keep the Live box; at the largest text the time goes under the
-/// words. A made-up meeting stands in for the microphone
+/// top of its page, earliest first, each time opening the transcript at its minute with those lines lit, and Full
+/// Transcript in the card (no transcript lines on it, nor Live Transcript); before the first a waiting line while Persona
+/// attends; with the keyboard up only the newest highlight, or the waiting line; a hub without the flag, a meeting started
+/// without it on a hub with it, a room that is unavailable and Persona turned off before the first highlights keep the
+/// Live box; at the largest text the time goes under the words. A made-up meeting stands in for the microphone
 /// (`-showMeetingSample room-highlights`, a line in each of fourteen minutes): its lines reach the hub as a real one's do,
 /// and once they are there and the room made its own highlight from them, the test sets the highlights as the room's
 /// tool would (`POST /mock/meeting_highlights` with each highlight's `at`, which the mock resolves to that line's minute).
@@ -31,11 +32,15 @@ final class MeetingHighlightsUITests: XCTestCase {
         ("17:30", "张三周五前出两种定价方案的测算。"),
         ("21:10", "待定：招聘计划由谁负责。"),
     ]
-    /// The made-up meeting's lines: how many reach the hub, and the newest (Live Transcript and the folded Live box).
+    /// The made-up meeting's lines: how many reach the hub.
     private static let lineCount = 14
-    private static let newestLine = "今天先到这里"
     /// The words the mock's room makes its own highlight of after the batch: the batch's last line (`highlights_made_up`).
     private static let roomsHighlight = "今天先到这里"
+    /// How long the slow room takes to come up (`room_seconds`): long enough for the page to open and show its waiting line.
+    private static let slowRoom = 40
+    /// Lines only the transcript has, never the words of a highlight here: two of the newest three, which phase 2's Live
+    /// box and the card's removed Live Transcript showed, and the first. The card must show none of them.
+    private static let transcriptOnly = ["还有招聘计划，目前没有人负责", "招聘计划谁来负责，下次会上再定", "好，我们开始"]
 
     override func setUpWithError() throws {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { return }
@@ -51,7 +56,8 @@ final class MeetingHighlightsUITests: XCTestCase {
     }
 
     /// (a) The room's highlights at the top of the page: all four, earliest first, each with its time; the Persona part
-    /// under it as phase 1 has it (the thread's header, the composer), Full Transcript one tap away, and no Live box.
+    /// under it as phase 1 has it (the thread's header, the composer), Full Transcript in the card at its trailing side
+    /// under the highlights, and no Live box, waiting line, Live Transcript or line of the transcript.
     @MainActor func testTheHighlightsShowAtTheTopInTimeOrder() throws {
         let hub = try mockHub()
         for look in ["light", "dark"] {
@@ -62,12 +68,20 @@ final class MeetingHighlightsUITests: XCTestCase {
             XCTAssertLessThanOrEqual(card.frame.maxY, header.frame.minY + 1, "\(look): the card isn't above the thread")
             XCTAssertTrue(element(app, "meeting-ask-field").exists, "\(look): no composer:\n\(app.debugDescription)")
             XCTAssertFalse(element(app, "meeting-live").exists, "\(look): the Live box beside the highlights")
+            XCTAssertFalse(element(app, "meeting-highlights-waiting").exists, "\(look): the waiting line beside the highlights")
+            assertNoTranscript(app, card, look)
             let transcript = card.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch
             XCTAssertTrue(transcript.exists && transcript.isHittable, "\(look): Full Transcript isn't one tap away:\n\(app.debugDescription)")
-            let disclosure = element(app, "meeting-live-transcript")
-            XCTAssertEqual(disclosure.value as? String, "已收起", "\(look): the card starts closed")
-            XCTAssertEqual(disclosure.frame.midY, transcript.frame.midY, accuracy: 4, "\(look): Live Transcript and Full Transcript aren't one row")
+            let last = rows(app).element(boundBy: Self.shown.count - 1)
+            XCTAssertGreaterThanOrEqual(transcript.frame.minY, last.frame.maxY - 1, "\(look): Full Transcript isn't under the highlights")
+            XCTAssertGreaterThan(transcript.frame.minX, card.frame.midX, "\(look): Full Transcript isn't at the trailing side")
             try shot(app, "card", look: look)
+            // Full Transcript pushes the whole transcript; Back returns to the card.
+            transcript.tap()
+            XCTAssertTrue(element(app, "recording-timeline-sentence").waitForExistence(timeout: 5),
+                          "\(look): Full Transcript opened no transcript:\n\(app.debugDescription)")
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(element(app, "meeting-highlights").waitForExistence(timeout: 5), "\(look): Back didn't return:\n\(app.debugDescription)")
             app.terminate()
         }
     }
@@ -107,67 +121,35 @@ final class MeetingHighlightsUITests: XCTestCase {
         }
     }
 
-    /// (c) Live Transcript opens the card in place: the newest highlight alone above the newest lines and how far behind,
-    /// Full Transcript under them; it reads Expanded, and closes again to all four.
-    @MainActor func testLiveTranscriptOpensAndClosesInPlace() throws {
+    /// (d) With the keyboard up the card keeps only its newest highlight (the latest at), without Full Transcript and
+    /// with no Live box or line of the transcript, and once it goes down every highlight is back with Full Transcript.
+    @MainActor func testWithTheKeyboardUpOnlyTheNewestHighlightStays() throws {
         let hub = try mockHub()
         for look in ["light", "dark"] {
             if look != "light" { try fresh(hub) }
             let app = try highlightsPage(hub, look: look)
-            let disclosure = element(app, "meeting-live-transcript")
-            disclosure.tap()
-            XCTAssertTrue(waitFor(5) { disclosure.value as? String == "已展开" }, "\(look): not Expanded: \(String(describing: disclosure.value))")
-            XCTAssertTrue(waitFor(5) { self.rows(app).count == 1 }, "\(look): open, the card keeps \(rows(app).count) highlights")
-            XCTAssertTrue(rows(app).firstMatch.buttons["meeting-highlight-time"].label.contains(Self.shown[3].clock), "\(look): not the newest")
-            let card = element(app, "meeting-highlights")
-            XCTAssertTrue(text(card, Self.newestLine).waitForExistence(timeout: 5), "\(look): no newest line:\n\(app.debugDescription)")
-            // How far behind, on Live Transcript's row at the other side ("About N s behind").
-            let behind = text(card, "落后")
-            XCTAssertTrue(behind.waitForExistence(timeout: 5), "\(look): the open card doesn't say how far behind:\n\(card.debugDescription)")
-            XCTAssertGreaterThan(behind.frame.minX, disclosure.frame.maxX, "\(look): how far behind isn't after Live Transcript")
-            XCTAssertTrue(behind.frame.midY > disclosure.frame.minY && behind.frame.midY < disclosure.frame.maxY,
-                          "\(look): how far behind isn't on Live Transcript's row: \(behind.frame) beside \(disclosure.frame)")
-            let transcript = card.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch
-            XCTAssertTrue(transcript.exists && transcript.isHittable, "\(look): no Full Transcript in the open card")
-            XCTAssertGreaterThan(transcript.frame.minY, text(card, Self.newestLine).frame.minY, "\(look): Full Transcript isn't under the lines")
-            XCTAssertTrue(element(app, "meeting-ask-field").exists, "\(look): the composer went")
-            try shot(app, "open", look: look)
-            disclosure.tap()
-            XCTAssertTrue(waitFor(5) { disclosure.value as? String == "已收起" }, "\(look): not Collapsed")
-            XCTAssertTrue(waitFor(5) { self.rows(app).count == Self.shown.count }, "\(look): closed, the card has \(rows(app).count) highlights")
-            XCTAssertFalse(text(card, Self.newestLine).exists, "\(look): the lines stay")
-            app.terminate()
-        }
-    }
-
-    /// (d) With the keyboard up the card is phase 2's folded Live box ("Live", how far behind, the newest line, no Full
-    /// Transcript), and once it goes down the card is as the owner left it (open here).
-    @MainActor func testWithTheKeyboardUpTheCardIsTheFoldedLiveBox() throws {
-        let hub = try mockHub()
-        for look in ["light", "dark"] {
-            if look != "light" { try fresh(hub) }
-            let app = try highlightsPage(hub, look: look)
-            let disclosure = element(app, "meeting-live-transcript")
-            disclosure.tap()
-            XCTAssertTrue(waitFor(5) { disclosure.value as? String == "已展开" })
             let field = element(app, "meeting-ask-field")
             XCTAssertTrue(waitFor(15) { field.isEnabled }, "\(look): the composer is off: \(app.debugDescription)")
             field.tap()
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "\(look): no keyboard")
-            let box = element(app, "meeting-live")
-            XCTAssertTrue(box.waitForExistence(timeout: 5), "\(look): no folded Live box:\n\(app.debugDescription)")
-            XCTAssertTrue(element(app, "meeting-highlights").waitForNonExistence(timeout: 5), "\(look): the highlights stay with the keyboard")
-            XCTAssertTrue(text(box, Self.newestLine).exists, "\(look): the folded box hasn't the newest line:\n\(app.debugDescription)")
-            XCTAssertFalse(box.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch.exists,
-                           "\(look): the folded box has Full Transcript")
+            let card = element(app, "meeting-highlights")
+            XCTAssertTrue(waitFor(5) { self.rows(app).count == 1 }, "\(look): with the keyboard the card has \(rows(app).count) highlights:\n\(app.debugDescription)")
+            let newest = rows(app).firstMatch
+            XCTAssertTrue(newest.buttons["meeting-highlight-time"].label.contains(Self.shown[3].clock),
+                          "\(look): not the newest: \(newest.debugDescription)")
+            XCTAssertTrue(text(newest, Self.shown[3].text).exists, "\(look): not the newest's words: \(newest.debugDescription)")
+            XCTAssertTrue(waitFor(5) { !card.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch.exists },
+                          "\(look): Full Transcript stays with the keyboard")
+            XCTAssertFalse(element(app, "meeting-live").exists, "\(look): a Live box with the keyboard:\n\(app.debugDescription)")
+            assertNoTranscript(app, card, look)
             try shot(app, "keyboard", look: look)
 
             // The keyboard down: a drag from inside the thread down into the keyboard, which the thread's scroll view
             // dismisses interactively. A thread at its top hands a drag down to the sheet (which hides the page, also when
             // the scroll reaches the top on the way), so the batch's lines are opened first, making the thread taller than
             // its view, and it is scrolled up to them (they open at their place, not the end); the drag, from the bottom
-            // of what shows of the thread just into the keyboard, is then shorter than what is above. Then the card comes
-            // back open.
+            // of what shows of the thread just into the keyboard, is then shorter than what is above. Then every highlight
+            // is back.
             let lines = element(app, "meeting-thread-lines")
             XCTAssertTrue(lines.waitForExistence(timeout: 10), "\(look): no batch of lines in the thread:\n\(app.debugDescription)")
             lines.tap()
@@ -206,31 +188,37 @@ final class MeetingHighlightsUITests: XCTestCase {
                 down = keyboard.waitForNonExistence(timeout: 3)
             }
             XCTAssertTrue(down, "\(look): dragging the thread didn't put the keyboard down:\n\(app.debugDescription)")
-            XCTAssertTrue(element(app, "meeting-highlights").waitForExistence(timeout: 5), "\(look): the card isn't back:\n\(app.debugDescription)")
-            XCTAssertEqual(element(app, "meeting-live-transcript").value as? String, "已展开", "\(look): not as the owner left it")
-            XCTAssertTrue(waitFor(5) { !self.element(app, "meeting-live").exists }, "\(look): the Live box stays beside the card")
+            XCTAssertTrue(waitFor(5) { self.rows(app).count == Self.shown.count },
+                          "\(look): the keyboard down, the card has \(rows(app).count) highlights:\n\(app.debugDescription)")
+            XCTAssertTrue(waitFor(5) { card.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch.exists },
+                          "\(look): Full Transcript isn't back:\n\(app.debugDescription)")
+            XCTAssertFalse(element(app, "meeting-live").exists, "\(look): a Live box beside the card")
             app.terminate()
         }
     }
 
-    /// (e) A hub without the highlights (`{"on": false}` before the launch): `GET …/live` carries none, and the page keeps
-    /// phase 2's Live box with the phone's own lines.
+    /// (e) A hub without the highlights (`{"on": false}` before the launch): the phone reads the flag when a meeting starts,
+    /// so the meeting starts with the live view alone (`room-taking-part`, as a start on that hub snapshots it);
+    /// `GET …/live` carries no highlights, and the page keeps phase 2's Live box with the phone's own lines: no Highlights
+    /// card and no waiting line, also once the room had its turn after the batch.
     @MainActor func testAHubWithoutTheHighlightsKeepsTheLiveBox() throws {
         let hub = try mockHub()
         try post(hub, "/mock/meeting_highlights", ["on": false])
-        let app = try meetingPage(hub, look: "light")
+        let app = try meetingPage(hub, look: "light", sample: "room-taking-part")
         XCTAssertTrue(element(app, "meeting-live").waitForExistence(timeout: 10), app.debugDescription)
-        try waitForTheLines(hub, roomsHighlight: false)
+        try waitForTheLines(hub, lines: 1, roomsHighlight: false)
         XCTAssertNil(try liveRead(hub)["highlights"], "the hub without the flag sent highlights: \(String(describing: try? liveRead(hub)))")
-        // Nothing positive to wait for: the page has its turn to (not) show any.
-        sleep(5)
-        XCTAssertFalse(element(app, "meeting-highlights").exists, "highlights from a hub without them:\n\(app.debugDescription)")
+        // The room sets its topics after the batch: once the page shows them it has followed the room's turn.
+        XCTAssertTrue(element(app, "meeting-topics").waitForExistence(timeout: 20), "the page never followed the room:\n\(app.debugDescription)")
+        sleep(3)
+        XCTAssertFalse(element(app, "meeting-highlights").exists, "a Highlights card on a hub without them:\n\(app.debugDescription)")
+        XCTAssertFalse(element(app, "meeting-highlights-waiting").exists, "a waiting line on a hub without the highlights")
         XCTAssertTrue(element(app, "meeting-live").exists, "no Live box:\n\(app.debugDescription)")
         try shot(app, "no-highlights", look: "light")
     }
 
-    /// (f) At the largest text size, light and dark, the page scrolls as one: each highlight's time goes under its words, and an open card
-    /// keeps every highlight above the lines.
+    /// (f) At the largest text size, light and dark, the page scrolls as one: each highlight's time goes under its words,
+    /// and Full Transcript is in the card under them.
     @MainActor func testLargestTextSizeStacksTheTime() throws {
         let hub = try mockHub()
         for look in ["large", "large-dark"] {
@@ -243,21 +231,12 @@ final class MeetingHighlightsUITests: XCTestCase {
             XCTAssertTrue(words.exists, "\(first.debugDescription)")
             XCTAssertGreaterThanOrEqual(time.frame.minY, words.frame.maxY - 1, "the time isn't under the words")
             try shot(app, "card", look: look)
-
-            let disclosure = element(app, "meeting-live-transcript")
-            XCTAssertTrue(reveal(disclosure, in: app), "no Live Transcript on the screen:\n\(app.debugDescription)")
-            disclosure.tap()
-            XCTAssertTrue(waitFor(5) { disclosure.value as? String == "已展开" })
-            XCTAssertEqual(rows(app).count, Self.shown.count, "open at the largest text, every highlight stays")
-            let newest = text(element(app, "meeting-highlights"), Self.newestLine)
-            XCTAssertTrue(newest.waitForExistence(timeout: 5), app.debugDescription)
-            // Above the lines: the last highlight ends before the lines begin (the page scrolls as one, so the frames compare).
+            let card = element(app, "meeting-highlights")
+            let transcript = card.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch
+            XCTAssertTrue(transcript.exists, "no Full Transcript in the card at the largest text:\n\(card.debugDescription)")
             let last = rows(app).element(boundBy: Self.shown.count - 1)
-            XCTAssertLessThanOrEqual(last.frame.maxY, newest.frame.minY + 1,
-                                     "open at the largest text, the highlights aren't above the lines: \(last.frame) and \(newest.frame)")
-            // The shot with the lines on the screen.
-            for _ in 0..<6 where !(newest.exists && newest.isHittable) { app.swipeUp(velocity: .slow) }
-            try shot(app, "open", look: look)
+            XCTAssertGreaterThanOrEqual(transcript.frame.minY, last.frame.maxY - 1, "Full Transcript isn't under the highlights")
+            XCTAssertFalse(element(app, "meeting-live").exists, "a Live box at the largest text")
             app.terminate()
         }
     }
@@ -277,6 +256,105 @@ final class MeetingHighlightsUITests: XCTestCase {
         XCTAssertFalse(element(app, "meeting-highlights").exists, "highlights for a meeting started without them:\n\(app.debugDescription)")
         XCTAssertTrue(element(app, "meeting-live").exists, "no Live box:\n\(app.debugDescription)")
         try shot(app, "started-without", look: "light")
+    }
+
+    /// (h) Before the room's first highlights, while Persona attends, the card holds its waiting line (and Full
+    /// Transcript), not the Live box nor a line of the transcript; once the room makes its first highlight the line goes
+    /// and the highlight shows. The
+    /// room comes up slowly (`{"room": "slow"}`), so the page opens before it has fed the room; then it gets the meeting
+    /// so far and makes its own highlight of the batch's last line.
+    @MainActor func testBeforeTheFirstHighlightsTheCardWaits() throws {
+        let hub = try mockHub()
+        for look in ["light", "dark"] {
+            if look != "light" { try fresh(hub) }
+            try post(hub, "/mock/meeting_conversation", ["room": "slow", "room_seconds": Self.slowRoom])
+            let app = try meetingPage(hub, look: look)
+            let waiting = element(app, "meeting-highlights-waiting")
+            XCTAssertTrue(waiting.waitForExistence(timeout: 10), "\(look): no waiting line:\n\(app.debugDescription)")
+            let card = element(app, "meeting-highlights")
+            XCTAssertTrue(card.exists, "\(look): the waiting line isn't on the Highlights card")
+            XCTAssertTrue(((try? highlights(hub)) ?? []).isEmpty, "\(look): the room already has highlights: \(String(describing: try? highlights(hub)))")
+            XCTAssertEqual(rows(app).count, 0, "\(look): highlights beside the waiting line")
+            XCTAssertFalse(element(app, "meeting-live").exists, "\(look): the Live box while Persona attends:\n\(app.debugDescription)")
+            XCTAssertTrue(card.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch.exists,
+                          "\(look): no Full Transcript under the waiting line")
+            assertNoTranscript(app, card, look)
+            try shot(app, "waiting", look: look)
+
+            // The room comes up, is fed the meeting so far and makes its first highlight: the line gives way to it.
+            try waitForTheLines(hub)
+            let made = (try? highlights(hub)) ?? []
+            XCTAssertFalse(made.isEmpty, "\(look): the room made no highlight")
+            XCTAssertTrue(waitFor(20) { self.rows(app).count == made.count },
+                          "\(look): \(rows(app).count) highlights on the card, the room made \(made.count):\n\(app.debugDescription)")
+            XCTAssertTrue(text(card, Self.roomsHighlight).exists, "\(look): not the room's highlight:\n\(card.debugDescription)")
+            XCTAssertTrue(waiting.waitForNonExistence(timeout: 5), "\(look): the waiting line stays beside the highlight")
+            XCTAssertFalse(element(app, "meeting-live").exists, "\(look): a Live box beside the highlight")
+            app.terminate()
+        }
+    }
+
+    /// (i) A room that can't start (`{"room": "unavailable"}`, its problem `machine_offline`): Persona can't take part, so
+    /// with no highlights the top card is phase 2's Live box under the room's problem, never the waiting line, also once
+    /// the page has read the room's state.
+    @MainActor func testAnUnavailableRoomKeepsTheLiveBox() throws {
+        let hub = try mockHub()
+        try post(hub, "/mock/meeting_conversation", ["room": "unavailable"])
+        let app = try meetingPage(hub, look: "light")
+        let problem = element(app, "meeting-room-problem")
+        XCTAssertTrue(problem.waitForExistence(timeout: 20), "no room problem:\n\(app.debugDescription)")
+        XCTAssertEqual((try liveRead(hub)["room"] as? [String: Any])?["state"] as? String, "unavailable")
+        let box = element(app, "meeting-live")
+        XCTAssertTrue(box.waitForExistence(timeout: 5), "no Live box under the room's problem:\n\(app.debugDescription)")
+        XCTAssertTrue(element(app, "meeting-highlights").waitForNonExistence(timeout: 5), "a Highlights card with the room unavailable")
+        XCTAssertFalse(element(app, "meeting-highlights-waiting").exists, "a waiting line with the room unavailable")
+        XCTAssertGreaterThanOrEqual(box.frame.minY, problem.frame.maxY - 1, "the Live box isn't under the room's problem")
+        sleep(3)
+        XCTAssertTrue(((try? highlights(hub)) ?? []).isEmpty, "an unavailable room made highlights: \(String(describing: try? highlights(hub)))")
+        XCTAssertTrue(box.exists && !element(app, "meeting-highlights-waiting").exists, "the card changed:\n\(app.debugDescription)")
+        try shot(app, "room-unavailable", look: "light")
+        app.terminate()
+    }
+
+    /// (j) The waiting line with the keyboard up, then Persona turned off before the first highlights. The room here
+    /// starts without the highlights' tool (`{"on": false}` after the made-up start took the flag, as a room started
+    /// before the hub had it), so the meeting waits for as long as the test looks, with no race against the room. The
+    /// card holds the waiting line and no transcript; with the keyboard up it keeps the line alone, without Full
+    /// Transcript, and is no Live box; once the page menu turns Persona off it is phase 2's Live box, with no waiting line.
+    @MainActor func testTheWaitingLineFoldsWithTheKeyboardAndGoesWithTheRole() throws {
+        let hub = try mockHub()
+        for look in ["light", "dark"] {
+            if look != "light" { try fresh(hub) }
+            try post(hub, "/mock/meeting_highlights", ["on": false])
+            let app = try meetingPage(hub, look: look)
+            let waiting = element(app, "meeting-highlights-waiting")
+            XCTAssertTrue(waiting.waitForExistence(timeout: 10), "\(look): no waiting line:\n\(app.debugDescription)")
+            let card = element(app, "meeting-highlights")
+            // The room had its turn after the batch (its topics), and set no highlight.
+            XCTAssertTrue(element(app, "meeting-topics").waitForExistence(timeout: 20), "\(look): the page never followed the room:\n\(app.debugDescription)")
+            XCTAssertTrue(waiting.exists && rows(app).count == 0, "\(look): not waiting after the room's turn:\n\(app.debugDescription)")
+            assertNoTranscript(app, card, look)
+
+            let field = element(app, "meeting-ask-field")
+            XCTAssertTrue(waitFor(15) { field.isEnabled }, "\(look): the composer is off: \(app.debugDescription)")
+            field.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "\(look): no keyboard")
+            XCTAssertTrue(waitFor(5) { !card.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch.exists },
+                          "\(look): Full Transcript stays with the keyboard:\n\(app.debugDescription)")
+            XCTAssertTrue(waiting.exists, "\(look): the waiting line went with the keyboard:\n\(app.debugDescription)")
+            XCTAssertEqual(rows(app).count, 0, "\(look): highlights beside the waiting line")
+            XCTAssertFalse(element(app, "meeting-live").exists, "\(look): a Live box with the keyboard while Persona attends:\n\(app.debugDescription)")
+            assertNoTranscript(app, card, look)
+            try shot(app, "waiting-keyboard", look: look)
+
+            // Persona off before any highlights: phase 2's Live box in the card's place, the waiting line gone.
+            turnPersonaOff(app, look)
+            XCTAssertTrue(element(app, "meeting-live").waitForExistence(timeout: 10), "\(look): Persona off, no Live box:\n\(app.debugDescription)")
+            XCTAssertTrue(waiting.waitForNonExistence(timeout: 5), "\(look): the waiting line stays with Persona off")
+            XCTAssertFalse(element(app, "meeting-highlights").exists, "\(look): a Highlights card with Persona off and none")
+            try shot(app, "role-off", look: look)
+            app.terminate()
+        }
     }
 
     // MARK: Helpers: the app
@@ -333,6 +411,33 @@ final class MeetingHighlightsUITests: XCTestCase {
             }
         }
         return false
+    }
+
+    /// The card shows no transcript: no Live Transcript anywhere on the page, and none of the lines only the transcript
+    /// has (`transcriptOnly`).
+    @MainActor private func assertNoTranscript(_ app: XCUIApplication, _ card: XCUIElement, _ look: String,
+                                               file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(card.exists, "\(look): no Highlights card:\n\(app.debugDescription)", file: file, line: line)
+        XCTAssertFalse(element(app, "meeting-live-transcript").exists, "\(look): Live Transcript on the page", file: file, line: line)
+        for words in Self.transcriptOnly {
+            XCTAssertFalse(text(card, words).exists, "\(look): the card shows the transcript's line \(words):\n\(card.debugDescription)",
+                           file: file, line: line)
+        }
+    }
+
+    /// Persona off from the page menu's role picker (`meeting-role`, 关 in zh-Hans): its choices are in the menu, or under
+    /// the picker when the system shows it as a submenu.
+    @MainActor private func turnPersonaOff(_ app: XCUIApplication, _ look: String) {
+        let menu = element(app, "meeting-page-menu")
+        XCTAssertTrue(menu.waitForExistence(timeout: 5), "\(look): no page menu:\n\(app.debugDescription)")
+        menu.tapCenter()
+        let off = app.buttons["关"].firstMatch
+        if !off.waitForExistence(timeout: 3) {
+            let role = element(app, "meeting-role")
+            if role.exists { role.tap() }
+        }
+        XCTAssertTrue(off.waitForExistence(timeout: 5), "\(look): no Off in the page menu:\n\(app.debugDescription)")
+        off.tap()
     }
 
     @MainActor private func rows(_ app: XCUIApplication) -> XCUIElementQuery {
@@ -437,14 +542,15 @@ final class MeetingHighlightsUITests: XCTestCase {
         try liveRead(hub)["highlights"] as? [[String: Any]] ?? []
     }
 
-    /// The made-up meeting's lines are in the hub's live log and its room is up; with the highlights on (`roomsHighlight`),
-    /// the room has also had its own turn after the batch, which ends with its highlight from the batch's last line (the
-    /// room is ready before it is fed, so ready alone doesn't say that turn is over).
-    private func waitForTheLines(_ hub: String, roomsHighlight: Bool = true) throws {
+    /// The made-up meeting's lines (`count`, the highlights sample's unless named) are in the hub's live log and its room
+    /// is up; with the highlights on (`roomsHighlight`), the room has also had its own turn after the batch, which ends
+    /// with its highlight from the batch's last line (the room is ready before it is fed, so ready alone doesn't say that
+    /// turn is over).
+    private func waitForTheLines(_ hub: String, lines count: Int = MeetingHighlightsUITests.lineCount, roomsHighlight: Bool = true) throws {
         let ready = waitFor(40) {
             guard let read = try? self.liveRead(hub, from: 0) else { return false }
             let lines = (read["lines"] as? [[String: Any]] ?? []).filter { !(($0["text"] as? String) ?? "").isEmpty }
-            return (read["room"] as? [String: Any])?["state"] as? String == "ready" && lines.count >= Self.lineCount
+            return (read["room"] as? [String: Any])?["state"] as? String == "ready" && lines.count >= count
         }
         XCTAssertTrue(ready, "the meeting's lines never reached the room: \(String(describing: try? liveRead(hub, from: 0)))")
         guard roomsHighlight else { return }

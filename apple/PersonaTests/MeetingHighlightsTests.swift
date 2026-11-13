@@ -5,8 +5,9 @@ import Testing
 /// The highlights on the phone (#3862 phase 2b; contract docs/assistant/meeting-minutes.md「Phase 2b: highlights」 and
 /// 「The meeting card」, the phone's side docs/apple/recording.md「Highlights (phase 2b)」): the flag kept only beside the
 /// conversation and the live view and snapshotted at the start, the lenient decoding, the merge by what a read asked for
-/// with the cap and the order, the parts read (never by the background topics read), the card's mode, its newest
-/// highlight and rows, and which transcript lines a highlight's time lights. The hub is a `FakeHub`; nothing reaches a
+/// with the cap and the order, the parts read (never by the background topics read), the card's mode (the Live box, the
+/// waiting line or the highlights, each folded with the keyboard up), its newest highlight and rows, and which transcript
+/// lines a highlight's time lights. The hub is a `FakeHub`; nothing reaches a
 /// network.
 @MainActor struct MeetingHighlightsTests {
     // MARK: Fixtures
@@ -22,6 +23,11 @@ import Testing
 
     private func room(_ role: MeetingAttendance = .participant, liveView: Bool = true, highlights: Bool = true) -> RecordingAttendance {
         RecordingAttendance.room(role, private: false, photos: false, liveView: liveView, highlights: highlights)
+    }
+
+    /// The room as `GET …/live` gives it, in `state`.
+    private func roomState(_ state: String) throws -> MeetingRoom {
+        try JSON.decoder.decode(MeetingRoom.self, from: Data(#"{"state":"\#(state)"}"#.utf8))
     }
 
     private func path(_ id: UUID, _ route: String) -> String { "/api/v1/recordings/\(id.uuidString.lowercased())/\(route)" }
@@ -244,18 +250,92 @@ import Testing
 
     // MARK: The card
 
-    /// The top card: phase 2's Live box for a meeting started without the highlights and before the first; Highlights
-    /// once there are any; with the keyboard up (the regular sizes) the folded Live box either way, and at the
-    /// accessibility sizes, where nothing folds, as without it.
-    @Test func theCardsMode() {
+    /// The top card: phase 2's Live box only where there can be no highlights (a meeting started without them, or one
+    /// Persona doesn't attend, by its role or its room, that has none); the waiting line before the first while Persona
+    /// attends; the highlights once there are any, also after the role turned off. With the keyboard up (the regular
+    /// sizes) each one folds, and at the accessibility sizes, where nothing folds, each stays as without it.
+    @Test func theCardsMode() throws {
         typealias H = MeetingHighlights
-        #expect(H.mode(shows: false, hasHighlights: true, writing: false, accessibilitySize: false) == .live(folded: false), "the flag is off")
-        #expect(H.mode(shows: true, hasHighlights: false, writing: false, accessibilitySize: false) == .live(folded: false), "none yet")
-        #expect(H.mode(shows: true, hasHighlights: true, writing: false, accessibilitySize: false) == .highlights)
-        #expect(H.mode(shows: true, hasHighlights: true, writing: true, accessibilitySize: false) == .live(folded: true), "the keyboard is up")
-        #expect(H.mode(shows: false, hasHighlights: false, writing: true, accessibilitySize: false) == .live(folded: true), "as phase 2")
-        #expect(H.mode(shows: true, hasHighlights: true, writing: true, accessibilitySize: true) == .highlights, "nothing folds")
-        #expect(H.mode(shows: true, hasHighlights: false, writing: true, accessibilitySize: true) == .live(folded: false))
+        let roleOff = try H.attending(meeting(room(.off)), room: roomState("ready"), roomMissing: false, refused: false)
+        let roomUnavailable = try H.attending(meeting(room()), room: roomState("unavailable"), roomMissing: false, refused: false)
+        #expect(!roleOff && !roomUnavailable)
+        func mode(shows: Bool = true, has: Bool = false, attending: Bool = true, writing: Bool = false, large: Bool = false) -> H.Mode {
+            H.mode(shows: shows, hasHighlights: has, attending: attending, writing: writing, accessibilitySize: large)
+        }
+        #expect(mode(shows: false) == .live(folded: false), "no flag: the Live box")
+        #expect(mode(shows: false, has: true) == .live(folded: false), "no flag: the Live box, whatever the hub sends")
+        #expect(mode() == .waiting(folded: false), "flag, Persona attends, none yet: the waiting line")
+        #expect(mode(has: true) == .highlights(folded: false), "flag and highlights")
+        #expect(mode(attending: roleOff) == .live(folded: false), "flag, the role off, none: the Live box")
+        #expect(mode(attending: roomUnavailable) == .live(folded: false), "flag, the room unavailable, none: the Live box")
+        #expect(mode(has: true, attending: roleOff) == .highlights(folded: false), "the role turned off: the highlights stay")
+        #expect(mode(has: true, attending: roomUnavailable) == .highlights(folded: false))
+
+        // The keyboard up: each one folds.
+        #expect(mode(shows: false, writing: true) == .live(folded: true), "the folded Live box, as phase 2 has it")
+        #expect(mode(writing: true) == .waiting(folded: true), "the waiting line alone")
+        #expect(mode(has: true, writing: true) == .highlights(folded: true), "the newest highlight alone")
+        #expect(mode(attending: false, writing: true) == .live(folded: true))
+        #expect(mode(has: true, attending: false, writing: true) == .highlights(folded: true))
+        let folds = [H.Mode.live(folded: true), .waiting(folded: true), .highlights(folded: true)].map(\.folded)
+        let wholes = [H.Mode.live(folded: false), .waiting(folded: false), .highlights(folded: false)].map(\.folded)
+        #expect(folds == [true, true, true] && wholes == [false, false, false])
+
+        // At the accessibility sizes nothing folds.
+        #expect(mode(has: true, writing: true, large: true) == .highlights(folded: false), "nothing folds")
+        #expect(mode(writing: true, large: true) == .waiting(folded: false))
+        #expect(mode(shows: false, writing: true, large: true) == .live(folded: false))
+        #expect(mode(attending: false, writing: true, large: true) == .live(folded: false))
+    }
+
+    /// Whether Persona attends and its room still gets the meeting, as the page works it out for the waiting line: the
+    /// page's own rule for attending (`MeetingAsk.canAsk`: the role attends, the phone hasn't stopped attending, the room
+    /// isn't missing on an older manager), the phone still sending lines, the hub having taken the role, and the room not
+    /// unavailable. A room not read yet, starting or ready attends. Each case that doesn't is the Live box until the first
+    /// highlights (`theCardsMode`), whatever the role still says.
+    @Test func attendingIsTheRoleAndTheRoom() throws {
+        typealias H = MeetingHighlights
+        let starting = try roomState("starting"), ready = try roomState("ready"), unavailable = try roomState("unavailable")
+        let none = try roomState("none")
+        func attending(_ attendance: RecordingAttendance = RecordingAttendance.room(.participant, private: false, photos: false,
+                                                                                    liveView: true, highlights: true),
+                       room: MeetingRoom?, missing: Bool = false, refused: Bool = false) -> Bool {
+            H.attending(meeting(attendance), room: room, roomMissing: missing, refused: refused)
+        }
+        #expect(attending(room: nil), "the room not read yet")
+        #expect(attending(room(.listener), room: starting))
+        #expect(attending(room: ready))
+        #expect(!attending(room(.off), room: ready), "the role off")
+        #expect(!attending(room(.off), room: nil))
+        #expect(!attending(room: unavailable), "the room unavailable")
+        #expect(!attending(room(.listener), room: ready, missing: true), "no room on an older manager")
+
+        // The role still attends, but the phone stopped: an older manager's 404 on `…/live` or `…/ask` (the banner says
+        // Persona stopped attending), or `live_full` (no more lines, so no batch reaches the room).
+        var unsupported = room()
+        unsupported.stopped = .unsupported
+        #expect(unsupported.role == .participant && !attending(unsupported, room: ready), "the phone stopped attending")
+        var full = room()
+        full.stopped = .liveFull
+        #expect(!attending(full, room: ready), "no more lines reach the room")
+        // The hub stored the role as off (`attendance_problem`), its room never started: the banner says to choose again.
+        #expect(!attending(room: none, refused: true), "the hub didn't take the role")
+        #expect(!attending(room: ready, refused: true))
+        // An attending role with nobody to attend goes as off (`sentRole`).
+        #expect(!attending(RecordingAttendance(role: .participant), room: nil), "nobody chosen to attend")
+        // Turned on again, the phone attends again (`set` clears `stopped`).
+        var again = unsupported
+        again.set(.off, at: 60)
+        again.set(.listener, at: 90)
+        #expect(attending(again, room: ready))
+
+        // Through the card: the Live box while none came, as with the role off.
+        let mode = { (attending: Bool) in
+            H.mode(shows: true, hasHighlights: false, attending: attending, writing: false, accessibilitySize: false)
+        }
+        #expect(mode(attending(unsupported, room: ready)) == .live(folded: false))
+        #expect(mode(attending(room: none, refused: true)) == .live(folded: false))
+        #expect(mode(attending(room: starting)) == .waiting(folded: false))
     }
 
     /// The rows keep the order given, say their time from the recording's start, and keep their identity when the list
@@ -277,11 +357,13 @@ import Testing
         #expect(MeetingHighlights.newest(tie)?.text == "Second at 300")
         #expect(MeetingHighlights.newest([]) == nil)
 
-        #expect(MeetingHighlights.shown(again, open: false, accessibilitySize: false) == again, "closed: all of them")
-        #expect(MeetingHighlights.shown(again, open: true, accessibilitySize: false).map(\.text) == ["Vendor through Q3."],
-                "open in the regular layout: the newest alone")
-        #expect(MeetingHighlights.shown(again, open: true, accessibilitySize: true) == again, "open at the accessibility sizes: all")
-        #expect(MeetingHighlights.shown([], open: true, accessibilitySize: false).isEmpty)
+        #expect(MeetingHighlights.shown(again, folded: false) == again, "all of them")
+        #expect(MeetingHighlights.shown(again, folded: true).map(\.text) == ["Vendor through Q3."],
+                "folded (the keyboard is up): the newest alone, the latest at, not the last given")
+        let unsorted = MeetingHighlights.rows([highlight("Late", 900), highlight("Early", 60)])
+        #expect(MeetingHighlights.shown(unsorted, folded: true).map(\.text) == ["Late"], "the latest at, wherever it is listed")
+        #expect(MeetingHighlights.shown(tie, folded: true).map(\.text) == ["Second at 300"])
+        #expect(MeetingHighlights.shown([], folded: true).isEmpty)
     }
 
     // MARK: The transcript at a highlight's minute
