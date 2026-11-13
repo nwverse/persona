@@ -2208,7 +2208,8 @@ private struct AgentsList: View {
 
     private func workspaceAgentMenu(_ s: Session) -> AgentRowMenu {
         AgentRowMenu(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil,
-                     live: s.state.isLive, terminal: s.canTerminal, attachable: s.canAttach, deletable: s.canDelete,
+                     live: s.state.isLive, terminal: s.canTerminal, renamable: s.canRename, closable: s.canClose,
+                     attachable: s.canAttach, deletable: s.canDelete,
                      paneActions: NodeMenu.offersPaneActions(s), actions: rowActions)
     }
 

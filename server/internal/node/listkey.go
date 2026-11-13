@@ -240,6 +240,12 @@ func (w *keyWriter) caps(c *proto.SessionCapabilities) {
 	if c.Model != nil {
 		w.b.WriteString(" model=" + strconv.FormatBool(*c.Model))
 	}
+	if c.Close != nil {
+		w.b.WriteString(" close=" + strconv.FormatBool(*c.Close))
+	}
+	if c.Rename != nil {
+		w.b.WriteString(" rename=" + strconv.FormatBool(*c.Rename))
+	}
 	if c.Rewind != nil {
 		w.b.WriteString(" rewind=" + strconv.FormatBool(*c.Rewind))
 	}

@@ -36,6 +36,7 @@ One setting has one writer. When two places seem to hold the same thing, this is
 | Per-device `devices.prefs` | quiet hours, translation scope, notification switches | that device | Per-device only; not a settings key and not synced as one |
 | `PERSONA_*` environment | `DATABASE_URL`, `PUBLIC_URL`, `LISTEN`, `NODE_PACKAGES`, `ADMIN_ACCESS` | the deployment | Overrides the matching `hub.json` field, never written back. Each also accepts its former `JARVIS_*` name |
 | Node-local third-party files | Claude / Codex / Antigravity / OMP `settings.json` | the user or those tools | Read by the node on that computer; the Agents settings page edits the allow-listed subset |
+| Node-local `node-signing.json` | the certificate a Mac's resident node signs its builds with | you, on that Mac | Read by the resident node at start; never sent to the hub ([mac-node-signing.md](mac-node-signing.md)) |
 
 Consequences worth remembering:
 

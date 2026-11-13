@@ -307,6 +307,14 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		return proto.Session{}, err
 	}
 	used, _ := params["launcher"].(string)
+	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
+	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
+	// can both change it.
+	if _, asked := params["config_dir"]; asked && used != "" && used != "claude" {
+		if agent := s.launcherAgent(ctx, machine, used); agent != "" && agent != "claude" {
+			delete(params, "config_dir")
+		}
+	}
 	if model, _ := params["model"].(string); p.Model != "" && model == p.Model {
 		// A launcher that sets its own --model, or whose agent takes none, would not run it (model_pick.go).
 		if err := s.pickedModelRefusal(ctx, machine, used, model); err != nil {

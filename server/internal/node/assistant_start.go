@@ -401,6 +401,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		cmd = n.assistantCLICommand(shell, launcher, cwd, args, env)
 	}
 	cmd.SysProcAttr = osproc.GroupAttr() // so stop() can kill the whole group
+	msysCmdLine(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

@@ -132,6 +132,7 @@ type Service struct {
 	interrupts interruptBook
 
 	titles     titleBook       // titles.go
+	phoneKept  keptPhoneTools  // fleet_tools.go: the phone's tools as the hub last listed them
 	agentNames agentNamingBook // agent_naming.go
 	prefs      settingsBook    // profile.go
 	main       mainBook        // start.go
@@ -144,6 +145,7 @@ type Service struct {
 	supervise  superviseBook   // supervise_signals.go
 	preempt    preemptBook     // owner_preempt.go
 	tbriefs    taskBriefBook   // task_brief.go
+	search     searchIndex     // search_index.go
 
 	modelPicks modelPickBook // model_pick.go
 	// noBackground: there is no background supervisor whatever the setting says, so the main conversation gets its
@@ -270,6 +272,7 @@ func New(o Options) *Service {
 	s.directionNameRoutes()
 	s.originRoutes()
 	s.profileRoutes()
+	s.skillImportRoutes()
 	s.readinessRoutes()
 	s.availabilityRoutes()
 	s.startRoutes()
@@ -289,6 +292,7 @@ func New(o Options) *Service {
 	s.companionRoutes()
 	s.kbInit(o.KB)
 	s.kbRoutes()
+	s.searchRoutes()
 	s.inboxRoutes()
 	s.modelConfigRoutes()
 	s.modelProfileRoutes()

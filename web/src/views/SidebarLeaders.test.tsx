@@ -111,15 +111,27 @@ describe("the leader conversations in the sidebar", () => {
     expect(row("lead-a").textContent).toContain("在做 2 · 等你 1");
     expect(row("lead-b").textContent).toContain("Infrastructure");
     expect(row("lead-b").textContent).not.toContain("在做");
-    // 常驻 is marked only by its heading and counts (#6214): a lead's leading icon is the ordinary chat icon, the same
-    // one a 最近 row draws — no pin glyph that could read as a tappable button.
-    const leadIcon = row("lead-a").querySelector("svg")!.outerHTML;
+    // 常驻 is marked only by its heading and counts (#6214): a lead with nothing running draws the ordinary chat icon,
+    // the same one a 最近 row draws — no pin glyph that could read as a tappable button. (lead-a has Agents working, so
+    // it carries the working arc instead, asserted in the spin test below.)
+    const leadIcon = row("lead-b").querySelector("svg")!.outerHTML;
     const recentIcon = row("newest").querySelector("svg")!.outerHTML;
     expect(leadIcon).toBe(recentIcon);
     // 常驻 is marked only by its heading and counts (#6214): no pin glyph on the row that could read as a button
     const allChats = host.querySelector<HTMLAnchorElement>('a[href="/history"]')!;
     expect(allChats.textContent).toContain(t("sidebar.all_chats"));
     expect(headings().join()).not.toMatch(/置顶|其他对话|方向/);
+  });
+
+  it("spin the one working mark while any Agent under them runs, even when their own conversation is idle (#6230)", async () => {
+    await renderSidebar();
+    // lead-a's own session is idle but two of its Agents work: the row carries the working arc and the "在做 2" count
+    const leadA = row("lead-a");
+    expect(leadA.textContent).toContain("在做 2");
+    expect(leadA.querySelector('[data-shape="arc"][data-state="working"]')).not.toBeNull();
+    // lead-b has nothing running: no working arc, the quiet pin stays
+    const leadB = row("lead-b");
+    expect(leadB.querySelector('[data-shape="arc"]')).toBeNull();
   });
 
   it("show their titles on a hub without the leaders list", async () => {
