@@ -907,11 +907,15 @@ final class MessageLiftUITests: XCTestCase {
                 // At most 8 screens back and 4 minutes: a press or a scroll that goes wrong ends the case, not the ticket.
                 let deadline = Date.now.addingTimeInterval(240)
                 var rounds = 0
-                while !left.isEmpty, rounds < 8, Date.now < deadline {
+                var lost = false // a press opened something else: the rest would press another screen
+                // The chat's header (title, state, the strip of running agents) ends near 100 pt at the default size and
+                // near 175 pt at xxxLarge, where a press above 200 pt can open another agent from the strip.
+                let top: CGFloat = big ? 200 : 140
+                while !left.isEmpty, !lost, rounds < 8, Date.now < deadline {
                     let window = app.windows.firstMatch.frame
                     // Clear of the header and of the composer, and of the jump button's column on the right.
-                    let band = CGRect(x: window.minX, y: window.minY + 140, width: window.width * 0.7, height: window.height - 140 - 130)
-                    for probe in left where Date.now < deadline {
+                    let band = CGRect(x: window.minX, y: window.minY + top, width: window.width * 0.7, height: window.height - top - 130)
+                    for probe in left where Date.now < deadline && !lost {
                         let e = text(probe.words)
                         guard e.exists else { continue }
                         let f = visiblePart(e.frame)
@@ -932,8 +936,12 @@ final class MessageLiftUITests: XCTestCase {
                         // The first press under the folded message, which lifted that message (#6645): a shot either way.
                         if !right || probe.name == "other-top" { shot("rows-\(probe.name)\(tag)") }
                         if up { putTheLiftBack(probe.name) }
+                        if !up && !e.exists {
+                            lost = true
+                            wrong.append("\(probe.name): the press left the chat")
+                        }
                     }
-                    guard !left.isEmpty else { break }
+                    guard !left.isEmpty, !lost else { break }
                     // Back a third of the screen, slowly enough that the list stops where the finger does.
                     let origin = app.coordinate(withNormalizedOffset: .zero)
                     origin.withOffset(CGVector(dx: window.width * 0.85, dy: window.height * 0.35))
