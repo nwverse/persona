@@ -1237,7 +1237,7 @@ func TestApprovedWaitIsNotAskedAgain(t *testing.T) {
 }
 
 func TestSilentSuccessRetiresStaleModelRetry(t *testing.T) {
-	for _, mode := range []string{"scheduled retry", "published card", "restored card", "late Retry tap", "continued failure", "new error wins", "exit without success", "exit after success"} {
+	for _, mode := range []string{"scheduled retry", "published card", "restored card", "restored with hub card", "late Retry tap", "continued failure", "new error wins", "exit without success", "exit after success"} {
 		t.Run(mode, func(t *testing.T) {
 			s, f := workService(t)
 			ctx := context.Background()
@@ -1262,11 +1262,6 @@ func TestSilentSuccessRetiresStaleModelRetry(t *testing.T) {
 				t.Fatal("setup: no exhausted-retry card")
 			}
 			s.putWork(ctx, e)
-			if mode == "restored card" {
-				s.work.mu.Lock()
-				delete(s.work.cards, id)
-				s.work.mu.Unlock()
-			}
 			// Reproduce the actual stale card, which was generated against the newer reply's timestamp.
 			c.TurnError = ""
 			c.SilentTurnSucceeded = mode != "continued failure" && mode != "exit without success"
@@ -1277,6 +1272,16 @@ func TestSilentSuccessRetiresStaleModelRetry(t *testing.T) {
 				c.Status, c.State = proto.StatusOffline, proto.StateOffline
 			}
 			f.setSessions(k[0], c)
+			if mode == "restored card" || mode == "restored with hub card" {
+				if mode == "restored with hub card" {
+					f.hubCards = s.workCards()
+				}
+				store := &workMemStore{rows: map[[2]string]db.SessionWork{k: e}}
+				s = newServiceOn(t, f, store)
+				if !s.loadWork(ctx) || len(s.workCards()) != 0 {
+					t.Fatal("restored an obsolete card")
+				}
+			}
 			if mode == "late Retry tap" {
 				q := e.Work.Questions[0]
 				handled, err := s.workAnswer(ctx, id, proto.Resolution{Answers: map[string]string{q.Question: q.Options[0].Label}})
