@@ -14747,10 +14747,11 @@ def mock_peer_fold():
                          "有一件要你定：版本切换后搜索的范围。"))
 
 
-# Also with MOCK_PEER_FOLD=1: work lines right under a long message from another session, folded to a few lines with Expand
-# (#6645: the folded words still took the long presses below the card, so a long press on the answer under it lifted the
-# card). A working Agent chat: the exchange reported (a tool and a reply in its work line, 37 minutes long, a 2 KB
-# answer); one with tools only; one with a reply only; then the running one, its last tool still going. Synthetic text.
+# Also with MOCK_PEER_FOLD=1 (or =live: its session pushed again every 1.5 s): work lines right under a long message from
+# another session, folded to a few lines with Expand (#6645: the folded words still took the long presses below the
+# card, so a long press on the answer under it lifted the card). A working Agent chat: the exchange reported (a tool
+# and a reply in its work line, 37 minutes long, a 2 KB answer); one with tools only; one with a reply only; then the
+# running one, its last tool still going. Synthetic text.
 PEER_FOLD = "a1f3c2d4-0000-4000-8000-000000006645"
 PEER_REPORT = ("合并队列的进展：\n"
                "- 发布分支已经合上最新的主干，只有一个说明文件冲突，已经解决，不用变基。\n"
@@ -14822,12 +14823,29 @@ def mock_peer_fold_work():
                  tool_input={"command": "npm run test:ui -- popup --last-two", "description": "跑剩下两条"})]
     ITEMS[PEER_FOLD] = items
     SESSIONS.append(sess("macbook", PEER_FOLD, "发布脚本拆分", "/Users/me/code/shop-app", "working", "working", "shop-app", 22,
-                         "peers", 1, 0, "还差两条，接着跑。"))
+                         "peers", 1, 0, "还差两条，接着跑。",
+                         background=[{"id": "bkload", "kind": "shell", "description": "压测第 1 轮", "command": "npm run load -- round1",
+                                      "output_file": "/tmp/claude/bkload.output", "started_at": ago(minutes=40)}]))
 
 
-if os.environ.get("MOCK_PEER_FOLD") == "1":
+def peer_fold_ticker():
+    """MOCK_PEER_FOLD=live: the session's row again every 1.5 s (a new rev and time, nothing else), as the hub sends it
+    while background work goes on: the reported chat was running when its work line would not open."""
+    while True:
+        time.sleep(1.5)
+        push = globals().get("push_machine")  # defined further down; the thread starts while the module still loads
+        if push is None:
+            continue
+        row = next(x for x in SESSIONS if x["session_id"] == PEER_FOLD)
+        row.update(updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), rev=(row.get("rev") or 0) + 1)
+        push("macbook")
+
+
+if os.environ.get("MOCK_PEER_FOLD") in ("1", "live"):
     mock_peer_fold()
     mock_peer_fold_work()
+    if os.environ.get("MOCK_PEER_FOLD") == "live":
+        threading.Thread(target=peer_fold_ticker, daemon=True).start()
 
 
 # MOCK_LONG_INPUT=1: your own long message folds (#5676): an Agent chat with a long pasted report (past 14 lines on a

@@ -58,24 +58,25 @@ final class WorkLineUnderFoldUITests: XCTestCase {
         return f
     }
 
-    /// Drags the chat until the work line is on screen, clear of the top bar and the composer: toward older lines while
-    /// it is above that, toward newer ones while it is below.
+    /// Brings the work line on screen, clear of the top bar and the composer: a flick toward older lines while the list
+    /// has not made it yet, then slow drags (held at the end: a plain drag flings the upside-down list well past it,
+    /// docs/lessons/ios.md). All in the list's left margin: a drag that starts on a message's words was often taken by it
+    /// and the list stayed put (`MessageLiftUITests`).
     @MainActor private func reveal(_ which: NSPredicate) {
         let window = app.windows.firstMatch.frame
-        for _ in 0..<12 {
-            let e = head(which)
-            var older = true
-            if e.exists {
-                let y = onScreen(e).midY
-                if y > window.height * 0.18, y < window.height * 0.8 { return }
-                older = y <= window.height * 0.18
-            }
-            // Slowly, held at the end: a plain drag flings the upside-down list well past the line (docs/lessons/ios.md).
-            let (from, to) = older ? (0.35, 0.6) : (0.6, 0.35)
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
-                .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to)),
-                       withVelocity: .slow, thenHoldForDuration: 0.3)
+        let margin = 6 / max(window.width, 1)
+        func drag(_ from: Double, _ to: Double, fast: Bool) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: margin, dy: from))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: margin, dy: to)),
+                       withVelocity: fast ? .fast : .slow, thenHoldForDuration: fast ? 0 : 0.3)
             sleep(1)
+        }
+        for _ in 0..<16 {
+            let e = head(which)
+            guard e.exists else { drag(0.3, 0.75, fast: true); continue }
+            let y = onScreen(e).midY
+            if y > window.height * 0.18, y < window.height * 0.8 { return }
+            if y <= window.height * 0.18 { drag(0.35, 0.6, fast: false) } else { drag(0.6, 0.35, fast: false) }
         }
         XCTFail("work line \(which.predicateFormat) never came on screen")
     }
