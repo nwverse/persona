@@ -187,7 +187,7 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
       {preparing(item) ? (
         <div className="flex min-w-0 items-center gap-2 rounded-[10px] bg-inset p-3 text-[12.5px] shadow-hairline" data-event-preparing>
           <Spinner size={12} />
-          <Shimmer className="min-w-0 flex-1 truncate">{word ?? t("inbox-inboxevent.preparing")}</Shimmer>
+          <Shimmer className="min-w-0 flex-1 truncate">{now ?? t("inbox-inboxevent.preparing")}</Shimmer>
           {open}
           {action}
         </div>
