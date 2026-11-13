@@ -103,7 +103,7 @@ internal fun inboxFollowTime(value: String?, res: Resources, locale: Locale, now
     val days = -inboxDays(at, now, zone)
     val time = clockTime(at, locale, zone)
     return when {
-        days <= 0 -> time
+        days == 0L -> time
         days == 1L -> res.getString(R.string.inbox_time_tomorrow) + " " + time
         at.atZone(zone).year == now.atZone(zone).year -> LocalizedFormats.format(at, LocalizedFormats.MONTH_DAY, locale, zone) + " " + time
         else -> LocalizedFormats.format(at, LocalizedFormats.DATE, locale, zone) + " " + time
