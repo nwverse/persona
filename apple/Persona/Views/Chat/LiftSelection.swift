@@ -622,7 +622,14 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
     /// A moved line can start inside the one before it (a table picture's, taller here than the chat's table), where the
     /// layout manager's lookup takes the earlier line too.
     override func closestPosition(to point: CGPoint) -> UITextPosition? {
-        guard storage.length > 0, let container = layout.textContainers.first else { return super.closestPosition(to: point) }
+        guard let place = place(nearest: point) else { return super.closestPosition(to: point) }
+        return position(from: beginningOfDocument, offset: place.offset)
+    }
+
+    /// `closestPosition(to:)`'s place, and the side of it the point is on: `before` when the point is on the character
+    /// before it (left of the place, not in front of its line's first word) or past its line's last word.
+    private func place(nearest point: CGPoint) -> (offset: Int, before: Bool)? {
+        guard storage.length > 0, let container = layout.textContainers.first else { return nil }
         let p = CGPoint(x: point.x - textContainerInset.left, y: point.y - textContainerInset.top)
         // Not the first line holding the point: the lines are in order, but one can start above the end of the one before.
         var line: (rect: CGRect, used: CGRect, glyphs: NSRange)?
@@ -630,18 +637,18 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
             guard !self.snapper.hidden.contains(glyphs.location), line == nil || rect.minY <= p.y else { return }
             line = (rect, used, glyphs)
         }
-        guard let line else { return super.closestPosition(to: point) }
+        guard let line else { return nil }
         let text = storage.string as NSString
         let chars = layout.characterRange(forGlyphRange: line.glyphs, actualGlyphRange: nil)
         var end = NSMaxRange(chars)
         if end > chars.location, UnicodeScalar(text.character(at: end - 1)).map(CharacterSet.newlines.contains) == true { end -= 1 }
-        var best = chars.location, distance = CGFloat.infinity, at = chars.location
+        var best = chars.location, bestX = CGFloat.infinity, distance = CGFloat.infinity, at = chars.location
         while at <= end {
             let x = at < end ? line.rect.minX + layout.location(forGlyphAt: layout.glyphIndexForCharacter(at: at)).x : line.used.maxX
-            if abs(x - p.x) < distance { (best, distance) = (at, abs(x - p.x)) }
+            if abs(x - p.x) < distance { (best, bestX, distance) = (at, x, abs(x - p.x)) }
             at = at < end ? min(NSMaxRange(text.rangeOfComposedCharacterSequence(at: at)), end) : end + 1
         }
-        return position(from: beginningOfDocument, offset: best)
+        return (best, best == end ? best > chars.location : best > chars.location && bestX > p.x)
     }
 
     override func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? {
@@ -739,10 +746,15 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         }
     }
 
-    /// The word under a point in the window; where there is none (a space, a mark), the character there.
+    /// The word under a point in the window; where there is none (a space, a mark), the character there. The word on
+    /// the point's side of the nearest place: a press on the right half of a word's last character found the place
+    /// after it and took the next word, which Chinese has with no space between (#6552).
     private func word(at point: CGPoint) -> UITextRange? {
-        guard let pos = closestPosition(to: convert(point, from: nil)) else { return nil }
-        for direction in [UITextStorageDirection.forward, .backward] {
+        let local = convert(point, from: nil), near = place(nearest: local)
+        guard let pos = near.flatMap({ position(from: beginningOfDocument, offset: $0.offset) }) ?? closestPosition(to: local) else {
+            return nil
+        }
+        for direction in near?.before == true ? [UITextStorageDirection.backward, .forward] : [.forward, .backward] {
             if let w = tokenizer.rangeEnclosingPosition(pos, with: .word, inDirection: UITextDirection(rawValue: direction.rawValue)) {
                 return w
             }
