@@ -9,6 +9,7 @@ import { t } from "../i18n";
 import { managedProvider } from "./compatibility";
 import { shellPath } from "./format";
 import { modelName } from "./launcher-models";
+import { onManagerChoice } from "./manager-choice";
 
 export const NEW_CONVERSATION = "new";
 
@@ -128,12 +129,33 @@ export function usePickedEffort(key: string): string | undefined {
   return useSyncExternalStore(subscribe, () => efforts.get(key));
 }
 
-/** Drop key's whole pick, launcher, model and effort together: none of it outlives the others (the new-conversation
- *  page's would go with the start, and a hub that keeps picks would keep what nobody chose). */
+/** The native service tier picked for a new conversation; absent: Codex's own default. Independent of effort. */
+const serviceTiers = new Map<string, string>();
+
+export function pickedServiceTier(key: string): string | undefined {
+  return serviceTiers.get(key);
+}
+
+export function pickServiceTier(key: string, tier: string | undefined) {
+  if (tier) serviceTiers.set(key, tier);
+  else serviceTiers.delete(key);
+  listeners.forEach((l) => l());
+}
+
+export function usePickedServiceTier(key: string): string | undefined {
+  return useSyncExternalStore(subscribe, () => serviceTiers.get(key));
+}
+
+// A speed was validated against one manager's catalog and start capability; never carry it to another, even with no pill mounted.
+onManagerChoice(() => pickServiceTier(NEW_CONVERSATION, undefined));
+
+/** Drop key's whole pick, launcher, model, effort and speed together: none of it outlives the others (the
+ *  new-conversation page's would go with the start, and a hub that keeps picks would keep what nobody chose). */
 export function dropPick(key: string) {
   picks.delete(key);
   models.delete(key);
   efforts.delete(key);
+  serviceTiers.delete(key);
   listeners.forEach((l) => l());
 }
 

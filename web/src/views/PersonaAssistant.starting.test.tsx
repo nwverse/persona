@@ -6,6 +6,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getState, reset } from "../lib/store";
+import { dropPick, NEW_CONVERSATION, pickedServiceTier, pickEffort, pickLauncher, pickModel, pickServiceTier } from "../lib/assistant-chat";
+import { ASSISTANT_START_SERVICE_TIER_FEATURE } from "../lib/assistant-models";
+import { chooseManager } from "../lib/manager-choice";
 import type { Session } from "../lib/types";
 import { PersonaAssistant, SLOW_START_MS } from "./PersonaAssistant";
 
@@ -19,9 +22,9 @@ vi.hoisted(() => {
 });
 
 type Started = { session: Session };
-const starts = vi.hoisted(() => [] as { resolve: (r: Started) => void; reject: (e: unknown) => void }[]);
+const starts = vi.hoisted(() => [] as { resolve: (r: Started) => void; reject: (e: unknown) => void; body: Record<string, unknown> }[]);
 vi.mock("../lib/assistant-start", () => ({
-  startConversation: () => new Promise<Started>((resolve, reject) => starts.push({ resolve, reject })),
+  startConversation: (body: Record<string, unknown>) => new Promise<Started>((resolve, reject) => starts.push({ resolve, reject, body })),
 }));
 
 const navigate = vi.hoisted(() => vi.fn());
@@ -59,10 +62,12 @@ const send = async () => {
 };
 
 const waiting = () => host.querySelector("[data-start-pending]");
+const sentBody = () => JSON.parse(JSON.stringify(starts[0].body)) as Record<string, unknown>;
 const headerTitle = () => host.querySelector("header h1, header [data-header-title]")?.textContent ?? host.querySelector("header")?.textContent ?? "";
 
 beforeEach(() => {
   reset();
+  dropPick(NEW_CONVERSATION);
   starts.length = 0;
   navigate.mockClear();
   Object.assign(getState(), {
@@ -80,6 +85,8 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   reset();
+  dropPick(NEW_CONVERSATION);
+  chooseManager(null);
 });
 
 describe("新对话页：第一条消息发出、会话还没开起来 (#1697)", () => {
@@ -130,5 +137,67 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     expect(host.querySelector("textarea")!.value).toBe(WORDS);
     expect(host.querySelector("textarea")!.disabled).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("sends an explicit Fast choice with the first request, independently of effort, then clears it", async () => {
+    Object.assign(getState(), { features: [ASSISTANT_START_SERVICE_TIER_FEATURE] });
+    pickLauncher(NEW_CONVERSATION, "codex");
+    pickModel(NEW_CONVERSATION, "gpt-fast");
+    pickEffort(NEW_CONVERSATION, "high");
+    pickServiceTier(NEW_CONVERSATION, "priority");
+    await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+    await flush();
+    await send();
+    expect(sentBody()).toMatchObject({ launcher: "codex", model: "gpt-fast", effort: "high", service_tier: "priority" });
+    await act(async () => starts[0].resolve({ session: { machine_id: "hub", session_id: "c2", title: "" } as Session }));
+    await flush();
+    expect(pickedServiceTier(NEW_CONVERSATION)).toBeUndefined();
+  });
+
+  it("an untouched first request has no service_tier", async () => {
+    await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+    await flush();
+    await send();
+    expect(sentBody()).not.toHaveProperty("service_tier");
+  });
+
+  it("an older hub gets no service_tier even when a downgraded page held a draft", async () => {
+    Object.assign(getState(), { features: [] });
+    pickLauncher(NEW_CONVERSATION, "codex");
+    pickModel(NEW_CONVERSATION, "gpt-fast");
+    pickServiceTier(NEW_CONVERSATION, "priority");
+    await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+    await flush();
+    await send();
+    expect(sentBody()).toMatchObject({ launcher: "codex", model: "gpt-fast" });
+    expect(sentBody()).not.toHaveProperty("service_tier");
+  });
+
+  it("a manager change disarms Fast before the destination catalog answers", async () => {
+    Object.assign(getState(), { features: [ASSISTANT_START_SERVICE_TIER_FEATURE] });
+    pickLauncher(NEW_CONVERSATION, "codex");
+    pickModel(NEW_CONVERSATION, "gpt-fast");
+    pickServiceTier(NEW_CONVERSATION, "priority");
+    await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+    await flush();
+    act(() => chooseManager("other-manager"));
+    await flush();
+    expect(pickedServiceTier(NEW_CONVERSATION)).toBeUndefined();
+    await send();
+    expect(sentBody()).not.toHaveProperty("service_tier");
+  });
+
+  it("a refused start keeps Fast with the restored draft", async () => {
+    Object.assign(getState(), { features: [ASSISTANT_START_SERVICE_TIER_FEATURE] });
+    pickLauncher(NEW_CONVERSATION, "codex");
+    pickModel(NEW_CONVERSATION, "gpt-fast");
+    pickServiceTier(NEW_CONVERSATION, "priority");
+    await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+    await flush();
+    await send();
+    await act(async () => starts[0].reject(new Error("no launcher")));
+    await flush();
+    expect(pickedServiceTier(NEW_CONVERSATION)).toBe("priority");
+    expect(sentBody()).toHaveProperty("service_tier", "priority");
   });
 });

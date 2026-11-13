@@ -67,6 +67,10 @@ const (
 	// (#6282, docs/protocol/protocol.md "Assistant chat search"). The hub lists the assistant_search feature only while
 	// the default manager names it; the apps keep filtering titles and last messages without it.
 	CapabilityAssistantSearch = "assistant_search"
+	// CapabilityAssistantStartServiceTier: the manager forwards a new conversation's native service_tier to the node,
+	// which acknowledges it before the first turn (#6240). The hub lists the feature only for the default manager and
+	// refuses an explicit tier sent to a manager that does not name this capability.
+	CapabilityAssistantStartServiceTier = "assistant_start_service_tier"
 )
 
 // The methods and events, by direction. The assistant's handshake is manager.hello {id, host, os, arch, deploy,

@@ -17,6 +17,15 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+func TestBusHelloNamesAssistantStartServiceTier(t *testing.T) {
+	b := NewBusHub(BusOptions{Hub: "http://[fd00::20]:18660", Token: "t"})
+	p, _ := b.client.HelloParams().(map[string]any)
+	caps, _ := p["capabilities"].([]string)
+	if !slices.Contains(caps, assistantwire.CapabilityAssistantStartServiceTier) {
+		t.Fatalf("manager does not advertise first-message Fast: %v", caps)
+	}
+}
+
 // pickFixture is mainChatFixture with the main conversation "main" and a side conversation "side" (on cx) on "server",
 // Model configuration › Main chat on gw, and two more providers: "far", kept off every computer, and "own", which
 // skips computers with their own Claude Code sign-in (as "server" has).
@@ -478,6 +487,22 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 		sid := got["sid"].(string)
 		f.setSessions("server", proto.Session{SessionID: sid, Assistant: true, Launcher: "cx"})
 		if p, err := send(t, s, sid, map[string]any{}); err != nil || p["launcher"] != "cx" || p["model"] != "vendor/typed-1" || p["effort"] != "high" {
+			t.Fatalf("next message: %v %v", p, err)
+		}
+	})
+	t.Run("Fast and effort stay independent", func(t *testing.T) {
+		s, f := pickFixture(t)
+		code, got := start(t, s, `{"prompt":"hi","launcher":"cx","model":"vendor/typed-1","effort":"high","service_tier":"priority"}`)
+		want := proto.ModelPick{Launcher: "cx", Model: "vendor/typed-1", Effort: "high"}
+		if code != 200 || got["pick"] != want {
+			t.Fatalf("%d %v", code, got)
+		}
+		if p := f.lastSend(t); p["launcher"] != "cx" || p["model"] != "vendor/typed-1" || p["effort"] != "high" || p["service_tier"] != "priority" {
+			t.Fatalf("first message: %v", p)
+		}
+		sid := got["sid"].(string)
+		f.setSessions("server", proto.Session{SessionID: sid, Assistant: true, Launcher: "cx"})
+		if p, err := send(t, s, sid, map[string]any{}); err != nil || p["launcher"] != "cx" || p["model"] != "vendor/typed-1" || p["effort"] != "high" || p["service_tier"] != nil {
 			t.Fatalf("next message: %v %v", p, err)
 		}
 	})
