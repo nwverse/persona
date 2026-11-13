@@ -230,14 +230,16 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
   (prose explaining meta fields; disallowed without `meta`). `group.tool` and `group.fallback` need no declaration; if absent, return `unknown_method`. The model sees unavailable tools; with no fallback, an untriageable batch waits for the next round.
   If either side lacks support, retain one row per chat. Old hubs / plugins do not affect each other (old hubs do not recognize `group`; see protocol "Old hubs").
 - **Model behavior** (`inbox.triage`): prompt = generic association rules (`prompts/inbox/group.md`: replies / quotes, same topic, consecutive messages from one person belong together; a long gap plus new topic starts another;
-  uncertainty merges into an existing event; at most 3 new events per batch; tier criteria shared with triage in `inbox/tiers.md`) + plugin `meta_description` + source rules (`rules`, otherwise global `inbox.rules`)
+  uncertainty merges into an existing event; the prompt asks for at most 3 new events per batch; tier criteria shared with triage in `inbox/tiers.md`) + plugin `meta_description` + source rules (`rules`, otherwise global `inbox.rules`)
   + batch text. Existing events for the chat are preloaded (the no-query result of `events` below), saving one call. Each model response is JSON, either one tool call or a result.
+  The output budget is `256 + 48 × new messages + 160 × min(new messages, candidate events + 3)`, clamped to 1024–4096 tokens on every model call.
   The batch `context` may interleave the user's own messages by position: their sender is `我（自己说的，不归类）`, they have no message id of their own (a trailing `(回复 <id>)` or `(话题 <id>)` names another message), they are context only, they are not in `new`, and the model must not assign them.
   At most 4 tool calls per batch; at most 2 minutes total, 45 seconds per call.
 - **Tools**: `events` (hub-owned: open events in the same chat plus those handled within 3 days, at most 10, `{id, title, summary, tier, version, done, meta}`; `query` filters text in titles, summaries, meta);
   `messages_before`, `messages_around`, `search` (plugin-owned through `group.tool`, avatars / media stripped, at most 8 KB).
 - **Result**: `assign` (each new message's event: existing ID or `new:1`…) and `events` (title, summary, tier, reason for each touched event; new events may `continues` a handled one).
-  Hub validates: every new message assigned exactly once; existing events must have been queried in this batch and remain unhandled; at most 3 `new:k`; tier must be one of three and title required. **Invalid results mean model unavailable.**
+  Hub validates: every new message assigned exactly once; existing events must have been queried in this batch and remain unhandled; tier must be one of three and title required. The 3-new-event limit is prompt guidance only: exceeding it does not invalidate the result.
+  An invalid result or unparseable JSON is handed back to the model once for correction, consuming one call allowance without adding a tool call; if no allowance remains, or the correction is still invalid, the model is treated as unavailable and the fallback is used.
 - **Counts**: hub maintains total message `count`, initialized from assigned messages and incremented by newly assigned messages each batch, ignoring plugin `extra.count`. `started_at` is fixed at creation.
 - **Inbox writes**: for connectors maintaining `meta`, call `group.append` once per touched event; retry only failed events, 3 attempts total. Write Inbox items using returned `id`, model title / summary / tier, `triaged_by: "model"`,
   treating this version as triaged. If the user handled an event meanwhile, create a new continuation instead. An unchanged `last` is a retransmission, with no store / push (push once per ID + version). Muted events remain directly done.
@@ -450,7 +452,7 @@ An item stays one matter for as long as it goes on: a handled event takes the me
 | Field | Meaning | Listed |
 | --- | --- | --- |
 | `where` | Where the matter happens, for people: a group's name, the other person of a direct chat, a repository. Empty for mail | Yes |
-| `title_by` | Who wrote `title` and `summary`: `model` (grouping), `rules` (the connector's fallback), `assistant` (the processing conversation), `user`. Once `assistant` or `user` wrote them, grouping leaves both alone | No |
+| `title_by` | Who wrote `title` and `summary`: `model` (grouping), `rules` (the connector's fallback), `assistant` (the processing conversation's `inbox_suggest` `title` / `summary`), `user`. Once `assistant` or `user` wrote them, grouping leaves both alone | No |
 | `follow` | `{who, next, check_at, checks, due}`: who or what it waits on (the model's words), the next step, when to look at it again (RFC 3339; 24 hours when not given), how many times in a row a look found nothing new, and whether that time came with nobody to look (the AI twin off). Apps read only `who`, `next` and `check_at` | Yes |
 | `now` | The item's state key (table below), worked out from the item alone: no clock, no settings, so the list memo holds (`inbox_list_memo.go`) | Yes, never stored |
 
@@ -526,7 +528,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 
 **Suggestion tool `inbox_suggest`** (`assistant/inbox_suggest.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
 conversation the item was handed to ("Item actions", Hand to AI), rejecting other chats):
-`{item?, kind, text, note?, handback?, outcome?, recap?, machine?, cwd?, related?, changes?}`.
+`{item?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?}`.
 
 | kind | Meaning | After confirmation |
 | --- | --- | --- |
@@ -535,7 +537,8 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 | `conclusion` | Conclusion: `outcome: fyi` (move to FYI with the conclusion; OK marks done) or `done` (review found no action needed; immediately done, `done_by=manager`) | OK marks done (`done_by=user`) |
 
 - `handback: true`: a suggestion requiring your judgment ("Ask a colleague before replying to the client"). Confirmation executes nothing; hand it back to the handling chat as instructions to act, with the normal chain recording.
-- `recap` alone, without `kind`, updates only the summary (for example after a send), up to 600 characters. `related` contains IDs of related Inbox items from other chats / sources, recorded on both sides.
+- `recap` without `kind` updates the recap (for example after a send), up to 600 characters. `related` contains IDs of related Inbox items from other chats / sources, recorded on both sides.
+- `title` names the matter (one line, clipped to 40 characters) and `summary` says where it stands and who is waited on for what (one line, clipped to 80); either may accompany a suggestion or a recap-only call. A non-blank accepted value sets `title_by=assistant`; blank values leave the item unchanged. Only chat events (a grouped event or a built-in chat) accept `title`, and only when they have no mail, document or company-feed block; a grouped event may still carry its connector block. Connector threads (including PRs / issues and iMessage), mail, documents and company-feed posts keep their own title: the tool ignores `title`, says why, and still writes `summary`.
 - Each submission increments `suggestion.version` and invalidates the old suggestion; producing a suggestion sets `handling.state = done`. Chain records "Manager suggests a reply / an Agent / advice awaiting your decision" (`handling`, linked to the handling chat); conclusions record `concluded`.
 - A mail reply suggestion also keeps its exact reply target internally (not in the listed suggestion). Opening mail marks it seen, and a later collection can consequently reduce a thread to an older unread UID; confirmation checks the bound target under the collection lock and returns `409 mail_reply_target_changed` instead of answering that different mail (#5471). A pre-upgrade mail suggestion has no bound target and is refused the same way rather than guessed; non-mail suggestions keep their legacy confirmation path. An FYI conclusion likewise remains open when its mail is read elsewhere: the item becomes `read`, but only **Got it** files it.
 - Old `inbox_draft` (reply only) remains supported, equivalent to `kind: reply`, for chats started before the tool list changed.
@@ -805,8 +808,9 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   reply), plus the requested action (default "Summarize this, tell me what I need to do, and suggest a reply," with two other presets), sent as one message.
   Targets: **Persona (main chat)**, the default (#1194, every client): the item's own manager's main conversation (another manager's item goes to that manager's,
   found by asking it; with none yet, the message starts it), which then opens; **Persona (new chat)** starts a new conversation with the item's manager (iOS / Mac switch to the
-  Persona tab); an Agent (latest 8) receives it in its session (navigate there). Only live, writable Agents on online computers are offered. The web leaves the item open by default for every target; iOS / Mac and Android mark it done by default once the message got there, except for the main chat (below).
+  Persona tab); an Agent (latest 8) receives it in its session (navigate there). Only live, writable Agents on online computers are offered. The web, iOS, Mac and Android leave the item open by default for every target after the message arrives.
   Apple sends an Agent hand-off as one pending outbox message: a wait for the connection keeps the same message and operation id through the outbox's retries, not a new send; the item is filed only at the terminal sent state, and a refusal keeps the sheet open with its reason (#1846). The filing intent and whether it was initiated are restored with the outbox, so delivery after an app relaunch still files the item once.
+  On iPhone, iPad and the Mac, after a new chat or Agent (including New Agent) accepts the hand-off, the client records the session with `POST /api/v1/inbox/{id}/handoff` and body `{session: {machine_id, session_id}, kind: "conversation" | "agent", title, client_id}`, with no `text`. This only records and links the session; it sends no second message. A new chat uses the item's title; an Agent uses its session title when listed, with the item's title as the fallback. The main chat's original request already records itself and is not repeated. Any record failure, including an older hub's 400 / 404 / 405, is ignored without changing the successful hand-off or its UI.
   **New Agent…** (#5933; iOS / iPadOS bar and sheet, the Mac through the same sheet, web; Android later) is the first row of the Agents, shown even when none is running,
   for giving the item to a fresh Agent in another folder. It reads the item and opens the existing New Agent page prefilled:
   - **Context:** the item as a card over the first message, sent ahead of it: the same `<persona-context>` an Agent target gets.
@@ -816,9 +820,8 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   - **Confirmation:** nothing is sent before Start there, so there is no Undo toast. Cancel comes back to the item with the ask kept: the bar's field or the sheet / dialog as
     it was.
   - **After start:** the Agent opens (on the Mac once the sheet has closed, as for the other targets), and the item's source remembers that Agent, never "New Agent…" (the bar's `inbox.handOffTarget` too), so the next item from it starts there
-    while it can take messages. "Also mark as done" is off by default on the web and on for Agent targets on iOS / Mac and Android unless the user set the box: the item is filed once the Agent started (web: once its
-    first message went).
-  - **Hub and manager:** unchanged; the page's start (`POST /api/v1/sessions`) and first message are New Agent's own.
+    while it can take messages. "Also mark as done" is off by default for every target on the web, iOS and Mac; Android's existing Agent target defaults off too. The user's choice stays, and a checked item is filed once the Agent started (web: once its first message went).
+  - **Hub and manager:** the page's start (`POST /api/v1/sessions`) and first message are New Agent's own; on iPhone, iPad and the Mac, the client records the Agent on the item through the hand-off endpoint above after Start.
   **Write-back to the item** (#1194, web, iOS, Mac and Android): the main-chat target calls `POST /api/v1/inbox/{id}/handoff` `{text, client_id}` on the item's manager (`assistant/inbox_handoff.go`),
   which sends the text after a block naming the item (`prompts/inbox/handoff.md`) to its main conversation through `session.send_once` (the client id is the message id, so the same
   request again sends nothing more), or starts the main conversation with it, and answers `{item, session}`; a work machine is refused, and a failed send records nothing (`apierr.Call`'s status, as for a new conversation).
@@ -843,7 +846,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   shows a chip for every open item handed over. `prompts/inbox/handoff.md` tells the conversation to write back when the user wants
   a reply or a conclusion or the matter is settled, and again whenever it changes. The web's card has "Open in Inbox"; iOS has no way yet to open an
   item from the chat, so its card leaves rejecting and instructing to the item's page. Mock: `MOCK_TASKS=1 MOCK_HANDOFF_CARD=1` (`sent`: the reply went).
-  "Also mark as done" is off by default on the web for every target; on iOS / Mac and Android it is off for the main chat (it may still write back) and on for the other targets, with switching targets following that default until the user sets the box,
+  "Also mark as done" is off by default on the web, iOS, Mac and Android for every target. Switching targets follows that default until the user sets the box,
   whose choice then stays. Checked, the item is filed once the hand-off is answered, and a later `inbox_suggest` on it is refused as already filed.
   Not covered: later messages on the item are not forwarded to the main conversation (it reads the source with its tools when asked), and filing the item is not told there.
   **The iPhone's event page** (#2055, `Persona/Views/Inbox/InboxHandOffBar.swift`) has no sheet: a bar pinned to the bottom, like iMessage's, at most two rows high and riding up
@@ -851,13 +854,13 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   Handle It) and Draft Reply / View Draft, which opens AI Draft Reply's sheet. Under them: a target capsule (a system menu: Main Chat, New Chat, then New Agent…, the latest 3
   Agents and More… with the next ones), a one-line "Hand to AI…" field and Send. A chip or a send goes without a confirmation, held for 5 s behind a toast at the bottom (`InboxHandOffModel.undoWindow`):
   Undo takes it back (a typed ask goes back into the field), View sends it at once and opens the conversation; left alone it goes and the toast says where, with View. Sending
-  never leaves the page. The last target is remembered (`inbox.handOffTarget`); an Agent no longer listed falls back to Main Chat. "Also mark as done" keeps the targets' defaults.
+  never leaves the page. The last target is remembered (`inbox.handOffTarget`); an Agent no longer listed falls back to Main Chat. "Also mark as done" is off, so the toast does not say the item was filed.
   The Mac and the iPhone's source pages (whose own reply composer sits at the bottom) keep the sheet, which opens the conversation after sending.
   **Per source** (#2121, `InboxHandOffMemory`, shared cases in `spec/fixtures/inbox/handoff_memory.json`), the bar and the sheet remember where an item went:
   - **Key:** the item's source plus its most specific mute option (`repo`, else `chat`, else `sender`), in the hub group.
   - **Next item from that source:** starts on that target, marked **Last time**. Nothing is sent until the user sends. An item without one of those options starts as before (the bar's last target, the sheet's Main Chat).
   - **The remembered Agent can't take it now** (it has ended, can't take messages or its computer is offline: the same test as the Agents offered): Main Chat stands in, with a line saying so.
-  - **Visible Mark as Done:** a preselected Agent turns Mark as Done on, so the bar's toast says "· marking done" / "· marked done" and the sheet shows its toggle.
+  - **Visible Mark as Done:** on iPhone, iPad and the Mac, a preselected Agent leaves Mark as Done off, like every other default target; only the user's explicit choice turns it on. The bar's toast says "· marking done" / "· marked done" only for that choice, and the sheet shows its toggle.
   - **Storage:** local to the device, ids only, the 200 most recent sources, not synced, and forgotten with the group (`forgetGroups`, `unpair`).
   iOS and Mac (`InboxHandOffModel`) send it with one `client_id` per hand-off. Whenever the answer leaves open whether the text went (no answer or a timeout, the connection lost
   midway, a 5xx without a `code` from something in front of the hub or from the hub unable to keep its receipt, `assistant_in_doubt`, `delivered: unknown` or `yes`, the node lost

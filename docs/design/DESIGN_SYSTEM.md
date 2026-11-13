@@ -979,7 +979,7 @@ Toasts: error, success or info; one slot, so a new toast replaces the old. Durat
 
 The hub's link while it is down (Waiting for network, Connecting…, Updating…, or what only the user can fix) is said once: in the title of a page that has one (an Agent's chat), else by a pill floating under the home bar on the home pages (iOS `ShellLinkPill`, `docs/apple/shell.md` "Connection status and toasts"; Android `JLinkPill`, #4339). It moves nothing, takes no touches and is announced; a spinner while it retries, a caution mark when it cannot.
 
-### Web assistant skill mentions (#5357)
+### Web skill mentions (#5357)
 
 Reuse the composer's existing `ComposerPanel` surface, neutral sliding highlight, icon set, keyboard/IME/Escape
 behavior and context chips. A skill row has two lines: readable name plus source, then its description; the source
@@ -987,6 +987,8 @@ distinguishes equal names. Selecting it adds a removable skill chip rather than 
 Skill rows and the skill chip's remove target meet the Web 44 px touch size. The menu's loading, partial-inventory and
 failure status stays secondary and never disables ordinary chat. No new primary screen, setting, model choice or
 native client pattern is introduced. Use the existing surface/hover/ink/accent tokens in light/dark and narrow layouts.
+Ordinary Claude Code and Codex Agent chats use this same picker and chip. The catalog belongs to the actual session;
+unsupported or unavailable environments show the existing quiet failure status while text and other references remain usable.
 
 ### 3.11 Code blocks, inline code and quotes in replies
 

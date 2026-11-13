@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -29,8 +30,8 @@ import (
 // existing event takes the new messages but keeps its title, summary, tier, reason, urgency and triager. That version is final.
 
 const (
-	groupCalls       = 4                  // tool calls one batch may make
-	groupNewMax      = 3                  // new events the model may open for one batch
+	groupCalls       = 4                  // call allowances per batch (tools and a possible correction)
+	groupNewMax      = 3                  // new events the prompt suggests for one batch; also sizes the output budget
 	groupEventsMax   = 10                 // events the events tool lists
 	groupDoneFor     = 3 * 24 * time.Hour // how long a done event is still listed
 	groupConcurrency = 4                  // batches related at once (the others wait for the next round)
@@ -259,8 +260,9 @@ type groupAnswer struct {
 	} `json:"events"`
 }
 
-// askGroup has the model relate the batch, calling tools at most groupCalls times, within groupTimeout. nil and why
-// when the model can't or its answer does not hold up (the fallback then groups it).
+// askGroup has the model relate the batch, calling tools at most groupCalls times, within groupTimeout. One invalid
+// answer is handed back for correction, consuming one of those call allowances without adding a tool call. nil and why
+// when the model can't or its answer still does not hold up (the fallback then groups it).
 func (s *Service) askGroup(ctx context.Context, c assistantwire.InboxSource, t connector.InboxThing, events []groupEvent) (*groupPlan, string) {
 	ctx, cancel := context.WithTimeout(ctx, groupTimeout)
 	defer cancel()
@@ -276,32 +278,70 @@ func (s *Service) askGroup(ctx context.Context, c assistantwire.InboxSource, t c
 		seen[e.ID] = e
 	}
 	in := prompts.InboxGroupInput{Thread: t.Thread, New: t.Group.New, Context: t.Context, Events: jsonText(events)}
+	budget := groupOutputBudget(len(t.Group.New), len(events))
+	retried := false
 	for {
 		in.Left = groupCalls - len(in.Calls)
+		if retried {
+			in.Left-- // the correction spends an allowance, but is not a tool call in Calls
+		}
 		var out groupAnswer
 		sctx, scancel := context.WithTimeout(ctx, groupStepTimeout)
-		err := s.inboxModelJSON(sctx, purposeTriage, system, prompts.RenderInboxGroupInput(in), 0, &out)
+		input := prompts.RenderInboxGroupInput(in)
+		in.Problem = "" // a correction is shown on the immediately following request only
+		err := s.inboxModelJSON(sctx, purposeTriage, system, input, budget, &out)
 		scancel()
 		paused, _ := modelPaused(err)
+		var problem error
+		why := "模型出错："
 		switch {
 		case modelUnconfigured(err):
 			return nil, "没有配置分拣模型"
 		case paused:
 			return nil, "模型暂时不可用：" + err.Error()
+		case err != nil && groupJSONProblem(err):
+			problem = err
 		case err != nil:
-			return nil, "模型出错：" + err.Error()
+			return nil, why + err.Error()
 		case out.Tool == "":
-			plan, err := checkGroupAnswer(out, t.Group.New, seen)
-			if err != nil {
-				return nil, "模型的结果不合格：" + err.Error()
+			plan, checkErr := checkGroupAnswer(out, t.Group.New, seen)
+			if checkErr == nil {
+				return plan, ""
 			}
-			return plan, ""
+			problem, why = checkErr, "模型的结果不合格："
 		case in.Left == 0:
-			return nil, fmt.Sprintf("模型查了 %d 次还要查", groupCalls)
+			return nil, fmt.Sprintf("模型查了 %d 次还要查", len(in.Calls))
+		}
+		if problem != nil {
+			if retried {
+				return nil, "模型重问后仍不合格：" + problem.Error()
+			}
+			if in.Left == 0 {
+				return nil, why + problem.Error()
+			}
+			retried = true
+			in.Problem = problem.Error()
+			continue
 		}
 		result := s.groupTool(ctx, c.ID, t.Thread, out.Tool, out.Args, seen)
 		in.Calls = append(in.Calls, prompts.InboxGroupCall{Tool: out.Tool, Args: argsText(out.Args), Result: result})
 	}
+}
+
+// groupOutputBudget sizes every grouping response from the batch's messages and candidate events, within the model's
+// usual 1024-token floor and a 4096-token ceiling.
+func groupOutputBudget(fresh, candidates int) int {
+	return max(1024, min(4096, 256+48*fresh+160*min(fresh, candidates+groupNewMax)))
+}
+
+// groupJSONProblem is a malformed model answer that one correction may fix, not a transport or availability failure.
+func groupJSONProblem(err error) bool {
+	if errors.Is(err, ai.ErrNoObject) || errors.Is(err, ai.ErrUnterminated) || errors.Is(err, ai.ErrTruncated) {
+		return true
+	}
+	var syntax *json.SyntaxError
+	var valueType *json.UnmarshalTypeError
+	return errors.As(err, &syntax) || errors.As(err, &valueType)
 }
 
 // groupTool runs one tool for the model: events here, the conversation's through the connector (at the hub). A
@@ -341,8 +381,8 @@ func (s *Service) groupTool(ctx context.Context, connectorID, thread, name strin
 }
 
 // checkGroupAnswer holds the model's answer to the rules: every new message in exactly one event; an existing event
-// only one it was shown and not done; at most groupNewMax new ones (new:<n>), a done one they continue one it was
-// shown; every event used described, with a known tier and a title.
+// only one it was shown and not done; a new one (new:<n>) may continue a done one it was shown; every event used
+// described, with a known tier and a title. The prompt's new-event limit is guidance, not a validation failure.
 func checkGroupAnswer(out groupAnswer, fresh []string, seen map[string]groupEvent) (*groupPlan, error) {
 	want := map[string]bool{}
 	for _, m := range fresh {
@@ -377,7 +417,6 @@ func checkGroupAnswer(out groupAnswer, fresh []string, seen map[string]groupEven
 		described[e.Event] = i
 	}
 	plan := &groupPlan{model: true}
-	news := 0
 	for _, ev := range order {
 		i, ok := described[ev]
 		if !ok {
@@ -393,7 +432,6 @@ func checkGroupAnswer(out groupAnswer, fresh []string, seen map[string]groupEven
 		pe := plannedEvent{messages: byEvent[ev], title: d.Title, summary: d.Summary, tier: d.Tier, reason: d.Reason,
 			urgent: d.Urgent && d.Tier == TierAction}
 		if isNewEvent(ev) {
-			news++
 			if d.Continues != "" {
 				if s, ok := seen[d.Continues]; !ok || !s.Done {
 					return nil, fmt.Errorf("事件 %q 接着的 %q 不是查到的已处理的事", ev, d.Continues)
@@ -411,9 +449,6 @@ func checkGroupAnswer(out groupAnswer, fresh []string, seen map[string]groupEven
 			pe.existing = ev
 		}
 		plan.events = append(plan.events, pe)
-	}
-	if news > groupNewMax {
-		return nil, fmt.Errorf("新开了 %d 件事，最多 %d 件", news, groupNewMax)
 	}
 	return plan, nil
 }
