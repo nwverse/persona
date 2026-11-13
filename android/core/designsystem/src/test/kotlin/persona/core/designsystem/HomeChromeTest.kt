@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -14,15 +15,26 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertLeftPositionInRootIsEqualTo
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.filter
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -32,9 +44,12 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 
 @RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "zh-w400dp-h900dp-mdpi")
 class HomeChromeTest {
     @get:Rule val rule = createComposeRule()
@@ -126,6 +141,141 @@ class HomeChromeTest {
         val label = rule.onNodeWithText("Agents").getBoundsInRoot()
         val action = rule.onNodeWithContentDescription("New chat").getBoundsInRoot()
         assertTrue("the trailing action covers the destination label: $label / $action", label.right <= action.left)
+    }
+
+    @Test fun glassOneTrailingFitsEveryWidthAndFont() = homeControlsFit(AppStyle.Glass, trailingActions = 1)
+    @Test fun glassTwoTrailingFitEveryWidthAndFont() = homeControlsFit(AppStyle.Glass, trailingActions = 2)
+    @Test fun briefOneTrailingFitsEveryWidthAndFont() = homeControlsFit(AppStyle.Brief, trailingActions = 1)
+    @Test fun briefTwoTrailingFitEveryWidthAndFont() = homeControlsFit(AppStyle.Brief, trailingActions = 2)
+    @Test fun boardOneTrailingFitsEveryWidthAndFont() = homeControlsFit(AppStyle.Board, trailingActions = 1)
+    @Test fun boardTwoTrailingFitEveryWidthAndFont() = homeControlsFit(AppStyle.Board, trailingActions = 2)
+
+    private fun homeControlsFit(style: AppStyle, trailingActions: Int) {
+        var width by mutableStateOf(200.dp)
+        var fontScale by mutableStateOf(2f)
+        var faceClicks = 0
+        var newClicks = 0
+        var optionClicks = 0
+        val selections = mutableListOf<String>()
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = fontScale)) {
+                PersonaTheme(style = style, reduceMotion = true) {
+                    Box(Modifier.width(width).height(220.dp).testTag("pane")) {
+                        HomeNavigation(
+                            items = listOf(
+                                NavItem("assistant", "Assistant", PhIcons.ChatCircle),
+                                NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
+                            ),
+                            selected = "agents", onSelect = { selections += it },
+                            leading = { JPersonaButton(PersonaState.Idle, "Sidebar", { faceClicks++ }) },
+                            trailing = {
+                                JIconButton(PhIcons.NotePencil, "New session", { newClicks++ })
+                                if (trailingActions == 2) JIconButton(PersonaIcons.moreMenu, "List options", { optionClicks++ })
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        for (w in listOf(200.dp, 280.dp, 320.dp, 360.dp, 400.dp)) for (scale in listOf(1f, 2f)) {
+            rule.runOnIdle { width = w; fontScale = scale }
+            rule.waitForIdle()
+            val case = "$style width=$w fontScale=$scale trailing=$trailingActions"
+            val agentsLabel = if (style == AppStyle.Glass) "Agents" else "Agents 2"
+            assertTextNotEllipsized("Assistant", case)
+            assertTextNotEllipsized(agentsLabel, case)
+            val pane = rule.onNodeWithTag("pane").getBoundsInRoot()
+            val face = rule.onNodeWithContentDescription("Sidebar").getBoundsInRoot()
+            val switcher = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            val new = rule.onNodeWithContentDescription("New session").getBoundsInRoot()
+            val controls = mutableListOf("face" to face, "switcher" to switcher, "new" to new)
+            if (trailingActions == 2) controls += "options" to rule.onNodeWithContentDescription("List options").getBoundsInRoot()
+            assertTrue("switcher has no width: $case / $switcher", switcher.right > switcher.left)
+            for ((name, bounds) in controls) {
+                assertTrue("$name is horizontally clipped: $case / $pane / $bounds",
+                    bounds.left >= pane.left && bounds.right <= pane.right)
+                assertTrue("$name is vertically clipped: $case / $pane / $bounds",
+                    bounds.top >= pane.top && bounds.bottom <= pane.bottom)
+            }
+            for (i in controls.indices) for (j in i + 1 until controls.size) {
+                assertDoesNotOverlap(controls[i].second, controls[j].second,
+                    "${controls[i].first} / ${controls[j].first}: $case")
+            }
+            for ((name, bounds) in controls.filter { it.first != "switcher" }) {
+                assertEquals("$name lost its 48dp target: $case", 48.dp, bounds.right - bounds.left)
+            }
+            if (w == 200.dp) {
+                assertTrue("200dp must stack below the face: $case / $face / $switcher", switcher.top >= face.bottom)
+                assertTrue("200dp must stack below the action: $case / $new / $switcher", switcher.top >= new.bottom)
+            }
+            if (w == 360.dp && scale == 1f && trailingActions == 1) {
+                assertTrue("360dp must stay inline: $case / $face / $switcher",
+                    switcher.top < face.bottom && switcher.bottom > face.top)
+            }
+            val beforeFace = faceClicks
+            val beforeNew = newClicks
+            val beforeOptions = optionClicks
+            rule.onNodeWithContentDescription("Sidebar").performClick()
+            rule.onNodeWithContentDescription("New session").performClick()
+            if (trailingActions == 2) rule.onNodeWithContentDescription("List options").performClick()
+            placedText("Assistant").performClick()
+            placedText(agentsLabel).performClick()
+            assertEquals("face click: $case", beforeFace + 1, faceClicks)
+            assertEquals("new click: $case", beforeNew + 1, newClicks)
+            if (trailingActions == 2) assertEquals("options click: $case", beforeOptions + 1, optionClicks)
+            assertEquals("segment clicks: $case", listOf("assistant", "agents"), selections.takeLast(2))
+        }
+    }
+
+    private fun placedText(text: String, useUnmergedTree: Boolean = false) =
+        rule.onAllNodesWithText(text, useUnmergedTree = useUnmergedTree)
+            .filter(SemanticsMatcher("placed in the top bar") { it.boundsInRoot.top > 0f }).onFirst()
+
+    private fun assertTextNotEllipsized(text: String, case: String) {
+        val layouts = mutableListOf<TextLayoutResult>()
+        placedText(text, useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        val result = layouts.single()
+        assertTrue("$text is ellipsized: $case", !result.isLineEllipsized(0))
+    }
+
+    @Test fun glassWideSwitcherIsCenteredWithOneAndTwoTrailingActions() {
+        var trailingActions by mutableStateOf(1)
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                Box(Modifier.width(400.dp).height(120.dp).testTag("pane")) {
+                    HomeNavigation(
+                        items = listOf(
+                            NavItem("assistant", "Assistant", PhIcons.ChatCircle),
+                            NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
+                        ),
+                        selected = "agents", onSelect = {},
+                        leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {}) },
+                        trailing = {
+                            JIconButton(PhIcons.NotePencil, "New session", {})
+                            if (trailingActions == 2) JIconButton(PersonaIcons.moreMenu, "List options", {})
+                        },
+                    )
+                }
+            }
+        }
+        for (count in 1..2) {
+            rule.runOnIdle { trailingActions = count }
+            rule.waitForIdle()
+            val pane = rule.onNodeWithTag("pane").getBoundsInRoot()
+            val face = rule.onNodeWithContentDescription("Sidebar").getBoundsInRoot()
+            val switcher = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            assertTrue("switcher is not inline with $count trailing actions: $face / $switcher",
+                switcher.top < face.bottom && switcher.bottom > face.top)
+            assertEquals("switcher is not centered with $count trailing actions",
+                (pane.left.value + pane.right.value) / 2,
+                (switcher.left.value + switcher.right.value) / 2, 0.51f)
+        }
+    }
+
+    private fun assertDoesNotOverlap(a: DpRect, b: DpRect, message: String) {
+        val separate = a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top
+        assertTrue("$message: $a / $b", separate)
     }
 
     @Test fun briefRetappingAssistantOpensItsMenu() = retappingAssistantOpensItsMenu(AppStyle.Brief)

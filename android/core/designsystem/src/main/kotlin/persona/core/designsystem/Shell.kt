@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,6 +24,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.toggleableState
@@ -261,58 +264,218 @@ fun HomeNavigation(
     // Felt only when it moves to another page, as iOS's switcher.
     val haptics = rememberHaptics()
     val select: (String) -> Unit = { key -> if (key != selected) haptics(Haptic.Tap); onSelect(key) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val scale = (density.fontScale * HomeTokens.shellTextStep).coerceAtMost(HomeTokens.shellScaleMaximum)
     if (PersonaTheme.style != AppStyle.Glass) {
-        Row(modifier.fillMaxWidth().background(palette.background).statusBarsPadding()
-            .padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            leading()
-            // The switcher keeps its cells' width; given the rest of the row itself, Board's ruled frame stretched
-            // past its two cells and left an empty box beside them.
-            Box(Modifier.weight(1f)) {
+        val switcher: @Composable () -> Unit = {
+            Box(Modifier.width(IntrinsicSize.Max)) {
                 JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
                     items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { index ->
                         val key = items[index].key
                         if (key == selected && onSelectedMenu != null) onSelectedMenu() else select(key)
-                    })
+                    }, Modifier.testTag("home-switcher"))
             }
-            trailing()
         }
+        HomeNavigationLayout(
+            modifier = modifier.fillMaxWidth().background(palette.background).statusBarsPadding(),
+            horizontalPadding = Tokens.Space.s,
+            verticalPadding = Tokens.Space.xs,
+            inlineSpacing = Tokens.Space.s,
+            trailingSpacing = Tokens.Space.s,
+            centerSwitcher = false,
+            centerInlineVertically = true,
+            switcherEndAccessory = null,
+            leading = leading,
+            trailing = trailing,
+            fullSwitcher = switcher,
+            compactSwitcher = {
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                    androidx.compose.ui.unit.Density(density.density, fontScale = 1f)) {
+                    switcher()
+                }
+            },
+            stackedSwitcher = {
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                    androidx.compose.ui.unit.Density(density.density, fontScale = 1f)) {
+                    switcher()
+                }
+            },
+        )
         return
     }
-    val scale = (androidx.compose.ui.platform.LocalDensity.current.fontScale * HomeTokens.shellTextStep)
-        .coerceAtMost(HomeTokens.shellScaleMaximum)
+    val choose: (NavItem) -> Unit = { item ->
+        if (item.key == selected && onSelectedMenu != null) onSelectedMenu() else select(item.key)
+    }
+    val segmentWidth = HomeTokens.segmentWidth * scale
+    val waiting = items.lastOrNull()?.badge ?: 0
+    val endAccessory: (@Composable () -> Unit)? = if (waiting > 0) {
+        { GlassHomeBadge(waiting) }
+    } else null
+    HomeNavigationLayout(
+        modifier = modifier.fillMaxWidth().statusBarsPadding().heightIn(min = HomeTokens.headerHeight),
+        horizontalPadding = Tokens.Space.l,
+        verticalPadding = Tokens.Space.xxs,
+        inlineSpacing = null,
+        trailingSpacing = null,
+        centerSwitcher = true,
+        centerInlineVertically = false,
+        switcherEndAccessory = endAccessory,
+        leading = leading,
+        trailing = trailing,
+        fullSwitcher = {
+            GlassHomeSwitcher(items, selected, segmentWidth, scale, onClick = choose)
+        },
+        compactSwitcher = {
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                androidx.compose.ui.unit.Density(density.density, fontScale = 1f)) {
+                GlassHomeSwitcher(items, selected, HomeTokens.segmentWidth, scale = 1f, onClick = choose)
+            }
+        },
+        stackedSwitcher = { available ->
+            val compactScale = HomeTokens.shellTextStep
+            val fittedWidth = ((available - Tokens.Space.xs * 2) / items.size.coerceAtLeast(1))
+                .coerceAtMost(HomeTokens.segmentWidth * compactScale)
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                androidx.compose.ui.unit.Density(density.density, fontScale = 1f)) {
+                GlassHomeSwitcher(items, selected, fittedWidth, compactScale, onClick = choose)
+            }
+        },
+    )
+}
+
+/**
+ * Measures the real switcher and action widths, then tries full inline, compact inline and stacked in that order.
+ * Measurement candidates hide their semantics; only the selected candidate is composed again for placement.
+ */
+@Composable
+private fun HomeNavigationLayout(
+    modifier: Modifier,
+    horizontalPadding: Dp,
+    verticalPadding: Dp,
+    inlineSpacing: Dp?,
+    trailingSpacing: Dp?,
+    centerSwitcher: Boolean,
+    centerInlineVertically: Boolean,
+    switcherEndAccessory: (@Composable () -> Unit)?,
+    leading: @Composable () -> Unit,
+    trailing: @Composable RowScope.() -> Unit,
+    fullSwitcher: @Composable () -> Unit,
+    compactSwitcher: @Composable () -> Unit,
+    stackedSwitcher: @Composable (Dp) -> Unit,
+) {
+    SubcomposeLayout(modifier) { constraints ->
+        val leadingPlaceable = subcompose(0) { Box { leading() } }.first().measure(androidx.compose.ui.unit.Constraints())
+        val trailingPlaceable = subcompose(1) {
+            Row(
+                horizontalArrangement = trailingSpacing?.let { Arrangement.spacedBy(it) } ?: Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically,
+            ) { trailing() }
+        }.first().measure(androidx.compose.ui.unit.Constraints())
+        val full = subcompose(2) {
+            Box(Modifier.clearAndSetSemantics {}) { fullSwitcher() }
+        }.first().measure(androidx.compose.ui.unit.Constraints())
+        val compact = subcompose(3) {
+            Box(Modifier.clearAndSetSemantics {}) { compactSwitcher() }
+        }.first().measure(androidx.compose.ui.unit.Constraints())
+        val accessory = switcherEndAccessory?.let { content ->
+            subcompose(4) { Box(Modifier.clearAndSetSemantics {}) { content() } }.first()
+                .measure(androidx.compose.ui.unit.Constraints())
+        }
+        // The badge starts at the capsule's right edge minus its own width, so only its offset overflows that edge.
+        val accessoryOverflow = if (accessory != null) Tokens.Space.s.roundToPx() else 0
+        val horizontal = horizontalPadding.roundToPx()
+        val vertical = verticalPadding.roundToPx()
+        val gap = inlineSpacing?.roundToPx() ?: 0
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else {
+            horizontal * 2 + leadingPlaceable.width + full.width + trailingPlaceable.width + gap * 2
+        }
+        val contentWidth = (width - horizontal * 2).coerceAtLeast(0)
+        fun fits(switcherWidth: Int): Boolean {
+            if (centerSwitcher) {
+                val left = (contentWidth - switcherWidth) / 2
+                return left >= leadingPlaceable.width &&
+                    left + switcherWidth + accessoryOverflow <= contentWidth - trailingPlaceable.width
+            }
+            return leadingPlaceable.width + switcherWidth + accessoryOverflow + trailingPlaceable.width + gap * 2 <= contentWidth
+        }
+        val inline = fits(full.width)
+        val compactInline = !inline && fits(compact.width)
+        val stacked = !inline && !compactInline
+        val stackedWidth = (contentWidth - accessoryOverflow).coerceAtLeast(0)
+        val switcher = when {
+            inline -> subcompose(6) { fullSwitcher() }.first().measure(androidx.compose.ui.unit.Constraints())
+            compactInline -> subcompose(7) { compactSwitcher() }.first().measure(androidx.compose.ui.unit.Constraints())
+            else -> subcompose(5) { stackedSwitcher(stackedWidth.toDp()) }.first()
+                .measure(androidx.compose.ui.unit.Constraints(maxWidth = contentWidth))
+        }
+        val firstRowHeight = maxOf(leadingPlaceable.height, trailingPlaceable.height)
+        val stackGap = if (stacked) Tokens.Space.xs.roundToPx() else 0
+        val contentHeight = if (stacked) firstRowHeight + stackGap + switcher.height
+            else maxOf(firstRowHeight, switcher.height)
+        val desiredHeight = contentHeight + vertical * 2
+        val height = if (constraints.hasBoundedHeight) desiredHeight.coerceIn(constraints.minHeight, constraints.maxHeight)
+            else maxOf(desiredHeight, constraints.minHeight)
+        val leadingY = if (!stacked && centerInlineVertically) vertical + (contentHeight - leadingPlaceable.height) / 2 else vertical
+        val trailingY = if (!stacked && centerInlineVertically) vertical + (contentHeight - trailingPlaceable.height) / 2 else vertical
+        val switcherY = if (stacked) vertical + firstRowHeight + stackGap
+            else if (centerInlineVertically) vertical + (contentHeight - switcher.height) / 2 else vertical
+        val switcherX = when {
+            stacked -> horizontal + (contentWidth - switcher.width - accessoryOverflow) / 2
+            centerSwitcher -> horizontal + (contentWidth - switcher.width) / 2
+            else -> horizontal + leadingPlaceable.width + gap
+        }.coerceAtLeast(horizontal)
+        layout(width, height) {
+            switcher.placeRelative(switcherX, switcherY)
+            leadingPlaceable.placeRelative(horizontal, leadingY)
+            trailingPlaceable.placeRelative(width - horizontal - trailingPlaceable.width, trailingY)
+        }
+    }
+}
+
+@Composable
+private fun GlassHomeSwitcher(
+    items: List<NavItem>,
+    selected: String,
+    segmentWidth: Dp,
+    scale: Float,
+    modifier: Modifier = Modifier,
+    onClick: (NavItem) -> Unit,
+) {
+    val palette = PersonaTheme.palette
     val density = androidx.compose.ui.platform.LocalDensity.current
     val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
-    Box(modifier.fillMaxWidth().statusBarsPadding().heightIn(min = HomeTokens.headerHeight)
-        .padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xxs)) {
-        Box(Modifier.align(Alignment.TopStart)) { leading() }
-        Box(Modifier.align(Alignment.TopCenter).padding(end = HomeTokens.segmentWidth)) {
-            Row(Modifier.floatingSurface(CircleShape).padding(Tokens.Space.xs)) {
-                items.forEach { item ->
-                    val chosen = item.key == selected
-                    val labelStyle = PersonaTheme.type.body.copy(fontSize = PersonaTheme.type.body.fontSize * HomeTokens.shellTextStep,
-                        fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal)
-                    val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
-                    val available = with(density) { (HomeTokens.segmentWidth * scale).toPx() }
-                    val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
-                    val fittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
-                    Box(Modifier.width(HomeTokens.segmentWidth * scale).height(HomeTokens.segmentHeight * scale)
-                        .clip(CircleShape).background(if (chosen) {
-                            if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight
-                        } else Color.Transparent)
-                        .clickable(role = Role.Tab) {
-                            if (chosen && onSelectedMenu != null) onSelectedMenu() else select(item.key)
-                        }.semantics { this.selected = chosen }, contentAlignment = Alignment.Center) {
-                        Text(item.label, style = labelStyle.copy(fontSize = fittedSize),
-                            color = if (chosen) palette.ink else palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
+    Box(modifier) {
+        Row(Modifier.testTag("home-switcher").floatingSurface(CircleShape).padding(Tokens.Space.xs)) {
+            items.forEach { item ->
+                val chosen = item.key == selected
+                val labelStyle = PersonaTheme.type.body.copy(fontSize = PersonaTheme.type.body.fontSize * HomeTokens.shellTextStep,
+                    fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal)
+                val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
+                val available = with(density) { (segmentWidth - Tokens.Space.xxs).toPx().coerceAtLeast(1f) }
+                val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
+                val fittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
+                Box(Modifier.width(segmentWidth).height(HomeTokens.segmentHeight * scale)
+                    .clip(CircleShape).background(if (chosen) {
+                        if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight
+                    } else Color.Transparent)
+                    .clickable(role = Role.Tab) { onClick(item) }
+                    .semantics { this.selected = chosen }, contentAlignment = Alignment.Center) {
+                    Text(item.label, style = labelStyle.copy(fontSize = fittedSize),
+                        color = if (chosen) palette.ink else palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            val waiting = items.lastOrNull()?.badge ?: 0
-            if (waiting > 0) Text("$waiting", style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-                color = palette.needsYou.text, modifier = Modifier.align(Alignment.TopEnd).offset(x = Tokens.Space.s, y = -Tokens.Space.xs)
-                    .clip(CircleShape).background(palette.sunken).padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.xxs), maxLines = 1)
         }
-        Row(Modifier.align(Alignment.TopEnd), verticalAlignment = Alignment.CenterVertically) { trailing() }
+        val waiting = items.lastOrNull()?.badge ?: 0
+        if (waiting > 0) GlassHomeBadge(waiting,
+            Modifier.align(Alignment.TopEnd).offset(x = Tokens.Space.s, y = -Tokens.Space.xs))
     }
+}
+
+@Composable
+private fun GlassHomeBadge(count: Int, modifier: Modifier = Modifier) {
+    Text("$count", style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+        color = PersonaTheme.palette.needsYou.text,
+        modifier = modifier.clip(CircleShape).background(PersonaTheme.palette.sunken)
+            .padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.xxs),
+        maxLines = 1)
 }
