@@ -199,3 +199,18 @@ func TestOppInboxAgentSweepLeavesAnAgentAwaitingTheUserAlone(t *testing.T) {
 		t.Fatalf("the sweep took a parked Agent for a stopped one: handling %q, stops %d, chain %+v", state, stops, it.Chain)
 	}
 }
+
+// The node's own queued input is input the user typed while it worked: it starts a new turn, so the current one is not
+// the Agent's stop yet.
+func TestOppInboxAgentStopWaitsForTheNodesQueuedInput(t *testing.T) {
+	h, it := oppStoppedHub(t)
+	h.f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s-sub", Status: proto.StatusIdle,
+		Queued: []string{"also check the tests"}, LastText: "the example is fixed", UpdatedAt: time.Now().UTC()})
+	h.inboxAgentTurnSettled(context.Background(), "box", "s-sub")
+	h.inbox.mu.Lock()
+	stops := len(oppStops(it))
+	h.inbox.mu.Unlock()
+	if stops != 0 {
+		t.Fatalf("queued input was taken for a stop: %+v", it.Chain)
+	}
+}
