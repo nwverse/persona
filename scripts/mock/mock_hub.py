@@ -13072,7 +13072,7 @@ LAUNCHER_MODELS = {
     ]},
     "codex": {"agent": "codex", "models": [
         {"id": "gpt-5.5", "name": "GPT-5.5", "description": "Latest model for coding and everyday work", "default": True, "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium"},
-        {"id": "gpt-5.5-codex", "name": "GPT-5.5-Codex", "description": "Tuned for long agentic coding", "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium"},
+        {"id": "gpt-5.5-codex", "name": "GPT-5.5-Codex", "description": "Tuned for long agentic coding", "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium", "service_tiers": [{"id": "default", "name": "Standard"}, {"id": "priority", "name": "Fast", "description": "Increased usage"}]},
         {"id": "gpt-5.5-mini", "name": "GPT-5.5-Mini", "description": "Smaller and cheaper", "efforts": ["low", "medium", "high"], "default_effort": "medium"},
     ]},
 }
@@ -18150,7 +18150,7 @@ def search_index_text(item):
         return None
     text = item.get("text") or ""
     if item.get("role") == "assistant":
-        text = search_card_text(text)
+        text = search_plain(search_card_text(text))
     elif item.get("role") == "user":
         if item.get("from") or item.get("injected"):
             return None
@@ -18165,26 +18165,142 @@ def search_index_text(item):
     return text if text.strip() else None
 
 
+# A reply's Markdown as the chat shows it (#7072): the manager's searchPlain (server/internal/assistant/search_text.go),
+# pattern for pattern; spec/fixtures/chat-search checks both.
+_PLAIN_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+_PLAIN_RULE = re.compile(r"^[ \t]{0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$")
+_PLAIN_TABLE_SEP = re.compile(r"^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$")
+_PLAIN_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+")
+_PLAIN_QUOTE = re.compile(r"^[ \t]{0,3}>[ \t]?")
+_PLAIN_LIST = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?")
+_PLAIN_ESCAPE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~<])")
+_PLAIN_INLINE = [
+    (re.compile(r"!\[([^\]\n]*)\]\([^)\n]*\)"), r"\1"),
+    (re.compile(r"\[([^\]\n]+)\]\([^)\n]*\)"), r"\1"),
+    (re.compile(r"\[([^\]\n]+)\]\[[^\]\n]*\]"), r"\1"),
+    (re.compile(r"<((?:https?|mailto):[^> \t\n]+)>"), r"\1"),
+    (re.compile(r"\*\*([^ \t\n*]|[^ \t\n*][^\n]*?[^ \t\n*])\*\*"), r"\1"),
+    (re.compile(r"(^|[^0-9A-Za-z_])__([^ \t\n_]|[^ \t\n_][^\n]*?[^ \t\n_])__($|[^0-9A-Za-z_])"), r"\1\2\3"),
+    (re.compile(r"~~([^~\n]+?)~~"), r"\1"),
+    (re.compile(r"\*([^ \t\n*]|[^ \t\n*][^*\n]*?[^ \t\n*])\*"), r"\1"),
+    (re.compile(r"(^|[^0-9A-Za-z_])_([^ \t\n_]|[^ \t\n_][^_\n]*?[^ \t\n_])_($|[^0-9A-Za-z_])"), r"\1\2\3"),
+]
+_PLAIN_ESCAPED = 0xE000
+
+
+def search_plain(md):
+    """A reply's Markdown as the chat shows it, without the markup (searchPlain)."""
+    if not any(c in md for c in "*_`#>[~|-+!<\\0123456789"):
+        return md
+    out, fence = [], ""
+    for line in md.split("\n"):
+        if fence:
+            t = line.strip()
+            if t.startswith(fence) and t.strip(fence[0]) == "":
+                fence = ""
+            else:
+                out.append(line)
+            continue
+        m = _PLAIN_FENCE.match(line)
+        if m:
+            fence = m.group(1)
+            continue
+        if _PLAIN_RULE.match(line) or _PLAIN_TABLE_SEP.match(line):
+            continue
+        line = _PLAIN_HEADING.sub("", line, count=1)
+        while _PLAIN_QUOTE.match(line):
+            line = _PLAIN_QUOTE.sub("", line, count=1)
+        line = _PLAIN_LIST.sub("", line, count=1)
+        t = line.strip()
+        if t.startswith("|"):
+            line = " ".join(c.strip() for c in t.strip("|").split("|"))
+        out.append(search_inline(line))
+    return "\n".join(out).strip()
+
+
+def search_code_span(s):
+    """The first code span: (where its backticks start, how many, where the closing run starts), or None."""
+    frm = 0
+    while True:
+        at = s.find("`", frm)
+        if at < 0:
+            return None
+        n = 0
+        while at + n < len(s) and s[at + n] == "`":
+            n += 1
+        j = at + n
+        while j < len(s):
+            k = s.find("`", j)
+            if k < 0:
+                break
+            m = 0
+            while k + m < len(s) and s[k + m] == "`":
+                m += 1
+            if m == n:
+                return at, n, k
+            j = k + m
+        frm = at + n
+
+
+def search_marks(s):
+    for r, w in _PLAIN_INLINE:
+        s = r.sub(w, s)
+        if w.endswith("\\3"):
+            s = r.sub(w, s)
+    return s
+
+
+def search_inline(line):
+    line = _PLAIN_ESCAPE.sub(lambda m: chr(_PLAIN_ESCAPED + ord(m.group(1))), line)
+    out = []
+    while line:
+        span = search_code_span(line)
+        if not span:
+            out.append(search_marks(line))
+            break
+        at, n, end = span
+        out.append(search_marks(line[:at]))
+        code = line[at + n:end]
+        if len(code) >= 2 and code[0] == " " and code[-1] == " " and code.strip(" "):
+            code = code[1:-1]
+        out.append(code)
+        line = line[end + n:]
+    return "".join(chr(ord(c) - _PLAIN_ESCAPED) if _PLAIN_ESCAPED <= ord(c) < _PLAIN_ESCAPED + 128 else c for c in "".join(out))
+
+
 def search_fold(s):
     return unicodedata.normalize("NFKC", s).lower()
+
+
+def search_fold_map(s):
+    """`s` folded a character at a time (`search_fold`), and for each folded character the index of the one it came
+    from: NFKC makes "…" three dots, so a cut snippet's folded text is longer than it (the manager's searchFoldRunes)."""
+    out, src = [], []
+    for i, ch in enumerate(s):
+        f = search_fold(ch)
+        out.append(f)
+        src.extend([i] * len(f))
+    return "".join(out), src
 
 
 def search_snippet(body, words):
     """The text around the first match on one line, "…" where cut, and every match's UTF-16 [start, end)."""
     start, end = 0, min(len(body), 120)
-    low = search_fold(body)
+    low, src = search_fold_map(body)
     for w in words:
         at = low.find(w)
-        if at >= 0 and len(low) == len(body):
-            start, end = max(0, at - 40), min(len(body), at + len(w) + 80)
+        if at >= 0:
+            first, last = src[at], src[at + len(w) - 1]
+            start, end = max(0, first - 40), min(len(body), last + 1 + 80)
             break
     snippet = ("…" if start else "") + " ".join(x.strip() for x in body[start:end].splitlines() if x.strip()) + ("…" if end < len(body) else "")
-    marked, low = [False] * len(snippet), search_fold(snippet)
+    marked = [False] * len(snippet)
+    low, src = search_fold_map(snippet)
     for w in words:
-        i = low.find(w) if len(low) == len(snippet) else -1
+        i = low.find(w)
         while i >= 0:
             for j in range(i, i + len(w)):
-                marked[j] = True
+                marked[src[j]] = True
             i = low.find(w, i + len(w))
     utf16 = [0]
     for ch in snippet:
@@ -19349,6 +19465,19 @@ LIVE = []  # (send, subscribed session ids) of each open WebSocket
 # GET /api/v1/messaging lists the source lark, /api/v1/messaging/lark/… answers in the protocol's shapes, the feature
 # messaging is on, every {type: lark} push goes out as {type: messaging} too.
 MOCK_MESSAGING = os.environ.get("MOCK_MESSAGING") == "1"
+# Settings › Inbox Sources › Source Relationships (`GET /api/v1/subscriptions/-/graph`, SourcesGraphView): one
+# extension's reads, two sources and the Inbox; `-openSourcesGraph YES`, then tap `graph.source.news` for its sheet.
+SOURCES_GRAPH = {
+    "extensions": [{"id": "mail", "name": "Mail", "line": "Two accounts"}],
+    "reads": [{"id": "mail.inbox", "extension": "mail", "title": "Inbox", "direct": True},
+              {"id": "mail.lists", "extension": "mail", "title": "Mailing lists", "push": True}],
+    "sources": [{"id": "news", "read": "mail.lists", "name": "Newsletters", "icon": "", "line": "Daily at 9:00",
+                 "badge": {"text": "On", "tone": "positive"}, "reading": True, "to": ["inbox"], "state": "active",
+                 "ask": "persona://assistant?q=newsletters"},
+                {"id": "work", "read": "mail.inbox", "name": "Work mail", "icon": "", "line": "As it arrives",
+                 "reading": True, "to": ["inbox"], "state": "active"}],
+    "destinations": [{"id": "inbox", "name": "Inbox", "line": "What needs you"}],
+}
 if MOCK_MESSAGING:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import lark_messaging
@@ -22993,6 +23122,7 @@ class H(BaseHTTPRequestHandler):
         if preview_route and preview_route(self, "GET", p, q): return
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
+        if p == "/api/v1/subscriptions/-/graph": return self.send_json(SOURCES_GRAPH)
         if recordings_route(self, "GET", p): return
         if custom_models_route(self, "GET", p, q): return
         if managers_route(self, "GET", p): return
@@ -24829,7 +24959,8 @@ class H(BaseHTTPRequestHandler):
                                        "code": START_FAIL["code"], "delivered": "unknown", "retryable": False}, 502)
             body = json.loads(self.last_body or b"{}")
             prompt = body.get("prompt", "")
-            SENT.append({"text": prompt, "images": body.get("images"), **({"launcher": body["launcher"]} if body.get("launcher") else {})})
+            SENT.append({"text": prompt, "images": body.get("images"), **({"launcher": body["launcher"]} if body.get("launcher") else {}),
+                         **({"service_tier": body["service_tier"]} if body.get("service_tier") else {})})
             now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             sid = str(uuid.uuid4())
             session = assistant_sess(sid, "", 0, "")  # what the hub returns: no title, model or transcript rev yet
@@ -24841,6 +24972,16 @@ class H(BaseHTTPRequestHandler):
             session.update(machine_id=mid, **({"cwd": home + "/.persona/assistant"} if home and mid != "server" else {}))
             session.update(status="working", state="working", updated_at=now, launcher=body.get("launcher") or "claude",
                            permission_mode=body.get("permission_mode") or "", effort=body.get("effort") or "")
+            listed = next((m for m in LAUNCHER_MODELS.get(session["launcher"], {}).get("models", [])
+                           if m.get("id") == (body.get("model") or engine_default_model(session["launcher"]))), {})
+            tiers = listed.get("service_tiers") or []
+            requested_tier = body.get("service_tier")
+            if requested_tier and requested_tier not in {tier["id"] for tier in tiers}:
+                return self.send_json({"error": "This model cannot apply the requested service tier", "code": "assistant_service_tier_unsupported",
+                                       "delivered": "none", "retryable": False}, 409)
+            if tiers:
+                # thread/settings/update was acknowledged before the first turn: the response and sessions push agree.
+                session.update(service_tier=requested_tier or "default", service_tiers=copy.deepcopy(tiers))
             session["main"] = bool(body.get("main"))
             if body.get("space") == "health":
                 session.update(cwd="/home/me/.persona/health", space="health")
@@ -27915,7 +28056,7 @@ _features_without_model_pick = features
 
 
 def features():
-    return _features_without_model_pick() + (["assistant_model_pick"] if MODEL_PICK_MODE else [])
+    return _features_without_model_pick() + (["assistant_model_pick", "assistant_start_service_tier"] if MODEL_PICK_MODE else [])
 
 
 MOCK_HELP.append("MOCK_MODEL_PICK=1|picked  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"

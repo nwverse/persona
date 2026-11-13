@@ -9,7 +9,7 @@ export class TranscriptModel {
   private reducer: TranscriptReducer = new TranscriptReducer();
   private sync: TranscriptSync = new TranscriptSync(this.reducer);
   private active: boolean = true;
-  private filling: number = -1;
+  private fillRunning: boolean = false;
   private refreshing: boolean = false;
   private refreshAgain: boolean = false;
   private readonly row: ResourceRow;
@@ -74,19 +74,31 @@ export class TranscriptModel {
     if (!this.active) return;
     for (const action of actions) {
       if (!this.active) return;
-      if (action.kind === 'schedule_fill') {
-        if (this.filling !== -1) clearTimeout(this.filling);
-        this.filling = setTimeout(() => { this.filling = -1; this.drive(this.sync.fillTimer()).catch((error: Error) => this.failure(error)); }, action.delayMillis);
+      if (action.kind === 'fetch_after') {
+        if (this.fillRunning) continue;
+        this.fillRunning = true;
+        try {
+          let next: number | undefined = action.afterSeq;
+          while (next !== undefined && this.active) {
+            const data = await this.repository.call(this.path('after_seq=' + next + '&lazy_images=1'));
+            if (!this.active) return;
+            const result = this.sync.after(this.batch(data));
+            this.emit();
+            await this.drive(result.actions.filter((candidate) => candidate.kind !== 'fetch_after'));
+            const following = result.actions.find((candidate) => candidate.kind === 'fetch_after');
+            next = following?.kind === 'fetch_after' ? following.afterSeq : undefined;
+          }
+        } catch (error) {
+          this.sync.finishFill();
+          if (error instanceof Error) throw error;
+          throw new Error('failed');
+        } finally { this.fillRunning = false; }
       } else if (action.kind === 'subscribe') {
         const payload: Record<string, Object> = Wire.payload(['type', 'machine_id', 'session_id', 'fold_work'], ['subscribe', this.row.machine, this.row.session || this.row.id, true]);
         if (action.sinceSeq !== undefined) payload['since_seq'] = action.sinceSeq;
         this.repository.transport.send(JSON.stringify(payload));
       } else if (action.kind === 'fetch_latest') {
         await this.latest();
-      } else if (action.kind === 'fetch_after') {
-        const data = await this.repository.call(this.path('after_seq=' + action.afterSeq + '&lazy_images=1'));
-        if (!this.active) return;
-        await this.drive(this.sync.after(this.batch(data)).actions); this.emit();
       } else if (action.kind === 'fetch_older') {
         try {
           const data = await this.repository.call(this.path('before_seq=' + action.beforeSeq + '&lines=80&fold_work=1&lazy_images=1'));
@@ -109,7 +121,6 @@ export class TranscriptModel {
   }
   close(): void {
     if (!this.active) return; this.active = false;
-    if (this.filling !== -1) clearTimeout(this.filling);
     try { this.repository.transport.send(JSON.stringify(Wire.payload(['type', 'machine_id', 'session_id'], ['unsubscribe', this.row.machine, this.row.session || this.row.id]))); } catch (_) {}
   }
 }
