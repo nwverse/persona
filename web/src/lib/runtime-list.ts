@@ -15,6 +15,9 @@ export const runtimeIdentity = (s: Session) => {
   if (key === undefined) { key = tupleKey([s.machine_id, s.session_id]); identities.set(s, key); }
   return key;
 };
+/** The identity of the row a session is drawn under (`parent_agent_id`, #5935, lib/side-sessions.ts), as runtimeIdentity
+ *  keys rows: on the session's own machine. */
+export const runtimeParentIdentity = (s: Session) => s.parent_agent_id ? tupleKey([s.machine_id, s.parent_agent_id]) : undefined;
 export function runtimeRemoval(id: string): string {
   try {
     const tuple: unknown = JSON.parse(id);
