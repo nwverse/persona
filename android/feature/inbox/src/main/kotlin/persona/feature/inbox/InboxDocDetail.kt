@@ -135,6 +135,20 @@ fun InboxItemDetailScreen(repository: InboxRepository, route: InboxItemDetailRou
     }
 }
 
+private fun InboxRecord.additionalAssistantText(text: String, loadedContext: Boolean): String {
+    val summary = item.summary?.trim()?.takeIf { it.isNotEmpty() } ?: return text
+    val trimmed = text.trim()
+    fun String.afterSummary() = if (startsWith(summary) && getOrNull(summary.length)?.isWhitespace() != false)
+        substring(summary.length).trimStart() else null
+    val title = item.title.trim()
+    if (loadedContext && title.isNotEmpty() && trimmed.startsWith(title) && trimmed.getOrNull(title.length)?.isWhitespace() != false) {
+        val content = trimmed.substring(title.length).trimStart().afterSummary()
+        if (content != null) return content
+        if (title != summary) return text
+    }
+    return trimmed.afterSummary() ?: text
+}
+
 internal fun LazyListScope.inboxItemBody(record: InboxRecord, context: String? = null, onOpen: (String) -> Unit) {
     val doc = record.doc
     if (doc == null) {
@@ -146,9 +160,13 @@ internal fun LazyListScope.inboxItemBody(record: InboxRecord, context: String? =
                 }
             }
             if (!record.onlyTitleAndSummary(context)) {
-                (context?.takeIf { it.isNotBlank() } ?: record.item.preview).takeIf { it.isNotBlank() }?.let { text ->
-                    item("assistant-content-header") { JSectionHeader(stringResource(R.string.inbox_content)) }
-                    item("item-preview") { Text(text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                val loadedContext = context?.takeIf { it.isNotBlank() }
+                (loadedContext ?: record.item.preview).takeIf { it.isNotBlank() }?.let { text ->
+                    val content = record.additionalAssistantText(text, loadedContext != null)
+                    if (content.isNotBlank()) {
+                        item("assistant-content-header") { JSectionHeader(stringResource(R.string.inbox_content)) }
+                        item("item-preview") { Text(content, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                    }
                 }
             }
             return

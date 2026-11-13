@@ -66,7 +66,7 @@ class AssistantInboxRowsTest {
         connector = InboxConnectorRef("server/session-1", label = "Assistant", url = chatUrl),
     )
 
-    private class OneInbox(snapshot: InboxSnapshot, var context: String) : InboxRepository {
+    private class OneInbox(snapshot: InboxSnapshot, var context: String?) : InboxRepository {
         override val entries = MutableStateFlow(emptyList<InboxEntry>())
         override val snapshot = MutableStateFlow(snapshot)
         override val connectionState = flowOf(ConnectionState.Online)
@@ -156,6 +156,94 @@ class AssistantInboxRowsTest {
         rule.onNodeWithText("Hand to AI").assertDoesNotExist()
     }
 
+    @Test fun detailStripsSummaryBeforeAdditionalPreviewContent() {
+        val extra = "Additional details from the assistant response."
+        val shown = record.copy(item = record.item.copy(preview = "$summary\n\n$extra"))
+        val inbox = OneInbox(InboxSnapshot(records = listOf(shown)), null)
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
+                Box(Modifier.testTag("assistant-detail-extra").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    InboxItemDetailScreen(inbox, InboxItemDetailRoute(shown.item.id), navigator)
+                }
+            }
+        }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            rule.waitForIdle()
+            rule.onNodeWithText("Content").assertExists()
+            rule.onNodeWithText(extra).assertExists()
+            rule.onNodeWithText("$summary\n\n$extra").assertDoesNotExist()
+            val bitmap = rule.onNodeWithTag("assistant-detail-extra").captureToImage().asAndroidBitmap()
+            val name = "assistant-inbox-en-detail-extra-${s.name.lowercase()}-${if (d) "dark" else "light"}.png"
+            File(out(), name).outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+    }
+
+    @Test fun detailStripsTitleAndSummaryWhenTitleStartsWithSummary() {
+        val summaryText = "Morning"
+        val shown = record.copy(item = record.item.copy(title = "Morning briefing", summary = summaryText, preview = summaryText))
+        val extra = "Extra details that belong only in the body."
+        val inbox = OneInbox(InboxSnapshot(records = listOf(shown)), "${shown.item.title}\n$summaryText\n\n$extra")
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                Box(Modifier.width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    InboxItemDetailScreen(inbox, InboxItemDetailRoute(shown.item.id), navigator)
+                }
+            }
+        }
+        rule.onNodeWithText(extra).assertExists()
+        rule.onNodeWithText("briefing\n$summaryText\n\n$extra").assertDoesNotExist()
+    }
+
+    @Test fun detailStripsTitleAndSummaryWhenTheyAreEqual() {
+        val summaryText = "Morning"
+        val shown = record.copy(item = record.item.copy(title = summaryText, summary = summaryText, preview = summaryText))
+        val extra = "Extra details after the repeated heading."
+        val inbox = OneInbox(InboxSnapshot(records = listOf(shown)), "$summaryText\n$summaryText\n\n$extra")
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                Box(Modifier.width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    InboxItemDetailScreen(inbox, InboxItemDetailRoute(shown.item.id), navigator)
+                }
+            }
+        }
+        rule.onNodeWithText(extra).assertExists()
+        rule.onNodeWithText("$summaryText\n\n$extra").assertDoesNotExist()
+    }
+
+    @Test fun detailStripsOnlyOneSummaryFromPreviewWhenTitleEqualsSummary() {
+        val summaryText = "Morning"
+        val extra = "Morning notes are ready."
+        val shown = record.copy(item = record.item.copy(title = summaryText, summary = summaryText,
+            preview = "$summaryText\n$extra"))
+        val inbox = OneInbox(InboxSnapshot(records = listOf(shown)), null)
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                Box(Modifier.width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    InboxItemDetailScreen(inbox, InboxItemDetailRoute(shown.item.id), navigator)
+                }
+            }
+        }
+        rule.onNodeWithText(extra).assertExists()
+        rule.onNodeWithText("notes are ready.").assertDoesNotExist()
+    }
+
+    @Test fun detailDoesNotStripSummaryInsideAnotherWord() {
+        val shown = record.copy(item = record.item.copy(title = "Daily briefing", summary = "Morning", preview = "Mornington"))
+        val inbox = OneInbox(InboxSnapshot(records = listOf(shown)), null)
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                Box(Modifier.width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    InboxItemDetailScreen(inbox, InboxItemDetailRoute(shown.item.id), navigator)
+                }
+            }
+        }
+        rule.onNodeWithText("Mornington").assertExists()
+        rule.onNodeWithText("ton").assertDoesNotExist()
+    }
+
     @Test fun detailReloadsContextWhenTheItemRefreshes() {
         val inbox = OneInbox(InboxSnapshot(records = listOf(record)), "${record.item.title}\n$summary")
         rule.setContent {
@@ -185,7 +273,8 @@ class AssistantInboxRowsTest {
             }
         }
         rule.onNodeWithText("Content").assertExists()
-        rule.onNodeWithText(extra, substring = true).assertExists()
+        rule.onNodeWithText(extra).assertExists()
+        rule.onNodeWithText("${record.item.title}\n$summary\n\n$extra").assertDoesNotExist()
     }
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h1000dp-xhdpi")
