@@ -41,6 +41,11 @@ const (
 	// directories, in those spaces), docs/protocol/protocol.md "Projects and spaces". An older hub reads none of the
 	// keys, so an app sends them only to a hub that says this.
 	featureSessionsCatalog = "sessions_catalog"
+	// featureSessionsTodo: a paged GET /api/v1/sessions takes todo=<id> (the sessions on that open to-do) and
+	// todo=none (on none), and its counts have a todo map (by to-do id, "" for none), docs/protocol/protocol.md
+	// "Sessions by to-do" (#6662). An older hub ignores the key and lists every session, so an app sends it only to a
+	// hub that says this.
+	featureSessionsTodo = "sessions_todo"
 )
 
 // runtimeList is a transport cache of the manager's already-decorated rows. It
@@ -162,8 +167,13 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root st
 		group = row.WorkspaceID
 	}
 	pane := sessionorigin.Of(*row)
+	// the open to-do it is on: the manager sets row.Todo for an active link only (a done one is completed_todo)
+	todo := ""
+	if row.Todo != nil {
+		todo = row.Todo.ID
+	}
 	item := sessionlist.Item{
-		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane,
+		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane, Todo: todo,
 		State: row.State, BackgroundWaiting: row.BackgroundWaiting, Source: row.SourceKind, Provider: row.Agent, UpdatedAt: row.UpdatedAt,
 		Fold: indexedFold(row, root, indexed.Fold), Private: healthSession(row),
 	}

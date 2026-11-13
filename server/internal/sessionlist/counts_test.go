@@ -82,3 +82,50 @@ func TestBackgroundWaitingCount(t *testing.T) {
 		t.Fatalf("filtered: %+v", counts)
 	}
 }
+
+// Sessions by to-do (#6662): todo=<id> lists the rows on that to-do, todo=none the rows on none; the counts have each
+// to-do's rows and, under "", the rows on none. A row moved to another to-do moves with it, in a delta too, and the
+// filter binds a cursor as the others do.
+func TestTodoFilterAndCounts(t *testing.T) {
+	var index Index
+	items := make([]Item, 5)
+	for n := range items {
+		items[n] = testItem(fmt.Sprintf("row-%d", n), n)
+	}
+	items[0].Todo, items[1].Todo, items[2].Todo = "todo_a", "todo_a", "todo_b"
+	index.Replace("demo", items)
+	counts, err := index.Counts(Options{})
+	if err != nil || counts.Todo["todo_a"] != 2 || counts.Todo["todo_b"] != 1 || counts.Todo[""] != 2 {
+		t.Fatalf("counts: %+v %v", counts, err)
+	}
+	ids := func(p Page) []string {
+		var out []string
+		for _, s := range p.Sessions {
+			out = append(out, s.(testPayload).ID)
+		}
+		return out
+	}
+	if got := ids(mustQuery(t, &index, Options{Todo: "todo_a"})); fmt.Sprint(got) != "[row-1 row-0]" {
+		t.Fatalf("todo_a: %v", got)
+	}
+	if got := ids(mustQuery(t, &index, Options{Todo: TodoNone})); fmt.Sprint(got) != "[row-4 row-3]" {
+		t.Fatalf("none: %v", got)
+	}
+	if counts, _ := index.Counts(Options{Todo: "todo_b"}); counts.Total != 1 || counts.Todo["todo_b"] != 1 {
+		t.Fatalf("filtered counts: %+v", counts)
+	}
+	baseline := index.Revision()
+	items[3].Todo = "todo_b"
+	items[3].Full = testPayload{ID: items[3].ID, Title: "Linked to b"}
+	index.Replace("demo", items)
+	if got := ids(mustQuery(t, &index, Options{Todo: "todo_b", Since: baseline})); fmt.Sprint(got) != "[row-3]" {
+		t.Fatalf("delta into todo_b: %v", got)
+	}
+	if page := mustQuery(t, &index, Options{Todo: TodoNone, Since: baseline}); len(page.Remove) != 1 || page.Remove[0] != "row-3" || page.Total != 1 {
+		t.Fatalf("delta out of none: %+v", page)
+	}
+	first := mustQuery(t, &index, Options{Todo: "todo_b", Limit: 1})
+	if _, err := index.Query(Options{Todo: "todo_a", Cursor: first.NextCursor}); err == nil {
+		t.Fatal("a cursor taken with another to-do")
+	}
+}
