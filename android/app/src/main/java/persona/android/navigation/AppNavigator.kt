@@ -53,7 +53,11 @@ internal class AppNavigator(
         }
         val chat = when (key) { is ChatRoute -> key; is InteractionRoute -> key.chat; else -> null }
         if (chat != null && openAssistant(chat, true)) return
-        if (chat != null && chat.kind != null) {
+        // A sourced assistant conversation belongs above the item that opened it, even when its kind is already known.
+        // Router.restore would instead pop to an earlier copy and retain that copy's provenance. Agents keep that path.
+        val fromInbox = key is ChatRoute && key.source is RouteSource.InboxItem &&
+            (key.kind == ConversationKind.Assistant || chatTab(key) == AppTab.Persona)
+        if (chat != null && chat.kind != null && !fromInbox) {
             Router().parse(RouteInput.Internal(key))?.let { onSelectTab(it.restore(stacks)); return }
         }
         val rootTab = when (key) {
@@ -70,7 +74,9 @@ internal class AppNavigator(
             ?: selectedTab().takeIf { it == AppTab.Persona }
             ?: AppTab.Agents else selectedTab()
         onSelectTab(target)
-        if (key is ChatRoute) stacks.filterKeys { it != target }.values.forEach { stack -> stack.removeAll { it == key } }
+        if (key is ChatRoute) stacks.filterKeys { it != target }.values.forEach { stack ->
+            stack.removeAll { page -> page.chat()?.let { sameConversation(it, key) } == true }
+        }
         val stack = stacks.getValue(target)
         if (stack.last() != key) stack.add(key)
         restoreSecondaryParents(stack)
@@ -126,16 +132,27 @@ internal class AppNavigator(
      * else they go. Visited tabs stay composed, so this can come from a hidden tab: the tab on screen stays as it is.
      */
     fun groupGone(chat: ChatRoute, moved: ChatRoute?) {
-        fun shows(key: NavKey) = key == chat || key is InteractionRoute && key.chat == chat
+        fun shows(key: NavKey) = key.chat()?.let { sameConversation(it, chat) } == true
+        // Callers rebuilding the replacement may only know its new ids and kind; provenance belongs to the existing page.
+        val destination = moved?.let { if (it.source == null) it.copy(source = chat.source) else it }
         stacks.values.forEach { stack ->
             val at = stack.indexOfFirst { shows(it) }.takeIf { it >= 0 } ?: return@forEach
             val from = stack.firstNotNullOfOrNull { page -> openedFrom[page]?.takeIf { shows(page) } }
             stack.removeAll { shows(it) }
-            if (moved != null && moved !in stack) {
-                stack.add(at, moved)
-                from?.let { openedFrom[moved] = it }
+            if (destination != null && stack.none { it is ChatRoute && sameConversation(it, destination) }) {
+                stack.add(at, destination)
+                from?.let { openedFrom[destination] = it }
             }
         }
         openedFrom.keys.retainAll { page -> stacks.values.any { page in it } }
     }
 }
+
+private fun NavKey.chat(): ChatRoute? = when (this) {
+    is ChatRoute -> this
+    is InteractionRoute -> chat
+    else -> null
+}
+
+private fun sameConversation(left: ChatRoute, right: ChatRoute): Boolean =
+    left.machineId == right.machineId && left.sessionId == right.sessionId
