@@ -4331,7 +4331,7 @@ and `/items/{iid}/full` all carry the metadata. Old messages and those written b
 | --- | --- | --- | --- | --- |
 | A quiet task dispatched from the main chat has a result (`assistant/task_notice.md`) | `🔔 任务「标题」做完了（电脑）` ("Task 'title' is done (computer)"), with `（这是 Persona 的任务通知，……` ("This is a Persona task notification, …") on the second or third line | `task_notice` | `done` / `needs` / `interrupted` / `failed` | Task "x" is done / waiting for you / interrupted / couldn't start |
 | A scheduled task or follow-up is due (`assistant/task_run.md`) | `⏰ 标题（你之前安排的跟进）` / `（定时任务）` / `（定时任务，每 30 分钟）` ("title (a follow-up you scheduled)" / "(scheduled task)" / "(scheduled task, every 30 minutes)") | `followup` | `once` / `daily` / `interval` | Follow-up "x" is due / Scheduled task "x" starts running |
-| Wake an Agent that is waiting (`agents/wake.md`, Agents chats) | `⏰（Persona 叫醒你，第 N 次）` ("Persona wakes you, attempt N") | `followup` | `wake` | Persona woke it: check whether "what it's waiting for" is ready |
+| Wake an Agent that is waiting (`agents/wake.md`, Agents chats) | Localized: `<persona-wake>{"title":"…"}</persona-wake>`; legacy Chinese: `⏰（Persona 叫醒你，第 N 次）` | `followup` | `wake` | Persona woke it: check whether "what it's waiting for" is ready |
 | Continue an Agent once its subscription usage limit reset (`agents/limit_continue.md`, Agents chats, #1710; only the hub marks it) | `⏰（Persona 叫你接着做）订阅的用量额度已经重置了` ("Persona asks you to go on: the subscription's usage limit has reset") | `followup` | `limit_continue` | Usage limit reset: Persona told it to go on |
 | A node restart lost background tasks (`assistant/lost_tasks.md`) | `⚠️ 运行你的 node 刚重启过` ("The node running you just restarted") | `system` | `lost_tasks` | The node restarted; N background tasks stopped |
 | A supervision message in the main chat (`assistant/supervise.md`, #3124) | `📋 督办：你派出去的任务有 N 个要你处理` ("Supervision: N tasks you dispatched need your attention"), with `这是 Persona 的督办消息` ("This is a Persona supervision message") on the second line | `system` | `supervise` | Supervision: N dispatched tasks need attention |
@@ -4346,6 +4346,14 @@ and `/items/{iid}/full` all carry the metadata. Old messages and those written b
 - A task notification still queued for sending already uses only `任务「x」的通知` ("Notification for task 'x'") in the `queued` field of `sessions`.
 
 **Supervision turns** (#1988): `injected.state = supervise` additionally carries `level: info|triage|user`, read from the exact `<persona-supervision level="…" />` line in the generated message. Missing level on older supervision messages means triage. Info is progress-only and does not dispatch a main-chat turn. Web defaults an entire triage turn to one muted, expandable record; original input, tool trace and replies remain inspectable in that record. User-level turns remain visible. A successful `supervision_finish` result with `visibility:user`, `notify_user`, `ask_user`, or user-facing `task_review` promotes the whole turn; failed calls do not. A pending ask_user remains visible while waiting for the user's answer. `fold.supervision_user:true` carries successful promotion across server-side work folding. Native clients must implement this turn-level behavior separately; merely drawing the input as a system line does not hide its reply.
+
+**Localized wakes** (#5976): the new marker is one leading line containing canonical JSON (only `title`, the waiting
+subject, with HTML characters/newlines escaped). It is followed by the localized prompt body. The hub recognizes
+it after snapshot/source blocks and supplies `followup` / `wake` metadata; malformed markers are not inferred.
+The model text is preserved and `injected.line` uses the viewer's language. App-originated messages and protected
+user-authorship blocks never acquire automated provenance from a pasted marker. Empty-language Chinese output
+and its legacy parser remain unchanged. Older hubs do not recognize the new marker; clients receive metadata
+from the updated hub, so the old-hub fallback fixtures are unchanged.
 
 **When an old hub has no `injected`**, recognize by text (only lines with `role:"user", kind:"text"` and no `client_msg_id`; strip leading whitespace and `<persona-context>` snapshot blocks first):
 

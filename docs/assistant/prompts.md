@@ -8,6 +8,83 @@ What counts as a prompt: system / user text sent to a model, CLAUDE.md written t
 and explanatory text that wraps data in a prompt (`<persona-context>` blocks, lines such as "类型：飞书私聊"—"Type: Lark direct message"). The user's own words, collected chat history, and document bodies are **data**, not template content.
 MCP tool descriptions and parameter explanations shown to models are also prompts, in `mcp/` (see "MCP tools" below). Tool-result text returned to models still lives in the respective code.
 
+## Language migration
+
+User- and agent-facing prompts must carry the caller's language through a `Language` or `Lang` field. New or
+changed language-aware templates have en, zh-Hans and ja caller-level goldens. Source quotations, identifiers,
+recorded decisions and the owner's words remain data: do not translate or rewrite them to match the interface.
+
+The migration in #5976 establishes the contract, a wake-message example and a downward-only inventory. It does
+not claim that every historical prompt has been translated. The follow-ups below own the remaining areas; each
+must audit all production callers and any parser before changing the text. Use `answerLanguage(hello.Locale)`
+for the owner's native language name (`English`, `日本語`, empty for zh-Hans), or the existing i18n-code `Lang`
+pattern where the caller already uses it. Instruction-only language hints and fully translated templates are both
+supported; a hint alone is not evidence that user-visible injected instructions have been translated.
+
+### Compatibility and wake messages
+
+`agents/wake.md` is fully rendered in English and Japanese. `agents_work_tick.go` reads the owner's language at
+send time, so a subsequent wake follows a changed language without rewriting a previous message. Empty language
+keeps the complete original Chinese prompt byte for byte, including its approval wording. The four variants
+(timer, another Agent stopping, user-approved step, task-authorized step) have separate en/ja goldens and the
+normal `session.send` fake captures the localized text. The one approved step never authorizes unrelated outward
+actions; localization does not remove or weaken policy. Other supported language names currently use the English
+instruction branch until that language gets a whole-text translation.
+
+New localized wakes start with `<persona-wake>` containing canonical JSON with the waiting subject in `title`,
+followed by `</persona-wake>` on the same line. JSON escapes tags and newlines in that subject. Recognition uses
+this metadata, not translated wording. Malformed metadata is not inferred as a different message. Chinese wakes
+and old transcripts keep the narrow historical header parser: this compatibility exception is needed to preserve
+the empty-language bytes. Pasted user text remains protected by `client_msg_id` or the outer user-authorship
+sentinel. The hub returns the same structured `injected`/`source` fields and localizes the display line for the
+viewer, without changing the model's original text. New localized markers are tested on the hub; the shared
+old-hub fallback fixtures stay unchanged. Older hubs cannot recognize these new markers by text alone.
+
+### Remaining work by area
+
+The tracking issues below implement the migration separately; finishing this umbrella does not imply they are done.
+Each uses the Template rules in this document and keeps existing empty-language output unless its issue explicitly
+records a justified compatibility change. Before claiming any follow-up, recheck ownership and overlapping PRs.
+
+| Area | Tracking issue | Scope |
+| --- | --- | --- |
+| agents | #6268 | Remaining agent event and policy templates; audit source recognition and authorization branches. Wake is already covered here. |
+| assistant | #6269 | Generated instructions, snapshots, supervision and scheduled events; audit parser/role boundaries and preserve policy. |
+| mcp | #6270 | Tool descriptions and schema guidance; thread language through tool-list callers and keep names/arguments stable. |
+| inbox | #6271 | Triage, drafting, grouping and handling templates; preserve original incoming text and test callers. |
+| kb | #6272 | Classify internal data generation versus user-facing output, then migrate applicable prompts; preserve existing knowledge and source names. |
+| todo | #6273 | Task/to-do wording and review context; preserve criteria, decisions and authorization evidence. |
+| tools | #6274 | Remaining tool guidance and generated helper text; keep protocol identifiers and parameters stable. |
+| channel/shared/bot | #6275 | Channel/bot wrappers and shared fragments; inventory all includes and preserve provenance and native message data. |
+
+### Ratchet and acceptance
+
+`scripts/ci/prompt_language_ratchet.py` runs in the repository CI guards. It counts CJK-bearing `.md` templates
+without an actual `if` on `.Language` or `.Lang`, including language handling inherited through a template called
+with the same data. Comments and quoted mentions do not qualify. The baseline records both directory counts and
+filenames: a new omission fails even when another file in that directory was removed. There are no source
+exemptions. The checker also compares the baseline against `CI_BASE_SHA` (otherwise `origin/main`) when it exists
+there, so editing the JSON cannot raise the allowance. Run `--update` only to remove resolved entries; it refuses
+increases. This is a structural guard, not a check of translation quality, caller wiring or model behavior.
+
+The initial inventory is computed from this checkout rather than the issue's earlier audit. A migration needs
+caller-level goldens, synthetic delivery and parser tests where applicable, and unchanged default/Chinese goldens.
+The checker has negative tests for new files/directories, replacing an omission at the same count, quoted/comment
+mentions, include cycles and attempts to raise the baseline. Judge behavior and recording-language live checks
+still follow the rules below when those prompts change.
+
+### Related work and knowledge policy
+
+#5906 shipped recording summaries, minutes and day recaps in the recording's language, with owner-language
+fallback (#6011); #6045 preserves place names as spoken. Those paths are not reimplemented here. Existing knowledge
+content stays in the language in which it was recorded; a UI-language change never rewrites stored pages or quoted
+source data. Other KB templates are migration backlog, not a permanent exemption: their follow-up decides which
+new outputs should use owner language and which preserve source language before changing them.
+
+#5898 and its instruction-placement proposal (#5903) separately address deduplication and policy placement,
+including wake messages. This change translates the existing rules without cutting or moving them. #5750/#6202
+localize Persona Link's client UI; they do not supply the language of model prompts.
+
 ## Directory
 
 | File | Purpose | Used by |
@@ -186,7 +263,7 @@ Descriptions live in iOS `apple/Persona/PhoneTools/*Tool.swift` (collected by `P
 - Where user-facing output instructions say "use Chinese", replace that with a `Language` field (the language's own name, `English`, `日本語`; callers use `assistant.answerLanguage(hello.Locale)`, passing empty for zh-Hans),
   and `{{if .Language}}用{{.Language}}{{else}}用中文{{end}}` in the template ("use [Language]", otherwise "use Chinese"). Empty remains byte-for-byte identical to the original, leaving existing goldens unchanged; en / ja have separate `*.en.golden` / `*.ja.golden`
   (`assistant/claude_md.md`, `inbox/triage.md`, `inbox/group.md`, `inbox/draft.md`, `tools/session_title.md`; `docs/protocol/i18n.md`).
-  Knowledge-base prompts (`kb/`) are Chinese too. Those that write for the user from a recording (`kb/recording.md`, `minutes.md`, `minutes_merge.md`, `day_recap.md`, `day_recap_merge.md`) take `KBOwner.Language`, for the recording's language (else the owner's), and include `kb/write_language.md`, which says to write everything in it whatever languages the transcript mixes (#5906, `docs/assistant/meeting-minutes.md`, "How the hub generates them"). Unlike the rule above, their empty value is not byte-for-byte the old text: the mixed-language rule applies to Chinese output too, so their zh goldens changed on purpose, in the one sentence that asked for Chinese (now the empty branch of `kb/write_language.md`) and nowhere else. Their en / ja goldens come from the engine (`kb/minutes_language_test.go`). The other `kb/` prompts write knowledge-base data and stay Chinese (`docs/protocol/i18n.md`, "Follow-up work").
+  Knowledge-base prompts (`kb/`) are Chinese too. Those that write for the user from a recording (`kb/recording.md`, `minutes.md`, `minutes_merge.md`, `day_recap.md`, `day_recap_merge.md`) take `KBOwner.Language`, for the recording's language (else the owner's), and include `kb/write_language.md`, which says to write everything in it whatever languages the transcript mixes (#5906, `docs/assistant/meeting-minutes.md`, "How the hub generates them"). Unlike the rule above, their empty value is not byte-for-byte the old text: the mixed-language rule applies to Chinese output too, so their zh goldens changed on purpose, in the one sentence that asked for Chinese (now the empty branch of `kb/write_language.md`) and nowhere else. Their en / ja goldens come from the engine (`kb/minutes_language_test.go`). Other `kb/` templates remain in the language-migration inventory until their follow-up classifies generated output and source-preserving data; persisted knowledge is never rewritten just because the UI language changes (`docs/protocol/i18n.md`, "Follow-up work").
 - Voice prompts (all under `voice/` since #3501; `instructions.md`, `target.md`, `agent_message.md`, `status.md`, `folded.md` in #3502, `ask.md`, `needs_you.md`, `answered.md` in #3504, `progress.md`, `observed.md`, `failure.md` in #3503, `nudge.md` in #2297, `read_aloud.md` in #5004, `transcribe_caption.md` and `transcribe_verbatim.md` in #3862) have three whole-language versions. `Lang` is an i18n code (`en`, `ja`, otherwise Chinese),
   with `{{if eq .Lang "en"}}…{{else if eq .Lang "ja"}}…{{else}}…{{end}}` in the template. Goldens are `voice/testdata/prompts/<name>.<branch>.<zh-Hans|en|ja>.golden`
   (`go test ./internal/voice -run Golden`, `UPDATE_GOLDEN=1` to update). The fast layer speaks to the user; writing in the user's language makes the model continue in that language.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,12 +125,15 @@ func TestAgentsSwitchEachByItsState(t *testing.T) {
 // queued one the user moved to another launcher meanwhile is dropped with nothing done.
 func TestAgentsSwitchFilterBusyAndMovedMeanwhile(t *testing.T) {
 	ft, _ := switchRig(t)
-	ft.sessions("mac", agentRow("s1dflt0001", "", proto.StatusIdle), agentRow("s2other001", "sub", proto.StatusIdle))
 	ft.f.nodes = map[string]nodeAnswer{
 		DeviceSessionSwitch: func(string, json.RawMessage) (any, error) {
 			return nil, &rpc.Error{Code: proto.CodeSwitchBusy, Message: "a background command runs"}
 		},
 	}
+	ft.sessions("mac", agentRow("s1dflt0001", "", proto.StatusIdle), agentRow("s2other001", "sub", proto.StatusIdle))
+	// Finish the initial inventory event before creating the queued request. Otherwise
+	// that older event can start a retry before the test reports the user's move.
+	waitFleetOrder(t, ft.s)
 	res, err := batchSwitch(ft, map[string]any{"launcher": "work", "from_launcher": "claude"})
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +156,37 @@ func TestAgentsSwitchFilterBusyAndMovedMeanwhile(t *testing.T) {
 	}
 	if got := callsFor(ft.f, "s1dflt0001"); len(got) != n {
 		t.Errorf("moved meanwhile, switched anyway: %v", got)
+	}
+}
+
+// Initial queue loading can overlap an inventory event. Both paths must read the
+// loaded flag under the queue mutex, including the no-store early return.
+func TestAgentsSwitchConcurrentLoadAndList(t *testing.T) {
+	for range 256 {
+		s := &Service{}
+		start := make(chan struct{})
+		var done sync.WaitGroup
+		done.Add(2)
+		go func() {
+			defer done.Done()
+			<-start
+			s.loadSwitchQueue(context.Background())
+		}()
+		go func() {
+			defer done.Done()
+			<-start
+			for range 8 {
+				s.switchQueueListed("sample-machine")
+			}
+		}()
+		close(start)
+		done.Wait()
+		s.switchQ.mu.Lock()
+		ready := s.switchQ.loaded && s.switchQ.items != nil && s.switchQ.running != nil && s.switchQ.retry != nil
+		s.switchQ.mu.Unlock()
+		if !ready {
+			t.Fatal("concurrent listing lost the initialized queue")
+		}
 	}
 }
 

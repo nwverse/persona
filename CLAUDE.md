@@ -99,6 +99,7 @@ This is a public open-source repository; everyone and every Agent maintains it t
   dependencies and Store; when it fails, move the logic as its hint says (`docs/server/architecture.md`).
 - **Prompts live in `server/internal/prompts/`** (MCP tool descriptions under `mcp/`): one prompt per file, composed with templates, never
   built with `fmt` / `+` in Go. Update the golden tests and read the diff (`docs/assistant/prompts.md`).
+- **Prompt language**: user- and agent-facing templates carry `Language` / `Lang` from the caller and add en / zh-Hans / ja goldens. Preserve source data and existing empty-language bytes; follow `docs/assistant/prompts.md` ("Language migration"). The prompt-language CI inventory may only shrink.
 - **Phones reach the hub directly over the internet** (TLS, preferring IPv6; VPNs are the user's own business), with the LAN kept
   compatible (`docs/operations/network.md`).
 
