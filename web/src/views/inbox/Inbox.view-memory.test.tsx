@@ -155,6 +155,25 @@ describe("Inbox history-entry view memory", () => {
     expect(chainRows()).toHaveLength(1);
   });
 
+  it("does not let a post-reload entry reuse an old entry's identifier and snapshot", async () => {
+    await setSearch("before reload");
+    const oldEntry = (history.state as Record<string, unknown>).personaInboxView;
+    await leaveForChat();
+
+    resetInboxViewMemoryForTests(); // another page load: a new prefix, the entry counter starting again
+    await act(async () => history.pushState(null, "", "/inbox"));
+    await show();
+    const newEntry = (history.state as Record<string, unknown>).personaInboxView;
+    expect(newEntry).not.toBe(oldEntry);
+    await setSearch("after reload");
+    await act(async () => root.render(<div>outside</div>));
+    await flush();
+
+    await act(async () => popped(() => history.go(-2)));
+    await show();
+    expect(search().value).toBe("");
+  });
+
   it("copies the current list view to a row's new entry without moving another item's chain expansion", async () => {
     await setSearch("chat");
     await openItem("a1");

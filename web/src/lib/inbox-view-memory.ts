@@ -2,6 +2,7 @@
 // identifier; its snapshot lives in this page's memory. Thus a fresh navigation (and a reload) starts clean, while Back
 // after another route remounts the Inbox can put back what that entry showed. Updates never write browser history.
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { uuid } from "./format";
 
 const ENTRY = "personaInboxView";
 const SETTLE_MS = 1500;
@@ -35,6 +36,8 @@ export interface InboxViewMemory {
 }
 
 const entries = new Map<string, ViewState>();
+// A reload leaves old identifiers in history. Its new entries must not reuse one and claim that old entry's new snapshot.
+let load = uuid();
 let nextEntry = 0;
 
 function emptyState(): ViewState {
@@ -117,7 +120,7 @@ class ViewMemory implements InboxViewMemory {
     }
     // An in-Inbox push keeps the view on screen. Give its new entry a copy, leaving the previous entry's snapshot alone.
     if (this.id) entries.set(this.id, this.state);
-    this.id = actual ?? `i${++nextEntry}`;
+    this.id = actual ?? `${load}:i${++nextEntry}`;
     this.state = copyState(this.state);
     if (!actual) history.replaceState({ ...objectState(history.state), [ENTRY]: this.id }, "");
     entries.set(this.id, this.state);
@@ -128,9 +131,11 @@ class ViewMemory implements InboxViewMemory {
   }
 }
 
-/** Tests: forget every entry, as a reload does. Entry identifiers already in history are deliberately left alone. */
+/** Tests: forget every entry and start another page load. Identifiers already in history are deliberately left alone. */
 export function resetInboxViewMemoryForTests(): void {
   entries.clear();
+  load = uuid();
+  nextEntry = 0;
 }
 
 /** The page owns entry attachment. `id` and `manager` make an in-Inbox row navigation attach the pushed entry too. */
