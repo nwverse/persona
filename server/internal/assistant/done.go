@@ -91,7 +91,7 @@ func ownerActionLine(text string) string {
 			if !strings.Contains(compact, p.marker) {
 				continue
 			}
-			if p.marker == "要不要" && !strings.ContainsAny(line, "？?") {
+			if p.marker == "要不要" && !strings.ContainsAny(line, "？?") { // i18n-ignore: parser markers, not display copy
 				continue // evaluating whether to do something is narrative, not asking the owner to choose (#5732)
 			}
 			negated := false
