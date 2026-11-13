@@ -143134,6 +143134,29 @@
       },
       "extractionState" : "manual"
     },
+    "This computer hasn't answered yet." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This computer hasn't answered yet."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターからまだ応答がありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑还没有回应。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "This computer is offline" : {
       "localizations" : {
         "en" : {
