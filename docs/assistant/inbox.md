@@ -456,6 +456,8 @@ An item stays one matter for as long as it goes on: a handled event takes the me
 | `follow` | `{who, next, check_at, checks, due}`: who or what it waits on (the model's words), the next step, when to look at it again (RFC 3339; 24 hours when not given), how many times in a row a look found nothing new, and whether that time came with nobody to look (the AI twin off). Apps read only `who`, `next` and `check_at` | Yes |
 | `now` | The item's state key (table below), worked out from the item alone: no clock, no settings, so the list memo holds (`inbox_list_memo.go`) | Yes, never stored |
 
+The manager refreshes `where` from the connector's `chat` tag (else its `repo` tag) on every write, and the mute menu uses it for the chat's name, falling back to the title.
+
 **State keys.** The manager sends a key; every app puts it in words from one table, `spec/fixtures/inbox/now.json` (English, Simplified Chinese and Japanese, with the cases Go and the apps check). Without `now` (an older hub), or with a key an app does not know (a newer hub), the apps keep their own state words. When several states hold, the first wins: done, folded, a suggestion, queued (the agent record says queued and has no session yet, while `handling` already says looking), the processing state (looking, Agent working, waiting, failed), `follow_up_ask`, `check_due`, then the tier. `{reason}` is `handling.error` as it was written (already words, in the language of its time); without it the plain "AI couldn't handle it".
 
 | `now` | When | Section | English |
