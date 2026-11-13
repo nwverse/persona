@@ -31,6 +31,9 @@ const kindLabel: Record<InboxParent["kind"], string> = { inbox: t("inbox-inboxli
  *  `manager`: whose line it is (its items are that manager's: docs/assistant/managers.md "Clients").
  *  Local lists name a non-item ancestor; without a name only its kind is shown, never its raw id. */
 export function lineRows(tree: InboxTree, manager?: string, local: LineLocal = {}): LineRow[] {
+  // A partial 200 answer is an empty line, as an older hub's refused route is; never throw the item page away.
+  const ancestors = tree.ancestors ?? [];
+  const children = tree.children ?? [];
   const localTitle = (a: InboxParent): string | undefined => {
     if (a.kind === "todo") {
       const title = local.todos?.find((td) => td.id === a.id && sameManager(td.manager, manager))?.title.trim();
@@ -44,10 +47,10 @@ export function lineRows(tree: InboxTree, manager?: string, local: LineLocal = {
   };
   const target = (node: InboxParent, item?: InboxItem): LineTarget | undefined =>
     node.kind === "inbox" && item ? { id: node.id, manager: item.manager ?? manager } : undefined;
-  const ups = tree.ancestors.map((a, i): LineRow => {
+  const ups = ancestors.map((a, i): LineRow => {
     // ancestors are nearest first: this row's pair ends at the ancestor just below it, or at this item for the nearest one.
-    const lower = i === 0 ? tree.node : tree.ancestors[i - 1];
-    const lowerItem = i === 0 ? tree.item : tree.ancestors[i - 1].item;
+    const lower = i === 0 ? tree.node : ancestors[i - 1];
+    const lowerItem = i === 0 ? tree.item : ancestors[i - 1].item;
     return {
       key: `up:${a.kind}:${a.id}`,
       label: kindLabel[a.kind],
@@ -57,7 +60,7 @@ export function lineRows(tree: InboxTree, manager?: string, local: LineLocal = {
       detach: target(lower, lowerItem),
     };
   }).reverse();
-  const downs = tree.children.map((c): LineRow => ({
+  const downs = children.map((c): LineRow => ({
     key: `down:${c.id}`,
     label: t("inbox-inboxline.next"),
     title: c.title,
