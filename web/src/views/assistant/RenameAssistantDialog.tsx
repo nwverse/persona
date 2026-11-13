@@ -65,7 +65,7 @@ export function RenameAssistantDialog({
           onChange={(e) => setDraft(e.target.value)}
           placeholder={t("assistant-profile.name_placeholder")}
           aria-label={t("settings-managers.name")}
-          className="w-full rounded-control bg-inset px-3 py-2 text-[14px] text-ink shadow-hairline outline-none focus:ring-2 focus:ring-accent"
+          className="w-full rounded-control bg-inset px-3 py-2 text-sm leading-5 text-ink shadow-hairline outline-none focus:ring-2 focus:ring-accent"
         />
       </form>
     </Dialog>

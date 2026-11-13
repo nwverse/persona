@@ -242,13 +242,23 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * themselves, views/agents/GroupedSessions.tsx, load when a Browse by is chosen, which took 407 B back off; the same
  * code measured +1,396 B and +1,510 B on the two mains before, docs/lessons/web.md; the 30 B of room main had stay).
  * +100 B for the scheduled tasks list's "Inbox: …" marks and the assistant's own Inbox row (#6430): the Japanese first
- * screen was 49 B over with them, in three languages' text and a few lines of code. And 256 B for task delivery tracking
- * (#5732: ja 474,928 B against 474,666 B on main at 70b73fad9e, +262 B, of which 16 B fit the room main had:
- * cancellation counts and reasons, delivery and owner-wait labels, bidirectional lineage, and the matching triage and
- * navigation). Another 128 B for the merged tree: main b7358143bc measures 476,712 B (52 B over its own budget),
- * while this PR measures 477,013 B (+301 B against that main because chunk composition is not additive); 31 B remains.
+ * screen was 49 B over with them, in three languages' text and a few lines of code.
+ * And 720 B for "By to-do" as one kind of row (#6458: main at 8269cd921 measured ja 476,774 B, 114 B over the budget
+ * before; this change takes it to 477,349 B, +575 B: the to-dos at the top level and their groups, "Recent (not running)"
+ * among them, as rows with a count, a state and an ⓘ, a to-do's state in the To-dos page's word, and the groups'
+ * explanations; the ⓘ's words, ui/InfoTipPanel.tsx, load the first time one is asked for, which took 287 B back off;
+ * 31 B of room).
+ * And 176 B for side sessions drawn under their parent, with main's own growth (#5935: main at 2d9596043 measured ja
+ * 477,447 B, 67 B over the budget before; this change takes it to 477,525 B, +78 B: lib/side-sessions.ts's
+ * arrangement, the paged list's use of it for its order and the Earlier split, and a row's parent identity in
+ * lib/runtime-list.ts; 31 B of room). And 256 B for task delivery tracking (#5732: ja 474,928 B against 474,666 B
+ * on main at 70b73fad9e, +262 B, of which 16 B fit the room main had: cancellation counts and reasons, delivery and
+ * owner-wait labels, bidirectional lineage, and the matching triage and navigation). Another 128 B for the merged tree:
+ * main b7358143bc measures 476,712 B (52 B over its own budget), while this PR measures 477,013 B (+301 B against that
+ * main because chunk composition is not additive). One further 128 B for the final merge: main 2852dfbb9b measures
+ * 477,860 B (304 B over its own budget), while this PR measures 478,036 B (+176 B against that main); 32 B remains.
  */
-export const FIRST_SCREEN_BUDGET = 477_044;
+export const FIRST_SCREEN_BUDGET = 478_068;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

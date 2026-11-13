@@ -26,6 +26,10 @@ import { Icon } from "../../ui/icons";
 import { Spark } from "./InboxParts";
 import { byTime } from "../../lib/times";
 
+// A dialog's error under its controls, and a hand-off target's line under its title, as each one writes them.
+const ERROR = "mt-2 text-[12px] text-red";
+const TARGET_SUB = "block truncate text-[11.5px] text-ink-3";
+
 export function draftTitle(it: InboxItem): string {
   if (it.moment) return t("inbox-inboxdialogs.title_moment");
   if (it.doc) return t("inbox-inboxdialogs.title_comment", { title: it.title });
@@ -170,7 +174,7 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
           </div>
         )}
       </div>
-      {error && <p className="mt-2 text-[12px] text-red">{error}</p>}
+      {error && <p className={ERROR}>{error}</p>}
       <form
         className="mt-3 flex items-center gap-2"
         onSubmit={(e) => {
@@ -398,7 +402,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
           <span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="plus" size={12} /></span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[13px] text-ink">{t("inbox-inboxdialogs.target_new_agent")}</span>
-            <span className="block truncate text-[11.5px] text-ink-3">{t("inbox-inboxdialogs.target_new_agent_sub")}</span>
+            <span className={TARGET_SUB}>{t("inbox-inboxdialogs.target_new_agent_sub")}</span>
           </span>
           {opening ? <Spinner size={13} /> : <Icon name="chevronRight" size={13} className="shrink-0 text-ink-3" />}
         </button>
@@ -415,7 +419,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
         ))}
       </div>
       {last?.gone && <p className="mt-2 text-[12px] text-orange" data-testid="handoff-last-gone">{t("inbox-inboxdialogs.last_gone")}</p>}
-      {error && <p className="mt-2 text-[12px] text-red">{error}</p>}
+      {error && <p className={ERROR}>{error}</p>}
     </Dialog>
   );
 }
@@ -429,7 +433,7 @@ function Target({ on, last, onPick, title, sub, icon }: { on: boolean; last?: bo
           <span className="truncate text-[13px] text-ink">{title}</span>
           {last && <span className="shrink-0 rounded-full bg-accent px-1.5 text-[10.5px] leading-[16px] font-medium whitespace-nowrap text-white">{t("inbox-inboxdialogs.last_time")}</span>}
         </span>
-        {sub && <span className="block truncate text-[11.5px] text-ink-3">{sub}</span>}
+        {sub && <span className={TARGET_SUB}>{sub}</span>}
       </span>
       <Icon name="check" size={13} stroke={2.6} className={cx("shrink-0 text-accent-ink", !on && "invisible")} />
     </button>

@@ -778,6 +778,35 @@ if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
     for _s in SESSIONS:
         if _s["session_id"] == WIDGET: _s["bypass_available"] = True
 
+# Full access by a restart (#6476, node/mode_restart.go): Allow All picked for a terminal Claude Code whose process has
+# no bypass flag (bypass_available false) is not refused. Its row says a restart waits (bypass_pending) and keeps the
+# mode it runs in; once its turn is over (here: MOCK_BYPASS_RESTART_SECONDS, default 6, after an idle pick; a working
+# agent waits until it is idle) the "restart" comes up in it, with bypass_available. Any other mode drops it.
+BYPASS_RESTART_SECONDS = float(os.environ.get("MOCK_BYPASS_RESTART_SECONDS") or 6)
+
+
+def bypass_restart(s, mode):
+    """True when s takes mode by a restart (queued here); a pick of another mode drops one that waits."""
+    if mode != "bypassPermissions":
+        if mode: s.pop("bypass_pending", None)
+        return False
+    if s.get("assistant") or s.get("agent") not in (None, "claude") or not s.get("pane_id") or s.get("bypass_available") \
+            or s.get("permission_mode") == "bypassPermissions":
+        return False
+    s["bypass_pending"] = True
+
+    def restarted():
+        if not s.get("bypass_pending"): return  # dropped meanwhile
+        if s.get("state") in ("working", "needs_you"):
+            threading.Timer(BYPASS_RESTART_SECONDS, restarted).start()  # waits for the turn to end
+            return
+        s.pop("bypass_pending", None)
+        s.update(permission_mode="bypassPermissions", bypass_available=True, updated_at=ago(minutes=0))
+        push_machine(s["machine_id"])
+    threading.Timer(BYPASS_RESTART_SECONDS, restarted).start()
+    return True
+
+
 # MOCK_STALE_DONE=1 (#2069): the widget session as the hub listed it while herdr said done through a turn the phone
 # started (status done, state idle, its activity still moving): the Agents list before the node's fix.
 if os.environ.get("MOCK_STALE_DONE") == "1":
@@ -1482,6 +1511,19 @@ if os.environ.get("MOCK_OVERVIEW_DENSE"):
                          "The governance query CLI is read-only. Next I'll check which of its commands the migration needs.",
                          source_kind="runtime", agent_label="claude", state_since=ago(minutes=2),
                          capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": True, "attach": False}))
+
+# MOCK_SIDE_SESSIONS=1 (#5935): two sessions the Claude desktop app started from the PR review, newer than it: a /btw
+# question that waits for the user and a side chat. They name the review in parent_agent_id, as the node sets it, and the
+# Agents list draws them under it.
+if os.environ.get("MOCK_SIDE_SESSIONS") == "1":
+    _desktop = dict(space_kind="", space_id="", space_name="", space_index=0, slot_id="", slot_name="", slot_index=0, pane_id="",
+                    tab_id="", workspace_id="", started_by_persona=False, parent_agent_id=REVIEW)
+    SESSIONS += [
+        sess("macbook", "a1f3c2d4-0000-4000-8000-0000000059a1", "btw: 这个 PR 现在能合吗", "/Users/me/code/weather", "blocked",
+             "needs_you", "", 0, "", 0, 4, "想先确认一下：两条命名建议要不要等改完再合？", pending=1, **_desktop),
+        sess("macbook", "a1f3c2d4-0000-4000-8000-0000000059a2", "Side chat", "/Users/me/code/weather", "idle", "idle", "", 0, "", 0,
+             9, "两条命名建议都改成英文会更统一。", seen_at=ago(minutes=8), **_desktop),
+    ]
 
 # MOCK_SESSIONS_MANY=<n> (#4410): n more idle sessions, enough to page an Agents list several pages deep with
 # MOCK_SESSIONS_LIST=1. GET /mock/sessions/touch moves the newest of them to now: the list's revision changes and every
@@ -22179,6 +22221,7 @@ MOCK_HELP = [
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
+    "MOCK_SIDE_SESSIONS=1  Two Claude desktop side sessions under the PR review (parent_agent_id, #5935), one waiting for you",
     "MOCK_SESSIONS_CATALOG=1  With MOCK_SESSIONS_LIST=1: catalog=1, place= and space= on the paged list, a Windows PC, one repository on two computers and a plain notes folder on two",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
@@ -25180,7 +25223,11 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.last_body or b"{}")
             for s in SESSIONS + ASSISTANT:  # the stored sessions: all_sessions() hands out copies
                 if s["session_id"] == p.split("/")[5]:
-                    s.update({k: v for k, v in body.items() if k in ("permission_mode", "effort", "model") and v})
+                    applied = body
+                    if bypass_restart(s, body.get("permission_mode")):
+                        applied = {k: v for k, v in body.items() if k != "permission_mode"}
+                        push_machine(s["machine_id"])
+                    s.update({k: v for k, v in applied.items() if k in ("permission_mode", "effort", "model") and v})
                     MODES_LOG.append({"session_id": s["session_id"], **{k: v for k, v in body.items() if k in ("permission_mode", "effort", "model")}})
             return self.send_json({"ok": True})
         self.send_json({"ok": True})

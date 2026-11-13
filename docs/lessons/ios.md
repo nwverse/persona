@@ -34,6 +34,24 @@ Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in
   dragged. Make the text view reach past the words (`Theme.Lift.handleReach`), with a matching
   `textContainerInset` that keeps the words where they are.
 
+## A lazy grid never makes what it does not show (#4073)
+
+- `LazyVGrid` and `LazyVStack` make an item only once it comes near the visible part of their scroll view. A preference,
+  `GeometryReader` or `onGeometryChange` on an item that never comes into view never reports, so "not measured yet"
+  lasts for good.
+- The new conversation's welcome reports where its first suggestion cards end (`WelcomeFold`), and the shell caps
+  Needs You over the composer below that (`NeedsRoom`). At the largest accessibility text sizes the greeting and the
+  paragraph filled the page and the cards stayed below it. The grid never made them, and Needs You showed every row it
+  had (three and "N more") over the welcome.
+- A few items that must be measured wherever they are go in a non-lazy layout (`Grid`, `VStack`). The shell's four
+  cards are a `Grid` now. The main chat's welcome measures nothing and keeps its `LazyVGrid`.
+- Reproduce with `-UIPreferredContentSizeCategoryName UICTContentSizeCategoryAccessibilityXXXL` on an ordinary iPhone
+  simulator; no iPhone Duo is needed.
+- An XCUITest query builds the app's accessibility tree, and that makes a lazy grid make its items off the page too. A
+  test that first waited for Needs You saw one row without the fix: the query had made the cards, and their fold capped
+  it. `testNeedsYouAtTheLargestTextSize` lets the page settle without asking for anything, and counts the rows at its
+  first look.
+
 ## Tab selection and targeted opens are different navigation intents (#5641)
 
 - An Agent pushed on Assistant's stack still uses the dev chat view, which writes the shared last-opened Agent marker.

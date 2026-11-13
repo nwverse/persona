@@ -851,9 +851,9 @@ private struct AgentsList: View {
     /// only their header, and the agent searched for was not there to open; quiet spaces and idle rows already open).
     /// Sections that start folded: By Status's Seen is the long tail. For them the saved list holds "!<id>" once opened.
     private static let foldedByDefault: Set<String> = ["state/idle"]
-    /// Sections whose default depends on what they hold (Unassigned, `TodoAgentGroup.folded`): the saved list holds "<id>"
-    /// or "!<id>" once the user chose, nothing until then (#1836).
-    private static let foldedByChoice: Set<String> = ["todo:none"]
+    /// Sections whose default depends on what they hold (Started Manually and Unassigned, `TodoAgentGroup.folded`): the
+    /// saved list holds "<id>" or "!<id>" once the user chose, nothing until then (#1836, #6458).
+    private static let foldedByChoice: Set<String> = ["todo:none", "todo:manual"]
 
     /// Starts folded: `foldedByDefault`, and a working tree's「N 个子项」(#3075).
     private static func foldsByDefault(_ id: String) -> Bool {
@@ -2330,11 +2330,12 @@ private struct AgentsList: View {
         }
     }
 
-    /// One section per todo, its agents ordered; agents opened by hand in herdr go into "Started Manually" (open); the other
-    /// unassigned ones into "Unassigned" (folded by default, open while one of them needs you or nothing is above it:
-    /// `TodoAgentGroup.folded`).
+    /// One section per todo, its agents ordered; agents opened by hand in the terminal go into "Started Manually", the other
+    /// unassigned ones into "Unassigned": each folded by default, open while one of them needs you or nothing is above it
+    /// (`TodoAgentGroup.folded`), and listed while empty when nothing narrows the list, to say what it would hold (#6458).
     @ViewBuilder private func todoSections(_ live: [Session]) -> some View {
-        let todoGroups = TodosLogic.buildTodoAgentGroups(sessions: live, todos: TodoStore.shared.todos, isMuted: model.isMuted)
+        let keepEmpty = query.isEmpty && quick == .all && !live.isEmpty
+        let todoGroups = TodosLogic.buildTodoAgentGroups(sessions: live, todos: TodoStore.shared.todos, isMuted: model.isMuted, keepEmpty: keepEmpty)
         todoGroupSections(todoGroups, mixedHosts: Set(live.compactMap(\.hostKind)).count > 1)
     }
 
@@ -2343,23 +2344,31 @@ private struct AgentsList: View {
         ForEach(todoGroups) { g in
             let id = g.key
             let folded = g.todoID == nil ? isFolded(id, otherwise: g.folded) : isFolded(id)
-            if !g.sessions.isEmpty {
+            if !g.sessions.isEmpty || g.hint != nil {
                 listSection {
                     if !folded {
-                        cappedRows(g.sessions, key: id) { s in slotRow(s, context: true, showHost: mixedHosts) }
+                        if g.sessions.isEmpty, let hint = g.hint {
+                            groupEmptyRow(hint)
+                        } else {
+                            cappedRows(g.sessions, key: id) { s in slotRow(s, context: true, showHost: mixedHosts) }
+                        }
                     }
                 } header: {
-                    FoldButton(title: g.name, folded: folded, detail: String(localized: "\(g.sessions.count) [Chats View cb60bd]")) { toggleFold(id, shown: folded) } label: {
+                    // A group says what it holds with its count, for VoiceOver too: its header is one element (#6458).
+                    FoldButton(title: g.name, folded: folded, detail: [String(localized: "\(g.sessions.count) [Chats View cb60bd]"), g.hint ?? ""].filter { !$0.isEmpty }
+                        .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label"))) { toggleFold(id, shown: folded) } label: {
                         HStack(spacing: Theme.Space.sm) {
                             if compact {
                                 Text(g.name).font(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
                             } else {
                                 Text(g.name)
                             }
+                            if let hint = g.hint { InfoTip(name: g.name, text: hint).textCase(nil) }
                             if let st = g.todoStatus {
                                 CountBadge(count: g.sessions.count, look: .tone(st.todoTone))
                             } else {
-                                CountBadge(count: g.sessions.count, look: .tone(StatusPalette.idle))
+                                // the most urgent of its agents' states, the rule a to-do's count follows (#6458)
+                                CountBadge(count: g.sessions.count, look: .tone(g.mostUrgent?.tone ?? StatusPalette.idle))
                             }
                             if let todoID = g.todoID,
                                 g.sessions.allSatisfy({ TodosLogic.isOnTodosHub(sessionGroup: $0.key.group, hubGroup: model.hub?.group) }) {
@@ -2382,6 +2391,18 @@ private struct AgentsList: View {
                 .listSectionSpacing(folded ? .custom(0) : .default)
             }
         }
+    }
+
+    /// An open group with no agents (#6458): what it would hold, in its place.
+    private func groupEmptyRow(_ hint: String) -> some View {
+        Text(hint)
+            .font(compact ? CompactList.meta : Theme.Font.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .listRowInsets(rowInsets(level: 0))
+            .listRowBackground(floating ? Color.clear : nil)
+            .listRowSeparator(.hidden)
+            .accessibilityIdentifier("agents.groupEmpty")
     }
 
     /// By Pinned (#4352, `DirectionAgentSections`) from the hub's tree; nil without one.
