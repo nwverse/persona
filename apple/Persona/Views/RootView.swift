@@ -218,9 +218,6 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification)) { _ in
             WindowTextSize.apply(); systemSize = WindowTextSize.system
         }
-        #if DEBUG
-        .task { await WindowTextSize.probe() }
-        #endif
         #endif
         // The Theme Color on the windows too, for what UIKit draws in the window's tint (Settings' row icons, `WindowTint`).
         .onChange(of: model.look, initial: true) { WindowTint.apply() }

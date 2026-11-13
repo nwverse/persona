@@ -30,23 +30,4 @@ enum WindowTextSize {
         }
     }
 }
-
-#if DEBUG
-extension WindowTextSize {
-    /// `-ax.probe YES`: what the system's size, the window's and the Large Content Viewer say, in the log (`ax.probe`),
-    /// and a system alert over the page: it must stay at the system's size, not the interface's cap.
-    @MainActor static func probe() async {
-        guard UserDefaults.standard.bool(forKey: "ax.probe") else { return }
-        try? await Task.sleep(for: .seconds(3))
-        let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.windows.first { $0.isKeyWindow } }.first
-        NSLog("ax.probe system=%@ window=%@ largeContentViewer=%d", UIApplication.shared.preferredContentSizeCategory.rawValue,
-              window?.traitCollection.preferredContentSizeCategory.rawValue ?? "none", UILargeContentViewerInteraction.isEnabled ? 1 : 0)
-        guard UserDefaults.standard.bool(forKey: "ax.probeAlert"), var top = window?.rootViewController else { return }
-        while let next = top.presentedViewController { top = next }
-        let alert = UIAlertController(title: "Probe alert", message: "Does this follow the system's text size?", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
-        top.present(alert, animated: false)
-    }
-}
-#endif
 #endif
