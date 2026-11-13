@@ -261,7 +261,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  */
 // #6575: verified runtime checkout display membership adds 79 B to the first screen on main at 2e57ac117
 // (ja 478,119 B to 478,198 B). Carry that measured feature allowance onto the current main budget.
-export const FIRST_SCREEN_BUDGET = 478_775;
+// #6295: Paseo's workspaces add 55 B (ja 478,762 B on main at 2910ccda4 to 478,817 B; en 475,065 B to 475,120 B,
+// zh-Hans 476,052 B to 476,107 B): New worktree on a Paseo Git row, the engine sent with an agent's worktree status, add
+// and remove, and no herdr ID to copy on a runtime's space. 13 B of it fit the room main had; 0 B of room left.
+export const FIRST_SCREEN_BUDGET = 478_817;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
