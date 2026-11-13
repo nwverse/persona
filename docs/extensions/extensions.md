@@ -3004,7 +3004,7 @@ Views, components, actions, responses, placements and context all use schema-gen
   `context` with made-up lines of a 90-line file).
 - UI version 6 (#827, "UI version 6"): pages, the native stream and the app's cards and sections send 6 (`pageVersion`, `ExtensionPageStream.uiVersion`, `cardVersion`), so the hub sends
   version 6 as it is; a card or a section draws version 4–5's code components read-only (`ExtensionCodeSummary`: a header, a path, up to 12 files with what changed, 20 lines of code,
-  5 comments of a thread, a composer that sends); widgets, the watch and the system extensions keep 3.
+  5 comments of a thread, a composer with only the buttons the card can use: none in the assistant's read-only cards, so none is drawn there); widgets, the watch and the system extensions keep 3.
   Row controls (`ExtensionControls.swift`, `ExtensionControlRow`): a switch or a stepper at the row's end, a slider on a line under it, all system controls labeled by the row's title and read out with
   their value as written (`display` for the value the extension drew, else the number in the user's locale and the unit); a row with its own action does it from its words, the control beside them.
   A switch sends at once, a slider when the finger lifts (moved without a drag, by VoiceOver or a keyboard, 0.6 s after the last move), a stepper 0.6 s after the last tap. `action.confirm` asks
