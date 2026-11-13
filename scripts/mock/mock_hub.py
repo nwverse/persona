@@ -18150,7 +18150,7 @@ def search_index_text(item):
         return None
     text = item.get("text") or ""
     if item.get("role") == "assistant":
-        text = search_card_text(text)
+        text = search_plain(search_card_text(text))
     elif item.get("role") == "user":
         if item.get("from") or item.get("injected"):
             return None
@@ -18163,6 +18163,109 @@ def search_index_text(item):
     else:
         return None
     return text if text.strip() else None
+
+
+# A reply's Markdown as the chat shows it (#7072): the manager's searchPlain (server/internal/assistant/search_text.go),
+# pattern for pattern; spec/fixtures/chat-search checks both.
+_PLAIN_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+_PLAIN_RULE = re.compile(r"^[ \t]{0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$")
+_PLAIN_TABLE_SEP = re.compile(r"^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$")
+_PLAIN_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+")
+_PLAIN_QUOTE = re.compile(r"^[ \t]{0,3}>[ \t]?")
+_PLAIN_LIST = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?")
+_PLAIN_ESCAPE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~<])")
+_PLAIN_INLINE = [
+    (re.compile(r"!\[([^\]\n]*)\]\([^)\n]*\)"), r"\1"),
+    (re.compile(r"\[([^\]\n]+)\]\([^)\n]*\)"), r"\1"),
+    (re.compile(r"\[([^\]\n]+)\]\[[^\]\n]*\]"), r"\1"),
+    (re.compile(r"<((?:https?|mailto):[^> \t\n]+)>"), r"\1"),
+    (re.compile(r"\*\*([^ \t\n*]|[^ \t\n*][^\n]*?[^ \t\n*])\*\*"), r"\1"),
+    (re.compile(r"(^|[^0-9A-Za-z_])__([^ \t\n_]|[^ \t\n_][^\n]*?[^ \t\n_])__($|[^0-9A-Za-z_])"), r"\1\2\3"),
+    (re.compile(r"~~([^~\n]+?)~~"), r"\1"),
+    (re.compile(r"\*([^ \t\n*]|[^ \t\n*][^*\n]*?[^ \t\n*])\*"), r"\1"),
+    (re.compile(r"(^|[^0-9A-Za-z_])_([^ \t\n_]|[^ \t\n_][^_\n]*?[^ \t\n_])_($|[^0-9A-Za-z_])"), r"\1\2\3"),
+]
+_PLAIN_ESCAPED = 0xE000
+
+
+def search_plain(md):
+    """A reply's Markdown as the chat shows it, without the markup (searchPlain)."""
+    if not any(c in md for c in "*_`#>[~|-+!<\\0123456789"):
+        return md
+    out, fence = [], ""
+    for line in md.split("\n"):
+        if fence:
+            t = line.strip()
+            if t.startswith(fence) and t.strip(fence[0]) == "":
+                fence = ""
+            else:
+                out.append(line)
+            continue
+        m = _PLAIN_FENCE.match(line)
+        if m:
+            fence = m.group(1)
+            continue
+        if _PLAIN_RULE.match(line) or _PLAIN_TABLE_SEP.match(line):
+            continue
+        line = _PLAIN_HEADING.sub("", line, count=1)
+        while _PLAIN_QUOTE.match(line):
+            line = _PLAIN_QUOTE.sub("", line, count=1)
+        line = _PLAIN_LIST.sub("", line, count=1)
+        t = line.strip()
+        if t.startswith("|"):
+            line = " ".join(c.strip() for c in t.strip("|").split("|"))
+        out.append(search_inline(line))
+    return "\n".join(out).strip()
+
+
+def search_code_span(s):
+    """The first code span: (where its backticks start, how many, where the closing run starts), or None."""
+    frm = 0
+    while True:
+        at = s.find("`", frm)
+        if at < 0:
+            return None
+        n = 0
+        while at + n < len(s) and s[at + n] == "`":
+            n += 1
+        j = at + n
+        while j < len(s):
+            k = s.find("`", j)
+            if k < 0:
+                break
+            m = 0
+            while k + m < len(s) and s[k + m] == "`":
+                m += 1
+            if m == n:
+                return at, n, k
+            j = k + m
+        frm = at + n
+
+
+def search_marks(s):
+    for r, w in _PLAIN_INLINE:
+        s = r.sub(w, s)
+        if w.endswith("\\3"):
+            s = r.sub(w, s)
+    return s
+
+
+def search_inline(line):
+    line = _PLAIN_ESCAPE.sub(lambda m: chr(_PLAIN_ESCAPED + ord(m.group(1))), line)
+    out = []
+    while line:
+        span = search_code_span(line)
+        if not span:
+            out.append(search_marks(line))
+            break
+        at, n, end = span
+        out.append(search_marks(line[:at]))
+        code = line[at + n:end]
+        if len(code) >= 2 and code[0] == " " and code[-1] == " " and code.strip(" "):
+            code = code[1:-1]
+        out.append(code)
+        line = line[end + n:]
+    return "".join(chr(ord(c) - _PLAIN_ESCAPED) if _PLAIN_ESCAPED <= ord(c) < _PLAIN_ESCAPED + 128 else c for c in "".join(out))
 
 
 def search_fold(s):
