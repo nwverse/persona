@@ -81,7 +81,9 @@ func forwardedModel(probe Probe, model string) error {
 			}
 		}
 	}
-	if matches != 1 {
+	// Every model flag names the model asked for: a wrapper that pins that model and also forwards its arguments
+	// passes it twice, and claude runs it either way (#6205). None at all is a launcher that dropped it.
+	if matches == 0 {
 		return errors.New("启动器没有可靠转发模型参数，请在模型供应商中修正它")
 	}
 	return nil
