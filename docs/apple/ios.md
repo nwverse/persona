@@ -703,7 +703,7 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   - `SplitDividerTests` (`-openSplitFresh YES` starts both lists at the system's width).
 - **Readable width**: chats and the Persona home page are at most 760pt wide (`ChatView.readableWidth`), centered when wider; the top bar still spans the full width.
 - **No screen dimensions**: the screens have different sizes and ratios; never use `UIScreen.main`. The long-press message action bar stays within the chat area (`MessageMenu.area`
-  coordinate space); interaction forms have a maximum height of 55% of their container (`containerRelativeFrame`); image scaling uses the view's `traitCollection.displayScale`.
+  coordinate space); interaction forms have a maximum height of 55% of their container (`containerRelativeFrame`), except a lone question card above the composer that grows past half the page (`docs/design/DESIGN_SYSTEM.md` 4.8, #6277); image scaling uses the view's `traitCollection.displayScale`.
 - **Toolbar buttons need both titles and icons** (`Label("新建会话", systemImage: …)`, "New chat"): vertical bars show only icons, and overflow menus show titles;
   icon-only buttons become blank menu items.
 - **Vertical side bars**: when the system places bars at the side (outer screen, inner landscape; non-nil `toolbarVerticalEdge`, iOS 27.1 onward), the Agents chat page no longer draws its own header buttons;

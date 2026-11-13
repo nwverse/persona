@@ -21,13 +21,14 @@
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
   `DeviceAssistantSend` text. This proves literal deduplication, not a stable-policy refactor or provider-context savings.
 
-
 - Proven `prompt` source can describe either a terminal tool label or a first-message fallback (#5269).
   Ordinary Claude inventory falls back to the first message for a bare tool label but not its spinner-prefixed
   form, so spinner normalization alone still lets a generated name disappear. Accept recognizable bad fallback
   changes only with explicit Claude runtime and prompt provenance; reject other tool/runtime names, meaningful
   titles, manual/custom titles and unknown sources. Apply this comparison at display and late-result boundaries,
   and test both directions plus service reconstruction without a new model call or counter reset.
+
+- A to-do's PR reference may exist only in `PRURL`, without appearing in its title or notes (#5458). Duplicate hints must read that link too; an open to-do still represents ongoing work when its linked Agent is idle.
 
 - Terminal spinner frames are presentation, not native-title changes (#5254). Comparing a saved `raw_title`
   byte for byte with a later inventory hid a successful automatic name while leaving its one-shot count spent.
