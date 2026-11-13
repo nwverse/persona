@@ -40,6 +40,7 @@ export function FileInfoDialog({
   entry,
   onClose,
   onGoTo,
+  onChangeMode,
 }: {
   mid: string;
   cwd: string;
@@ -49,6 +50,8 @@ export function FileInfoDialog({
   onClose: () => void;
   /** Go to where a link leads: a folder opens, a file is shown in its folder. */
   onGoTo?: (path: string, dir: boolean) => void;
+  /** Change the permissions (#5831): offered where the computer takes them. */
+  onChangeMode?: (mode: number) => void;
 }) {
   const features = useStore((s) => s.features);
   const machine = useStore((s) => s.machines.find((m) => m.id === mid));
@@ -108,7 +111,7 @@ export function FileInfoDialog({
         <Button tone="primary" onClick={onClose}>{t("files-info.done")}</Button>
       </>
     }>
-      <div className="flex flex-col gap-3 text-[13px]" data-testid="file-info">
+      <div className="flex flex-col gap-3 text-xs" data-testid="file-info">
         <p className="text-ink-2">{kind}</p>
         {symlink && says !== undefined && (
           <Group title={t("files-info.link")}>
@@ -135,10 +138,15 @@ export function FileInfoDialog({
             <Row label={t("files-info.who")} value={permissionWords(info.mode)} />
             {info.owner && <Row label={t("files-info.owner")} value={info.group ? t("files-info.owner_group", { owner: info.owner, group: info.group }) : info.owner} />}
             <Row label={t("files-info.code")} value={`${modeSymbolic(info.mode)} · ${modeOctal(info.mode)}`} mono />
+            {onChangeMode && !info.symlink && (
+              <div className="px-3 py-2">
+                <Button icon="pencil" onClick={() => onChangeMode(info.mode!)}>{t("files-perm.change")}</Button>
+              </div>
+            )}
           </Group>
         )}
         {loading && <Loading label={t("files-info.loading")} />}
-        {note && <p className="text-[12px] text-ink-3">{note}</p>}
+        {note && <p className="text-xs text-ink-3">{note}</p>}
       </div>
     </Dialog>
   );
@@ -157,7 +165,7 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
   return (
     <div className="flex items-start justify-between gap-4 px-3 py-2">
       <span className="shrink-0 text-ink-2">{label}</span>
-      <span className={mono ? "min-w-0 text-right font-mono text-[12px] break-all text-ink" : "min-w-0 text-right text-ink"}>{value}</span>
+      <span className={mono ? "min-w-0 text-right font-mono text-xs break-all text-ink" : "min-w-0 text-right text-ink"}>{value}</span>
     </div>
   );
 }

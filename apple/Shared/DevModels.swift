@@ -252,6 +252,13 @@ extension APIClient {
     func zipFiles(machine: String, paths: [String], cwd: String, dir: String?, name: String) async throws -> ZippedFile {
         try await post(mp(machine) + "/files/zip", body: ZipRequest(paths: paths, cwd: cwd, dir: dir, name: name), timeout: 610, as: ZippedFile.self)
     }
+    /// Copies paths into folder dir (#5830); conflict "replace" / "keep" answers a 409 `exists` ("keep" into their own
+    /// folder: Duplicate).
+    func copyFiles(machine: String, paths: [String], cwd: String, dir: String, conflict: String? = nil) async throws -> [MovedFile] {
+        struct CopyResponse: Decodable { var copied: [MovedFile]? }
+        return try await post(mp(machine) + "/files/copy", body: MoveRequest(paths: paths, cwd: cwd, dir: dir, conflict: conflict),
+                              timeout: 610, as: CopyResponse.self).copied ?? []
+    }
     private struct RestoreRequest: Encodable {
         var trashIDs: [String]
         enum CodingKeys: String, CodingKey { case trashIDs = "trash_ids" }

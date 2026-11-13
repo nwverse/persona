@@ -73,11 +73,18 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 		}
 	}
 	// A model's call says which conversation asked (task_brief.go callerOrigin); the hub's own runTool calls do not.
-	res, err := s.runTool(withToolCaller(ctx, call.MachineID, call.SessionID), call.MachineID, call.SessionID, call.Name, args)
-	if err != nil {
-		return proto.TextResult(err.Error(), true)
+	ctx = withToolCaller(ctx, call.MachineID, call.SessionID)
+	outward := s.outwardReader(ctx, call.MachineID, call.SessionID)
+	if outward {
+		ctx = withOutwardReader(ctx)
 	}
-	return proto.TextResult(res, false)
+	res, err := s.runTool(ctx, call.MachineID, call.SessionID, call.Name, args)
+	if err != nil {
+		return proto.TextResult(outwardText(outward, err.Error()), true)
+	}
+	// A conversation that writes to other people never reads the private parts of a profile, whichever tool would
+	// give them (outward_reader.go).
+	return proto.TextResult(outwardText(outward, res), false)
 }
 
 // appTool runs a tool that is app's (app.call app.tool).

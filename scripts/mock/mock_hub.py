@@ -17154,7 +17154,8 @@ def mock_files(p, q):
         if isinstance(v, tuple):
             return {"path": path, "name": name, "size": mock_size(v), "mime": v[0], "data": v[1], "is_dir": False, "truncated": False}, 200
         mime = "text/markdown" if name.endswith(".md") else "text/plain"
-        return {"path": path, "name": name, "size": mock_size(v), "mime": mime, "text": v, "is_dir": False, "truncated": False}, 200
+        return {"path": path, "name": name, "size": mock_size(v), "mime": mime, "text": v, "is_dir": False, "truncated": False,
+                "revision": mock_text_revision(v)}, 200
     home, cwd = mock_abs(mid, arg("cwd"), "")
     root = home + "/" + MOCK_REPO
     if not (cwd == root or cwd.startswith(root + "/")):
@@ -17247,6 +17248,7 @@ MOCK_TREE[MOCK_REPO + "/docs/guide.pdf"] = ("application/pdf", mock_pdf())
 # checkout), `old-settings.json` → ../legacy/settings.json (broken), and a script; GET …/stat?detail=1 answers the Info
 # sheet's fields (mode, owner, group, times, items, a link's target).
 MOCK_LINKS = {}
+MOCK_MODES = {}  # tree key (no trailing /) -> permission bits changed through …/files/chmod (#5831)
 if os.environ.get("MOCK_FILE_LINKS"):
     MOCK_TREE["code/shared/"] = None
     MOCK_TREE["code/shared/colors.json"] = '{"sky": "#4a90d9", "rain": "#5b6b7d"}\n'
@@ -17266,6 +17268,11 @@ def link_real(rel):
     return rel
 
 
+def mock_text_revision(text):
+    """A text file's revision as file?stream=1 gives it and files/write checks it (#5829): its content's hash here."""
+    return "r" + hashlib.sha1(text.encode()).hexdigest()[:12]
+
+
 def mock_stat_detail(mid, asked, cwd):
     """GET …/stat?detail=1 for one path (docs/protocol/protocol.md "File details and links")."""
     home, path = mock_abs(mid, asked, cwd)
@@ -17274,7 +17281,7 @@ def mock_stat_detail(mid, asked, cwd):
     link = MOCK_LINKS.get(rel)
     real = link_real(rel)
     is_dir = real == "" or real.endswith("/")
-    d = {"path": asked, "kind": "dir" if is_dir else "file", "mode": 0o755 if is_dir or rel.endswith(".sh") else 0o644,
+    d = {"path": asked, "kind": "dir" if is_dir else "file", "mode": MOCK_MODES.get(real.rstrip("/"), 0o755 if is_dir or rel.endswith(".sh") else 0o644),
          "owner": "me", "group": "staff", "mtime": ago(hours=5), "ctime": ago(hours=5), "birthtime": ago(days=9)}
     if is_dir:
         d["items"] = len(mock_children(real))
@@ -20565,7 +20572,7 @@ _features_without_file_ops = features
 def features():
     return (_features_without_file_ops() + (["upload_dir", "file_edit"] if FILE_OPS else [])
             + (["file_info"] if os.environ.get("MOCK_FILE_LINKS") else [])
-            + (["file_mkdir", "file_write", "file_zip"] if FILE_OPS else []))
+            + (["file_mkdir", "file_write", "file_zip", "file_copy", "file_chmod", "pane_cwd"] if FILE_OPS else []))
 
 
 def file_ops_key(mid, path, cwd):
@@ -20707,7 +20714,7 @@ def file_ops_route(h, p, body):
 def file_make_route(h, p, body):
     """POST /api/v1/machines/{mid}/files/{mkdir,write,zip} under MOCK_FILE_OPS (#5828): a folder in the tree, a text file
     made or replaced, a real zip of tree entries kept in FILES at a temporary path for …/file/download."""
-    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/(mkdir|write|zip)", p)
+    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/(mkdir|write|zip|copy|chmod)", p)
     if not (FILE_OPS and m): return False
     mid, op = m.groups()
     req = json.loads(body or b"{}")
@@ -20730,9 +20737,35 @@ def file_make_route(h, p, body):
             if taken(rel): return h.send_json({"error": "已经有了", "code": "exists", "name": rel.rpartition("/")[2]}, 409) or True
         elif rel not in MOCK_TREE:
             return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+        elif not req.get("force") and isinstance(MOCK_TREE[rel], str) and req.get("revision") != mock_text_revision(MOCK_TREE[rel]):
+            # changed since it was opened (GET /mock/touch?path=): nothing written, as the node answers
+            return h.send_json({"error": "the file changed on the computer since it was opened", "code": "file_changed",
+                                "revision": mock_text_revision(MOCK_TREE[rel]), "mtime": ago()}, 409) or True
         MOCK_TREE[rel] = text
         fs_changed(mid, [(home + "/" + rel.rpartition("/")[0]).rstrip("/")], True)
-        return h.send_json({"path": home + "/" + rel, "size": len(text.encode()), "revision": "r%d" % len(FILE_OPS_LOG), "mtime": ago()}) or True
+        return h.send_json({"path": home + "/" + rel, "size": len(text.encode()), "revision": mock_text_revision(text), "mtime": ago()}) or True
+    if op == "chmod":  # #5831: the bits kept for the Info sheet's answer
+        home, rel, err = file_ops_key(mid, req.get("path", ""), cwd)
+        if err: return h.send_json(*err) or True
+        if not taken(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+        MOCK_MODES[rel.rstrip("/")] = int(req.get("mode", 0o644)) & 0o777
+        return h.send_json({"path": req["path"], "mode": MOCK_MODES[rel.rstrip("/")]}) or True
+    if op == "copy":  # #5830: the tree entries copied into dir, named as a move names them
+        home, drel, err = file_ops_dir(mid, req.get("dir", ""), cwd)
+        if err: return h.send_json(*err) or True
+        copied = []
+        for path in req.get("paths", []):
+            _, rel, err = file_ops_key(mid, path, cwd)
+            if err: return h.send_json(*err) or True
+            if not taken(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+            name = rel.rpartition("/")[2]
+            final = file_ops_free(drel, name, req.get("conflict"))
+            if final is None: return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
+            for k, v in list(MOCK_TREE.items()):
+                if k == rel or k == rel + "/" or k.startswith(rel + "/"): MOCK_TREE[drel + final + k[len(rel):]] = v
+            copied.append({"from": path, "to": req["dir"].rstrip("/") + "/" + final})
+        fs_changed(mid, [(home + "/" + drel).rstrip("/")], True)
+        return h.send_json({"copied": copied}) or True
     import io, zipfile
     out, n = io.BytesIO(), 0
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
@@ -21787,6 +21820,12 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if p == "/mock/touch":  # #5829: a file changed on the computer behind an open editor (path relative to the home)
+            rel = q.get("path", [""])[0].lstrip("~/")
+            if isinstance(MOCK_TREE.get(rel), str):
+                MOCK_TREE[rel] += "\n// changed on the computer\n"
+                return self.send_json({"touched": rel})
+            return self.send_json({"error": "no such text file"}, 404)
         if p == "/mock/video-reads":
             with VIDEO_READ_LOCK:
                 if "reset" in q: VIDEO_READS.clear()

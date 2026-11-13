@@ -683,6 +683,8 @@ extension Theme {
         static let newFile = "doc.badge.plus"
         /// New Folder in the file page's ＋ (#5828): the folder with a plus, as a new group.
         static let newFolder = newGroup
+        /// Duplicate in the file page (#5830): a copy beside the original.
+        static let duplicate = "plus.square.on.square"
         /// Files looked up by name or listed (Glob, LS).
         static let findFiles = "folder.badge.questionmark"
         /// Text searched for inside files (Grep).

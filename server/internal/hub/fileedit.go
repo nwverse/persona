@@ -35,6 +35,8 @@ type fileEditRequest struct {
 	Revision string  `json:"revision,omitempty"`
 	SHA256   string  `json:"sha256,omitempty"`
 	Force    bool    `json:"force,omitempty"`
+	// chmod (#5831): permission bits 0–0777.
+	Mode *int `json:"mode,omitempty"`
 }
 
 // maxFileWriteBody: a write's JSON (the node takes 4 MB of text; escaping can double it).
@@ -91,6 +93,23 @@ func (q fileEditRequest) check(op string) error {
 		}
 	case "zip":
 		return nonEmpty(q.Paths, "paths")
+	case "chmod":
+		if strings.TrimSpace(q.Path) == "" {
+			return errors.New("path is required")
+		}
+		if q.Mode == nil || *q.Mode < 0 || *q.Mode > 0o777 {
+			return errors.New("mode must be from 0 to 0777")
+		}
+	case "copy":
+		if strings.TrimSpace(q.Dir) == "" {
+			return errors.New("dir is required")
+		}
+		switch q.Conflict {
+		case "", proto.UploadConflictReplace, proto.UploadConflictKeep:
+		default:
+			return errors.New("conflict must be replace or keep")
+		}
+		return nonEmpty(q.Paths, "paths")
 	}
 	return nil
 }
@@ -111,7 +130,7 @@ func (h *Hub) fileEdit(op string) http.HandlerFunc {
 			return
 		}
 		wait := 2 * time.Minute // a big folder to the trash on a slow disk
-		if op == "zip" {
+		if op == "zip" || op == "copy" {
 			wait = 10 * time.Minute // up to 2 GB of files
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), wait)
@@ -121,7 +140,11 @@ func (h *Hub) fileEdit(op string) http.HandlerFunc {
 			var re *rpc.Error
 			switch {
 			case errors.As(err, &re) && re.Code == "" && strings.HasPrefix(re.Message, "unknown method"):
-				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-fileedit.outdated", i18n.Args{"name": m.cfg.Name}), nil)
+				key := "hub-fileedit.outdated"
+				if op != "rename" && op != "move" && op != "trash" && op != "restore" {
+					key = "hub-fileedit.outdated_feature" // mkdir, write, zip, copy, chmod (#5828-#5831)
+				}
+				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), key, i18n.Args{"name": m.cfg.Name}), nil)
 			case errors.As(err, &re) && re.Code == proto.CodeNotFound:
 				writeCode(w, http.StatusNotFound, proto.CodeNotFound, re.Message, nil)
 			default:
