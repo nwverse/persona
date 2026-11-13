@@ -1,5 +1,12 @@
 # Lessons: testing and validation
 
+- A counter of a shared resource (lists, calls, reads) must not include what a fixture's own background passes do
+  (#6121). `TestIdlePassesReadWhatRuns` counted `closeDoneTaskAgents`'s machine lists, but `liveLoop`'s signal-driven
+  pass (a 100 ms coalescing window) listed the same machine from the fixture's earlier calls, so the count was 0 or 1
+  depending on the race (32 failures in 200 runs). Settle the counter before the measurement: wait until no list has
+  happened for a quiet window longer than the background pass's coalescing delay, then count only what the call under
+  test adds. Never fix this class with a plain `time.Sleep` before the call — that only moves the race.
+
 - A test that calls an entry point which sets the process environment must `t.Setenv` that variable first, so the
   test puts it back (#4581). `nodeclient.RunHook` with `--persona-home <dir>` sets `PERSONA_HOME`; one test left it
   pointing at its removed `t.TempDir()`, and every later `internal/node` test put `node.sock` there. On macOS that path
