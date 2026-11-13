@@ -59,7 +59,8 @@ enum HomeSamples {
                 .init(title: t("Movie with Sam", "和小林看电影"), start: at(19, 0), end: at(21, 0)),
             ],
             source: .calendar)
-        s.today?.days = days(zh: zh, now: now, today: s.today?.events ?? [])
+        let todays = s.today?.events ?? []
+        s.today?.days = days(zh: zh, now: now, today: todays)
         s.todos = .init(
             items: [
                 .init(id: "t1", title: t("Renew the passport", "续签护照"), due: at(9, 0), overdue: true),
