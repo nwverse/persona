@@ -666,6 +666,22 @@ func keepsWords(it *InboxItem) bool {
 	return it.TitleBy == TitleByAssistant || it.TitleBy == TitleByUser
 }
 
+// fallbackEventTitle removes a redundant conversation-name prefix only when a real title remains.
+func fallbackEventTitle(title, where string) string {
+	title = strings.TrimSpace(title)
+	if where == "" {
+		return title
+	}
+	rest, ok := strings.CutPrefix(title, where+"：")
+	if !ok {
+		return title
+	}
+	if rest = strings.TrimSpace(rest); rest != "" {
+		return rest
+	}
+	return title
+}
+
 // putEvent keeps an event the connector wrote (or the hub composed), under the item's id: the model's title, summary
 // and tier, or under the fallback a new event's title and rule tier with "By rule". Ordinary fallback messages joining an
 // existing event leave its title, summary, tier, reason, urgency and triager unchanged; a rewritten direct-chat join may
@@ -774,7 +790,7 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		if tier == "" {
 			tier = b.fallbackEventTier(thing, it)
 		}
-		if t := strings.TrimSpace(e.title); t != "" {
+		if t := fallbackEventTitle(e.title, it.Where); t != "" {
 			it.Title = t
 		}
 		it.Summary, it.Tier, it.Reason, it.TriagedBy, it.TitleBy = "", tier, b.byRules(), "rules", TitleByRules
