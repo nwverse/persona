@@ -3,9 +3,9 @@ import Testing
 @testable import Persona
 
 /// What the inbox's source page opens (docs/assistant/inbox.md, "Plugin-rendered details"): an item whose only block is
-/// its chat opens the conversation; every other source keeps today's page. The page keeps the source's order (a document,
-/// a connector's thread, a Moments post and mail before the chat), so a block sent beside a chat does not take the chat's
-/// place — a document from the same source still opens the document.
+/// its chat opens the conversation; every other source keeps today's page. The page keeps the source's order — a document,
+/// a connector's thread and a Moments post before the chat, mail after it — so a block sent beside a chat does not take
+/// the chat's place: a document from the same source still opens the document.
 @MainActor
 struct InboxSourceSlotScopeTests {
     private func item(source: String, kind: String = "doc", _ blocks: String) throws -> InboxItem {
@@ -38,8 +38,9 @@ struct InboxSourceSlotScopeTests {
     }
 
     @Test func todaysSourceOrderIsKeptWhenBlocksComeTogether() throws {
-        // The source's order before this page changed: a document, a connector's thread, a Moments post and mail all
-        // came before the chat, so an item carrying one of them beside its chat block keeps today's page.
+        // The source's order before this page changed: a document, a connector's thread and a Moments post all came
+        // before the chat, so an item carrying one of them beside its chat block keeps today's page; mail came after
+        // the chat, so a chat beside it still opens.
         let chat = #""lark":{"feed_id":"feed-1","is_group":true,"start_position":"7"}"#
         let withConnector = try item(source: "examplechat", kind: "group",
                                      chat + #","connector":{"thread":"thread-1","label":"Example"}"#)
@@ -48,6 +49,10 @@ struct InboxSourceSlotScopeTests {
 
         let withMoment = try item(source: "lark", kind: "moment", chat + #","moment":{"post_id":"post-1","notice":"comment"}"#)
         #expect(InboxSourcePage.Selection.of(item: withMoment) == .slot(.moment))
+
+        let withMail = try item(source: "lark", kind: "mail",
+                                chat + #","mail":{"account_id":"mail-1","mailbox":"INBOX","uids":[5]}"#)
+        #expect(InboxSourcePage.Selection.of(item: withMail) == .chat(try #require(withMail.larkConversation)))
     }
 
     @Test func anItemWithoutABlockKeepsTheEmptyPage() throws {
