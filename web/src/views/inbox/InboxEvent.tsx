@@ -1,15 +1,16 @@
 // An inbox item as an event (docs/assistant/inbox.md "Events and handling chain", docs/web/web.md "Inbox"): the row's mark ("In progress"'s state
 // word, "AI is preparing a suggestion", the suggestion's kind and first line) and the detail's body — ✦ summary, recap, the
 // suggestion card
-// with its buttons right under it, then the handling chain folded to its newest entry, each entry going where its link says.
+// with its buttons right under it, then the handling chain folded to its three newest entries, each entry going where its link says.
 // Drawn only for an item that carries this phase's fields (lib/inbox-events.ts `hasEvent`).
 import { useEffect, useRef, useState } from "react";
 import {
-  actOnSuggestion, canExpand, chainIconMeaning, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
+  actOnSuggestion, canExpand, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
   type ChainEntry, type ChainTap, type InboxSuggestion,
 } from "../../lib/inbox-events";
 import { conversationRoute, docChangeLine, isDone, itemKey, itemPath, itemRoute, reloadInbox, replaceItem, suggestionAct, useInbox, type InboxItem } from "../../lib/inbox";
 import { otherManager } from "../../lib/manager-choice";
+import { nowText } from "../../lib/inbox-now";
 import { connectorBrand } from "../../lib/connectors";
 import { stateOf } from "../../lib/format";
 import { stateName } from "../../lib/state-labels";
@@ -88,17 +89,26 @@ export function EventMark({ it }: { it: InboxItem }) {
 // ── the detail ───────────────────────────────────────────
 
 /**
- * The detail's body for an event: summary, recap, how the handling goes, the suggestion, handling chain, "Related" and "Trail".
+ * The detail's body for an event: the active state and its actions, the suggestion, summary and recap, the handling chain, "Related" and "Trail".
  * `embedded`: above the item's own page (a Feishu chat or mail, #3262 / #5471), as tall as it needs up to a share of the pane, then scrolling.
  */
 export function EventBody({ item, onSource, embedded = false }: { item: InboxItem; onSource: (at: SourceAt) => void; embedded?: boolean }) {
   const done = isDone(item);
+  const now = nowText(item);
   // capped above the source: its bottom fades while there is more below, so a cut-off row reads as more to scroll to
   const box = useRef<HTMLDivElement>(null);
   const fold = useFoldScroll(box, embedded, [item]);
   const body = (
     <div ref={box} {...fold} className={embedded ? "min-h-0 overflow-y-auto" : "min-h-0 flex-1 overflow-y-auto"} data-event-body={embedded ? "embedded" : ""}>
       <div className={cx("mx-auto flex max-w-[760px] flex-col px-4 sm:px-6", embedded ? "gap-3 py-3" : "gap-4 py-4")}>
+        {(!done || now !== undefined) && <HandlingLine item={item} now={now} />}
+        {done && now === undefined && item.done_by === "manager" && (
+          <p className="flex items-center gap-2 text-[12.5px] text-ink-2" data-event-manager-done>
+            <Icon name="check" size={13} stroke={2.4} className="shrink-0 text-green" />
+            {t("inbox-inboxevent.manager_done")}
+          </p>
+        )}
+        {!done && item.suggestion && <SuggestionCard key={`${item.id}@${item.suggestion.version}`} item={item} suggestion={item.suggestion} />}
         {(item.summary || item.recap) && (
           <section className="flex flex-col gap-2">
             {item.summary && (
@@ -115,14 +125,6 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
             )}
           </section>
         )}
-        {!done && <HandlingLine item={item} />}
-        {done && item.done_by === "manager" && (
-          <p className="flex items-center gap-2 text-[12.5px] text-ink-2" data-event-manager-done>
-            <Icon name="check" size={13} stroke={2.4} className="shrink-0 text-green" />
-            {t("inbox-inboxevent.manager_done")}
-          </p>
-        )}
-        {!done && item.suggestion && <SuggestionCard key={`${item.id}@${item.suggestion.version}`} item={item} suggestion={item.suggestion} />}
         <Chain item={item} onSource={onSource} />
         <Related item={item} />
         <InboxLine item={item} />
@@ -134,16 +136,18 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
 }
 
 /** The active state, its processing conversation, and a way to instruct an open item without a suggestion. */
-function HandlingLine({ item }: { item: InboxItem }) {
+function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   const conversation = useConversation();
   const [sayOpen, setSayOpen] = useState(false);
   const [say, setSay] = useState("");
   const [acting, setActing] = useState(false);
   const h = item.handling;
-  const canSay = !isDone(item) && !item.suggestion;
-  const failed = canSay && (handlingFailed(item) || (item as InboxItem & { now?: string }).now === "failed");
-  if (!h && !canSay) return null;
-  const word = handlingWord(item);
+  const done = isDone(item);
+  const canSay = !done && !item.suggestion;
+  const failed = canSay && (handlingFailed(item) || item.now === "failed");
+  if (!h && !canSay && now === undefined) return null;
+  const word = now ?? handlingWord(item);
+  const working = h?.state === "looking" || h?.state === "agent";
   const to = h?.machine_id && h.session_id ? conversation(h.machine_id, h.session_id) : undefined;
   const instruct = async (words: string) => {
     const text = words.trim();
@@ -171,9 +175,9 @@ function HandlingLine({ item }: { item: InboxItem }) {
     </button>
   );
   const action = canSay && (failed ? (
-    <Button tone="quiet" size="sm" icon="retry" busy={acting} onClick={() => void instruct(t("inbox-inboxevent.retry_text"))} testId="inbox-retry">{t("inbox-inboxevent.retry")}</Button>
+    <Button tone="quiet" size="sm" icon="retry" busy={acting} onClick={() => void instruct(t("inbox-inboxdetail.retry_text"))} testId="inbox-retry">{t("inbox-inboxdetail.retry")}</Button>
   ) : !sayOpen ? (
-    <Button tone="quiet" size="sm" icon="chat" onClick={() => setSayOpen(true)} testId="inbox-say">{t("inbox-inboxevent.say_something")}</Button>
+    <Button tone="quiet" size="sm" icon="chat" onClick={() => setSayOpen(true)} testId="inbox-say">{t("inbox-inboxdetail.say_something")}</Button>
   ) : null);
   const showSay = sayOpen && canSay && !failed;
   if (!preparing(item) && !failed && !word && !action && !showSay) return null;
@@ -182,22 +186,21 @@ function HandlingLine({ item }: { item: InboxItem }) {
       {preparing(item) ? (
         <div className="flex min-w-0 items-center gap-2 rounded-[10px] bg-inset p-3 text-[12.5px] shadow-hairline" data-event-preparing>
           <Spinner size={12} />
-          <Shimmer className="min-w-0 flex-1 truncate">{t("inbox-inboxevent.preparing")}</Shimmer>
+          <Shimmer className="min-w-0 flex-1 truncate">{word ?? t("inbox-inboxevent.preparing")}</Shimmer>
           {open}
           {action}
         </div>
       ) : failed ? (
         <div className="flex items-start gap-2 rounded-[10px] bg-red-tint p-3 text-[12.5px] text-red" role="status" data-event-failed>
           <Icon name="warning" size={14} className="mt-px shrink-0" />
-          <span className="min-w-0 flex-1 leading-relaxed">{h?.error ? t("inbox-inboxevent.failed_with", { error: h.error }) : t("inbox-inboxevent.failed")}</span>
+          <span className="min-w-0 flex-1 leading-relaxed">{now ?? (h?.error ? t("inbox-inboxevent.failed_with", { error: h.error }) : t("inbox-inboxevent.failed"))}</span>
           {open}
           {action}
         </div>
       ) : word ? (
-        <div className="flex min-w-0 items-center gap-2 text-[12.5px] text-ink-2" data-event-handling={h?.state}>
-          {h?.state === "waiting" ? <Icon name="clock" size={13} className="shrink-0 text-ink-3" /> : <Spinner size={12} />}
-          <span className="min-w-0 truncate">{word}</span>
-          <span className="flex-1" />
+        <div className="flex min-w-0 items-center gap-2 text-[12.5px] text-ink-2" data-event-handling={h?.state ?? (done ? "done" : undefined)} data-event-now={now === undefined ? undefined : item.now}>
+          {done ? <Icon name="check" size={13} stroke={2.4} className="shrink-0 text-green" /> : h?.state === "waiting" ? <Icon name="clock" size={13} className="shrink-0 text-ink-3" /> : working ? <Spinner size={12} /> : null}
+          <span className={cx("min-w-0 flex-1", now === undefined && "truncate")}>{word}</span>
           {open}
           {action}
         </div>
@@ -210,7 +213,7 @@ function HandlingLine({ item }: { item: InboxItem }) {
               value={say}
               onChange={(e) => setSay(e.target.value)}
               placeholder={t("inbox-inboxevent.say_placeholder")}
-              aria-label={t("inbox-inboxevent.say_something")}
+              aria-label={t("inbox-inboxdetail.say_something")}
               className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-3"
               data-event-say-input
               onKeyDown={(e) => {
@@ -220,7 +223,7 @@ function HandlingLine({ item }: { item: InboxItem }) {
           </label>
           <div className="flex flex-wrap justify-end gap-2">
             <Button tone="quiet" size="sm" disabled={acting} onClick={() => { setSayOpen(false); setSay(""); }}>{t("common.cancel")}</Button>
-            <Button tone="accent" size="sm" icon="spark" disabled={!say.trim() || acting} busy={acting} onClick={() => void instruct(say)}>{t("inbox-inboxevent.say_something")}</Button>
+            <Button tone="accent" size="sm" icon="spark" disabled={!say.trim() || acting} busy={acting} onClick={() => void instruct(say)}>{t("inbox-inboxdetail.say_something")}</Button>
           </div>
         </div>
       )}
@@ -310,6 +313,30 @@ export function SuggestionCard({ item, suggestion: s }: { item: InboxItem; sugge
       )}
     </section>
   );
+}
+
+/** The shared icon meaning of a chain step (spec/fixtures/inbox/timeline.json), kept in the lazy detail chunk. */
+export function chainIconMeaning(e: Pick<ChainEntry, "kind" | "via">): string {
+  if (e.kind === "reported") return "reported";
+  if (e.via === "assistant") return "persona";
+  if (e.via === "agent") return "agents";
+  if (e.via === "user") return "person";
+  if (e.via) return "source";
+  const kinds: Record<string, string> = {
+    received: "received",
+    triaged: "triaged",
+    handling: "persona",
+    sent: "sendMail",
+    agent: "agents",
+    confirmed: "success",
+    rejected: "rejected",
+    instructed: "instructed",
+    self_replied: "reply",
+    failed: "error",
+    concluded: "concluded",
+    done: "done",
+  };
+  return kinds[e.kind] ?? "info";
 }
 
 const CHAIN_ICON: Record<string, { icon?: IconName; glyph?: "reply" | "question" }> = {
@@ -402,7 +429,7 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
         >
           <span className="min-w-[34px] shrink-0 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums">{chainTime(e.at)}</span>
           <ChainIcon item={item} e={e} />
-          {reported && <Tag>{t("inbox-inboxevent.assistant_says")}</Tag>}
+          {reported && <Tag>{t("inbox-inboxdetail.assistant_says")}</Tag>}
           <span className="min-w-0 flex-1 truncate">{e.text}</span>
           {agentState && <span className="shrink-0 text-[11.5px] whitespace-nowrap text-ink-3" data-chain-agent-state>{agentState}</span>}
           {goes && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />}

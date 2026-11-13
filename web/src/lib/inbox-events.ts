@@ -161,30 +161,6 @@ export function chainRows(chain: ChainEntry[] | undefined, open: boolean): Chain
   return open || all.length <= 3 ? all : all.slice(-3);
 }
 
-/** The shared icon meaning of a chain step (spec/fixtures/inbox/timeline.json). The view maps it to its own icons. */
-export function chainIconMeaning(e: Pick<ChainEntry, "kind" | "via">): string {
-  if (e.kind === "reported") return "reported";
-  if (e.via === "assistant") return "persona";
-  if (e.via === "agent") return "agents";
-  if (e.via === "user") return "person";
-  if (e.via) return "source";
-  const kinds: Record<string, string> = {
-    received: "received",
-    triaged: "triaged",
-    handling: "persona",
-    sent: "sendMail",
-    agent: "agents",
-    confirmed: "success",
-    rejected: "rejected",
-    instructed: "instructed",
-    self_replied: "reply",
-    failed: "error",
-    concluded: "concluded",
-    done: "done",
-  };
-  return kinds[e.kind] ?? "info";
-}
-
 /** What tapping an entry does: go somewhere, or expand its detail / messages in place (nothing to expand: nothing). */
 export type ChainTap =
   | { kind: "source"; position?: string; uid?: number; url?: string }

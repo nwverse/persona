@@ -10,18 +10,10 @@ vi.mock("../ui/atoms", () => ({ toast: vi.fn() }));
 import { toast } from "../ui/atoms";
 import { badgeCount, getInbox, reloadInbox, resetInboxForTests, sections, suggestionAct, TIERS, type InboxItem } from "./inbox";
 import {
-  actOnSuggestion, chainIconMeaning, chainRows, chainTap, chainTime, firstLine, handlingWord, hasEvent, itemAtUid, preparing, statusOf, suggestionButtons, suggestionTitle,
-  type ChainEntry,
+  actOnSuggestion, chainRows, chainTap, chainTime, firstLine, handlingWord, hasEvent, itemAtUid, preparing, statusOf, suggestionButtons, suggestionTitle,
 } from "./inbox-events";
 
 const fixture = JSON.parse(readFileSync(join(__dirname, "../../../scripts/mock/inbox_events.json"), "utf8")) as { items: InboxItem[] };
-const timeline = JSON.parse(readFileSync(join(__dirname, "../../../spec/fixtures/inbox/timeline.json"), "utf8")) as {
-  cases: {
-    name: string;
-    input: { item: { chain: ChainEntry[] } };
-    expected: { folded: string[]; expanded: string[]; steps: { id: string; icon: string; reported: boolean }[] };
-  }[];
-};
 const byId = (id: string) => fixture.items.find((x) => x.id === id)!;
 const reply = byId("lark:oc_demo1:100");
 const urgent = byId("lark:oc_demo2:200");
@@ -104,18 +96,6 @@ describe("收件箱事件：处理链条", () => {
     expect(ids(chainRows(waiting.chain, false))).toEqual(["c4", "c5", "c6"]);
     expect(ids(chainRows(waiting.chain, true))).toEqual(["c1", "c2", "c3", "c4", "c5", "c6"]);
     expect(chainRows(undefined, false)).toEqual([]);
-  });
-  it("matches every shared timeline case, including via and reported icons", () => {
-    for (const c of timeline.cases) {
-      const chain = c.input.item.chain;
-      expect(ids(chainRows(chain, false)), c.name).toEqual(c.expected.folded);
-      expect(ids(chainRows(chain, true)), c.name).toEqual(c.expected.expanded);
-      for (const step of c.expected.steps) {
-        const entry = chain.find((e) => e.id === step.id)!;
-        expect(chainIconMeaning(entry), `${c.name}/${step.id}`).toBe(step.icon);
-        expect(entry.kind === "reported", `${c.name}/${step.id}`).toBe(step.reported);
-      }
-    }
   });
   it("goes where each link says, or expands in place", () => {
     const conv = (mid: string, sid: string) => ({ name: "session", mid, sid }) as const;

@@ -18,9 +18,5 @@
   "entry_collapse": "收起",
   "message_sender": "{sender}：",
   "related": "有关",
-  "manager_done": "助手处理了",
-  "assistant_says": "助手说",
-  "say_something": "说一句",
-  "retry": "再试一次",
-  "retry_text": "请再试一次。"
+  "manager_done": "助手处理了"
 }

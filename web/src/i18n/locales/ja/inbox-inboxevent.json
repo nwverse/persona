@@ -18,9 +18,5 @@
   "entry_collapse": "閉じる",
   "message_sender": "{sender}：",
   "related": "関連",
-  "manager_done": "アシスタントが処理済み",
-  "assistant_says": "アシスタントによると",
-  "say_something": "ひとこと伝える",
-  "retry": "もう一度試す",
-  "retry_text": "もう一度試してください。"
+  "manager_done": "アシスタントが処理済み"
 }
