@@ -461,11 +461,11 @@ func (r *hubRun) closeSpanLocked(from, to float64) {
 	r.notifyLocked()
 }
 
-// expireSpanLocked: the open span counts as closed at to without the phone saying so (a later speaking on, the run
-// ending): the sentences held for it are judged with [from, to] and the answer it carried as a speaking span, which
-// is never written to the timeline. The timeline has only what the phone said, so a span whose speaking off a dropped
-// socket lost (and that the next start or upload repairs) never becomes an assumed span that marks real speech in the
-// final pass.
+// expireSpanLocked: the open span counts as closed at to without the phone saying so (the phone's end, a later
+// speaking on, the run ending): the sentences held for it are judged with [from, to] and the answer it carried as a
+// speaking span, which is never written to the timeline. The timeline has only what the phone said, so a span whose
+// speaking off a dropped socket lost (and that the next start or upload repairs) never becomes an assumed span that
+// marks real speech in the final pass.
 func (r *hubRun) expireSpanLocked(from, to float64) {
 	span := kb.SpokenSpan{Start: from, End: max(from, to), Text: r.openText}
 	r.clearOpenLocked()

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/kb"
 )
@@ -381,6 +383,41 @@ func TestHubEchoSpanNotClosedByAnUploadWhileItsSocketIsUp(t *testing.T) {
 	m, _, _ := h.engine().MeetingRead(meetingRec)
 	if tl := m.Transcription.Timeline; tl == nil || !slices.Equal(tl.Speaking, []kb.SpokenSpan{{Start: 1.8, End: 4.8, Text: answer}}) {
 		t.Fatalf("the timeline: %+v", m.Transcription.Timeline)
+	}
+}
+
+// A span still open when the phone sends end counts as closed at the end: the sentences held for it are judged with
+// [from, end] and the ones that are not Persona's echo go out as line frames before the socket closes.
+func TestHubEchoSpanOpenAtTheEnd(t *testing.T) {
+	h := newHubFixture(t)
+	lines := []fakeLine{longAnswer[0], longAnswer[1], longAnswer[3]}
+	h.tr.set(func(f *fakeTranscriber) { f.live = jobScript{lines: lines} })
+	h.hubUpload(meetingRec, 1, nil)
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(1.6)
+	p.wait("line", 1)
+	p.send(map[string]any{"type": "speaking", "on": true, "at": 1.9, "text": lines[1].text})
+	p.audio(5.4)
+	waitFor(t, "both sentences held", func() bool {
+		return h.runHas(meetingRec, func(r *hubRun) bool { return len(r.held) == 2 })
+	})
+	p.send(map[string]any{"type": "end", "at": 7.0})
+	if got := p.waitClosed(); got != websocket.StatusNormalClosure {
+		t.Fatalf("after end: %v", got)
+	}
+	if got := p.texts(); !slices.Equal(got, []string{lines[0].text, lines[2].text}) {
+		t.Fatalf("lines before the close %q", got)
+	}
+	if !h.runHas(meetingRec, func(r *hubRun) bool { return len(r.held) == 0 && r.openFrom == nil }) {
+		t.Fatal("sentences still held after the end")
+	}
+	if got := h.hubEcho(meetingRec); !slices.Equal(got, []bool{false, true, false}) {
+		t.Fatalf("echo marks %v (%q)", got, h.hubTexts(meetingRec))
+	}
+	// The end assumed for the span is not the phone's: the timeline never has it.
+	m, _, _ := h.engine().MeetingRead(meetingRec)
+	if tl := m.Transcription.Timeline; tl != nil && len(tl.Speaking) > 0 {
+		t.Fatalf("an assumed span in the timeline: %+v", tl.Speaking)
 	}
 }
 

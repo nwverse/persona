@@ -278,14 +278,16 @@ func (s *Service) audioEnd(e *kb.Engine, run *hubRun, p *phoneSocket, aw *kb.Aud
 		return
 	}
 	p.send(map[string]any{"type": "ack", "at": at})
-	run.finishLive(p)
+	run.finishLive(p, at)
 	p.closeWith(websocket.StatusNormalClosure)
 	s.kickFinal()
 }
 
-// finishLive: the phone on socket p sent end: the live job is ended and its last sentences come (within
-// audioEndWait), then the hub's transcript is written.
-func (r *hubRun) finishLive(p *phoneSocket) {
+// finishLive: the phone on socket p sent end at recording second end: the live job is ended and its last sentences
+// come (within audioEndWait); a speaking span still open counts as closed at end (expireSpanLocked: the sentences held
+// for it are judged with [from, end] and their line frames go out on p before it closes), then the hub's transcript is
+// written.
+func (r *hubRun) finishLive(p *phoneSocket, end float64) {
 	r.mu.Lock()
 	if r.phone == p {
 		r.ended = true
@@ -317,6 +319,9 @@ func (r *hubRun) finishLive(p *phoneSocket) {
 		break
 	}
 	r.mu.Lock()
+	if r.openFrom != nil && !r.stopped {
+		r.expireSpanLocked(*r.openFrom, end)
+	}
 	r.putHubLocked()
 	r.finishing = false
 	r.mu.Unlock()
