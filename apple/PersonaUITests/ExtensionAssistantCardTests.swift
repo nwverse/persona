@@ -18,11 +18,11 @@ final class ExtensionAssistantCardTests: XCTestCase {
             springboard.buttons[title].tap()
         }
         // The newest card: UI version 4's code-hosting components, drawn read-only now that cards report version 6
-        // (#827); with no page to send to, its composer is left out.
+        // (#827); its composer's button can't send from a card, so the composer is left out.
         let header = app.staticTexts["登录页支持“记住我”"]
         XCTAssertTrue(header.waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertTrue(app.staticTexts["web/session.ts"].firstMatch.exists, app.debugDescription)
-        XCTAssertFalse(app.buttons["发送"].exists, "a card has no page: its composer is left out")
+        XCTAssertFalse(app.buttons["发送"].exists, "a composer whose buttons this card can't use is left out")
         try shot(app, "assistant-code-card")
         let overview = app.staticTexts["本周概览"]
         for _ in 0..<6 where !overview.isHittable { app.swipeDown() }
@@ -31,8 +31,10 @@ final class ExtensionAssistantCardTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["周会摘要"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["plugin-ui-link"].exists || app.staticTexts["查看说明"].exists,
                       "只读卡片的链接保留：\n\(app.debugDescription)")
-        XCTAssertFalse(app.buttons["plugin-ui-action-must-not-run"].exists)
-        XCTAssertFalse(app.buttons["不应运行"].exists)
+        // An action with no reply, open or push does nothing in a card: drawn, never enabled.
+        for button in [app.buttons["plugin-ui-action-must-not-run"], app.buttons["不应运行"]] where button.exists {
+            XCTAssertFalse(button.isEnabled, button.debugDescription)
+        }
         try shot(app, "assistant-cards")
     }
 

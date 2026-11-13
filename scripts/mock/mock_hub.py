@@ -15241,7 +15241,8 @@ ITEMS["hlth0004-0000-4000-8000-000000000004"] = (
 )
 # Assistant screenshots with the shared renderer: a read-only persona-view and a legacy persona-card, leaving other mock modes unchanged.
 if os.environ.get("MOCK_EXTENSION_CARDS") == "1":
-    _view = {"sections": [{"title": "本周概览", "items": [
+    # A card needs its `fallback` (the words a client that can't draw it shows): without one it is drawn as text.
+    _view = {"fallback": "本周概览：会议记录已整理。", "sections": [{"title": "本周概览", "items": [
         {"type": "markdown", "text": "**会议记录已整理**，可以查看摘要。"},
         {"type": "row", "title": "周会摘要", "icon": "doc", "action": {"id": "must-not-run"}},
         {"type": "button", "title": "不应运行", "action": {"id": "must-not-run"}},
@@ -15250,7 +15251,7 @@ if os.environ.get("MOCK_EXTENSION_CARDS") == "1":
     _fence = lambda language, data: "```" + language + "\n" + json.dumps(data, ensure_ascii=False) + "\n```"
     # UI version 4's code-hosting components in a card (#827): drawn read-only by ExtensionCodeSummary, now that cards
     # report UI version 6 and the hub sends them as they are.
-    _code = {"sections": [{"title": "合并请求 #42", "items": [
+    _code = {"fallback": "合并请求 #42：登录页支持“记住我”，3 个文件。", "sections": [{"title": "合并请求 #42", "items": [
         {"type": "header", "title": "登录页支持“记住我”", "subtitle": "remember-me → main · 3 个提交"},
         {"type": "breadcrumb", "crumbs": [{"title": "app"}, {"title": "web"}, {"title": "login.tsx"}]},
         {"type": "file_tree", "entries": [

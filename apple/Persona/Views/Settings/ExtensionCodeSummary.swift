@@ -48,9 +48,10 @@ struct ExtensionCodeSummary: View {
                 }
             }
         case .composer(let c):
-            if let model {
+            // Only the buttons this card can use (a read-only assistant card can use none): with none, no box to type in.
+            if let model, case let buttons = c.buttons.filter({ model.isEnabled($0.action) }), !buttons.isEmpty {
                 CodeComposerView(placeholder: c.placeholder ?? "", text: Binding(get: { model.values[c.name] ?? "" }, set: { model.values[c.name] = $0 }),
-                                 buttons: c.buttons.map { b in (b.title, b.tone, b.action.id, { send(b, name: c.name, model) }) },
+                                 buttons: buttons.map { b in (b.title, b.tone, b.action.id, { send(b, name: c.name, model) }) },
                                  running: model.running, identifier: "code-composer-\(c.name)")
             }
         default: EmptyView()
