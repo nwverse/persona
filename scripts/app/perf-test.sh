@@ -23,6 +23,7 @@ cd "$(dirname "$0")/../.." || exit 2
 ROOT=$PWD
 eval "$(python3 scripts/persona_config.py env)"
 python3 scripts/persona_config.py xcconfig >/dev/null
+~/.local/bin/xcode-slot native/app-core/scripts/build-apple.sh
 
 SUITES=("$@")
 [ ${#SUITES[@]} -gt 0 ] || SUITES=(agents assistant composer inbox settings machines)

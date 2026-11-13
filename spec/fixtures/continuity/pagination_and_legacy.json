@@ -1537,11 +1537,11 @@
       "from_test": "olderHubsWithoutSpansWorkAsBefore"
     },
     {
-      "name": "same_id_plain_item_keeps_original",
-      "description": "普通 item 同 id 的新版内容被忽略，保持当前 iOS 的去重行为。",
+      "name": "same_id_plain_item_uses_newest_full_copy",
+      "description": "普通 item 同 id 的新页副本替换旧副本，保留最新完整元数据，与当前 iOS ChatStore.merge 一致。",
       "source": [
-        "ios/Shared/ChatStore.swift: merge",
-        "CLAUDE.md：缓存里的旧 item 不会被新页覆盖"
+        "ios/PersonaTests/ChatStoreTests.swift: duplicateIDsInOneBacklogKeepTheNewestCopy",
+        "ios/Shared/ChatStore.swift: merge"
       ],
       "input": {
         "initial": {
@@ -1585,7 +1585,7 @@
               "seq": 1,
               "role": "assistant",
               "kind": "text",
-              "text": "旧版示例"
+              "text": "新版示例"
             }
           ],
           "item_ids": [
@@ -1595,6 +1595,87 @@
           "history": "h",
           "has_more": true,
           "loaded_once": false,
+          "gap": "none",
+          "actions": []
+        }
+      ],
+      "derived": true
+    },
+    {
+      "name": "interleaved_duplicate_cache_restores_newest_and_promotion",
+      "description": "缓存中交错的重复 id 保留最新副本、恢复行序，旧副本已确认的 supervision 转移到新副本。",
+      "source": [
+        "ios/PersonaTests/ChatStoreTests.swift: interleavedDuplicateCacheRestoresTranscriptOrder, duplicateCachedIDsKeepTheNewestCopyBeforeAnEmptyMerge",
+        "ios/Shared/ChatStore.swift: newestCopies, retainingPromotion"
+      ],
+      "input": {
+        "initial": {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "Fictional old",
+              "supervision_user": true
+            },
+            {
+              "id": "2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "text",
+              "text": "Fictional answer"
+            },
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "Fictional newest"
+            }
+          ],
+          "covered": 2,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true
+        },
+        "events": [
+          {
+            "kind": "ws_items",
+            "items": [],
+            "history": "h",
+            "from_seq": 0,
+            "to_seq": 2
+          }
+        ]
+      },
+      "expected": [
+        {
+          "items": [
+            {
+              "id": "1#0",
+              "seq": 1,
+              "role": "user",
+              "kind": "text",
+              "text": "Fictional newest",
+              "supervision_user": true
+            },
+            {
+              "id": "2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "text",
+              "text": "Fictional answer"
+            }
+          ],
+          "item_ids": [
+            "1#0",
+            "2#0"
+          ],
+          "covered": 2,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
           "gap": "none",
           "actions": []
         }

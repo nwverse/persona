@@ -42,8 +42,8 @@ struct Shared {
 #[derive(Default)]
 struct Patches {
     version: u64,
-    /// Woken since the last drain.
-    woken: bool,
+    /// Chats with a change not yet drained. Waking one chat must not consume another chat's notification.
+    woken: HashSet<String>,
     chats: HashMap<String, ChatPatch>,
 }
 
@@ -88,7 +88,7 @@ impl Runtime {
     pub fn drain(&self, chat: &str) -> Vec<u8> {
         let patch = {
             let mut patches = lock(&self.shared.patches);
-            patches.woken = false;
+            patches.woken.remove(chat);
             match patches.chats.get_mut(chat) {
                 Some(patch) => {
                     let ops = std::mem::take(&mut patch.ops);
@@ -132,7 +132,11 @@ impl Drop for Runtime {
     fn drop(&mut self) {
         let _ = self.sender.send(Message::Stop);
         if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            // The C host may free its final handle from `release`, which runs on this worker. Joining that same
+            // thread would deadlock; dropping the detached handle lets this last worker exit instead.
+            if worker.thread().id() != std::thread::current().id() {
+                let _ = worker.join();
+            }
         }
     }
 }
@@ -239,7 +243,9 @@ impl Worker {
             }
             Action::CloseChat { chat } => {
                 self.chats.remove(&chat);
-                lock(&self.shared.patches).chats.remove(&chat);
+                let mut patches = lock(&self.shared.patches);
+                patches.chats.remove(&chat);
+                patches.woken.remove(&chat);
                 self.timer_chats.retain(|_, c| *c != chat);
             }
             Action::Chat { chat, event } => {
@@ -327,8 +333,7 @@ impl Worker {
                 patches.version += 1;
                 let version = patches.version;
                 patches.chats.get_mut(chat).expect("patch inserted above").version = version;
-                let first = !patches.woken;
-                patches.woken = true;
+                let first = patches.woken.insert(chat.to_owned());
                 first.then_some(version)
             }
         };
@@ -391,47 +396,58 @@ fn apply(session: &mut Session, event: ChatEvent) -> Result<Step, String> {
     })
 }
 
-/// The list operations that turn `old` into `new`. Items are compared by identity: an item stays the same `Arc` for
-/// as long as it stays in the chat, and items that stay keep their relative order, so removals then insertions are
-/// enough. Removals go from the end so each index refers to the list as it is at that point.
+/// The list operations that turn `old` into `new`. A newer copy with the same id and position is an `Update`, not a
+/// remove/insert pair, so a client retains row identity. An id whose `(seq, block)` moved is removed and inserted at
+/// its new position. Removals go from the end; insertions then refer to the surviving list.
 fn diff(old: &[Arc<Item>], new: &[Arc<Item>]) -> Vec<ListOp> {
     let common = old.iter().zip(new).take_while(|(a, b)| Arc::ptr_eq(a, b)).count();
-    if common == old.len() {
-        // Appends only: the usual case while a chat streams.
+    if common == old.len() && old.iter().zip(new).all(|(a, b)| Arc::ptr_eq(a, b)) {
         return new[common..]
             .iter()
             .enumerate()
             .map(|(i, item)| insert(common + i, item))
             .collect();
     }
-    let kept: HashSet<*const Item> = new.iter().map(Arc::as_ptr).collect();
+    let new_by_id: HashMap<&str, &Arc<Item>> = new.iter().map(|item| (item.id.as_str(), item)).collect();
     let mut ops = Vec::new();
-    let mut survivors = Vec::with_capacity(old.len());
+    let mut survivors = Vec::new();
     for (index, item) in old.iter().enumerate().rev() {
-        if kept.contains(&Arc::as_ptr(item)) {
-            survivors.push(item);
-        } else {
+        let Some(replacement) = new_by_id.get(item.id.as_str()) else {
             ops.push(ListOp::Remove { index: index as u32 });
+            continue;
+        };
+        if (replacement.seq, replacement.part()) != (item.seq, item.part()) {
+            ops.push(ListOp::Remove { index: index as u32 });
+        } else {
+            survivors.push(*replacement);
+            if !Arc::ptr_eq(item, replacement) {
+                ops.push(ListOp::Update {
+                    index: index as u32,
+                    id: replacement.id.clone(),
+                    json: replacement.json().to_owned(),
+                });
+            }
         }
     }
     survivors.reverse();
     let mut next = 0;
     for (index, item) in new.iter().enumerate() {
-        if next < survivors.len() && Arc::ptr_eq(survivors[next], item) {
+        if next < survivors.len() && survivors[next].id == item.id {
             next += 1;
         } else {
             ops.push(insert(index, item));
         }
     }
-    if next == survivors.len() {
+    if next != survivors.len() {
+        // An id removed by a fold/history reset and reinserted elsewhere is not a retained survivor. Keep the
+        // operation list correct rather than relying on the debug assertion.
+        let mut ops: Vec<ListOp> = (0..old.len())
+            .rev()
+            .map(|index| ListOp::Remove { index: index as u32 })
+            .collect();
+        ops.extend(new.iter().enumerate().map(|(index, item)| insert(index, item)));
         return ops;
     }
-    // Never expected: items that stayed changed order. Start the list over.
-    let mut ops: Vec<ListOp> = (0..old.len())
-        .rev()
-        .map(|index| ListOp::Remove { index: index as u32 })
-        .collect();
-    ops.extend(new.iter().enumerate().map(|(i, item)| insert(i, item)));
     ops
 }
 
@@ -459,6 +475,7 @@ mod tests {
                     list.remove(*index as usize);
                 }
                 ListOp::Insert { index, id, .. } => list.insert(*index as usize, id.clone()),
+                ListOp::Update { index, id, .. } => list[*index as usize] = id.clone(),
             }
         }
         list
@@ -474,5 +491,67 @@ mod tests {
         let ops = diff(&old, &mixed);
         assert_eq!(replay(&old, &ops), vec!["0#0", "1#0", "3#0", "4#0"]);
         assert!(diff(&old, &old).is_empty());
+    }
+
+    #[test]
+    fn diff_replays_updates_moves_and_reinsertions() {
+        let old = items(r#"[{"id":"a#0","seq":1},{"id":"b#0","seq":2},{"id":"c#0","seq":3}]"#);
+        let new = items(r#"[{"id":"a#0","seq":1},{"id":"c#0","seq":3},{"id":"b#0","seq":4}]"#);
+        assert_eq!(replay(&old, &diff(&old, &new)), vec!["a#0", "c#0", "b#0"]);
+        let replaced = items(r#"[{"id":"a#0","seq":1,"text":"new"}]"#);
+        let replaced = vec![replaced[0].clone(), old[1].clone(), old[2].clone()];
+        let ops = diff(&old, &replaced);
+        assert!(matches!(ops.as_slice(), [ListOp::Update { index: 0, .. }]));
+        assert_eq!(replay(&old, &ops), vec!["a#0", "b#0", "c#0"]);
+        let last = items(r#"[{"id":"c#0","seq":3,"text":"new"}]"#);
+        let appended = vec![old[0].clone(), old[1].clone(), last[0].clone(), old[0].clone()];
+        let ops = diff(&old, &appended);
+        assert!(
+            matches!(
+                ops.as_slice(),
+                [ListOp::Update { index: 2, .. }, ListOp::Insert { index: 3, .. }]
+            ),
+            "replacement plus append: {ops:?}"
+        );
+        assert_eq!(replay(&old, &ops), vec!["a#0", "b#0", "c#0", "a#0"]);
+    }
+
+    #[test]
+    fn wakes_each_chat_independently_and_allows_release_on_worker() {
+        struct ReleaseHost {
+            core: Arc<Mutex<Option<Runtime>>>,
+            wakes: Arc<Mutex<Vec<u64>>>,
+        }
+        impl Host for ReleaseHost {
+            fn changed(&self, version: u64) {
+                self.wakes.lock().unwrap().push(version);
+            }
+            fn run(&self, _effect: &[u8]) {}
+        }
+        impl Drop for ReleaseHost {
+            fn drop(&mut self) {
+                // Simulates CHost.release freeing the final handle on the worker: Runtime::drop must not join itself.
+                self.core.lock().unwrap().take();
+            }
+        }
+        let core = Arc::new(Mutex::new(None));
+        let wakes = Arc::new(Mutex::new(Vec::new()));
+        let host = Arc::new(ReleaseHost {
+            core: core.clone(),
+            wakes: wakes.clone(),
+        });
+        *core.lock().unwrap() = Some(Runtime::new(Config::default(), host));
+        let runtime = core.lock().unwrap();
+        let runtime = runtime.as_ref().unwrap();
+        for chat in ["a", "b"] {
+            runtime.dispatch(&wire::encode(&Action::OpenChat {
+                chat: chat.into(),
+                snapshot: ChatSnapshot::default(),
+            }));
+        }
+        assert!(runtime.flush(Duration::from_secs(5)));
+        assert_eq!(wakes.lock().unwrap().len(), 2);
+        runtime.drain("a");
+        runtime.drain("b");
     }
 }

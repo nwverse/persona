@@ -132,7 +132,15 @@ pub enum ListOp {
         index: u32,
     },
     /// `json` is the hub's item exactly as received.
+    /// `json` retains the hub item's fields and the native client's normalized display metadata.
     Insert {
+        index: u32,
+        id: String,
+        json: String,
+    },
+    /// Replaces the item at `index` with the newest complete copy of the same id. Removing and reinserting would
+    /// discard list-row identity and any native presentation state attached to it.
+    Update {
         index: u32,
         id: String,
         json: String,

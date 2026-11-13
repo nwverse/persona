@@ -104,6 +104,8 @@ result() {
 }
 
 if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
+  ci_run 'Build PersonaCore XCFramework' 1200 "$SOURCE/native/app-core/scripts/build-apple.sh"
+  ci_run 'PersonaCore strict-concurrency tests and C-binding fixture replay' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaCore" --scratch-path "$SPM/PersonaCore" -Xswiftc -warnings-as-errors
   ci_run 'PersonaKit unit tests' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaKit" --scratch-path "$SPM/PersonaKit"
   # The Persona Link menu bar app's package (apple/PersonaLink): its own SwiftPM package, outside apple/project.yml.
   ci_run 'Persona Link unit tests' 600 xcrun swift test --package-path "$SOURCE/apple/PersonaLink" --scratch-path "$SPM/PersonaLink" -Xswiftc -warnings-as-errors

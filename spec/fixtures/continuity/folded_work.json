@@ -1216,6 +1216,378 @@
         }
       ],
       "derived": true
+    },
+    {
+      "name": "opened_fold_and_supervision_survive_repeated_pages",
+      "description": "展开的工作再次遇到同范围 fold 仍保持展开；已确认的 supervision 标记传到展开工作且不被未标记页面降级。",
+      "source": [
+        "ios/PersonaTests/FoldedWorkTests.swift: workOpenedHereStaysOpenWhenAPageFoldsItAgain, aRepeatedPromotedFoldUpdatesWorkThatStaysOpen",
+        "ios/Shared/ChatStore.swift: opened, retainingPromotion"
+      ],
+      "input": {
+        "initial": {
+          "items": [
+            {
+              "id": "fold:2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "fold",
+              "fold": {
+                "items": 7,
+                "tools": 3,
+                "thoughts": 1,
+                "through_seq": 8,
+                "through_id": "8#0"
+              }
+            }
+          ],
+          "covered": 8,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true
+        },
+        "events": [
+          {
+            "kind": "open_fold",
+            "fold_id": "fold:2#0"
+          },
+          {
+            "kind": "http_range",
+            "items": [
+              {
+                "id": "2#0",
+                "seq": 2,
+                "role": "assistant",
+                "kind": "thinking",
+                "text": "Fictional plan"
+              },
+              {
+                "id": "3#0",
+                "seq": 3,
+                "role": "assistant",
+                "kind": "tool_use",
+                "tool_use_id": "read",
+                "tool_name": "Read"
+              },
+              {
+                "id": "4#0",
+                "seq": 4,
+                "role": "user",
+                "kind": "tool_result",
+                "tool_use_id": "read",
+                "text": "Fictional result"
+              }
+            ]
+          },
+          {
+            "kind": "ws_items",
+            "items": [
+              {
+                "id": "fold:2#0",
+                "seq": 2,
+                "role": "assistant",
+                "kind": "fold",
+                "fold": {
+                  "items": 7,
+                  "tools": 3,
+                  "thoughts": 1,
+                  "through_seq": 8,
+                  "through_id": "8#0",
+                  "supervision_user": true
+                }
+              }
+            ],
+            "history": "h",
+            "from_seq": 0,
+            "to_seq": 8
+          },
+          {
+            "kind": "ws_items",
+            "items": [
+              {
+                "id": "fold:2#0",
+                "seq": 2,
+                "role": "assistant",
+                "kind": "fold",
+                "fold": {
+                  "items": 7,
+                  "tools": 3,
+                  "thoughts": 1,
+                  "through_seq": 8,
+                  "through_id": "8#0"
+                }
+              }
+            ],
+            "history": "h",
+            "from_seq": 0,
+            "to_seq": 8
+          }
+        ]
+      },
+      "expected": [
+        {
+          "items": [
+            {
+              "id": "fold:2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "fold",
+              "fold": {
+                "items": 7,
+                "tools": 3,
+                "thoughts": 1,
+                "through_seq": 8,
+                "through_id": "8#0"
+              }
+            }
+          ],
+          "item_ids": [
+            "fold:2#0"
+          ],
+          "covered": 8,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "gap": "none",
+          "actions": [
+            {
+              "kind": "fetch_range",
+              "from_seq": 2,
+              "through_seq": 8
+            }
+          ]
+        },
+        {
+          "items": [
+            {
+              "id": "2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "thinking",
+              "text": "Fictional plan"
+            },
+            {
+              "id": "3#0",
+              "seq": 3,
+              "role": "assistant",
+              "kind": "tool_use",
+              "tool_use_id": "read",
+              "tool_name": "Read"
+            },
+            {
+              "id": "4#0",
+              "seq": 4,
+              "role": "user",
+              "kind": "tool_result",
+              "tool_use_id": "read",
+              "text": "Fictional result"
+            }
+          ],
+          "item_ids": [
+            "2#0",
+            "3#0",
+            "4#0"
+          ],
+          "covered": 8,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "gap": "none",
+          "actions": []
+        },
+        {
+          "items": [
+            {
+              "id": "2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "thinking",
+              "text": "Fictional plan",
+              "supervision_user": true
+            },
+            {
+              "id": "3#0",
+              "seq": 3,
+              "role": "assistant",
+              "kind": "tool_use",
+              "tool_use_id": "read",
+              "tool_name": "Read",
+              "supervision_user": true
+            },
+            {
+              "id": "4#0",
+              "seq": 4,
+              "role": "user",
+              "kind": "tool_result",
+              "tool_use_id": "read",
+              "text": "Fictional result",
+              "supervision_user": true
+            }
+          ],
+          "item_ids": [
+            "2#0",
+            "3#0",
+            "4#0"
+          ],
+          "covered": 8,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "gap": "none",
+          "actions": []
+        },
+        {
+          "items": [
+            {
+              "id": "2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "thinking",
+              "text": "Fictional plan",
+              "supervision_user": true
+            },
+            {
+              "id": "3#0",
+              "seq": 3,
+              "role": "assistant",
+              "kind": "tool_use",
+              "tool_use_id": "read",
+              "tool_name": "Read",
+              "supervision_user": true
+            },
+            {
+              "id": "4#0",
+              "seq": 4,
+              "role": "user",
+              "kind": "tool_result",
+              "tool_use_id": "read",
+              "text": "Fictional result",
+              "supervision_user": true
+            }
+          ],
+          "item_ids": [
+            "2#0",
+            "3#0",
+            "4#0"
+          ],
+          "covered": 8,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "gap": "none",
+          "actions": []
+        }
+      ],
+      "derived": true
+    },
+    {
+      "name": "partial_work_replaces_promoted_fold_without_downgrade",
+      "description": "部分展开工作替换其 fold 时保留 supervision；同一未标记工作的后续副本不得清除证据。",
+      "source": [
+        "ios/PersonaTests/FoldedWorkTests.swift: partialOverlapRetainsPromotionAfterRemovingTheFold",
+        "ios/Shared/ChatStore.swift: retainingPromotion, dropOverlappingFolds"
+      ],
+      "input": {
+        "initial": {
+          "items": [
+            {
+              "id": "fold:2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "fold",
+              "fold": {
+                "items": 7,
+                "tools": 3,
+                "thoughts": 1,
+                "through_seq": 8,
+                "through_id": "8#0",
+                "supervision_user": true
+              }
+            }
+          ],
+          "covered": 8,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true
+        },
+        "events": [
+          {
+            "kind": "ws_items",
+            "items": [
+              {
+                "id": "2#0",
+                "seq": 2,
+                "role": "assistant",
+                "kind": "thinking",
+                "text": "Fictional plan"
+              }
+            ],
+            "history": "h",
+            "from_seq": 8,
+            "to_seq": 9
+          },
+          {
+            "kind": "ws_items",
+            "items": [
+              {
+                "id": "2#0",
+                "seq": 2,
+                "role": "assistant",
+                "kind": "thinking",
+                "text": "Fictional plan"
+              }
+            ],
+            "history": "h",
+            "from_seq": 8,
+            "to_seq": 9
+          }
+        ]
+      },
+      "expected": [
+        {
+          "items": [
+            {
+              "id": "2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "thinking",
+              "text": "Fictional plan",
+              "supervision_user": true
+            }
+          ],
+          "item_ids": [
+            "2#0"
+          ],
+          "covered": 9,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "gap": "none",
+          "actions": []
+        },
+        {
+          "items": [
+            {
+              "id": "2#0",
+              "seq": 2,
+              "role": "assistant",
+              "kind": "thinking",
+              "text": "Fictional plan",
+              "supervision_user": true
+            }
+          ],
+          "item_ids": [
+            "2#0"
+          ],
+          "covered": 9,
+          "history": "h",
+          "has_more": false,
+          "loaded_once": true,
+          "gap": "none",
+          "actions": []
+        }
+      ],
+      "derived": true
     }
   ]
 }

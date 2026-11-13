@@ -1,14 +1,14 @@
-//! When a chat asks the hub for lines: the settling delay before filling a gap, at most eight catch-up pages before
-//! the latest page instead, reconnect subscriptions, older history and an opened fold's pages. No clocks or transport:
-//! the caller runs the requests and reports their results as events.
+//! When a chat asks the hub for lines: immediate catch-up, at most eight pages before fetching the latest page,
+//! reconnect subscriptions, older history and an opened fold's pages. No clocks or transport: the caller runs the
+//! requests and reports their results as events.
 
 use serde::{Deserialize, Serialize};
 
 use super::reducer::{Batch, Gap, Reducer};
 use crate::item::Item;
 
-/// The settling delay before a gap is filled. A scheduling constant, not a measured latency.
-pub const FILL_DELAY_MS: u32 = 1_500;
+/// Kept for wire compatibility with the old fixture format. Current iOS fills immediately (`AppModel.settle`, #4267).
+pub const FILL_DELAY_MS: u32 = 0;
 /// Catch-up pages before giving up and fetching the latest page.
 pub const MAX_FILL_PAGES: u32 = 8;
 /// Pages of one opened fold before publishing what arrived.
@@ -104,17 +104,27 @@ impl Session {
         match gap {
             Gap::None => Vec::new(),
             Gap::Fill => {
+                // AppModel's `filling` set collapses entry into one operation. A later gap is heard, not answered:
+                // the current operation rereads `covered` for its next page and retains its eight-page budget.
                 self.heard += 1;
-                vec![Request::ScheduleFill {
-                    delay_ms: FILL_DELAY_MS,
+                if self.filling {
+                    return Vec::new();
+                }
+                self.filling = true;
+                self.fill_pages = 0;
+                self.asked = self.heard;
+                vec![Request::FetchAfter {
+                    after_seq: self.reducer.covered(),
                 }]
             }
             Gap::Reload => vec![Request::FetchLatest { fold_work: true }],
         }
     }
 
-    /// The settling delay ended. Reads `covered` now, even if a backlog already closed the gap.
+    /// Legacy fixture/wire compatibility for an old scheduled fill. Current iOS never emits a timer and always uses
+    /// `settle`, which starts the same immediate request without waiting 1.5 seconds.
     pub fn fill_timer(&mut self) -> Step {
+        self.heard += 1;
         if self.filling {
             return Step::default();
         }
@@ -129,17 +139,22 @@ impl Session {
         }
     }
 
-    /// A catch-up page. It never carries older-history pagination.
+    /// A catch-up page. It never carries older-history pagination. The next page always reads the current cursor,
+    /// including a capped push that arrived while this one was in flight.
     pub fn after(&mut self, mut batch: Batch) -> Step {
+        if !self.filling {
+            // A failed/cancelled or stale response cannot complete a different fill operation.
+            return Step::default();
+        }
         batch.backlog = false;
         batch.has_more = None;
         let gap = self.reducer.apply(batch);
         self.fill_pages += 1;
-        // A move heard while this page was on its way may be past it: one more page reads it.
-        let again = gap == Gap::None && self.behind();
-        let requests = if gap == Gap::Reload || (gap == Gap::Fill || again) && self.fill_pages >= MAX_FILL_PAGES {
+        let requests = if gap == Gap::Reload || (gap == Gap::Fill || self.behind()) && self.fill_pages >= MAX_FILL_PAGES
+        {
             vec![Request::FetchLatest { fold_work: true }]
-        } else if gap == Gap::Fill || again {
+        } else if gap == Gap::Fill || self.behind() {
+            self.asked = self.heard;
             vec![Request::FetchAfter {
                 after_seq: self.reducer.covered(),
             }]
@@ -181,7 +196,7 @@ impl Session {
     }
 
     pub fn load_older(&mut self) -> Step {
-        if self.loading_older || self.reducer.has_more() != Some(true) {
+        if self.loading_older || self.reducer.has_more() != Some(true) || self.reducer.items().is_empty() {
             return Step::default();
         }
         let Some(first) = self.reducer.first_seq() else {

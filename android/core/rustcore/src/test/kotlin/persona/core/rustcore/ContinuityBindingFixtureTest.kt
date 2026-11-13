@@ -120,6 +120,7 @@ class ContinuityBindingFixtureTest(private val name: String, private val fixture
             when (op) {
                 is ListOp.Remove -> list.removeAt(op.index.toInt())
                 is ListOp.Insert -> list.add(op.index.toInt(), op.json)
+                is ListOp.Update -> list[op.index.toInt()] = op.json
             }
         }
         return patch
