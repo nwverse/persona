@@ -168,9 +168,24 @@ func fillMigrated(it *InboxItem, t connector.InboxThing) {
 	it.UpdatedAt, it.Last, it.Rules = t.At, t.Last, t.Rules
 	it.Avatar, it.Count = t.Extra.Avatar, max(t.Extra.Count, 1)
 	setBlocks(it, t.Extra)
+	if where := whereOf(t.Tags); where != "" {
+		it.Where = where
+	}
 	if t.Tier != "" {
 		setRuleTier(it, t)
 	}
+}
+
+// whereOf is a chat tag's display name, trimmed; no named chat tag leaves the item's where unchanged.
+func whereOf(tags []connector.Tag) string {
+	for _, tag := range tags {
+		if tag.Key == connector.TagChat {
+			if name := strings.TrimSpace(tag.Name); name != "" {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 func setBlocks(it *InboxItem, x *connector.ThingExtra) {
