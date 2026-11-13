@@ -25,8 +25,9 @@ final class FolderTransfers {
         var showsProgress = true // a remote copy / zip appears only after one second
     }
 
-    /// The rows the transfer bar shows; a quick remote operation never appears.
-    var visibleItems: [Item] { items.filter(\.showsProgress) }
+    /// The rows the transfer bar shows, derived when items change rather than in the view's body; a quick remote operation never appears.
+    private(set) var visibleItems: [Item] = []
+    private func syncVisible() { visibleItems = items.filter(\.showsProgress) }
 
     /// A name already in the folder, waiting for the user's answer.
     struct Conflict: Identifiable {
@@ -45,8 +46,16 @@ final class FolderTransfers {
     private(set) var conflictName = ""
     /// A finished download, for Save to Files; set back to nil when the picker is done.
     var saving: URL?
+    private struct RemotePoll {
+        let machine: String
+        let api: APIClient
+        let operationID: String
+        let started: Date
+    }
     @ObservationIgnored private var tasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var last: Task<Void, Never>?
+    @ObservationIgnored private var pollRequests: [UUID: RemotePoll] = [:]
+    @ObservationIgnored private var pollTasks: [UUID: Task<Void, Never>] = [:]
 
     /// Queues files picked on this device for the folder `dir` (as the browser knows it, relative to cwd or ~/);
     /// uploaded gets each file's path on the machine. owned: the files are our own temporary copies (from the photo
@@ -103,7 +112,7 @@ final class FolderTransfers {
               done: @escaping () -> Void) {
         guard !paths.isEmpty else { return }
         let item = remoteItem(.copy, paths)
-        queue(item) { [weak self] in
+        queue(item, serial: false) { [weak self] in
             guard let self else { return }
             update(item.id) { $0.waiting = false }
             do {
@@ -124,7 +133,7 @@ final class FolderTransfers {
         guard let first = paths.first else { return }
         let dir = (first as NSString).deletingLastPathComponent
         let item = remoteItem(.copy, paths)
-        queue(item) { [weak self] in
+        queue(item, serial: false) { [weak self] in
             guard let self else { return }
             update(item.id) { $0.waiting = false }
             do {
@@ -174,7 +183,7 @@ final class FolderTransfers {
         let name = paths.count == 1 ? ((base as NSString).deletingPathExtension.isEmpty ? base : (base as NSString).deletingPathExtension) + ".zip"
             : String(localized: "Archive.zip")
         let item = remoteItem(.compress, paths)
-        queue(item) { [weak self] in
+        queue(item, serial: false) { [weak self] in
             guard let self else { return }
             update(item.id) { $0.waiting = false }
             do {
@@ -195,12 +204,29 @@ final class FolderTransfers {
     private func remote<T>(_ id: UUID, machine: String, api: APIClient,
                            request: (String) async throws -> T) async throws -> T {
         let operationID = UUID().uuidString
-        let polling = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
+        pollRequests[id] = RemotePoll(machine: machine, api: api, operationID: operationID, started: Date())
+        startPolling(id)
+        defer {
+            pollTasks.removeValue(forKey: id)?.cancel()
+            pollRequests[id] = nil
+        }
+        return try await request(operationID)
+    }
+
+    /// Restarts only polling after the bar was hidden; the original POST never stopped.
+    func resumePolling() {
+        for id in pollRequests.keys { startPolling(id) }
+    }
+
+    private func startPolling(_ id: UUID) {
+        guard pollTasks[id] == nil, let poll = pollRequests[id] else { return }
+        pollTasks[id] = Task { [weak self] in
+            let delay = max(0, 1 - Date().timeIntervalSince(poll.started))
+            try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
             self?.update(id) { $0.showsProgress = true }
             while !Task.isCancelled {
-                if let operation = try? await api.fileOperation(machine: machine, id: operationID) {
+                if let operation = try? await poll.api.fileOperation(machine: poll.machine, id: poll.operationID) {
                     self?.update(id) {
                         $0.done = operation.bytesDone
                         $0.size = operation.bytesTotal
@@ -211,19 +237,22 @@ final class FolderTransfers {
                 try? await Task.sleep(for: .milliseconds(250))
             }
         }
-        defer { polling.cancel() }
-        return try await request(operationID)
     }
 
     func cancel(_ id: UUID) {
+        pollTasks.removeValue(forKey: id)?.cancel()
+        pollRequests[id] = nil
         tasks.removeValue(forKey: id)?.cancel()
         items.removeAll { $0.id == id }
+        syncVisible()
     }
 
-    /// When the browser goes away: a question nobody will answer is a no, downloads nobody will save stop. Uploads
-    /// go on (the files end up in the folder all the same).
+    /// When the browser goes away: a question nobody will answer is a no, downloads nobody will save stop. Uploads and
+    /// remote copy / zip POSTs go on; only their progress polling pauses until the bar appears again.
     func stop() {
         answer(.cancel)
+        for task in pollTasks.values { task.cancel() }
+        pollTasks.removeAll()
         for item in items where item.kind == .download { cancel(item.id) }
         if let saving { MachineFileDownload.remove(saving) }
         saving = nil
@@ -235,18 +264,21 @@ final class FolderTransfers {
         saving = nil
     }
 
-    private func queue(_ item: Item, _ work: @escaping () async -> Void) {
+    /// Uploads and downloads stay serial. A remote copy / zip starts independently so a long transfer cannot hide it.
+    private func queue(_ item: Item, serial: Bool = true, _ work: @escaping () async -> Void) {
         items.append(item)
-        let prev = last
+        syncVisible()
+        let prev = serial ? last : nil
         let task = Task { [weak self] in
             await prev?.value
             guard !Task.isCancelled else { return }
             await work()
             self?.tasks[item.id] = nil
             self?.items.removeAll { $0.id == item.id }
+            self?.syncVisible()
         }
         tasks[item.id] = task
-        last = task
+        if serial { last = task }
     }
 
     private func send(_ id: UUID, url: URL, dir: String, cwd: String, machine: MachineRef, model: AppModel,
@@ -358,7 +390,10 @@ final class FolderTransfers {
     }
 
     private func update(_ id: UUID, _ change: (inout Item) -> Void) {
-        if let i = items.firstIndex(where: { $0.id == id }) { change(&items[i]) }
+        if let i = items.firstIndex(where: { $0.id == id }) {
+            change(&items[i])
+            syncVisible()
+        }
     }
 
     /// What to tell the user when a file did not make it into the folder; nil when they cancelled it.
@@ -391,6 +426,7 @@ struct FolderTransfersBar: View {
                               removeLabel: removeLabel(item)) { transfers.cancel(item.id) }
             }
         }
+        .onAppear { transfers.resumePolling() }
     }
 
     private func symbol(_ item: FolderTransfers.Item) -> String {

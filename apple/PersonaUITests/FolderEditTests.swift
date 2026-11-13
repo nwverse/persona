@@ -113,21 +113,31 @@ final class FolderEditTests: XCTestCase {
         remoteProgress("dark", copying: false)
     }
 
+    func testRemoteCopyProgressLightLargestText() {
+        remoteProgress("light", copying: true, largestText: true)
+    }
+
+    func testRemoteCompressProgressDarkLargestText() {
+        remoteProgress("dark", copying: false, largestText: true)
+    }
+
     /// MOCK_FILE_OP_DELAY keeps the original POST open: the bar appears after one second and Cancel leaves no output.
-    private func remoteProgress(_ scheme: String, copying: Bool) {
+    private func remoteProgress(_ scheme: String, copying: Bool, largestText: Bool = false) {
         app.terminate()
         app.launchArguments += ["-ui.scheme", scheme]
+        if largestText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
         app.launchPinned()
         openHome()
 
         app.staticTexts["notes.txt"].press(forDuration: 1.2)
         let action = app.buttons[copying ? "创建副本" : "压缩"]
+        if largestText { for _ in 0..<4 where !action.exists { app.swipeUp() } }
         XCTAssertTrue(action.waitForExistence(timeout: 5), "no remote operation in the row menu:\n\(app.debugDescription)")
         action.tap()
         let cancel = app.buttons[copying ? "取消复制 notes.txt" : "取消压缩 notes.txt"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 10), "no progress bar with Cancel:\n\(app.debugDescription)")
         sleep(2) // past the one-second threshold, with a polled byte count on screen
-        shot(copying ? "copy-progress" : "compress-progress")
+        shot((copying ? "copy-progress" : "compress-progress") + (largestText ? "-ax" : ""))
         cancel.tap()
         XCTAssertTrue(cancel.waitForNonExistence(timeout: 5), "the cancelled operation stayed in the transfer bar")
         XCTAssertFalse(app.staticTexts[copying ? "notes 2.txt" : "notes.zip"].waitForExistence(timeout: 2),
