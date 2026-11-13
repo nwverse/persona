@@ -3383,7 +3383,18 @@ RECORDINGS_TRIMMED = {}
 # POST /api/v1/recordings/{id}/minutes/todos {version, actions} confirms action items as to-dos (#4062): each gets a to-do and
 # its todo_id; an old version is 409 minutes_stale. POST /mock/recording_minutes_rewrite {"id"} writes the next version at once
 # (what the user sees is then stale).
+# The minutes' shape (#6563, docs/assistant/meeting-minutes.md "Summary card (#6563)"): MOCK_RECORDING_MINUTES_SHAPE=legacy
+# (the default) writes them as a hub from before the summary card does, with no `overview`; overview adds the summary card
+# (`overview`, with every point and decision one bullet) and lays the Markdown out after it; malformed keeps the legacy
+# minutes and adds an `overview` that the contract's "Clients" rules clean down to nothing, so clients fall back to the
+# legacy layout. Every shape has `language` and `markdown`. POST /mock/recording_minutes {"mode", "shape"} switches both
+# (a body without `shape` goes back to the variable's; any other value is 400 and changes nothing).
+MINUTES_SHAPES = ("legacy", "overview", "malformed")
+MINUTES_SHAPE_START = os.environ.get("MOCK_RECORDING_MINUTES_SHAPE", "legacy")
+if MINUTES_SHAPE_START not in MINUTES_SHAPES:
+    sys.exit("mock hub: MOCK_RECORDING_MINUTES_SHAPE must be one of %s" % ", ".join(MINUTES_SHAPES))
 RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
+RECORDING_MINUTES_SHAPE = [MINUTES_SHAPE_START]
 RECORDING_MINUTES_ASKED = []
 # All-day recording fixtures (#4741): ready makes a recap from the stored text; the other modes let clients exercise
 # waiting, retry and the time before a recap is due. All recording routes share the lock, including delete and trim.
@@ -3739,31 +3750,267 @@ def minutes_span(body):
 
 def recording_minutes(body, rid=None):
     """Made-up minutes in the contract's shape (docs/assistant/meeting-minutes.md) from a recording's own sentences: the
-    first two are points, those that decide / assign / leave something open are decisions / actions / open questions.
+    first two with words are points, those that decide / assign / leave something open are decisions / actions / open
+    questions; a sentence without words (only punctuation, spaces or marks) is no item.
     Each item's `at` is its sentence's start (seconds into the recording). A photo with words (its caption, the text
-    the phone read, the room's note) is a point of its own that cites it (`"photo": n`, its `at` the photo's)."""
+    the phone read, the room's note) is a point of its own that cites it (`"photo": n`, its `at` the photo's).
+    In the overview shape (RECORDING_MINUTES_SHAPE) every sentence that neither decides, assigns nor leaves something
+    open is a point, in time order, so each topic has a few lines; a decision loses its "决定：" label; and the points
+    and decisions are also the summary card's bullets (minutes_overview). The malformed shape is the legacy minutes with
+    a broken `overview` (MINUTES_OVERVIEW_MALFORMED). Every shape has `language` and the hub's `markdown`
+    (minutes_markdown)."""
     segs = [x for x in (transcription_record(rid) if rid and transcription_hub(rid) else body.get("segments", []))
             if x.get("text") and not x.get("echo")]  # Persona's echo is not the meeting's (#5905)
+    shape = RECORDING_MINUTES_SHAPE[0]
     cal = body.get("calendar") or {}
-    item = lambda x: {"text": x["text"].rstrip("。"), "at": x["start"]}
+    # The summary card's texts carry no Markdown (bold is `strong`) and are cleaned as the hub cleans every item: the
+    # marks out, on one line, at most 400 characters (minutes_clip). An item left without words is dropped before
+    # either the legacy lists or the overview are made, as the hub drops it, in every shape.
+    plain = (lambda s: minutes_clip(" ".join(s.replace("**", "").split()), 400)) if shape == "overview" else (lambda s: s)
+    item = lambda x: {"text": plain(x["text"].rstrip("。")).rstrip("。"), "at": x["start"]}
+    worded = lambda xs: [x for x in xs if x["text"].strip()]
+    # A decision's own "决定：" label goes in the summary card's words: the Markdown says "Decided: " before it.
+    decided = (lambda s: re.sub(r"^\s*(?:决定|[Dd]ecided?|[Dd]ecision)\s*[:：]\s*(?=\S)", "", s)) if shape == "overview" else (lambda s: s)  # i18n-ignore: fixture keywords
     acts = [x for x in segs if "负责" in x["text"]]
+    photo_points = worded([{"text": plain((x.get("caption") or (x.get("text") or x.get("note") or "").split("\n")[0])[:200]), "at": x["at"], "photo": x["n"]}
+                           for x in (photos_listed(rid) if rid else []) if x.get("caption") or x.get("text") or x.get("note")])
+    if shape == "overview":  # in time order, as the hub sorts them
+        said = worded([item(x) for x in segs if not any(w in x["text"] for w in ("决定", "负责", "没定"))])  # i18n-ignore: fixture keywords
+        points = sorted(said + photo_points, key=lambda x: x["at"])[:100]
+    else:
+        points = worded([item(x) for x in segs])[:2] + photo_points
     out = {
         "version": 1,
         "title": cal.get("title") or body.get("title") or None,
         **minutes_span(body),  # `when`, and the same span as `start` / `end` for the apps to format (#4713)
         "where": cal.get("location"),
         "attendees": cal.get("attendees"),
-        "points": [item(x) for x in segs[:2]] + [
-            {"text": (x.get("caption") or (x.get("text") or x.get("note") or "").split("\n")[0])[:200], "at": x["at"], "photo": x["n"]}
-            for x in (photos_listed(rid) if rid else []) if x.get("caption") or x.get("text") or x.get("note")],
-        "decisions": [item(x) for x in segs if "决定" in x["text"]],
+        "points": points,
+        "decisions": worded([dict(item(x), text=decided(item(x)["text"])) for x in segs if "决定" in x["text"]]),
         # Who is named before 负责 ("does"), and a deadline when one is said ("周五前").
-        "actions": [{k: v for k, v in {"id": "a%d" % (i + 1), "who": x["text"].split("负责")[0][-3:] or None, "what": x["text"].rstrip("。"),
+        "actions": [{k: v for k, v in {"id": "a%d" % (i + 1), "who": x["text"].split("负责")[0][-3:] or None, "what": plain(x["text"].rstrip("。")),
                                       "by": "周五前" if "周五前" in x["text"] else None, "at": x["start"], "todo_id": ""}.items() if v is not None}
                     for i, x in enumerate(acts)],
-        "open": [item(x) for x in segs if "没定" in x["text"]],
+        "open": worded([item(x) for x in segs if "没定" in x["text"]]),
     }
-    return {k: v for k, v in out.items() if v}
+    out = {k: v for k, v in out.items() if v}
+    lang = minutes_lang(body)
+    if shape == "overview" and (overview := minutes_overview(out, segs, lang)):
+        out["overview"] = overview
+    elif shape == "malformed":
+        out["overview"] = copy.deepcopy(MINUTES_OVERVIEW_MALFORMED)
+    out["language"] = lang
+    out["markdown"] = minutes_markdown(out, body, lang, out.get("overview") if shape == "overview" else None)
+    return out
+
+
+# The summary card (#6563, docs/assistant/meeting-minutes.md "Summary card (#6563)"): the topic icons, in the contract's
+# order, which the mock's topics take in turn.
+MINUTES_ICONS = ("progress", "schedule", "release", "performance", "metrics", "tooling", "quality", "design", "people",
+                 "customer", "budget", "risk", "general")
+# The two groups of 4 or more topics: the meeting's first and second half, which is what they are (the topics go in time
+# order). Made-up words in the minutes' language, not the hub's.
+MINUTES_HALVES = {"zh-Hans": ("前半场", "后半场"), "en": ("First half", "Second half"), "ja": ("前半", "後半")}  # i18n-ignore: fixture words
+# What the contract's "Clients" rules clean down to nothing (no group, topic or bullet is left), so a client shows the
+# legacy minutes: a headline and conclusions of the wrong type, members that are no objects, a group without a list of
+# topics, topics without a title or a list of bullets, and bullets without words. A client that keeps any of them shows
+# words that say what it got wrong.
+MINUTES_OVERVIEW_MALFORMED = {
+    "headline": 3,
+    "conclusions": {"text": "Conclusions that are not a list", "at": 1},
+    "groups": [
+        "x", 7, None, [],
+        {"title": "A group without topics"},
+        {"title": "A group whose topics are not a list", "topics": "x"},
+        {"title": ["a title that is not a string"], "topics": [
+            "x", None,
+            {"title": "  ", "icon": "progress", "bullets": [{"text": "A topic with a blank title", "at": 1}]},
+            {"title": 3, "icon": "progress", "bullets": [{"text": "A topic whose title is a number", "at": 1}]},
+            {"icon": "progress", "bullets": [{"text": "A topic without a title", "at": 1}]},
+            {"title": "A topic whose bullets are not a list", "icon": "progress", "bullets": {"text": "x", "at": 1}},
+            {"title": "A topic without bullets", "icon": "progress"},
+            {"title": "A topic whose bullets have no words", "icon": "not-an-icon", "bullets": [
+                "x", 5, None, [], {"text": "   ", "at": 1}, {"text": 42, "at": 1}, {"text": None, "at": 1, "decision": True},
+                {"at": 1, "strong": ["x"]}]},
+        ]},
+    ],
+}
+
+
+def minutes_lang(body):
+    """The language the hub writes a recording's minutes in (kb/language.go outputLang): the recording's, when the hub has
+    a catalog for it, else Chinese (the mock has no owner's language)."""
+    primary = str(body.get("language") or "").strip().replace("_", "-").split("-")[0].lower()
+    return {"zh": "zh-Hans", "en": "en", "ja": "ja"}.get(primary, "zh-Hans")
+
+
+_MINUTES_CATALOGS = {}
+# The summary card's words in the hub's catalog (kb-minutes.json), for a tree whose catalog does not have them yet.
+_MINUTES_WORDS = {  # i18n-ignore: the hub's words
+    "en": {"conclusions": "Core conclusions", "decided": "Decided: ", "ai_note": "AI-generated from the recording. Check anything important."},
+    "zh-Hans": {"conclusions": "核心结论", "decided": "已决定：", "ai_note": "由 AI 根据录音生成，重要内容请核对。"},
+    "ja": {"conclusions": "主な結論", "decided": "決定：", "ai_note": "録音から AI が作成しました。重要な内容は確認してください。"},
+}
+
+
+def minutes_t(lang, key, **args):
+    """The hub's kb-minutes.json words (server/internal/i18n/locales/<lang>/kb-minutes.json), {name} filled from args."""
+    if lang not in _MINUTES_CATALOGS:
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        try:
+            with open(os.path.join(root, "server", "internal", "i18n", "locales", lang, "kb-minutes.json"), encoding="utf-8") as f:
+                _MINUTES_CATALOGS[lang] = json.load(f)
+        except (OSError, ValueError): _MINUTES_CATALOGS[lang] = {}
+    s = _MINUTES_CATALOGS[lang].get(key) or _MINUTES_WORDS.get(lang, {}).get(key) or key
+    return re.sub(r"\{(\w+)\}", lambda m: str(args.get(m.group(1), m.group(0))), s)
+
+
+def minutes_clip(text, n):
+    """text at most n characters, as the hub clips an item (400), a conclusion (200) or a headline (120): a cut keeps
+    n - 1 characters and ends in "…"."""
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
+def minutes_strong(text, limit=None):
+    """The text's bold places (`strong`) as the mock marks them: its first number (with a unit), or 完成 / done, whichever
+    comes first; kept only where the contract's rule finds it (its first occurrence) and when it is not the whole text.
+    In a text minutes_clip cut to limit, one that ends at the "…" is not bold: the mock cannot tell whether the cut
+    reached it, and the hub leaves out a mark the cut reaches."""
+    m = re.search(r"\d+(?:\.\d+)?(?:\s?(?:%|[KMGT]B\b|K\b|ms\b))?|完成|\b[Dd]one\b", text)  # i18n-ignore: fixture keywords
+    if not m or text.find(m.group(0)) != m.start() or len(m.group(0)) > 20 or m.group(0) == text.strip(): return []
+    if limit and len(text) == limit and text.endswith("…") and m.end() == limit - 1: return []
+    return [m.group(0)]
+
+
+def minutes_bold(text, strong):
+    """text as the Markdown writes it: a literal * escaped, the `strong` places wrapped in ** by the contract's rule (each
+    entry's first occurrence at or after the end of the one before; one not found bolds nothing)."""
+    out, i = [], 0
+    for s in strong or []:
+        j = text.find(s, i) if isinstance(s, str) and s else -1
+        if j < 0: continue
+        out += [text[i:j].replace("*", "\\*"), "**" + s.replace("*", "\\*") + "**"]
+        i = j + len(s)
+    return "".join(out) + text[i:].replace("*", "\\*")
+
+
+def minutes_topic_title(text, names=()):
+    """A topic's title from its first bullet: the subject it names before a colon ("导出：超过 4 MB 的条目会被丢弃",
+    "Export: entries over 4 MB are dropped"), unless that is an attendee's name (a speaker); else its first clause after
+    such a name, cut to 12 characters in Chinese or Japanese and to whole words within 40 otherwise."""
+    label = re.match(r"\s*([^\s:：，,。]{1,12}(?: [^\s:：，,。]+){0,3})\s*[:：]\s*(?=\S)", text)
+    if label and label.group(1) not in names: return label.group(1)[:40]
+    words = text[label.end():] if label else text
+    clause = re.split(r"[，,。;；!?！？、]|\.(?:\s|$)", words, maxsplit=1)[0].strip() or words.strip() or text.strip()
+    if re.search(r"[\u3040-\u30ff\u3400-\u9fff]", clause): return clause[:12]
+    title = ""
+    for w in clause.split():
+        if len(title) + len(w) + 1 > 40: break
+        title = (title + " " + w).strip()
+    return title or clause[:40]
+
+
+def minutes_overview(m, segs, lang):
+    """The summary card (#6563) from minutes m, as the hub guarantees it ("The `overview` field"): every point and decision
+    is one bullet (same text, at and photo), the bullets of each transcript minute a topic titled by its first one
+    (minutes_topic_title; minutes merged when there would be more than 12, topics of the same title one), icons in turn,
+    two titled groups (the halves) when there are 4 or more topics, else one untitled. A bullet's and a conclusion's bold
+    place is minutes_strong's. The conclusions are the first 4 decisions, citing a photo only when a bullet cites it; the
+    headline is the first sentence. None when there is no point or decision, as the hub leaves the overview out."""
+    bullets = [{"text": x["text"], "at": x["at"], **({"photo": x["photo"]} if x.get("photo") else {}), "_decision": False}
+               for x in m.get("points") or []]
+    bullets += [{"text": x["text"], "at": x["at"], **({"photo": x["photo"]} if x.get("photo") else {}), "_decision": True}
+                for x in m.get("decisions") or []]
+    if not bullets: return None
+    at = lambda b: b["at"] if isinstance(b["at"], (int, float)) else 0
+    bullets.sort(key=at)
+    minutes = sorted({int(at(b) // 60) for b in bullets})
+    per = -(-len(minutes) // 12)  # transcript minutes per topic: at most 12 topics
+    buckets = {}
+    for b in bullets: buckets.setdefault(minutes.index(int(at(b) // 60)) // per, []).append(b)
+    topics = []
+    for k in sorted(buckets):
+        title = minutes_topic_title(buckets[k][0]["text"], m.get("attendees") or ())
+        same = next((t for t in topics if t["title"].casefold() == title.casefold()), None)
+        if same: same["bullets"] += buckets[k]
+        else: topics.append({"title": title, "icon": MINUTES_ICONS[len(topics) % len(MINUTES_ICONS)], "bullets": list(buckets[k])})
+
+    def bullet(b):
+        strong = minutes_strong(b["text"], 400)
+        return {"text": b["text"], **({"strong": strong} if strong else {}), "at": b["at"],
+                **({"photo": b["photo"]} if b.get("photo") else {}), **({"decision": True} if b["_decision"] else {})}
+
+    topics = [{"title": t["title"], "icon": t["icon"], "bullets": [bullet(b) for b in sorted(t["bullets"], key=at)]}
+              for t in topics]
+    if len(topics) >= 4:
+        half, names = (len(topics) + 1) // 2, MINUTES_HALVES[lang]
+        groups = [{"title": names[0], "topics": topics[:half]}, {"title": names[1], "topics": topics[half:]}]
+    else:
+        groups = [{"title": "", "topics": topics}]
+    cited = {b["photo"] for t in topics for b in t["bullets"] if b.get("photo")}
+    conclusions = []
+    for x in (m.get("decisions") or [])[:4]:
+        text = minutes_clip(x["text"], 200)
+        strong = minutes_strong(text, 200)
+        conclusions.append({"text": text, **({"strong": strong} if strong else {}), "at": x["at"],
+                            **({"photo": x["photo"]} if x.get("photo") in cited else {})})
+    first = minutes_clip(" ".join(segs[0]["text"].replace("**", "").split()).rstrip("。"), 120) if segs else ""
+    out = {}
+    if first and first != m.get("title"): out["headline"] = first
+    if conclusions: out["conclusions"] = conclusions
+    out["groups"] = groups
+    return out
+
+
+def minutes_markdown(m, body, lang, ov=None):
+    """minutes.md as the hub writes it (kb/minutes.go renderMinutes): with clock times in the local zone, sections with
+    nothing left out, the fixed words from the hub's kb-minutes.json in the minutes' language. With the overview ov (the
+    overview shape's; a malformed one is never laid out) it follows the contract's "Markdown" (#6563): the headline, the
+    core conclusions, the topics under their group headings (or as the sections with one untitled group) with decisions
+    after "Decided: ", the action items and open questions as before with no checkbox, a literal * escaped in every text
+    the minutes hold, then the AI note. Without one it is the legacy layout, byte for byte."""
+    try: start = datetime.fromisoformat(str(body.get("started_at")).replace("Z", "+00:00")).astimezone()
+    except (TypeError, ValueError): start = None
+    clock = lambda sec: "[" + ((start + timedelta(microseconds=math.trunc(sec * 1_000_000 if isinstance(sec, (int, float)) else 0)))
+                               .strftime("%H:%M:%S") if start else "00:00:00") + "] "
+    photo = lambda x: minutes_t(lang, "photo", n=x["photo"]) if x.get("photo") else ""
+    # The hub's title when none was given: the recording's name in Chinese (the mock's 录音), else when it started.
+    title = m.get("title") or ("录音" if lang == "zh-Hans" else  # i18n-ignore: the recording's name
+                               minutes_t(lang, "untitled", when=start.strftime("%Y-%m-%d %H:%M") if start else ""))
+    esc = (lambda s: str(s).replace("*", "\\*")) if ov else str
+    out = "# " + esc(title) + "\n\n- " + minutes_t(lang, "when", when=m.get("when") or "") + "\n"
+    if m.get("where"): out += "- " + minutes_t(lang, "where", where=esc(m["where"])) + "\n"
+    if m.get("attendees"): out += "- " + minutes_t(lang, "attendees", names=minutes_t(lang, "list_sep").join(map(esc, m["attendees"]))) + "\n"
+    if ov:
+        if ov.get("headline"): out += "\n" + esc(ov["headline"]) + "\n"
+        if ov.get("conclusions"):
+            out += "\n## " + minutes_t(lang, "conclusions") + "\n\n"
+            out += "".join("- " + clock(c["at"]) + minutes_bold(c["text"], c.get("strong")) + photo(c) + "\n" for c in ov["conclusions"])
+        named = len(ov["groups"]) > 1
+        for g in ov["groups"]:
+            if named: out += "\n## " + esc(g["title"]) + "\n"
+            for t in g["topics"]:
+                out += "\n" + ("### " if named else "## ") + esc(t["title"]) + "\n\n"
+                out += "".join("- " + clock(x["at"]) + (minutes_t(lang, "decided") if x.get("decision") else "")
+                               + minutes_bold(x["text"], x.get("strong")) + (minutes_t(lang, "who", who=esc(x["who"])) if x.get("who") else "")
+                               + photo(x) + "\n" for x in t["bullets"])
+    else:
+        if m.get("points"):
+            out += "\n## " + minutes_t(lang, "points") + "\n\n"
+            out += "".join("- " + clock(x["at"]) + x["text"] + (minutes_t(lang, "who", who=x["who"]) if x.get("who") else "")
+                           + photo(x) + "\n" for x in m["points"])
+        if m.get("decisions"):
+            out += "\n## " + minutes_t(lang, "decisions") + "\n\n" + "".join("- " + clock(x["at"]) + x["text"] + photo(x) + "\n" for x in m["decisions"])
+    if m.get("actions"):
+        out += "\n## " + minutes_t(lang, "actions") + "\n\n"
+        out += "".join("- " + clock(a["at"]) + (minutes_t(lang, "owner", who=esc(a["who"])) if a.get("who") else "") + esc(a["what"])
+                       + (minutes_t(lang, "by", by=esc(a.get("by") or a.get("due_date"))) if a.get("by") or a.get("due_date") else "")
+                       + photo(a) + "\n" for a in m["actions"])
+    if m.get("open"):
+        out += "\n## " + minutes_t(lang, "open") + "\n\n" + "".join("- " + clock(x["at"]) + esc(x["text"]) + photo(x) + "\n" for x in m["open"])
+    if m.get("partial"): out += "\n> " + minutes_t(lang, "partial") + "\n"
+    if ov: out += "\n*" + minutes_t(lang, "ai_note") + "*\n"
+    return out.rstrip("\n")
 
 
 # The managers' roster (docs/assistant/managers.md): the hub's own assistant (the default), one on another computer, one offline,
@@ -5530,9 +5777,17 @@ def photos_of(rid, make=False):
 
 
 def photos_cited(rid):
-    """The numbers of the photos the current minutes cite."""
+    """The numbers of the photos the current minutes cite: their items', and the summary card's conclusions' and bullets'
+    (#6563; a malformed overview's members that are no objects cite nothing)."""
     minutes = (KB_DETAIL.get(("recordings", rid)) or {}).get("minutes") or {}
-    return {x["photo"] for k in ("points", "decisions", "actions", "open") for x in minutes.get(k) or [] if isinstance(x.get("photo"), int)}
+    lists = [minutes.get(k) for k in ("points", "decisions", "actions", "open")]
+    ov = minutes.get("overview")
+    if isinstance(ov, dict):
+        lists.append(ov.get("conclusions"))
+        for g in ov.get("groups") if isinstance(ov.get("groups"), list) else []:
+            for t in g.get("topics") if isinstance(g, dict) and isinstance(g.get("topics"), list) else []:
+                if isinstance(t, dict): lists.append(t.get("bullets"))
+    return {x["photo"] for xs in lists if isinstance(xs, list) for x in xs if isinstance(x, dict) and isinstance(x.get("photo"), int)}
 
 
 def photos_listed(rid):
@@ -6618,8 +6873,14 @@ def recordings_route_locked(h, method, p):
                                              "segments": v["segments"], "fed": v["fed"], "asks": v["asks"]}
                                          for k, v in MEETING_LIVE.items()}}) or True
     if p == "/mock/recording_minutes" and method == "POST":
-        # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too.
-        RECORDING_MINUTES[0] = json.loads(h.last_body or b"{}").get("mode", "pending")
+        # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too. The
+        # minutes' shape (#6563) is the body's, else MOCK_RECORDING_MINUTES_SHAPE's; another one changes nothing.
+        try: body = json.loads(h.last_body or b"{}")
+        except ValueError: body = None
+        if not isinstance(body, dict) or body.get("shape", MINUTES_SHAPE_START) not in MINUTES_SHAPES:
+            return h.send_json({"error": "shape must be one of " + ", ".join(MINUTES_SHAPES)}, 400) or True
+        RECORDING_MINUTES[0] = body.get("mode", "pending")
+        RECORDING_MINUTES_SHAPE[0] = body.get("shape", MINUTES_SHAPE_START)
         for t in TRANSCRIPTIONS.values():
             if t.get("socket"): t["socket"]["fail"]("recording_deleted")
         TRANSCRIPTIONS.clear()
@@ -6628,7 +6889,7 @@ def recordings_route_locked(h, method, p):
         with PHOTO_LOCK: PHOTO_STORE.clear()
         KB["recordings"] = []
         for key in [k for k in KB_DETAIL if k[0] == "recordings"]: KB_DETAIL.pop(key)
-        return h.send_json({"mode": RECORDING_MINUTES[0]}) or True
+        return h.send_json({"mode": RECORDING_MINUTES[0], "shape": RECORDING_MINUTES_SHAPE[0]}) or True
     if p == "/mock/recordings" and method == "GET":
         return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0],
                             "minutes_asked": RECORDING_MINUTES_ASKED, "trimmed": sorted(RECORDINGS_TRIMMED)}) or True

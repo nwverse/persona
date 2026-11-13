@@ -26,6 +26,8 @@ def inspect_elf(data, abi):
     expected = {'arm64-v8a': 183, 'x86_64': 62}[abi]
     if machine != expected:
         raise ValueError(f'{abi}: wrong ELF machine {machine}, expected {expected}')
+    if len(data) < 64 or phoff + phentsize * phnum > len(data):
+        raise ValueError(abi + ': truncated ELF header or program headers')
     loads = []
     for index in range(phnum):
         offset = phoff + index * phentsize
@@ -119,5 +121,5 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, ValueError, subprocess.CalledProcessError, zipfile.BadZipFile) as error:
+    except (OSError, ValueError, struct.error, subprocess.CalledProcessError, zipfile.BadZipFile) as error:
         sys.exit("Android core size: FAILED (" + str(error) + ")")

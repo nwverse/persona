@@ -17,7 +17,8 @@ cd android && ./gradlew :core:rustcore:test :app:assembleDebug :core:rustcore-an
   :core:rustcore-android:assembleReleaseAndroidTest
 ```
 
-`buildAndroidCore` declares Cargo.lock, the toolchain, Rust sources/manifests/headers and its build script as inputs.
+`buildAndroidCore` declares Cargo.lock, the pinned toolchain, Rust sources/manifests/headers and target rlibs, the
+build script, and the NDK's clang/lld/ar/strip/readelf and sysroot as inputs. Standalone JVM tests do not require the NDK.
 A second invocation with unchanged inputs must report it `UP-TO-DATE` (or `FROM-CACHE`), with no Cargo compilation.
 Both the symbol-retaining `build/native/symbols/<abi>/libpersona_core.so` and the stripped packaged `.so` under
 `build/native/jni/<abi>/` are build outputs; no compiled library is committed. The unstripped symbols and ELF reports
@@ -67,5 +68,6 @@ python3 -I native/app-core/scripts/android-device-test.py --serial <owned serial
 ```
 
 An arm64 hardware run uses the same tasks with the device selected. There is no separate arm64-only test
-implementation. Debuggable instrumentation with R8 and the release native library is not a non-debuggable production-app
-benchmark; its build type and test APK R8 status are recorded explicitly. The phase-1 production adapter and iOS-baseline comparative measurements remain separate work.
+implementation. The release test APK is non-debuggable and R8-minified, with its mapping under
+`build/outputs/mapping/releaseAndroidTest/`; the native library is also an optimized release build. These are not
+production-app screen measurements. The phase-1 production adapter and iOS-baseline comparative measurements remain separate work.

@@ -8,11 +8,65 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 import zipfile
 
 
 def run(command, timeout=120, **kwargs):
     return subprocess.run(command, timeout=timeout, check=True, text=True, **kwargs)
+
+
+def parse_junit(output, expected_identities):
+    """Require a start and exactly one successful completion for every selected test, not just a final count."""
+    current_class = None
+    current_test = None
+    started = set()
+    completed = set()
+    for line in output.splitlines():
+        if line.startswith('INSTRUMENTATION_STATUS: class='):
+            current_class = line.split('=', 1)[1].strip()
+        elif line.startswith('INSTRUMENTATION_STATUS: test='):
+            current_test = line.split('=', 1)[1].strip()
+        elif line.startswith('INSTRUMENTATION_STATUS_CODE:'):
+            status = int(line.split(':', 1)[1].strip())
+            identity = (current_class, current_test)
+            if status == 1:
+                started.add(identity)
+            elif status == 0:
+                if identity in completed:
+                    raise ValueError('duplicate JUnit completion: ' + str(identity))
+                completed.add(identity)
+            else:
+                raise ValueError('JUnit test did not complete successfully: ' + str(identity))
+    if set(expected_identities) != started or set(expected_identities) != completed:
+        raise ValueError('incomplete or unexpected JUnit tests: expected ' + str(sorted(expected_identities))
+                         + ', started ' + str(sorted(started)) + ', completed ' + str(sorted(completed)))
+    if 'FAILURES!!!' in output or 'INSTRUMENTATION_CODE: 0' in output:
+        raise ValueError('instrumentation reported failures or no executed tests')
+
+
+def fixture_identities(apk):
+    """The same file/version/nonempty/unique-name contract as DeviceFixtureReader, with exact test names."""
+    names = []
+    try:
+        with zipfile.ZipFile(apk) as package:
+            files = sorted(name for name in package.namelist()
+                           if name.startswith('assets/continuity/') and name.endswith('.json'))
+            if not files:
+                raise ValueError('no packaged continuity fixtures')
+            for name in files:
+                fixture = json.loads(package.read(name))
+                if fixture.get('version') != 1:
+                    raise ValueError('unsupported fixture version: ' + name)
+                cases = fixture.get('cases')
+                if not isinstance(cases, list) or not cases:
+                    raise ValueError('empty or missing fixture cases: ' + name)
+                names.extend(case['name'] for case in cases)
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError('invalid packaged continuity fixture: ' + str(error)) from error
+    if len(names) != len(set(names)):
+        raise ValueError('duplicate packaged continuity case names')
+    return [('persona.core.rustcore.ContinuityBindingFixtureTest', 'replay[' + name + ']') for name in names]
 
 
 def main():
@@ -68,10 +122,17 @@ def main():
     if args.suite == 'benchmark':
         # Clear this synthetic test package's state, not merely an old report path on /sdcard (whose FUSE
         # transport may be unavailable). No hub, pairing or user data is involved in this test-only package.
-        run(adb + ['shell', 'pm', 'clear', 'persona.core.rustcore.android.test'], timeout=30)
+        cleared = run(adb + ['shell', 'pm', 'clear', 'persona.core.rustcore.android.test'],
+                      timeout=30, capture_output=True).stdout.strip()
+        if cleared != 'Success':
+            raise ValueError('cannot clear the synthetic benchmark package: ' + cleared)
     test = 'persona.core.rustcore.ContinuityBindingFixtureTest' if args.suite == 'replay' else 'persona.core.rustcore.RustCoreDeviceBenchmark'
-    command = adb + ['shell', 'am', 'instrument', '-w', '-r', '-e', 'class', test,
-                     'persona.core.rustcore.android.test/androidx.test.runner.AndroidJUnitRunner']
+    nonce = uuid.uuid4().hex if args.suite == 'benchmark' else ''
+    command = adb + ['shell', 'am', 'instrument', '-w', '-r']
+    if nonce:
+        command += ['-e', 'rustCoreBenchmarkNonce', nonce]
+    command += ['-e', 'class', test,
+                'persona.core.rustcore.android.test/androidx.test.runner.AndroidJUnitRunner']
     started = time.monotonic()
     try:
         result = run(command, timeout=args.timeout, capture_output=True)
@@ -88,25 +149,22 @@ def main():
     (args.output / 'counts.json').write_text(json.dumps(counts, indent=2) + '\n')
     expected = 1 if args.suite == 'benchmark' else None
     if args.suite == 'replay':
-        # The leader's iOS-reference fixture set can gain cases independently of the packaging module. Count
-        # exactly what this test APK carries instead of freezing an old fixture total in the runner.
-        with zipfile.ZipFile(args.apk) as package:
-            expected = sum(len(json.loads(package.read(name))['cases'])
-                           for name in package.namelist()
-                           if name.startswith('assets/continuity/') and name.endswith('.json'))
-        if not expected:
-            raise ValueError('no packaged continuity cases in test APK')
+        identities = fixture_identities(args.apk)
+        expected = len(identities)
         (args.output / 'fixture-count.txt').write_text(str(expected) + '\n')
+    else:
+        identities = [('persona.core.rustcore.RustCoreDeviceBenchmark', 'dispatchAndFrameCosts')]
     if counts != {'tests': expected, 'failures': 0, 'instrumentationCode': -1}:
         raise ValueError('real JUnit result is not a pass: ' + str(counts) + '; see instrumentation.txt')
-    if 'FAILURES!!!' in output or 'INSTRUMENTATION_CODE: 0' in output:
-        raise ValueError('instrumentation reported failures or no executed tests')
+    parse_junit(output, identities)
     if args.suite == 'benchmark':
         report = run(adb + ['shell', 'cat',
                             '/sdcard/Android/data/persona.core.rustcore.android.test/files/rust-core-benchmark.json'],
                      timeout=30, capture_output=True)
         (args.output / 'benchmark.json').write_text(report.stdout)
         measurements = json.loads(report.stdout)
+        if measurements.get('nonce') != nonce:
+            raise ValueError('benchmark report does not belong to this run')
         expected_device = {'model': props['ro.product.model'], 'abi': props['ro.product.cpu.abi'],
                            'api': int(props['ro.build.version.sdk']),
                            'build': props['ro.build.display.id'], 'kernelPageBytes': int(props['kernelPageBytes'])}
@@ -125,5 +183,5 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
         sys.exit('Android core device: FAILED (' + str(error) + ')')

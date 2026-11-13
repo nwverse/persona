@@ -71,7 +71,10 @@ class RustCoreDeviceBenchmark {
             assertEquals(1, list.size)
             assertTrue("the real worker emitted patches", host.versions.isNotEmpty())
             val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val nonce = InstrumentationRegistry.getArguments().getString("rustCoreBenchmarkNonce")
+                ?: error("missing per-run benchmark nonce")
             val metadata = JSONObject()
+                .put("nonce", nonce)
                 .put("scope", "optimized instrumentation APK; emulator diagnostics, not physical-device acceptance")
                 .put("samples", SAMPLES).put("warmUp", WARM_UP)
                 .put("model", Build.MODEL).put("device", Build.DEVICE)
