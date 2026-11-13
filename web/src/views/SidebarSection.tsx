@@ -1,6 +1,8 @@
 // A sidebar group: its heading stays in view while its rows scroll, a section folds under it, and its count says what
 // it counts. Kept apart from the sidebar's own parts so that a list outside the sidebar can draw the same sections.
 import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
+import { t } from "../i18n";
+import { stateCount } from "../lib/state-labels";
 import { Collapse, cx, sidebarFoldMotion } from "../ui/atoms";
 import { contextMenuProps } from "../ui/context-menu";
 import { Icon } from "../ui/icons";
@@ -60,6 +62,17 @@ export function GroupCount({ n, label, className }: { n: number; label: string; 
     <span title={label} className={cx("text-[10.5px] text-ink-3 tabular-nums", className)}>
       <span aria-hidden>{n}</span>
       <span className="sr-only">{label}</span>
+    </span>
+  );
+}
+
+/** On a folded group's heading, how many of its sessions need the user (DESIGN_SYSTEM 3.4): the number in the
+ *  attention tone, with the words for its tooltip and for a screen reader. Nothing when none do. */
+export function NeedsCount({ n }: { n: number }) {
+  if (n <= 0) return null;
+  return (
+    <span title={stateCount("needs_you", n)} className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums">
+      {n}<span className="sr-only"> {t("sidebar.needs_you_suffix", { count: n })}</span>
     </span>
   );
 }

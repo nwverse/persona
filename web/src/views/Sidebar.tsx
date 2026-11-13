@@ -568,7 +568,7 @@ function AgentsBlock(props: AgentsBlockProps) {
 
 // The computer before a row's title, where rows of several computers sit under one project: as a tab's name before its
 // agent's (SidebarTree), it gives way before the title does.
-const PLACE_PREFIX = "min-w-0 max-w-[40%] shrink truncate text-[11.5px] text-ink-3";
+const PLACE_PREFIX = "min-w-0 max-w-[40%] shrink truncate text-xs text-ink-3";
 
 function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true, chooseGrouping }: AgentsBlockProps) {
   const machines = useStore(selectSidebarMachines);

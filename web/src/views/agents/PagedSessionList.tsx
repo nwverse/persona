@@ -8,7 +8,7 @@ import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../
 import { groupMachines, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
 import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
 import { SearchField } from "../../ui/SearchField";
-import { STATE_LABEL, stateCount } from "../../lib/state-labels";
+import { STATE_LABEL } from "../../lib/state-labels";
 import type { AgentState } from "../../lib/types";
 import { Button, cx, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -19,6 +19,7 @@ import { removeStoredValue, storedValue, storeValue } from "../../lib/compatibil
 import { ACTIVE_WINDOWS, activeWindow, splitByActivity, windowStart, type ActiveWindow } from "../../lib/session-activity";
 import { useFolded } from "../../lib/use-folded";
 import { sameValue } from "../../lib/stable-lines";
+import { NeedsCount } from "../SidebarSection";
 import { GroupedSessions, type GroupedSource } from "./GroupedSessions";
 import { useSessionGroups } from "./use-session-groups";
 
@@ -406,11 +407,7 @@ function EarlierHeader({ count, needs, window, folded, onToggle }: { count: numb
         <span className="shrink-0 text-[11px] text-ink-3 tabular-nums">{count}</span>
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
       </button>
-      {needs > 0 && (
-        <span title={stateCount("needs_you", needs)} className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums">
-          {needs}<span className="sr-only"> {t("sidebar.needs_you_suffix", { count: needs })}</span>
-        </span>
-      )}
+      <NeedsCount n={needs} />
     </div>
   );
 }

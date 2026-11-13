@@ -7,13 +7,12 @@ import { t } from "../../i18n";
 import { shortPath } from "../../lib/format";
 import { filterQuery, PAGE_SIZE, SessionList, type ListFilters } from "../../lib/session-list";
 import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
-import { stateCount } from "../../lib/state-labels";
 import { onHubEvent } from "../../lib/store";
 import { useFolded } from "../../lib/use-folded";
 import { Button } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
-import { GroupCount, Section } from "../SidebarSection";
+import { GroupCount, NeedsCount, Section } from "../SidebarSection";
 
 /** How a section's own list is read: the collection the groups are of, as the list above them reads it. */
 export interface GroupedSource<T> {
@@ -73,11 +72,7 @@ function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, sou
       <Section first={first} folded={folded} onToggle={toggle}
         title={<>{name}{computer && <span className="font-normal"> · {computer}</span>}</>}
         right={<>
-          {group.needs > 0 && (
-            <span title={stateCount("needs_you", group.needs)} className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums">
-              {group.needs}<span className="sr-only"> {t("sidebar.needs_you_suffix", { count: group.needs })}</span>
-            </span>
-          )}
+          <NeedsCount n={group.needs} />
           <GroupCount n={group.count} label={t("paged-agents.count", { count: group.count })} />
         </>}>
         {!folded && <>
@@ -93,7 +88,7 @@ function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, sou
 function GroupPlaces({ group, machineName }: { group: SessionGroup; machineName: (id: string) => string }) {
   if (!group.origin && !group.places.length) return null;
   return (
-    <ul aria-label={t("paged-agents.places")} className="flex flex-col gap-0.5 px-2 pb-1 text-[11px] leading-[1.45] text-ink-3">
+    <ul aria-label={t("paged-agents.places")} className="flex flex-col gap-0.5 px-2 pb-1 text-xs text-ink-3">
       {group.origin && (
         <li className="flex min-w-0 items-center gap-1.5">
           <Icon name="git" size={11} className="shrink-0" />
