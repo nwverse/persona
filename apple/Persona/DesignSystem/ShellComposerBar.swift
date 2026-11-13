@@ -31,7 +31,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     var history: String? = nil
     /// The main conversation cannot answer yet: send says what to do first and goes there, the draft stays.
     var gate: SendGate? = nil
-    /// The iPhone's 「+」 opens the composer's panel (`AttachSheet`, Telegram's attachment menu) from where the button is,
+    /// The iPhone's 「+」 opens the composer's panel (`AttachSheet`, a half-height system sheet), given where the button is
     /// in the window, and touched and held, the menu of `attach` (#3225); nil: a tap opens the menu of `attach`.
     var openAttach: ((CGRect) -> Void)? = nil
     /// Glow While Replying (`ComposerGlow`): the band around the bar while the assistant's reply is being written. Drawn

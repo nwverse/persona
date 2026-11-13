@@ -110,7 +110,8 @@ internal fun AgentsScreen(
     val sessionsByKey = remember(page.sessions) { page.sessions.associateBy { it.key } }
     // By To-do only when the hub has to-dos, as iOS offers it (`DevGrouping.offered(supportsTodos:)`, #4338 A5).
     val todosSupported by (model.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
-    val groupings = offeredGroupings(todosSupported)
+    // "By pinned" only from a hub with the direction tree (#4352), or while it is the one chosen.
+    val groupings = offeredGroupings(todosSupported, page.directionsAvailable || page.preferences.grouping == AgentGrouping.Direction)
     // A fallback for when no app feedback is provided (previews, tests): the page's own toast, as the root's.
     val toast = persona.core.designsystem.rememberToastState()
     val feedback = persona.core.designsystem.LocalAppFeedback.current
@@ -597,6 +598,18 @@ internal fun AgentsScreen(
                                 counts = listOf(todoState.countTone to group.rows.count { !it.isNestedSubtask }),
                                 onAction = { navigator.navigate(persona.core.navigation.TodoDetailRoute(todoId)) },
                                 actionLabel = stringResource(R.string.agents_view_todo))
+                        } else if (group.id.startsWith(DirectionTaskPrefix)) {
+                            // "By direction": a to-do of the hub's tree under its direction (#4352); the arrow opens it.
+                            val todoId = group.id.removePrefix(DirectionTaskPrefix).substringAfter('/')
+                            AgentSpaceHeader(groupTitle, group.folded, { model.fold(group) }, depth = entry.depth, first = entry.first,
+                                counts = group.headingCounts, icon = PersonaIcons.todo, kind = stringResource(R.string.agents_kind_todo),
+                                menu = { HeadingAction(PersonaIcons.forward, stringResource(R.string.agents_view_todo),
+                                    { navigator.navigate(persona.core.navigation.TodoDetailRoute(todoId)) }) })
+                        } else if (group.id.startsWith(DirectionGroupPrefix)) {
+                            val todoCount = page.list.groups.count { it.under == group.id }
+                            AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
+                                icon = PersonaIcons.pinned, counts = group.headingCounts,
+                                detail = pluralStringResource(R.plurals.agents_count_todos, todoCount, todoCount))
                         } else AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
                             icon = PhIcons.PushPin.takeIf { group.id == "pinned" } ?: PersonaIcons.backgroundWaiting.takeIf { group.id == "state/background" },
                             counts = group.stateSectionCounts ?: group.todoLooseCounts ?: group.sectionCounts, waitsInBackground = group.id == "state/background",
@@ -1136,6 +1149,7 @@ private val AgentGrouping.icon: PhIcon get() = when (this) {
     AgentGrouping.MachineSpace, AgentGrouping.Space -> PersonaIcons.space
     AgentGrouping.Todo -> PersonaIcons.todo
     AgentGrouping.Machine -> PersonaIcons.machine
+    AgentGrouping.Direction -> PersonaIcons.pinned
     // iOS draws two state dots (circle.grid.2x1), which no generated glyph shows; a board of columns stands in.
     AgentGrouping.State -> PhIcons.Kanban
 }
@@ -1144,6 +1158,7 @@ private val AgentGrouping.label: String @Composable get() = stringResource(when 
     AgentGrouping.Repo -> R.string.agents_grouping_repo
     AgentGrouping.State -> R.string.agents_grouping_state
     AgentGrouping.Todo -> R.string.agents_grouping_todo
+    AgentGrouping.Direction -> R.string.agents_grouping_direction
     // iOS calls this grouping (computer, space, tab, agent) By Project (#4338 A5); the stored value stays MachineSpace.
     else -> R.string.agents_grouping_project
 })

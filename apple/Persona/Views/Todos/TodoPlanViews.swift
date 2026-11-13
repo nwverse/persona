@@ -126,16 +126,16 @@ struct TodoPlanSection: View {
             if draft.hasDue {
                 Toggle("All Day", isOn: $draft.allDay)
                     .accessibilityIdentifier("todo.plan.allDay")
-                DatePicker("Due", selection: $draft.due, displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
-                    .accessibilityIdentifier("todo.plan.dueDate")
+                FormDatePicker("Due", selection: $draft.due, displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute],
+                               identifier: "todo.plan.dueDate")
             }
             Toggle(isOn: $draft.hasRemind) {
                 Label { Text("Remind Me") } icon: { ThemedIcon(Theme.Icon.reminder) }
             }
             .accessibilityIdentifier("todo.plan.remind")
             if draft.hasRemind {
-                DatePicker("Remind At", selection: $draft.remind, in: min(draft.remind, .now)..., displayedComponents: [.date, .hourAndMinute])
-                    .accessibilityIdentifier("todo.plan.remindAt")
+                FormDatePicker("Remind At", selection: $draft.remind, in: min(draft.remind, .now)..., displayedComponents: [.date, .hourAndMinute],
+                               identifier: "todo.plan.remindAt")
                 if let sent = todo.remindedAt, todo.remindAt == draft.remind {
                     Text("Reminded \(TodoPlanText.moment(sent))")
                         .font(Theme.Font.caption)

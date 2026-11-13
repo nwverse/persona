@@ -145,11 +145,23 @@ func mailAddresses(list []mail.Address) []assistantwire.MailAddress {
 
 // readConnectors reads every connector with an inbox: its things and what it can do with them. One the user turned "Add
 // to Inbox" off for, not signed in, or a hub.json plugin's waiting for the triage model is read with nothing (nothing
-// of it waits); one whose Collect failed is left out (it keeps what it had).
+// of it waits); one whose Collect failed is left out (it keeps what it had). One whose Inbox feed was switched to its
+// default subscription is not read at all: the subscription hands its rows under its id (#6265).
 func (h *Manager) readConnectors(ctx context.Context) []assistantwire.InboxSource {
 	out := []assistantwire.InboxSource{}
 	h.reconcileIMessageAI(ctx)
+	migrated := map[string]bool{}
+	if subs := h.subsLive.Load(); subs != nil {
+		var err error
+		if migrated, err = subs.Migrated(ctx); err != nil {
+			h.logf("inbox: migrated sources: %v", err)
+			return out // which built-ins to read is not known: none this round, rather than one twice
+		}
+	}
 	for _, c := range h.connectors.All() {
+		if migrated[c.ID()] {
+			continue
+		}
 		in, ok := connector.As[connector.Inbox](c)
 		if !ok {
 			continue

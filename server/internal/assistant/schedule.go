@@ -1280,7 +1280,12 @@ func checkTask(t *Task, now time.Time) error {
 	if t.PermissionMode != "" && !slices.Contains(proto.PermissionModes, t.PermissionMode) {
 		return i18n.Err("assistant-schedule.bad_permission_mode", i18n.Args{"mode": strconv.Quote(t.PermissionMode)})
 	}
-	if t.Effort != "" && !slices.Contains(proto.EffortLevels, t.Effort) {
+	// A codex task takes its launcher's own effort list (ultra included, #6181); everything else keeps Claude Code's.
+	efforts := proto.EffortLevels
+	if t.Launcher == "codex" {
+		efforts = proto.CodexEffortLevels
+	}
+	if t.Effort != "" && !slices.Contains(efforts, t.Effort) {
 		return i18n.Err("assistant-schedule.bad_effort", i18n.Args{"effort": strconv.Quote(t.Effort)})
 	}
 	return checkUntil(t, now)
@@ -1777,7 +1782,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			params := map[string]any{"session_id": t.RunSessionID, "text": taskPrompt(t, due, now, loc, manual, kb, true), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode, "resume_only": true}
 			err := s.applyModel(ctx, "task."+t.ID, params)
 			if err == nil {
-				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
+				err = s.resumeOwn(ctx, m.ID, t.RunSessionID, params)
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.RunMachineID, t.RunSessionID
@@ -1807,6 +1812,26 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	}
 	s.startScheduledRun(run, t, m)
 	return sess, nil
+}
+
+// resumeOwn sends a run into the task's own conversation sid on machine (params: its assistant.send). A conversation
+// whose last turn ended "Not logged in" may have been made in a profile with no login, as every conversation the hub
+// started was until #6015; a conversation cannot move to another profile, so every later run there failed the same way.
+// It is resumed only in the profile the hub's conversations start in (meetingProfile): the node refuses it before
+// starting anything when it is in another one, and the run starts a new conversation, signed in (startConversation),
+// which the task keeps (#6186). One already in that profile is resumed as before, and so is any on a node too old to
+// be told a profile, whose conversations are all in that one. Only Claude Code has profiles: the node refuses a
+// config_dir for Codex or a runtime's conversation every time, so theirs are resumed as before.
+func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map[string]any) error {
+	if c, ok := s.session(ctx, machine, sid); ok && signedOut(c) && (c.Agent == "" || c.Agent == "claude") {
+		params["config_dir"] = meetingProfile
+	}
+	err := s.call(ctx, machine, DeviceAssistantSend, params, nil)
+	if _, asked := params["config_dir"]; asked && nodeOutdated(err) {
+		delete(params, "config_dir")
+		err = s.call(ctx, machine, DeviceAssistantSend, params, nil)
+	}
+	return err
 }
 
 // oneOffNotStarted: a one-off's scheduled run could not even start (its machine offline, the launcher not starting, no
