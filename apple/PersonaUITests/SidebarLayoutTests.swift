@@ -24,10 +24,13 @@ final class SidebarLayoutTests: XCTestCase {
         self.hub = hub
     }
 
-    @MainActor private func launch(_ extra: [String]) {
+    /// The launch pins the Sidebar layout (`-app.navigation`), which the setting cannot change while it is pinned.
+    @MainActor private func launch(_ extra: [String], layoutPinned: Bool = true) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-app.navigation", "sidebar", "-dev.openChat", ""] + extra
+        // `-holdChromeOpen`: an Agent's chat keeps its header open (its title), as the other chat tests do.
+        let layout = layoutPinned ? ["-app.navigation", "sidebar"] : []
+        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-holdChromeOpen", "YES"] + layout + extra
         app.launchPinned()
     }
 
@@ -170,17 +173,26 @@ final class SidebarLayoutTests: XCTestCase {
         }
     }
 
-    /// Settings › Appearance › Navigation: Separate brings the tabs back at once, Settings still open on its page.
+    /// Settings › Appearance › Navigation, not pinned at launch: Sidebar takes the app over at once with Settings still
+    /// open on its page, and Separate brings the tabs back (the app is left in Separate, the default).
     @MainActor func testTheChoiceAppliesAtOnce() {
-        launch(["-tab", "settings", "-openAppearance", "navigation"])
+        launch(["-tab", "settings", "-openAppearance", "navigation"], layoutPinned: false)
         let separate = element("navigation-layout-separate"), sidebar = element("navigation-layout-sidebar")
         XCTAssertTrue(separate.waitForExistence(timeout: 20), "no Navigation page:\n\(app.debugDescription)")
-        XCTAssertTrue(sidebar.isSelected, "Sidebar is not the one chosen")
+        func pick(_ choice: XCUIElement, _ step: String) {
+            choice.tap()
+            let chosen = NSPredicate { _, _ in choice.exists && choice.isSelected }
+            XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: chosen, object: NSNull())], timeout: 10),
+                           .completed, "\(step): not chosen, or Settings closed:\n\(app.debugDescription)")
+        }
+        pick(sidebar, "Sidebar")
         shot("setting")
-        separate.tap()
-        XCTAssertTrue(separate.waitForExistence(timeout: 10), "Settings closed:\n\(app.debugDescription)")
-        let chosen = NSPredicate { _, _ in separate.isSelected }
-        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: chosen, object: NSNull())], timeout: 10), .completed)
+        app.buttons["settings-close"].firstMatch.tap()
+        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 10), "the Sidebar layout did not come:\n\(app.debugDescription)")
+        // Settings again from the sidebar's foot, on the page it was on (the path is the app's).
+        element("sidebar-settings").tap()
+        XCTAssertTrue(separate.waitForExistence(timeout: 10), "Settings is not on Navigation:\n\(app.debugDescription)")
+        pick(separate, "Separate")
         app.buttons["settings-close"].firstMatch.tap()
         XCTAssertTrue(app.buttons["Agents"].firstMatch.waitForExistence(timeout: 10), "the tabs did not come back:\n\(app.debugDescription)")
         XCTAssertFalse(element("unified-sidebar").exists, "the Sidebar layout is still there")

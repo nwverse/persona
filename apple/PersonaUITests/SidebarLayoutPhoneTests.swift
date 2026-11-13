@@ -18,10 +18,13 @@ final class SidebarLayoutPhoneTests: XCTestCase {
         self.hub = hub
     }
 
-    @MainActor private func launch(_ extra: [String]) {
+    /// The launch pins the Sidebar layout (`-app.navigation`), which the setting cannot change while it is pinned.
+    @MainActor private func launch(_ extra: [String], layoutPinned: Bool = true) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-app.navigation", "sidebar", "-dev.openChat", ""] + extra
+        // `-holdChromeOpen`: an Agent's chat keeps its header open (its title), as the other chat tests do.
+        let layout = layoutPinned ? ["-app.navigation", "sidebar"] : []
+        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-holdChromeOpen", "YES"] + layout + extra
         app.launchPinned()
     }
 
