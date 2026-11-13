@@ -138,10 +138,11 @@ type groupPlan struct {
 
 // plannedEvent is one event a batch touches: an existing one or a new one (which may continue a done one).
 type plannedEvent struct {
-	existing  string // the event's id; "" a new one
-	messages  []string
-	continues string
-	reopen    *bool // nil means true for a done event; ignored for open and new events
+	existing     string // the event's id; "" a new one
+	messages     []string
+	continues    string
+	reopen       *bool // nil means true for a done event; ignored for open and new events
+	twinDisabled bool  // writeGroup snapshots the AI-twin switch before taking b.mu
 	// The model's words for it; under the fallback only a new one's title and rule tier (the connector's).
 	title, summary, tier, reason string
 	urgent                       bool
@@ -545,6 +546,7 @@ func (s *Service) fallbackGroup(ctx context.Context, c assistantwire.InboxSource
 // the append with its current meta whether it is open or done; only one that no longer exists gets a new event that
 // continues it instead.
 func (s *Service) writeGroup(ctx context.Context, c assistantwire.InboxSource, t connector.InboxThing, plan *groupPlan) {
+	twinDisabled := !s.inboxConfig(ctx).Agent.Enabled // read before taking b.mu below
 	b := &s.inbox
 	b.mu.Lock()
 	b.foldNoise(c.ID, t.Thread, plan)
@@ -573,6 +575,7 @@ func (s *Service) writeGroup(ctx context.Context, c assistantwire.InboxSource, t
 			continue
 		}
 		e.continues = a.Continues // a done event's follow-up continues it (above)
+		e.twinDisabled = twinDisabled
 		if it := s.putEvent(c, t.Thread, e, thing, plan.model); it != nil && !containsItem(saved, it) {
 			saved = append(saved, it)
 		}
@@ -751,7 +754,7 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 	if reopened && it.Agent != nil {
 		// A close note belongs to the filing that just ended, not to the conversation's new turn.
 		it.Agent.Pending = slices.DeleteFunc(it.Agent.Pending, func(n inboxNote) bool { return n.Name == prompts.NoteClosed })
-		if it.Agent.SessionID != "" {
+		if !e.twinDisabled && b.policyTwin(it) != TwinNever && it.Agent.SessionID != "" {
 			// Looking makes handled() true, so escalate queues the new messages to this session regardless of tier.
 			b.setHandling(it, HandlingLooking, "", now)
 		}
