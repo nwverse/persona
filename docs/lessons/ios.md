@@ -2195,3 +2195,18 @@ the page starts loading rather than leaving a banner that no longer does anythin
 Handing the composer something while the card is up has its own trap: the composer focused its field when a picture arrived
 in `composerInbox`, and focusing a field under a sheet closes the sheet. A preview screenshot closed the card it was taken
 from. The chat now tells its composer the card covers it (`composerCovered`), and the picture lands without the keyboard.
+
+## A start that waits for permission takes its turn when it is asked for (2026-11-13, #3407)
+
+The composer's mic started dictation in a `Task` whose `Dictation.start` waited for permission, and stopping checked
+`if dictation.isListening { dictation.stop() }`. Inside that wait (a few milliseconds once granted, the system's prompts
+the first time) nothing was listening yet: a send, leaving the page or saving a to-do stopped nothing, and the start
+listened afterwards into the emptied box. A hold after a tap made a second start that found the microphone in use,
+toasted and ended the hold, while the tap's dictation went on. The TLA+ model in `apple/verify/composer-hold/` found both.
+
+- An action that starts asynchronous work takes its turn in its own synchronous step (`Dictation.start` sets the turn,
+  then makes the task), not when the task first runs: tasks may run in another order than they were made.
+- After every suspension, check that the turn is still yours before taking a shared resource; a start whose turn has
+  passed ends without a word. Make `stop()` pass the turn, and call it unconditionally rather than behind `isListening`.
+- A newer start of the same owner takes over from an older one already holding the resource instead of failing as "in
+  use". Test the orderings with the wait held open (`Dictation.permission`, `DictationTurnTests`) and rerun the model.

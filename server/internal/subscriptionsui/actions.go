@@ -46,6 +46,8 @@ func (p *pages) act(action string, values map[string]string) (wire.ActionResult,
 		return p.recommend(values)
 	case "ask":
 		return p.ask()
+	case "graph":
+		return wire.ActionResult{OpenURL: GraphURL}, nil
 	case "triage_preview":
 		return p.triagePreview()
 	case "run_now":

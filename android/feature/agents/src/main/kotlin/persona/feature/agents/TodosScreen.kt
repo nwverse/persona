@@ -13,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -336,9 +337,14 @@ fun TodosScreen(
         )
     }
 
+    val listState = rememberLazyListState()
+    // The view toggles stay put below the bar, inside the reach of its blurred edge: show the edge only while the
+    // list has scrolled under it. Nothing on the calendar ever does; its grid and time axis scroll in their own boxes.
+    val underTop = remember(view) { if (view == TodosView.Calendar) { { false } } else { { listState.canScrollBackward } } }
     JPage(
         title = stringResource(R.string.agents_todos_title),
         onBack = onBack,
+        underTop = underTop,
         actions = {
             // on the calendar a new to-do is due on the day it shows, all day (iOS TodosView)
             JIconButton(PhIcons.Plus, stringResource(R.string.agents_todo_new), {
@@ -373,6 +379,7 @@ fun TodosScreen(
         }
         LazyColumn(
             Modifier.fillMaxSize(),
+            state = listState,
             contentPadding = PaddingValues(
                 top = padding.calculateTopPadding() + Tokens.Space.s,
                 bottom = padding.calculateBottomPadding() + Tokens.Space.l,

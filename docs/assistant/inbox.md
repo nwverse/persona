@@ -178,7 +178,7 @@ a summary up to 40 characters, and a short reason:
   currently the Lark extension). Hub-owned mail, GitHub, Telegram, and Messages behave unchanged: new items appear immediately, then triage in the background; timing and fallback (no rule tier means noise) remain as before.
   Identify by plugin ownership (`extensionConnectors`, recorded when hub starts a plugin connector and passed each round as `InboxSource.extension`), not name.
   Source subscriptions (#2039) are handed in the same way, one source per subscription with `extension` set: their items carry a fallback tier unless the user chose to wait for the model ([subscriptions.md](../extensions/subscriptions.md) "Destinations").
-  A subscription's rows follow its recipe's `group_by` (#5671): one a thread, or one for the whole subscription, which is triaged as one row like a Lark chat (an item in it that needs the user makes it Needs you). The source also has `counts`, so a move adds the thing's `extra.count` (the items its newest pull brought) to the item's count instead of one; for every other generic connector `extra.count` is not read there and a move counts one.
+  A subscription's rows follow its recipe's `group_by` (#5671): one a thread, or one for the whole subscription, which is triaged as one row like a Lark chat (an item in it that needs the user makes it Needs you). The source also has `counts`, so a move adds the thing's `extra.count` (the items its newest pull brought) to the item's count instead of one; for every other generic connector `extra.count` is not read there and a move counts one. A row is `read` when its recipe maps `seen` and its newest item was seen in the source (#6176), and is then handled like any connector's thing read elsewhere.
 - **Triage before admission (#1644)**: hold new plugin-connector items aside for a collection round (`inbox_admit.go`). After collection, triage in the background; only then write to the database and list them:
   - Model succeeds: use its tier and summary.
   - Model fails, fallback exists: admit by fallback with "Rule-based." **That version is final**, with no retriage on model recovery (only new activity triggers it).
@@ -333,7 +333,7 @@ Settings › Inbox Sources (#5278) shows the same mutes per source on each built
 
 - **Manager** (`assistant/inbox_mutes.go`): mutes live in `inbox_mutes` settings (source + tag + value + name). Each collection handles covered open items, so future
   messages arrive already done. Item mute targets (`mutes`): connector `InboxThing.Tags` (`repo`, `chat`, `sender`; a subscription's rows carry
-  their newest item's `sender`, #5306); Lark chat (`lark.feed_id`) and latest group speaker (`lark.sender_id`); lowercase mail sender address.
+  their newest item's `sender`, #5306, by its `sender_id` when the recipe maps one, and its `chat`, #6165); Lark chat (`lark.feed_id`) and latest group speaker (`lark.sender_id`); lowercase mail sender address.
   Lark Docs and Moments items have none.
 - **GitHub muted repositories**: formerly GitHub connector setting `muted_repos`, now source `github`, tag `repo` mutes. On manager connection,
   hub migrates old entries through `inbox.repo_mutes` and clears them from GitHub settings. Settings › Connectors › GitHub (and old Apps) still read / write `muted_repos`;
