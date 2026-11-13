@@ -230,6 +230,13 @@ func lookOf(c proto.Session) turnLook {
 }
 
 // turnsState is the ledger and what this manager remembers about it; the maps are by todo unless said otherwise.
+//
+// Lock order: mu (the ledger, held across its database reads and writes) and the task lock s.tasks.mu are never held
+// at the same time, in either order; jmu (the judging marks) is a leaf, taken under either of them or alone, and
+// nothing is locked and no I/O is done while it is held.
+//
+// So a ledger write that does not come back keeps the ledger's own callers waiting, and nobody who holds the task
+// lock: that one is taken all over the package (starting tasks, routing messages, cards, stages).
 type turnsState struct {
 	mu     sync.Mutex
 	loaded bool
@@ -242,11 +249,23 @@ type turnsState struct {
 	recovering map[string]bool
 	tries      map[string]int
 	retry      map[string]turnRetry
-	// judging: the end of a turn of the task is being handled (taskJudging).
+	// judging: the end of a turn of the task is being handled (taskJudging). Under jmu, not mu: it is set with the
+	// receipt's reservation and read with it under the task lock (settleTurn, turnStartHeard), which must not wait
+	// for the ledger. The ledger's own looks read it with mu held (settling), so what they read of the ledger and of
+	// the marks is still one moment's.
+	jmu     sync.Mutex
 	judging map[string]int
 	// closed: the sessions whose transcript showed their turn closed, at the row it was read at: an unknown status
 	// there is a stopped agent (rowsProven).
 	closed map[SessionRef]turnLook
+}
+
+// settling: the end of a turn of todo is being handled right now (taskJudging). Callable with the task lock or the
+// ledger's mutex held, or neither (jmu is a leaf).
+func (b *turnsState) settling(todo string) bool {
+	b.jmu.Lock()
+	defer b.jmu.Unlock()
+	return b.judging[todo] > 0
 }
 
 // turnRetry: n looks at row look, over the node's connection that began at conn, could not finish; the next is due
@@ -437,17 +456,15 @@ func (s *Service) turnSeen(ctx context.Context, todo string, last proto.Session,
 }
 
 // turnStartHeard: a start of task id's work was heard that no receipt closed yet (heard), and whether a look is
-// handling an end of it right now (settling; its reservation and its mark are set together, settleTurn).
+// handling an end of it right now (settling). Both are read under the task lock, under which settleTurn sets the
+// reservation and the mark together: there is no moment at which this sees the one without the other. The ledger
+// is not asked (turnsState's lock order).
 func (s *Service) turnStartHeard(id string) (heard, settling bool) {
 	s.tasks.mu.Lock()
 	defer s.tasks.mu.Unlock()
 	work, started := s.tasks.working[id]
 	receipt, receipted := s.tasks.receipted[id]
-	b := &s.tasks.turns
-	b.mu.Lock()
-	settling = b.judging[id] > 0
-	b.mu.Unlock()
-	return started && !(receipted && !receipt.Before(work)), settling
+	return started && !(receipted && !receipt.Before(work)), s.tasks.turns.settling(id)
 }
 
 // turnJudged keeps on the ledger the judgment written for todo's turn: c, the error when the judge could not say,
@@ -619,10 +636,11 @@ func (s *Service) rowsProven(agents []proto.Session) []proto.Session {
 
 // taskJudging marks the end of a turn of todo as being handled, from its receipt's reservation to its judgment
 // (taskTurnSettled, autoFinishTask; n: +1 when one starts, -1 when it ends): the sweep leaves the task alone meanwhile.
+// It is in memory only and never waits for the ledger: settleTurn calls it with the task lock held.
 func (s *Service) taskJudging(todo string, n int) {
 	b := &s.tasks.turns
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.jmu.Lock()
+	defer b.jmu.Unlock()
 	if b.judging[todo] += n; b.judging[todo] <= 0 {
 		delete(b.judging, todo)
 	}
@@ -751,7 +769,7 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 		s.saveTurnsLocked(ctx)
 	}
 	since := b.doc.Since
-	settling := b.judging[t.ID] > 0
+	settling := b.settling(t.ID) // with the ledger's mutex held: the turn on the ledger and the mark are one moment's
 	b.mu.Unlock()
 	current, ok := s.todoNow(t.ID)
 	if !ok || current.DoneAt != nil || current.Supervision == nil {
@@ -809,7 +827,7 @@ func (s *Service) resumeTurn(ctx context.Context, t Todo, e taskTurn) (looked bo
 	}
 	b := &s.tasks.turns
 	b.mu.Lock()
-	judging := b.judging[t.ID] > 0
+	judging := b.settling(t.ID)
 	if !judging {
 		b.tries[t.ID]++
 	}

@@ -151,7 +151,7 @@ func turnsQuiet(t *testing.T, s *Service, todo string) {
 		b := &s.tasks.turns
 		b.mu.Lock()
 		defer b.mu.Unlock()
-		return b.judging[todo] == 0 && !b.recovering[todo]
+		return !b.settling(todo) && !b.recovering[todo]
 	})
 }
 

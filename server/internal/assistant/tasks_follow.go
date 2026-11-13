@@ -349,7 +349,10 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 	}
 	reserved := time.Now()
 	s.tasks.receipted[t.ID] = reserved
-	s.taskJudging(t.ID, 1) // with the reservation: the sweep leaves this turn alone while its end is handled here (task_turns.go)
+	// With the reservation, under the task lock: no look sees the one without the other (turnStartHeard), and the
+	// sweep leaves this turn alone while its end is handled here. The mark is in memory: nothing here waits for the
+	// ledger, whose mutex is held across its database writes (turnsState's lock order, task_turns.go).
+	s.taskJudging(t.ID, 1)
 	s.tasks.mu.Unlock()
 	defer s.taskJudging(t.ID, -1)
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)

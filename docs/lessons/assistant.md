@@ -511,3 +511,9 @@ keyed to the event that told of the turn, not to the turn.
   that retries every tick reads the same transcript for hours.
 - Compare rows by what says the thing changed. The transcript's size says it was written to; the row's time can move
   on a later list with nothing written, and a row compared on both was never the same row twice.
+- A mutex that is held across database calls must not be reachable from under a hot lock. The ledger's mutex is
+  held across its reads and writes; a counter that happened to live under it was read and set with the task lock
+  held, so one stuck write would have parked every user of the task lock behind it. Before putting a field under a
+  lock, ask who reads it and what they hold: in-memory state that a hot path needs gets a lock that is held across
+  nothing, and the order is written on the struct in one sentence a reader can check. Test it by stalling the store,
+  not by reading the code.
