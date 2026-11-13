@@ -16,7 +16,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -106,11 +106,11 @@ class InboxSectionHeaderShotsTest {
             rule.waitForIdle()
             rule.onAllNodes(hasText("Needs you") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)).assertCountEquals(1)
             if (scale == 1f) rule.onNodeWithText("Mark all as read").assertExists()
-            else rule.onNodeWithContentDescription("More").assertExists()
+            else rule.onNodeWithTag("inbox.section.overflow").assertExists()
             capture("${appearance.name.lowercase()}-${if (night) "dark" else "light"}-${scale}x")
         }
         rule.runOnIdle { style = AppStyle.Brief; dark = false; fontScale = 2f }
-        rule.onNodeWithContentDescription("More").performClick()
+        rule.onNodeWithTag("inbox.section.overflow").performClick()
         rule.onNodeWithText("Mark all as read").assertExists()
         rule.onNodeWithText("Collapse").assertExists()
     }

@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
@@ -220,7 +221,8 @@ fun JSectionHeader(
         val right = if (overflow) subcompose("overflow") {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Spacer(Modifier.width(8.dp.dense))
-                JIconButton(PhIcons.DotsThree, stringResource(R.string.designsystem_more), { menu = true }, raised = false)
+                JIconButton(PhIcons.DotsThree, stringResource(R.string.designsystem_more), { menu = true }, raised = false,
+                    modifier = Modifier.testTag("inbox.section.overflow"))
                 JMenu(menu, { menu = false }, buildList {
                     trailing?.let { add(JAction(it, enabled = onClick != null, onClick = { onClick?.invoke() })) }
                     addAll(overflowActions)

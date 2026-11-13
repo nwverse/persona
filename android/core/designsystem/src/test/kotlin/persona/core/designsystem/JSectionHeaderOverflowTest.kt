@@ -9,7 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
@@ -54,14 +54,14 @@ class JSectionHeaderOverflowTest {
         rule.onNodeWithText("Needs you").assertExists()
         rule.onNodeWithText("2").assertExists()
         rule.onNodeWithText("Collapse").assertExists()
-        rule.onNodeWithContentDescription("More").assertDoesNotExist()
+        rule.onNodeWithTag("inbox.section.overflow").assertDoesNotExist()
     }
 
     @Test fun fittingHeaderKeepsItsOrdinaryActions() {
         show(1f)
         rule.onNodeWithText("Needs you").assertExists()
         rule.onNodeWithText("Mark all as read").assertExists()
-        rule.onNodeWithContentDescription("More").assertDoesNotExist()
+        rule.onNodeWithTag("inbox.section.overflow").assertDoesNotExist()
     }
 
     @Test fun overflowingHeaderKeepsTheWholeTitleAndMovesActionsIntoTheMenuWithoutOscillating() {
@@ -81,15 +81,15 @@ class JSectionHeaderOverflowTest {
         }
         rule.onNodeWithText("Needs you").assertExists()
         rule.onNodeWithText("Mark all as read").assertDoesNotExist()
-        rule.onNodeWithContentDescription("More").assertExists()
+        rule.onNodeWithTag("inbox.section.overflow").assertExists()
         repeat(2) {
             rule.runOnIdle { recompositions++ }
             rule.waitForIdle()
             rule.onNodeWithText("Needs you").assertExists()
-            rule.onNodeWithContentDescription("More").assertExists()
+            rule.onNodeWithTag("inbox.section.overflow").assertExists()
             rule.onNodeWithText("Mark all as read").assertDoesNotExist()
         }
-        rule.onNodeWithContentDescription("More").performClick()
+        rule.onNodeWithTag("inbox.section.overflow").performClick()
         rule.onNodeWithText("Mark all as read").assertExists()
         rule.onNodeWithText("Collapse").assertExists()
     }
