@@ -8200,13 +8200,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%1$lld message from another conversation is waiting [Queue Strip]"
+                  "value" : "%1$lld message from another conversation is waiting"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%1$lld messages from other conversations are waiting [Queue Strip]"
+                  "value" : "%1$lld messages from other conversations are waiting"
                 }
               }
             }
@@ -8215,13 +8215,13 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "別の会話からのメッセージが %1$lld 件待機中 [Queue Strip]"
+            "value" : "別の会話からのメッセージが %1$lld 件待機中"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "还有 %1$lld 条别的对话在排队 [Queue Strip]"
+            "value" : "还有 %1$lld 条别的对话在排队"
           }
         }
       }
