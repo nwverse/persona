@@ -101,6 +101,7 @@ struct InboxPage: View {
     @State private var showingRules = false     // Rules
     @State private var showingSubscriptions = false  // source subscriptions (#2041)
     @State private var ruling: InboxPolicyTarget? // a row's Rule for This Chat / Sender / Repository…
+    @State private var todoRequest: InboxTodoRequest? // rows waiting for their to-do's due time (#6480)
     @State private var confirming = false // Clear All over many items asks first
     /// Selecting (#2059): the picked items' keys (`InboxItem.key`); nil when not selecting. Marking stays in Persona (done, with Undo).
     @State private var picked: Set<String>?
@@ -192,6 +193,7 @@ struct InboxPage: View {
                 .sheet(isPresented: $showingRules) { InboxRulesView() }
                 .sheet(isPresented: $showingSubscriptions) { SubscriptionsSheet() }
                 .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
+                .sheet(item: $todoRequest) { InboxDueSheet(request: $0) }
                 .confirmationDialog(InboxBulk.confirmTitle, isPresented: $confirming, titleVisibility: .visible) {
                     Button(InboxBulk.confirmButton(count: cleanScope.count)) { clean(confirmed: true) }
                         .accessibilityIdentifier("inbox.cleanConfirm")
@@ -258,6 +260,20 @@ struct InboxPage: View {
                             try? await Task.sleep(for: .milliseconds(800))
                             store.setDone(chosen(picked ?? []), true)
                             picked = nil
+                        }
+                    }
+                    // `-showInboxDue YES` / `-showInboxMerge YES` / `-showInboxTodo YES`: Select with the first two rows picked and the
+                    // due sheet open / those two merged / those two added to to-dos for today (#6480 screenshots).
+                    let actionKeys = ["showInboxDue", "showInboxMerge", "showInboxTodo"].filter { UserDefaults.standard.bool(forKey: $0) }
+                    if let action = actionKeys.first {
+                        for _ in 0..<20 where store.open.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
+                        picked = Set(pickable.prefix(2).map(\.key))
+                        try? await Task.sleep(for: .milliseconds(800))
+                        let two = chosen(picked ?? [])
+                        switch action {
+                        case "showInboxDue": todoRequest = InboxTodoRequest(items: two) { picked = nil }
+                        case "showInboxMerge": store.merge(two) { picked = nil }
+                        default: store.addTodos(two, due: .today) { picked = nil }
                         }
                     }
                     // `-showInboxDone YES`: the first group's Done open and scrolled to, its groups' titles sticking (#2059 screenshots).
@@ -507,6 +523,21 @@ struct InboxPage: View {
                 .accessibilityIdentifier("inbox.selectDone")
         }
         ToolbarItemGroup(placement: .bottomBar) {
+            // Merge: the picked rows become one row (undoable); Add to To-Dos asks the due time. Each ends selecting when it went
+            // through. Merge needs two rows of one manager.
+            Button("Merge") {
+                store.merge(chosen) { withAnimation(Theme.Motion.standard) { self.picked = nil } }
+            }
+            .disabled(!InboxStore.canMerge(chosen))
+            .accessibilityIdentifier("inbox.mergePicked")
+            Menu {
+                InboxDueButtons(add: { due in addTodos(chosen, due) }, pick: { todoRequest = InboxTodoRequest(items: chosen) { self.picked = nil } })
+            } label: {
+                Label("Add to To-Dos", systemImage: Theme.Icon.todo).labelStyle(.iconOnly)
+            }
+            .disabled(chosen.isEmpty)
+            .accessibilityLabel("Add to To-Dos")
+            .accessibilityIdentifier("inbox.todoPicked")
             Spacer()
             // One request, versions checked, Undo on the toast (InboxStore.setDone); selecting ends.
             Button("Mark as Done") {
@@ -518,6 +549,11 @@ struct InboxPage: View {
             .disabled(chosen.isEmpty)
             .accessibilityIdentifier("inbox.markPickedDone")
         }
+    }
+
+    /// Add to To-Dos with a due: one to-do per row; selecting ends once they were added.
+    private func addTodos(_ items: [InboxItem], _ due: InboxDue) {
+        store.addTodos(items, due: due) { withAnimation(Theme.Motion.standard) { self.picked = nil } }
     }
 
     private func pick(_ it: InboxItem) {
@@ -890,6 +926,9 @@ struct InboxPage: View {
             Button { store.setDone(it, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }
         } else {
             Button { store.setDone(it, true) } label: { Label("Done [Inbox View 59f6c8]", systemImage: Theme.Icon.done) }
+            Menu {
+                InboxDueButtons(add: { store.addTodos([it], due: $0) }, pick: { todoRequest = InboxTodoRequest(items: [it]) })
+            } label: { Label("Add to To-Dos", systemImage: Theme.Icon.todo) }
         }
         if let mutes = it.mutes, !mutes.isEmpty {
             Section {
@@ -1058,6 +1097,11 @@ struct InboxRow: View {
                 }
                 if showAccount && !item.isLark {
                     Text(item.accountName).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                if let merged = item.mergedFrom?.count, merged > 0 {
+                    // Rows merged into this one (#6480): plain grey small text
+                    Text("Merged from \(merged + 1) rows").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .accessibilityIdentifier("inbox.mergedFrom")
                 }
                 if let now, !item.isDone {
                     nowLine(now)
@@ -1329,6 +1373,7 @@ struct InboxDetailView: View {
     @State private var drafting = false
     @State private var handingOff = false
     @State private var ruling: InboxPolicyTarget?
+    @State private var todoRequest: InboxTodoRequest?
     @State private var slot: InboxItemSlotModel
 
     init(item: InboxItem, accounts: [MailAccount]) {
@@ -1346,6 +1391,7 @@ struct InboxDetailView: View {
             }
             .sheet(isPresented: $handingOff) { InboxHandOffSheet(item: current) }
             .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
+            .sheet(item: $todoRequest) { InboxDueSheet(request: $0) }
             #if DEBUG
             // `-showInboxAction draft|handoff`: open that sheet (screenshots).
             .task {
@@ -1357,9 +1403,18 @@ struct InboxDetailView: View {
             }
             #endif
             .pageToolbar {
-                if let mutes = current.mutes, !mutes.isEmpty {
+                if !current.isDone || !(current.mutes ?? []).isEmpty {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Menu { InboxRuleButtons(item: current) { ruling = $0 } } label: { ThemedIcon(Theme.Icon.moreMenu) }
+                        Menu {
+                            if !current.isDone {
+                                // Add to To-Dos (#6480): the row counts as handled, so the page closes like Done
+                                Menu {
+                                    InboxDueButtons(add: { InboxStore.shared.addTodos([current], due: $0) { dismiss() } },
+                                                    pick: { todoRequest = InboxTodoRequest(items: [current]) { dismiss() } })
+                                } label: { Label("Add to To-Dos", systemImage: Theme.Icon.todo) }
+                            }
+                            if !(current.mutes ?? []).isEmpty { InboxRuleButtons(item: current) { ruling = $0 } }
+                        } label: { ThemedIcon(Theme.Icon.moreMenu) }
                             .accessibilityLabel("More")
                             .accessibilityIdentifier("inbox.detail.more")
                     }
