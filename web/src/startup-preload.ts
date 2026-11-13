@@ -251,8 +251,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * And 162 B for restoring expanded Needs you title navigation and hydrating off-page question sessions (#6432:
  * main at f0c995f923 measured ja 477,957 B; sharing the header's label and chevron takes this fix to 478,119 B,
  * +162 B, keeping main's 11 B of room). Keep only this feature's measured allowance on top of main's changes.
+ * And 172 B for the Agents fold-all button that acts on the list under the controls, and a to-do's first five decisions
+ * (#6447: ja 478,291 B against 478,119 B on main at 2e57ac117: the button's rule (fold the groups to their headings,
+ * open a list folded under its title, no button where there is nothing to fold to), its two icons (corners in for
+ * Collapse all, out for Expand all) and its name as the tooltip, less the two list-menu items it replaces and the
+ * Recent row's ⓘ words, and the decisions' words in the to-dos' catalog; main's 11 B of room stay).
  */
-export const FIRST_SCREEN_BUDGET = 478_130;
+export const FIRST_SCREEN_BUDGET = 478_302;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -426,13 +431,14 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
  * query typed, off the idle tier; 31 B of room so the next main does not tip it). And 108 B for the same main
  * with the lead row-title restoration (#6400: 44,583 B after merging it, +108 B, of which 0 B fit the old room).
+ * And 141 B for the later additions: 44,724 B as measured, with 0 B of room.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  * The foldable sidebar Recent (#6228) adds nothing to this tier: the fold stays on the first screen. On main at
  * eaa68818e the idle pages send 44,608 B (25 B over the 44,583 B ceiling from the intervening #6458 / #5935 growth), and
  * this branch measures 44,585 B — 23 B less than main, two over the old ceiling; the ceiling moves to 44,608 B so it
  * covers main, 0 B of room for this branch's measured 44,585 B.
  */
-export const IDLE_TIER_BUDGET = 44_608;
+export const IDLE_TIER_BUDGET = 44_734;
 
 const gzip = promisify(gzipCompress);
 
