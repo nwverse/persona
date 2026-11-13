@@ -15332,8 +15332,105 @@ def mock_peer_fold():
                          "有一件要你定：版本切换后搜索的范围。"))
 
 
-if os.environ.get("MOCK_PEER_FOLD") == "1":
+# Also with MOCK_PEER_FOLD=1 (or =live: its session pushed again every 1.5 s): work lines right under a long message from
+# another session, folded to a few lines with Expand (#6645: the folded words still took the long presses below the
+# card, so a long press on the answer under it lifted the card). A working Agent chat: the exchange reported (a tool
+# and a reply in its work line, 37 minutes long, a 2 KB answer); one with tools only; one with a reply only; then the
+# running one, its last tool still going. Synthetic text.
+PEER_FOLD = "a1f3c2d4-0000-4000-8000-000000006645"
+PEER_REPORT = ("合并队列的进展：\n"
+               "- 发布分支已经合上最新的主干，只有一个说明文件冲突，已经解决，不用变基。\n"
+               "- 打包脚本拆成构建和上传两步以后，构建在本机 3 分钟内跑完，上传单独重试。\n"
+               "- 弹窗的单测现在是 62 个，全部通过；界面测试还差两条，在跑。\n"
+               "- 要不要放进下一个小版本，由你和它定；我这边可以随时排进队列。\n"
+               "- 截图在 PR 里，深浅色各一套。\n"
+               "- 下一步：等界面测试跑完再报一次。\n"
+               "最后一行在这里。")
+# The reported exchange as the real one was shaped: a message from another session in English, folded to three lines;
+# a reply and the turn's end; 37 minutes later a background agent's result woke the agent (a wake tool_result, its call
+# on an earlier page), it sent a message, and a long answer came (about 2 KB, drawn in several rows).
+PEER_EN_REPORT = ("Got feature-split 1a2b3c4d. It merges onto the new main with only a .lane/REPORT.md conflict, so no "
+                  "rebase is needed. Whether it ships in the next patch release is up to you and the lead; I queued it "
+                  "behind the two open fixes. The popup count in PopupTests is now 62, all passing; two UI tests are "
+                  "still running and I will report again when they finish. Screenshots for light and dark are in the PR.")
+PEER_LONG_ANSWER = ("已经回复 release-worker，等它的界面测试结果。构建脚本的新版本也做完了，在 `core` 的 `build-split` 分支上，"
+                    "提交 `5e6f7a8b`，没有推送或合并；分支已经交给 release-worker 排进合并队列。\n\n"
+                    "**做了什么**\n"
+                    "- **拆分**：`release.sh` 现在分成构建和上传两步，上传失败只重试上传，不再从头构建；两步之间的产物放在 `dist/`，带校验和。\n"
+                    "- **结果**：原来一次失败要重跑 12 分钟，现在重试上传只要 40 秒；三次模拟的上传失败都在第二次重试时成功。\n"
+                    "- **没改 core 以外的文件**：守护进程和配置都不用改，旧的一步式命令还能用，会打印一行提示换成新命令。\n\n"
+                    "**验证**\n"
+                    "- 离线：`go build` 和 `go vet` 干净，`go test ./...` 全过（含新加的 9 个用例）。\n"
+                    "- 本机：完整走了一遍构建、上传、校验，产物和旧脚本逐字节一致。\n"
+                    "- 失败注入：上传中途断网三次，每次都只重试了上传，日志里能看到重试次数和耗时。\n"
+                    "- 兼容：旧的一步式命令在三台不同的构建机上各跑了一遍，结果和新命令一致，提示行也都打印出来了。\n"
+                    "- 回滚：把分支回退到拆分前再跑一遍，产物和拆分后的逐字节一致，说明拆分没有改动构建本身。\n\n"
+                    "**风险**\n"
+                    "- 上传那一步换了重试的写法，网络特别慢的时候第一次重试会等满 30 秒才开始，日志里会多一行等待提示，不影响结果。\n"
+                    "- 产物目录 `dist/` 现在会留到下一次构建开始才清，磁盘紧张的机器上要注意，我在说明里写了一句。\n"
+                    "- 旧命令的提示只打印一次，长期跑在定时任务里的机器可能看不到，建议发版说明里专门提一下。\n\n"
+                    "**还没做**\n"
+                    "- 文档里的发布步骤还是旧的一步式写法，等合并后一起改。\n"
+                    "- 签名证书下个月到期，下一次发版前要换，已经记进待办。\n"
+                    "- 是否放进下一个小版本，等你和 release-worker 定。")
+
+
+def mock_peer_fold_work():
+    items = [it("user", "text", 70, text="把发布脚本拆成构建和上传两步"),
+             *tool("Edit", {"file_path": "/Users/me/code/shop-app/scripts/release.sh", "old_string": "build && upload",
+                            "new_string": "build\nupload"}, "ok", 69),
+             it("assistant", "text", 68, text="拆好了：构建和上传现在是两步，上传失败只重试上传。")]
+    # The case reported, shaped as it was (see PEER_EN_REPORT): its work line reads "Tools 1 · Replies 1 · 37 min".
+    items += [it("user", "text", 62, text=PEER_EN_REPORT, **{"from": "release-worker"}),
+              it("assistant", "text", 61.9, text="先回它一句，说收到了；构建脚本那边还在后台跑，跑完再一起报。"),
+              it("system", "turn_duration", 61.9, turn_duration={"duration_ms": 7000}),
+              it("user", "tool_result", 25, tool_use_id="toolu_peer_fold_bg", text="构建脚本拆分完成，验证全过。", wake=True,
+                 task={"kind": "agent", "status": "completed", "title": "拆分构建脚本", "task_id": "bgsplit",
+                       "tool_use_id": "toolu_peer_fold_bg", "output_file": "/tmp/claude/bgsplit.output", "detail": "完成"}),
+              *tool("SendMessage", {"to": "release-worker", "message": "收到，界面测试跑完再报。"}, "sent", 24.8),
+              it("assistant", "text", 24.6, text=PEER_LONG_ANSWER),
+              it("system", "turn_duration", 24.6, turn_duration={"duration_ms": 26000})]
+    # Tools only.
+    items += [it("user", "text", 20, text=PEER_REPORT, **{"from": "docs-worker"}),
+              *tool("Read", {"file_path": "/Users/me/code/shop-app/docs/release.md"}, "# 发布", 19.6),
+              *tool("Bash", {"command": "git log --oneline -3", "description": "看最近的提交"}, "a1b2c3d 拆分发布脚本", 19.2),
+              it("assistant", "text", 18, text="发布文档和最近的提交都对得上，不用改。")]
+    # A reply only.
+    items += [it("user", "text", 15, text=PEER_REPORT, **{"from": "release-worker"}),
+              it("assistant", "text", 14.6, text="这条只是进展，不需要动手。"),
+              it("assistant", "text", 14, text="记下了，等它下一次报告。")]
+    # Running: a reply, a tool, then a tool still going.
+    items += [it("user", "text", 4, text=PEER_REPORT, **{"from": "docs-worker"}),
+              it("assistant", "text", 3.8, text="先跑一遍界面测试确认。"),
+              *tool("Bash", {"command": "npm run test:ui -- popup", "description": "跑弹窗的界面测试"}, "60 passed", 3.5),
+              it("assistant", "text", 3, text="还差两条，接着跑。"),
+              it("assistant", "tool_use", 2.9, tool_use_id="toolu_peer_fold_running", tool_name="Bash",
+                 tool_input={"command": "npm run test:ui -- popup --last-two", "description": "跑剩下两条"})]
+    ITEMS[PEER_FOLD] = items
+    SESSIONS.append(sess("macbook", PEER_FOLD, "发布脚本拆分", "/Users/me/code/shop-app", "working", "working", "shop-app", 22,
+                         "peers", 1, 0, "还差两条，接着跑。",
+                         background=[{"id": "bkload", "kind": "shell", "description": "压测第 1 轮", "command": "npm run load -- round1",
+                                      "output_file": "/tmp/claude/bkload.output", "started_at": ago(minutes=40)}]))
+
+
+def peer_fold_ticker():
+    """MOCK_PEER_FOLD=live: the session's row again every 1.5 s (a new rev and time, nothing else), as the hub sends it
+    while background work goes on: the reported chat was running when its work line would not open."""
+    while True:
+        time.sleep(1.5)
+        push = globals().get("push_machine")  # defined further down; the thread starts while the module still loads
+        if push is None:
+            continue
+        row = next(x for x in SESSIONS if x["session_id"] == PEER_FOLD)
+        row.update(updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), rev=(row.get("rev") or 0) + 1)
+        push("macbook")
+
+
+if os.environ.get("MOCK_PEER_FOLD") in ("1", "live"):
     mock_peer_fold()
+    mock_peer_fold_work()
+    if os.environ.get("MOCK_PEER_FOLD") == "live":
+        threading.Thread(target=peer_fold_ticker, daemon=True).start()
 
 
 # MOCK_LONG_INPUT=1: your own long message folds (#5676): an Agent chat with a long pasted report (past 14 lines on a

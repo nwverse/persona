@@ -234,8 +234,9 @@ nonisolated final class ScreenVideoStream: @unchecked Sendable {
     private func watch() async throws {
         while !Task.isCancelled {
             try await Task.sleep(for: .milliseconds(250))
-            let (at, any, quiet) = lock.withLock { (heardAt, heardAny, quiet) }
-            if !quiet, ContinuousClock.now - at > (any ? silence : Self.opening) { throw Ended(why: .silent) }
+            // Typed, and named apart from the `quiet` property it reads: inferred, the tuple crashed the type checker.
+            let (at, any, paused): (ContinuousClock.Instant, Bool, Bool) = lock.withLock { (heardAt, heardAny, quiet) }
+            if !paused, ContinuousClock.now - at > (any ? silence : Self.opening) { throw Ended(why: .silent) }
         }
     }
 
