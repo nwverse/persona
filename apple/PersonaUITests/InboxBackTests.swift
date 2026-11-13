@@ -49,9 +49,9 @@ final class InboxBackTests: XCTestCase {
         guard app.windows.firstMatch.frame.width > 600 else { throw XCTSkip("needs an iPad or an open Duo") }
     }
 
-    @MainActor private func openDetail() {
+    @MainActor private func openDetail(_ step: String) {
         launch(["-tab", "mail", "-openInboxItem", Self.itemID])
-        assertDetail("opened")
+        assertDetail(step)
     }
 
     @MainActor private func assertDetail(_ step: String) {
@@ -73,6 +73,10 @@ final class InboxBackTests: XCTestCase {
         let row = chainRow(text)
         if !row.exists {
             let all = app.buttons["inbox.chain.all"].firstMatch
+            for _ in 0..<5 where all.exists && !all.isHittable {
+                app.swipeUp()
+                _ = all.waitForExistence(timeout: 2)
+            }
             if all.waitForExistence(timeout: 5) { all.tap() }
         }
         for _ in 0..<5 where !row.exists || !row.isHittable {
@@ -109,7 +113,7 @@ final class InboxBackTests: XCTestCase {
     }
 
     @MainActor func testPhoneTimelineChatsSwipeBackToTheItem() throws {
-        openDetail()
+        openDetail("phone-detail")
         try requirePhone()
 
         openChat(revealChainRow("管理者处理"), "phone-handling-chat")
@@ -122,9 +126,9 @@ final class InboxBackTests: XCTestCase {
     }
 
     @MainActor func testWideTimelineChatsSwipeBackBesideTheSidebar() throws {
-        openDetail()
+        openDetail("wide-detail")
         try requireWide()
-        assertWideSidebar("wide-detail")
+        assertWideSidebar("wide-sidebar-initial")
 
         openChat(revealChainRow("管理者处理"), "wide-handling-chat")
         swipeBack()
@@ -154,7 +158,7 @@ final class InboxBackTests: XCTestCase {
     }
 
     @MainActor func testHandOffViewSwipesBackToTheItem() throws {
-        openDetail()
+        openDetail("handoff-detail")
         try requirePhone()
         let chip = app.buttons["handoff-chip-summarize"].firstMatch
         XCTAssertTrue(chip.waitForExistence(timeout: 15), "no Hand to AI chip")
@@ -165,6 +169,8 @@ final class InboxBackTests: XCTestCase {
 
         let composer = app.descendants(matching: .any)["shell-composer-field"].firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 20), "View did not open the handed-off conversation")
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].firstMatch.waitForExistence(timeout: 5),
+                      "the handed-off conversation is not pushed over the item")
         shot("phone-handoff-chat")
         swipeBack()
         assertDetail("phone-handoff-back")

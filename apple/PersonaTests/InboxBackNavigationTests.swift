@@ -17,6 +17,13 @@ struct InboxBackNavigationTests {
         """#.utf8))
     }
 
+    private func keepingDefaults(_ body: () throws -> Void) rethrows {
+        let keys = ["assistant.current", "dev.openChat", "app.tab"]
+        let saved = keys.map { (key: $0, value: UserDefaults.standard.object(forKey: $0)) }
+        defer { for entry in saved { UserDefaults.standard.set(entry.value, forKey: entry.key) } }
+        body()
+    }
+
     @Test func automaticMainSelectionKeepsPagesButUserSelectionsDoNot() {
         #expect(AssistantCurrentNavigation.keepsPushedPages(old: nil, new: Self.main, main: Self.main))
         #expect(!AssistantCurrentNavigation.keepsPushedPages(old: nil, new: Self.other, main: Self.main))
@@ -36,67 +43,75 @@ struct InboxBackNavigationTests {
 
     /// Both waiting-Agent rows (the inbox list and the new-chat page) share the chain's existing session decision.
     @Test func waitingAgentRowsPushWithoutMovingEitherTab() {
-        let model = AppModel()
-        model.selectedTab = .assistant
-        model.openChat = nil
-        let tab = model.selectedTab, current = model.assistantCurrent
-        var pushed: [InboxChatRoute] = []
-        InboxEventOpen.session(Self.other, manager: false, owner: nil, model: model) { pushed.append($0) }
-        #expect(pushed == [InboxChatRoute(key: model.inHub(Self.other), manager: nil)])
-        #expect(model.selectedTab == tab && model.assistantCurrent == current && model.openChat == nil)
+        keepingDefaults {
+            let model = AppModel()
+            model.selectedTab = .assistant
+            model.openChat = nil
+            let tab = model.selectedTab, current = model.assistantCurrent
+            var pushed: [InboxChatRoute] = []
+            InboxEventOpen.session(Self.other, manager: false, owner: nil, model: model) { pushed.append($0) }
+            #expect(pushed == [InboxChatRoute(key: model.inHub(Self.other), manager: nil)])
+            #expect(model.selectedTab == tab && model.assistantCurrent == current && model.openChat == nil)
 
-        InboxEventOpen.session(Self.other, manager: false, owner: nil, model: model)
-        #expect(model.selectedTab == .chats && model.openChat == Self.other)
+            InboxEventOpen.session(Self.other, manager: false, owner: nil, model: model)
+            #expect(model.selectedTab == .chats && model.openChat == Self.other)
+        }
     }
 
     /// The direct Thread row and a to-do sheet's Agent row use the same route and the item's manager.
     @Test func threadAgentRowsPushTheItemsManagerOrKeepTheTodoFallback() {
-        let model = AppModel()
-        model.openChat = nil
-        var pushed: [InboxChatRoute] = []
-        InboxLineOpen.agent(Self.other, owner: "m2", model: model) { pushed.append($0) }
-        #expect(pushed == [InboxChatRoute(key: model.inHub(Self.other), manager: "m2")])
-        #expect(model.openChat == nil)
+        keepingDefaults {
+            let model = AppModel()
+            model.openChat = nil
+            var pushed: [InboxChatRoute] = []
+            InboxLineOpen.agent(Self.other, owner: "m2", model: model) { pushed.append($0) }
+            #expect(pushed == [InboxChatRoute(key: model.inHub(Self.other), manager: "m2")])
+            #expect(model.openChat == nil)
 
-        InboxLineOpen.agent(Self.other, owner: "m2", model: model)
-        #expect(model.selectedTab == .chats && model.openChat == model.inHub(Self.other))
+            InboxLineOpen.agent(Self.other, owner: "m2", model: model)
+            #expect(model.selectedTab == .chats && model.openChat == model.inHub(Self.other))
+        }
     }
 
     @Test func connectorSummaryPushesItsManagerOrUsesTheOriginalAssistantOpen() {
-        let model = AppModel()
-        let current = model.assistantCurrent, reveal = model.assistantReveal
-        var pushed: [InboxChatRoute] = []
-        LarkChatView.openSummary(Self.other, owner: "m2", model: model) { pushed.append($0) }
-        #expect(pushed == [InboxChatRoute(key: model.inHub(Self.other), manager: "m2")])
-        #expect(model.assistantCurrent == current && model.assistantReveal == reveal)
+        keepingDefaults {
+            let model = AppModel()
+            let current = model.assistantCurrent, reveal = model.assistantReveal
+            var pushed: [InboxChatRoute] = []
+            LarkChatView.openSummary(Self.other, owner: "m2", model: model) { pushed.append($0) }
+            #expect(pushed == [InboxChatRoute(key: model.inHub(Self.other), manager: "m2")])
+            #expect(model.assistantCurrent == current && model.assistantReveal == reveal)
 
-        LarkChatView.openSummary(Self.other, owner: "m2", model: model)
-        #expect(model.assistantCurrent == Self.other && model.selectedTab == .assistant)
-        #expect(model.assistantReveal == reveal + 1)
-        #expect(model.assistantItemManagers[Self.other] == nil, "the old fallback did not name an item manager")
+            LarkChatView.openSummary(Self.other, owner: "m2", model: model)
+            #expect(model.assistantCurrent == Self.other && model.selectedTab == .assistant)
+            #expect(model.assistantReveal == reveal + 1)
+            #expect(model.assistantItemManagers[Self.other] == nil, "the old fallback did not name an item manager")
+        }
     }
 
     @Test func handOffViewPushesEveryTargetAndKeepsItsFallback() throws {
-        let model = AppModel(), item = try item(manager: "m2")
-        let agent = SessionKey(machineID: "computer", sessionID: "agent")
-        let targets: [InboxHandOffModel.Target] = [.main, .newChat, .agent(agent)]
-        for target in targets {
-            var pushed: [InboxChatRoute] = []
-            var fallback = 0
-            InboxHandOffBar.open(sent: (target, Self.other), item: item, model: model,
-                                 push: { pushed.append($0) }, fallback: { fallback += 1 })
-            #expect(pushed == [InboxChatRoute(key: model.inHub(Self.other), manager: "m2")])
-            #expect(fallback == 0)
-        }
+        try keepingDefaults {
+            let model = AppModel(), item = try item(manager: "m2")
+            let agent = SessionKey(machineID: "computer", sessionID: "agent")
+            let targets: [InboxHandOffModel.Target] = [.main, .newChat, .agent(agent)]
+            for target in targets {
+                var pushed: [InboxChatRoute] = []
+                var fallback = 0
+                InboxHandOffBar.open(sent: (target, Self.other), item: item, model: model,
+                                     push: { pushed.append($0) }, fallback: { fallback += 1 })
+                #expect(pushed == [InboxChatRoute(key: model.inHub(Self.other), manager: "m2")])
+                #expect(fallback == 0)
+            }
 
-        var fallback = 0
-        for target in targets {
-            InboxHandOffBar.open(sent: (target, Self.other), item: item, model: model,
-                                 push: nil, fallback: { fallback += 1 })
+            var fallback = 0
+            for target in targets {
+                InboxHandOffBar.open(sent: (target, Self.other), item: item, model: model,
+                                     push: nil, fallback: { fallback += 1 })
+            }
+            #expect(fallback == targets.count)
+            InboxHandOffBar.open(sent: nil, item: item, model: model,
+                                 push: { _ in Issue.record("nothing sent must not push") }, fallback: { fallback += 1 })
+            #expect(fallback == targets.count + 1)
         }
-        #expect(fallback == targets.count)
-        InboxHandOffBar.open(sent: nil, item: item, model: model,
-                             push: { _ in Issue.record("nothing sent must not push") }, fallback: { fallback += 1 })
-        #expect(fallback == targets.count + 1)
     }
 }
