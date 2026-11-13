@@ -61,14 +61,23 @@ func CheckViewJSON(raw []byte) error { return checkViewJSON(raw, false) }
 func CheckFittedJSON(raw []byte) error { return checkViewJSON(raw, true) }
 
 func checkViewJSON(raw []byte, hubNames bool) error {
+	_, err := decodeCheckedView(raw, hubNames)
+	return err
+}
+
+// DecodeCheckedViewJSON is CheckViewJSON that also gives the View it decoded
+// from raw and checked, for a caller that would decode raw again.
+func DecodeCheckedViewJSON(raw []byte) (View, error) { return decodeCheckedView(raw, false) }
+
+func decodeCheckedView(raw []byte, hubNames bool) (View, error) {
 	if err := ValidateJSON("View", raw); err != nil {
-		return err
+		return View{}, err
 	}
 	var v View
 	if err := json.Unmarshal(raw, &v); err != nil {
-		return err
+		return View{}, err
 	}
-	return checkViewSemantics(&v, hubNames)
+	return v, checkViewSemantics(&v, hubNames)
 }
 
 func checkViewSemantics(v *View, hubNames bool) error {
