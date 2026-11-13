@@ -467,3 +467,13 @@ keyed to the event that told of the turn, not to the turn.
 - When such a ledger is new, decide what it does with everything that happened before it existed. Here a turn that ended
   before the ledger was first kept is recorded as seen and nothing is made of it; otherwise the first sweep after an
   upgrade would have judged every stopped task again.
+- A recovery path changes state last. The first version took the start nobody heard (stage back, check cleared, review
+  wait cleared) and then ran the end's handler, which could still refuse: a cancelled task or a usage-limit wait lost its
+  state for an end that was never handled. Run every refusal of the path being recovered first, and only then the
+  missing step.
+- Every way a recovery look can end without doing the work needs an answer to "will looking again help?". Never (the
+  task refuses this end): record it and stop. Not until something changes (a usage-limit wait, a computer that is away):
+  do not look. Perhaps (the node did not answer): back off, and start over when the row moves. A boolean "not done"
+  that retries every tick reads the same transcript for hours.
+- Compare rows by what says the thing changed. The transcript's size says it was written to; the row's time can move
+  on a later list with nothing written, and a row compared on both was never the same row twice.

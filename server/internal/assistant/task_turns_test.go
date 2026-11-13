@@ -3,11 +3,14 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -90,6 +93,43 @@ func stillTurns(t *testing.T, what string, want turnCounts, s *Service, todo str
 
 var oneEach = turnCounts{1, 1, 1}
 
+// workMark is when the manager last took a start of todo's work (zero: none).
+func workMark(s *Service, todo string) time.Time {
+	s.tasks.mu.Lock()
+	defer s.tasks.mu.Unlock()
+	return s.tasks.working[todo]
+}
+
+// startTaken waits until the manager took a start of todo's work after the one at before.
+func startTaken(t *testing.T, s *Service, todo string, before time.Time) {
+	t.Helper()
+	waitFor(t, "the start to be taken", func() bool { return workMark(s, todo).After(before) })
+}
+
+// sweeps runs the supervision sweep n times, each after the looks of the one before finished.
+func sweeps(t *testing.T, s *Service, todo string, n int) {
+	t.Helper()
+	for range n {
+		s.superviseWatch(context.Background(), time.Now())
+		turnsQuiet(t, s, todo)
+	}
+}
+
+// itemReadsCounted counts the session.items reads from here on.
+func itemReadsCounted(f *fakeHub) *atomic.Int32 {
+	var n atomic.Int32
+	f.hookReads(receiptHooks{before: func(int) { n.Add(1) }})
+	return &n
+}
+
+// shortTurnRetries has the sweep's looks that could not finish tried again at once, and puts the spacing back.
+func shortTurnRetries(t *testing.T, base time.Duration) {
+	t.Helper()
+	old := turnRetryBase
+	turnRetryBase = base
+	t.Cleanup(func() { turnRetryBase = old })
+}
+
 // restartedOn is the manager started again on database st: newQuietServiceOn without setting the package's timings a
 // second time. The test's first manager is not stopped the way a process is, and what it still runs reads them.
 func restartedOn(t *testing.T, st Store) (*Service, *fakeHub) {
@@ -158,7 +198,9 @@ func TestCompletionSeenByBothTriggers(t *testing.T) {
 			nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
 			s.superviseWatch(ctx, time.Now()) // the manager's sweep has run: the turns' ledger is kept from here on
 			f.setItems(turnPage("turn-1", "", false)...)
+			before := workMark(s, todo.ID)
 			nodeListed(s, f, turnRow(proto.StatusWorking, 2, ""))
+			startTaken(t, s, todo.ID, before) // a list's start is taken after setSessions returns; the turn ends after that
 			f.setItems(turnPage("turn-1", "修好了", true)...)
 			done := turnRow(proto.StatusDone, 3, "修好了")
 			if first == "the sweep" {
@@ -525,5 +567,528 @@ func TestTurnEndOf(t *testing.T) {
 	if a, b := receiptID("todo1", taskTurn{Machine: "box", Session: "s1", Key: "turn-7"}), receiptID("todo1", taskTurn{Machine: "box", Session: "s1", Key: "turn-8"}); a == b ||
 		a != receiptID("todo1", taskTurn{Machine: "box", Session: "s1", Key: "turn-7", Rev: 9}) || receiptID("todo1", taskTurn{Machine: "box", Session: "s1"}) != "" {
 		t.Errorf("receipt ids: %q %q", a, b)
+	}
+}
+
+// A cancelled task that is still open is left as it is when its agent ends a turn unheard: no receipt, judgment or
+// message, no start taken for it (its stage and its supervision stay), and its transcript is read once, not on every
+// tick. (Todo.Cancelled: the cancellation mark. No path sets it on an open todo today; the end's refusal is there.)
+func TestCompletionUnheardOnACancelledOpenTask(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
+	sweeps(t, s, todo.ID, 1)
+	at := time.Now()
+	changeTodo(s, todo.ID, func(x *Todo) { x.CancelledAt = &at })
+	before := todoNow(s, todo.ID)
+	if !before.Cancelled() || before.DoneAt != nil {
+		t.Fatalf("not cancelled and open: %+v", before)
+	}
+	mark := workMark(s, todo.ID)
+	f.setItems(turnPage("turn-1", "修好了", true)...)
+	reads := itemReadsCounted(f)
+	nodeListed(s, f, turnRow(proto.StatusDone, 3, "修好了"))
+	sweeps(t, s, todo.ID, 5)
+	stillTurns(t, "a cancelled open task", turnCounts{}, s, todo.ID, f)
+	now := todoNow(s, todo.ID)
+	if got := reads.Load(); got != 1 {
+		t.Fatalf("%d transcript reads over 5 ticks for a row that did not move, want 1", got)
+	}
+	if !workMark(s, todo.ID).Equal(mark) || now.Stage != before.Stage || now.Supervision.State != before.Supervision.State || !now.Cancelled() || now.DoneAt != nil {
+		t.Fatalf("the task was changed for a turn whose end is refused: start %v → %v, stage %q → %q, %+v", mark, workMark(s, todo.ID), before.Stage, now.Stage, now.Supervision)
+	}
+	if e, ok := s.turnOf(context.Background(), todo.ID); !ok || e.State != turnBefore || e.Key != "turn-1" {
+		t.Fatalf("the ledger's turn = %+v, want turn-1 kept as seen", e)
+	}
+	// The row moves with the same turn (its node lists it again): it is known as seen, nothing more is made of it.
+	nodeListed(s, f, turnRow(proto.StatusDone, 4, "修好了"))
+	sweeps(t, s, todo.ID, 3)
+	stillTurns(t, "a cancelled open task, its row moved", turnCounts{}, s, todo.ID, f)
+	if got := reads.Load(); got != 2 {
+		t.Fatalf("%d transcript reads after the row moved once, want 2", got)
+	}
+}
+
+// A task its review cancelled that is open again (the user reopened it, its agent was sent more) is no cancelled
+// task (Supervision.state): a turn that ends unheard there is taken up once, like any other, and its row is not read
+// tick after tick.
+func TestCompletionUnheardOnATaskCancelledByReviewAndOpenAgain(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
+	sweeps(t, s, todo.ID, 1)
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Supervision.State = reviewCancelled
+	s.todos.mu.Unlock()
+	if now := todoNow(s, todo.ID); now.Cancelled() || now.DoneAt != nil {
+		t.Fatalf("an open task whose ledger says cancelled reads as cancelled: %+v", now.Supervision)
+	}
+	f.setItems(turnPage("turn-1", "修好了", true)...)
+	reads := itemReadsCounted(f)
+	nodeListed(s, f, turnRow(proto.StatusDone, 3, "修好了"))
+	sweeps(t, s, todo.ID, 1)
+	waitFor(t, "the turn's receipt and judgment", func() bool {
+		n := countTurns(t, s, todo.ID, f)
+		return n.receipts == 1 && n.judgments == 1
+	})
+	wantTurns(t, "cancelled by its review, open again", oneEach, s, todo.ID, f) // done: it waits for review again (#5892)
+	turnsQuiet(t, s, todo.ID)
+	handled := reads.Load()
+	sweeps(t, s, todo.ID, 5)
+	stillTurns(t, "cancelled by its review, open again: later ticks", oneEach, s, todo.ID, f)
+	if got := reads.Load(); got != handled {
+		t.Fatalf("%d transcript reads over 5 more ticks of a row that did not move, want none (%d handled the turn)", got-handled, handled)
+	}
+}
+
+// While a usage limit is waited out (the CLI goes on after the reset) the turn has not ended: the sweep reads nothing
+// and takes no start, tick after tick. Once the wait is over with nothing gone on, the turn is taken up once.
+func TestCompletionUnheardWhileAUsageLimitIsWaitedOut(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
+	sweeps(t, s, todo.ID, 1)
+	before, mark := todoNow(s, todo.ID), workMark(s, todo.ID)
+	limited := func(reset time.Time) proto.Session {
+		row := turnRow(proto.StatusDone, 3, limitText)
+		row.TurnError, row.TurnErrorKind, row.TurnErrorResetsAt, row.TurnErrorResumes = limitText, proto.TurnErrorUsageLimit, &reset, true
+		return row
+	}
+	f.setItems(turnPage("turn-1", limitText, true)...)
+	reads := itemReadsCounted(f)
+	nodeListed(s, f, limited(time.Now().Add(time.Hour)))
+	sweeps(t, s, todo.ID, 5)
+	stillTurns(t, "a usage limit waited out", turnCounts{}, s, todo.ID, f)
+	now := todoNow(s, todo.ID)
+	if got := reads.Load(); got != 0 {
+		t.Fatalf("%d transcript reads while the limit is waited out, want none", got)
+	}
+	if !workMark(s, todo.ID).Equal(mark) || now.Stage != before.Stage || now.Supervision.State != before.Supervision.State {
+		t.Fatalf("the task was changed while its turn waits for the reset: start %v → %v, stage %q → %q, %+v", mark, workMark(s, todo.ID), before.Stage, now.Stage, now.Supervision)
+	}
+	// The reset passed long ago and nothing went on: the same row is now a turn that ended, cut off by the limit.
+	f.setSessions("box", limited(time.Now().Add(-limitResumeGrace-time.Minute)))
+	sweeps(t, s, todo.ID, 4)
+	waitFor(t, "the interrupted receipt", func() bool { return len(recoveryReceipts(t, s, todo.ID)) == 1 })
+	sweeps(t, s, todo.ID, 3)
+	time.Sleep(4 * shortSuperviseTimings.every)
+	receipts := recoveryReceipts(t, s, todo.ID)
+	if len(receipts) != 1 || receipts[0].State != "interrupted" || f.judged != 0 {
+		t.Fatalf("after the wait: %d receipts %+v, %d judgments, want one interrupted receipt and no judgment", len(receipts), receipts, f.judged)
+	}
+	if got := reads.Load(); got < 1 || got > 2 {
+		t.Fatalf("%d transcript reads to take the turn up, want the sweep's and the end's own", got)
+	}
+}
+
+// A node that lists the session but does not answer the transcript read is not asked on every tick: the next tick,
+// then ever later while the row stays as it is. A row that moves is looked at on the next tick again.
+func TestTurnSweepSpacesLooksThatCannotFinish(t *testing.T) {
+	shortTurnRetries(t, time.Hour)
+	s, f, todo := newSupervisedService(t)
+	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
+	sweeps(t, s, todo.ID, 1)
+	f.setItems(turnPage("turn-1", "修好了", true)...)
+	reads, mark := itemReadsCounted(f), workMark(s, todo.ID)
+	f.mu.Lock()
+	f.itemsFail = 1000
+	f.mu.Unlock()
+	nodeListed(s, f, turnRow(proto.StatusDone, 3, "修好了"))
+	sweeps(t, s, todo.ID, 8)
+	if got := reads.Load(); got != 2 {
+		t.Fatalf("%d reads over 8 ticks of a node that does not answer, want 2 (the first, the next tick, then an hour's wait)", got)
+	}
+	nodeListed(s, f, turnRow(proto.StatusDone, 4, "修好了")) // the row moved
+	sweeps(t, s, todo.ID, 4)
+	if got := reads.Load(); got != 4 {
+		t.Fatalf("%d reads after the row moved, want 4 (two more: at once, the next tick)", got)
+	}
+	stillTurns(t, "a node that does not answer", turnCounts{}, s, todo.ID, f)
+	if now := workMark(s, todo.ID); !now.Equal(mark) {
+		t.Fatalf("a start was taken for a turn that could not be read: %v → %v", mark, now)
+	}
+	f.mu.Lock()
+	f.itemsFail = 0
+	f.mu.Unlock()
+	nodeListed(s, f, turnRow(proto.StatusDone, 5, "修好了")) // it answers again, and its row moved
+	sweeps(t, s, todo.ID, 1)
+	wantTurns(t, "once the node answers", oneEach, s, todo.ID, f)
+}
+
+// A turn the edge handled before its transcript named it — the runtime had not written its end yet, or the read
+// failed — is that same turn when it is found named later, by the sweep (its row moved with the end record) or by
+// the end being told again at the same row after a stale start: no second receipt, judgment or message, and its
+// judgment and review wait stand.
+func TestCompletionUnnamedThenNamed(t *testing.T) {
+	const laterRecord, readFailed, sameRow = "the end record came later", "the read failed", "the read failed, told again at the same row"
+	for _, how := range []string{laterRecord, readFailed, sameRow} {
+		t.Run(how, func(t *testing.T) {
+			s, f, todo := newSupervisedService(t)
+			ctx := context.Background()
+			nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
+			sweeps(t, s, todo.ID, 1)
+			closed := turnPage("turn-1", "修好了", true)
+			f.setItems(closed[:len(closed)-1]...) // the prompt and the reply; the runtime's end record is not written yet
+			if how != laterRecord {
+				f.mu.Lock()
+				f.itemsFail = 1 // the end's one read of the transcript
+				f.mu.Unlock()
+			}
+			before := workMark(s, todo.ID)
+			nodeListed(s, f, turnRow(proto.StatusWorking, 2, ""))
+			startTaken(t, s, todo.ID, before)
+			done := turnRow(proto.StatusDone, 3, "修好了")
+			nodeListed(s, f, done)
+			wantTurns(t, "the turn, with no name yet", oneEach, s, todo.ID, f)
+			waitFor(t, "the review to wait", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
+			turnsQuiet(t, s, todo.ID)
+			if e, ok := s.turnOf(ctx, todo.ID); !ok || e.Key != "" || e.State != turnDone || (e.Open == "") != (how != laterRecord) {
+				t.Fatalf("the ledger's turn = %+v, want one with no name", e)
+			}
+			mark, judged := workMark(s, todo.ID), todoNow(s, todo.ID)
+			f.setItems(closed...) // the end record is in the transcript now
+			if how == sameRow {
+				// Nothing more was written. A list from before the end arrives late, then the current one again.
+				nodeListed(s, f, turnRow(proto.StatusWorking, 3, ""))
+				startTaken(t, s, todo.ID, mark)
+				nodeListed(s, f, done)
+				waitFor(t, "the turn to get its name", func() bool { e, _ := s.turnOf(ctx, todo.ID); return e.Key == "turn-1" })
+				waitFor(t, "the review to wait again", func() bool {
+					now := todoNow(s, todo.ID)
+					return now.Check != nil && now.Supervision.State == reviewPending
+				})
+				turnsQuiet(t, s, todo.ID)
+			} else {
+				nodeListed(s, f, turnRow(proto.StatusDone, 4, "修好了")) // the row moved with the end record
+				sweeps(t, s, todo.ID, 3)
+			}
+			stillTurns(t, "found named later", oneEach, s, todo.ID, f)
+			now := todoNow(s, todo.ID)
+			if how != sameRow && !workMark(s, todo.ID).Equal(mark) {
+				t.Fatalf("a start was taken for a turn that was handled: %v → %v", mark, workMark(s, todo.ID))
+			}
+			if now.Supervision.State != reviewPending || now.Check == nil || judged.Check == nil || now.Check.Verdict != judged.Check.Verdict {
+				t.Fatalf("the turn was taken for a new one: %+v, check %+v", now.Supervision, now.Check)
+			}
+			if e, ok := s.turnOf(ctx, todo.ID); !ok || e.Key != "turn-1" || e.Judged == nil {
+				t.Fatalf("the ledger's turn = %+v, want turn-1 with its judgment", e)
+			}
+			// And told once more by the list: still that turn.
+			s.TurnEnded(ctx, SessionRef{MachineID: "box", SessionID: "s1"})
+			sweeps(t, s, todo.ID, 2)
+			stillTurns(t, "told again under its name", oneEach, s, todo.ID, f)
+		})
+	}
+}
+
+// A turn taken up while its transcript could not be read has no prompt to know it by. The turn after it is still its
+// own turn, whatever the manager's clock says: here the node's clock is ten minutes behind the manager's, so the
+// second turn's prompt carries a time before the moment the manager took up the first.
+func TestCompletionAfterAnUnnamedTurnWithTheNodeClockBehind(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	nodeTime := func() time.Time { return time.Now().Add(-10 * time.Minute) }
+	row := func(status string, rev int64, text string) proto.Session {
+		r := turnRow(status, rev, text)
+		r.UpdatedAt = nodeTime()
+		return r
+	}
+	page := func(turn, reply string) []proto.Item {
+		items := turnPage(turn, reply, true)
+		for i := range items {
+			items[i].TS = nodeTime()
+		}
+		return items
+	}
+	nodeListed(s, f, row(proto.StatusIdle, 1, ""))
+	sweeps(t, s, todo.ID, 1)
+	f.judge = `{"verdict":"not_done","reason":"测试还没补"}`
+	f.setItems(page("turn-1", "修了崩溃，测试还没补")...)
+	f.mu.Lock()
+	f.itemsFail = 1 // the end's one read of the transcript
+	f.mu.Unlock()
+	before := workMark(s, todo.ID)
+	nodeListed(s, f, row(proto.StatusWorking, 2, ""))
+	startTaken(t, s, todo.ID, before)
+	nodeListed(s, f, row(proto.StatusDone, 3, "修了崩溃，测试还没补"))
+	wantTurns(t, "the first turn, not read", oneEach, s, todo.ID, f)
+	turnsQuiet(t, s, todo.ID)
+	if e, ok := s.turnOf(context.Background(), todo.ID); !ok || e.Key != "" || e.Open != "" {
+		t.Fatalf("the ledger's turn = %+v, want one with no name and no prompt", e)
+	}
+
+	f.judge = `{"verdict":"done","reason":"测试补上了"}`
+	before = workMark(s, todo.ID)
+	nodeListed(s, f, row(proto.StatusWorking, 4, ""))
+	startTaken(t, s, todo.ID, before)
+	f.setItems(page("turn-2", "测试补上了，PR https://github.com/o/r/pull/901 已合并")...)
+	nodeListed(s, f, row(proto.StatusDone, 5, "测试补上了，PR https://github.com/o/r/pull/901 已合并"))
+	wantTurns(t, "the turn after it", turnCounts{2, 2, 2}, s, todo.ID, f)
+	if e, ok := s.turnOf(context.Background(), todo.ID); !ok || e.Key != "turn-2" {
+		t.Fatalf("the ledger's turn = %+v, want turn-2", e)
+	}
+	sweeps(t, s, todo.ID, 3)
+	stillTurns(t, "later ticks", turnCounts{2, 2, 2}, s, todo.ID, f)
+}
+
+// A meeting's turn in the task's agent is never the task's completion: found by the sweep with no start heard, it is
+// left alone (no receipt, no start taken), kept as seen and not read again.
+func TestCompletionUnheardMeetingTurn(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
+	sweeps(t, s, todo.ID, 1)
+	if _, err := s.meetingTurnSent("box", "s1", "rec-1", false); err != nil {
+		t.Fatal(err)
+	}
+	s.meetingTurnStarted("box", "s1", true)
+	if !s.meetingTurnNow("box", "s1") {
+		t.Fatal("no meeting turn marked")
+	}
+	before, mark := todoNow(s, todo.ID), workMark(s, todo.ID)
+	f.setItems(turnPage("turn-1", "会议纪要整理好了", true)...)
+	reads := itemReadsCounted(f)
+	nodeListed(s, f, turnRow(proto.StatusDone, 3, "会议纪要整理好了"))
+	sweeps(t, s, todo.ID, 5)
+	stillTurns(t, "a meeting's turn", turnCounts{}, s, todo.ID, f)
+	if got := reads.Load(); got != 1 {
+		t.Fatalf("%d transcript reads over 5 ticks, want 1", got)
+	}
+	if now := todoNow(s, todo.ID); !workMark(s, todo.ID).Equal(mark) || now.Stage != before.Stage || now.Supervision.State != before.Supervision.State {
+		t.Fatalf("the task was changed for a meeting's turn: start %v → %v, stage %q → %q, %+v", mark, workMark(s, todo.ID), before.Stage, now.Stage, now.Supervision)
+	}
+}
+
+// A turn the user stopped between a tool and the answer gets no receipt until something is written (the end's own
+// rule, taskTurnAwaitingAnswer). Found by the sweep with no start heard, no start is taken for it either, and its
+// transcript is read for the look that found it, not tick after tick.
+func TestCompletionUnheardStoppedBeforeItsAnswer(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
+	sweeps(t, s, todo.ID, 1)
+	before, mark := todoNow(s, todo.ID), workMark(s, todo.ID)
+	open := turnPage("turn-1", "", false) // the prompt and a tool call
+	f.setItems(append(open, proto.Item{ID: "turn-1-stop#0", Kind: proto.KindNotice, Text: userStoppedNotice, TS: time.Now().UTC()})...)
+	reads := itemReadsCounted(f)
+	nodeListed(s, f, turnRow(proto.StatusDone, 3, ""))
+	sweeps(t, s, todo.ID, 5)
+	stillTurns(t, "stopped before its answer", turnCounts{}, s, todo.ID, f)
+	if got := reads.Load(); got != 2 {
+		t.Fatalf("%d transcript reads over 5 ticks, want 2 (the sweep's and the end's own)", got)
+	}
+	if now := todoNow(s, todo.ID); !workMark(s, todo.ID).Equal(mark) || now.Stage != before.Stage || now.Supervision.State != before.Supervision.State {
+		t.Fatalf("the task was changed for a turn that gets no receipt: start %v → %v, stage %q → %q, %+v", mark, workMark(s, todo.ID), before.Stage, now.Stage, now.Supervision)
+	}
+}
+
+// An unknown row counts as a stopped agent only at the very row its transcript was read at. A row whose transcript
+// is written to while the sweep reads (its size moved) is not taken on that look, with no start taken for it; the
+// next tick looks at the row as it is then, and the turn is taken up once.
+func TestCompletionUnknownRowMovesDuringTheLook(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	nodeListed(s, f, turnRow(proto.StatusUnknown, 1, ""))
+	sweeps(t, s, todo.ID, 1)
+	mark := workMark(s, todo.ID)
+	f.setItems(turnPage("turn-1", "修好了", true)...)
+	nodeListed(s, f, turnRow(proto.StatusUnknown, 3, "修好了"))
+	var once sync.Once
+	f.hookReads(receiptHooks{before: func(int) {
+		once.Do(func() { f.setSessions("box", turnRow(proto.StatusUnknown, 4, "修好了")) }) // written to under the read
+	}})
+	sweeps(t, s, todo.ID, 1)
+	if n := countTurns(t, s, todo.ID, f); n != (turnCounts{}) || !workMark(s, todo.ID).Equal(mark) {
+		t.Fatalf("taken on a row that moved under the look: %+v, start %v → %v", n, mark, workMark(s, todo.ID))
+	}
+	sweeps(t, s, todo.ID, 1)
+	wantTurns(t, "the next tick, at the row as it is", oneEach, s, todo.ID, f)
+	sweeps(t, s, todo.ID, 3)
+	stillTurns(t, "later ticks", oneEach, s, todo.ID, f)
+}
+
+// The row the sweep read and the rows the end's own looks get later are the same row as long as the transcript's
+// size is: a node's later list can carry another time for a transcript that did not change (its metadata is read a
+// few seconds late). An unknown row is still the stopped agent its transcript showed, in the same look and through
+// the judgment, and the list that only changed the time costs no second read.
+func TestCompletionUnknownRowListedAgainWithALaterTime(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	nodeListed(s, f, turnRow(proto.StatusUnknown, 1, ""))
+	sweeps(t, s, todo.ID, 1)
+	f.setItems(turnPage("turn-1", "修好了", true)...)
+	row := turnRow(proto.StatusUnknown, 3, "修好了")
+	nodeListed(s, f, row)
+	var reads atomic.Int32
+	f.hookReads(receiptHooks{before: func(int) {
+		later := row
+		later.UpdatedAt = row.UpdatedAt.Add(time.Duration(reads.Add(1)) * 3 * time.Second) // listed again with a later time, at every read
+		f.setSessions("box", later)
+	}})
+	sweeps(t, s, todo.ID, 1)
+	wantTurns(t, "one look", oneEach, s, todo.ID, f)
+	if now := todoNow(s, todo.ID); now.Check == nil || now.Check.Verdict != verdictDone {
+		t.Fatalf("the judgment did not land on the first look: %+v", now.Check)
+	}
+	turnsQuiet(t, s, todo.ID)
+	handled := reads.Load()
+	sweeps(t, s, todo.ID, 4)
+	stillTurns(t, "later ticks", oneEach, s, todo.ID, f)
+	if got := reads.Load(); got != handled || f.judged != 1 {
+		t.Fatalf("%d more transcript reads and %d judgments for a row whose time alone moved, want none and 1", got-handled, f.judged)
+	}
+}
+
+// lateStart has a start of todo's work land while the judge is asked, n times: the judgment of the turn that just
+// ended does not land then (autoFinishTask: the work changed while it was judged).
+func lateStart(s *Service, f *fakeHub, todo string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	reply := f.judge
+	f.judgeBy = func(string) string {
+		if n > 0 {
+			n--
+			s.tasks.mu.Lock()
+			s.tasks.working[todo] = time.Now()
+			s.tasks.mu.Unlock()
+		}
+		return reply
+	}
+}
+
+// A judgment that did not land (a start told late changed the task's work while the judge was asked, and no turn
+// came of it) is asked again by the sweep: the turn still ends with one receipt, one judgment written and one
+// supervision message.
+func TestCompletionJudgmentThatDidNotLand(t *testing.T) {
+	shortTurnRetries(t, time.Millisecond)
+	s, f, todo := newSupervisedService(t)
+	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
+	sweeps(t, s, todo.ID, 1)
+	lateStart(s, f, todo.ID, 1)
+	f.setItems(turnPage("turn-1", "修好了", true)...)
+	nodeListed(s, f, turnRow(proto.StatusDone, 3, "修好了"))
+	sweeps(t, s, todo.ID, 1)
+	if now := todoNow(s, todo.ID); now.Check != nil || f.judged != 1 {
+		t.Fatalf("the first judgment landed: %+v after %d calls", now.Check, f.judged)
+	}
+	for range 4 {
+		time.Sleep(2 * time.Millisecond)
+		sweeps(t, s, todo.ID, 1)
+	}
+	wantTurns(t, "asked again", turnCounts{receipts: 1, judgments: 2, messages: 1}, s, todo.ID, f)
+	waitFor(t, "the review to wait", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
+	if now := todoNow(s, todo.ID); now.Check == nil || now.Check.Verdict != verdictDone {
+		t.Fatalf("no judgment on the todo: %+v", now.Check)
+	}
+	for range 4 {
+		time.Sleep(2 * time.Millisecond)
+		sweeps(t, s, todo.ID, 1)
+	}
+	stillTurns(t, "later ticks", turnCounts{receipts: 1, judgments: 2, messages: 1}, s, todo.ID, f)
+}
+
+// A judgment that never lands is not asked for ever: after turnJudgeTries more tries the turn is told unjudged, once,
+// and the sweep is done with it.
+func TestCompletionJudgmentThatNeverLands(t *testing.T) {
+	shortTurnRetries(t, time.Millisecond)
+	s, f, todo := newSupervisedService(t)
+	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
+	sweeps(t, s, todo.ID, 1)
+	lateStart(s, f, todo.ID, 1000)
+	f.setItems(turnPage("turn-1", "修好了", true)...)
+	reads := itemReadsCounted(f)
+	nodeListed(s, f, turnRow(proto.StatusDone, 3, "修好了"))
+	for range turnJudgeTries + 4 {
+		sweeps(t, s, todo.ID, 1)
+		time.Sleep(20 * time.Millisecond) // past the spacing of the looks (this test's turnRetryBase, doubled)
+	}
+	want := turnCounts{receipts: 1, judgments: 1 + turnJudgeTries, messages: 1}
+	wantTurns(t, "told unjudged", want, s, todo.ID, f)
+	if e, ok := s.turnOf(context.Background(), todo.ID); !ok || e.Judged == nil || e.Judged.Err == "" || e.Signal == nil || e.Signal.Kind != sigUnjudged {
+		t.Fatalf("the ledger's turn = %+v, want it told unjudged", e)
+	}
+	turnsQuiet(t, s, todo.ID)
+	done := reads.Load()
+	for range 5 {
+		sweeps(t, s, todo.ID, 1)
+		time.Sleep(20 * time.Millisecond)
+	}
+	stillTurns(t, "later ticks", want, s, todo.ID, f)
+	if got := reads.Load(); got != done {
+		t.Fatalf("%d more transcript reads after the turn was told unjudged, want none", got-done)
+	}
+}
+
+// feedDown is a database whose feed cannot be asked while down is set.
+type feedDown struct {
+	*db.DB
+	down atomic.Bool
+}
+
+func (d *feedDown) FeedItem(ctx context.Context, id string) (*db.FeedRow, error) {
+	if d.down.Load() {
+		return nil, errors.New("the database did not answer")
+	}
+	return d.DB.FeedItem(ctx, id)
+}
+
+// The end of a turn the ledger has is told again while the feed cannot be asked for its receipt: the ledger's word
+// stands. No second notice and no second judgment over a database error; the judgment it has is put back.
+func TestCompletionRepeatedEndWhileTheFeedIsDown(t *testing.T) {
+	st := &feedDown{DB: taskRecoveryDatabase(t)}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
+	before := workMark(s, todo.ID)
+	nodeListed(s, f, turnRow(proto.StatusWorking, 2, ""))
+	startTaken(t, s, todo.ID, before)
+	f.setItems(turnPage("turn-1", "修好了", true)...)
+	done := turnRow(proto.StatusDone, 3, "修好了")
+	nodeListed(s, f, done)
+	wantTurns(t, "the turn", oneEach, s, todo.ID, f)
+	waitFor(t, "the review to wait", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
+	turnsQuiet(t, s, todo.ID)
+	notices := len(f.notices())
+
+	st.down.Store(true)
+	before = workMark(s, todo.ID)
+	nodeListed(s, f, turnRow(proto.StatusWorking, 3, "")) // a list from before the end, arriving late
+	startTaken(t, s, todo.ID, before)
+	nodeListed(s, f, done)
+	waitFor(t, "the judgment to be put back", func() bool {
+		now := todoNow(s, todo.ID)
+		return now.Check != nil && now.Supervision.State == reviewPending
+	})
+	turnsQuiet(t, s, todo.ID)
+	st.down.Store(false)
+	stillTurns(t, "the same end again, the feed down", oneEach, s, todo.ID, f)
+	if got := len(f.notices()); got != notices {
+		t.Fatalf("%d notices, want the %d there were: the turn was handled a second time", got, notices)
+	}
+}
+
+// With the fleet the manager's own, the rows of a computer that is away are its copy of the node's last list, marked
+// unknown: the sweep asks that computer nothing, tick after tick, and looks once it is back.
+func TestTurnSweepLeavesAComputerThatIsAwayAlone(t *testing.T) {
+	ft := newFleetTestNoStore(t)
+	node := ft.d.add("box", "Box")
+	away := func(is bool) {
+		ft.d.mu.Lock()
+		node.away = is
+		ft.d.mu.Unlock()
+	}
+	linked := time.Now().Add(-time.Hour)
+	task := Todo{ID: "todo_away", Origin: "conv1", CreatedAt: linked, Supervision: &Supervision{Supervisor: "conv1"},
+		Agents: []TodoAgent{{MachineID: "box", SessionID: "s1", LinkedAt: linked}}}
+	row := turnRow(proto.StatusUnknown, 3, "修好了") // as its rows are kept when its connection ends
+	ft.f.setSessions("box", row)
+	ft.f.setItems(turnPage("turn-1", "", false)...) // a turn still open: one read, and the look is done
+	reads := itemReadsCounted(ft.f)
+	away(true)
+	for range 5 {
+		ft.s.watchTurn(context.Background(), task, []proto.Session{row})
+		turnsQuiet(t, ft.s, task.ID)
+	}
+	if got := reads.Load(); got != 0 {
+		t.Fatalf("%d transcript reads on a computer that is away, want none", got)
+	}
+	away(false)
+	for range 3 {
+		ft.s.watchTurn(context.Background(), task, []proto.Session{row})
+		turnsQuiet(t, ft.s, task.ID)
+	}
+	if got := reads.Load(); got != 1 {
+		t.Fatalf("%d transcript reads once it is back, want 1 (the row did not move after it)", got)
 	}
 }
