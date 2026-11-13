@@ -997,6 +997,13 @@ the web's (`web/src/lib/live-text.ts`, `docs/web/web.md`).
 - **Which deltas**: `AppModel.streamsAgentReplies`: a listed session that is not a Persona conversation, or a chat already given an agent's delta.
   An unlisted session's delta is handled as before (the assistant's rules), and its chat in the Agents style draws nothing. Both go through the
   same pacer (`DeltaPacer`, at most 5 draws a second, an empty delta at once).
+- **Even reveal** (#6651): the model's text comes in bursts (a few dozen characters about every 350 ms, up to 2 s apart), so drawing what
+  arrived showed a jump per burst. `StreamingText` reveals it a few characters a frame (`StreamReveal` in PersonaKit, driven by
+  `StreamRevealClock`'s display link, which runs only while text waits, at most 60 Hz): a little slower than the stream's average so far,
+  faster when more waits (waiting / 0.6 s), never slower than 20 characters a second. Only that view redraws per frame; the store and the
+  list see the deltas as before. A first text over 80 characters (a chat opened mid-stream) shows at once; when the stream ends
+  (`ChatStore.liveDone`), or the user holds the list, or the reply's item replaces it, the whole text shows at once. The Mac shows text as
+  it comes. Measured with `PerfAssistantTests/testStreamingTrace*` (recorded model streams, `scripts/mock/stream_trace.py`).
 - **What it shows** (`ChatStore.agentStreamed`, `Shared/LiveText.swift`, a port of `live-text.ts`, compiled for the watch too): the delta as it
   came (`agentLive`) is never drawn as it is, only what of it the newest items lack (`liveText`): the agent's latest message only (its words at
   the end of the transcript, nothing after them), only where a word ends, a cut item counting as its whole block (`full_size`); a late whole copy
@@ -1615,9 +1622,10 @@ page merges and cache serialization; the chat cache schema changes with these fi
 `ChatSupervisionTests` and `SupervisionRoundUITests`. Screenshots use `MOCK_TASKS=1 MOCK_SUPERVISION=1` on a fresh test device;
 `-showSupervisionOpen YES` opens the record, and `-openAllWork YES` exposes its internal work for inspection.
 
-## Background rounds (#4314)
+## Background rounds (#4314, leaders in #6595)
 
-In the assistant's **main** conversation, a round whose first input comes from another conversation (source kind
+In the assistant's **main** conversation and its **leader** conversations (`AppModel.assistantLeaders`,
+`ChatLines.foldsBackground(…leaders:)`), a round whose first input comes from another conversation (source kind
 `conversation`), a scheduled follow-up (`followup` with the task's title; not a usage-limit continuation, a wake-up or an
 untitled follow-up, which continue the user's own work) or a scheduled task (`patrol`) folds like a quiet supervision round: one muted
 line, `@<source> · Background round` (`@<source> · Running in the background` while it runs), drawn by the same
@@ -1625,7 +1633,9 @@ line, `@<source> · Background round` (`@<source> · Running in the background` 
 `MessageSource.of`: `Item.source`, then the `message-source` metadata block, then the hub's `injected` mark. The round
 lasts until the next actual input; recaps and compactions inside stay inside. A message the user queued while it runs
 joins the same transcript turn, so `ChatLines.lines` cuts the turn at each input: the user's message and what follows it
-are never folded in. Other conversations and Agent sessions are unchanged.
+are never folded in. Other side conversations and Agent sessions are unchanged. The hub's interject note
+(`prompts/assistant/interject.md`, `<persona-context kind="context" title="插话">`) is dropped in `ContextRef.scan`, so
+it never renders as an owner-bubble quote; `WatchText.shown` likewise leaves no 〔插话〕 mark on the watch.
 
 Opening the line shows the whole round, history included (super rule 2.4). Unlike a supervision record it shows the
 input as its source block, not as raw input: a supervising conversation's message shows its text; a scheduled task's or

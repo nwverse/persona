@@ -127,7 +127,8 @@ class AssistantTest {
     }
 
     // #5084: the background supervisor is built in. It waits under "All chats" with the chats Persona opened itself,
-    // never among 常驻 or Recent, and is found by the name the app gives it.
+    // never among 常驻 or Recent, and is found by the name the app gives it. Since #6350 (#6228) a scheduled task's
+    // own chat leaves Recent as well: it keeps its All chats row and the Scheduled Tasks entry, nothing is deleted.
     @Test fun theBackgroundSupervisorIsListedUnderAllChatsOnly() {
         val main = Session(machineId = "demo", sessionId = "main", title = "主对话")
         val mine = Session(machineId = "demo", sessionId = "mine", title = "周报", origin = "user", updatedAt = "2026-11-12T08:00:00Z")
@@ -140,7 +141,7 @@ class AssistantTest {
         val result = conversationGroups(snapshot, "", named)
         assertEquals("bg", result.background)
         assertEquals(listOf(background, scheduled, mine), result.others)
-        assertEquals(listOf(scheduled, mine), result.recent)
+        assertEquals("a scheduled task's chat no longer takes a Recent row (#6350)", listOf(mine), result.recent)
         assertTrue(result.directions.isEmpty())
         // whatever the leaders or its origin say, it is no direction and no recent chat of the user's
         val odd = snapshot.copy(leaders = listOf("bg"), conversations = listOf(main, mine, background.copy(origin = null)))
