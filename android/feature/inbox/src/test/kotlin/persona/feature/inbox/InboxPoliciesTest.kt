@@ -133,6 +133,8 @@ class InboxPoliciesTest {
         val actions = muteAndRuleActions(res, record, {}, {})
         assertEquals(listOf("Mute this conversation · Launch group", "Mute this sender · Alex",
             "Rule for this conversation · Design", "Rule for this sender · Alex"), actions.map { it.label })
+        val withoutWhere = muteAndRuleActions(res, record.copy(event = InboxEventFields.None), {}, {})
+        assertEquals("Mute this conversation · Design", withoutWhere.first().label)
     }
 
     private class PolicyRepository(var policies: List<InboxPolicy> = emptyList()) : InboxRepository by FakeInboxRepository() {

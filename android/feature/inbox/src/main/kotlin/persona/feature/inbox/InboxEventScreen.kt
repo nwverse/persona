@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 import persona.core.contracts.InboxChainEntry
 import persona.core.contracts.InboxSuggestion
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.inbox.InboxTier
 import persona.core.navigation.Navigator
@@ -180,7 +181,7 @@ internal fun EventRowMark(mark: EventMark) {
         EventMark.Preparing -> JStateLabel(stringResource(R.string.inbox_handling_preparing), Status.Working)
         is EventMark.Failed -> JStateLabel(stringResource(R.string.inbox_handling_failed), Status.NeedsYou, problem = true)
         is EventMark.Now -> if (mark.accent) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-            JIcon(PhIcons.Sparkle, null, size = Tokens.Space.m, tint = palette.accent, decorative = true)
+            JIcon(PersonaIcons.ai, null, size = Tokens.Space.m, tint = palette.accent, decorative = true)
             Text(mark.text, style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
         } else JStateLabel(mark.text, mark.status, problem = mark.problem)
     }

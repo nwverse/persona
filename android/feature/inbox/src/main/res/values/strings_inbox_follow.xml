@@ -8,7 +8,7 @@
     <string name="inbox_now_agent_working">Agent working</string>
     <string name="inbox_now_waiting">Waiting for %1$s</string>
     <string name="inbox_now_waiting_anyone">Waiting for a reply</string>
-    <string name="inbox_now_look_again">"&#32;· look again %1$s"</string>
+    <string name="inbox_now_look_again">" · look again %1$s"</string>
     <string name="inbox_now_next">: %1$s</string>
     <string name="inbox_now_follow_up_ask">Checked 3 times with no news. Keep following?</string>
     <string name="inbox_now_check_due">Time to look again</string>

@@ -8,7 +8,7 @@
     <string name="inbox_now_agent_working">Agent 在做</string>
     <string name="inbox_now_waiting">等%1$s</string>
     <string name="inbox_now_waiting_anyone">等对方回复</string>
-    <string name="inbox_now_look_again">"&#32;· %1$s再看"</string>
+    <string name="inbox_now_look_again">" · %1$s 再看"</string>
     <string name="inbox_now_next">：%1$s</string>
     <string name="inbox_now_follow_up_ask">看过 3 次还没动静，还要跟吗？</string>
     <string name="inbox_now_check_due">到了再看的时间</string>

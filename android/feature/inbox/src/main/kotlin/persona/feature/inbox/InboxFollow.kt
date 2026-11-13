@@ -100,4 +100,5 @@ internal fun inboxRowMeta(where: String?, sender: String?, preview: String, res:
 }
 
 internal fun inboxRowMeta(record: InboxRecord, res: Resources): String? =
+    // The domain item mirrors event.where for search; the event fallback also supports records built from wire fields alone.
     inboxRowMeta(record.event.where ?: record.item.where, record.item.sender, record.item.preview, res)

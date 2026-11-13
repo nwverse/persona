@@ -8,7 +8,7 @@
     <string name="inbox_now_agent_working">Agentが作業中</string>
     <string name="inbox_now_waiting">%1$sを待っています</string>
     <string name="inbox_now_waiting_anyone">相手の返信待ち</string>
-    <string name="inbox_now_look_again">"&#32;· %1$sに再確認"</string>
+    <string name="inbox_now_look_again">" · %1$sに再確認"</string>
     <string name="inbox_now_next">：%1$s</string>
     <string name="inbox_now_follow_up_ask">3回確認しても動きがありません。続けますか？</string>
     <string name="inbox_now_check_due">再確認の時間です</string>
