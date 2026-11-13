@@ -45,8 +45,12 @@ final class KnowledgeCorrectionsUITests: XCTestCase {
 
     @MainActor func testRemovingALinkAsksFirst() throws {
         let app = open("people/lilei")
-        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "设计评审")).firstMatch // i18n-ignore
-        XCTAssertTrue(row.waitForExistence(timeout: 15), "no linked chat:\n\(app.debugDescription)")
+        // 李雷's project: held in his own list, so it can be removed (a list row only exists once it is on screen).
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "天气 App")).firstMatch // i18n-ignore
+        let list = app.collectionViews.firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 15), "the entry did not open:\n\(app.debugDescription)")
+        for _ in 0..<6 where !row.isHittable { list.swipeUp(velocity: .slow) }
+        XCTAssertTrue(row.isHittable, "no linked project:\n\(app.debugDescription)")
         row.swipeLeft()
         let swipe = app.buttons["移除关联"].firstMatch // i18n-ignore
         XCTAssertTrue(swipe.waitForExistence(timeout: 5), "no Remove Link on the row:\n\(app.debugDescription)")
@@ -60,7 +64,7 @@ final class KnowledgeCorrectionsUITests: XCTestCase {
         let scope = app.sheets.count > 0 ? app.sheets.firstMatch : app.popovers.count > 0 ? app.popovers.firstMatch : app
         scope.buttons["移除关联"].firstMatch.tap() // i18n-ignore
 
-        wait("the hub did not get remove_chats") { updates().contains { ($0["remove_chats"] as? [String]) == ["design-review"] } }
+        wait("the hub did not get remove_projects") { updates().contains { ($0["remove_projects"] as? [String]) == ["weather-app"] } }
         let gone = NSPredicate(format: "exists == false")
         expectation(for: gone, evaluatedWith: row)
         waitForExpectations(timeout: 10)
@@ -78,8 +82,8 @@ final class KnowledgeCorrectionsUITests: XCTestCase {
     }
 
     private func updates() -> [[String: Any]] {
-        (get("/mock/kb_updates")["updates"] as? [[String: Any]] ?? []).filter { $0["id"] as? String == "lilei" || $0["id"] as? String == "design-review" }
-            .filter { $0["remove_chats"] != nil || $0["remove_people"] != nil }
+        (get("/mock/kb_updates")["updates"] as? [[String: Any]] ?? []).filter { $0["id"] as? String == "lilei" }
+            .filter { $0["remove_projects"] != nil || $0["remove_chats"] != nil }
     }
 
     private func pinnedSent() -> [String] {

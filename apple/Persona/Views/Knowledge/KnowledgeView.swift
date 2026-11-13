@@ -723,13 +723,6 @@ struct KnowledgeDetailView: View {
                 Task { await deleteFacts() }
             }
         }
-        .confirmationDialog(unlinking?.question ?? "", isPresented: Binding(get: { unlinking != nil }, set: { if !$0 { unlinking = nil } }),
-                            titleVisibility: .visible, presenting: unlinking) { r in
-            Button(String(localized: "Remove Link"), role: .destructive) { Task { await unlink(r) } }
-            Button("Cancel", role: .cancel) {}
-        } message: { r in
-            Text(r.explanation)
-        }
         #if DEBUG && os(macOS)
         // `-showKBEditor YES` with `-showKnowledgeEntry <kind>/<id>`: the tag editor open (Mac screenshots).
         .onAppear { if UserDefaults.standard.bool(forKey: "showKBEditor") { editing = true } }
@@ -990,6 +983,15 @@ struct KnowledgeDetailView: View {
                 }
                 .contextMenu {
                     Button(role: .destructive) { unlinking = removal } label: { Label("Remove Link", systemImage: Theme.Icon.clear) }
+                }
+                // On the row, so the question points at the link it is about (on the page it pointed at the header).
+                .confirmationDialog(removal.question, isPresented: Binding(get: { unlinking?.id == removal.id },
+                                                                           set: { if !$0, unlinking?.id == removal.id { unlinking = nil } }),
+                                    titleVisibility: .visible) {
+                    Button(String(localized: "Remove Link"), role: .destructive) { Task { await unlink(removal) } }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text(removal.explanation)
                 }
         } else {
             row
