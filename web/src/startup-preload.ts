@@ -241,8 +241,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * list that reads rows only (lib/session-list.ts), and a row's computer under a project on several; the sections
  * themselves, views/agents/GroupedSessions.tsx, load when a Browse by is chosen, which took 407 B back off; the same
  * code measured +1,396 B and +1,510 B on the two mains before, docs/lessons/web.md; the 30 B of room main had stay).
+ * And 233 B for side sessions drawn under their parent (#5935: ja 476,683 B against 476,450 B on main at ad4eea414:
+ * lib/side-sessions.ts's arrangement, the paged list's use of it for its order and the Earlier split, and a row's
+ * parent identity in lib/runtime-list.ts; the 110 B of room main had stay).
  */
-export const FIRST_SCREEN_BUDGET = 476_560;
+export const FIRST_SCREEN_BUDGET = 476_793;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
