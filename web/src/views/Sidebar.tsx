@@ -302,9 +302,9 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const go = useGo(onNavigate);
 
   // A lead's row is an ordinary conversation row under the 常驻 heading (#6214): no pin glyph of its own, so it never
-  // reads as a button. Pinning lives only in the row's ⋯ / right-click menu, as on iOS and Android.
+  // reads as a button. Its "在做 N · 等你 N" counts stay on hover and the ⋯ has its own reserved end slot (keepTrailing).
   const directionRow = (c: Session) => (
-    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionLabel(directionNames, c.session_id, conversationTitle(c))} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={(counts.get(c.session_id)?.working ?? 0) > 0} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
+    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionLabel(directionNames, c.session_id, conversationTitle(c))} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={(counts.get(c.session_id)?.working ?? 0) > 0} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
   );
 
   const recentRow = (c: Session) => (

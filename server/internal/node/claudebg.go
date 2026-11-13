@@ -19,7 +19,7 @@ import (
 // Claude sessions that run where Persona has no terminal pane: a background session Claude's own daemon runs (/fork,
 // /background: kind "bg"), a session open in Claude's desktop app (entrypoint claude-desktop…), claude in a terminal
 // that herdr, Orca, Tern or botmux do not run (entrypoint cli). Each writes sessions/<pid>.json in its config directory with
-// the session it has open, its status (busy / idle / waiting) and, since Claude Code 2.1.29x, its peer inbox
+// the session it has open, its status (busy / idle / shell / waiting) and, since Claude Code 2.1.29x, its peer inbox
 // (claudepeer.go). They listed as offline while they worked, and a message from the phone was refused (a second
 // claude --resume would write the same transcript, openelsewhere.go). The node lists every live one as running, with
 // its status from the file and its transcript as for any session; a message goes through its inbox when the node can
