@@ -62,11 +62,11 @@ describe("线索的父子关系请求", () => {
     new ApiError(409, "that parent would make a cycle", { code: "conflict", error: "that parent would make a cycle" }),
     new ApiError(409, "HTTP 409", {}),
     new ApiError(409, "different wording", { code: "other", error: "different wording" }),
-  ])("shows the localized cycle explanation for every 409", async (error) => {
+  ])("shows the localized conflict explanation for every 409", async (error) => {
     calls.fail = error;
 
     await expect(linkInboxParent({ id: "child" }, item("parent", "发布准备"))).resolves.toBe(false);
-    expect(toast).toHaveBeenCalledExactlyOnceWith("这个关联会形成循环，请选择其他内容。", "error");
+    expect(toast).toHaveBeenCalledExactlyOnceWith("这个关联不成立，请选择其他内容。", "error");
   });
 
   it.each([400, 404])("keeps the existing error text for HTTP %i", async (status) => {
