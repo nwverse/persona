@@ -421,6 +421,18 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "harmony/entry/src/main/ets/core/DeviceLook.ts": {
+      "reason": "Reserved former built-in look package ids that a downloaded device look may not take, kept as the other clients' compatibility adapters keep them.",
+      "tokens": [
+        "jarvis",
+        "jarvis-blob",
+        "jarvis-circuit",
+        "jarvis-facet",
+        "jarvis-pixel"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "harmony/entry/src/main/ets/core/WireCompatibility.ts": {
       "reason": "Harmony native transport and pairing compatibility with existing deployed hubs.",
       "tokens": [
@@ -435,6 +447,23 @@
       "reason": "Harmony context envelopes read and send the existing negotiated wire tag.",
       "tokens": [
         "jarvis-context"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "harmony/tests/assistant-card-integration.test.mjs": {
+      "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "harmony/tests/device-look.test.mjs": {
+      "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
+      "tokens": [
+        "jarvis",
+        "jarvis-blob"
       ],
       "path_tokens": [],
       "external_refs": []

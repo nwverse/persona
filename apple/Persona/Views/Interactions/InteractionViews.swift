@@ -107,7 +107,7 @@ struct InteractionPreviewCard: View {
                     .foregroundStyle(StatusPalette.needsYou.dot)
                     .scaledFrame(width: Theme.Size.icon) // one column: the titles line up card to card
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(title).font(Theme.Font.heading).lineLimit(1)
+                    Text(title).font(Theme.Font.heading).lineLimit(2) // a row title may wrap; the buttons below never do
                     if showsPlace {
                         Text(interaction.placeLine(machine: machine))
                             .font(Theme.Font.label)
@@ -879,7 +879,7 @@ struct PlanTextSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                Markdown(MarkdownMemo.content(plan)).markdownTheme(.persona)
+                Markdown(MarkdownMemo.content(plan)).readingContent().markdownTheme(.persona)
                     .markdownTextStyle { ForegroundColor(Theme.primaryText) }.padding()
             }
             .navigationTitle(PlanText.title(plan))

@@ -97,6 +97,9 @@ struct CardFold<Words: View>: View {
     var box: CardFoldBox = .code
     /// The words are only the start of the text: there is more than they show, however tall they are.
     var more = false
+    /// Reading content (a plan): the words, and the lines they are cut at, grow past the interface's cap
+    /// (`readingContent()`); its toggle stays capped as the interface is.
+    var reading = false
     var title: String
     /// The toggle's accessibility identifiers, "<id>.expand".
     var id: String
@@ -127,7 +130,7 @@ struct CardFold<Words: View>: View {
 
     private var clip: some View {
         FoldClip(cut: cut, line: line, floor: line * CGFloat(Self.fewestLines)) {
-            words()
+            sized(words())
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full = $0 }
         }
@@ -136,7 +139,11 @@ struct CardFold<Words: View>: View {
         .contentShape(.rect) // what is folded away takes no touches
         .mask { if folds { FoldFadeMask(line: line) } else { Rectangle() } }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shown = $0 }
-        .background(alignment: .top) { FoldLinesProbe(lines: lines, font: font, level: level) { cut = $0 } }
+        .background(alignment: .top) { sized(FoldLinesProbe(lines: lines, font: font, level: level) { cut = $0 }) }
+    }
+
+    @ViewBuilder private func sized(_ content: some View) -> some View {
+        if reading { content.readingContent() } else { content }
     }
 
     @ViewBuilder private func boxed(_ content: some View) -> some View {
@@ -233,7 +240,7 @@ struct CardPlan: View {
     var body: some View {
         let all = ToolTextMemo.codeLines(plan)
         let start = all.count > Self.startLines ? all.prefix(Self.startLines).joined(separator: "\n") : plan
-        CardFold(lines: lines, font: Theme.Font.body, level: .body, box: .none, more: start.count < plan.count,
+        CardFold(lines: lines, font: Theme.Font.body, level: .body, box: .none, more: start.count < plan.count, reading: true,
                  title: String(localized: "Show Full Text"), id: "card-plan", open: open) {
             Markdown(MarkdownMemo.content(start))
                 .markdownTheme(.persona)
