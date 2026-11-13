@@ -378,6 +378,7 @@ enum LauncherName {
 
     /// A direct API connection: what the hub calls itself, so it can send through a computer.
     var providerKind: String { existing?.kind ?? imported?.kind ?? "launcher" }
+    var providerAgent: String? { existing?.agent ?? imported?.agent }
     var isAPI: Bool { providerKind == "api" }
     /// Send Through's choices: the hub's computers, and the stored one even when the hub no longer lists it.
     var viaChoices: [(id: String, name: String)] {
@@ -481,6 +482,7 @@ enum LauncherName {
                              maxContext: Int(t(maxContext)) ?? 0, effort: t(effort))
         if apiKeyByReference, !key.isEmpty { input.apiKeyReference = key }
         if isNew, let displayName = imported?.displayName, !displayName.isEmpty { input.displayName = displayName }
+        if isNew { input.agent = imported?.agent }
         if scopeShown { scope.apply(to: &input, old: e, machines: deps.machines(), kind: input.kind ?? "launcher") }
         if isAPI, viaMachine != (e?.viaMachine ?? "") { input.viaMachine = viaMachine }
         return input
