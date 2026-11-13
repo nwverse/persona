@@ -134,8 +134,8 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
 
 ## Taps
 
-A widget opens its page (`persona://widget/<kind>`): the Agents list, To-dos, Machines, Recordings, Health, Inbox,
-and the calendar for Today. Agents opens the most urgent agent's chat (`persona://open?machine=…&session=…`, the Live
+A widget opens its page (`persona://widget/<kind>`): the Agents list, To-dos, Machines, Recordings, Health, Inbox;
+Today opens To-dos too (Persona has no calendar page of its own), and Usage opens Machines, where the windows are. Agents opens the most urgent agent's chat (`persona://open?machine=…&session=…`, the Live
 Activity's link). Each row of the large Agents widget opens its own agent. The Record button runs the Record control's
 intent without opening the app, and the recording's Live Activity confirms it at once.
 
