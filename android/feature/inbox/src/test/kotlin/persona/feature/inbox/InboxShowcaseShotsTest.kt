@@ -220,10 +220,14 @@ class InboxShowcaseShotsTest {
             rule.onNodeWithText("收到 2 条消息 · 张三", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("开了 Agent：核对报价单", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("Agent 停了：报价单第 3 行税率错了", useUnmergedTree = true).assertExists()
-            // Empty sessions means no state words; once supplied, only the newest Agent entry carries its stateWord.
-            val expectedState = liveSessions.firstOrNull()?.stateWord(false)?.resolve(resourcesFor(language, night))
-            rule.onAllNodesWithText(expectedState ?: if (english) "Needs you" else "需要你", useUnmergedTree = true)
-                .assertCountEquals(if (liveSessions.isEmpty()) 0 else 1)
+            if (liveSessions.isEmpty()) {
+                for (word in listOf("完成未看", "Unread", "已看", "Seen", "未运行", "Not running", "需要你", "Needs you") {
+                    rule.onAllNodesWithText(word, useUnmergedTree = true).assertCountEquals(0)
+                }
+            } else {
+                val expectedState = requireNotNull(liveSessions.firstOrNull()?.stateWord(false)?.resolve(resourcesFor(language, night)))
+                rule.onNodeWithText(expectedState, useUnmergedTree = true).assertExists()
+            }
             saveShot("detail-expanded-${if (english) "en" else "zh-Hans"}-${appearance.name.lowercase()}-${if (night) "dark" else "light"}", "showcase-detail")
         }
     }
