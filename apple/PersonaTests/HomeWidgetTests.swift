@@ -150,4 +150,64 @@ struct HomeWidgetTests {
         #expect(HomeContext(snapshot: s, date: now).mood(.inbox) == .needsYou)
         #expect(HomeContext(snapshot: HomeSnapshot(), date: now).mood(.agents) == .offline) // not paired
     }
+
+    // MARK: The second widgets (Today, To-dos, Usage)
+
+    private static func todo(_ id: String, due: Date? = nil, done: Bool = false, high: Bool = false) -> TodoItem {
+        var fields = ["\"id\":\"\(id)\"", "\"title\":\"\(id)\""]
+        if let due { fields.append("\"due_at\":\"\(ISO8601DateFormatter().string(from: due))\"") }
+        if done { fields.append("\"done_at\":\"2026-01-01T00:00:00Z\"") }
+        if high { fields.append("\"priority\":\"high\"") }
+        do { return try JSON.decoder.decode(TodoItem.self, from: Data("{\(fields.joined(separator: ","))}".utf8)) }
+        catch { fatalError("bad fixture: \(error)") }
+    }
+
+    /// The To-dos widget's list is the To-dos page's Today filter, open ones only: overdue first, then by due, the
+    /// high-priority ones before the rest; a tick on the widget rides along.
+    @Test func todosAreTodaysOpenOnes() {
+        let calendar = Calendar.current
+        let now = calendar.date(bySettingHour: 13, minute: 0, second: 0, of: Date(timeIntervalSince1970: 1_800_000_000))!
+        let todos = [
+            Self.todo("later", due: now.addingTimeInterval(3 * 3600)),
+            Self.todo("overdue", due: now.addingTimeInterval(-26 * 3600)),
+            Self.todo("soon", due: now.addingTimeInterval(1800)),
+            Self.todo("done", due: now.addingTimeInterval(1800), done: true),
+            Self.todo("tomorrow", due: now.addingTimeInterval(30 * 3600)),
+            Self.todo("undated"),
+        ]
+        let t = HomeTodos.build(todos, ticks: ["soon": .ticking], now: now, calendar: calendar)
+        #expect(t.items.map(\.id) == ["overdue", "soon", "later"])
+        #expect(t.count == 3 && t.overdue == 1)
+        #expect(t.items[0].overdue && t.items[1].tick == .ticking)
+    }
+
+    /// A tick the hub does not take (here: no hub) is marked failed, so the widget says so and offers it again.
+    @Test func aTickThatFailsIsShown() async {
+        HomeWidgetActions.ticks = [:]
+        await HomeWidgetActions.complete(todoID: "not-a-todo")
+        #expect(HomeWidgetActions.ticks["not-a-todo"] == .failed)
+        HomeWidgetActions.ticks = [:]
+    }
+
+    /// The phone's calendar first, the hub's meetings without it, and with neither the widget is told why.
+    @Test func eventsComeFromTheCalendarThenTheHub() {
+        let e = HomeSnapshot.Event(title: "Review", start: 1, end: 2)
+        #expect(HomeToday.build(calendar: [e], hub: [], now: .now)?.source == .calendar)
+        #expect(HomeToday.build(calendar: nil, hub: [e], now: .now)?.source == .hub)
+        #expect(HomeToday.build(calendar: nil, hub: nil, now: .now)?.source == nil)
+    }
+
+    /// Usage keeps the Machines page's accounts and windows; with no account and no tokens there is nothing to show.
+    @Test func usageKeepsTheWindows() throws {
+        #expect(HomeUsage.build([], tokens: 0, tpm: 0, hourly: []) == nil)
+        let json = """
+        {"id":"a","provider":"claude","name":"Claude Max","windows":[{"label":"5h","window_minutes":300,"used_percent":86}],
+         "stale":false,"local":true,"sources":[],"machines":[]}
+        """
+        let account = try JSON.decoder.decode(UsageAccount.self, from: Data(json.utf8))
+        let u = try #require(HomeUsage.build([account], tokens: 1200, tpm: 30, hourly: [1, 2]))
+        #expect(u.accounts.first?.windows.first?.percent == 86 && u.accounts.first?.windows.first?.minutes == 300)
+        #expect(u.tokensToday == 1200 && u.hourly == [1, 2])
+    }
 }
+
