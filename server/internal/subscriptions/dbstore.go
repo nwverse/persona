@@ -20,6 +20,7 @@ type DB interface {
 	CommitSubscriptionRun(ctx context.Context, id string, merge func(data []byte, revision int64) ([]byte, error),
 		seen []db.SubscriptionSeenRow, items []db.SubscriptionItemRow, read []string, now time.Time) error
 	SubscriptionItems(ctx context.Context, id string, q db.SubscriptionItemsQuery) ([]db.SubscriptionItemRow, error)
+	SubscriptionItem(ctx context.Context, id, uid string) (*db.SubscriptionItemRow, error)
 	PruneSubscriptionItems(ctx context.Context, id string, before time.Time) error
 }
 
@@ -185,6 +186,19 @@ func (d *DBStore) HeldItems(ctx context.Context, id string, q ItemQuery) ([]Held
 		out = append(out, Held{Seq: r.Seq, Stored: r.CreatedAt, Item: it})
 	}
 	return out, nil
+}
+
+func (d *DBStore) HeldItem(ctx context.Context, id, uid string) (*Held, error) {
+	r, err := d.db.SubscriptionItem(ctx, id, uid)
+	if err != nil || r == nil {
+		return nil, err
+	}
+	var it Item
+	if err := json.Unmarshal(r.Data, &it); err != nil {
+		return nil, nil // a row this build cannot read, as HeldItems leaves it out
+	}
+	it.SubscriptionID, it.UID = id, r.UID
+	return &Held{Seq: r.Seq, Stored: r.CreatedAt, Item: it}, nil
 }
 
 func (d *DBStore) PruneItems(ctx context.Context, id string, before time.Time) error {

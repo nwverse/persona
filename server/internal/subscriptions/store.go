@@ -35,6 +35,8 @@ type Store interface {
 	CommitRun(ctx context.Context, c RunCommit) error
 	// HeldItems are the subscription's held items q picks, in the order they were stored (#2039).
 	HeldItems(ctx context.Context, id string, q ItemQuery) ([]Held, error)
+	// HeldItem is the subscription's held item uid (the newest stored, if several); nil when it holds none (#6198).
+	HeldItem(ctx context.Context, id, uid string) (*Held, error)
 	// PruneItems removes the subscription's held items stored before before (their dedup keys stay).
 	PruneItems(ctx context.Context, id string, before time.Time) error
 }
@@ -238,6 +240,17 @@ func (m *MemStore) HeldItems(_ context.Context, id string, q ItemQuery) ([]Held,
 		}
 	}
 	return slices.Clone(out), nil
+}
+
+func (m *MemStore) HeldItem(_ context.Context, id, uid string) (*Held, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.items) - 1; i >= 0; i-- {
+		if h := m.items[i]; h.SubscriptionID == id && h.UID == uid {
+			return &h, nil
+		}
+	}
+	return nil, nil
 }
 
 func (m *MemStore) PruneItems(_ context.Context, id string, before time.Time) error {

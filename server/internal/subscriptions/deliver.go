@@ -62,6 +62,7 @@ func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 	}
 	now := s.now()
 	out := []InboxSource{}
+	replying := s.replying(ctx)
 	for _, sub := range all {
 		src := InboxSource{ID: sub.ID, Name: sub.Label, Kinds: kindsOf(sub.Label), Things: []connector.InboxThing{}}
 		catchup, live, err := s.inboxHeld(ctx, sub, now)
@@ -69,6 +70,7 @@ func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 			return nil, err
 		}
 		d := s.deliverer(sub, now)
+		d.replies = replying[sub.Connector] && sub.RunState != StateNotConnected
 		src.Things = append(src.Things, d.inboxThings(catchup, live)...)
 		src.Things = append(src.Things, d.failing())
 		if inboxFrom(sub) != nil {
@@ -77,6 +79,43 @@ func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 		out = append(out, src)
 	}
 	return out, nil
+}
+
+// replying are the connectors that are on and answer an inbox reply (connector.Inbox), by id. Their status is not
+// asked on every round (it may be a call to the extension): a subscription that could not reach its connector says so
+// itself (StateNotConnected), and ReplyTarget asks before a reply goes.
+func (s *Service) replying(ctx context.Context) map[string]bool {
+	out := map[string]bool{}
+	for _, info := range s.o.Connectors.All(ctx) {
+		if _, ok := connector.As[connector.Inbox](info.Conn); ok && info.Enabled {
+			out[info.ID] = true
+		}
+	}
+	return out
+}
+
+// ReplyTarget is where a reply to a row of subscription id goes (#6198): its connector, and the thread the connector
+// knows the row's newest item by (the recipe's thread, else the item's id). last is the row's newest item (the thing's
+// Last, the item's id in the source). ok is false when the subscription, the item or its reply_to is gone, the item has
+// no id of the source's, or the connector cannot reply now: the reply is refused as for a row that cannot be replied to.
+func (s *Service) ReplyTarget(ctx context.Context, id, last string) (conn connector.Inbox, thread string, ok bool) {
+	sub, err := s.o.Store.GetSubscription(ctx, id)
+	if err != nil || sub == nil || last == "" || strings.HasPrefix(last, weakPrefix) {
+		return nil, "", false
+	}
+	h, err := s.o.Store.HeldItem(ctx, id, last)
+	if err != nil || h == nil || h.ReplyTo == "" {
+		return nil, "", false
+	}
+	info, found := s.o.Connectors.Find(ctx, sub.Connector)
+	if !found || !info.ready() {
+		return nil, "", false
+	}
+	in, ok := connector.As[connector.Inbox](info.Conn)
+	if !ok {
+		return nil, "", false
+	}
+	return in, cmpOr(h.Thread, h.UID), true
 }
 
 // readErrorOf is how a subscription in state says it is behind, as a built-in's failed read does (#6189): its last run
@@ -171,6 +210,9 @@ type deliverer struct {
 	lang  i18n.Lang
 	loc   *time.Location
 	rules string
+	// replies: the subscription's connector is on and answers an inbox reply (Service.replying), so a row whose newest
+	// item has reply_to can be replied to (#6198).
+	replies bool
 }
 
 func (s *Service) deliverer(sub Subscription, now time.Time) deliverer {
@@ -383,6 +425,9 @@ func (d deliverer) threadThing(key string, items []Held) connector.InboxThing {
 		Read: last.Seen} // read in the source up to its newest item: read here (#6176)
 	if strings.HasPrefix(last.Link, "https://") {
 		t.URL = last.Link
+	}
+	if last.ReplyTo != "" && d.replies && !strings.HasPrefix(last.UID, weakPrefix) {
+		t.ReplyTo, t.CanReply = last.ReplyTo, true // the reply goes to its connector with this item (Service.ReplyTarget)
 	}
 	if n := d.newestPull(items); n > 1 {
 		if t.Extra == nil {
