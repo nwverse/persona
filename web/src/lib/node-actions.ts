@@ -12,6 +12,7 @@ import { navigate } from "./router";
 import { openNewWorktree } from "./worktree";
 import type { MenuItem } from "../ui/menu-model";
 import { launcherBlock, usableFirst } from "./launcher-health";
+import { providerIdNote, providerTitle } from "./provider-names";
 
 export type NodeKind = "machine" | "workspace" | "tab" | "pane";
 
@@ -95,8 +96,10 @@ export const canChangeHost = (host: string | undefined) => !host || host === "he
 /** Renaming a workspace or a tab is herdr's and Tern's (the capability table in docs/integrations/engines.md). */
 export const canRenameIn = (host: string | undefined) => canChangeHost(host) || host === "tern";
 
-/** Only the agents a launcher starts the way "New agent" does without a first message: Claude Code. */
-export const launchableHere = (l: Launcher) => (l.agent_type || l.agent || "claude") === "claude";
+/** Claude Code, and a launcher the computer says it starts in a pane the user picked, keeping that pane when the start
+ *  fails (`run_here`: its Codex launchers, #5504). An older computer's failed Codex start closes its pane, here the
+ *  user's own shell (#5275): there Codex starts from "New agent" in a tab of its own. */
+export const launchableHere = (l: Launcher) => l.run_here || (l.agent_type || l.agent || "claude") === "claude";
 
 export const GIT_OPS = [
   { op: "pull", label: t("lib-node-actions.git_pull"), accel: "p", done: "lib-node-actions.git_pull_done" },
@@ -225,15 +228,16 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
     const block = launcherBlock(l);
     return {
       key: `node-agent-${l.name}`,
-      label: l.name,
-      hint: l.model,
+      // a provider by its display name, its startup ID at the row's end before the model (#5029); an rc alias by its ID
+      label: providerTitle(l),
+      hint: [providerIdNote(l), l.model].filter(Boolean).join(" · ") || undefined,
       // the pane's shell is a terminal's too: what "New agent" grays out is said here before it is chosen, after the
       // ones that can start (#1643); still a choice, as on iOS and New agent's "Try anyway": a start that works clears it
       ...(block ? { detail: block.reason, divider: i > 0 && !launcherBlock(all[i - 1]) } : {}),
       inline: true,
       onSelect: async () => {
         const res = (await deps.post(mid, "panes/agent", { pane: node.paneId, launcher: l.name }).catch((e) => Promise.reject(fail("lib-node-actions.start_failed", e)))) as PaneAgentResult | undefined;
-        deps.notify(t("lib-node-actions.started_in_pane", { name: l.name }), "ok");
+        deps.notify(t("lib-node-actions.started_in_pane", { name: providerTitle(l) }), "ok");
         deps.changed();
         // into the new agent's chat, as "New agent" opens the one it starts (#3287); an answer naming none stays here
         const sid = res?.session_id?.trim();

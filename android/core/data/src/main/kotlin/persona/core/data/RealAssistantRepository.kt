@@ -8,6 +8,7 @@ import persona.core.contracts.ServerEvent
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
+import persona.core.domain.models.keepingDetails
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -65,6 +66,7 @@ class RealAssistantRepository(
             if (machine.isNotEmpty() && main.isNotEmpty()) SessionKey(machine, main) else null,
             conversations, request.manager, request.owner,
             leaders = leadersOf(data),
+            backgroundSupervisor = backgroundSupervisorOf(data),
         )
     }
 
@@ -169,19 +171,36 @@ class RealAssistantRepository(
         }
         scope.launch {
             sessions.sessions.collect { updates ->
-                lock.withLock {
-                    val transport = connection.current.value ?: return@withLock
+                val reread = lock.withLock {
+                    val transport = connection.current.value ?: return@withLock null
                     val choice = AssistantManagerChoice.current.value
                     val request = Request(transport, choice)
-                    if (restoredScope != request.key || current.value.managerId != request.owner) return@withLock
+                    if (restoredScope != request.key || current.value.managerId != request.owner) return@withLock null
                     // A health chat is the health space's (docs/assistant/health.md): never on the assistant's own list.
                     val owned = updates.filter { choice.owns(it.manager) && !it.isHealth }
                     val byKey = owned.associateBy { it.key }
+                    val before = current.value
+                    // A summary row (paged lists) leaves the launcher, the permission mode, the compaction and the
+                    // other chat details out: they stay as the conversation had them (#5055); its model_pick is its own.
                     current.update { snapshot ->
-                        snapshot.copy(conversations = (snapshot.conversations.map { byKey[it.key] ?: it } +
+                        snapshot.copy(conversations = (snapshot.conversations.map { byKey[it.key]?.keepingDetails(it) ?: it } +
                             owned.filter { it.assistant == true }).distinctBy { it.key })
                     }
                     cached[request.key] = current.value
+                    request.takeIf { mayBeNewBackgroundSupervisor(before, owned) }
+                }
+                // The hub makes the background supervisor on first use (#4927), long after the page was read: which
+                // conversation it is comes from `GET /api/v1/assistant` alone, so a new one that may be it is asked about.
+                if (reread != null) launch {
+                    try {
+                        refresh(reread)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Logger.getLogger(RealAssistantRepository::class.java.name).log(
+                            Level.WARNING, "Assistant refresh for a new conversation failed; the list stands", e,
+                        )
+                    }
                 }
             }
         }
@@ -244,7 +263,9 @@ class RealAssistantRepository(
 
     override suspend fun startConversation(): SessionKey = start(null)
 
-    override suspend fun startConversation(launcher: String): SessionKey = start(launcher)
+    override suspend fun startConversation(launcher: String): SessionKey = start(persona.core.contracts.ModelPick(launcher))
+
+    override suspend fun startConversation(pick: persona.core.contracts.ModelPick): SessionKey = start(pick)
 
     override suspend fun mainConversationOf(manager: String): SessionKey {
         val captured = request()
@@ -279,18 +300,20 @@ class RealAssistantRepository(
         return session.key
     }
 
-    private suspend fun start(launcher: String?): SessionKey {
+    private suspend fun start(pick: persona.core.contracts.ModelPick?): SessionKey {
         // Capture identity before waiting behind another creation.
         val request = request()
         return creationLock.withLock {
             val config = request.transport.assistantOf(request.owner)
             check(connection.current.value === request.transport) { CoreText.of(Key.ConnectionSwitched).shown }
-            create(request, config.string("main").isEmpty(), launcher, config)
+            create(request, config.string("main").isEmpty(), pick, config)
         }
     }
 
-    private suspend fun create(request: Request, isMain: Boolean, launcher: String?, config: JsonObject): SessionKey {
-        val result = request.transport.createConversationOf(request.owner, isMain, launcher)
+    private suspend fun create(request: Request, isMain: Boolean, pick: persona.core.contracts.ModelPick?, config: JsonObject): SessionKey {
+        // A model or an effort goes with the launcher only (the new-chat page's panel); a launcher alone as before.
+        val result = if (pick != null && (pick.model != null || pick.effort != null)) request.transport.createConversationOf(request.owner, isMain, pick)
+            else request.transport.createConversationOf(request.owner, isMain, pick?.launcher)
         val session = JsonCodec.decodeFromJsonElement<Session>(result.getValue("session"))
         check(connection.current.value === request.transport) { CoreText.of(Key.ConnectionSwitched).shown }
         noteConversation(session.sessionId, request)
@@ -309,6 +332,7 @@ class RealAssistantRepository(
                 put("machine_id", snapshot.mainSession?.machineId ?: session.machineId)
                 put("main", snapshot.mainSession?.sessionId.orEmpty())
                 put("conversations", JsonArray(snapshot.conversations.map { JsonCodec.encodeToJsonElement(it) }))
+                snapshot.backgroundSupervisor?.let { put("background_supervisor", it) }
             })
         }
         return session.key
@@ -331,6 +355,29 @@ internal fun spaceConversationsOf(data: JsonObject, space: String): List<Session
 internal fun leadersOf(data: JsonObject): List<String> {
     val main = data.string("main")
     return data.array("leaders").mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.takeIf { id -> id.isNotEmpty() && id != main } }
+}
+
+/**
+ * `background_supervisor` of `GET /api/v1/assistant` (#4927): the built-in background supervisor's conversation id, null
+ * until the hub has made it and from a hub without it. Never the main conversation's.
+ */
+internal fun backgroundSupervisorOf(data: JsonObject): String? =
+    data.string("background_supervisor").takeIf { it.isNotEmpty() && it != data.string("main") }
+
+/**
+ * Whether [updates] bring a conversation that may be the hub's background supervisor and that [before] does not name as
+ * it: an assistant conversation the hub opened itself with no task behind it (`origin: "task"`, no `origin_ref`,
+ * docs/assistant/unified-entry.md "Background supervisor"), either new to the list or just retitled. The hub starts the
+ * conversation first, then records it as the background supervisor, then titles it, so the retitling is the update
+ * after which `GET /api/v1/assistant` is sure to name it.
+ */
+internal fun mayBeNewBackgroundSupervisor(before: AssistantSnapshot, updates: List<Session>): Boolean {
+    val listed = before.conversations.associateBy { it.key }
+    return updates.any {
+        it.assistant == true && it.sessionId != before.backgroundSupervisor &&
+            it.origin == "task" && it.originRef.isNullOrBlank() &&
+            listed[it.key].let { known -> known == null || known.title != it.title }
+    }
 }
 
 /** `GET /api/v1/assistant/leaders`'s names by leader conversation id: current directions with a name only. */

@@ -51,6 +51,8 @@ nonisolated enum StateName: String, CaseIterable, Sendable {
     static var taskWorking: String { interfaceText("Task Working [State Names]") }
     static var taskNeedsYou: String { interfaceText("Task Needs You [State Names]") }
     static var taskStuck: String { interfaceText("Stuck [State Names]") }
+    /// A piece of a direction no Agent has started yet, the hub's `planned` (#5860).
+    static var taskNotStarted: String { interfaceText("Task Not Started [State Names]") }
     /// The same words as a supervised task awaiting review (`ReviewState.pendingReview`).
     static var taskToVerify: String { interfaceText("Awaiting review") }
 

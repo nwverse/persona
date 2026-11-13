@@ -83,6 +83,9 @@
   --mark-green: #34c759;
   --mark-blue: #007aff;
   --mark-white: #fff;
+  /* Public package artwork may contain a transparent black mark: keep its backing light in both schemes. */
+  --extension-logo-backing: var(--mark-white);
+  --extension-meta-size: 11px;
   --mark-black: #000;
   --shadow-hairline: 0 0 0 1px var(--line);
   --shadow-btn: 0 0 0 1px var(--line-strong), 0 1px 2px #1018280d;
@@ -203,6 +206,7 @@
   --color-orange-tint: var(--orange-tint);
   --color-red: var(--red);
   --color-red-tint: var(--red-tint);
+  --color-danger-wash: var(--danger-wash);
   --color-attention: var(--attention);
   --color-danger-fill: var(--danger-fill);
   --color-ai: var(--ai);
@@ -235,7 +239,7 @@
   --sidebar-fold-close-ease: ease-in;
 
   --font-sans: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --font-mono: "JetBrains Mono", "SF Mono", "DejaVu Sans Mono", "Liberation Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 
 body {
@@ -428,10 +432,32 @@ button:disabled { cursor: default; }
 /* A permission mode's tone (#3956; iOS Theme.ModeTone, Android ModeTone, docs/design/DESIGN_SYSTEM.md): how much a
  * mode lets an agent do without asking, on the header's mode button. None is an agent state's color (blue, orange, green).
  * Ask First (and a mode not reported yet) is the quiet ink on the chip fill; the others wash their capsule at 12%. */
+:root { --danger-wash: color-mix(in srgb, var(--red) 12%, transparent); } /* iOS Theme.danger at 12%: the failed and interrupted conclusion cards and the failed Needs you row (#5569). Reds are 4.78:1 on the tray's surface and 4.31:1 on the light canvas, so every word on the wash is --ink (12:1 and up) and --red only colours icons (theme-contrast.test.ts). --red-tint stays neutral (selection and error fills of the other pages). */
 :root { --mode-plans: #0e7c86; --mode-acts: var(--hue-purple); --mode-allows: var(--red); }
 .dark { --mode-plans: #4fd1c5; }
 :root { --mode-plans-tint: color-mix(in srgb, var(--mode-plans) 12%, transparent); --mode-acts-tint: color-mix(in srgb, var(--mode-acts) 12%, transparent); --mode-allows-tint: color-mix(in srgb, var(--mode-allows) 12%, transparent); }
 @theme inline { --color-mode-plans: var(--mode-plans); --color-mode-acts: var(--mode-acts); --color-mode-allows: var(--mode-allows); --color-mode-plans-tint: var(--mode-plans-tint); --color-mode-acts-tint: var(--mode-acts-tint); --color-mode-allows-tint: var(--mode-allows-tint); }
+
+/* The unified model panel (#5032, after Cindy's model selector; ui/model-panel). An effort level's color says how
+ * strong the level is, not how light the page is, so it is the same in light and dark, taken by the level itself
+ * (lib/model-panel.ts effortColor): a model whose top is High ends blue, and purple is only the true top (Codex's Ultra
+ * takes Max's). Fast's blue shows only in the setup flyout (rows and the pill draw Fast in their own ink); the star
+ * turns gold under the pointer and once saved. The panel opens out of the pill (--model-panel-morph, the design system's
+ * ease) and its content fades in after it; its rows' hover glides between them. */
+:root {
+  --effort-minimal: #2aae5b; --effort-low: #2aae5b; --effort-medium: #14b8a6; --effort-high: #3b82f6; --effort-xhigh: #4f46e5; --effort-max: #8b5cf6;
+  --fast: #3b9eff; --fast-tint: color-mix(in srgb, var(--fast) 16%, transparent);
+  --favorite-star: #d99a06;
+  --model-panel-morph: 220ms; --model-panel-fade: 140ms; --model-panel-fade-delay: 50ms; --model-panel-glide: 80ms; --model-panel-ease: var(--ease-out-strong);
+  --effort-move: 200ms; --effort-resize: 150ms; --effort-ease: var(--ease-link);
+}
+.dark { --favorite-star: #e8b425; }
+@theme inline { --color-fast: var(--fast); --color-fast-tint: var(--fast-tint); --color-favorite-star: var(--favorite-star); }
+/* From the pill's shape (--model-panel-from, set where it opens) to the panel; the clip ends past the panel's edges so
+   its shadow is whole, and goes when the animation does. */
+@keyframes model-panel-morph{0%{clip-path:var(--model-panel-from);transform:translateY(var(--model-panel-shift,0px))}to{clip-path:inset(-32px round 44px);transform:none}}
+@keyframes model-panel-content{0%{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce) { :root { --model-panel-fade-delay: 0ms; } }
 
 /* ── Phones (#1996) ─────────────────────────────────────── */
 /* The chat's reading sizes: 15 / 14 on wide screens, 16 / 15 on a phone (the user's call: iOS reads at 17, but tool rows

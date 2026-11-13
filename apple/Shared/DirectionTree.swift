@@ -25,12 +25,15 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
         var needsYou: Int
         var stuck: Int
         var review: Int
+        /// Open to-dos no Agent has ever worked on (#5860); 0 from an older hub, which omits the field.
+        var planned: Int
 
-        init(working: Int = 0, needsYou: Int = 0, stuck: Int = 0, review: Int = 0) {
+        init(working: Int = 0, needsYou: Int = 0, stuck: Int = 0, review: Int = 0, planned: Int = 0) {
             self.working = working
             self.needsYou = needsYou
             self.stuck = stuck
             self.review = review
+            self.planned = planned
         }
 
         init(from decoder: Decoder) throws {
@@ -39,30 +42,32 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
             needsYou = try c.decodeIfPresent(Int.self, forKey: .needsYou) ?? 0
             stuck = try c.decodeIfPresent(Int.self, forKey: .stuck) ?? 0
             review = try c.decodeIfPresent(Int.self, forKey: .review) ?? 0
+            planned = try c.decodeIfPresent(Int.self, forKey: .planned) ?? 0
         }
 
         private enum CodingKeys: String, CodingKey {
-            case working, stuck, review
+            case working, stuck, review, planned
             case needsYou = "needs_you"
         }
     }
 
-    /// A to-do's one state, as the hub decides it (precedence needs_you, review, stuck, working). A state this app does
-    /// not know reads as working: the to-do is open either way.
+    /// A to-do's one state, as the hub decides it (precedence needs_you, review, planned, stuck, working). A state this
+    /// app does not know reads as working: the to-do is open either way.
     nonisolated enum TaskState: String, Codable, Hashable, Sendable, CaseIterable {
-        case needsYou = "needs_you", review, stuck, working
+        case needsYou = "needs_you", review, stuck, working, planned
 
         init(from decoder: Decoder) throws {
             self = TaskState(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .working
         }
 
-        /// Needs you / to verify / stuck / working (`StateName`).
+        /// Needs you / to verify / stuck / working / not started (`StateName`).
         var text: String {
             switch self {
             case .needsYou: StateName.taskNeedsYou
             case .review: StateName.taskToVerify
             case .stuck: StateName.taskStuck
             case .working: StateName.taskWorking
+            case .planned: StateName.taskNotStarted
             }
         }
     }

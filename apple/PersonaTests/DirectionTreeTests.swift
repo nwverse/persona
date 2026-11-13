@@ -58,9 +58,29 @@ struct DirectionTreeTests {
     /// The hub's state values as the wire spells them (`working`, not the old `doing`).
     @Test func decodesEachStateValue() throws {
         let states = try JSON.decoder.decode([DirectionTree.TaskState].self,
-                                             from: Data(#"["needs_you","review","stuck","working"]"#.utf8))
-        #expect(states == [.needsYou, .review, .stuck, .working])
+                                             from: Data(#"["needs_you","review","stuck","working","planned"]"#.utf8))
+        #expect(states == [.needsYou, .review, .stuck, .working, .planned])
         #expect(DirectionTree.TaskState.working.rawValue == "working")
+        #expect(DirectionTree.TaskState.planned.rawValue == "planned")
+    }
+
+    /// #5860: a leader's piece no Agent has worked on is `planned`, with its own count; an older hub omits both.
+    @Test func plannedPiecesDecodeAsNotStartedAndOlderHubsReadZero() throws {
+        let withPlanned = """
+        {"directions":[{"id":"lead","name":"Product",
+          "counts":{"working":1,"needs_you":0,"stuck":0,"review":0,"planned":2},
+          "tasks":[{"id":"t1","title":"Ship","state":"working"},
+                   {"id":"t2","title":"Piece","state":"planned"}]}]}
+        """
+        let tree = try JSON.decoder.decode(DirectionTree.self, from: Data(withPlanned.utf8))
+        let lead = try #require(tree.directions.first)
+        #expect(lead.counts.planned == 2)
+        #expect(lead.tasks.map(\.state) == [.working, .planned])
+        #expect(lead.tasks[1].state.text == "未开始")
+        // The folded row's two counts ignore planned, as on the web.
+        #expect(lead.counts.label == "在做 1")
+        let older = try JSON.decoder.decode(DirectionTree.Counts.self, from: Data(#"{"working":1}"#.utf8))
+        #expect(older.planned == 0)
     }
 
     @Test func fetchesTheTreeAndAnOlderHubHasNone() async throws {
@@ -88,6 +108,7 @@ struct DirectionTreeTests {
         #expect(DirectionTree.TaskState.needsYou.text == "等你")
         #expect(DirectionTree.TaskState.stuck.text == "卡住")
         #expect(DirectionTree.TaskState.review.text == "待验收")
+        #expect(DirectionTree.TaskState.planned.text == "未开始")
         // A direction's counts are the sidebar's lead-row words (#4331), only the non-zero parts.
         #expect(DirectionTree.Counts(working: 2, needsYou: 1).label == "在做 2 · 等你 1")
         #expect(DirectionTree.Counts(working: 3).label == "在做 3")

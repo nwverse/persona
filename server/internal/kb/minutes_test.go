@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -71,7 +72,7 @@ const minutesReply = `{
 
 // A meeting's minutes: every item at the time of the line it cites (others dropped), a person only when named in the
 // transcript or the calendar, a due date only when it is a real day from the meeting on; stored next to the recording,
-// readable from Get, searchable, told once.
+// readable from Get, searchable, told once. A photo is a line of the input of its own, by its words.
 func TestMinutesWritten(t *testing.T) {
 	m := &captureModel{reply: minutesReply}
 	e := goldenEngine(t, m)
@@ -81,10 +82,13 @@ func TestMinutesWritten(t *testing.T) {
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	u := meetingUpload(1, start, "大家好，今天评审导出", "Ada 说导出超过 4 MB 的条目会被丢掉", "那这一版先保留上限", "Bo 你周五前补上回归测试", "上限按条还是按录音算还没定")
 	u.Calendar = &RecordingCalendar{Title: " 发布评审 ", Attendees: []string{"Ada", " Cy ", "Ada", ""}, Location: ""}
+	ended := start.Add(50 * time.Second)
+	u.EndedAt = &ended
 	putRecording(t, e, recID, u, now)
 	if r := recordingNow(t, e, recID); r.MinutesState != MinutesPending || r.Name != "发布评审" || r.Kind != RecordingMeeting {
 		t.Fatalf("after upload: state %q name %q kind %q", r.MinutesState, r.Name, r.Kind)
 	}
+	addPhoto(t, e, recID, photoUpload(1, 25, "白板", "导出上限：每条 4 MB"), false)
 	if n := e.WriteMinutes(context.Background(), 2); n != 1 {
 		t.Fatalf("wrote %d", n)
 	}
@@ -444,8 +448,9 @@ func TestGoldenMinutesMerge(t *testing.T) {
 				Points:    []prompts.KBMinutesNote{{Line: 3, Text: "导出超过 4 MB 的条目会被丢掉", Who: "Ada"}},
 				Decisions: []prompts.KBMinutesNote{{Line: 40, Text: "这一版先保留上限"}}},
 			{Part: 2, From: "15:00:00", To: "15:59:50", Where: "三号会议室",
-				Actions: []prompts.KBMinutesNote{{Line: 410, Text: "补上回归测试", Who: "Bo", By: "周五前", DueDate: "2026-11-13"}},
-				Open:    []prompts.KBMinutesNote{{Line: 700, Text: "上限按条还是按录音"}}},
+				Decisions: []prompts.KBMinutesNote{{Photo: 2, Text: "白板上的排期照此执行"}},
+				Actions:   []prompts.KBMinutesNote{{Line: 410, Text: "补上回归测试", Who: "Bo", By: "周五前", DueDate: "2026-11-13"}},
+				Open:      []prompts.KBMinutesNote{{Line: 700, Text: "上限按条还是按录音"}}},
 		},
 	}
 	golden(t, "minutes_merge.system", prompts.RenderKBMinutesMerge(prompts.KBOwner{Owner: "示例用户"}))
@@ -556,7 +561,7 @@ func TestMinutesAnswerRules(t *testing.T) {
 		if err := json.Unmarshal([]byte(reply), &a); err != nil {
 			t.Fatal(err)
 		}
-		return e.buildMinutes(r, a, read, goldenZone)
+		return e.buildMinutes(r, a, read, goldenZone, i18n.ZhHans)
 	}
 	for _, empty := range []string{`{}`, `{"title":"无法总结"}`, `{"points":[{"text":"","line":1}]}`} {
 		if _, err := build(empty); !errors.Is(err, errMinutesUnusable) {

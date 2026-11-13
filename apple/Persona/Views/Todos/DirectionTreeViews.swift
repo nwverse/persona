@@ -4,12 +4,14 @@ import SwiftUI
 // state word per to-do in one tone, and a direction's two counts. The tree decides both; these only draw them.
 
 extension DirectionTree.TaskState {
-    /// The word's color: Needs You's for needs you, Working's for working, Caution's for stuck and to verify (the words say which).
+    /// The word's color: Needs You's for needs you, Working's for working, Caution's for stuck and to verify (the words
+    /// say which), and the quiet idle grey for not started (#5860, the web's text-ink-3).
     var tone: Color {
         switch self {
         case .needsYou: StatusPalette.needsYou.text
         case .working: StatusPalette.working.text
         case .stuck, .review: Theme.cautionText
+        case .planned: StatusPalette.idle.text
         }
     }
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"path/filepath"
+	"strings"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -67,7 +68,25 @@ func (n *Node) markStopped(s *proto.Session) {
 	default:
 		return
 	}
-	if _, runtime := engineRuntimes[n.defaultKind()]; runtime || n.defaultHost() == nil {
+	if h, _, known := n.runtimes.belongs(s.SessionID); h != nil || known || n.runtimes.unlistedTranscripts()[s.SessionID] {
+		return
+	}
+	kind := s.Host
+	if kind == "" {
+		st, _ := n.state.get(s.SessionID)
+		pane := st.Pane
+		if pane == "" {
+			n.mu.Lock()
+			pane = n.lastPanes[s.SessionID]
+			n.mu.Unlock()
+		}
+		if pane != "" {
+			kind = host.ParsePane(pane).Kind
+		} else {
+			kind = n.defaultKind() // Older transcripts may have no recorded host.
+		}
+	}
+	if _, runtime := engineRuntimes[kind]; runtime || n.hosts.Get(kind) == nil {
 		return
 	}
 	if n.isAssistantSession(s.SessionID) || n.runtimeAssistant(s.SessionID) || n.freshFork(s.SessionID) {
@@ -145,4 +164,77 @@ func allShells(names []string) bool {
 		}
 	}
 	return true
+}
+
+// finishedTerminal is a terminal a stopped agent left, as panes.close_finished lists it.
+type finishedTerminal struct {
+	Pane        string `json:"pane"`
+	SessionID   string `json:"session_id"`
+	TabID       string `json:"tab_id,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Why         string `json:"why,omitempty"` // a kept one: why it was not closed
+}
+
+// closeFinished is the user's "Close finished terminals" (#4754): it closes the terminals stopped agents left — panes
+// Persona opened for a session (personaTabToken) with no agent in them and only shells in front, looked at again now —
+// only those in only (comma-separated pane ids, what the user confirmed) when given. preview lists them and closes
+// nothing. Nothing calls it on a timer.
+func (n *Node) closeFinished(ctx context.Context, only string, preview bool) (map[string]any, error) {
+	want := map[string]bool{}
+	for _, p := range strings.Split(only, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			want[p] = true
+		}
+	}
+	type cand struct {
+		p host.Agent
+		h host.Host
+	}
+	var cands []cand
+	n.mu.Lock()
+	inUse := map[string]bool{}
+	for _, a := range n.agents {
+		inUse[a.PaneID] = true
+	}
+	for _, h := range n.hosts.All() {
+		for _, p := range n.layouts[h.Kind()].panes {
+			if p.PaneID == "" || !validID(p.Tokens[personaTabToken]) || p.Agent != "" || inUse[p.PaneID] || len(want) > 0 && !want[p.PaneID] {
+				continue
+			}
+			cands = append(cands, cand{p, h})
+		}
+	}
+	n.mu.Unlock()
+	closed, kept := []finishedTerminal{}, []finishedTerminal{}
+	for _, c := range cands {
+		t := finishedTerminal{Pane: c.p.PaneID, SessionID: c.p.Tokens[personaTabToken], TabID: c.p.TabID, WorkspaceID: c.p.WorkspaceID}
+		fg, ok := c.h.(host.ForegroundNamer)
+		org, ok2 := c.h.(host.Organizer)
+		if !ok || !ok2 {
+			t.Why = "this engine cannot close it from here"
+			kept = append(kept, t)
+			continue
+		}
+		ref := n.hosts.Ref(c.p.PaneID)
+		names, err := fg.PaneForeground(ctx, ref)
+		if err != nil || len(names) == 0 || !allShells(names) {
+			t.Why = "something runs in it" // the user is using it
+			kept = append(kept, t)
+			continue
+		}
+		if !preview {
+			if err := org.Close(ctx, ref, c.p.WorkspaceID, c.p.TabID); err != nil {
+				t.Why = err.Error()
+				kept = append(kept, t)
+				continue
+			}
+			log.Printf("finished terminal %s (session %s): closed by the user", c.p.PaneID, t.SessionID)
+		}
+		closed = append(closed, t)
+	}
+	if !preview && len(closed) > 0 {
+		_ = n.refreshHosts(ctx)
+		n.notifySessions()
+	}
+	return map[string]any{"closed": closed, "kept": kept, "preview": preview}, nil
 }

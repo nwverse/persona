@@ -28,7 +28,9 @@ import (
 //     leader's Agent, task_leader.go) puts its Agents under that leader Agent inside the leader's task; when the
 //     leader's task is not listed it is a task of the conversation above the leader (supervisorAboveTask).
 //   - Its state, first match wins: needs_you (the SOP's Waiting on you), review (waits for acceptance, nothing of it
-//     running), stuck (taskStuck, the leader reports' rule), working.
+//     running), planned (no agent has ever worked on it and it is not a concern: a piece of a direction a leader
+//     recorded with todo_create, a Lark topic's to-do, a to-do the user made; #5846), stuck (taskStuck, the leader
+//     reports' rule), working. A direction lists them needs_you, review, stuck, working, planned.
 //
 // The apps are told {"type":"directions"} whenever the tree's content changes (directionTreeSync), and read the tree
 // again then.
@@ -39,9 +41,10 @@ const (
 	treeReview   = "review"
 	treeStuck    = "stuck"
 	treeWorking  = "working"
+	treePlanned  = "planned"
 )
 
-var treeStates = []string{treeNeedsYou, treeReview, treeStuck, treeWorking}
+var treeStates = []string{treeNeedsYou, treeReview, treeStuck, treeWorking, treePlanned}
 
 // sourceSpawned: a to-do Agent linked because another Agent of the to-do spawned it (todo_sessions.go); its via is
 // "<machine>/<session>" of that Agent.
@@ -70,6 +73,7 @@ type treeCounts struct {
 	NeedsYou int `json:"needs_you"`
 	Stuck    int `json:"stuck"`
 	Review   int `json:"review"`
+	Planned  int `json:"planned"`
 }
 
 func (c *treeCounts) add(state string) {
@@ -80,6 +84,8 @@ func (c *treeCounts) add(state string) {
 		c.Review++
 	case treeStuck:
 		c.Stuck++
+	case treePlanned:
+		c.Planned++
 	default:
 		c.Working++
 	}
@@ -432,6 +438,8 @@ func (tb *treeBuild) state(t listedTodo) string {
 		return treeNeedsYou
 	case tr.Section != triageWorking && (t.Supervision.state(t.Todo) == reviewPending || triageOpenAsk(t.Ask) != nil):
 		return treeReview
+	case notStarted(t.Todo):
+		return treePlanned
 	case taskStuck(t.Todo, tr, tb.reached[t.ID], tb.now):
 		return treeStuck
 	}
