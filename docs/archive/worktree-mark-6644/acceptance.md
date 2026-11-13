@@ -1,4 +1,4 @@
-# Worktree sidebar mark — evidence for #6644
+# Worktree sidebar mark: evidence for #6644
 
 Screenshots showing the By-repository sidebar after removing the bare git-branch glyph
 from non-main worktree rows. The main checkout keeps its home marker and Primary badge;
