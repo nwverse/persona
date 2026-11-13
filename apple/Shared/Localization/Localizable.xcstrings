@@ -8200,13 +8200,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%1$lld message from another conversation is waiting [Queue Strip]"
+                  "value" : "%1$lld message from another conversation is waiting"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%1$lld messages from other conversations are waiting [Queue Strip]"
+                  "value" : "%1$lld messages from other conversations are waiting"
                 }
               }
             }
@@ -8215,13 +8215,13 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "別の会話からのメッセージが %1$lld 件待機中 [Queue Strip]"
+            "value" : "別の会話からのメッセージが %1$lld 件待機中"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "还有 %1$lld 条别的对话在排队 [Queue Strip]"
+            "value" : "还有 %1$lld 条别的对话在排队"
           }
         }
       }
@@ -27967,6 +27967,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "按钮"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Buttons and bars stop growing at the system's Extra Extra Extra Large size; messages and other reading text keep growing." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buttons and bars stop growing at the system's Extra Extra Extra Large size; messages and other reading text keep growing."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ボタンやバーは、システムの「特大」サイズより大きくなりません。メッセージなどの読み物は、そのまま大きくなります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按钮和栏最大只放大到系统的「特大」；消息等阅读内容会继续放大。"
           }
         }
       },
@@ -65623,6 +65646,29 @@
       },
       "extractionState" : "manual"
     },
+    "Hand to Agent [To-do Page Button]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hand to Agent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェントへ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交给 Agent"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Hand to Persona" : {
       "localizations" : {
         "en" : {
@@ -82239,6 +82285,29 @@
       },
       "extractionState" : "manual"
     },
+    "Mention a file, workspace, or session" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mention a file, workspace, or session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイル、ワークスペース、またはセッションをメンション"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提及文件、工作区或会话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Mentioned" : {
       "localizations" : {
         "en" : {
@@ -91662,6 +91731,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有对得上的文件或会话"
+          }
+        }
+      }
+    },
+    "No matching files, workspaces, or sessions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No matching files, workspaces, or sessions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一致するファイル、ワークスペース、またはセッションはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有对得上的文件、工作区或会话"
           }
         }
       }
@@ -174511,6 +174603,121 @@
       },
       "extractionState" : "manual"
     },
+    "Branch: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Branch: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブランチ：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分支：%1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Computer: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Computer: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータ：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑：%1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Folder: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Folder: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダ：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目录：%1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Workspace · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace · %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ワークスペース · %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区 · %1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Workspace: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ワークスペース：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区：%1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Workspace navigation" : {
       "comment" : "BeautifulUI looks this up in the app's catalog (#5574)",
       "localizations" : {
@@ -183853,6 +184060,236 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "「%@」"
+          }
+        }
+      }
+    },
+    "When Done, Put It in the Inbox" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When Done, Put It in the Inbox"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了後に受信箱へ入れる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跑完放进收件箱"
+          }
+        }
+      }
+    },
+    "Don’t" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Don’t"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "入れない"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不放"
+          }
+        }
+      }
+    },
+    "Worth a Look" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Worth a Look"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "注目時のみ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "值得看才放"
+          }
+        }
+      }
+    },
+    "Every Time" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Every Time"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毎回"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次都放"
+          }
+        }
+      }
+    },
+    "Every run adds a row to your Inbox so you can follow up. Tapping it opens that chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Every run adds a row to your Inbox so you can follow up. Tapping it opens that chat."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行のたびに受信箱へ1行追加するので、フォローしやすくなります。開くとそのチャットが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次运行完都在收件箱里放一行，方便你跟进，点开就是那段对话。"
+          }
+        }
+      }
+    },
+    "A row is added to your Inbox only when a run finds something worth a look. Tapping it opens that chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A row is added to your Inbox only when a run finds something worth a look. Tapping it opens that chat."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行で見る価値のあることが見つかったときだけ、受信箱に1行追加します。開くとそのチャットが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有这次运行发现值得你看的事，才在收件箱里放一行，点开就是那段对话。"
+          }
+        }
+      }
+    },
+    "Nothing is added to your Inbox." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing is added to your Inbox."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信箱には入れません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不会放进收件箱。"
+          }
+        }
+      }
+    },
+    "Inbox: if worth a look" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inbox: if worth a look"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信箱：見る価値があれば"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件箱：值得看才放"
+          }
+        }
+      }
+    },
+    "Inbox: every time" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inbox: every time"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信箱：毎回"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件箱：每次"
+          }
+        }
+      }
+    },
+    "Open the Chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open the Chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チャットを開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开对话"
           }
         }
       }

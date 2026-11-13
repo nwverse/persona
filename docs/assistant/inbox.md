@@ -238,11 +238,12 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
 - **Tools**: `events` (hub-owned: open events in the same chat plus those handled within 3 days, at most 10, `{id, title, summary, tier, version, done, meta}`; `query` filters text in titles, summaries, meta);
   `messages_before`, `messages_around`, `search` (plugin-owned through `group.tool`, avatars / media stripped, at most 8 KB).
 - **Result**: `assign` (each new message's event: existing ID or `new:1`…) and `events` (title, summary, tier, reason for each touched event; new events may `continues` a handled one).
-  Hub validates: every new message assigned exactly once; existing events must have been queried in this batch and remain unhandled; tier must be one of three and title required. The 3-new-event limit is prompt guidance only: exceeding it does not invalidate the result.
+  For a handled event, the optional `reopen` in its `events` item defaults to true: a genuine follow-up appends to and reopens the same event. Only pure closeout (thanks, acknowledgement or emoji) sets `reopen: false`, which appends and records the messages but keeps the event done; `reopen` has no effect on open or new events.
+  Hub validates: every new message assigned exactly once; existing events must have been queried in this batch; handled events are allowed except done noise events and done events with at least 50 messages, which are excluded from candidates; tier must be one of three and title required. The 3-new-event limit is prompt guidance only: exceeding it does not invalidate the result.
   An invalid result or unparseable JSON is handed back to the model once for correction, consuming one call allowance without adding a tool call; if no allowance remains, or the correction is still invalid, the model is treated as unavailable and the fallback is used.
 - **Counts**: hub maintains total message `count`, initialized from assigned messages and incremented by newly assigned messages each batch, ignoring plugin `extra.count`. `started_at` is fixed at creation.
 - **Inbox writes**: for connectors maintaining `meta`, call `group.append` once per touched event; retry only failed events, 3 attempts total. Write Inbox items using returned `id`, model title / summary / tier, `triaged_by: "model"`,
-  treating this version as triaged. If the user handled an event meanwhile, create a new continuation instead. An unchanged `last` is a retransmission, with no store / push (push once per ID + version). Muted events remain directly done.
+  treating this version as triaged. Grouping records `title_by: "model"` or `"rules"` when it writes the title; once `title_by` is `"assistant"` or `"user"`, grouping leaves the title and summary unchanged while tier, reason and urgency still advance. If the user handled an event meanwhile, append to and reopen that event rather than replacing it with a new continuation. An unchanged `last` is a retransmission, with no store / push (push once per ID + version). Muted events remain directly done.
 - **Fallback**: unavailable model (unconfigured, no quota, error, timeout) or invalid result invokes plugin `group.fallback` for structural grouping (reply / quote chains, topics, consecutive messages by one person, time gaps).
   Without `group.fallback`, do not write the batch; wait for the model and resubmit next round, like Inbox items without fallback.
   It receives events under the same rules as `events`. For an event the fallback opens, use plugin `rule_tier`, reason "Rule-based," `triaged_by: "rules"`; do not send this version back to the model.
@@ -411,14 +412,15 @@ with a chronological **handling chain**. Additive only: IDs, sources, existing f
 **Section calculation** (`status()`): collapsed stays collapsed (noise never upgrades); reply / Agent suggestion → Needs you; handling chat reviewing / sub-chat working → Working (urgent stays Needs you);
 awaiting response → Working; failure → Needs you; otherwise `tier` (FYI / Needs you; untriaged counts as Needs you). A `conclusion` suggestion uses its chosen tier.
 
-**Handling chain** records only key calls, **written by code where they occur**, not model-authored or investigative steps. Each entry is `{id, at, kind, text, detail?, count?, sender?, messages?, link?, edited?}`.
+**Handling chain** records only key calls, **written by code where they occur**, not model-authored or investigative steps. Each entry is `{id, at, kind, text, detail?, count?, sender?, messages?, link?, via?, edited?}`.
 `text` is a manager-written localized line; Apps may also render by `kind`. `link` is the tap destination: `{type: "source", position?}` (Lark: item's chat at that message),
 `{type: "source", uid}` (mail: that mail in the item), `{type: "source", url}` (connectors / Docs: in-App opening), `{type: "source"}` (item's source page),
 `{type: "session", machine_id, session_id}` (chat / sub-chat), `{type: "item", id}` (another item). Without `link`, tap expands `detail` / `messages` inline.
+A `received` entry's `via` is the item's `source`; a `triaged` entry's is `assistant`.
 
 | kind | Recorded when | Tap destination |
 | --- | --- | --- |
-| `received` | New messages enter this item, **one entry per batch**: "Received 3 messages · A contact" (mail: "Received 2 emails · …"), with `count`, `sender`; `messages` is this batch (up to 10, 200 characters each; Lark from plugin context lines without their trailing notes for the AI (`(id=…, …)`), omitted if unreadable, preview for one message; mail uses summaries). Replies from others also go here. Messages outside this item are not recorded | First batch message's source position: Lark first batch `start_position`, later batches by chat sequence (count backward by new-message count, never earlier than previous batch's last message); mail first uid; others source page |
+| `received` | New messages enter this item: "Received 3 messages · A contact" (mail: "Received 2 emails · …"), with `count`, `sender`; `messages` is this batch (up to 10, 200 characters each; Lark from plugin context lines without their trailing notes for the AI (`(id=…, …)`), omitted if unreadable, preview for one message; mail uses summaries). Consecutive `received` entries merge as they are written: `count` adds up, `at` is the newest, `messages` keeps the newest 10, and `link` and `id` stay those of the first batch in the run. `sender` stays when it is the same and is cleared when it differs, with `text` regenerated from the merged count and sender. Replies from others also go here. Messages outside this item are not recorded | First batch message's source position: Lark first batch `start_position`, later batches by chat sequence (count backward by new-message count, never earlier than previous batch's last message); mail first uid; others source page |
 | `triaged` | Triage: "Triaged: Needs you" / "Triaged: Needs you (urgent)," `detail` = tier · reason. Same-tier retriage with unchanged urgency is not recorded | Expand inline |
 | `handling` | A handling chat takes over this item (once per chat) | That chat |
 | `sent` | Persona sends on your behalf (`/reply`, confirmed reply suggestion): "Sent a Lark message" / "Sent an email" / "Posted a comment" | Lark chat tail (where reply lands); replied mail; others source page |
@@ -435,11 +437,11 @@ awaiting response → Working; failure → Needs you; otherwise `tier` (FYI / Ne
 
 **Event splitting**:
 - **Atomic threads** come from sources: connector `InboxThing.thread` (one Lark chat, mail thread, GitHub PR / issue).
-- **Noise stays one item per atomic thread** (`foldNoise`): all noise events newly created by the model in a grouping batch merge into that chat's open noise event, or one new noise event if absent. Noise events do not absorb higher-tier messages
+- **Noise stays one item per atomic thread** (`foldNoise`): all noise events newly created by the model in a grouping batch merge into that chat's open noise event, or one new noise event if absent. `foldNoise` skips done targets: they neither absorb folded noise nor are merged into another event. Noise events do not absorb higher-tier messages
   (those create separate items), so noise is never split by topic, merged with other work, or upgraded. Fallback messages joining an existing noise event likewise leave its tier and title unchanged.
 - **FYI / Needs you** still split by topic ("Event grouping" above).
 - **New messages follow the existing event**: while it is being handled (`handling` looking / agent / waiting, or a suggestion awaiting you), new messages record only `received`; tier, title, summary, urgency stay unchanged,
-  with no retriage (`TriagedAt` advances directly). Its handling chat decides what to do (below). Inactive items retriage as before.
+  with no retriage (`TriagedAt` advances directly). Its handling chat decides what to do (below). Inactive items retriage as before. A genuine follow-up to an already handled event appends to and reopens it, adding a `reopened` chain entry after `received`; pure closeout stays done with only the `received` record.
 - **Cross-atomic related items**: phase 1 does not merge them, only records `related` on both sides, at most 10, excluding same-atomic-thread items. Currently populated when a connector says an item grew from another (`InboxThing.parent` points to an item in another source / chat),
   and from `related` submitted by a handling chat with its suggestion (only existing Inbox items are accepted).
 
@@ -452,11 +454,13 @@ An item stays one matter for as long as it goes on: a handled event takes the me
 | Field | Meaning | Listed |
 | --- | --- | --- |
 | `where` | Where the matter happens, for people: a group's name, the other person of a direct chat, a repository. Empty for mail | Yes |
-| `title_by` | Who wrote `title` and `summary`: `model` (grouping), `rules` (the connector's fallback), `assistant` (the processing conversation), `user`. Once `assistant` or `user` wrote them, grouping leaves both alone | No |
+| `title_by` | Who wrote `title` and `summary`: `model` (grouping), `rules` (the connector's fallback), `assistant` (the processing conversation's `inbox_suggest` `title` / `summary`), `user`. Once `assistant` or `user` wrote them, grouping leaves both alone | No |
 | `follow` | `{who, next, check_at, checks, due}`: who or what it waits on (the model's words), the next step, when to look at it again (RFC 3339; 24 hours when not given), how many times in a row a look found nothing new, and whether that time came with nobody to look (the AI twin off). Apps read only `who`, `next` and `check_at` | Yes |
 | `now` | The item's state key (table below), worked out from the item alone: no clock, no settings, so the list memo holds (`inbox_list_memo.go`) | Yes, never stored |
 
-**State keys.** The manager sends a key; every app puts it in words from one table, `spec/fixtures/inbox/now.json` (English, Simplified Chinese and Japanese, with the cases Go and the apps check). Without `now` (an older hub), or with a key an app does not know (a newer hub), the apps keep their own state words. When several states hold, the first wins: done, folded, a suggestion, queued (the agent record says queued and has no session yet, while `handling` already says looking), the processing state (looking, Agent working, waiting, failed), `follow_up_ask`, `check_due`, then the tier. `{reason}` is `handling.error` as it was written (already words, in the language of its time); without it the plain "AI couldn't handle it".
+The manager refreshes `where` from the connector's `chat` tag (else its `repo` tag) on every write, and the mute menu uses it for the chat's name, falling back to the title.
+
+**State keys.** The manager sends a key; every app puts it in words from one table, `spec/fixtures/inbox/now.json` (English, Simplified Chinese and Japanese, with the cases Go and the apps check). Without `now` (an older hub), or with a key an app does not know (a newer hub), the apps keep their own state words. When several states hold, the first wins: done, folded, a suggestion, queued (the agent record says queued and has no session yet, while `handling` already says looking), the processing state (looking, Agent working, waiting, failed), `follow_up_ask`, `check_due`, then the tier. `{reason}` is `handling.error` as it was written (already words, in the language of its time); without it the plain "AI couldn't handle it". An unrecognized `done_by` leaves `now` empty so the apps keep their own done words. A `conclusion` is not an action suggestion: as in `status()`, it suppresses the queued and processing-state keys, and the later follow-up or tier rules apply.
 
 | `now` | When | Section | English |
 | --- | --- | --- | --- |
@@ -528,7 +532,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 
 **Suggestion tool `inbox_suggest`** (`assistant/inbox_suggest.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
 conversation the item was handed to ("Item actions", Hand to AI), rejecting other chats):
-`{item?, kind, text, note?, handback?, outcome?, recap?, machine?, cwd?, related?, changes?}`.
+`{item?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?}`.
 
 | kind | Meaning | After confirmation |
 | --- | --- | --- |
@@ -537,7 +541,8 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 | `conclusion` | Conclusion: `outcome: fyi` (move to FYI with the conclusion; OK marks done) or `done` (review found no action needed; immediately done, `done_by=manager`) | OK marks done (`done_by=user`) |
 
 - `handback: true`: a suggestion requiring your judgment ("Ask a colleague before replying to the client"). Confirmation executes nothing; hand it back to the handling chat as instructions to act, with the normal chain recording.
-- `recap` alone, without `kind`, updates only the summary (for example after a send), up to 600 characters. `related` contains IDs of related Inbox items from other chats / sources, recorded on both sides.
+- `recap` without `kind` updates the recap (for example after a send), up to 600 characters. `related` contains IDs of related Inbox items from other chats / sources, recorded on both sides.
+- `title` names the matter (one line, clipped to 40 characters) and `summary` says where it stands and who is waited on for what (one line, clipped to 80); either may accompany a suggestion or a recap-only call. A non-blank accepted value sets `title_by=assistant`; blank values leave the item unchanged. Only chat events (a grouped event or a built-in chat) accept `title`, and only when they have no mail, document or company-feed block; a grouped event may still carry its connector block. Connector threads (including PRs / issues and iMessage), mail, documents and company-feed posts keep their own title: the tool ignores `title`, says why, and still writes `summary`.
 - Each submission increments `suggestion.version` and invalidates the old suggestion; producing a suggestion sets `handling.state = done`. Chain records "Manager suggests a reply / an Agent / advice awaiting your decision" (`handling`, linked to the handling chat); conclusions record `concluded`.
 - A mail reply suggestion also keeps its exact reply target internally (not in the listed suggestion). Opening mail marks it seen, and a later collection can consequently reduce a thread to an older unread UID; confirmation checks the bound target under the collection lock and returns `409 mail_reply_target_changed` instead of answering that different mail (#5471). A pre-upgrade mail suggestion has no bound target and is refused the same way rather than guessed; non-mail suggestions keep their legacy confirmation path. An FYI conclusion likewise remains open when its mail is read elsewhere: the item becomes `read`, but only **Got it** files it.
 - Old `inbox_draft` (reply only) remains supported, equivalent to `kind: reply`, for chats started before the tool list changed.

@@ -1459,6 +1459,10 @@ nonisolated struct APIClient: Sendable {
         /// "asked" only what a run sends with notify_user. Such a task always runs in its own conversation. Sent only when
         /// set: a hub keeps it when left out, and an older hub never gets it.
         var push: String?
+        /// When Done, Put It in the Inbox (hubs with the task_inbox feature, docs/assistant/assistant.md「Put it in the Inbox when done」): nil or ""
+        /// nothing, "worthy" a row only when a run finds something worth a look, "every" a row after every run. Independent of `push`.
+        /// Sent only when set: a hub keeps it when left out, and an older hub never gets it.
+        var inbox: String?
         var createdBy: String?    // "assistant": Persona set it up from a conversation
         var lastRun: Date?        // read-only, set by the hub
         var lastSessionID: String?
@@ -1466,7 +1470,7 @@ nonisolated struct APIClient: Sendable {
         var lastError: String?
         var nextRun: Date?
         enum CodingKeys: String, CodingKey {
-            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push
+            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push, inbox
             case repeats = "repeat", everyMinutes = "every_minutes", machineID = "machine_id", sessionID = "session_id"
             case permissionMode = "permission_mode", createdBy = "created_by"
             case lastRun = "last_run", lastSessionID = "last_session_id", nextRun = "next_run"
@@ -1479,6 +1483,9 @@ nonisolated struct APIClient: Sendable {
         static let pushAsked = "asked"
         /// The hub feature that says it takes `push`; without it the editor leaves the setting out.
         static let pushFeature = "task_push"
+        /// The hub feature that says it takes `inbox`; without it the editor leaves the setting out.
+        static let inboxFeature = "task_inbox"
+        static let inboxWorthy = "worthy", inboxEvery = "every"
         /// Where the next run goes when the task isn't continuing the conversation it came from.
         var ownConversation: SessionKey? {
             guard let m = runMachineID, let s = runSessionID else { return nil }
@@ -1509,6 +1516,7 @@ nonisolated struct APIClient: Sendable {
             launcher = text(.launcher); permissionMode = text(.permissionMode); effort = text(.effort)
             createdBy = text(.createdBy)
             push = text(.push)
+            inbox = text(.inbox)
             lastRun = date(.lastRun); lastSessionID = text(.lastSessionID); lastStatus = text(.lastStatus); lastError = text(.lastError)
             nextRun = date(.nextRun)
             runMachineID = text(.runMachineID); runSessionID = text(.runSessionID)
@@ -1522,6 +1530,7 @@ nonisolated struct APIClient: Sendable {
             try c.encode(enabled, forKey: .enabled); try c.encode(sessionID ?? "", forKey: .sessionID)
             try c.encode(permissionMode ?? "", forKey: .permissionMode)
             try c.encodeIfPresent(push, forKey: .push)
+            try c.encodeIfPresent(inbox, forKey: .inbox)
             if includesModelSettings {
                 try c.encode(launcher ?? "", forKey: .launcher)
                 try c.encode(effort ?? "", forKey: .effort)
