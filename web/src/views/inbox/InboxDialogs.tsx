@@ -225,18 +225,12 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
   const [last] = useState(() => resolveHandOff(memoryKey ? recallHandOff(memoryKey) : null, (path) => listedAgent(sessions, machines, path) !== undefined));
   const lastAgent = last?.target.startsWith("agent:") ? listedAgent(sessions, machines, last.target.slice("agent:".length)) : undefined;
   const [target, setTarget] = useState<"main" | "new" | Session>(() => lastAgent ?? (last?.target === "new" ? "new" : "main"));
-  // Off for the main conversation, which may still write back to the item; on for the others. The user's own choice stays.
-  const [markDone, setMarkDone] = useState(() => target !== "main");
-  const doneChosen = useRef(false);
+  // Off for every target: handing work on does not, by itself, finish the item. The user's own choice stays.
+  const [markDone, setMarkDone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // The main conversation's hand-off being tried: the same text again after no answer is the same hand-off.
   const attempt = useRef<{ text: string; id: string } | null>(null);
-
-  const choose = (next: "main" | "new" | Session) => {
-    setTarget(next);
-    if (!doneChosen.current) setMarkDone(next !== "main");
-  };
 
   // The 8 agents worked on most recently, on computers that are online now, and the one this source went to last time.
   const agents = useMemo(() => {
@@ -253,7 +247,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
   // "New agent…" (#5933): New agent over this dialog, with the item as the card over the first message (the same
   // <persona-context> an agent gets here) and the ask, or the first preset, as the message. Nothing is sent before its
   // Start; its Cancel comes back here as it was. Once the agent is going: this source remembers that agent, never "New
-  // agent…", and the item is filed unless "Also mark as done" was turned off here (on for agents).
+  // agent…", and the item is filed only when "Also mark as done" was checked here (off by default).
   const [opening, setOpening] = useState(false);
   const startNewAgent = async () => {
     if (busy || opening) return;
@@ -261,13 +255,12 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
     setError("");
     try {
       const full = await api<InboxItem>(itemPath(item.id), { headers: itemRequest(item) });
-      const file = doneChosen.current ? markDone : true;
       openNewAgent({
         forwards: [handOffContext({ ...item, ...full })],
         prompt: ask.trim() || HANDOFF_PRESETS[0],
         onStarted: (s) => {
           if (memoryKey) rememberHandOff(memoryKey, agentTarget(s.machine_id, s.session_id));
-          if (file) void setDone(item, true);
+          if (markDone) void setDone(item, true);
           onClose();
         },
       });
@@ -357,10 +350,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
             <input
               type="checkbox"
               checked={markDone}
-              onChange={(e) => {
-                doneChosen.current = true;
-                setMarkDone(e.target.checked);
-              }}
+              onChange={(e) => setMarkDone(e.target.checked)}
               className="size-3.5 accent-[var(--accent)]"
             />
             {t("inbox-inboxdialogs.also_done")}
@@ -396,8 +386,8 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
 
       <p className="mt-4 mb-1.5 text-[12px] font-medium text-ink-2">{t("inbox-inboxdialogs.target_label")}</p>
       <div role="radiogroup" aria-label={t("inbox-inboxdialogs.target_label")} className="max-h-[300px] divide-y divide-line overflow-y-auto rounded-card bg-surface shadow-card">
-        <Target on={target === "main"} last={isLast("main")} onPick={() => choose("main")} title={t("inbox-inboxdialogs.target_main")} sub={t("inbox-inboxdialogs.target_main_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
-        <Target on={target === "new"} last={isLast("new")} onPick={() => choose("new")} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="compose" size={12} /></span>} />
+        <Target on={target === "main"} last={isLast("main")} onPick={() => setTarget("main")} title={t("inbox-inboxdialogs.target_main")} sub={t("inbox-inboxdialogs.target_main_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
+        <Target on={target === "new"} last={isLast("new")} onPick={() => setTarget("new")} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="compose" size={12} /></span>} />
         <button type="button" onClick={() => void startNewAgent()} disabled={busy || opening} data-testid="handoff-new-agent" className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover disabled:opacity-60">
           <span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="plus" size={12} /></span>
           <span className="min-w-0 flex-1">
@@ -411,7 +401,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
             key={`${s.machine_id}/${s.session_id}`}
             on={typeof target === "object" && sameSession(target, s)}
             last={isLast(s)}
-            onPick={() => choose(s)}
+            onPick={() => setTarget(s)}
             title={sessionTitle(s)}
             sub={[machineWithHub(s.machine_id, machines), s.space_name].filter(Boolean).join(" › ")}
             icon={<span className="flex size-6 items-center justify-center"><StatusMark state={stateOf(s)} /></span>}
