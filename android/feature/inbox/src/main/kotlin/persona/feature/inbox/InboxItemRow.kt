@@ -75,8 +75,8 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
             onLongClick = { selection?.longClick { menu = true } ?: run { menu = true } }, extra = {
                 record.localDelivery?.pendingStatus()?.let { PendingBadge(it) }
                     ?: record.localStatus?.let { InboxLocalStatus(it) }
-                // Meta already carries the shared state at its trailing side; otherwise it replaces the old mark in place.
-                if (metaText == null) (nowMark ?: oldMark)?.let { EventRowMark(it) }
+                // Meta carries a recognized shared state; without one, the old mark still has its own place below it.
+                if (metaText == null || nowMark == null) (nowMark ?: oldMark)?.let { EventRowMark(it) }
                 if (!done) AgentDraftCard(record, composers, navigator, repository = repository)
             })
     }

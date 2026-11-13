@@ -24,6 +24,8 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.InboxEventFields
+import persona.core.contracts.InboxFollow
+import persona.core.contracts.InboxHandling
 import persona.core.designsystem.*
 import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.*
@@ -114,10 +116,13 @@ class InboxGroupNameRowTest {
 
     @Test fun eventWithWhereKeepsTheSummaryAndUsesTheSharedThreeContentLines() {
         val base = record()
+        val sender = base.item.sender!!
+        val group = base.groupName!!
         val followed = base.copy(
             item = base.item.copy(preview = "Latest line", summary = "AI summary"),
-            event = InboxEventFields(where = "Source group", now = "confirm_reply"),
+            event = InboxEventFields(where = group, now = "confirm_reply"),
         )
+        val metaText = if (group == sender) "$sender：Latest line" else "$group · $sender：Latest line"
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
         var scale by mutableStateOf(1f)
@@ -139,12 +144,12 @@ class InboxGroupNameRowTest {
             assertTitleStartsVisibly(followed.item.title, context)
             val title = rule.onNodeWithText(followed.item.title, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
             val summary = rule.onNodeWithText("AI summary", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-            val meta = rule.onNodeWithText("Source group · Sender：Latest line", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            val meta = rule.onNodeWithText(metaText, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
             assertTrue("$context: $title / $summary / $meta", title.top < summary.top && summary.top < meta.top)
             rule.onNodeWithText("等你确认回复", useUnmergedTree = true).assertExists()
             // The old source-conversation and sender lines would repeat the new meta, so they are not drawn.
-            rule.onNodeWithText("Source group", useUnmergedTree = true).assertDoesNotExist()
-            rule.onNodeWithText("Sender", useUnmergedTree = true).assertDoesNotExist()
+            rule.onNodeWithText(group, useUnmergedTree = true).assertDoesNotExist()
+            rule.onNodeWithText(sender, useUnmergedTree = true).assertDoesNotExist()
             val out = File(System.getenv("PERSONA_INBOX_FOLLOW_SHOTS") ?: "build/inbox-follow-shots").apply { mkdirs() }
             File(out, "${appearance.name.lowercase()}-${if (night) "dark" else "light"}-${fontScale}x.png").outputStream().use {
                 assertTrue(rule.onNodeWithTag("follow-row").captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))
@@ -154,18 +159,33 @@ class InboxGroupNameRowTest {
         // A direct chat says the person once, in the same title / summary / meta order.
         rule.runOnIdle {
             shown = followed.copy(item = followed.item.copy(kind = "dm"), isGroup = false, groupName = null,
-                event = followed.event.copy(where = "Sender", now = "waiting"))
+                event = followed.event.copy(where = sender, now = "waiting"))
         }
-        rule.onNodeWithText("Sender：Latest line", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("$sender：Latest line", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("等对方回复", useUnmergedTree = true).assertExists()
-        rule.onNodeWithText("Sender", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithText(sender, useUnmergedTree = true).assertDoesNotExist()
+
+        val working = followed.copy(
+            item = followed.item.copy(status = InboxItem.WORKING),
+            event = followed.event.copy(status = InboxItem.WORKING, handling = InboxHandling(state = "looking"), now = "waiting",
+                follow = InboxFollow(who = "A very long wait for the whole review group to answer",
+                    next = "Check every remaining owner and then ask for a decision again")),
+        )
+        rule.runOnIdle { shown = working }
+        val boundedMeta = rule.onNodeWithText(metaText, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue("A long shared state must leave visible width for the required meta text", boundedMeta.width > 0f)
+        for (unknownOrMissing in listOf("something_new", null)) {
+            rule.runOnIdle { shown = working.copy(event = working.event.copy(now = unknownOrMissing)) }
+            // With where but no recognized now, the legacy working mark must not disappear.
+            rule.onNodeWithText("AI 正在看", useUnmergedTree = true).assertExists()
+        }
 
         // Without where the legacy group, sender and summary lines come back unchanged; no empty meta row is reserved.
         rule.runOnIdle { shown = base }
         rule.onNodeWithText("AI summary", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithText(base.item.summary!!, useUnmergedTree = true).assertExists()
-        rule.onNodeWithText("Source group", useUnmergedTree = true).assertExists()
-        rule.onNodeWithText("Sender", useUnmergedTree = true).assertExists()
-        rule.onNodeWithText("Source group · Sender：Latest line", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithText(group, useUnmergedTree = true).assertExists()
+        rule.onNodeWithText(sender, useUnmergedTree = true).assertExists()
+        rule.onNodeWithText(metaText, useUnmergedTree = true).assertDoesNotExist()
     }
 }
