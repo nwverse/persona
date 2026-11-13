@@ -53,13 +53,27 @@ func (s *Service) openTodoSessionIDs(ctx context.Context, machine string) (map[s
 // twice, since the hub's held sessions can lag the node by a changed event. nil knownIDs (the pre-start list failed)
 // means nothing is adopted.
 //
-// Limit of the fallback: two unanswered starts in the same directory and launcher at the same instant, on a node that
-// ignored session_id, cannot be told apart, so one could adopt the other's session (a mislabeled card, never a
-// duplicate agent); newest-wins is the best guess and the neutral fallback stays safe otherwise. A session already on
-// an open todo is never taken, so a task can never steal another task's agent.
+// Limits of the fallback (only reachable on a node too old to honor session_id): two unanswered starts in the same
+// directory and launcher at the same instant cannot be told apart, so one could adopt the other's session (a
+// mislabeled card, never a duplicate agent); newest-wins is the best guess and the neutral fallback stays safe
+// otherwise. A session the owner started by hand is indistinguishable from a hub-started one once it is on no open
+// todo (both carry StartedByPersona), so such a session can still be adopted — the exact-id path on an up-to-date
+// node is what closes that risk. A session already on an open todo is never taken, so a task can never steal another
+// task's agent; and an unreadable todo book fails closed instead of guessing.
 func (s *Service) adoptStartedSession(ctx context.Context, m Device, launcher, cwd, expectID string, knownIDs map[string]bool) (proto.Session, bool) {
 	if knownIDs == nil {
 		return proto.Session{}, false
+	}
+	// The open-todo exclusion is read once and shared by both list attempts: the reconciliation is one decision
+	// about one start, so it must see one consistent set of linked sessions. Failing to read the book fails closed:
+	// no heuristic adoption without knowing what the open todos already own.
+	var linked map[string]bool
+	if expectID == "" {
+		var ok bool
+		linked, ok = s.openTodoSessionIDs(ctx, m.ID)
+		if !ok {
+			return proto.Session{}, false
+		}
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
@@ -81,12 +95,16 @@ func (s *Service) adoptStartedSession(ctx context.Context, m Device, launcher, c
 					return sess, true
 				}
 			}
-		}
-		// The node did not list the expected id (an older node ignores session_id, or its list still lags): keep the
-		// old heuristic, but never take a session another open todo already links.
-		linked, ok := s.openTodoSessionIDs(ctx, m.ID)
-		if !ok {
-			return proto.Session{}, false
+			// The node did not list the expected id (an older node ignores session_id, or its list still lags): load
+			// the open-todo book now, lazily, so a new-node exact match never pays for it, then keep the old
+			// heuristic without taking a session another open todo already links.
+			if linked == nil {
+				var ok bool
+				linked, ok = s.openTodoSessionIDs(ctx, m.ID)
+				if !ok {
+					return proto.Session{}, false
+				}
+			}
 		}
 		var best proto.Session
 		found := false

@@ -3,9 +3,11 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -153,4 +155,56 @@ func validSessionIDShape(id string) bool {
 		}
 	}
 	return true
+}
+
+// failTodoLoadStore is a store whose todo book cannot be read: every other method delegates to the in-memory task
+// store, so only ensureTodosLoaded fails.
+type failTodoLoadStore struct {
+	*profileTaskStore
+	todoStore
+}
+
+func (*failTodoLoadStore) ListTodos(context.Context) ([]db.TodoRow, error) {
+	return nil, errors.New("the todo book is unavailable")
+}
+
+// When the open-todo book cannot be read the heuristic adopts nothing rather than guess: the exclusion that keeps a
+// task from stealing another task's agent cannot be evaluated. Both the upfront read (no exact id) and the lazy read
+// after a missing exact id fail closed.
+func TestAdoptFailsClosedWhenTheTodoBookCannotLoad(t *testing.T) {
+	st := &failTodoLoadStore{profileTaskStore: &profileTaskStore{
+		memStore: &memStore{vals: map[string][]byte{}}, plans: map[string]db.TaskPlanRow{},
+	}}
+	f := newFakeHub()
+	f.sessions["box"] = nil
+	f.settings = &Settings{Timezone: "Asia/Shanghai"}
+	s := newServiceOn(t, f, st)
+	dev := Device{ID: "box"}
+	known := map[string]bool{}
+	fresh := adoptSession("sess-new", func(*proto.Session) {})
+	f.setSessions("box", fresh)
+
+	if _, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", "", known); ok {
+		t.Fatal("the heuristic adopted with an unreadable todo book")
+	}
+	if _, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", "missing-id", known); ok {
+		t.Fatal("the fallback after a missing exact id adopted with an unreadable todo book")
+	}
+}
+
+// The documented fallback limit on an old node (one that ignored session_id): a session the owner started by hand is
+// hub-started-shaped and, while it is on no open todo, indistinguishable from the session the lost start created. It
+// can still be adopted there. This pins the boundary: linking that manual session to an open todo removes it, and an
+// up-to-date node's exact-id path never reaches this guess (see the tests above).
+func TestAdoptOldNodeFallbackCanTakeAnUnlinkedManualSession(t *testing.T) {
+	s, f := newTaskService(t)
+	dev := Device{ID: "box"}
+	known := map[string]bool{}
+	manual := adoptSession("manual-1", func(*proto.Session) {})
+	f.setSessions("box", manual)
+
+	got, ok := s.adoptStartedSession(context.Background(), dev, "claude-code", "/code/app", "id-the-old-node-ignored", known)
+	if !ok || got.SessionID != "manual-1" {
+		t.Fatalf("got %+v ok=%v: the old-node fallback keeps adopting an unlinked same-shaped session", got, ok)
+	}
 }
