@@ -463,6 +463,17 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 val sectionPickable = if (selecting && subs.isEmpty()) group.rows.filter(::selectable).map { it.id } else emptyList()
                 item("section:$prefix${group.id}", contentType = "section") {
                     val title = if (group.id == "working") group.title.text() else inboxGroupTitle(group)
+                    val overflowAction = when {
+                        selecting -> null
+                        group.id == "done" && subs.isNotEmpty() -> JAction(stringResource(R.string.inbox_jump_to),
+                            onClick = { jumpMenu = InboxJumpMenu(prefix, group.id, subs) })
+                        group.id in setOf("action", "fyi") && sectionReader.hasUnread(group) ->
+                            JAction(stringResource(R.string.inbox_conversations_read_all), enabled = !sectionReader.busy,
+                                onClick = { sectionReader.read(group) })
+                        group.id == "noise" -> JAction(stringResource(R.string.inbox_clear_all), enabled = !sectionReader.busy,
+                            onClick = { markAll(allTargets(listOf(group)), InboxBulkAction.Done) })
+                        else -> null
+                    }
                     JSectionHeader(
                         title = title,
                         // Done with the hub's counts (#3016): all of it, as its groups add up, not just what is loaded.
@@ -476,6 +487,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                         }),
                         // A section without groups is one group: its tick picks it all, folded or not.
                         leading = if (sectionPickable.isNotEmpty()) ({ InboxGroupTick(sectionPickable, picked, title) { picked = it } }) else null,
+                        overflowActions = listOfNotNull(overflowAction),
                         action = when {
                             selecting -> null
                             group.id == "done" && subs.isNotEmpty() -> ({
