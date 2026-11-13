@@ -13,16 +13,16 @@ final class AgentFollowUpUITests: XCTestCase {
         "agent_auto_naming": true, "agent_auto_naming_max": 1, "agent_auto_naming_interval_hours": 0,
     ]
 
-    override func setUp() async throws {
+    override func setUpWithError() throws {
         continueAfterFailure = false
         guard let value = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs scripts/mock/mock_hub.py") }
         hub = value
-        guard try await assistant()["agent_auto_naming"] != nil else { throw XCTSkip("this mock hub has no Agent Follow-Up settings") }
-        try await reset()
     }
 
-    override func tearDown() async throws {
-        if hub != nil { try? await reset() }
+    /// Each test starts from the hub's defaults, whatever an earlier one changed.
+    @MainActor private func prepare() async throws {
+        guard try await assistant()["agent_auto_naming"] != nil else { throw XCTSkip("this mock hub has no Agent Follow-Up settings") }
+        try await reset()
     }
 
     @MainActor private func request(_ method: String, _ body: [String: Any]? = nil) async throws -> [String: Any] {
@@ -100,7 +100,8 @@ final class AgentFollowUpUITests: XCTestCase {
         choice.tap()
     }
 
-    @MainActor func testTheProfileOpensThePageAndTheSwitchMovedThere() throws {
+    @MainActor func testTheProfileOpensThePageAndTheSwitchMovedThere() async throws {
+        try await prepare()
         let app = launch("assistant")
         let row = element(app, "assistant-agent-follow-up")
         reveal(row, in: app)
@@ -116,6 +117,7 @@ final class AgentFollowUpUITests: XCTestCase {
     }
 
     @MainActor func testThePageShowsTheHubsDefaultsAndSavesAMenuChoice() async throws {
+        try await prepare()
         let app = launch("agentFollowUp")
         let start = app.switches["followup-start-requested"].firstMatch
         XCTAssertTrue(start.waitForExistence(timeout: 20), "no Agent Follow-Up page:\n\(app.debugDescription)")
@@ -132,6 +134,7 @@ final class AgentFollowUpUITests: XCTestCase {
     }
 
     @MainActor func testSessionNamesUnlimitedAndRegularUpdates() async throws {
+        try await prepare()
         let app = launch("agentFollowUp")
         XCTAssertTrue(app.switches["followup-start-requested"].firstMatch.waitForExistence(timeout: 20))
         try pick("followup-naming-max", ["不限", "Unlimited", "無制限"], in: app)
