@@ -208,7 +208,10 @@ import Synchronization
         // moved under the system's transition; the page coming back on Restore moves it again.
         if rect == nil, starting || active { return }
         place()
-        if rect != nil, restore.pending { DispatchQueue.main.async { [weak self] in self?.restore.finish() } }
+        if rect != nil, restore.pending {
+            VNCPiPLog.add("整页画好了，小窗长回去") // i18n-ignore
+            DispatchQueue.main.async { [weak self] in self?.restore.finish() }
+        }
     }
 
     /// The source over the page's picture, or (no page) where the small window comes up.
@@ -347,17 +350,28 @@ import Synchronization
             wanted = false
             starting = false
             AppModel.shared.vncPiP = nil
-            // Ready again under the page when it is up (and by itself again when the app goes to the background); else
-            // the connection goes. The next start gets a content source of its own: started again from the same one,
-            // the system drew the picture at the small window's last size from the first frame, a magnified corner of
-            // it where the whole picture should shrink (#6333; the old corner source did it too, too small to see).
+            // Ready again under the page when it is up (and by itself again when the app goes to the background), with
+            // a new source and controller; else the connection goes.
             if let ref, AppModel.shared.screenOpen?.machine == ref {
                 controller?.canStartPictureInPictureAutomaticallyFromInline = true
-                if let host { controller?.contentSource = .init(sampleBufferDisplayLayer: host.display, playbackDelegate: self) }
+                // After this callback, not inside it: the controller calling it goes.
+                DispatchQueue.main.async { [weak self] in self?.renew(ref) }
                 return
             }
             end()
         }
+    }
+
+    /// The small window is back in the page, which is still up: the next start gets a new source and controller
+    /// (#6333). Started again from the ones it used, the system drew the first frames at the small window's last size,
+    /// a magnified corner of the picture where the whole picture should shrink; a new content source alone did not
+    /// change that. The page holds the connection meanwhile (`VNC.release` then `hold`); a start asked for since keeps
+    /// these.
+    private func renew(_ ref: MachineRef) {
+        guard self.ref == ref, host != nil, !wanted, !active, !starting, AppModel.shared.screenOpen?.machine == ref else { return }
+        let from = from
+        end()
+        prepare(ref, from: from, automatic: true)
     }
 
     nonisolated func pictureInPictureController(_ c: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
