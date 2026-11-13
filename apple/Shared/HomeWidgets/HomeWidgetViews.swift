@@ -1398,7 +1398,7 @@ struct HomeLockView: View {
         case .health:
             let steps = c.snapshot.health?.steps ?? 0
             let avg = max(1, c.snapshot.health?.stepsAverage ?? 1)
-            Gauge(value: min(1, Double(steps) / Double(avg))) { HomeWidgetTokens.symbol(symbol) } currentValueLabel: { Text(verbatim: homeShort(steps)) }
+            Gauge(value: min(1, Double(steps) / Double(avg))) { HomeWidgetTokens.symbol(symbol) } currentValueLabel: { Text(verbatim: homeSteps(steps)).minimumScaleFactor(HomeWidgetTokens.heroMinScale) }
                 .gaugeStyle(.accessoryCircular).privacySensitive()
         case .record:
             Button(intent: StartMeetingRecordingIntent()) {
