@@ -23,6 +23,8 @@ type InboxConnector struct {
 	CanReply bool   `json:"can_reply,omitempty"`
 	// RuleTier is the connector's tier for triage without a model.
 	RuleTier string `json:"rule_tier,omitempty"`
+	// OwnerAssigned preserves a source-verified responsibility card's sender-mute exception.
+	OwnerAssigned bool `json:"owner_assigned,omitempty"`
 	// Tags are what the thread is about (its repository, chat, sender…): what it can be muted by.
 	Tags []connector.Tag `json:"tags,omitempty"`
 }
@@ -215,7 +217,7 @@ func fillConnectorItem(it *InboxItem, t connector.InboxThing) {
 	if rule == "" && t.Extra != nil && connector.Tier(t.Extra.RuleTier).Known() {
 		rule = connector.Tier(t.Extra.RuleTier) // its fallback (capability fallback): the model still sorts it first
 	}
-	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, OpenURL: t.OpenURL, ReplyTo: t.ReplyTo, CanReply: t.CanReply, RuleTier: string(rule), Tags: t.Tags}
+	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, OpenURL: t.OpenURL, ReplyTo: t.ReplyTo, CanReply: t.CanReply, RuleTier: string(rule), OwnerAssigned: t.OwnerAssigned, Tags: t.Tags}
 	if t.Tier != "" {
 		setRuleTier(it, t)
 	}

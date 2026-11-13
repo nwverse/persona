@@ -79,6 +79,9 @@ func mutesOf(it *InboxItem) []MuteOption {
 // mutedBy is the mute that covers it, nil when none does.
 func mutedBy(mutes []InboxMute, it *InboxItem) *InboxMute {
 	for _, o := range mutesOf(it) {
+		if o.Tag == connector.TagSender && it.Source == "larkcli" && it.Connector != nil && it.Connector.OwnerAssigned {
+			continue // A card assigning the owner takes priority over its sender's mute, not its chat's.
+		}
 		for i := range mutes {
 			if m := &mutes[i]; m.Source == it.Source && m.Tag == o.Tag && m.Value == o.Value {
 				return m

@@ -789,21 +789,22 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, auth a
 		tags = append(tags, senderTag)
 	}
 	thing := connector.InboxThing{
-		Thread:   thread,
-		Kind:     kind,
-		Label:    label,
-		Title:    title,
-		Sender:   latest.Sender.Name,
-		Preview:  firstLine(text),
-		Context:  contextText(contextMessages),
-		At:       messageTime(latest),
-		Last:     latest.MessageID,
-		ReplyTo:  replyTo(lang, name, group.threadID != "" || group.handoff),
-		CanReply: latest.MessageID != "",
-		Rules:    c.rules(),
-		Tags:     tags,
+		Thread:        thread,
+		Kind:          kind,
+		Label:         label,
+		Title:         title,
+		Sender:        latest.Sender.Name,
+		Preview:       firstLine(text),
+		Context:       contextText(contextMessages),
+		At:            messageTime(latest),
+		Last:          latest.MessageID,
+		ReplyTo:       replyTo(lang, name, group.threadID != "" || group.handoff),
+		CanReply:      latest.MessageID != "",
+		Rules:         c.rules(),
+		Tags:          tags,
+		OwnerAssigned: cardAssignsOwner(latest, auth),
 	}
-	if group.addressed {
+	if group.addressed || thing.OwnerAssigned {
 		thing.Tier = connector.TierAction
 		thing.Why = i18n.T(lang, "hub-connectors.larkcli_addressed_rule")
 	}

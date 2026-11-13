@@ -52,6 +52,10 @@ type InboxThing struct {
 	// to the model (a human's ordinary comment). Why says which rule, for people ("Rule: a human @-mentions you").
 	Tier Tier   `json:"tier,omitempty"`
 	Why  string `json:"why,omitempty"`
+	// OwnerAssigned means the selected card explicitly names the current user
+	// in a responsibility role. The built-in Lark source uses it to override
+	// sender mutes only; chat mutes and already handled state still apply.
+	OwnerAssigned bool `json:"owner_assigned,omitempty"`
 	// Rules are the user's own triage rules for this thing, in their words (a source's or an account's): when set
 	// the model gets them instead of the hub's inbox.rules; the default criteria stay underneath. "" uses inbox.rules.
 	Rules string `json:"rules,omitempty"`

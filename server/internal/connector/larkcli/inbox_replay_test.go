@@ -44,6 +44,9 @@ func TestInboxReplayOnlySelectedMessagesPreservesLiveState(t *testing.T) {
 		if !strings.Contains(it.Context, "another request") {
 			t.Fatalf("unselected context should still be readable: %+v", it)
 		}
+		if it.OwnerAssigned != (it.Last == card.MessageID) {
+			t.Fatalf("responsibility exception followed context instead of the selected card: %+v", it)
+		}
 		wantSender := card.Sender.ID
 		if it.Last == request.MessageID {
 			wantSender = request.Sender.ID

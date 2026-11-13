@@ -51,6 +51,14 @@ func (c *Connector) inboxAuth(ctx context.Context) (adapter.AuthStatus, error) {
 var cardRole = lazyre.New(`(?i)^(?:on[- ]call(?: person)?|assignee|owner|responsible(?: person)?|值班人|负责人)\s*[:：]\s*(.*)$`) // i18n-ignore
 
 func cardAddressesOwner(message adapter.Message, auth adapter.AuthStatus) bool {
+	return cardOwnerMatch(message, auth, false)
+}
+
+func cardAssignsOwner(message adapter.Message, auth adapter.AuthStatus) bool {
+	return cardOwnerMatch(message, auth, true)
+}
+
+func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRole bool) bool {
 	if message.MsgType != "interactive" || auth.OpenID == "" {
 		return false
 	}
@@ -66,7 +74,7 @@ func cardAddressesOwner(message adapter.Message, auth adapter.AuthStatus) bool {
 		case map[string]any:
 			role = role || cardRoleElement(v)
 			tag, _ := v["tag"].(string)
-			if tag == "at" || tag == "person" && role {
+			if tag == "at" && (!requireRole || role) || tag == "person" && role {
 				for _, key := range []string{"user_id", "open_id", "id"} {
 					if v[key] == auth.OpenID {
 						return true
