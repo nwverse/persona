@@ -81,8 +81,9 @@ struct CommandAskTests {
         #expect(CardFoldCut.height(full: 40, cut: cut, line: line, floor: floor, offered: nil) == 40)
         #expect(CardFoldCut.height(full: 900, cut: cut, line: line, floor: floor, offered: nil) == cut)
         #expect(CardFoldCut.height(full: 900, cut: cut, line: line, floor: floor, offered: 1000) == cut)
-        // Offered less: the whole lines that fit.
+        // Offered less: the whole lines that fit, an offer rounded a hair under a line count keeping that line.
         #expect(CardFoldCut.height(full: 900, cut: cut, line: line, floor: floor, offered: 70) == line * 4)
+        #expect(CardFoldCut.height(full: 900, cut: cut, line: line, floor: floor, offered: line * 7 - 0.01) == line * 7)
         // Never under its fewest lines; words shorter than those, whole.
         #expect(CardFoldCut.height(full: 900, cut: cut, line: line, floor: floor, offered: 10) == floor)
         #expect(CardFoldCut.height(full: 20, cut: cut, line: line, floor: floor, offered: 10) == 20)

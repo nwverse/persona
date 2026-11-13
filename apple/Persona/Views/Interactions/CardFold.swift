@@ -188,11 +188,15 @@ private struct FoldClip: Layout {
 /// line was more trouble than the line), unless they are only the start of the text (`more`). Not measured yet: whole.
 nonisolated enum CardFoldCut {
     static let leastHidden = 3
+    /// Rounding the cut may ignore (points).
+    static let slack: CGFloat = 0.5
 
     static func height(full: CGFloat, cut: CGFloat, line: CGFloat, floor: CGFloat, offered: CGFloat?, more: Bool = false) -> CGFloat {
         guard cut > 0, line > 0 else { return full }
         var shown = min(full, cut)
-        if let offered, offered < shown { shown = max((offered / line).rounded(.down) * line, min(full, floor)) }
+        // Whole lines of what is offered, half a point either way: placing the fold rounds its toggle to the screen's
+        // pixels, and an offer a hair under seven lines lost the seventh, which left a line of empty room under it.
+        if let offered, offered < shown { shown = max(((offered + slack) / line).rounded(.down) * line, min(full, floor)) }
         // Hidden lines, from heights that carry a little rounding: under `leastHidden` and a half less, none at all.
         if !more, full - shown < (CGFloat(leastHidden) - 0.5) * line { return full }
         return shown
