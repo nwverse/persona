@@ -66,6 +66,7 @@ final class FolderTransfers {
     /// hidden session continue. The machine page has no session, so all its items use the same nil scope.
     var session: SessionKey? {
         didSet {
+            guard oldValue != session else { return }
             let stale = pollTasks.keys.filter { id in
                 guard let item = items.first(where: { $0.id == id }) else { return false }
                 return item.session != session

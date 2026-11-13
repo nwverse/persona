@@ -283,7 +283,7 @@ struct FilesPane: View {
                 }
             }
         }
-        .onTabVisibility(appear: { transfers.resumePolling() }, disappear: { transfers.stop() })
+        .onTabVisibility(sceneAware: true, appear: { transfers.resumePolling() }, disappear: { transfers.stop() })
         #if DEBUG
         .task { // `-showFilesDrop YES`: the folder looks as it does with files dragged over it (iPad), for screenshots
             if UserDefaults.standard.bool(forKey: "showFilesDrop") { dropping = true }
