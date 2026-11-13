@@ -75,9 +75,9 @@ class InboxSameMatterSheetTest {
         rule.onNodeWithText("Alice：Latest").assertExists()
         rule.onNode(hasSetTextAction()).performTextReplacement("Beta")
         rule.onNodeWithText("Alpha").assertDoesNotExist()
-        rule.onNodeWithText("Beta", substring = true).assertExists()
+        rule.onNode(hasText("Beta", substring = true) and hasClickAction() and !hasSetTextAction()).assertExists()
         rule.onNode(hasSetTextAction()).performTextReplacement("Alpha")
-        rule.onNode(hasText("Alpha", substring = true) and hasClickAction()).performClick()
+        rule.onNode(hasText("Alpha", substring = true) and hasClickAction() and !hasSetTextAction()).performClick()
         rule.waitForIdle()
         assertEquals(current.item.id, repository.writes.single().first.item.id)
         assertEquals(InboxParentRef("inbox", "alpha"), repository.writes.single().second)
@@ -96,13 +96,13 @@ class InboxSameMatterSheetTest {
         var dismisses = 0
         rule.setContent { Sheet(repository, current, tree, { dismisses++ }, {}) }
         rule.onNode(hasSetTextAction()).performTextReplacement("Alpha")
-        rule.onNode(hasText("Alpha", substring = true) and hasClickAction()).performClick()
+        rule.onNode(hasText("Alpha", substring = true) and hasClickAction() and !hasSetTextAction()).performClick()
         rule.waitForIdle()
         assertEquals(1, feedback.failures)
         assertTrue(feedback.notices.isEmpty())
         assertEquals(0, dismisses)
         rule.onNodeWithText("是同一件事…").assertExists()
-        rule.onNodeWithText("Alpha", substring = true).assertExists()
+        rule.onNode(hasText("Alpha", substring = true) and hasClickAction() and !hasSetTextAction()).assertExists()
     }
 
     @Test fun aFailedTreeReadCanBeRetried() {
@@ -120,7 +120,7 @@ class InboxSameMatterSheetTest {
         }
         repository.failRead = false
         rule.onNodeWithText("重试").performClick()
-        rule.onNodeWithText("Alpha", substring = true).assertExists()
+        rule.onNode(hasText("Alpha", substring = true) and hasClickAction() and !hasSetTextAction()).assertExists()
         assertEquals(2, repository.lineCalls)
     }
 
