@@ -496,6 +496,17 @@ class LaunchReportTests(unittest.TestCase):
                 self.assertFalse(result["complete"])
                 self.assertFalse(result["tests"][COLD]["acceptance_eligible"])
 
+    def test_launch_rejects_non_string_units_and_non_finite_conversions(self):
+        for unit in (None, 7):
+            with self.subTest(unit=unit):
+                result = self.collect(LaunchExporter({COLD: [100]}, unit=unit), expected_iterations=1)
+                self.assertFalse(result["complete"])
+                self.assertIn("unsupported launch metric unit", " ".join(result["tests"][COLD]["probe"]["issues"]))
+        overflow = self.collect(LaunchExporter({COLD: [1e308, 1e308]}, unit="s"), expected_iterations=2)
+        self.assertFalse(overflow["complete"])
+        self.assertNotIn("launch", overflow["tests"][COLD])
+        self.assertIn("not finite after milliseconds conversion", " ".join(overflow["tests"][COLD]["probe"]["issues"]))
+
     def test_launch_counts_are_checked_per_test_run(self):
         complete = self.collect(LaunchExporter({COLD: [[100, 140, 180], [200, 240, 280]]}), expected_iterations=3)
         self.assertTrue(complete["complete"])

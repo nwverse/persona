@@ -339,8 +339,9 @@ launch. Everything before the first frame is time the user stares at the launch 
 show where the time went. `Snapshot restored` follows a successfully decoded cached snapshot and publication of its values;
 `First frame (root appeared)` is the once-per-process root-appearance boundary immediately before SwiftUI submits the first
 frame (the system launch metric, not this proxy, is the displayed-frame timestamp); `Connected` enters `AppModel.didConnect`
-after the socket reaches `.connected` and before registration and refetch work. They add no dynamic detail, IO or launch-time
-allocation, and compile only in DEBUG / PERF_SIGNPOST builds.
+after the socket reaches `.connected` and before registration and refetch work. They add no dynamic detail or file IO; their
+only new state is one static Bool, and their logging cost is the existing `PerfTrace.event` path (including its lazy OSLog
+setup). They compile only in DEBUG / PERF_SIGNPOST builds.
 
 **Check.** The App Launch template in Instruments (simulator or device), `XCTApplicationLaunchMetric` in a UI test, and the
 launch histogram in Xcode Organizer for TestFlight builds.

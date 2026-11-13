@@ -57,7 +57,10 @@ final class PerfLaunchTests: PerfTestCase {
     @MainActor private func measureLaunch(_ screenshotName: String, resetSnapshot: Bool = false) {
         var firstLaunch = true
         measure(metrics: [XCTApplicationLaunchMetric(waitUntilResponsive: false)], options: options) {
-            if resetSnapshot { removeSnapshot() }
+            if resetSnapshot {
+                app.terminate() // wait for the previous process and its detached writers before deleting its snapshot
+                removeSnapshot()
+            }
             app.launchPinned()
             if firstLaunch {
                 allowNotifications()

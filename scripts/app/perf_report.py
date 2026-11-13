@@ -384,9 +384,10 @@ def launch_measurement(entry, expected_iterations=None):
     else:
         factors = {"ms": 1, "millisecond": 1, "milliseconds": 1,
                    "s": 1000, "second": 1000, "seconds": 1000}
-        factor = factors.get(metric.get("unit", "").lower())
+        raw_unit = metric.get("unit", "")
+        factor = factors.get(raw_unit.lower()) if isinstance(raw_unit, str) else None
         if factor is None:
-            issues.append(f"unsupported launch metric unit: {metric.get('unit', '')}")
+            issues.append(f"unsupported launch metric unit: {raw_unit}")
         else:
             values = metric.get("values", [])
             if not values or not all(finite(value) and value > 0 for value in values):
@@ -403,10 +404,17 @@ def launch_measurement(entry, expected_iterations=None):
                     if count != expected_iterations:
                         issues.append(f"incomplete launch run {index} count: expected {expected_iterations}, got {count}")
             values = [value * factor for value in values]
+            if not all(finite(value) for value in values):
+                issues.append("launch metric values are not finite after milliseconds conversion")
+                values = []
     if values:
-        summary = {"unit": "ms", "values": values, "median": statistics.median(values),
-                   "minimum": min(values), "maximum": max(values), "spread": max(values) - min(values),
-                   "budget_gate": "none; the 400 ms target is for a recent iPhone, not a simulator"}
+        candidate = {"unit": "ms", "values": values, "median": statistics.median(values),
+                     "minimum": min(values), "maximum": max(values), "spread": max(values) - min(values),
+                     "budget_gate": "none; the 400 ms target is for a recent iPhone, not a simulator"}
+        if all(finite(candidate[key]) for key in ("median", "minimum", "maximum", "spread")):
+            summary = candidate
+        else:
+            issues.append("launch metric summary is not finite")
     probe = {"source": "xcresult_launch_metric", "trust": "xctest_measurements", "raw_samples": [],
              "log_fallback": [], "issues": issues, "warnings": [], "statistics": {}, "medians": {},
              "expected_iterations": expected_iterations, "complete": not issues, "acceptance_eligible": False,
