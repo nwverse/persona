@@ -159,7 +159,8 @@ describe("收件箱事件：详情", () => {
     expect(text.indexOf(item.summary!)).toBeLessThan(text.indexOf("处理链条"));
   });
   it("uses rowMeta without a time and moves Original into the small line; an older item keeps sourceLine and its time", () => {
-    act(() => root.render(<InboxDetail item={showcase.items[0]} loaded />));
+    const embedded = { ...showcase.items[0], lark: reply.lark };
+    act(() => root.render(<InboxDetail item={embedded} loaded />));
     expect(host.querySelector("[data-detail-meta] span")?.textContent).toBe("订单群 · 张三：好的，我看一下新的");
     expect(host.querySelector("[data-detail-meta] button")).toBeNull(); // an embedded chat has no separate Original page
     expect(host.querySelector("[data-event-now]")?.textContent).toContain("等张三确认新报价");

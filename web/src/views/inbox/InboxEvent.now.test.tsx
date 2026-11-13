@@ -103,6 +103,7 @@ describe("EventMark and the manager's now key", () => {
     const failed = mark(item({ now: "failed", handling: { owner: "manager", state: "failed", error: "处理超时了" } }));
     expect(failed).toContain("AI 没处理完：处理超时了");
     expect(failed).toContain("text-red");
+    expect(failed).toContain("--mark-color:var(--red)");
     expect(mark(item({ now: "check_due", follow: { next: "问周五行不行" } }))).toContain("到了再看的时间：问周五行不行");
   });
 });

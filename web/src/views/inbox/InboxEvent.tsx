@@ -51,7 +51,12 @@ export function EventMark({ it }: { it: InboxItem }) {
       <p className={cx("flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap", key === "failed" ? "text-red" : isDone(it) ? "text-ink-3" : "text-ink-2")} data-event-mark="now" data-event-icon={icon}>
         {icon === "clock" && <Icon name="clock" size={12} className="shrink-0 text-ink-3" />}
         {icon === "spinner" && <Spinner size={11} />}
-        {icon === "needs-you" && <StatusMark state="needs_you" size="sm" label={false} />}
+        {/* failed keeps the Needs-you shape, but both its mark and its words use the danger color */}
+        {icon === "needs-you" && (
+          <span className={cx("inline-flex shrink-0", key === "failed" && "[&_.status-mark]:![--mark-color:var(--red)]")}>
+            <StatusMark state="needs_you" size="sm" label={false} />
+          </span>
+        )}
         {icon === "check" && <Icon name="check" size={12} stroke={2.4} className="shrink-0" />}
         {key === "looking" ? <Shimmer className="truncate">{now}</Shimmer> : <span className="truncate">{now}</span>}
       </p>
