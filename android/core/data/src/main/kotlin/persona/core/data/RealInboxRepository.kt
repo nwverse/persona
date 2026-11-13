@@ -580,17 +580,19 @@ class RealInboxRepository(
         if (!machine.isNullOrBlank() && !session.isNullOrBlank()) {
             val key = SessionKey(machine, session)
             checkNotNull(messageSender) { "agent message sender not wired" }.send(key, request.text, request.operationId)
-            // The message is already accepted: recording it on the item is best-effort and never turns that into a failure.
-            quietly {
-                val transport = requireTransport()
-                val old = recordOf(request.itemId)
-                val hubItemId = old?.hubItemId ?: request.itemId
-                val result = asItem(old) {
-                    transport.recordAgentHandOff(hubItemId, key, request.targetTitle.orEmpty(), request.operationId)
-                }
-                if (owns(transport)) {
-                    result.obj("item")?.takeIf { it.optional("id") == hubItemId }?.let { data ->
-                        refreshLock.withLock { if (owns(transport)) replaceRecord(record(data, transport, old)) }
+            // The message is already accepted: open it now and record the hand-off without holding the sheet open.
+            scope.launch {
+                quietly {
+                    val transport = requireTransport()
+                    val old = recordOf(request.itemId)
+                    val hubItemId = old?.hubItemId ?: request.itemId
+                    val result = asItem(old) {
+                        transport.recordAgentHandOff(hubItemId, key, request.targetTitle.orEmpty(), request.operationId)
+                    }
+                    if (owns(transport)) {
+                        result.obj("item")?.takeIf { it.optional("id") == hubItemId }?.let { data ->
+                            refreshLock.withLock { if (owns(transport)) replaceRecord(record(data, transport, old)) }
+                        }
                     }
                 }
             }
