@@ -90,6 +90,15 @@ func capsFmt(c *proto.SessionCapabilities) string {
 		modes = fmt.Sprint(*c.Modes)
 	}
 	key := fmt.Sprintf("&{%v %v %v %v %v %v %s", c.Read, c.Send, c.Interrupt, c.Approve, c.Terminal, c.Attach, modes)
+	if c.Model != nil {
+		key += fmt.Sprintf(" model=%v", *c.Model)
+	}
+	if c.Close != nil {
+		key += fmt.Sprintf(" close=%v", *c.Close)
+	}
+	if c.Rename != nil {
+		key += fmt.Sprintf(" rename=%v", *c.Rename)
+	}
 	if c.Rewind != nil {
 		key += fmt.Sprintf(" rewind=%v", *c.Rewind)
 	}
@@ -229,6 +238,9 @@ func listKeyVariants() (proto.Session, map[string]proto.Session) {
 		"caps_modes":       func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Modes: proto.CanModes(false)} },
 		"caps_rewind":      func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Rewind: proto.CanModes(true)} },
 		"caps_rewind_code": func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{RewindCode: proto.CanModes(true)} },
+		"caps_model":       func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Model: proto.CanModes(false)} },
+		"caps_close":       func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Close: proto.CanModes(true)} },
+		"caps_rename":      func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Rename: proto.CanModes(true)} },
 		"attached":         func(s *proto.Session) { s.Attached = false },
 		"codex_route":      func(s *proto.Session) { s.CodexRoute = "terminal" },
 		"route_note":       func(s *proto.Session) { s.CodexRouteNote = "" },

@@ -662,8 +662,8 @@ struct ChatView: View {
             guard let r, r.key == key, r.window == nil || r.window == macWindow else { return }
             switch r.kind {
             case .inspector: showInfo.toggle()
-            case .rename: if session?.canTerminal == true { renaming = session }
-            case .close: if session?.status.isLive == true && session?.canTerminal == true { closing = session }
+            case .rename: if session?.canRename == true { renaming = session }
+            case .close: if session?.status.isLive == true && session?.canClose == true { closing = session }
             case .delete: if session?.canDelete == true { deleting = session }
             case .clear: break // the composer's
             case .terminal:
@@ -2585,7 +2585,7 @@ struct ChatView: View {
                 }
                 // The last card was answered: one low-key entry to the next conversation that needs you (#4348).
                 if let next = nextNeedsYouSession {
-                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.persona.name : next.title) : next.displayTitle) {
+                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.assistantShownName : next.title) : next.displayTitle) {
                         openNext(next)
                     }
                 }
@@ -2595,7 +2595,7 @@ struct ChatView: View {
                     QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
                                photoMarks: model.chat(key).queuePhotoMarks,
                                steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
-                               persona: session?.assistant == true ? model.persona.name : nil)
+                               persona: session?.assistant == true ? model.assistantShownName : nil)
                 }
                 // The newest plan while its line is out of view (#5602): which step of how many; tap, the whole plan.
                 // Folded while a card asks something (#2970): it sat over the card's buttons.
@@ -2620,7 +2620,7 @@ struct ChatView: View {
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
-                    Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.persona.name)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
+                    Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
                              covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) })
                         // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                         // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
@@ -2735,7 +2735,7 @@ struct ChatView: View {
                     .onChange(of: phase) { _, phase in store.traceSendFeedback(phase) }
                     #endif
             } else if frozen == nil, startingTurn(pending) {
-                TypingIndicator(text: String(localized: "\(style == .assistant ? model.persona.name : (session?.agentLabel ?? "Claude")) is getting ready…"))
+                TypingIndicator(text: String(localized: "\(style == .assistant ? model.assistantShownName : (session?.agentLabel ?? "Claude")) is getting ready…"))
                     .flippedBack()
                     .id("starting-turn")
             }
@@ -3350,7 +3350,8 @@ struct ChatView: View {
             if status.isActive, session?.canInterrupt == true {
                 Button { Task { await model.interrupt(key) } } label: { Label("Interrupt [Composer Buttons f9d193]", systemImage: Theme.Icon.interrupt) }
             }
-            if style == .dev, let s = session, s.canTerminal {
+            // By `capabilities.rename` where the node says (a runtime's session, #6294), else a terminal's.
+            if style == .dev, let s = session, s.canRename {
                 Button { renaming = s } label: { Label("Rename… [Assistant Sidebar ec4cd0]", systemImage: Theme.Icon.edit) }
             }
             if style == .dev {
@@ -3370,7 +3371,7 @@ struct ChatView: View {
                 if host == nil, let space = s.spaceKey, let openSpace {
                     Button { openSpace(space) } label: { Label("All Agents in Space", systemImage: Theme.Icon.space) }
                 }
-                if s.status.isLive && s.canTerminal {
+                if s.status.isLive && s.canClose { // `capabilities.close` where the node says (#6294), else a terminal's
                     Button(role: .destructive) { closing = s } label: {
                         Label("Stop and Close Agent…", systemImage: Theme.Icon.end).lineLimit(1)
                     }
@@ -4444,6 +4445,7 @@ struct ChatView: View {
         menu.rewindBlock = { [model, key] in
             model.rewinding.contains(key) ? String(localized: "Rewinding") : Rewind.block(model.session(key))
         }
+        menu.rewindOffer = { [model, key] in Rewind.offer(model.session(key)) }
         menu.agent = { [model, key] in model.session(key)?.agentLabel ?? "Claude" }
         menu.source = { [model, key] in
             let s = model.session(key)
@@ -5061,8 +5063,10 @@ struct Composer: View, Equatable {
     /// The launcher's list behind this session's model menus once read (#3754); nil: the fixed aliases.
     private var runningModels: [AgentModel]? { RunningModelLists.shared.models(key, model.session(key)) }
 
+    /// A session whose node takes the model (#6294, `capabilities.model`) picks from its launcher's list once read.
     private var canPickModel: Bool {
         guard let s = model.session(key) else { return false }
+        if s.capabilities?.model != nil { return SessionModes.offersModels(s, list: runningModels) }
         return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex && !s.assistant
     }
 
@@ -5312,7 +5316,7 @@ struct Composer: View, Equatable {
             } else if usesShellComposer {
                 // The shell's composer (docs/apple/ios.md「New shell」), whatever the style: the assistant's and an agent's (#1091).
                 ShellComposerBar(placeholder: status.isActive ? String(localized: "Add a note (queued)")
-                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.persona.name)") : placeholder ?? String(localized: "Message Claude"))),
+                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.assistantShownName)") : placeholder ?? String(localized: "Message Claude"))),
                                  text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                                  hasAttachments: hasAttachments,
                                  stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
@@ -5370,6 +5374,8 @@ struct Composer: View, Equatable {
                                    switch PromptItems.modelPick(id, running: model.session(key)?.model, list: runningModels) {
                                    case .typeID: typingModel = true // #1644: through …/modes
                                    case .keep: break
+                                   // a session whose node takes the model (#6294): through …/modes, never as a message
+                                   case .send where model.session(key)?.picksModelByModes == true: Task { await model.setModes(key, model: id) }
                                    case .send(let text): model.sendNow(key, text: text, images: []) // photos and quotes stay for the message
                                    }
                                },

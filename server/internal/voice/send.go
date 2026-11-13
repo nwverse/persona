@@ -25,7 +25,8 @@ import (
 //     with Send Anyway), it is told why and the app may send it again (resend: the user's own act, so past the gate);
 //     while a card waits, a word that only approves or refuses is not sent (cards are tapped), resent or not.
 // A run that the hub took (200) folds the ones not answered yet on the same conversation (tracker.adopt): one refused
-// or not known to have been sent is never folded (its message would be waited for in vain).
+// or not known to have been sent is never folded (its message would be waited for in vain). A meeting call reads no
+// marks: everything it hands over is a question for the room (meeting.go).
 
 // leadMarks are the marks a delegation starts with, in the three languages and either colon.
 var leadMarks = []struct {
@@ -74,7 +75,13 @@ var approvalCards = []string{proto.IxPlan, proto.IxPermission, proto.IxScreen}
 
 // handOverBound is protocol 2's handover (mu held; it goes on in the background). name is what the log calls it.
 func (c *conversation) handOverBound(name, task, delegation string, gen int, at time.Time, reply string) {
-	kind, rest := splitMark(task)
+	var kind, rest string
+	if c.meeting == nil {
+		// A meeting call has no marks (meeting.go): every delegation is a question for the room, as it was said. A
+		// status would speak the room's last turn, a batch's or a heard ask's, which this call did not hand over, and a
+		// stop would cut the room's work on the meeting short.
+		kind, rest = splitMark(task)
+	}
 	switch kind {
 	case "status":
 		c.logf("%s: a status (not gated)", name)
@@ -145,6 +152,12 @@ func (c *conversation) newBoundRun(task, delegation string, gen int) *voiceRun {
 // message is what goes to the bound conversation for task: an agent gets voice/agent_message, Persona's own
 // conversations voice/delegated.
 func (c *conversation) message(task string, recent []prompts.VoiceLine) string {
+	if c.meeting != nil {
+		// The room gets the question's text only, as …/ask sends a spoken one
+		// (docs/assistant/meeting-minutes.md "Asking the room"): its own rules say how it answers, and the call's lines
+		// are not the room's to keep.
+		return task
+	}
 	l := string(c.language())
 	if c.target.Kind == "agent" {
 		return prompts.RenderVoiceAgentMessage(prompts.VoiceAgentMessage{Lang: l, Task: task, History: recent})
