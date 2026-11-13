@@ -313,6 +313,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			return proto.Session{}, refusePick(http.StatusBadRequest, err)
 		}
 	}
+	if err := s.validateSkillSelections(ctx, machine, "", params); err != nil {
+		return proto.Session{}, err
+	}
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
@@ -982,6 +985,9 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	}
 	delete(p.Params, "via")
 	params, own, err := s.sendParamsOwn(ctx, p)
+	if err == nil {
+		err = s.validateSkillSelections(ctx, p.MachineID, p.SessionID, params)
+	}
 	switch {
 	case !p.Human || !own || marked: // anyone else's id, a person's carrying another's words (a mail handed on, the
 		// old main conversation's) or sent by Siri or the share sheet, never counts, nor does a person's id once

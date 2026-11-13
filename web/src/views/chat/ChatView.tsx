@@ -1,6 +1,6 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
 import { useAssistantTitle, useManagerOffline } from "../ManagerParts";
-import { LinkManager } from "../../lib/manager-choice";
+import { LinkManager, useShownManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
@@ -34,7 +34,8 @@ import { echoed, taggedSeen } from "../../lib/echo";
 import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
 import { beginMessageSend, observeMessageItems, settleMessageEcho, stopMessageFeedback, useMessageFeedback } from "../../lib/message-send";
-import { conversationKey, pickedLauncher, pickedModel } from "../../lib/assistant-chat";
+import { conversationKey, pickedLauncher, pickedModel, usePickedLauncher } from "../../lib/assistant-chat";
+import { splitSkillDraft } from "../../lib/skill-mentions";
 import { unlinkAgentFromTodo } from "../../lib/todos";
 import { t as tr } from "../../i18n";
 import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
@@ -81,7 +82,7 @@ import { waitingOnSubagents } from "../../lib/background-work";
 import { doneSubagentLink, useSubagentLink } from "../../lib/subagent-link";
 import { childCall, childCardKey, childOfCall, childPlaces, exchangeStarts, placeChildren, type ChildPlace } from "../../lib/child-cards";
 import { useChildSessions } from "../../lib/use-child-sessions";
-import { openExpanded } from "./expanded";
+import { openExpanded, openFoldRange } from "./expanded";
 import { seekCall } from "./jump";
 import { navRailTicks, type NavRailSource, type NavRailTick } from "../../lib/nav-rail";
 import { containsInput, indexedNavTicks, userInputRevision, windowUserInputs, USER_INPUT_PAGE_SIZE } from "../../lib/user-input-index";
@@ -91,6 +92,7 @@ import { useChatScrollbar } from "./useChatScrollbar";
 import { ChatLineView, closedRecap, closeRecap, dismissedError, dismissError, ErrorBanner, errorKey, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
 import { useEarlierStretches } from "./useEarlierStretches";
+import { useFoldSearch } from "./useFoldSearch";
 import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, RenameDialog, RenameSpaceDialog, renameTitle, SessionInfoDialog } from "./SessionDialogs";
 import { PermissionPicker, usePlanMode } from "./PermissionPicker";
 import { archiveItems } from "../AgentMenus";
@@ -105,7 +107,7 @@ import { forgetReveals, revealItem, undoReveals, clearReveal } from "./search-re
 import { forwardDraftOf, openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
 import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
-import { lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
+import { foldHolding, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
 import { chatFiles } from "../../lib/mentions";
 import { sameMessage } from "../../lib/queue";
 import { OutboxBubbles } from "./OutboxBubbles";
@@ -569,7 +571,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [draftKey, title, canCompose, canFork, canRewind, rewindCode, rewindDeclared, rewindLive, mid, sid, assistant, persona.name, forwardFrom, picker],
   );
   // the assistant works on any computer, so its @ menu offers workspaces too
-  const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant) }), [session?.cwd, draftKey, assistant]);
+  const shownManager = useShownManager();
+  const skillLauncher = usePickedLauncher(conversationKey(mid, sid));
+  const assistantLauncher = useStore((s) => s.assistant?.launcher);
+  const skillEnvironment = JSON.stringify([session?.launcher, session?.model_pick, assistantLauncher]);
+  const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant),
+    skills: assistant ? { manager: session?.manager ?? shownManager, session: sid, launcher: skillLauncher, environment: skillEnvironment } : undefined,
+  }), [session?.cwd, session?.manager, draftKey, assistant, shownManager, sid, skillLauncher, skillEnvironment]);
 
   // a sent message stays as a "sending" bubble until the transcript has it (lib/echo.ts): an item the hub tied to it
   // (any kind, a notice too), or else a latest user message with its words; one that answered one answers no other
@@ -1065,6 +1073,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       return false;
     }
     if (assistant && !out.images.length && out.text.trim() && getFeedState().routes[sid]) {
+      if (splitSkillDraft(out.text).skills.length) {
+        toast(t("chat-chatview.skills_route"), "error");
+        return false;
+      }
       try {
         // in turn: the route is used up by the first message that takes it, and the next one must see that
         if (await inSendOrder(outboxKey(mid, sid), () => sendRouted(sid, out.text))) return true;
@@ -1458,11 +1470,22 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       lit.current = { el, timer: window.setTimeout(unlight, HIT_MS) };
     });
   }, [ctx.scope, follow, unlight, land]);
+  // the work the hub folded, fetched for the search while it is open (useFoldSearch, #6281): a hit in it opens its fold
+  // into the chat first, as "Jump to the step" does (jump.ts seekCall)
+  const folds = useFoldSearch(mid, sid, tr.history, earlier.liveItems, search.open);
+  const searchItems = useMemo(() => (folds.items.length ? [...earlier.liveItems, ...folds.items] : earlier.liveItems), [earlier.liveItems, folds.items]);
   const goTo = useCallback((hit: ChatSearchHit) => {
     setSearch((x) => ({ ...x, open: false }));
     setPicked(true);
-    seekItem(hit.itemId);
-  }, [seekItem]);
+    const fold = earlier.liveItems.some((i) => i.id === hit.itemId) ? undefined : foldHolding(folds.fetched, hit.itemId);
+    if (!fold?.fold) return seekItem(hit.itemId);
+    openFoldRange(ctx.scope, fold.seq, fold.fold.through_seq); // its steps land in open groups
+    tr.expandFold(fold).then(
+      () => requestAnimationFrame(() => seekItem(hit.itemId)),
+      () => toast(t("chat-chatview.search_not_found")),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tr.expandFold follows the chat, as seekItem does
+  }, [seekItem, earlier.liveItems, folds.fetched, ctx.scope]);
   // a forward's card opened this chat at its original (#3899, lib/forward.ts jumpWhenOpen): brought into view once the
   // transcript is in and holds it; one further back stays where the chat opens, as iOS does
   useEffect(() => {
@@ -1660,7 +1683,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const wait = useMemo(() => (outgoing || awaiting ? null : backgroundWaitLine(session)), [outgoing, awaiting, session]);
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
   const done = turnDone(state, session, lastLine, tr.items);
-  const running = session ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
+  // In a Persona conversation the live work line in the message stream already says the turn is at work (its "Working…"
+  // header, spinner and clock), so the dock does not repeat it while that line is on screen (#6230). The bar stays for
+  // background workflows, background waits and subagents (lastLive is false then; the stream only shows their quiet
+  // fold rows), and for Agent chats, whose dock keeps the full cindy status bar.
+  const running = session && !(assistant && lastLive) ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const hasQueue = queued.length > 0;
@@ -2025,7 +2052,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         open={search.open}
         query={search.query}
         onQuery={(query) => setSearch((x) => ({ ...x, query }))}
-        items={earlier.liveItems}
+        items={searchItems}
+        foldsLoading={folds.loading}
+        foldsPartial={folds.partial}
         rounds={rounds}
         hasMore={earlier.liveHasMore}
         onLoadEarlier={loadForSearch}
@@ -2570,4 +2599,3 @@ function headerSlot(centered: boolean, side: "start" | "end"): string {
   if (!centered) return "contents";
   return cx(HEADER_SLOT, side === "start" ? HEADER_SLOT_START : HEADER_SLOT_END, "lg:contents");
 }
-
