@@ -562,7 +562,7 @@ Chat page:
   Other answer… first number for Type something then text+Enter (`Resolution.preKeys`), Chat instead sends Chat about this number; raw terminal,
   keys/input under View terminal; unparseable dialog shows terminal directly. DEBUG `-showSampleScreen YES`.
   A command's permission prompt (the hub's `dialog.command`, #5266) reads as a tool approval instead: "Claude Wants to Run a Command", the agent's words,
-  the command (`ScreenCommandAskBody`, three rows until Show All, two in Beautiful UI), the warning in plain words (Show Original: Claude Code's own), the countdown running
+  the command (`ScreenCommandAskBody`, eight lines until Show All N Lines opens it whole, fewer when the card is short, two in Beautiful UI; `CardCode`, #6605), the warning in plain words (Show Original: Claude Code's own), the countdown running
   (`ScreenCountdown`), Deny / Allow for its No / Yes (`ScreenParser.Dialog.allowDeny`). Mock: `MOCK_SCREEN_DANGER=before|after`.
 - Interaction panel above input: questions (`QuestionForm`, iOS grouped list, question + rounded choice group, terminal-style numbered circles become checks, "(Recommended)" shown as Recommended badge but original sent; Other answer… last row becomes input on tap; single-question single-choice submits immediately, multiple title "Heading · 1/2", small Previous / Next / Submit below, auto-next after single choice; `-showSampleQuestion YES`), plans (Markdown + full screen, Approve and run automatically /
   Approve and auto-accept edits / Request changes with feedback), permissions (Allow / Deny / Always allow this session), terminal (screen + parsed choices + keys + text).
@@ -625,6 +625,9 @@ Only at iPhone compact width; iPad, open iPhone Duo, Mac and watch remain unchan
 Routing stays unchanged: all navigation still writes `AppModel.selectedTab` (notifications, Siri, hand to Persona, Inbox rows…); the shell treats `.assistant` / `.chats` as its pages,
 `.mail` as "push Inbox on Assistant", `.settings` as "open Settings sheet", then returns to the original page. Foreground page has one source, `ShellState.page`;
 writing `selectedTab` forwards immediately to the shell (not through `onChange`), and switch segments and dragging use it too: see `docs/apple/shell.md`.
+
+Inbox-linked conversations use `InboxChatRoute` wherever `ShellDestinations` is enabled: the iPhone shell, regular-width iPad / open Duo (`padPlaces`), and the unified Sidebar layout (`embedded`). `pushInboxChat` is supplied under exactly the same condition and injected directly on every destination, as is `feishuOpen`, because an iPad split does not forward the root content's environment to those pages. It appends to `navPath` (the unified Sidebar's host path there, the current place's `NavigationPath` otherwise), so `ShellPlaces` saves that exact path, including `InboxChatRoute`, whenever the place is left. so `ShellPlaces` saves that exact path, including `InboxChatRoute`, whenever the place is left. The pushed `ChatView` does not yet expose the new place-sidebar button in its custom `devChrome`; that integration is follow-up work. This covers the timeline's handling and Agent rows, the draft's processing view, Hand to AI's View (main, new chat or Agent) and New Agent completion, Thread Agent rows (including an Agent inside a to-do sheet, which closes before the push), waiting-Agent rows in the inbox and on the new-chat page, and a summary started from an inbox source chat. Back, including the left-edge swipe, returns to the item, inbox list or new-chat page that opened it. A waiting card pushes only when its `ix.sessionKey.group` is the current hub's group and keeps that key unchanged; another group's card keeps `model.open`, which selects its own group's Persona for an assistant conversation. Sessionless cards still open as sheets, pushed chats keep `ChatView`'s default style, and Mac / Vision / classic layouts keep their previous destinations because the closure is nil.
+A chat pushed over the new-chat page is discarded when `assistantCurrent` changes, because New Chat is not a `ShellPlaces` place. `AssistantCurrentNavigation` keeps pushed pages when the app automatically changes no current conversation to the main one (`old == nil`, nonnil `new == assistantMain`), including manager reconnects; an explicit user reveal still goes to the root. A real hub-group change forgets every saved place and clears the old hub's inbox and item pages, while initial pairing (`nil → group`) and reconnects do not. `InboxBackNavigationTests` covers these rules and every route fallback; `InboxBackTests` covers phone and wide edge-swipe return paths.
 
 UI tests always use `launchPinned()` to fix the style (the run's, unless the test passes `-ui.style` itself, #5683) and `launchPersona()` for clean Demo Mode startup, without overriding the app's default navigation.
 Shell tests: `ShellTests`, `ShellAvatarTests` (top-left avatar and Inbox badge), `ShellPagerTests` (paging), `ShellSwitchTests`, `ShellSearchTests`. DEBUG: `-openShellPage inbox|machines|routines|knowledge|profile`; `-showShellPagerAt 0.3` holds the strip 30% across for screenshots; `-showHomeState empty|error` (new-chat page: nothing needs you / a failed-start notice, for screenshots).
@@ -724,7 +727,7 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   - `SplitDividerTests` (`-openSplitFresh YES` starts both lists at the system's width).
 - **Readable width**: chats and the Persona home page are at most 760pt wide (`ChatView.readableWidth`), centered when wider; the top bar still spans the full width.
 - **No screen dimensions**: the screens have different sizes and ratios; never use `UIScreen.main`. The long-press message action bar stays within the chat area (`MessageMenu.area`
-  coordinate space); interaction forms have a maximum height of 55% of their container (`containerRelativeFrame`), except a lone question card above the composer that grows past half the page (`docs/design/DESIGN_SYSTEM.md` 4.8, #6277); image scaling uses the view's `traitCollection.displayScale`.
+  coordinate space); interaction forms have a maximum height of 55% of their container (`containerRelativeFrame`) and never more than lets the card fit the cards' area, so a lone card never scrolls there too (#6605), except a lone question card above the composer that grows past half the page (`docs/design/DESIGN_SYSTEM.md` 4.8, #6277); question, permission, plan and terminal dialog forms keep their answers outside their one scroll area (`CardForm`); image scaling uses the view's `traitCollection.displayScale`.
 - **Toolbar buttons need both titles and icons** (`Label("新建会话", systemImage: …)`, "New chat"): vertical bars show only icons, and overflow menus show titles;
   icon-only buttons become blank menu items.
 - **Vertical side bars**: when the system places bars at the side (outer screen, inner landscape; non-nil `toolbarVerticalEdge`, iOS 27.1 onward), the Agents chat page no longer draws its own header buttons;
@@ -1121,6 +1124,25 @@ hub; what each rule and per-item setting means is in `docs/assistant/knowledge.m
   (`apple/Persona/Views/Settings/`), `KnowledgeSelectionTests`. Screenshots: the mock hub answers the routes (`MOCK_KB_SELECTION=missing|future|fail` for
   an old hub, an unknown field and a refused save); `-tab settings -openKnowledgeSelection YES` opens the page, `rule`, `chat` or `doc` instead of `YES`
   with that sheet up. Demo Mode keeps the document in memory.
+
+## Inbox rows
+
+For people scanning what needs them, one matter keeps its title, time and AI summary. Its metadata line says where it is
+happening, who wrote the newest line and what they wrote: `where · sender: preview` in English, with the localized colon
+in Chinese and Japanese. A direct chat whose `where` equals its sender names that person once. Without `where` (an older
+hub, or mail), the existing source-specific line is unchanged. Search includes `where` in addition to title, sender,
+preview and summary; it still does not search context or triage reasons.
+
+When the manager sends the optional `now` key, `InboxNow` resolves the shared `spec/fixtures/inbox/now.json` table and
+compose rules in the interface language. On an open item, the complete sentence takes the existing mark line below the
+metadata, in the mark's current font and color (failure red, other states secondary), rather than competing with the
+metadata or its count badge for width. Waiting has a static clock, only queued / looking / Agent-working spins, and states
+that need the owner use the existing Needs you mark (failure stays red); FYI and folded states do not spin. Done rows keep
+today's absence of a mark; their done_* words belong to the detail. Waiting includes its named person, short check time
+and next step when present; failure uses only `handling.error`. An unknown or missing key keeps the existing
+`InboxEventText.mark` line and draft behavior, including its row height. The frozen native Mac row keeps its previous
+metadata and mark. `InboxNowTests` checks every shared state and row case in en, zh-Hans and ja, optional-field decoding,
+fallback and `where` search.
 
 ## Translation (Settings › Translation, 2026-10-31)
 

@@ -48,5 +48,7 @@
   "handed_agent": "交给了 Agent「{title}」",
   "handed_agent_generic": "交给了 Agent",
   "handed_conversation": "交给了「{title}」",
-  "handed_conversation_generic": "交给了一个对话"
+  "handed_conversation_generic": "交给了一个对话",
+  "waiting_who": "等{who} · {at} 再看",
+  "waiting_reply": "等对方回复 · {at} 再看"
 }

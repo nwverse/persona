@@ -48,5 +48,7 @@
   "handed_agent": "Agent「{title}」に渡しました",
   "handed_agent_generic": "Agent に渡しました",
   "handed_conversation": "「{title}」に渡しました",
-  "handed_conversation_generic": "会話に渡しました"
+  "handed_conversation_generic": "会話に渡しました",
+  "waiting_who": "{who}待ち · {at}に再確認",
+  "waiting_reply": "返信待ち · {at}に再確認"
 }
