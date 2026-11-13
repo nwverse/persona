@@ -5,21 +5,25 @@
 // Drawn only for an item that carries this phase's fields (lib/inbox-events.ts `hasEvent`).
 import { useEffect, useRef, useState } from "react";
 import {
-  canExpand, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
+  canExpand, chainIconMeaning, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
   type ChainEntry, type ChainTap, type InboxSuggestion,
 } from "../../lib/inbox-events";
 import { conversationRoute, docChangeLine, isDone, itemKey, itemRoute, suggestionAct, useInbox, type InboxItem } from "../../lib/inbox";
 import { otherManager } from "../../lib/manager-choice";
+import { connectorBrand } from "../../lib/connectors";
+import { stateOf } from "../../lib/format";
+import { stateName } from "../../lib/state-labels";
 import { openLink } from "../../lib/links";
 import { type Route } from "../../lib/router";
 import { openFromInbox } from "../../lib/inbox-nav";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
 import { Button, cx, Shimmer, Spinner } from "../../ui/atoms";
+import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
 import { useFoldScroll } from "../chat/fold-scroll";
 import { InboxLine } from "./InboxLine";
-import { Glyph, Spark } from "./InboxParts";
+import { Glyph, Spark, Tag } from "./InboxParts";
 
 /** Where a tapped `source` entry (or "Original") opens the item's own page: at a Feishu position, a mail's uid, or a URL. */
 export type SourceAt = { position?: string; uid?: number; url?: string };
@@ -259,32 +263,39 @@ export function SuggestionCard({ item, suggestion: s }: { item: InboxItem; sugge
 const CHAIN_ICON: Record<string, { icon?: IconName; glyph?: "reply" | "question" }> = {
   received: { icon: "inbox" },
   triaged: { icon: "filter" },
-  handling: { icon: "spark" },
-  sent: { icon: "send" },
-  agent: { icon: "agent" },
-  confirmed: { icon: "check" },
+  persona: { icon: "spark" },
+  sendMail: { icon: "send" },
+  agents: { icon: "agent" },
+  success: { icon: "check" },
   rejected: { icon: "x" },
   instructed: { icon: "chat" },
-  self_replied: { glyph: "reply" },
-  failed: { icon: "warning" },
+  reply: { glyph: "reply" },
+  error: { icon: "warning" },
   done: { icon: "check" },
   concluded: { icon: "read" },
+  person: { icon: "person" },
+  reported: { icon: "chat" },
+  info: { icon: "info" },
 };
 
-function ChainIcon({ kind }: { kind: string }) {
-  const c = CHAIN_ICON[kind] ?? { icon: "info" as const };
-  const tone = kind === "failed" ? "text-red" : kind === "handling" || kind === "concluded" ? "text-accent" : "text-ink-3";
+function ChainIcon({ item, e }: { item: InboxItem; e: ChainEntry }) {
+  const meaning = chainIconMeaning(e);
+  const source = e.via || item.source;
+  const brand = meaning === "source" ? connectorBrand(source) : undefined;
+  const c = CHAIN_ICON[meaning] ?? CHAIN_ICON.info;
+  const tone = meaning === "error" ? "text-red" : meaning === "persona" || meaning === "concluded" ? "text-accent" : "text-ink-3";
   return (
-    <span className={cx("flex size-5 shrink-0 items-center justify-center rounded-full bg-field", tone)} aria-hidden>
-      {c.glyph ? <Glyph name={c.glyph} size={11} stroke={2.2} /> : <Icon name={c.icon!} size={11} stroke={2.2} />}
+    <span className={cx("flex size-5 shrink-0 items-center justify-center rounded-full bg-field", tone)} aria-hidden data-chain-icon={meaning}>
+      {brand ? <BrandMark brand={brand} size={18} fit="tile" /> : meaning === "source" ? <Icon name={source === "mail" ? "mail" : source === "chat" ? "chat" : "link"} size={11} stroke={2.2} /> : c.glyph ? <Glyph name={c.glyph} size={11} stroke={2.2} /> : <Icon name={c.icon!} size={11} stroke={2.2} />}
     </span>
   );
 }
 
-/** The handling chain: folded to the newest entry, "Show all (N)" shows them all, oldest first. */
+/** The handling chain: folded to the three newest entries, "Show all (N)" shows them all, oldest first. */
 export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: SourceAt) => void }) {
   const [open, setOpen] = useState(false);
   const conversation = useConversation();
+  const sessions = useStore((s) => s.sessions);
   const all = item.chain ?? [];
   if (!all.length) return null;
   const rows = chainRows(all, open);
@@ -297,41 +308,51 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
       onSource({ position: x.position, uid: x.uid });
     } else if (x.kind === "route") openFromInbox(x.route);
   };
+  const agentState = (e: ChainEntry) => {
+    if (e.kind !== "agent" && e.kind !== "agent_stopped") return undefined;
+    const link = e.link as Record<string, unknown> | undefined;
+    if (link?.type !== "session" || typeof link.machine_id !== "string" || typeof link.session_id !== "string") return undefined;
+    const session = sessions[link.machine_id]?.find((s) => s.session_id === link.session_id);
+    return session ? stateName(stateOf(session)) : undefined;
+  };
   return (
     <section data-event-chain>
       <div className="flex items-center gap-2 pb-1">
         <p className="min-w-0 flex-1 text-[11.5px] font-medium whitespace-nowrap text-ink-3">{t("inbox-inboxevent.chain")}</p>
-        {all.length > 1 && (
+        {all.length > 3 && (
           <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="h-6 shrink-0 rounded-[6px] px-1.5 text-[11.5px] font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink" data-chain-toggle>
             {open ? t("inbox-inboxevent.chain_collapse") : t("inbox-inboxevent.chain_expand", { count: all.length })}
           </button>
         )}
       </div>
       <ol className="flex flex-col">
-        {rows.map((e) => <ChainRow key={e.id} e={e} tap={chainTap(e, conversation, otherManager(item.manager))} onTap={tap} />)}
+        {rows.map((e) => <ChainRow key={e.id} item={item} e={e} tap={chainTap(e, conversation, otherManager(item.manager))} onTap={tap} agentState={agentState(e)} />)}
       </ol>
     </section>
   );
 }
 
-function ChainRow({ e, tap, onTap }: { e: ChainEntry; tap: ChainTap; onTap: (x: ChainTap) => void }) {
+function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: ChainEntry; tap: ChainTap; onTap: (x: ChainTap) => void; agentState?: string }) {
   const [open, setOpen] = useState(false);
   const expandable = canExpand(e);
   const goes = tap.kind === "source" || tap.kind === "route";
+  const reported = e.kind === "reported";
   const press = () => (goes ? onTap(tap) : expandable && setOpen((o) => !o));
   return (
-    <li data-chain-entry={e.kind}>
+    <li data-chain-entry={e.kind} data-chain-id={e.id} data-chain-reported={reported ? "" : undefined}>
       <div className="flex min-w-0 items-center gap-1">
         <button
           type="button"
           onClick={press}
           disabled={!goes && !expandable}
           aria-expanded={!goes && expandable ? open : undefined}
-          className={cx("flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-[12.5px]", goes || expandable ? "text-ink hover:bg-field" : "cursor-default text-ink")}
+          className={cx("flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-[12.5px]", goes || expandable ? cx("hover:bg-field", reported ? "text-ink-2" : "text-ink") : cx("cursor-default", reported ? "text-ink-2" : "text-ink"))}
         >
           <span className="min-w-[34px] shrink-0 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums">{chainTime(e.at)}</span>
-          <ChainIcon kind={e.kind} />
+          <ChainIcon item={item} e={e} />
+          {reported && <Tag>{t("inbox-inboxevent.assistant_says")}</Tag>}
           <span className="min-w-0 flex-1 truncate">{e.text}</span>
+          {agentState && <span className="shrink-0 text-[11.5px] whitespace-nowrap text-ink-3" data-chain-agent-state>{agentState}</span>}
           {goes && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />}
           {!goes && expandable && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />}
         </button>

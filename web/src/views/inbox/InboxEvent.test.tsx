@@ -44,6 +44,8 @@ vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: fal
 import type { InboxItem } from "../../lib/inbox";
 import { resetInboxForTests } from "../../lib/inbox";
 import { resetMailForTests } from "../../lib/mail";
+import { getState } from "../../lib/store";
+import type { Session } from "../../lib/types";
 import { InboxDetail } from "./InboxDetail";
 import { EventBody } from "./InboxEvent";
 import { InboxList } from "./InboxList";
@@ -55,6 +57,7 @@ settleRosterDefault();
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const fixture = JSON.parse(readFileSync(join(__dirname, "../../../../scripts/mock/inbox_events.json"), "utf8")) as { items: InboxItem[] };
+const showcase = JSON.parse(readFileSync(join(__dirname, "../../../../spec/fixtures/inbox/showcase.json"), "utf8")) as { items: InboxItem[] };
 const byId = (id: string) => fixture.items.find((x) => x.id === id)!;
 const reply = byId("lark:oc_demo1:100");
 const urgent = byId("lark:oc_demo2:200");
@@ -86,6 +89,7 @@ const press = async (text: string) => {
 beforeEach(() => {
   resetInboxForTests();
   resetMailForTests();
+  Object.assign(getState(), { sessions: {} });
   calls.list = [];
   calls.items = [];
   host = document.createElement("div");
@@ -98,7 +102,7 @@ afterEach(() => {
 });
 
 describe("收件箱事件：详情", () => {
-  it("draws 摘要, 总结, the reply suggestion with 驳回 · 修改 · 发送, then the chain folded to its newest entry", async () => {
+  it("draws 摘要, 总结, the reply suggestion with 驳回 · 修改 · 发送, then all three chain entries without a toggle", async () => {
     act(() => root.render(<EventBody item={reply} onSource={() => {}} />));
     const text = host.textContent ?? "";
     expect(text.indexOf(reply.summary!)).toBeLessThan(text.indexOf(reply.recap!));
@@ -106,11 +110,26 @@ describe("收件箱事件：详情", () => {
     expect(text.indexOf("建议回复")).toBeLessThan(text.indexOf("处理链条"));
     expect(host.querySelector("[data-suggestion-text]")?.textContent).toBe(reply.suggestion!.text);
     expect(buttons()).toEqual(expect.arrayContaining(["驳回", "修改", "发送"]));
-    expect(host.querySelectorAll("[data-chain-entry]")).toHaveLength(1);
-    expect(host.querySelector("[data-chain-entry]")?.getAttribute("data-chain-entry")).toBe("handling");
-    await press("展开全部（3）");
     expect([...host.querySelectorAll("[data-chain-entry]")].map((e) => e.getAttribute("data-chain-entry"))).toEqual(["received", "triaged", "handling"]);
-    expect(buttons()).toContain("收起");
+    expect(host.querySelector("[data-chain-toggle]")).toBeNull();
+  });
+  it("renders showcase sc-1 folded and expanded, with reported apart and the Agent's live state", async () => {
+    Object.assign(getState(), {
+      sessions: { m1: [{ machine_id: "m1", session_id: "s-agent", title: "核对报价单", cwd: "/work", status: "blocked", state: "needs_you" } as Session] },
+    });
+    act(() => root.render(<EventBody item={showcase.items[0]} onSource={() => {}} />));
+    const ids = () => [...host.querySelectorAll("[data-chain-id]")].map((e) => e.getAttribute("data-chain-id"));
+    expect(ids()).toEqual(["c5", "c6", "c7"]);
+    const reported = host.querySelector('[data-chain-id="c5"]')!;
+    expect(reported.getAttribute("data-chain-reported")).toBe("");
+    expect(reported.textContent).toContain("助手说");
+    expect(reported.querySelector('[data-chain-icon="reported"]')).not.toBeNull();
+    await press("展开全部（7）");
+    expect(ids()).toEqual(["c1", "c2", "c3", "c4", "c5", "c6", "c7"]);
+    expect(host.querySelector('[data-chain-id="c3"] [data-chain-agent-state"]')?.textContent).toBe("需要你");
+    expect(host.querySelector('[data-chain-id="c4"] [data-chain-agent-state"]')?.textContent).toBe("需要你");
+    await press("收起");
+    expect(ids()).toEqual(["c5", "c6", "c7"]);
   });
   it("labels each kind's buttons", () => {
     act(() => root.render(<EventBody item={agentSuggestion} onSource={() => {}} />));
@@ -158,7 +177,6 @@ describe("收件箱事件：详情", () => {
   it("a chain entry goes to its source at its position, or opens its messages in place", async () => {
     const onSource = vi.fn();
     act(() => root.render(<EventBody item={reply} onSource={onSource} />));
-    await press("展开全部（3）");
     const received = host.querySelector('[data-chain-entry="received"]')!;
     await act(async () => received.querySelector("button")!.click());
     expect(onSource).toHaveBeenCalledWith({ position: "100", uid: undefined });
@@ -186,7 +204,6 @@ describe("收件箱事件：详情", () => {
     expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull();
     expect(buttons()).not.toContain("看原文");
     expect(around().at(-1)).toContain("around=102"); // the chat, at the first new message
-    await press("展开全部（3）");
     const received = host.querySelector('[data-chain-entry="received"]')!;
     await act(async () => received.querySelector("button")!.click());
     await flush();
@@ -204,7 +221,6 @@ describe("收件箱事件：详情", () => {
     expect(reads()).toEqual(["/mail/messages/a1/89?mailbox=INBOX"]);
     expect(flags()).toEqual(["/mail/messages/a1/89/flags"]); // an unseen body is really opened, not a seen fixture
     expect(host.textContent).toContain("mail body 89");
-    await press("展开全部（3）");
     const received = host.querySelector('[data-chain-entry="received"]')!;
     await act(async () => received.querySelector("button")!.click());
     await flush();

@@ -18,5 +18,6 @@
   "entry_collapse": "Collapse",
   "message_sender": "{sender}: ",
   "related": "Related",
-  "manager_done": "Handled by the assistant"
+  "manager_done": "Handled by the assistant",
+  "assistant_says": "Assistant says"
 }
