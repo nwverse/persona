@@ -20,16 +20,12 @@ struct InboxSourceBodyTests {
         """#.utf8))
     }
 
-    /// Native chat data selects the chat directly, whether its source has an extension declaration or not. It also
-    /// precedes every kind of slot content; only an explicitly supplied position replaces the conversation's focus.
+    /// Native chat data alone selects the chat directly, whether its source has an extension declaration or not. Only an
+    /// explicitly supplied position replaces the conversation's focus.
     @Test(arguments: ["lark", "examplechat"])
-    func nativeChatWinsForExtensionAndUndeclaredSources(source: String) throws {
+    func nativeChatIsDirectForExtensionAndUndeclaredSources(source: String) throws {
         let item = try item(source: source, content: #"""
-        "lark": {"feed_id": "feed-1", "is_group": true, "start_position": "100", "read_position": "99"},
-        "doc": {"url": "https://example.com/document", "type": "docx", "notice": "mention"},
-        "connector": {"thread": "thread-1", "label": "Example"},
-        "moment": {"post_id": "post-1", "notice": "comment"},
-        "mail": {"account_id": "mail-1", "mailbox": "INBOX", "uids": [5, 7]}
+        "lark": {"feed_id": "feed-1", "is_group": true, "start_position": "100", "read_position": "99"}
         """#)
         let conversation = try #require(item.larkConversation)
         #expect(conversation.focus == "100")
@@ -57,8 +53,9 @@ struct InboxSourceBodyTests {
         #expect(InboxSourcePage.Selection.of(item: item, position: "250") == .chat(positioned))
     }
 
-    @Test func nonChatSlotsKeepTheirContentPrecedence() throws {
+    @Test func sourceContentKeepsItsExistingPrecedence() throws {
         var item = try item(source: "examplechat", content: #"""
+        "lark": {"feed_id": "feed-1", "is_group": true, "start_position": "100"},
         "doc": {"url": "https://example.com/document", "type": "docx", "notice": "comment"},
         "connector": {"thread": "thread-1", "label": "Example"},
         "moment": {"post_id": "post-1", "notice": "reply"},
@@ -73,6 +70,10 @@ struct InboxSourceBodyTests {
         #expect(InboxSourcePage.Selection.of(item: item) == .slot(.moment))
 
         item.moment = nil
+        let conversation = try #require(item.larkConversation)
+        #expect(InboxSourcePage.Selection.of(item: item) == .chat(conversation))
+
+        item.lark = nil
         #expect(InboxSourcePage.Selection.of(item: item) == .slot(.mail))
 
         item.mail = nil

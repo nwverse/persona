@@ -118,9 +118,18 @@ final class InboxSourceDirectTests: XCTestCase {
 
     @MainActor private func visibleItemRow() -> XCUIElement? {
         let byIdentifier = app.staticTexts.matching(identifier: Self.itemTitle).allElementsBoundByIndex
-        if let row = byIdentifier.first(where: { $0.exists && $0.isHittable }) { return row }
+        if let row = byIdentifier.first(where: { usableItemRow($0) }) { return row }
         let byLabel = app.staticTexts.matching(NSPredicate(format: "label == %@", Self.itemTitle)).allElementsBoundByIndex
-        return byLabel.first(where: { $0.exists && $0.isHittable })
+        return byLabel.first(where: { usableItemRow($0) })
+    }
+
+    /// At regular width, a matching title belongs to the Inbox only on the same side of the divider as its toolbar.
+    @MainActor private func usableItemRow(_ row: XCUIElement) -> Bool {
+        guard row.exists && row.isHittable else { return false }
+        guard regularWidth else { return true }
+        let divider = element("split.divider.assistant.list"), inbox = element("inbox.more")
+        guard divider.exists, inbox.exists else { return true }
+        return (row.frame.midX > divider.frame.midX) == (inbox.frame.midX > divider.frame.midX)
     }
 
     // MARK: - Direct native chat
@@ -129,7 +138,7 @@ final class InboxSourceDirectTests: XCTestCase {
         let message = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.nativeMessage)).firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 20), "\(route) did not open the native chat:\n\(app.debugDescription)")
         let focused = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.focusedMessage)).firstMatch
-        XCTAssertTrue(focused.waitForExistence(timeout: 5), "\(route) did not show the linked message position:\n\(app.debugDescription)")
+        XCTAssertTrue(focused.waitForExistence(timeout: 5), "\(route) did not show the expected chat focus:\n\(app.debugDescription)")
         XCTAssertFalse(element("inbox-plugin-item-back").exists,
                        "\(route) kept the extension's intermediate-page back strip")
         XCTAssertFalse(app.buttons[Self.extensionViewInChat].exists,

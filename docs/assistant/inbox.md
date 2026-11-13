@@ -704,9 +704,10 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   `-showInboxSuggestionEdit YES` (suggestion editor on iPhone event page).
 - **Plugin-rendered details** (#1681; `docs/extensions/extensions.md`, "Inbox items"): for items from a plugin connector (`source` = connector) contributing `inbox_item`,
   the plugin's item View is the slot's source body. Hub passes `{id, title, summary, tier, reason, done, meta, extra}`; meta unchanged, unparsed.
-  On iOS, View original and source chain entries for an item with `larkConversation` open `LarkChatView` directly, at the chain link's position or the conversation's own focus;
-  they skip the plugin's intermediate item View and its Back-to-event strip. Documents, Moments, mail, connector items and other non-chat sources keep the existing slot behavior,
-  including its original-body fallback for sources without a slot, old hubs, read-only devices and rendering failures. The Mac detail root is unchanged; its position links use the same source page.
+  On iOS and visionOS, View original and source chain entries whose existing source precedence reaches a native chat open `LarkChatView` directly,
+  at the chain link's position or the conversation's own focus; they skip the plugin's intermediate item View and its Back-to-event strip.
+  Document, connector and Moments content keeps its pages ahead of a native chat when an item carries both; mail and the empty fallback keep their slot behavior too.
+  Sources without a slot, old hubs, read-only devices and rendering failures keep the original body. The Mac detail root is unchanged; its position links use the same source page.
   For plugin pages still shown, View in chat returns `persona://inbox/<item id>/source`; the App opens its original source page.
 
 ## Item actions (`Persona/Views/Inbox/InboxActions.swift`)

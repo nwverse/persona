@@ -575,23 +575,23 @@ struct InboxSourceRoute: Hashable {
 
 /// The source as the inbox detail drew it before events: 'view original', a chain entry's link.
 struct InboxSourcePage: View {
-    /// What the page draws. A native chat goes straight to its conversation; every other source keeps the extension slot.
-    nonisolated enum Selection: Equatable {
+    /// What the page draws, in the source's existing order. The native-chat branch skips the extension's intermediate page.
+    @MainActor enum Selection: Equatable {
         case chat(LarkConversation)
         case slot(Slot)
 
-        nonisolated enum Slot: Equatable {
+        enum Slot: Equatable {
             case document, connector, moment, mail, empty
         }
 
         static func of(item: InboxItem, position: String? = nil) -> Selection {
+            if item.doc != nil { return .slot(.document) }
+            if item.connector != nil { return .slot(.connector) }
+            if item.moment != nil { return .slot(.moment) }
             if var conversation = item.larkConversation {
                 if let position { conversation.focus = position }
                 return .chat(conversation)
             }
-            if item.doc != nil { return .slot(.document) }
-            if item.connector != nil { return .slot(.connector) }
-            if item.moment != nil { return .slot(.moment) }
             if item.mail != nil { return .slot(.mail) }
             return .slot(.empty)
         }
