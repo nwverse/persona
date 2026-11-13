@@ -243,12 +243,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * code measured +1,396 B and +1,510 B on the two mains before, docs/lessons/web.md; the 30 B of room main had stay).
  * +100 B for the scheduled tasks list's "Inbox: …" marks and the assistant's own Inbox row (#6430): the Japanese first
  * screen was 49 B over with them, in three languages' text and a few lines of code.
- * And 635 B for an Agents fold-all button that always changes something, with a hint (#6447: ja 477,347 B against
+ * And 755 B for an Agents fold-all button that always changes something, with a hint (#6447: ja 477,467 B against
  * 476,712 B on main at 60743b81f: the button's rule for a list folded under its title and for the chat-list view, the
- * hint under it and its four strings, less the two list-menu items it replaces; the to-do page's use of it stays in
- * that page's chunk). Main was already 52 B over this budget, which this does not cover.
+ * hint under it and its four strings, less the two list-menu items it replaces, and 120 B of it the stylesheet's named
+ * `text-xs` size, which the font-size ratchet asks for; the to-do page's use of it stays in that page's chunk). Main was
+ * already 52 B over this budget, which this does not cover.
  */
-export const FIRST_SCREEN_BUDGET = 477_295;
+export const FIRST_SCREEN_BUDGET = 477_415;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
