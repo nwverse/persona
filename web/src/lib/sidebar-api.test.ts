@@ -86,7 +86,7 @@ describe("walking the rows", () => {
 });
 
 describe("the Agents title row's fold-all button (#6447)", () => {
-  const at = (p: Partial<Parameters<typeof agentsFoldAction>[0]>) => agentsFoldAction({ blockFolded: false, canFoldBlock: true, groups: 3, open: true, ...p });
+  const at = (p: Partial<Parameters<typeof agentsFoldAction>[0]>) => agentsFoldAction({ blockFolded: false, groups: 3, open: true, ...p });
 
   it("folds the groups while any is open, and opens them when none is", () => {
     expect(at({})).toBe("fold-groups");
@@ -96,16 +96,16 @@ describe("the Agents title row's fold-all button (#6447)", () => {
   it("opens the list and its groups when the list is folded under its title, whatever the groups are", () => {
     expect(at({ blockFolded: true })).toBe("open-block");
     expect(at({ blockFolded: true, groups: 0, open: false })).toBe("open-block");
+    expect(at({ blockFolded: true, flat: true })).toBe("open-block");
   });
 
-  it("folds the whole list in the chat-list view, where the groups on screen are only its end sections", () => {
-    expect(at({ flat: true })).toBe("fold-block");
-    expect(at({ flat: true, open: false })).toBe("fold-block");
+  it("never folds the list under its title: it has nothing to do in the chat-list view, whose only groups are its end sections", () => {
+    // the first fix folded the whole block here, the grouping tabs, quick filters and search with it
+    expect(at({ flat: true })).toBeNull();
+    expect(at({ flat: true, open: false })).toBeNull();
   });
 
-  it("folds the whole list when it has no groups, and offers nothing where the list cannot fold", () => {
-    expect(at({ groups: 0, open: false })).toBe("fold-block");
-    expect(at({ groups: 0, open: false, canFoldBlock: false })).toBeNull();
-    expect(at({ flat: true, canFoldBlock: false })).toBeNull();
+  it("has nothing to do in a list with no groups (a grouping still loading, nothing listed)", () => {
+    expect(at({ groups: 0, open: false })).toBeNull();
   });
 });

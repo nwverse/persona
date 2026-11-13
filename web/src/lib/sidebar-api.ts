@@ -41,18 +41,20 @@ export function setAgentsFolded(folded: boolean, store: Pick<Storage, "length" |
 }
 
 /** What the Agents title row's fold-all button does now (#6447): a click always changes what is on screen. */
-export type AgentsFoldAction = "open-block" | "fold-block" | "fold-groups" | "open-groups";
+export type AgentsFoldAction = "open-block" | "fold-groups" | "open-groups";
 
-/** `blockFolded`: the list is folded under the Agents title; `canFoldBlock`: it can be (the sidebar, not the phone's
- *  Agents page); `flat`: the list is drawn without groups (the chat-list view; its Pinned and Recent sections at the
- *  ends are not the list); `groups` / `open`: the group headings on screen and whether any is open. Folded under its
- *  title, the list opens with every group in it; a flat list, or one with no groups (a grouping still loading, nothing
- *  listed), folds under its title, or offers nothing where it cannot; otherwise the groups fold while any is open, and
- *  open when none is. Before #6447 it acted on the groups alone, so in those cases a click only flipped its label or
- *  opened a section out of sight. */
-export function agentsFoldAction({ blockFolded, canFoldBlock, flat = false, groups, open }: { blockFolded: boolean; canFoldBlock: boolean; flat?: boolean; groups: number; open: boolean }): AgentsFoldAction | null {
+/** `blockFolded`: the list is folded under the Agents title (its own click, #2524); `flat`: the list is drawn without
+ *  groups (the chat-list view; its Pinned and Recent sections at the ends are not the list); `groups` / `open`: the group
+ *  headings on screen and whether any is open. The button acts on the list under the controls only: Collapse all folds
+ *  the groups to their headings while any is open, Expand all opens them when none is, and the Agents title, grouping
+ *  tabs, quick filters, search and Filter stay. Folded under its title, the list opens with every group in it. A flat
+ *  list, or one with no groups (a grouping still loading, nothing listed), has nothing to fold to, so there is no button:
+ *  folding its rows would leave a blank under the search that reads as an empty list, and the design system invents no
+ *  heading over a flat list (docs/design/DESIGN_SYSTEM.md 3.4). Before #6447 it acted on the groups alone, so there a
+ *  click only flipped its label or opened a section out of sight; a first fix folded the whole block, controls too. */
+export function agentsFoldAction({ blockFolded, flat = false, groups, open }: { blockFolded: boolean; flat?: boolean; groups: number; open: boolean }): AgentsFoldAction | null {
   if (blockFolded) return "open-block";
-  if (flat || groups === 0) return canFoldBlock ? "fold-block" : null;
+  if (flat || groups === 0) return null;
   return open ? "fold-groups" : "open-groups";
 }
 

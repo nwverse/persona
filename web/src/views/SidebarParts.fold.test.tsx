@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-// The Agents title row's fold-all button (#6447): every click changes what is on screen. It folds and opens the groups;
-// in the chat-list view, whose only groups are its end sections, it folds the whole list under the title and opens it
-// again; with the list folded under the title it opens the list and every group; where nothing can fold it is not there.
-// A hint names the action and what it changes. The groups here stand in for the sidebar's: headings driven by useFolded.
+// The Agents title row's fold-all button (#6447): every click changes what is on screen, and only the list under the
+// controls. It folds the groups to their headings and opens them; with the list folded under the title it opens the
+// list and every group; in the chat-list view and with no groups it is not there (a first fix folded the whole block,
+// controls and all). A hint names the action and what it changes. The groups here stand in for the sidebar's: headings
+// driven by useFolded; SidebarFoldAll.test.tsx clicks the real one.
 import { act, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -78,24 +79,18 @@ describe("the Agents fold-all button", () => {
     expect(block()).toBe("open");
   });
 
-  it("folds the whole chat list under its title and opens it again, leaving its Recent section alone", async () => {
-    // before #6447 this opened Recent, out of sight at the list's end, and the list itself did not move
+  it("is not there in the chat-list view, whose only groups are its end sections, so it never folds the block", async () => {
+    // before #6447 a click there opened Recent, out of sight at the list's end; the first fix folded the whole block
     await render(<Block flat groups={[{ k: "recent", folded: true }]} />);
-    expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.fold_all"));
-    expect(hint()).toBe(t("sidebar.fold_list_hint"));
-    await press();
-    expect(block()).toBe("folded");
-    expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.open_all"));
-    expect(hint()).toBe(t("sidebar.open_list_hint"));
-    await press();
+    expect(button()).toBeNull();
     expect(block()).toBe("open");
+    expect(opened()).toEqual(["false"]);
   });
 
-  it("folds a list with no groups under its title, where a click once changed only its own label", async () => {
+  it("is not there while the list has no groups, where a click once changed only its own label", async () => {
     await render(<Block groups={[]} />);
-    expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.fold_all"));
-    await press();
-    expect(block()).toBe("folded");
+    expect(button()).toBeNull();
+    expect(block()).toBe("open");
   });
 
   it("opens the list folded under its title together with every group in it", async () => {
@@ -109,10 +104,20 @@ describe("the Agents fold-all button", () => {
     expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.fold_all"));
   });
 
-  it("is not there when nothing on the list can fold (the phone's Agents page in the chat-list view)", async () => {
+  it("acts on the groups alone where the list cannot fold under its title (the phone's Agents page)", async () => {
+    await render(<Block foldable={false} groups={[{ k: "machine:a" }]} />);
+    await press();
+    expect(opened()).toEqual(["false"]);
+    expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.open_all"));
     await render(<Block foldable={false} flat groups={[{ k: "recent", folded: true }]} />);
     expect(button()).toBeNull();
-    await render(<Block foldable={false} groups={[]} />);
+  });
+
+  it("opens a list folded under its title in the chat-list view, and then has nothing left to do", async () => {
+    await render(<Block blockFolded flat groups={[{ k: "recent", folded: true }]} />);
+    expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.open_all"));
+    await press();
+    expect(block()).toBe("open");
     expect(button()).toBeNull();
   });
 

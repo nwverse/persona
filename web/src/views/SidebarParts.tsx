@@ -139,12 +139,14 @@ export function morePagesMenu(more: NavPage[], activeKey: string, onNavigate?: (
 
 export { GroupCount, Section, SidebarGroup } from "./SidebarSection";
 
-const FOLD_LABEL = { "open-block": "sidebar.open_all", "fold-block": "sidebar.fold_all", "fold-groups": "sidebar.fold_all", "open-groups": "sidebar.open_all" } as const;
-const FOLD_HINT = { "open-block": "sidebar.open_list_hint", "fold-block": "sidebar.fold_list_hint", "fold-groups": "sidebar.fold_all_hint", "open-groups": "sidebar.open_all_hint" } as const;
+const FOLD_LABEL = { "open-block": "sidebar.open_all", "fold-groups": "sidebar.fold_all", "open-groups": "sidebar.open_all" } as const;
+const FOLD_HINT = { "open-block": "sidebar.open_list_hint", "fold-groups": "sidebar.fold_all_hint", "open-groups": "sidebar.open_all_hint" } as const;
 
-/** The Agents title row's one fold control (#3222): its action follows the group headings on screen, folded by hand,
- *  by the keyboard shortcut or by it, and the block's own fold (`block`, absent where the list cannot fold), so a click
- *  always changes something (#6447, lib/sidebar-api.ts `agentsFoldAction`). The row around it is the hint's box. */
+/** The Agents title row's one fold control (#3222): it acts on the list under the controls, never on the grouping
+ *  tabs, quick filters, search or Filter. Its action follows the group headings on screen, folded by hand, by the
+ *  keyboard shortcut or by it, and the block's own fold under the Agents title (`block`, absent where the list cannot
+ *  fold), so a click always changes something; a list without groups shows no button (#6447, lib/sidebar-api.ts
+ *  `agentsFoldAction`). The row around it is the hint's box. */
 export function GroupFoldButton({ groups, onAction, block, flat }: { groups: React.RefObject<HTMLElement | null>; onAction: () => void; block?: { folded: boolean; toggle: () => void }; flat?: boolean }) {
   const [seen, setSeen] = useState({ groups: 0, open: false });
   useEffect(() => {
@@ -161,11 +163,11 @@ export function GroupFoldButton({ groups, onAction, block, flat }: { groups: Rea
     observer.observe(root, { attributes: true, attributeFilter: ["aria-expanded", "inert"], childList: true, subtree: true });
     return () => observer.disconnect();
   }, [groups]);
-  const action = agentsFoldAction({ blockFolded: Boolean(block?.folded), canFoldBlock: Boolean(block), flat, groups: seen.groups, open: seen.open });
+  const action = agentsFoldAction({ blockFolded: Boolean(block?.folded), flat, groups: seen.groups, open: seen.open });
   if (!action) return null;
   const run = () => {
-    if (action === "open-block" || action === "fold-block") block?.toggle();
-    if (action !== "fold-block") setAgentsFolded(action === "fold-groups");
+    if (action === "open-block") block?.toggle();
+    setAgentsFolded(action === "fold-groups");
     onAction();
   };
   return <FoldAllButton label={t(FOLD_LABEL[action])} hint={t(FOLD_HINT[action])} onClick={run} className={SESSION_LIST_STYLE.foldButton} testId="agents-fold-all" />;

@@ -248,8 +248,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * among them, as rows with a count, a state and an ⓘ, a to-do's state in the To-dos page's word, and the groups'
  * explanations; the ⓘ's words, ui/InfoTipPanel.tsx, load the first time one is asked for, which took 287 B back off;
  * 31 B of room).
+ * And 424 B for the Agents fold-all button that acts on the list under the controls, and a to-do's first five decisions
+ * (#6447: ja 477,902 B against 477,478 B on main at 2d9596043: the button's rule (fold the groups to their headings,
+ * open a list folded under its title, no button where there is nothing to fold to), the hint under it and its three
+ * strings, less the two list-menu items it replaces, and the decisions' words in the to-dos' catalog). Main was already
+ * 98 B over this budget (#6515), which this does not cover.
  */
-export const FIRST_SCREEN_BUDGET = 477_380;
+export const FIRST_SCREEN_BUDGET = 477_804;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
