@@ -269,13 +269,18 @@ function QuestionCard({ ix, canApprove }: { ix: Interaction; canApprove: boolean
     (picked[i] ?? []).every((label) => qs[i].options?.some((o) => o.label === label && o.action === "defer")));
   const all = qs.every((_, i) => answered(i) && allowed(i));
 
-  const send = async () => {
-    if (!all) return;
+  const send = async (directLabel?: string) => {
+    if (directLabel === undefined && !all) return;
     setBusy(true);
     const answers: Record<string, string> = {};
-    qs.forEach((x, i) => {
-      answers[x.question] = custom[i]?.trim() || (picked[i] ?? []).join(", ");
-    });
+    if (directLabel === undefined) {
+      qs.forEach((x, i) => {
+        answers[x.question] = custom[i]?.trim() || (picked[i] ?? []).join(", ");
+      });
+    } else {
+      // The pick's state update has not rendered yet, so carry its label into the immediate submission explicitly.
+      answers[q.question] = directLabel;
+    }
     await resolve(ix, { answers });
     setBusy(false);
   };
@@ -288,7 +293,8 @@ function QuestionCard({ ix, canApprove }: { ix: Interaction; canApprove: boolean
       const next = q.multi_select ? (have.includes(label) ? have.filter((x) => x !== label) : [...have, label]) : [label];
       return { ...cur, [qi]: next };
     });
-    if (!q.multi_select && !last) slide.current = window.setTimeout(() => setQi((i) => Math.min(qs.length - 1, i + 1)), 380);
+    if (qs.length === 1 && !q.multi_select) void send(label);
+    else if (!q.multi_select && !last) slide.current = window.setTimeout(() => setQi((i) => Math.min(qs.length - 1, i + 1)), 380);
   };
 
   return (
