@@ -21172,6 +21172,29 @@
       },
       "extractionState" : "manual"
     },
+    "Agent stopped and closed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent stopped and closed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェントを停止して閉じました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止并关闭 Agent"
+          }
+        }
+      }
+    },
     "Agent stopped and closed. The chat history was kept." : {
       "localizations" : {
         "en" : {
@@ -63595,6 +63618,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Go back to before this message: everything after it is removed from the conversation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Go back to before this message: everything after it is removed from the conversation."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージを送る前に戻ります。以降のチャットは会話から削除されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回到发这条消息之前：之后的对话会被移除。"
+          }
+        }
+      }
     },
     "Go through my Lark messages that @mention me: which need a reply from me, and draft the ones you can" : {
       "localizations" : {
@@ -130891,6 +130937,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Stops the current task and ends this session" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stops the current task and ends this session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のタスクを停止して、このセッションを終了します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止当前任务，并结束这个会话"
+          }
+        }
+      }
     },
     "Stops the current task, quits %@, and closes its terminal tab (only this pane when split)" : {
       "localizations" : {
