@@ -30,8 +30,11 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -39,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 
@@ -140,6 +144,10 @@ fun JSectionHeader(
         return
     }
     var menu by remember { mutableStateOf(false) }
+    val titleStyle = if (sub) PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
+    else if (style == AppStyle.Glass) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp))
+    else PersonaTheme.type.headline.copy(fontSize = androidx.compose.ui.unit.TextUnit(15f, androidx.compose.ui.unit.TextUnitType.Sp))
+    val textMeasurer = rememberTextMeasurer()
     SubcomposeLayout(
         modifier.fillMaxWidth().then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClickLabel = fold?.action, onClick = onClick) else Modifier)
             .padding(top = if (sub) Tokens.Space.s else if (style == AppStyle.Board) 18.dp.dense else 26.dp.dense, bottom = if (sub) Tokens.Space.xs else 10.dp.dense,
@@ -184,17 +192,27 @@ fun JSectionHeader(
             }
         }.map { it.measure(Constraints()) }
         val leadingWidth = leading.maxOfOrNull { it.width } ?: 0
-        val fullTitle = subcompose("full-title") { titleGroup(false) }.map { it.measure(Constraints()) }
-        val fullTitleWidth = fullTitle.maxOfOrNull { it.width } ?: 0
-        val ordinary = subcompose("ordinary-actions") {
+        val density = this
+        fun textWidth(text: String, style: TextStyle): Int = textMeasurer.measure(
+            AnnotatedString(text), style = style, maxLines = 1, softWrap = false,
+        ).size.width
+        fun Dp.toPxInt() = with(density) { this@toPxInt.toPx() }.roundToInt()
+        val fullTitleWidth = textWidth(title, titleStyle) + (count?.let {
+            6.dp.dense.toPxInt() + textWidth("$it", PersonaTheme.type.micro) +
+                if (countTone != null) SectionHeaderTokens.countPadding.toPxInt() * 2 else 0
+        } ?: 0)
+        @Composable
+        fun ordinaryActions() {
             if (trailing != null || action != null) Spacer(Modifier.width(8.dp.dense))
             trailing?.let {
                 Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1,
                     modifier = if (trailingIsFoldAction && fold != null) Modifier.clearAndSetSemantics {} else Modifier)
             }
             if (action != null) Row { action.invoke(this) }
-        }.map { it.measure(Constraints()) }
-        val ordinaryWidth = ordinary.maxOfOrNull { it.width } ?: 0
+        }
+        val ordinaryWidth = (if (trailing != null || action != null) 8.dp.dense.toPxInt() else 0) +
+            (trailing?.let { textWidth(it, PersonaTheme.type.caption) } ?: 0) +
+            if (action != null) maxOf(48.dp.toPxInt(), textWidth(overflowActions.last().label, PersonaTheme.type.labelSmall) + 16.dp.dense.toPxInt()) else 0
         val overflow = overflowActions.isNotEmpty() && leadingWidth + fullTitleWidth + ordinaryWidth > constraints.maxWidth
         val right = if (overflow) subcompose("overflow") {
             Spacer(Modifier.width(8.dp.dense))
@@ -203,7 +221,7 @@ fun JSectionHeader(
                 trailing?.let { add(JAction(it, enabled = onClick != null, onClick = { onClick?.invoke() })) }
                 addAll(overflowActions)
             })
-        }.map { it.measure(Constraints()) } else ordinary
+        }.map { it.measure(Constraints()) } else subcompose("ordinary-visible") { ordinaryActions() }.map { it.measure(Constraints()) }
         val rightWidth = right.maxOfOrNull { it.width } ?: 0
         val bounded = constraints.maxWidth != Constraints.Infinity
         val titleWidth = if (bounded) (constraints.maxWidth - leadingWidth - rightWidth).coerceAtLeast(0) else fullTitleWidth
