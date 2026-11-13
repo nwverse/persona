@@ -703,10 +703,11 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
 - DEBUG: `-tab mail` (Inbox), `-openInboxFirst YES` (first unhandled item), `-openInboxItem <id>` (specific item), `-showInboxAction draft|handoff` (then that sheet),
   `-showInboxSuggestionEdit YES` (suggestion editor on iPhone event page).
 - **Plugin-rendered details** (#1681; `docs/extensions/extensions.md`, "Inbox items"): for items from a plugin connector (`source` = connector) contributing `inbox_item`,
-  keep the header (title, source, Done, ✦ summary, AI Draft Reply / Hand to AI), replacing the body with the plugin's item View (Lark renders event meta: people, time span, continuation, message chain, reply, View in chat).
-  View in chat returns `persona://inbox/<item id>/source`; the App opens its original source page (Lark at the item's first message).
-  Hub passes `{id, title, summary, tier, reason, done, meta, extra}`; meta unchanged, unparsed. Sources without a slot, old hubs without it, read-only devices, and rendering failures keep the original body.
-  Web implemented (`docs/web/web.md`, "Settings," "UI slots"); iOS / Android in separate PRs.
+  the plugin's item View remains the source body for items without a native chat conversation. Hub passes `{id, title, summary, tier, reason, done, meta, extra}`; meta unchanged, unparsed.
+  On iOS, View original and source chain entries for an item with `larkConversation` open `LarkChatView` directly, at the chain link's position or the conversation's own focus;
+  they skip the plugin's intermediate item View and its Back-to-event strip. Documents, Moments, mail, connector items and other non-chat sources keep the existing slot behavior,
+  including its original-body fallback for sources without a slot, old hubs, read-only devices and rendering failures. The Mac detail root is unchanged; its position links use the same source page.
+  For plugin pages still shown, View in chat returns `persona://inbox/<item id>/source`; the App opens its original source page.
 
 ## Item actions (`Persona/Views/Inbox/InboxActions.swift`)
 
