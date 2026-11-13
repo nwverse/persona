@@ -123,7 +123,9 @@ each count is its rows:
   hand. A task its supervisor parked (#3804, "Supervision" below) is here on the web, saying "Parked until <time> ·
   <reason>", however long it has been still (never folded under shelved); it is never in Needs you for being parked.
   Android and iOS do not know the state yet and file it by its other facts; `spec/fixtures/entries` has no parked case. A task's agents are never rows of their own: the task's row carries their state and progress meter, and opens the
-  task's details, which switch between its agents' chats. Shelved tasks fold under one uncounted line.
+  task's details, which switch between its agents' chats. Shelved tasks fold under one uncounted line. A row can stay
+  visible while the To-dos page no longer counts it open (a parked task past 48 h, a seen review): the chip badge reads
+  the row's `data-counts-open` flag, so the counted to-dos across both entries equal the To-dos header's "Not done".
 - Finished tasks (done, cancelled, accepted) are in neither; the board (**All**) has them. An answered card moves its task
   back to In progress. An empty Needs you is grey and opens "All caught up".
 

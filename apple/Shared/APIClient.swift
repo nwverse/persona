@@ -1893,6 +1893,15 @@ nonisolated struct APIClient: Sendable {
     func setFleetLook(device: String, _ look: FleetLook) async throws {
         _ = try await request("PUT", "/api/v1/devices/\(device)/prefs", body: FleetLookPut(look: look))
     }
+    /// Today's tokens by the hour (`GET /api/v1/usage`'s `hourly`, #5721): 24 numbers from midnight; empty from an older
+    /// hub, which has no such field.
+    func usageHourly() async throws -> [Int] {
+        struct Body: Decodable {
+            struct Usage: Decodable { var hourly: [Int]? }
+            var usage: Usage
+        }
+        return try await get("/api/v1/usage", as: Body.self).usage.hourly ?? []
+    }
     /// Whether this device has the Home Screen widgets, alone: while its app is not open, the hub wakes it to write them
     /// again when the agents' counts change (#5721). An older hub keeps the field and does nothing with it.
     func setHasWidgets(device: String, _ has: Bool) async throws {
