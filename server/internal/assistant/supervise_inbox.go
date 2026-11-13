@@ -194,7 +194,9 @@ func inboxSignalOf(it *InboxItem, linked bool) (superviseSignal, bool) {
 
 // receivedSince counts the messages received since the item's count was last signaled, and returns the current count
 // as the next watermark. since 0 (nothing counted yet in this run of the manager): an item linked just now counts every
-// message its item count holds, any other only the newest received entry, the one surely new.
+// message its item count holds, any other only the newest received entry, the one surely new. A mail item's count is
+// its unread count, which can fall below the watermark when mail is read elsewhere; its next batch then counts as one
+// and still signals.
 func receivedSince(it *InboxItem, since int, linked bool) (n, seq int) {
 	seq = it.Count
 	if since > 0 {
