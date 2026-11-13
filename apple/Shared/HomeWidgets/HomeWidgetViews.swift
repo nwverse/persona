@@ -1330,13 +1330,38 @@ struct HomeLockView: View {
 
     var body: some View {
         Group {
-            switch family {
-            case .accessoryCircular: circular
-            case .accessoryInline: Label(inline, systemImage: symbol)
-            default: rectangular
+            if !c.snapshot.paired {
+                unpaired
+            } else {
+                switch family {
+                case .accessoryCircular: circular
+                case .accessoryInline: Label(inline, systemImage: symbol)
+                default: rectangular
+                }
             }
         }
+        // Old numbers step back, as on the Home Screen; the rectangle has no room for when they are from.
+        .opacity(c.snapshot.paired && c.stale ? HomeWidgetTokens.staleOpacity : 1)
         .containerBackground(for: .widget) { Color.clear }
+    }
+
+    /// Before Persona is set up: the widget's mark, and where to go.
+    @ViewBuilder private var unpaired: some View {
+        switch family {
+        case .accessoryCircular:
+            ZStack {
+                AccessoryWidgetBackground()
+                HomeWidgetTokens.symbol(symbol).font(HomeWidgetTokens.headline)
+            }
+        case .accessoryInline:
+            Label { Text("Open Persona to connect [Home Widgets]") } icon: { HomeWidgetTokens.symbol(symbol) }
+        default:
+            VStack(alignment: .leading, spacing: 0) {
+                Text(kind.title).font(HomeWidgetTokens.lockTitle).lineLimit(1).homeAccent()
+                Text("Open Persona to connect [Home Widgets]").font(HomeWidgetTokens.lockLine).lineLimit(2).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var symbol: String {
