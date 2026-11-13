@@ -1,4 +1,4 @@
-import { removeStoredValue, storedValue, storeValue } from "../lib/compatibility";
+import { storedValue, storeValue } from "../lib/compatibility";
 // Beautiful UI's Sidebar Nav: workspace row, quick search, sections, one gliding highlight. Persona's main conversation
 // is the first entry (the app opens on the assistant); a new conversation and a new agent are the "+" of their sections (#1239).
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -23,8 +23,6 @@ import { recentConversations } from "../lib/conversation-origins";
 import { isBackgroundSupervisor } from "../lib/background-supervisor";
 import { setRecentMore, useRecentCount, useRecentMore } from "../lib/sidebar-recent";
 import { countsLabel, directionLabel, totalCounts, useDirectionNames, useLeaderCounts } from "../lib/direction-names";
-import { groupsByDirection, useDirectionTree } from "../lib/direction-tree";
-import { buildDirectionAgentTree } from "../lib/direction-agent-tree";
 import { SidebarDirectionRow } from "./SidebarDirections";
 import { ConversationRowMenu } from "./ConversationMenu";
 import { conversationPage } from "../lib/conversation-page";
@@ -33,7 +31,7 @@ import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { refresh, useStore } from "../lib/store";
 import { conversationTitle } from "./assistant/conversations";
 import { agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
-import { openTodoFromTag, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
+import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
 import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
@@ -62,7 +60,7 @@ import { markAllSeenLabel, stateCount } from "../lib/state-labels";
 import { PagedSessionList } from "./agents/PagedSessionList";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { runtimeActiveAt, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeParentIdentity, runtimePlace, runtimeRemoval, runtimeSessions } from "../lib/runtime-list";
-import { groupMachines, SESSIONS_CATALOG_FEATURE } from "../lib/session-groups";
+import { SESSIONS_CATALOG_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
@@ -544,38 +542,41 @@ type AgentsBlockProps = { workspaceActions?: WorkspaceTreeActions; reg: RegFn; h
 
 function AgentsBlock(props: AgentsBlockProps) {
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  const byTodo = useStore((s) => s.features.includes(SESSIONS_TODO_FEATURE));
+  const todosSupported = useStore((s) => s.todosSupported);
   const pins = useStore((s) => s.pins);
-  const [grouping, setGrouping] = useState(() => storedValue("persona.agentGrouping"));
+  const [stored, setGrouping] = useState(() => storedValue("persona.agentGrouping"));
   useEffect(() => onGrouping(setGrouping), []);
-  // A saved grouping (including an explicitly selected default) is a view preference the paged API cannot express.
-  const grouped = AGENT_GROUPINGS.some((g) => g.key === grouping);
+  const grouping = agentGrouping(stored);
+  // a hub without todos shows by machine, a by-todo choice kept for when it has them
+  const shown = todosSupported === false && grouping === "todo" ? "machine" : grouping;
   // several assistants: the list is the current one's (docs/assistant/managers.md "Clients"), which the hub's paged list
   // cannot ask for, so the complete list is read and filtered here
   const several = useScope().several;
-  const full = pins.sessions.length > 0 || pins.spaces.length > 0 || grouped || several;
+  // One set of groupings either way (#6662): the paged list draws them all but By repository, whose worktree level needs
+  // every session, and By to-do only on a hub that lists sessions by to-do; pins need the complete list too.
+  const paged = bounded && !several && pins.sessions.length === 0 && pins.spaces.length === 0 && shown !== "repo" && (shown !== "todo" || byTodo);
   const chooseGrouping = useCallback((g: AgentGrouping) => {
     storeValue("persona.agentGrouping", g);
     setGrouping(g);
     props.hover(null);
   }, [props.hover]);
-  const returnToPagedList = useCallback(() => {
-    removeStoredValue("persona.agentGrouping");
-    setGrouping(null);
-    props.hover(null);
-  }, [props.hover]);
-  // Back to the paged list: forget the saved grouping. Offered only where the paged list exists and nothing is pinned
-  // (pins keep the full list either way).
-  const pagedList = bounded && grouped && !several && pins.sessions.length === 0 && pins.spaces.length === 0
-    ? returnToPagedList
-    : undefined;
-  return bounded && !full ? <BoundedAgentsBlock {...props} chooseGrouping={chooseGrouping} /> : <LegacyAgentsBlock {...props} grouping={agentGrouping(grouping)} chooseGrouping={chooseGrouping} pagedList={pagedList} />;
+  return paged ? <BoundedAgentsBlock {...props} grouping={shown} chooseGrouping={chooseGrouping} /> : <LegacyAgentsBlock {...props} grouping={grouping} chooseGrouping={chooseGrouping} />;
 }
 
-// The computer before a row's title, where rows of several computers sit under one project: as a tab's name before its
-// agent's (SidebarTree), it gives way before the title does.
-const PLACE_PREFIX = "min-w-0 max-w-[40%] shrink truncate text-xs text-ink-3";
+/** The Agents block's title, the paged list's as the complete list's (#6662): unpinning changes nothing above the list. */
+const AGENTS_TITLE = "min-w-0 flex-1 text-[11px] font-semibold text-ink-3";
 
-function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true, chooseGrouping }: AgentsBlockProps) {
+/** The groupings this hub offers: By to-do only where it has to-dos. */
+function useGroupings() {
+  const todosSupported = useStore((s) => s.todosSupported);
+  return useMemo(() => AGENT_GROUPINGS.filter((g) => g.key !== "todo" || todosSupported !== false), [todosSupported]);
+}
+
+/** The paged list's section kind for each grouping it draws (#6662): By project is the space (`group`). */
+const PAGED_DIMENSION: Record<Exclude<AgentGrouping, "repo">, GroupDimension> = { todo: "todo", machine: "machine", space: "group", state: "state" };
+
+function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true, grouping, chooseGrouping }: AgentsBlockProps & { grouping: Exclude<AgentGrouping, "repo">; chooseGrouping: (g: AgentGrouping) => void }) {
   const machines = useStore(selectSidebarMachines);
   const catalog = useStore((s) => s.features.includes(SESSIONS_CATALOG_FEATURE));
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
@@ -588,22 +589,35 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true,
   const closeLinkTarget = useCallback(() => setLinkTarget(undefined), []);
   // the ⋯ toggles the menu, as in the full list
   const onRowMenu = useCallback<RowMenuFn>((s, anchor, at) => setRowMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at })), []);
+  // The complete list's grouping bar (#6662): the same segments, so a pin or an unpin changes nothing above the list.
+  // By repository takes the complete list (AgentsBlock).
+  const groupings = useGroupings();
+  // by to-do: the open to-dos' titles and the To-dos page's order; the hub counts their sessions by id
+  const todos = useScopedTodos();
+  const todoNames = useMemo((): TodoNames => {
+    const open = sortTodos(todos.filter((td) => !td.done_at));
+    const titles = new Map(open.map((td) => [td.id, td.title]));
+    return { order: open.map((td) => td.id), title: (id) => titles.get(id) };
+  }, [todos]);
+  const pagedGrouping = useMemo(() => ({
+    dimension: PAGED_DIMENSION[grouping],
+    label: AGENT_GROUPINGS.find((g) => g.key === grouping)?.label ?? "",
+    todos: todoNames,
+    bar: <GroupingBar groupings={groupings} selection={grouping} onChoose={chooseGrouping} />,
+  }), [grouping, todoNames, groupings, chooseGrouping]);
   return <>
-    <div className={SESSION_LIST_STYLE.heading}><span className={SESSION_LIST_STYLE.headingText}>{t("agentspage.title")}</span>{archives && <SectionAdd icon="archive" label={t("agentmenus.archived_agents")} to={{ name: "agent-archives" }} go={go} />}{add && <SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}</div>
+    <div className={SESSION_LIST_STYLE.heading}><span className={AGENTS_TITLE}>Agents</span>{archives && <SectionAdd icon="archive" label={t("agentmenus.archived_agents")} to={{ name: "agent-archives" }} go={go} />}{add && <SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}</div>
     <HubNoticeLine />
     <HerdrNotices />
-    <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={runtimeParentIdentity} event="sessions_list" onRepo={chooseGrouping ? () => chooseGrouping("repo") : undefined}
+    <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={runtimeParentIdentity} event="sessions_list" grouping={pagedGrouping}
       activeAt={runtimeActiveAt} needsYou={runtimeNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
       catalog={catalog} placeOf={runtimePlace}
       label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
-      renderRow={(s, within, group) => {
+      renderRow={(s, within) => {
         const k = `s:${s.machine_id}/${s.session_id}`;
-        // a project checked out on several computers: each row says before its title which one it is on
-        const spread = within === "project" && group ? groupMachines([group]) > 1 : false;
-        // under a group's heading the row leaves out what the heading says: its computer, its space, its project's folder
-        const where = [within === "machine" || spread ? "" : machineWithHub(s.machine_id, machines), within === "group" ? "" : s.space_name || (within === "project" ? "" : baseName(s.cwd))];
-        return <SessionRow s={s} k={k} reg={reg} hover={hover} active={activeKey === k} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} hint={where.filter(Boolean).join(" · ")} showTodoTag
-          prefix={spread ? machineWithHub(s.machine_id, machines) : undefined} prefixClass={spread ? PLACE_PREFIX : undefined} />;
+        // under a group's heading the row leaves out what the heading says: its computer, its space, its to-do
+        const where = [within === "machine" ? "" : machineWithHub(s.machine_id, machines), within === "group" ? "" : s.space_name || baseName(s.cwd)];
+        return <SessionRow s={s} k={k} reg={reg} hover={hover} active={activeKey === k} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} hint={where.filter(Boolean).join(" · ")} showTodoTag={within !== "todo"} />;
       }} />
     {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTarget} onCloseAgent={setClosing} onArchiveClose={setArchiveClosing} />}
     {renaming && <RenameDialog open session={renaming} onClose={() => setRenaming(null)} />}
@@ -614,7 +628,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true,
   </>;
 }
 
-function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, workspaceActions, add = true, foldable = false, grouping, chooseGrouping, pagedList }: AgentsBlockProps & { grouping: AgentGrouping; chooseGrouping: (g: AgentGrouping) => void; pagedList?: () => void }) {
+function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, workspaceActions, add = true, foldable = false, grouping, chooseGrouping }: AgentsBlockProps & { grouping: AgentGrouping; chooseGrouping: (g: AgentGrouping) => void }) {
   // the current assistant's computers, agents and to-dos (all of them with one assistant)
   const scope = useScope();
   const sidebarMachines = useStore(selectSidebarMachines);
@@ -652,16 +666,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     localStorage.setItem("persona.agentChatList", "0");
     chooseGrouping(g);
   }, [chooseGrouping]);
-  // "By pinned" (#4352) only where the hub sends the direction tree and there is a leader to group by
-  const directionTree = useDirectionTree();
-  const byDirection = groupsByDirection(directionTree);
-  // a hub without todos shows by machine, a by-todo choice kept for when it has them; by pinned with no leaders (or an
-  // older hub, or a first read that failed) shows by to-do, the choice kept for when there are
-  const fallback = todosSupported === false ? "machine" : "todo";
-  const shownGrouping = grouping === "direction" ? (byDirection || directionTree === undefined ? "direction" : fallback) : todosSupported === false && grouping === "todo" ? "machine" : grouping;
-  // while the first read is out "By pinned" stays an option, so the control's value is always one of its options
-  const offersDirection = byDirection || shownGrouping === "direction";
-  const availableGroupings = useMemo(() => AGENT_GROUPINGS.filter((g) => (g.key !== "todo" || todosSupported !== false) && (g.key !== "direction" || offersDirection)), [todosSupported, offersDirection]);
+  // a hub without todos shows by machine, a by-todo choice kept for when it has them
+  const shownGrouping = todosSupported === false && grouping === "todo" ? "machine" : grouping;
+  const availableGroupings = useGroupings();
   // "State first" / "Recently updated" (iOS AgentSort, G099): not under "By status", whose sections are the states already
   const [sortChoice, setSortChoice] = useState<AgentSort>(() => agentSort(localStorage.getItem(AGENT_SORT_KEY)));
   const byUpdate = sortChoice === "updated" && shownGrouping !== "state";
@@ -713,7 +720,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [unpinned, machines, byUpdate]);
   const groups = useMemo(() => {
     if (shownGrouping === "space" || shownGrouping === "repo" || shownGrouping === "machine") return [];
-    if (shownGrouping === "todo" || shownGrouping === "direction") return [];
+    if (shownGrouping === "todo") return [];
     return buildAgentGroups(unpinned, machines, "state", mutes);
   }, [unpinned, machines, shownGrouping, mutes, todos]);
   // by todo waits for the first GET /todos: the socket pushes the sessions before it answers, and a tree drawn without
@@ -731,13 +738,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, byUpdate, keepEmptyGroups]);
   lastTodoTree.current = todoTree;
   const catalog = useWorkspaceCatalog(shownGrouping === "repo");
-  // by pinned: the hub's tree, the agents it does not hold last (lib/direction-tree.ts)
-  const lastDirectionTree = useRef<TodoTree | undefined>(undefined);
-  const directionAgents = useMemo(() => {
-    if (shownGrouping !== "direction" || !byDirection) return undefined;
-    return shareTree(lastDirectionTree.current, buildDirectionAgentTree(directionTree, unpinned, machines, mutes));
-  }, [shownGrouping, byDirection, directionTree, unpinned, machines, mutes]);
-  lastDirectionTree.current = directionAgents;
   const repoMachines = useMemo(() => {
     if (shownGrouping !== "repo") return [];
     const built = buildRepoMachineTree(unpinned, machines, { ...catalog, hiddenSources: botmuxHidden ? ["botmux"] : undefined, navigationSessions: [...shown, ...pinnedAgents.filter((p) => !shown.includes(p))], hideEmpty: filtered, compareSessions: byUpdate ? byUpdated : undefined });
@@ -749,7 +749,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     return byUpdate ? machineTreeByUpdate(built) : built;
   }, [shownGrouping, machines, unpinned, pins, filtered, byUpdate]);
   // by todo a group mixes hosts (herdr, botmux…): when the list has more than one, rows outside herdr name theirs (#1836)
-  const mixedHosts = useMemo(() => (shownGrouping === "todo" || shownGrouping === "direction") && hostsOf(live).size > 1, [shownGrouping, live]);
+  const mixedHosts = useMemo(() => shownGrouping === "todo" && hostsOf(live).size > 1, [shownGrouping, live]);
   const unreadShown = filter === "unread" ? unreadOf(shown) : [];
   // Stable event handlers read the last committed list, including pushes received since the bar last rendered.
   const filterInputs = useRef({ live, mutes });
@@ -837,7 +837,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     // the agents archived from a row's ⋯ (lib/agent-archives.ts), to find and restore
     ...(archives ? [{ key: "archived", label: t("agentmenus.archived_agents"), icon: "archive" as const, divider: shownGrouping !== "state", onSelect: () => { navigate({ name: "agent-archives" }); onNavigate?.(); hover(null); } }] : []),
     // a hub with the paged list: return to it from a grouping chosen there (its Browse by offers By repo)
-    ...(pagedList ? [{ key: "paged-list", label: t("sidebar.paged_list"), icon: "clock" as const, divider: true, onSelect: pagedList }] : []),
   ];
 
   return (
@@ -851,7 +850,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
             <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-0 transition-[opacity,transform] group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
           </button>
         ) : (
-          <span className="min-w-0 flex-1 text-[11px] font-semibold text-ink-3">Agents</span>
+          <span className={AGENTS_TITLE}>Agents</span>
         )}
         {folded && <SessionTally sessions={live} folded />}
         <GroupFoldButton groups={groupsRef} onAction={() => hover(null)} block={foldable ? { folded, toggle: toggleBlock } : undefined} flat={chatList} />
@@ -941,8 +940,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         repoMachines.map((m) => (
           <RepoMachineSection key={m.key} m={m} flat={repoMachines.length <= 1} machines={machines} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} {...workspaceActions} />
         ))
-      ) : shownGrouping === "direction" ? (
-        directionAgents ? <TodoTreeView tree={directionAgents} sections machines={machines} showHost={mixedHosts} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} onNavigate={onNavigate} /> : <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>
       ) : todosPending ? (
         <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>
       ) : todoTree ? (

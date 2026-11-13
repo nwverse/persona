@@ -5,7 +5,7 @@ import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
 import { onHubEvent } from "../../lib/store";
 import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
-import { groupMachines, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
+import { groupMachines, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
 import { SearchField } from "../../ui/SearchField";
 import { STATE_LABEL } from "../../lib/state-labels";
@@ -46,8 +46,6 @@ export interface PagedSessionListProps<T> {
   catalog?: boolean;
   /** Where a row is, as the hub groups by it: the group holding the open row opens by itself. */
   placeOf?: (row: T) => SessionPlace;
-  /** "By repo" is the full, client-side tree (Sidebar's By repo), not a paged filter: offered only when the caller has it. */
-  onRepo?: () => void;
   /** "Active within" (#4236): a row's last activity in ms, the key `compare` orders by, newest first. Given, the list
    *  offers the window menu and folds the rows active before the window into one Earlier group at its end. */
   activeAt?: (row: T) => number;
@@ -59,7 +57,13 @@ export interface PagedSessionListProps<T> {
    *  under it a level in, each group where its most recent member was (lib/side-sessions.ts). Rows and counts stay the
    *  server's; only the order of the loaded rows changes. */
   parentOf?: (row: T) => string | undefined;
+  /** The sidebar's groupings (#6662): the caller chooses the dimension with its own bar, the complete list's, so both
+   *  lists show the same control; this list draws that bar first, then the state chips and the search, as the complete
+   *  list does, with no value pill of its own. A search lists its matches flat. `label` names the dimension. */
+  grouping?: PagedGrouping;
 }
+
+export interface PagedGrouping { dimension: GroupDimension; bar: ReactNode; label: string; todos?: TodoNames }
 
 // The chosen "Active within" window, kept per list on this browser.
 const windowKey = (personal: boolean) => personal ? "persona.personalActiveWindow" : "persona.agentActiveWindow";
@@ -81,14 +85,18 @@ export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, catalog = false, placeOf, onRepo, activeAt, needsYou, isOpen, parentOf }: PagedSessionListProps<T>) {
+export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, catalog = false, placeOf, activeAt, needsYou, isOpen, parentOf, grouping }: PagedSessionListProps<T>) {
   const [query, setQuery] = useState("");
   const [q, setQ] = useState("");
   const [state, setState] = useState("");
   // Browse by: "" is the one list, newest first; a dimension is that list in groups, or one of them once picked
-  const [dimension, setDimension] = useState<GroupDimension | "">(() => browseBy(storedValue(browseKey(personal)), personal));
+  const [ownDimension, setDimension] = useState<GroupDimension | "">(() => browseBy(storedValue(browseKey(personal)), personal));
+  const dimension = grouping ? grouping.dimension : ownDimension;
   const [picked, setPicked] = useState<SessionGroup | null>(null);
   const [machine, setMachine] = useState("");
+  // the caller's bar moved to another grouping: nothing of the last one stays picked
+  const chosen = grouping?.dimension;
+  useEffect(() => { setPicked(null); setMachine(""); }, [chosen]);
   const [provider, setProvider] = useState("");
   const [providerQuery, setProviderQuery] = useState("");
   useEffect(() => {
@@ -110,8 +118,9 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     ...(spaceMachine ? { machine_id: spaceMachine } : {}),
   }), [q, state, groupFilters, spaceMachine, provider]);
   const filtered = Object.keys(filters).length > 0;
-  // a dimension with no group picked: the list is drawn as its groups, and the one flat list is not read
-  const sections = Boolean(dimension) && !picked;
+  // a dimension with no group picked: the list is drawn as its groups, and the one flat list is not read; in the
+  // sidebar's groupings a search lists its matches flat
+  const sections = Boolean(dimension) && !picked && !(grouping && q);
   const summaryMode = root.isSummary();
   // a hub that folds child sessions (#5120): every read and count of this list leaves them out, as the root's do
   const rootsMode = root.isRoots();
@@ -203,7 +212,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   // group itself. Their counts follow the state tab, so a group's number is the number of rows it lists.
   const groupScope: ListFilters = useMemo(() => ({ ...facetFilters, ...(state ? { state } : {}) }), [facetFilters, state]);
   const scopeNeeds = scopeCounts?.state?.needs_you;
-  const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, waiting: sections ? scopeNeeds : 0, event });
+  const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos });
   const allGroups = grouped.groups;
   // the picked group follows what the hub says of it now (a project gains a directory); gone from the scope, it stays picked
   useEffect(() => {
@@ -296,13 +305,12 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     return picked && !listed.some((g) => g.key === picked.key) ? [...listed, allGroups?.find((g) => g.key === picked.key) ?? { ...picked, count: 0, needs: 0 }] : listed;
   }, [allGroups, picked]);
   const machines = useMemo(() => Object.entries(rootPage.counts?.machine ?? {}).filter(([id]) => id).sort(([a, x], [b, y]) => y - x || a.localeCompare(b)), [rootPage.counts]);
-  const dimensions: { key: typeof dimension | "repo"; label: string }[] = personal
+  const dimensions: { key: typeof dimension; label: string }[] = personal
     ? [{ key: "", label: t("paged-agents.recent") }, { key: "group", label: t("paged-agents.account") }]
-    : [{ key: "", label: t("paged-agents.recent") }, { key: "machine", label: t("paged-agents.machine") }, { key: "project", label: t("paged-agents.project") }, { key: "group", label: t("paged-agents.group") },
-      ...(onRepo ? [{ key: "repo" as const, label: t("lib-agent-groups.seg_repo") }] : [])];
+    : [{ key: "", label: t("paged-agents.recent") }, { key: "machine", label: t("paged-agents.machine") }, { key: "project", label: t("paged-agents.project") }, { key: "group", label: t("paged-agents.group") }];
   const machineName = (id: string) => label?.("machine", id) ?? id;
-  // a computer, and a space or account a hub without the catalog knows only by id, are named by the caller
-  const groupName = (g: SessionGroup) => g.members || dimension === "project" ? g.name : label?.(dimension, g.key) ?? g.name;
+  // a to-do and a state come named; a computer, and a space or account a hub without the catalog knows by id, by the caller
+  const groupName = (g: SessionGroup) => g.members || dimension === "project" || dimension === "todo" || dimension === "state" ? g.name : label?.(dimension, g.key) ?? g.name;
   // the lines under a group's name in the menu: a project's remote and directories, a space's computer
   const severalMachines = groupMachines(allGroups ?? []) > 1;
   const groupDetail = (g: SessionGroup): string | undefined => {
@@ -312,9 +320,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     return [...(g.origin ? [g.origin] : []), ...places].join("\n") || undefined;
   };
   const allOf = t(dimension === "machine" ? "paged-agents.all_machines" : dimension === "project" ? "paged-agents.all_projects" : personal ? "paged-agents.all_accounts" : "paged-agents.all_spaces");
-  const chooseDimension = (d: typeof dimension | "repo") => {
-    // The repo tree cannot be a paged filter (it needs every session): it switches to the full By repo view.
-    if (d === "repo") { onRepo?.(); return; }
+  const dimensionLabel = grouping ? grouping.label : dimensions.find((d) => d.key === dimension)?.label;
+  const chooseDimension = (d: typeof dimension) => {
     setDimension(d); setPicked(null); setMachine("");
     if (d) storeValue(browseKey(personal), d);
     else removeStoredValue(browseKey(personal));
@@ -328,10 +335,28 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const shownTotal = sections ? grouped.total : page.total;
   const states = personal ? ["unread", "idle"] : ["needs_you", "working", "unread", "idle", "offline", "unknown"];
   const loadingLine = <p role="status" className="px-2 py-2 text-xs text-ink-3">{t("sidebar.loading")}</p>;
+  const searchField = <SearchField value={query} onChange={setQuery} placeholder={t("paged-agents.search")} />;
+  const stateChips = (
+    <div role="radiogroup" aria-label={t("sidebar.quick_filters")} className="flex flex-wrap gap-0.5">
+      {["", ...states.filter((s) => (stateTotals[s] ?? 0) > 0 || state === s)].map((s) => {
+        const on = state === s;
+        const n = s && scopeCounts ? stateTotals[s] ?? 0 : undefined;
+        const name = s ? STATE_LABEL[s as AgentState] : t("paged-agents.all");
+        return (
+          <button key={s} type="button" role="radio" aria-checked={on} aria-label={n === undefined ? name : `${name} ${n}`} onClick={() => setState(s)}
+            className={cx("touch-hit relative z-10 flex h-6 items-center gap-1 whitespace-nowrap rounded-full px-[7px] text-[11.5px] transition-[background-color,color,box-shadow] duration-150", on ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-2 hover:bg-hover hover:text-ink")}>
+            {s && <StatusMark state={s as AgentState} size="sm" />}
+            {name}
+            {n !== undefined && <span className={cx("tabular-nums", on ? "text-ink-2" : "text-ink-3")}>{n}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
   return (
     <div data-paged-sessions={personal ? "personal" : "runtime"} data-loaded-sessions={page.rows.length} data-has-more={page.hasMore}>
       <div className="space-y-2 px-1 py-2">
-        <SearchField value={query} onChange={setQuery} placeholder={t("paged-agents.search")} />
+        {grouping ? <>{grouping.bar}{stateChips}{searchField}</> : <>{searchField}
         <SegmentedTrack role="radiogroup" label={t("paged-agents.group_by")} className="flex gap-0.5 rounded-full p-0.5" thumbClassName="rounded-full bg-surface shadow-btn">
           {dimensions.map((d) => {
             const on = d.key === dimension;
@@ -343,26 +368,12 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
             );
           })}
         </SegmentedTrack>
-        <div role="radiogroup" aria-label={t("sidebar.quick_filters")} className="flex flex-wrap gap-0.5">
-          {["", ...states.filter((s) => (stateTotals[s] ?? 0) > 0 || state === s)].map((s) => {
-            const on = state === s;
-            const n = s && scopeCounts ? stateTotals[s] ?? 0 : undefined;
-            const name = s ? STATE_LABEL[s as AgentState] : t("paged-agents.all");
-            return (
-              <button key={s} type="button" role="radio" aria-checked={on} aria-label={n === undefined ? name : `${name} ${n}`} onClick={() => setState(s)}
-                className={cx("touch-hit relative z-10 flex h-6 items-center gap-1 whitespace-nowrap rounded-full px-[7px] text-[11.5px] transition-[background-color,color,box-shadow] duration-150", on ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-2 hover:bg-hover hover:text-ink")}>
-                {s && <StatusMark state={s as AgentState} size="sm" />}
-                {name}
-                {n !== undefined && <span className={cx("tabular-nums", on ? "text-ink-2" : "text-ink-3")}>{n}</span>}
-              </button>
-            );
-          })}
-        </div>
-        {(dimension || personal) && <div className="flex flex-wrap gap-1">
+        {stateChips}</>}
+        {(dimension && !grouping || personal) && <div className="flex flex-wrap gap-1">
           {dimension === "group" && !personal && !cataloged && <PickChip label={t("paged-agents.machine")} header={t("paged-agents.machine")} value={machine} shown={machine ? machineName(machine) : t("paged-agents.all_machines")}
             items={[{ key: "", label: t("paged-agents.all_machines") }, ...machines.map(([id, n]) => ({ key: id, label: machineName(id), hint: String(n) }))]}
             onChoose={(id) => { setMachine(id); setPicked(null); }} />}
-          {dimension && <PickChip label={t("paged-agents.group_filter")} header={dimensions.find((d) => d.key === dimension)?.label} value={value} shown={picked ? groupName(picked) : allOf} grow
+          {dimension && <PickChip label={t("paged-agents.group_filter")} header={dimensionLabel} value={value} shown={picked ? groupName(picked) : allOf} grow
             items={[{ key: "", label: allOf }, ...groups.map((g) => ({ key: g.key, label: groupName(g), hint: String(g.count), detail: groupDetail(g) }))]}
             onChoose={chooseGroup} />}
           {personal && <SearchField value={providerQuery} onChange={setProviderQuery} placeholder={t("paged-agents.provider")} tone="inset" icon={false} className="min-w-0 flex-1" />}

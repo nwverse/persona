@@ -1,5 +1,6 @@
-// The paged list by group: one folding section for each computer, project, space or account, with how many sessions it
-// holds and how many of them need the user on its heading. The first few sections start open on their newest sessions;
+// The paged list by group: one folding section for each computer, project, space or account (the sidebar's to-do and
+// state too, #6662), with how many sessions it holds and how many of them need the user on its heading. The first few
+// sections start open on their newest sessions (by to-do every to-do's, "Not on a to-do" folded);
 // a section reads its own sessions while it is open, a page at a time, and stops when it is folded, so the groups of a
 // long list cost nothing until someone looks into one.
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
@@ -51,7 +52,7 @@ export function GroupedSessions<T>({ groups, dimension, kind, scope, source, ren
   return (
     <div data-session-groups={dimension}>
       {shown.map((group, i) => (
-        <GroupSection key={group.key} group={group} first={i === 0} startsOpen={i < SESSION_LIST_METRICS.groupsOpen} dimension={dimension} kind={kind} scope={scope} source={source}
+        <GroupSection key={group.key} group={group} first={i === 0} startsOpen={dimension === "todo" ? !group.rest : i < SESSION_LIST_METRICS.groupsOpen} dimension={dimension} kind={kind} scope={scope} source={source}
           renderRow={renderRow} name={groupName(group)} machineName={machineName} several={several} holds={Boolean(open && holdsPlace(group, dimension, open))} />
       ))}
       {groups.length > shown.length && (

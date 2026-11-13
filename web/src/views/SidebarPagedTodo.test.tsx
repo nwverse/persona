@@ -1,0 +1,123 @@
+// @vitest-environment jsdom
+// The sidebar's paged Agents list by to-do (#6662): the complete list's grouping bar, a section per open to-do read by
+// `todo=<id>`, open, then "Not on a to-do" folded; no complete list is read. A hub without `sessions_todo` gets the
+// complete list for By to-do, and the same bar.
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+vi.hoisted(() => {
+  globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+  window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
+});
+import { loadPages } from "../lib/lazy-page";
+import { connect, reset } from "../lib/store";
+import type { Todo } from "../lib/todos";
+import type { Session } from "../lib/types";
+import { Sidebar } from "./Sidebar";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+class FakeSocket {
+  static OPEN = 1;
+  static all: FakeSocket[] = [];
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onmessage: ((ev: { data: string }) => void) | null = null;
+  constructor() { FakeSocket.all.push(this); }
+  send() {}
+  close() { this.readyState = 3; }
+  open() { this.readyState = 1; this.onopen?.(); }
+  push(msg: Record<string, unknown>) { this.onmessage?.({ data: JSON.stringify(msg) }); }
+}
+const at = (minute: number) => `2026-01-01T00:${String(minute).padStart(2, "0")}:00Z`;
+const row = (id: string, minute: number, todo?: { id: string; title: string }, state: Session["state"] = "idle"): Session =>
+  ({ machine_id: "mac", session_id: id, title: id, cwd: "/code/app", status: state === "working" ? "working" : "idle", state, updated_at: at(minute), ...(todo ? { todo } : {}) }) as Session;
+const SHIP = { id: "todo_ship", title: "Ship 1.3" }, REVIEW = { id: "todo_review", title: "Submit for review" };
+const ROWS = [row("Widget tests", 9, SHIP, "working"), row("Release notes", 8, REVIEW), row("Screenshots", 7, REVIEW), row("Sort downloads", 6)];
+const TODOS: Todo[] = [
+  { id: SHIP.id, title: SHIP.title, created_at: at(1), updated_at: at(9), agents: [] },
+  { id: REVIEW.id, title: REVIEW.title, created_at: at(2), updated_at: at(8), agents: [] },
+];
+const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
+let host: HTMLDivElement, root: Root;
+const flush = async () => { for (let i = 0; i < 12; i++) await act(async () => { await Promise.resolve(); }); };
+
+async function render(features: string[]) {
+  const fetch = vi.fn((input: string) => {
+    const url = new URL(input, "http://hub.example.com");
+    const q = url.searchParams;
+    if (url.pathname.endsWith("/sessions")) {
+      const todo = q.get("todo");
+      const rows = ROWS.filter((r) => !todo || (todo === "none" ? !r.todo : r.todo?.id === todo));
+      if (q.has("counts")) {
+        const byTodo: Record<string, number> = {};
+        for (const r of rows) byTodo[r.todo?.id ?? ""] = (byTodo[r.todo?.id ?? ""] ?? 0) + 1;
+        return json({ total: rows.length, state: { idle: rows.length }, machine: { mac: rows.length }, group: {}, project: {}, todo: byTodo, revision: "r1" });
+      }
+      return json({ sessions: q.has("since") ? [] : rows, remove: [], has_more: false, revision: "r1", total: rows.length });
+    }
+    if (url.pathname.endsWith("/pins")) return json({ sessions: [], spaces: [] });
+    if (url.pathname.endsWith("/machines")) return json({ machines: [{ id: "mac", name: "MacBook", online: true }] });
+    if (url.pathname.endsWith("/todos")) return json({ todos: TODOS });
+    return json({});
+  });
+  vi.stubGlobal("fetch", fetch);
+  act(() => {
+    connect();
+    const socket = FakeSocket.all.at(-1)!;
+    socket.open();
+    socket.push({ type: "hello", features });
+  });
+  await flush();
+  act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
+  await flush();
+  return fetch;
+}
+const bar = () => host.querySelector('[role="radiogroup"][aria-label="Agent 分组"]');
+const segments = () => [...bar()!.querySelectorAll("button")].map((b) => b.textContent);
+const sections = () => [...host.querySelectorAll<HTMLElement>("[data-session-group]")];
+const heading = (section: HTMLElement) => section.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+const rowTexts = (section: HTMLElement) => [...section.querySelectorAll<HTMLElement>("[data-session-row] a")].map((a) => a.textContent);
+const paths = (fetch: ReturnType<typeof vi.fn>) => fetch.mock.calls.map(([input]) => new URL(input as string, "http://hub.example.com")).filter((u) => u.pathname.endsWith("/api/v1/sessions"));
+
+beforeEach(() => {
+  localStorage.clear();
+  reset();
+  FakeSocket.all = [];
+  vi.stubGlobal("WebSocket", FakeSocket);
+  history.replaceState(null, "", "/");
+  host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+});
+afterEach(() => {
+  act(() => root.unmount()); host.remove(); reset(); vi.unstubAllGlobals();
+});
+
+beforeAll(() => loadPages(), 60_000);
+
+describe("the sidebar's paged Agents by to-do", () => {
+  it("draws each open to-do as an open section of its Agents, then Not on a to-do folded, under the complete list's bar", async () => {
+    const fetch = await render(["sessions_list", "sessions_lookup", "sessions_todo"]);
+    expect(host.querySelector("[data-paged-sessions]")).not.toBeNull();
+    expect(segments()).toEqual(["待办", "机器", "仓库", "项目", "状态"]);
+    expect(bar()!.querySelector('[aria-checked="true"]')!.textContent).toBe("待办");
+    // the To-dos page's order (sortTodos), its titles
+    expect(sections().map((s) => [heading(s).textContent, heading(s).getAttribute("aria-expanded")])).toEqual([
+      ["Submit for review", "true"], ["Ship 1.3", "true"], ["没挂待办的", "false"],
+    ]);
+    const [review, ship, none] = sections();
+    expect(rowTexts(ship)).toEqual([expect.stringMatching(/^Widget tests/)]);
+    expect(rowTexts(review)).toEqual([expect.stringMatching(/^Release notes/), expect.stringMatching(/^Screenshots/)]);
+    // folded, it reads nothing
+    expect(rowTexts(none)).toEqual([]);
+    const reads = paths(fetch);
+    expect(reads.map((u) => u.searchParams.get("todo")).filter(Boolean).sort()).toEqual(["todo_review", "todo_ship"]);
+    expect(reads.some((u) => u.searchParams.get("summary") === "0" || !u.search)).toBe(false);
+  });
+
+  it("reads the complete list for By to-do on a hub that cannot list sessions by to-do, with the same bar", async () => {
+    const fetch = await render(["sessions_list", "sessions_lookup"]);
+    expect(host.querySelector("[data-paged-sessions]")).toBeNull();
+    expect(segments()).toEqual(["待办", "机器", "仓库", "项目", "状态"]);
+    expect(paths(fetch).some((u) => u.searchParams.get("summary") === "0" || !u.search)).toBe(true);
+    expect(host.textContent).toContain("Ship 1.3");
+  });
+});

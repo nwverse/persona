@@ -18,7 +18,8 @@ export function compareListIds(a: string, b: string): number {
 const JOURNAL_LIMIT = 16_384;
 const validCounts = (counts: ListCounts | undefined): counts is ListCounts => !!counts && typeof counts.total === "number" &&
   typeof counts.revision === "string" && !!counts.machine && !!counts.project && !!counts.group && !!counts.state;
-const FILTER_KEYS = ["state", "machine_id", "project", "group", "source", "provider", "q", "parent_session_id"] as const;
+// todo: `sessions_todo` (#6662), a to-do's id or "none"
+const FILTER_KEYS = ["state", "machine_id", "project", "group", "source", "provider", "q", "parent_session_id", "todo"] as const;
 /** The filters that take several values, each a machine and value pair spelled as a JSON array (`sessions_catalog`,
  * docs/protocol/protocol.md "Projects and spaces"): the rows at any of the places, in any of the spaces. */
 const PAIR_KEYS = ["place", "space"] as const;
@@ -45,6 +46,8 @@ export interface ListCounts {
   project: Record<string, number>;
   group: Record<string, number>;
   state: Record<string, number>;
+  /** By open to-do, "" for none (`sessions_todo`, #6662); absent from an older hub. */
+  todo?: Record<string, number>;
   revision: string;
 }
 export interface ListPage<T> {
