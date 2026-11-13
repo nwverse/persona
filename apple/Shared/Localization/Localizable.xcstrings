@@ -130271,6 +130271,30 @@
       },
       "extractionState" : "manual"
     },
+    "Still going through older chats; some may not show yet." : {
+      "comment" : "Under the assistant sidebar's search results while the manager's chat index is still reading older chats (#6284)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Still going through older chats; some may not show yet."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以前のチャットを整理中です。まだ表示されないものがあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "较早的对话还在整理，可能有些暂时搜不到。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Still needs: %@" : {
       "localizations" : {
         "en" : {

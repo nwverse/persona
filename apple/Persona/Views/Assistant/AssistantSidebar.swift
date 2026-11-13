@@ -782,6 +782,8 @@ struct AssistantSidebar: View {
     private var isShell: Bool { openInbox != nil }
     @State private var query = ""
     @State private var searchOpen = false
+    /// What was said in the chats, found by the manager (#6284): merged into the title / last-message matches.
+    @State private var chatSearch = AssistantChatSearch()
     #if os(iOS)
     /// The open iPhone Duo's search, over the whole window (`footerSearch`).
     @State private var fullSearch = false
@@ -839,7 +841,7 @@ struct AssistantSidebar: View {
                         }
                         conversations(all, archived: archived)
                     } else {
-                        results(AssistantSidebarSearch.filter(all, query, names: model.directionNames))
+                        results(searchRows(all))
                     }
                 }
                 #if os(macOS)
@@ -927,6 +929,9 @@ struct AssistantSidebar: View {
                     searching = false
                 }
             }
+        }
+        .onChange(of: query) { _, q in
+            chatSearch.search(q, api: model.api, on: model.features(model.hub?.group ?? "").contains(AssistantChatSearch.feature))
         }
     }
 
@@ -1338,7 +1343,14 @@ struct AssistantSidebar: View {
         }
     }
 
-    @ViewBuilder private func results(_ hits: [Session]) -> some View {
+    /// The search's rows: the local matches, and once the manager answers, its results first (archived chats too).
+    private func searchRows(_ all: [Session]) -> [AssistantSearchMerge.Row] {
+        let local = AssistantSidebarSearch.filter(all, query, names: model.directionNames)
+        guard let answer = chatSearch.answer(for: query) else { return local.map { AssistantSearchMerge.Row(session: $0) } }
+        return AssistantSearchMerge.rows(local: local, answer: answer, known: all + model.archivedConversations)
+    }
+
+    @ViewBuilder private func results(_ hits: [AssistantSearchMerge.Row]) -> some View {
         if hits.isEmpty {
             VStack(spacing: Theme.Space.sm) {
                 ThemedIcon(Theme.Icon.search).font(Theme.Font.title).foregroundStyle(.tertiary)
@@ -1348,7 +1360,13 @@ struct AssistantSidebar: View {
             .padding(.top, 40)
         } else {
             heading(String(localized: "\(hits.count) Chats [Assistant Sidebar a72a2a]")) { EmptyView() }
-            ForEach(hits) { row($0, named: model.directionNames[$0.sessionID]) }
+            if chatSearch.answer(for: query)?.partial == true {
+                Text("Still going through older chats; some may not show yet.")
+                    .font(Theme.Font.label).foregroundStyle(.secondary)
+                    .padding(.horizontal, Theme.Space.m)
+                    .accessibilityIdentifier("sidebar-search-partial")
+            }
+            ForEach(hits) { r in row(r.session, named: model.directionNames[r.session.sessionID], said: r.hit) }
         }
     }
 
@@ -1412,7 +1430,8 @@ struct AssistantSidebar: View {
     /// A conversation: a round mark (Persona's face for the main one), its title on one line, its state on the right.
     /// `named`: a direction's name, shown instead of its leader conversation's title.
     /// `drawsShade` false: a direction's row with its fold chevron beside it, which draws the shade across both (#4352).
-    private func row(_ s: Session, named: String? = nil, drawsShade: Bool = true) -> some View {
+    /// `said`: the message a search found it by (#6284), shown under its title and opened at.
+    private func row(_ s: Session, named: String? = nil, drawsShade: Bool = true, said: AssistantSearchAnswer.Hit? = nil) -> some View {
         let selected = s.key == current
         let isMain = s.key == model.assistantMain
         // The main conversation and the hub's built-in background supervisor (#5083) stay: no Archive, Pin or End.
@@ -1428,7 +1447,10 @@ struct AssistantSidebar: View {
         let leadWorking = model.assistantLeaders.contains(s.sessionID) && ((model.directionCounts[s.sessionID]?.working ?? 0) > 0)
         // What opened it when Persona did (#5195): the rule All Chats' filters use, so its mark and its filter agree.
         let source = isMain ? nil : AutoConversations.source(of: s, tasks: taskChats.known(on: model.api))
-        return Button { open(s.key) } label: {
+        return Button {
+            if let said { model.messageJump = MessageJump(key: s.key, item: said.itemID) }
+            open(s.key)
+        } label: {
             HStack(spacing: Theme.Space.m) {
                 // The shell's list is ChatGPT's: titles only, all in one column (the marks made it busy); the main
                 // conversation (only in search results here) keeps the app's logo, as its first row has it (#2004).
@@ -1439,7 +1461,16 @@ struct AssistantSidebar: View {
                 } else {
                     ConversationMark(id: s.sessionID)
                 }
-                titleText(title, named: !isMain)
+                if let said {
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                        titleText(title, named: !isMain)
+                        Text(AssistantSearchMerge.snippet(said))
+                            .font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
+                            .accessibilityIdentifier("sidebar-search-said")
+                    }
+                } else {
+                    titleText(title, named: !isMain)
+                }
                 ConversationSourceMark(source: source, channels: s.channels) // what opened it, or its latest message's channel
                 Spacer(minLength: Theme.Space.xs)
                 // A direction's work at this moment ("N working · N need you"), never a zero part (#4331).
