@@ -182,7 +182,7 @@ extension Theme {
         static let gitPush = "arrow.up.to.line.compact"
         static let gitFetch = "icloud.and.arrow.down"
         /// Stashes in a session's Git tab (#7015): uncommitted changes put away for later.
-        static let gitStash = "tray.and.arrow.down"
+        static let gitStash = "cabinet"
         /// Split a terminal pane to the right / below (the node menu's Split Pane).
         static let splitRight = "rectangle.split.2x1"
         static let splitDown = "rectangle.split.1x2"
