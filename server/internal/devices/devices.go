@@ -786,8 +786,9 @@ type View struct {
 
 // Views are the machines with their node.info (the extensions' code reads the computers' OS, programs, capabilities).
 func (d *Devices) Views() []View {
-	out := []View{}
-	for _, m := range d.machinesNow() {
+	machines := d.machinesNow()
+	out := make([]View, 0, len(machines))
+	for _, m := range machines {
 		m.mu.Lock()
 		v := View{Summary: Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
 			DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}, Info: m.info}
