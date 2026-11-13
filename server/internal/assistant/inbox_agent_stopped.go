@@ -45,10 +45,11 @@ func (s *Service) inboxHasAgentLink(machine, sid string) bool {
 	return false
 }
 
-// inboxAgentStopState is the same settled check as spawnedTurnSettled, plus the node's own queued input. A failure is
-// a stop even with queued or background work. detail is the Agent's last words, or its failure, ready for the chain.
+// inboxAgentStopState is the same settled check as spawnedTurnSettled, plus the node's own queued input and any wait
+// for the user (blocked, needs_you or a pending interaction). A failure is a stop even with queued or background work. detail is the Agent's last words, or its failure, ready for the chain.
 func (s *Service) inboxAgentStopState(sess proto.Session) (settled, failed bool, detail string) {
-	if sess.Status == proto.StatusWorking || sess.Starting {
+	if sess.Status == proto.StatusWorking || sess.Status == proto.StatusBlocked || sess.Starting ||
+		sess.State == proto.StateNeedsYou || sess.PendingInteractions > 0 {
 		return false, false, ""
 	}
 	turnError, _ := latestTurnError(sess)

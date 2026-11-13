@@ -141,6 +141,9 @@ func TestInboxAgentStoppedWaitsForMoreWork(t *testing.T) {
 	}{
 		{"working", func(_ *inboxHub, s *proto.Session) { s.Status = proto.StatusWorking }},
 		{"starting", func(_ *inboxHub, s *proto.Session) { s.Starting = true }},
+		{"needs you", func(_ *inboxHub, s *proto.Session) { s.State = proto.StateNeedsYou }},
+		{"pending interaction", func(_ *inboxHub, s *proto.Session) { s.PendingInteractions = 1 }},
+		{"blocked", func(_ *inboxHub, s *proto.Session) { s.Status = proto.StatusBlocked }},
 		{"queued input", func(_ *inboxHub, s *proto.Session) { s.Queued = []string{"continue"} }},
 		{"queued relay", func(h *inboxHub, _ *proto.Session) { h.queueRelay("s-sub", relayMsg{From: "another"}) }},
 		{"background", func(_ *inboxHub, s *proto.Session) { s.Background = []proto.BackgroundTask{{}} }},
