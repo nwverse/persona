@@ -93,7 +93,8 @@ This is a public open-source repository; everyone and every Agent maintains it t
 ### Server and data
 
 - **All server state lives in the Postgres container** `persona-postgres` on the hub machine (`docs/server/server.md`); no JSON state files
-  in `~/.persona/`. The exception is the knowledge base `~/.persona/data`: files first, the database as the index (`docs/assistant/knowledge.md`).
+  in `~/.persona/`. The exception is the knowledge base `~/.persona/data`: files first, the database as the index (`docs/assistant/knowledge.md`);
+  its full-text search index (`.search/`) is a cache built from the files that can be deleted at any time (`docs/assistant/knowledge.md`, "Search index (#1273)").
 - **The hub is only a communication center**: new business logic (endpoints, tables, model calls) goes into the managers
   (`server/internal/assistant`, `server/internal/devices`, `server/internal/extmgr`). `server/internal/hub/architecture_guard_test.go` pins the hub's routes,
   dependencies and Store; when it fails, move the logic as its hint says (`docs/server/architecture.md`).

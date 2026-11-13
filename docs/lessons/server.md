@@ -43,6 +43,23 @@ of deleted text that no search uses but that stay on disk until something rewrit
 and test. And a lane that runs on every round runs on every kick: one `stat` per file is cheap once and not every five
 seconds.
 
+## Checksums inside a file do not say it is the file you read before (2026-11-13, #1273)
+
+The search index's segments were named from a counter kept in the manifest, and every part of a segment was under a
+checksum. A reader keeps a segment's file table in memory and opens the file by name for each query. Review found the
+hole between the two: remove `.search`, rename one day file, and the rebuild writes a second `seg-000001.idx` of the
+same size with its files numbered differently; a read-only store that still held the first one's table read the new
+lists through it, every checksum passed, and a search lost a result. A checksum stored in a file proves the file agrees
+with itself, not with what a reader remembers of an earlier file under that name. Two rules came out of it: a name is
+never given to other content (64 random bits in each file name; a counter starts again whenever the thing it counts
+does), and whoever keeps part of a file in memory checks on every open that the file is still that one (a random id in
+the footer, compared with the footer it read). The same review found a data race that no test had shown, because only
+an opt-in harness ran a search, an update and the removal of the directory at once: what the doc calls safe to do at
+any time needs a default test that does it at that time, under `-race`. And the new tests took 70 s on Linux and
+968 s on a shared Mac, at 20% CPU: their cost was file opens (2.4 million of them), which one machine does in
+microseconds and another in most of a millisecond. Count the system calls of a test that walks directories
+(`strace -f -c -e trace=%file,%desc`) instead of trusting its seconds on the machine it was written on.
+
 ## A new file in the knowledge base is searched unless `searchable` says otherwise (2026-11-13, #5991)
 
 Search reads every `.md` and `.json` file of the data dir it is not told to skip, profile files before any message

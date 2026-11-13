@@ -980,11 +980,21 @@ be opened, so results, their order and the limits are the scan's.
 no entry with its path, mtime and size, and is read; a deleted one is not there to `stat`. A segment, key block or list that fails its checksum, a
 manifest that does not parse or names a missing file, an index written with other Unicode tables (the keys are taken from `fold`'s output, so the
 manifest records `unicode.Version` and `norm.Version`) or in another format: the search goes on without the index (one log line), and the next
-update starts it again from the files. `rm -r <data dir>/.search` is always safe, also while the manager runs. Tests: `kb/search_index_query_test.go`
-compares `Find`, `Search`, `SearchKind` and `Matches` with the scan over generated archives (Chinese and English mixed) and random queries, at several
-limits, with the index absent, half built, built, behind (files changed, added, renamed and deleted since), up to date and damaged in each of its
-parts (`PERSONA_KB_DIFF_SEED` draws other archives and queries than the ones every run uses, `PERSONA_KB_DIFF_DEPTH` more of them);
-`kb/search_index_test.go` covers the update itself.
+update starts it again from the files. A segment file that is not the one a search read its file table from ("A name is never used twice" below)
+is not read either: the search asks the index as it is on disk now. `rm -r <data dir>/.search` is always safe, also while the manager runs, searches
+or updates the index (`TestSearchesWhileTheIndexIsUpdatedAndRemoved`, which every `-race` run of the package includes).
+
+Tests: `kb/search_index_query_test.go` compares `Find`, `Search`, `SearchKind` and `Matches` with the scan over generated archives (Chinese and
+English mixed) and random queries, at several limits, with the index absent, half built, built, behind (files changed, added, renamed and deleted
+since), up to date and damaged in each of its parts; `kb/search_index_test.go` covers the update itself. A search opens every entry's files
+whatever the index says, and on some machines a file open costs most of a millisecond, so every run of the package does a light comparison: small
+archives, the scan's answers worked out once for each state of an archive, each query at one limit and on one of the two engines by turns, and
+the tests that flip every byte of a segment and of a log do it in memory. `PERSONA_KB_DIFF_DEPTH=2` does the whole grid (larger archives, every
+query at every limit on both engines, in every state), each step above 2 adds as many random queries again, and `PERSONA_KB_DIFF_SEED` draws other
+archives and queries.
+For the review fixes of 2026-11-13 the whole grid ran at depth 2 with the default seed and with seed 7 (36 s each on the Linux machine of the
+numbers below), at depth 4 with seed 20261113 (51 s) and at depth 2 on the benchmarks' 37,000-file archive (`PERSONA_KB_BENCH_ARCHIVE=1`, 87 s),
+without a difference from the scan; the light comparison takes 3.5 s there.
 
 **Keys.** A search finds a file when every word of the query is a *substring* of the file's folded text (`fold`: lowercase, then NFC; the words are
 the query split at white space), and then looks for the lines. So the index answers "which files can hold this substring", never "which files
@@ -1010,11 +1020,25 @@ it has them all; several words are several such conditions, anywhere in the file
 A file can have all the keys of a word without the word (the keys come from different places): it is read and the scan says no. The other way
 round cannot happen: `TestGramsNeverRuleOutAFileThatHoldsTheWords` and its fuzz target check that a file holding the words is never ruled out.
 
-**On disk** (`kb/search_index_segment.go`): immutable segments (`seg-<n>.idx`: the files' paths, mtimes and sizes, the sorted keys in blocks of 64
-with a checksum each, and for every key the list of its files as a bitmap, gaps or "all"), a log of the files read since the last segment
-(`log-<n>.log`, appended to, a checksum per entry, a torn tail ignored) and `manifest.json`, replaced by rename, which names the files that make
-up the index. A file's newest entry wins. Of a segment only the file table and one entry per key block stay in memory; the lists are read
-per query. The directory is 0700 and the files 0600, like the rest of the data directory.
+**On disk** (`kb/search_index_segment.go`): immutable segments (`seg-<n>-<id>.idx`: the files' paths, mtimes and sizes, the sorted keys in blocks
+of 64 with a checksum each, and for every key the list of its files as a bitmap, gaps or "all"), a log of the files read since the last segment
+(`log-<n>-<id>.log`, appended to, a checksum per entry, a torn tail ignored) and `manifest.json`, replaced by rename, which names the files that
+make up the index. A file's newest entry wins. Of a segment only the file table and one entry per key block stay in memory; the lists are read
+per query. The directory is 0700 and the files 0600, like the rest of the data directory. A segment is synced before the manifest that names it
+is written, and the manifest before it is renamed into place; the directory is not synced and the log never is. After a power loss the manifest
+can therefore be the one before, or name a segment that is not there: both are found when it is read, and the index is built again.
+
+**A name is never used twice.** A key's list is numbers into its own segment's file table, and a reader keeps that table in memory while it opens
+the file again for every query. A list read through another segment's table rules out the wrong files with every checksum passing, which is the
+one way this index could lose a result. So no file of the index ever gets a name another had: `<id>` is 64 bits drawn at random for each file
+(`<n>` only orders them for someone reading the directory), whether the index goes on, is built again after a failed check, starts over because
+`.search` was removed, or is put back from a copy. A counter alone would start again with the index, and a second `seg-000001.idx` of the same
+size is what a read-only store once read through the first one's table. As a second guard a segment's footer carries a random id of its own, and
+whoever holds a segment's table compares the footer on disk with the one it read every time it opens the file, for a query or a merge: when
+they differ a search reads the index from disk again and asks that, and a merge stops. An update makes the same check of every segment before
+it goes on from what it has in memory. This also holds inside the writing process: a search that began before a rebuild holds the snapshot from
+before, finds its segment gone or not the one it read, and asks the index that is there now. The manifest's `format` is 2 since then; an index
+in another format is built again.
 
 **Why beside the files and not in Postgres.** Server state lives in Postgres, and the entries' own index is there (`kb_entities`), so this one
 was measured there first: the same 4M-line archive (366,521 files, 286 MB of folded text, 97 million pairs of a key and a file) in a disposable
@@ -1034,7 +1058,9 @@ in `docs/operations/docker.md` is about; here a run that found changes syncs one
 files), a first build, an import's batch or a merge one segment and the manifest each time, and the log is not synced at all, since what a
 crash loses is read again. SQLite was not measured: every release binary is built with
 `CGO_ENABLED=0` for its platform, so it would be a new pure-Go database dependency, and its trigram tokenizer cannot answer a word under three
-characters either.
+characters either. This was decided for #1273 on 2026-11-13 on these measurements (the index stays in files beside the knowledge base, a cache
+of what the files say that can be removed at any time), and what would reopen it is the index having to hold something that cannot be worked out
+from the files again: that would be state, which belongs in Postgres.
 
 **Updates** (`Engine.UpdateSearchIndex`, the manager's **index** lane). A run `stat`s every file and reads those that are new or changed, once
 their mtime is 10 seconds old (`indexSettle`; a file still being appended to is read by searches, as before) and if they are no larger than 4 MB
@@ -1042,8 +1068,22 @@ their mtime is 10 seconds old (`indexSettle`; a file still being appended to is 
 as segments of at most 2 million keys, each published as it is finished, so a run that is cut short loses one batch and searches use what is
 done. More than 8 segments are merged into one, streaming. The lane runs at most once a minute while it only follows the files (a run looks at
 every file, and live messages kick a round every few seconds), and at once for a first build, an index that failed a check or a deletion (below).
-A read-only knowledge base (`kb.read_only`) never writes the index: it uses the one the writing process keeps, and looks every 30 seconds
-whether there is a newer one.
+A run that fails (a full disk, a directory the manager may not write) is not tried again at the next kick, since every try looks at all the files
+and reads a batch first: the next waits 15 seconds, then twice as long after each failure in a row, up to 5 minutes (`kbIndexRetry`,
+`kbIndexRetryMax`). The log has the failure once, however often it comes back, and a line when updating works again; searches read the files
+meanwhile. A run told to stop (the manager ends) returns within a moment while it looks at the files or merges, and after the batch in hand while
+it reads them. A read-only knowledge base (`kb.read_only`) never writes the index: it uses the one the writing process keeps, and looks every
+30 seconds whether there is a newer one.
+
+**One writer, and what two would cost.** The process that holds the data directory's lock writes the index, one run at a time; a search in that
+process that has to read the index from disk again (it was removed) does not touch what a run under way works with. The lock is let go when the
+manager's service ends, without waiting for a run under way, so at a hand-over the old process's run can overlap the new one's until it notices
+it was told to stop. Two writers cannot make a search wrong: every entry, in a segment or in the log, says only that the file with this path,
+mtime and size has these keys, each under a checksum, and no list is read through another segment's table (above). What they can do is undo each
+other's work: one's clean-up removes a segment the other is about to name, one manifest replaces the other's, or both append to the log at the
+same place. Each of these is a manifest that names a missing file, a segment that is not the one read, or a log that ends at an entry failing its
+checksum. Searches read the files meanwhile, and the next update reads the index again and, when it does not check out, builds it again. The
+worst case is one more first build.
 
 **The first build of an existing archive** runs in the index lane, in its own goroutine: the manager's start does not wait for it, and neither
 does a search, which reads the files the index has not reached yet (what every search did before) and gets faster as segments are published. At
@@ -1052,16 +1092,27 @@ meanwhile takes what it took before the index (up to ~2 s for Find and ~7 s for 
 waits for it (`needs_search_index`).
 
 **Deletions.** An entry of a file that is gone is never used, but its keys would stay on disk until the next merge. So after text is deleted on
-purpose (a source forgotten, retention pruning days, Moments posts or recordings, a recording or a project deleted) the next index run, within
-one round, writes the index again without it; entries of files that went another way are dropped within 10 minutes (`indexPurgeEvery`), and the
-older versions of files that changed within 24 hours (`indexMergeEvery`) or as soon as they are a quarter of the index. The index holds no text,
+purpose (a source forgotten, with its topics; retention pruning days, Moments posts or recordings; a recording, one of its photos or a project
+deleted) the next index run, within one round, writes the index again without it; entries of files that went another way are dropped within
+10 minutes (`indexPurgeEvery`), and the older versions of files that changed within 24 hours (`indexMergeEvery`) or as soon as they are a quarter
+of the index. The index holds no text,
 only keys of two or three characters next to paths, mtimes and sizes; it is in the data directory, so it has the same owner and modes and goes when the
 directory goes, and the history import's backups leave it out.
 
-**Limits.** A file's content is known by its mtime and size, as in the content cache, but the index outlives the process: a file rewritten to the
-same size with its mtime set back to what it was is not noticed until the index is removed. Nothing in Persona sets a file's mtime. Notes
-directories (`kb.extra_dirs`) are outside the data directory and read on every search, as before, and so are a recording's `meta.json` and
-`transcript.md` (searched from the committed snapshot, not the disk). What a cold search still costs is listing the directories and one `stat` per file.
+**Limits.** A file's content is known by its mtime and size, as in the content cache, but the index outlives the process. A file whose text
+changed while both stayed the same is searched by what it said before, and there are three ways to get there, none of them something Persona
+does (nothing in it sets a file's mtime):
+
+- the file is rewritten to the same size and its mtime set back to what it was (`os.Chtimes`, `touch -d`);
+- a copy that keeps times puts other text of the same size under the mtime the index read (`cp -p`, `rsync -t`, `touch -r`): two versions of a
+  file with the same mtime and size, one of them indexed and the other copied over it;
+- the clock is set back by more than the 10 seconds an update waits for a file to settle, on a filesystem that keeps mtimes to the second, and the
+  file is rewritten to the same size within the very second (by the clock as set back) that its mtime already said.
+
+A new process does not heal any of them: it reads the same index. Removing `.search` does (the next run builds it again), and so does anything
+that gives the file another mtime or size. Notes directories (`kb.extra_dirs`) are outside the data directory and read on every search, as before,
+and so are a recording's `meta.json` and `transcript.md` (searched from the committed snapshot, not the disk). What a cold search still costs is
+listing the directories and one `stat` per file.
 
 **Numbers** (`PERSONA_KB_SCALE_LINES=4000000 PERSONA_KB_SCALE_TEXT=varied go test ./internal/kb -run '^TestSearchScale$' -v -timeout 0`; a 32-CPU Linux
 machine shared with other work, files in the OS page cache; median of 5, of 3 for `kb_search`; cold is a new engine and a new store, the index
