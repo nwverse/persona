@@ -790,6 +790,50 @@ One App for iPhone and iPad (`TARGETED_DEVICE_FAMILY` 1,2). Previously only 1, g
   switching between Lark chats shows the new chat's own messages and draft on the right, switching back preserves the draft). XCUITest's own landscape screenshots are rotated;
   inspect landscape by holding with `TEST_RUNNER_PERSONA_HOLD=<seconds>` and capturing with `simctl io screenshot`.
 
+## Sidebar layout (#6332)
+
+Settings › Appearance › Navigation chooses how the app lays out Persona and the Agents (`NavigationLayout`, this device's
+own UserDefaults key `app.navigation`, applied at once, Settings staying on its page): **Separate**, the default and
+everything above unchanged (the Assistant | Agents switch on an iPhone, the Persona | Agents tabs on an iPad), or
+**Sidebar**, the web sidebar's structure in one column. The owner asked for it on 2026-11-13. The Sidebar layout is
+built for the iPad's regular width first (`NavigationLayout.offered`: the row shows on an iPad only); the iPhone's drawer
+follows in #6332's second part. The Mac (frozen) and Apple Vision Pro keep their own navigation.
+
+- **The column** (`UnifiedSidebarColumn`, `Persona/Views/Shell/UnifiedSidebar.swift`), in the web's order: the assistant
+  (its switcher) and Search; the main conversation held at the top while the rest scrolls (as the web's, #5581); one
+  list, the Agents list (`AgentsList`, `sidebarRows`) with the Persona sidebar's rows over its own
+  (`AssistantSidebar(part: .rows)`): **Pages** (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Health, Machines,
+  Messages when it is on, the extensions' pages) and **Persona Chats** (✎ New Chat on the heading, Pinned, Recent, All
+  Chats), each heading folding its section (remembered, `sidebar.fold.places` / `sidebar.fold.chats`; folded Pages keeps
+  the Inbox and To-dos counts); then the Agents' heading with the list's ⋯, Personal Agents and New Session, the quick
+  filters and the grouping, Needs You and the groups, the same rows as the Agents page. At the foot: "N need you ↓"
+  (`SidebarNeedsJump`, the count the Separate layout's switch and tabs show, `agentsWaiting`) in a band of its own above
+  the usage, so it never covers a row; a tap scrolls the list to the Agents' Needs You, the arrow says which way it is.
+  Then the two fullest subscription accounts (`SidebarUsageStrip`, `UsageWindows.top`; a tap opens Machines), New Chat
+  and Settings. The parts share their search and dialogs through `AssistantSidebarUI`, presented around the column
+  (`AssistantSidebarPresenters`): a sheet on a list row went with the row as it scrolled away. Search's words filter
+  Persona's chats and the Agents under them.
+- **The page beside it**: the Agents page's split (`ChatsView` under `\.unifiedSidebar`, `SidebarRoot` in `RootView`),
+  whose detail starts at the Persona conversation: `AssistantView` without a stack of its own (`embedded`), pushing on
+  the split's one path (`\.unifiedPath`). A pick in the sidebar replaces what is over the conversation, as the web's
+  routes: an Agent's chat (its row, a card), a place (`ShellRoute` / `SidebarRoute`, the split's first page without a back),
+  the conversation itself (its row, `ShellPage.conversation`). Every page the Persona page opens is a value there, never a
+  flag, so the next pick does not land under it. The conversation's sidebar button folds and brings back the split's
+  column (`SplitShowList.hide`). The shaded row follows what is beside the sidebar (`UnifiedSidebar.atRoot`,
+  `shownPlace`).
+- **Routes** (`PadRouter(unified: true)`): notifications, links, Live Activities, widgets, quick actions and Siri /
+  Shortcuts set `AppModel.selectedTab` and `openChat` as in the Separate layout and land on the same chat or page: an
+  Agent's chat opens beside the sidebar (the Agents list takes `openChat` as before); `.assistant` goes back to the
+  conversation (`ShellPage.conversation`); `.mail` opens the inbox and keeps it (the router's own tab change is only
+  noted); `.feishu` opens Messages; `.settings` is the sheet over what is in front. Choosing Agents by itself
+  (`agentsListReveal`) scrolls the sidebar to the Agents' heading and leaves the page beside it. `selectedTab` follows
+  what is in front, so a relaunch goes back to the Agent's chat that was open.
+- The Separate layout's views take the same code with the Sidebar layout's parts off: the whole `AssistantSidebar`,
+  `RootTabs` and the shell are drawn as before (pixel comparisons in #6332's PR).
+- Tests: `SidebarLayoutRoutingTests` (the router), `SidebarLayoutTests` (iPad UI: the column, a pick replacing the
+  page, the routes). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout; `-openAppearance navigation` opens
+  the setting's page.
+
 ## Home-screen quick actions (#3199)
 
 Long-press the Persona icon: the last conversation opened on this device, then "Record" (a meeting recording; `docs/apple/recording.md`), "New chat" and "Inbox" (`Persona/App/QuickActions.swift`). The system shows four at most, so "Agents" is not among them since #2191 (the tab bar has it), and the menu has one recent conversation, not two.
