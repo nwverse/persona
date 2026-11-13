@@ -188,6 +188,8 @@ type Node struct {
 	adoptedFailures []adoptedFailure
 	// fallbacks: each conversation's last model switch that answered, and the hold on it (assistant_fallback_hold.go).
 	fallbacks map[string]*assistantFallback
+	// unavailable: launcher + "\x00" + model a recovery found the gateway does not serve, and until when it is skipped.
+	unavailable map[string]time.Time
 
 	// runtimes: agent runtimes without a terminal, connected on runtime.sock (runtimes.go); runtimeSock overrides the
 	// socket path (tests).
@@ -1052,7 +1054,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if p.ResumeSessionID != "" {
 				return nil, workStartRefused("work_target_required", "A work session must be new.")
 			}
-			cwd, _, err := n.checkStart(p.Cwd, p.Launcher, "", p.PermissionMode, p.Effort)
+			cwd, _, err := n.checkStart(p.Cwd, p.Launcher, "", p.PermissionMode, p.Effort, p.AgentType)
 			if err != nil {
 				return nil, workStartRefused("work_project_unavailable", "The project folder or start options are no longer valid.")
 			}
@@ -1242,6 +1244,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return n.assistantMemory(a)
+	case "session.switch": // the switch picked a moment before, carried out now with no message (launcher_switch.go)
+		var to struct {
+			From string `json:"from"`
+		}
+		_ = json.Unmarshal(params, &to)
+		return ok(n.switchIdle(ctx, p.SessionID, p.Launcher, to.From, p.Model))
 	case "session.send":
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
@@ -1341,6 +1349,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.interrupt":
 		if n.isAssistantSession(p.SessionID) {
 			return ok(n.assistantInterrupt(p.SessionID))
+		}
+		if _, live := n.agent(p.SessionID); !live {
+			// A claude outside Persona's panes (the desktop app's, another terminal's): through its inbox (claudebg.go).
+			if handled, err := n.interruptOutside(ctx, p.SessionID); handled {
+				return ok(err)
+			}
 		}
 		return ok(n.keys(ctx, p.SessionID, []string{"esc"}, ""))
 	case "session.screen.before":

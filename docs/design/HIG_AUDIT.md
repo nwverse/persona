@@ -446,11 +446,11 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Evidence**: `reduceMotion ? Theme.Motion.state : Theme.Motion.composerSwap` changes only the curve.
 - **Fix**: use `.opacity` in both branches when reduced; skip the press scale; gate the pulse with `isActive: listening && !reduceMotion`.
 
-#### HIG-045 Message lift menu and attach bar animate scale and blur without a fallback
+#### HIG-045 Message lift menu animates scale and blur without a fallback
 - **Severity**: P2. **Platform**: iOS.
-- **Location**: `apple/Persona/Views/Chat/MessageLift.swift:94`, `apple/Persona/Views/Chat/MessageLift.swift:119`, `apple/Persona/Views/Chat/MessageLift.swift:160`, `apple/Persona/Views/Chat/MessageMenu.swift:305`, `apple/Persona/Views/Chat/MessageMenu.swift:393`, `apple/Persona/Views/Chat/AttachSheet.swift:360`, `apple/Persona/Views/Chat/AttachSheet.swift:481`.
+- **Location**: `apple/Persona/Views/Chat/MessageLift.swift:94`, `apple/Persona/Views/Chat/MessageLift.swift:119`, `apple/Persona/Views/Chat/MessageLift.swift:160`, `apple/Persona/Views/Chat/MessageMenu.swift:305`, `apple/Persona/Views/Chat/MessageMenu.swift:393`.
 - **Violates**: [Accessibility][a11y] (Reduce Motion); [Motion][motion].
-- **Problem**: long-press blurs the page, the bar scales in from 0.85 and the drag-back spring bounces. `reduceMotion` is declared at `MessageLift.swift:119` but never read. The attach bar-away state scales and blurs by 10.
+- **Problem**: long-press blurs the page, the bar scales in from 0.85 and the drag-back spring bounces. `reduceMotion` is declared at `MessageLift.swift:119` but never read. (The attach panel's bar now cross-fades, without scale or blur, and none with Reduce Motion: #4312.)
 - **Evidence**: `.transition(.scale(scale: 0.85, anchor: p.below ? .top : .bottom).combined(with: .opacity))`.
 - **Fix**: use the declared flag: opacity transition, bounce-0 spring, no blur or scale when reduced.
 

@@ -5,10 +5,37 @@ enum TodosViewMode: String, CaseIterable {
     case list, calendar
 }
 
-/// The top of the to-dos page: List | Calendar, and in the calendar Day | Week | Month. Each device keeps its choice.
+/// How the to-dos list is grouped (#4352): by status section (the default), or by Pinned direction from the hub's
+/// direction tree, offered only by a hub that has one.
+enum TodosGrouping: String, CaseIterable {
+    case status, direction
+
+    var title: String {
+        switch self {
+        case .status: String(localized: "Status")
+        case .direction: String(localized: "Directions")
+        }
+    }
+
+    /// The Group By menu's mark for it, as the Agents page's groupings have one each.
+    var symbol: String {
+        switch self {
+        case .status: Theme.Icon.byState
+        case .direction: Theme.Icon.pin
+        }
+    }
+
+    /// The grouping the list shows: the stored choice, but by status from a hub without the tree (an older hub, or
+    /// before it is read), whatever was chosen against another hub.
+    static func resolved(_ stored: TodosGrouping, hasTree: Bool) -> TodosGrouping { hasTree ? stored : .status }
+}
+
+/// The top of the to-dos page: List | Calendar, and in the calendar Day | Week | Month; in the list, its grouping when
+/// `grouping` is given. Each device keeps its choice.
 struct TodosModeBar<ListControls: View>: View {
     @Binding var view: TodosViewMode
     @Binding var mode: TodoCalendarMode
+    var grouping: Binding<TodosGrouping>? = nil
     /// The list view's own controls at the trailing end, where the calendar has its day / week / month (the phone's
     /// filter and sort, #3740).
     @ViewBuilder var listControls: ListControls
@@ -21,6 +48,24 @@ struct TodosModeBar<ListControls: View>: View {
                 .fixedSize()
                 .accessibilityIdentifier("todos.view")
             Spacer(minLength: Theme.Space.s)
+            if view == .list, let grouping {
+                // A grouping control, not a filter chip (docs/design/DESIGN_SYSTEM.md "List controls").
+                Menu {
+                    Picker("Group By", selection: grouping) {
+                        ForEach(TodosGrouping.allCases, id: \.self) { g in Text(g.title).tag(g) }
+                    }
+                } label: {
+                    HStack(spacing: Theme.Space.xs) {
+                        ThemedIcon(grouping.wrappedValue.symbol)
+                        Text(grouping.wrappedValue.title).lineLimit(1)
+                    }
+                }
+                .menuStyle(.button)
+                .themedButton()
+                .accessibilityLabel(Text("Group By"))
+                .accessibilityValue(Text(grouping.wrappedValue.title))
+                .accessibilityIdentifier("todos.grouping")
+            }
             if view == .calendar {
                 SegmentedChoice(String(localized: "Calendar"), TodoCalendarMode.allCases.map { (value: $0, label: $0.label) }, selection: $mode)
                     .labelsHidden()
@@ -45,8 +90,8 @@ struct TodosModeBar<ListControls: View>: View {
 }
 
 extension TodosModeBar where ListControls == EmptyView {
-    init(view: Binding<TodosViewMode>, mode: Binding<TodoCalendarMode>) {
-        self.init(view: view, mode: mode) { EmptyView() }
+    init(view: Binding<TodosViewMode>, mode: Binding<TodoCalendarMode>, grouping: Binding<TodosGrouping>? = nil) {
+        self.init(view: view, mode: mode, grouping: grouping) { EmptyView() }
     }
 }
 
@@ -336,8 +381,8 @@ struct TodoQuickAddSheet: View {
                         .accessibilityIdentifier("todo.calendar.newTitle")
                 }
                 Section {
-                    DatePicker(String(localized: "Due"), selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute])
-                        .accessibilityIdentifier("todo.calendar.newDue")
+                    FormDatePicker("Due", selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute],
+                                   identifier: "todo.calendar.newDue")
                     Toggle(String(localized: "All Day"), isOn: $allDay)
                         .accessibilityIdentifier("todo.calendar.newAllDay")
                 } footer: {
@@ -365,7 +410,7 @@ struct TodoQuickAddSheet: View {
             .macSheet()
             #endif
         }
-        .presentationDetents([.medium])
+        .formSheetDetents([.medium])
         .onAppear { typing = true }
     }
 

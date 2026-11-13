@@ -2,6 +2,9 @@ package persona.feature.assistant
 
 import persona.core.contracts.Session
 import persona.core.contracts.api.AssistantSnapshot
+import persona.core.contracts.Direction
+import persona.core.contracts.DirectionCounts
+import persona.core.contracts.DirectionTree
 import persona.core.contracts.api.LeaderCounts
 import java.time.Instant
 import java.time.ZoneId
@@ -111,7 +114,7 @@ class AssistantTest {
         val leadB = Session(machineId = "demo", sessionId = "lead-b", title = "1110 | 探索 | 支付", origin = "user")
         val snapshot = AssistantSnapshot(main.key, listOf(main, mine, leadB, leadA),
             leaders = listOf("lead-a", "gone", "lead-b"), directionNames = mapOf("lead-a" to "Growth"),
-            leaderCounts = mapOf("lead-a" to LeaderCounts(working = 1, needsYou = 2)))
+            directionTree = DirectionTree(listOf(Direction("lead-a", counts = DirectionCounts(working = 1, needsYou = 2, stuck = 4)))))
         val result = conversationGroups(snapshot, "", words)
         assertEquals(listOf(leadA, leadB), result.directions)
         assertEquals("Growth", result.names["lead-a"])

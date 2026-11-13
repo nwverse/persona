@@ -416,6 +416,9 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 
 ## `--resume` without `--model` brings back the session's last model (2026-11-09, #2487, 2.1.296)
 
+- A model's `model_not_found` is not automatically a configuration error (#5234). The live main conversation's model answered normally, then the gateway returned 404 on later turns; treating every user-selected model as final left each turn on an error card. Record when a model last answered in this conversation: a `model_not_found` within an hour gets the same bounded same-model retry as a 5xx, then the normal model chain. Never replay a model that has not answered here, and remember a missing recovery-chosen fallback for its launcher across conversations and resident handovers so it is not offered again at once.
+- An Agent SDK bridge has no `initialize` control request. Its own task-list control must supply an explicit empty background-task inventory before a model switch may restart it. Unknown or refused inventories must still block the switch.
+
 - Claude Code restores the model a resumed session last ran on. Only `--model`, `ANTHROPIC_MODEL` or an `ANTHROPIC_DEFAULT_*_MODEL` stops it; `"model"` in `settings.json` or `--settings` does not.
   The main chat had no model configured, so the app said "Claude Code default", but every `--resume` kept the model an earlier start had used. When the gateway dropped that model, every turn failed (`model_not_found`, later a 503 retried ten times), and changing Claude Code's settings changed nothing.
 - To check which model a turn used, read the last `assistant` line's `message.model` in the transcript. `modelUsage` in `-p --output-format json` and in `cost-state` adds up the whole session.

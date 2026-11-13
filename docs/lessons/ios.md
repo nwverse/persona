@@ -170,8 +170,8 @@ The table and red lines are in `docs/apple/ios.md` ("Design language", Motion); 
   there. The two exceptions are measured ones: a glyph swapped inside the same round button (Telegram's send) and the quote bar fading in
   quicker than out (Telegram's input panel), kept as measured.
 - **No easing under the finger.** An animation on a drag makes the content trail the finger, which reads as lag. Track the gesture with
-  `transaction.animation = nil` / plain state writes and hand the finger's speed to the release animation (`drawer(velocity:)`,
-  `attachOpen(velocity:)`), so the motion carries on instead of starting over.
+  `transaction.animation = nil` / plain state writes and hand the finger's speed to the release animation (`drawer(velocity:)`),
+  so the motion carries on instead of starting over.
 - **Continuous motion is registered.** Each loop costs battery and attention, and a loop nobody asked about is how a pulsing avatar or a
   spinning gear ships. `ContinuousMotionTests` scans the app targets for `repeatForever`, `TimelineView(.animation…)`, `phaseAnimator`,
   `repeatCount = .infinity` and `startAnimating()`; a new one fails until it is registered with its reason and the file that reads Reduce
@@ -242,7 +242,10 @@ from colliding with its buttons.
   CJK punctuation, and TextKit 2 matches SwiftUI glyph for glyph. TextKit 1 draws a line-ending 」 or ） about 3 pt narrower and starts the next
   line half an em in (a little in, before an opening bracket). Lines ending in ，。、”： match. `LiftUITextView.wrappedStart` measures how
   far a wrapped line starts past its indent and `LineSnap` moves it back; the narrower bracket stays (the highlight of a whole line
-  reaches the words' edge anyway).
+  reaches the words' edge anyway). A line that starts with an opening bracket (「) gets that bracket narrower too (6.1 pt of its 8.6 at
+  17 pt, iOS 27.2): it starts where the chat's does, and the rest of the line is 2.5 pt to the left, its end handle short of the last
+  word. `narrowedBracket` moves such a line right by what the bracket lost, so only the bracket starts in (#5982). A kern after the
+  bracket did the same but made the line too long for TextKit 1, which measures a line-ending 。 at full width: it wrapped the 。.
 - **Over lines a layout manager's delegate moved, find the line yourself.** `LineSnap` puts each line on the chat's
   (`shouldSetLineFragmentRect`); the highlight (`selectionRects`) and the paragraphs' accessibility frames follow. The text view's own
   lookups did not (#6099). In the mock's long answer, `closestPosition(to:)` found the table for a point on the line under it and the
@@ -257,7 +260,9 @@ from colliding with its buttons.
   SwiftUI `ScrollView`, the handle reaches the edge and the outer scroll view stays put. `LiftUITextView` follows the finger with a
   recognizer that never recognizes and cannot be prevented (`canBePrevented(by:)` false), treats a touch that changes the selection as a
   handle's drag, and scrolls the first enclosing `UIScrollView` from a display link, moving the dragged end of the selection with the words
-  under the finger, since a finger held still sends no touches.
+  under the finger, since a finger held still sends no touches. Since iOS 27 a dragged handle changes the selection only when the finger
+  lifts, so nothing changed while it was held at the edge and the lift never scrolled (#5982): the handle is told by where the finger went
+  down (`LiftLayout.handle`), and it scrolls once it has moved (`LiftLayout.moved`), not as soon as it is touched at an edge.
 - **XCUITest sees no child of a `.combine` element.** A lifted message combined into one element has no static texts to find; the long
   one is `.contain` (VoiceOver can then go through its parts, which scrolls it), and `isHittable` on its first line is what tells whether
   something else is drawn over it.
@@ -1660,6 +1665,9 @@ no initial Working row so the message shifted by one row, and pending local remo
 - Negative footer padding is visual overflow even when the accessibility frame still fits. A capped `ApprovalCard` keeps the host's horizontal and top alignment but has no bottom bleed, so its measured cap contains the whole button. Its footer pills also opt into `growsWithText`: a fixed 27 pt background does not grow when the label does at accessibility XXXL. The UI regression keeps actions above the outer area's 8 pt bottom fade, and screenshot pixel checks must confirm the visible capsule, not only `isHittable` and a successful resolution.
 
 ## A view that places itself over the whole screen gets no keyboard avoidance (2026-11-10, #3004)
+
+Superseded for the + panel by #4312: it is a system sheet now, its bar a `safeAreaInset` that the system's keyboard
+avoidance moves; the points on `Keyboard.dismiss()` and XCUITest's `typeText` below still hold.
 
 - The + panel (`AttachSheet`) measures the screen in a `GeometryReader` (size plus safe-area insets, which with the keyboard
   up include it) and places the sheet with `.position` under `ignoresSafeArea(.container)`. The keyboard only shrank the
