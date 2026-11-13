@@ -17,5 +17,5 @@
     <string name="inbox_line_retry">Try again</string>
     <string name="inbox_line_retry_text">Please try again.</string>
     <string name="inbox_line_instructed">Sent to the AI for a new suggestion</string>
-    <string name="inbox_line_cycle">This link would make a loop. Choose something else.</string>
+    <string name="inbox_line_link_conflict">This link isn\'t possible. Choose something else.</string>
 </resources>

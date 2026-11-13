@@ -80,12 +80,11 @@ class InboxSameMatterSheetTest {
         assertEquals(7, repository.lineCalls)
     }
 
-    @Test fun cycleDetectionRecognizesEveryLocalizedHubMessageButNotParentDepth() {
-        for (message in listOf("that parent would make a cycle", "这个关联会形成循环，请选择其他内容。", "この関連付けは循環します。別の項目を選択してください。")) {
-            assertTrue(message, isInboxParentCycle(HubFailure(HubError.Server, message, status = 409, code = "conflict")))
+    @Test fun everyParentConflictUsesOneExplanationRegardlessOfItsMessage() {
+        for (message in listOf("that parent would make a cycle", "that parent would be too deep", "这个关联会形成循环，请选择其他内容。")) {
+            assertTrue(message, isInboxParentConflict(HubFailure(HubError.Server, message, status = 409, code = "conflict")))
         }
-        assertFalse(isInboxParentCycle(HubFailure(HubError.Server, "that parent would be too deep", status = 409, code = "conflict")))
-        assertFalse(isInboxParentCycle(HubFailure(HubError.Server, "that parent would make a cycle", status = 500, code = "conflict")))
+        assertFalse(isInboxParentConflict(HubFailure(HubError.Server, "that parent would make a cycle", status = 500, code = "conflict")))
     }
 
     @Test fun pickerFiltersSearchesAndLinksTheRawParentWithoutAConfirmation() {
@@ -121,12 +120,12 @@ class InboxSameMatterSheetTest {
         rule.onNodeWithText("是同一件事…").assertDoesNotExist()
     }
 
-    @Test fun aCycleRefusalKeepsThePickerItsQueryAndUsesExistingFailureFeedback() {
+    @Test fun aParentConflictKeepsThePickerItsQueryAndShowsTheLocalizedExplanation() {
         val current = record("current", "Current")
         val alpha = record("alpha", "Alpha")
         val tree = InboxLineage(InboxParentRef("inbox", "current"), current)
         val repository = FakeRepository(listOf(current, alpha), tree).apply {
-            writeError = HubFailure(HubError.Server, "这个关联会形成循环，请选择其他内容。", status = 409, code = "conflict")
+            writeError = HubFailure(HubError.Server, "这个关联不成立，请选择其他内容。", status = 409, code = "conflict")
         }
         var dismisses = 0
         rule.setContent { Sheet(repository, current, tree, { dismisses++ }, {}) }
@@ -134,7 +133,7 @@ class InboxSameMatterSheetTest {
         rule.onNode(hasText("Alpha", substring = true) and hasClickAction() and !hasSetTextAction()).performClick()
         rule.waitForIdle()
         assertEquals(0, feedback.failures)
-        assertEquals("这个关联会形成循环，请选择其他内容。", feedback.notices.single().message)
+        assertEquals("这个关联不成立，请选择其他内容。", feedback.notices.single().message)
         assertEquals(FeedbackStyle.Error, feedback.notices.single().style)
         assertEquals(0, dismisses)
         rule.onNodeWithText("that parent would make a cycle").assertDoesNotExist()

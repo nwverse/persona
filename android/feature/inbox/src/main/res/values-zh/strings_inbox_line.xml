@@ -17,5 +17,5 @@
     <string name="inbox_line_retry">再试一次</string>
     <string name="inbox_line_retry_text">请再试一次。</string>
     <string name="inbox_line_instructed">已交给 AI，等它重新出建议</string>
-    <string name="inbox_line_cycle">这个关联会形成循环，请选择其他内容。</string>
+    <string name="inbox_line_link_conflict">这个关联不成立，请选择其他内容。</string>
 </resources>

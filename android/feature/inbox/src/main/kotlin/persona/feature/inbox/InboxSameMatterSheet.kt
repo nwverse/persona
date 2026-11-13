@@ -27,8 +27,8 @@ import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import persona.core.contracts.api.InboxParentRef
+import persona.core.contracts.api.hubCodedFailure
 import persona.core.contracts.parseTime
-import persona.core.hub.HubFailure
 import persona.core.designsystem.FeedbackStyle
 import persona.core.designsystem.GroupPosition
 import persona.core.designsystem.JAction
@@ -98,16 +98,8 @@ internal fun sameMatterLegacyMeta(record: InboxRecord, res: Resources): String? 
 
 internal fun sameMatterMeta(record: InboxRecord, res: Resources): String? = sameMatterLegacyMeta(record, res)
 
-private val inboxParentCycleWords = setOf(
-    "that parent would make a cycle",
-    "这个关联会形成循环，请选择其他内容。", // i18n-ignore: exact localized hub error used to classify the refusal, never displayed
-    "この関連付けは循環します。別の項目を選択してください。", // i18n-ignore: exact localized hub error used to classify the refusal, never displayed
-)
-
-/** The hub localizes this error, so English alone is not a discriminator. parent_deep has different words and stays generic. */
-internal fun isInboxParentCycle(error: Throwable): Boolean = HubFailure.from(error).let {
-    it.status == 409 && it.code == "conflict" && it.message in inboxParentCycleWords
-}
+/** Every 409 from this route (a cycle or excessive depth) gets the same plain explanation, with no message matching. */
+internal fun isInboxParentConflict(error: Throwable): Boolean = hubCodedFailure(error)?.status == 409
 
 /** Pick another open item as this item's parent. A missing root tree is read lazily; each descendant is then read once. */
 @Composable
@@ -130,7 +122,7 @@ internal fun InboxSameMatterSheet(
     var attempt by remember(record.item.id) { mutableIntStateOf(0) }
     var busy by remember(record.item.id) { mutableStateOf(false) }
     var writeFailed by remember(record.item.id) { mutableStateOf(false) }
-    var cycleFailed by remember(record.item.id) { mutableStateOf(false) }
+    var conflictFailed by remember(record.item.id) { mutableStateOf(false) }
     LaunchedEffect(record.item.id, initialTree, attempt) {
         loading = true; failed = false; descendants = null
         val base = if (initialTree != null) initialTree else try {
@@ -150,7 +142,7 @@ internal fun InboxSameMatterSheet(
         Column(Modifier.fillMaxWidth().imePadding()) {
             JSearchField(query, { query = it }, stringResource(R.string.inbox_line_search_placeholder), Modifier.fillMaxWidth())
             if (writeFailed) JNotice(stringResource(R.string.inbox_failed_retry), Modifier.padding(top = Tokens.Space.s))
-            if (cycleFailed) JNotice(stringResource(R.string.inbox_line_cycle), Modifier.padding(top = Tokens.Space.s))
+            if (conflictFailed) JNotice(stringResource(R.string.inbox_line_link_conflict), Modifier.padding(top = Tokens.Space.s))
             when {
                 loading -> Box(Modifier.weight(1f, fill = false).fillMaxWidth(), contentAlignment = Alignment.Center) { JLoading() }
                 failed -> Box(Modifier.weight(1f, fill = false).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -163,7 +155,7 @@ internal fun InboxSameMatterSheet(
                     itemsIndexed(candidates, key = { _, candidate -> candidate.item.id }) { index, candidate ->
                         JGroupItem(GroupPosition.of(index, candidates.size)) {
                             JRow(candidate.item.title, subtitle = sameMatterMeta(candidate, res), enabled = !busy, onClick = {
-                                busy = true; writeFailed = false; cycleFailed = false
+                                busy = true; writeFailed = false; conflictFailed = false
                                 scope.launch {
                                     try {
                                         repository.setInboxParent(record, InboxParentRef("inbox", candidate.hubItemId))
@@ -176,9 +168,9 @@ internal fun InboxSameMatterSheet(
                                         feedback?.notice(res.getString(R.string.inbox_line_linked, candidate.item.title), FeedbackStyle.Success)
                                     } catch (e: CancellationException) { throw e }
                                     catch (e: Exception) {
-                                        if (isInboxParentCycle(e)) {
-                                            val message = res.getString(R.string.inbox_line_cycle)
-                                            if (feedback?.notice(message, FeedbackStyle.Error) != true) cycleFailed = true
+                                        if (isInboxParentConflict(e)) {
+                                            val message = res.getString(R.string.inbox_line_link_conflict)
+                                            if (feedback?.notice(message, FeedbackStyle.Error) != true) conflictFailed = true
                                         } else if (feedback?.failure(e, operation = true) != true) writeFailed = true
                                     } finally { busy = false }
                                 }
