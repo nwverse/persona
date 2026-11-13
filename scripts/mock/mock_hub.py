@@ -13072,7 +13072,7 @@ LAUNCHER_MODELS = {
     ]},
     "codex": {"agent": "codex", "models": [
         {"id": "gpt-5.5", "name": "GPT-5.5", "description": "Latest model for coding and everyday work", "default": True, "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium"},
-        {"id": "gpt-5.5-codex", "name": "GPT-5.5-Codex", "description": "Tuned for long agentic coding", "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium"},
+        {"id": "gpt-5.5-codex", "name": "GPT-5.5-Codex", "description": "Tuned for long agentic coding", "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium", "service_tiers": [{"id": "default", "name": "Standard"}, {"id": "priority", "name": "Fast", "description": "Increased usage"}]},
         {"id": "gpt-5.5-mini", "name": "GPT-5.5-Mini", "description": "Smaller and cheaper", "efforts": ["low", "medium", "high"], "default_effort": "medium"},
     ]},
 }
@@ -24856,7 +24856,8 @@ class H(BaseHTTPRequestHandler):
                                        "code": START_FAIL["code"], "delivered": "unknown", "retryable": False}, 502)
             body = json.loads(self.last_body or b"{}")
             prompt = body.get("prompt", "")
-            SENT.append({"text": prompt, "images": body.get("images"), **({"launcher": body["launcher"]} if body.get("launcher") else {})})
+            SENT.append({"text": prompt, "images": body.get("images"), **({"launcher": body["launcher"]} if body.get("launcher") else {}),
+                         **({"service_tier": body["service_tier"]} if body.get("service_tier") else {})})
             now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             sid = str(uuid.uuid4())
             session = assistant_sess(sid, "", 0, "")  # what the hub returns: no title, model or transcript rev yet
@@ -24868,6 +24869,16 @@ class H(BaseHTTPRequestHandler):
             session.update(machine_id=mid, **({"cwd": home + "/.persona/assistant"} if home and mid != "server" else {}))
             session.update(status="working", state="working", updated_at=now, launcher=body.get("launcher") or "claude",
                            permission_mode=body.get("permission_mode") or "", effort=body.get("effort") or "")
+            listed = next((m for m in LAUNCHER_MODELS.get(session["launcher"], {}).get("models", [])
+                           if m.get("id") == (body.get("model") or engine_default_model(session["launcher"]))), {})
+            tiers = listed.get("service_tiers") or []
+            requested_tier = body.get("service_tier")
+            if requested_tier and requested_tier not in {tier["id"] for tier in tiers}:
+                return self.send_json({"error": "This model cannot apply the requested service tier", "code": "assistant_service_tier_unsupported",
+                                       "delivered": "none", "retryable": False}, 409)
+            if tiers:
+                # thread/settings/update was acknowledged before the first turn: the response and sessions push agree.
+                session.update(service_tier=requested_tier or "default", service_tiers=copy.deepcopy(tiers))
             session["main"] = bool(body.get("main"))
             if body.get("space") == "health":
                 session.update(cwd="/home/me/.persona/health", space="health")
@@ -27942,7 +27953,7 @@ _features_without_model_pick = features
 
 
 def features():
-    return _features_without_model_pick() + (["assistant_model_pick"] if MODEL_PICK_MODE else [])
+    return _features_without_model_pick() + (["assistant_model_pick", "assistant_start_service_tier"] if MODEL_PICK_MODE else [])
 
 
 MOCK_HELP.append("MOCK_MODEL_PICK=1|picked  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
