@@ -17,8 +17,10 @@ import persona.core.contracts.InboxChainEntry
 import persona.core.contracts.InboxChainLink
 import persona.core.contracts.Session
 import persona.core.contracts.inboxEventFields
+import persona.core.designsystem.InboxNowIcon
 import persona.core.designsystem.InlineTone
 import persona.core.designsystem.icons.PersonaIcons
+import persona.core.designsystem.inboxNowIcon
 import persona.core.designsystem.resolve
 import persona.core.domain.inbox.InboxItem
 import persona.core.domain.sort.AgentSession

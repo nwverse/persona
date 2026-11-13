@@ -10,11 +10,24 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 
 /** What an [JInlineStatus] says: something under way, something to look at, something that went wrong, or that it is done. */
 enum class InlineTone { Busy, Caution, Failed, Done }
+
+/** The detail's leading icon for a shared Inbox state key; tone keeps the existing state colors. */
+data class InboxNowIcon(val tone: InlineTone, val icon: PhIcon?)
+
+fun inboxNowIcon(key: String?): InboxNowIcon = when (key) {
+    "waiting" -> InboxNowIcon(InlineTone.Busy, PersonaIcons.time)
+    "queued", "looking", "agent_working" -> InboxNowIcon(InlineTone.Busy, null)
+    "failed" -> InboxNowIcon(InlineTone.Failed, null)
+    "confirm_reply", "confirm_agent", "decide", "follow_up_ask", "check_due", "needs_you" ->
+        InboxNowIcon(InlineTone.Caution, null)
+    else -> InboxNowIcon(InlineTone.Done, null)
+}
 
 /**
  * A short status set inside a card or above the composer, up to three lines: a spinner while [tone] is busy, a mark

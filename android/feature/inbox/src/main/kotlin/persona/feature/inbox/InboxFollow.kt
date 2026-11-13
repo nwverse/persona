@@ -4,9 +4,12 @@ import android.content.res.Resources
 import androidx.annotation.StringRes
 import androidx.compose.runtime.compositionLocalOf
 import persona.core.contracts.InboxEventFields
+import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.Status
 import java.time.Instant
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 
 /** The page's clock and zone, injectable for the shared showcase without changing production defaults. */
@@ -28,7 +31,7 @@ internal fun inboxNowText(
     val follow = event.follow
     val who = follow?.who?.takeIf { it.isNotBlank() }
     val next = follow?.next?.takeIf { it.isNotBlank() }
-    val again = follow?.checkAt?.let { chainTime(it, locale, now, zone).takeIf(String::isNotBlank) }
+    val again = follow?.checkAt?.let { inboxFollowTime(it, res, locale, now, zone).takeIf(String::isNotBlank) }
 
     fun text(@StringRes id: Int) = res.getString(id)
     fun text(@StringRes id: Int, arg: String) = res.getString(id, arg)
@@ -87,6 +90,43 @@ internal fun inboxNowStatus(key: String?): Status = when (key) {
     "done_muted" -> Status.Muted
     else -> Status.Idle
 }
+
+private fun clockTime(at: Instant, locale: Locale, zone: ZoneId): String =
+    DateTimeFormatter.ofPattern("HH:mm", locale).withZone(zone).format(at)
+
+private fun inboxDays(at: Instant, now: Instant, zone: ZoneId): Long =
+    ChronoUnit.DAYS.between(at.atZone(zone).toLocalDate(), now.atZone(zone).toLocalDate())
+
+/** The follow-up's short future moment: clock today, tomorrow in words, then a localized date and 24-hour clock. */
+internal fun inboxFollowTime(value: String?, res: Resources, locale: Locale, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
+    val at = value?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return ""
+    val days = inboxDays(at, now, zone)
+    val time = clockTime(at, locale, zone)
+    return when {
+        days <= 0 -> time
+        days == 1 -> res.getString(R.string.inbox_time_tomorrow) + " " + time
+        at.atZone(zone).year == now.atZone(zone).year -> LocalizedFormats.format(at, LocalizedFormats.MONTH_DAY, locale, zone) + " " + time
+        else -> LocalizedFormats.format(at, LocalizedFormats.DATE, locale, zone) + " " + time
+    }
+}
+
+/** A row's timestamp: clock today, yesterday, weekday within six days, then a short date, all in the injected zone. */
+internal fun displayTime(value: String, locale: Locale, res: Resources?, zone: ZoneId = ZoneId.systemDefault(), now: Instant = Instant.now()): String {
+    val at = runCatching { Instant.parse(value) }.getOrNull() ?: return ""
+    if (at.atZone(zone).year < 2000) return ""
+    val days = inboxDays(at, now, zone)
+    return when {
+        days <= 0 -> clockTime(at, locale, zone)
+        days == 1 -> res?.getString(R.string.inbox_time_yesterday) ?: LocalizedFormats.format(at, LocalizedFormats.MONTH_DAY, locale, zone)
+        now.toEpochMilli() - at.toEpochMilli() < 6 * 86_400_000 -> DateTimeFormatter.ofPattern("E", locale).withZone(zone).format(at)
+        at.atZone(zone).year == now.atZone(zone).year -> LocalizedFormats.format(at, LocalizedFormats.MONTH_DAY, locale, zone)
+        else -> at.atZone(zone).let { String.format(Locale.ROOT, "%04d-%02d-%02d", it.year, it.monthValue, it.dayOfMonth) }
+    }
+}
+
+/** Source-compatible form for older tests; production passes Resources so Yesterday is localized too. */
+internal fun displayTime(value: String, locale: Locale, zone: ZoneId = ZoneId.systemDefault()): String =
+    displayTime(value, locale, null, zone, Instant.now())
 
 /** `where · sender: preview`, saying a direct chat's name once; null leaves the old row's preview untouched. */
 internal fun inboxRowMeta(where: String?, sender: String?, preview: String, res: Resources): String? {

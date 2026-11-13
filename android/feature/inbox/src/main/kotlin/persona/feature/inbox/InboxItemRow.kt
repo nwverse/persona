@@ -3,7 +3,6 @@ package persona.feature.inbox
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.material3.Text
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PersonaIcons
@@ -32,10 +31,6 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
     val nowText = inboxNowForRow(record, res, currentLocale, now = clock(), zone = zone)
     val metaText = inboxRowThirdLine(record, res, translated?.preview?.ifBlank { null })
     val oldMark = if (!done) eventMark(record) else null
-    val nowMark = nowText?.let {
-        EventMark.Now(it, inboxNowStatus(record.event.now), problem = record.event.now == "failed", accent = oldMark is EventMark.Suggests,
-            key = record.event.now)
-    }
     val doneLabel = stringResource(if (done) R.string.inbox_move_back else R.string.inbox_done)
     val handOffLabel = stringResource(R.string.inbox_hand_to_ai)
     if (menu) JActionSheet(title = item.title, onDismiss = { menu = false }, actions = buildList {
@@ -49,6 +44,8 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
         MessageItem(sender = item.sender.orEmpty().ifBlank { item.title }, title = translated?.subject?.ifBlank { null } ?: item.title,
             heading = item.title.takeIf { groupEvent },
             titleIcon = translated?.let { PhIcons.Translate }, titleIconLabel = translated?.let { stringResource(R.string.inbox_translated) },
+            titleTag = stringResource(R.string.inbox_kind_dm).takeIf { item.kind == "dm" },
+            unread = if (record.count > 1) record.count else 0,
             selected = isInboxItemSelected(LocalDetailKey.current, item.id, record.feedId),
             position = position, avatar = rememberLarkAvatar(record.avatar.takeIf { record.doc == null }, onlineSince), avatarIcon = record.doc?.let { docIcon(it.type) },
             // A hub connector's item is any connector's (#2726): a neutral mark and the hub's name for it, never a brand.
@@ -58,24 +55,17 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
                 record.isMail -> MessageSource.Mail
                 else -> MessageSource.Other
             },
-            sourceLabel = when {
-                record.isConnector -> record.sourceLabel
-                record.feedId != null || record.source == "lark" -> stringResource(R.string.inbox_source_lark)
-                record.isMail -> stringResource(R.string.inbox_source_mail)
-                else -> record.sourceLabel
-            },
+            sourceLabel = null,
             group = record.groupName.takeIf { groupEvent },
-            time = item.updatedAt?.let { displayTime(it, currentLocale, zone) },
+            time = item.updatedAt?.let { displayTime(it, currentLocale, res, zone, clock()) },
             // Every row keeps title / AI summary / source-specific latest line, with or without where.
             preview = item.summary?.takeIf { it.isNotBlank() },
             meta = MessageItemMeta(metaText, nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
-                accent = oldMark is EventMark.Suggests),
+                key = record.event.now),
             status = when { done -> null; item.isWorking || record.agent?.state in setOf("running", "queued") -> Status.Working
                 item.section == InboxTier.Action.wire -> Status.NeedsYou; else -> null },
-            // The hub names its own sources Lark and Mail; the row already shows those as its source.
-            tags = listOfNotNull(kindLabel(res, record).takeIf { it.isNotBlank() },
-                record.sourceLabel.takeIf { !record.isConnector && it.isNotBlank() && it !in setOf("飞书", "邮件") }, // i18n-ignore: hub source labels it matches
-                pluralStringResource(R.plurals.inbox_messages_count, record.count, record.count).takeIf { record.count > 0 }),
+            // The kind tag sits beside the title and a count above one is a badge; no separate source/count chip row.
+            tags = emptyList(),
             // An extension may draw the page of its connector's items (inbox_item); the rest open their own page.
             // An event (inbox phase 1) opens its own page; an item from an older hub its source, as always.
             checked = selection?.checked?.takeIf { selection.selectable }, dimmed = selecting && selection?.selectable == false,
@@ -84,7 +74,7 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
                 record.localDelivery?.pendingStatus()?.let { PendingBadge(it) }
                     ?: record.localStatus?.let { InboxLocalStatus(it) }
                 // Meta carries a recognized shared state; without one, the old mark still has its own place below it.
-                if (nowMark == null) oldMark?.let { EventRowMark(it) }
+                if (nowText == null) oldMark?.let { EventRowMark(it) }
                 if (!done) AgentDraftCard(record, composers, navigator, repository = repository)
             })
     }
@@ -103,11 +93,6 @@ private fun InboxLocalStatus(label: String) {
     Text(shown, style = PersonaTheme.type.micro,
         color = if (draft != null) PersonaTheme.palette.cautionText else PersonaTheme.palette.ink3)
 }
-
-
-/** A row's time in the language the app is in: "Nov 5, 2:30 PM" in English, the same in each language's own form. */
-internal fun displayTime(value: String, locale: java.util.Locale, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String =
-    runCatching { LocalizedFormats.format(java.time.Instant.parse(value), LocalizedFormats.MONTH_DAY_TIME, locale, zone) }.getOrDefault("")
 
 
 @Composable

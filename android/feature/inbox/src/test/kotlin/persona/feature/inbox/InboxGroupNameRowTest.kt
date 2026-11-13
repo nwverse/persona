@@ -16,6 +16,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -39,6 +40,7 @@ import java.util.Locale
 @Config(sdk = [35], qualifiers = "zh-w600dp-h900dp-xhdpi")
 class InboxGroupNameRowTest {
     @get:Rule val rule = createComposeRule()
+    private val res = ApplicationProvider.getApplicationContext<android.content.Context>().resources
     private val repository = Proxy.newProxyInstance(InboxRepository::class.java.classLoader, arrayOf(InboxRepository::class.java)) { proxy, method, args ->
         when (method.name) {
             "equals" -> proxy === args[0]
@@ -119,7 +121,7 @@ class InboxGroupNameRowTest {
             // Neither the sender nor the source conversation is a second title on an old-hub row.
             rule.onNodeWithText(sender, useUnmergedTree = true).assertDoesNotExist()
             rule.onNodeWithText(group, useUnmergedTree = true).assertDoesNotExist()
-            record.item.updatedAt?.let { rule.onNodeWithText(displayTime(it, Locale.SIMPLIFIED_CHINESE), useUnmergedTree = true).assertExists() }
+            record.item.updatedAt?.let { rule.onNodeWithText(displayTime(it, Locale.SIMPLIFIED_CHINESE, res), useUnmergedTree = true).assertExists() }
             val out = File(System.getenv("PERSONA_INBOX_SHOTS") ?: "build/inbox-row-boundary-shots/legacy").apply { mkdirs() }
             File(out, "${appearance.name.lowercase()}-${if (night) "dark" else "light"}-${fontScale}x.png").outputStream().use {
                 assertTrue(rule.onNodeWithTag("row").captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))
@@ -180,7 +182,7 @@ class InboxGroupNameRowTest {
             assertTrue("$context: $title / $summary / $meta", title.top < summary.top && summary.top < meta.top)
             rule.onNodeWithText(group, useUnmergedTree = true).assertDoesNotExist()
             rule.onNodeWithText(sender, useUnmergedTree = true).assertDoesNotExist()
-            followed.item.updatedAt?.let { rule.onNodeWithText(displayTime(it, Locale.SIMPLIFIED_CHINESE), useUnmergedTree = true).assertExists() }
+            followed.item.updatedAt?.let { rule.onNodeWithText(displayTime(it, Locale.SIMPLIFIED_CHINESE, res), useUnmergedTree = true).assertExists() }
             val out = File(System.getenv("PERSONA_INBOX_FOLLOW_SHOTS") ?: "build/inbox-row-boundary-shots/follow").apply { mkdirs() }
             File(out, "${appearance.name.lowercase()}-${if (night) "dark" else "light"}-${fontScale}x.png").outputStream().use {
                 assertTrue(rule.onNodeWithTag("follow-row").captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))

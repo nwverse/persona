@@ -21,6 +21,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
@@ -122,6 +123,11 @@ class InboxShowcaseShotsTest {
             if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
     }
 
+    private fun resourcesFor(locale: Locale, dark: Boolean): android.content.res.Resources {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        return context.createConfigurationContext(localizedConfiguration(context.resources.configuration, locale, dark)).resources
+    }
+
     @Test fun drawsTheSharedListInEveryLanguageStyleAndAppearance() {
         val (records, clock) = showcase()
         val inbox = ShowcaseInbox(records)
@@ -156,7 +162,7 @@ class InboxShowcaseShotsTest {
                 if (english) "Waiting for 张三确认新报价" else "等张三确认新报价", "问更正后的报价行不行",
                 "周五午饭", "李四${separator}周五还约吗？", if (english) "Waiting for you to confirm a reply" else "等你确认回复",
                 "全员群 · 行政${separator}提醒：周一关闭", "发布群 · 王五${separator}我晚点回你", "赵六${separator}收到，谢谢",
-                if (english) "You replied" else "你回过了", displayTime("2026-01-01T11:21:00Z", language, ZoneOffset.UTC),
+                if (english) "You replied" else "你回过了", displayTime("2026-01-01T11:21:00Z", language, resourcesFor(language, night), ZoneOffset.UTC, clock),
             )) {
                 val found = rule.onAllNodes(hasText(words, substring = true), useUnmergedTree = true).fetchSemanticsNodes()
                 assertTrue("$appearance dark=$night locale=$language: missing $words", found.isNotEmpty())

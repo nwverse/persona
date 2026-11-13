@@ -72,7 +72,7 @@ class InboxFollowTest {
             val name = case.getValue("name").jsonPrimitive.content
             val input = case.getValue("input").jsonObject
             val expected = case.getValue("expected").jsonObject
-            val time = expected.text("time")?.let { chainTime(it, language.locale, clock, zone) }.orEmpty()
+            val time = expected.text("time")?.let { inboxFollowTime(it, language.resources, language.locale, clock, zone) }.orEmpty()
             val words = expected.getValue("text").jsonObject.getValue(language.wire).jsonPrimitive.content.replace("{time}", time)
             val actual = inboxNowText(event(input, language.wire), language.resources, language.locale, clock, zone)
             assertEquals("$name/${language.wire}", words, actual)
@@ -104,6 +104,51 @@ class InboxFollowTest {
         val future = record.copy(event = record.event.copy(now = "something_new"))
         assertNull(inboxNowForRow(future, resources, locale, clock, zone))
         assertEquals(EventMark.Working(R.string.inbox_handling_looking), eventMark(future))
+    }
+
+    @Test fun rowAndFollowTimesUseTheInjectedClockAndZone() {
+        for (language in languages) {
+            val res = language.resources
+            val locale = language.locale
+            assertEquals("09:00", inboxFollowTime("2026-01-01T09:00:00Z", res, locale, clock, zone))
+            val tomorrow = when (language.wire) {
+                "en" -> "tomorrow 09:00"
+                "zh-Hans" -> "明天 09:00"
+                else -> "明日 09:00"
+            }
+            assertEquals(tomorrow, inboxFollowTime("2026-01-02T09:00:00Z", res, locale, clock, zone))
+            val later = when (language.wire) {
+                "en" -> "Jan 3 09:00"
+                else -> "1月3日 09:00"
+            }
+            assertEquals(later, inboxFollowTime("2026-01-03T09:00:00Z", res, locale, clock, zone))
+            val nextYear = when (language.wire) {
+                "en" -> "Jan 2, 2027 09:00"
+                else -> "2027年1月2日 09:00"
+            }
+            assertEquals(nextYear, inboxFollowTime("2027-01-02T09:00:00Z", res, locale, clock, zone))
+
+            assertEquals("10:40", displayTime("2026-01-01T10:40:00Z", locale, res, zone, clock))
+            val yesterday = when (language.wire) {
+                "en" -> "Yesterday"
+                "zh-Hans" -> "昨天"
+                else -> "昨日"
+            }
+            assertEquals(yesterday, displayTime("2025-12-31T10:40:00Z", locale, res, zone, clock))
+            val weekday = when (language.wire) {
+                "en" -> "Tue"
+                "zh-Hans" -> "周二"
+                else -> "火"
+            }
+            assertEquals(weekday, displayTime("2025-12-30T10:40:00Z", locale, res, zone, clock))
+            val monthDay = when (language.wire) {
+                "en" -> "Dec 25"
+                else -> "12月25日"
+            }
+            assertEquals(monthDay, displayTime("2025-12-25T10:40:00Z", locale, res, zone,
+                Instant.parse("2025-12-31T12:00:00Z")))
+            assertEquals("2025-12-25", displayTime("2025-12-25T10:40:00Z", locale, res, zone, clock))
+        }
     }
 
     @Test fun legacyThirdLinesKeepEachSourcesOwnShape() {

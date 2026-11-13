@@ -50,17 +50,24 @@ data class MessageItemMeta(
     val state: String? = null,
     val status: Status = Status.Idle,
     val problem: Boolean = false,
-    val accent: Boolean = false,
+    val key: String? = null,
 )
 
 @Composable
 private fun MessageItemState(meta: MessageItemMeta) {
     val palette = PersonaTheme.palette
-    if (meta.accent) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-        JIcon(PhIcons.Sparkle, null, size = Tokens.Space.m, tint = palette.accent, decorative = true)
-        Text(meta.state.orEmpty(), Modifier.weight(1f), style = PersonaTheme.type.caption, color = palette.ink2,
-            maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
-    } else JStateLabel(meta.state.orEmpty(), meta.status, modifier = Modifier.fillMaxWidth(), problem = meta.problem)
+    val icon = inboxNowIcon(meta.key)
+    when {
+        icon.icon != null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            JIcon(icon.icon, null, size = Tokens.Space.m, tint = palette.ink2, decorative = true)
+            Text(meta.state.orEmpty(), style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+        }
+        icon.tone == InlineTone.Busy -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            JSpinner(Modifier.size(Tokens.Space.m))
+            Text(meta.state.orEmpty(), style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+        }
+        else -> JStateLabel(meta.state.orEmpty(), meta.status, modifier = Modifier.fillMaxWidth(), problem = meta.problem)
+    }
 }
 
 /**
@@ -94,6 +101,8 @@ fun MessageItem(
     /** A small mark after the title (the translate icon on a translated mail); none draws the title as always. */
     titleIcon: PhIcon? = null,
     titleIconLabel: String? = null,
+    /** A small kind tag beside the title (a direct chat's "DM"), never a row of source and count chips. */
+    titleTag: String? = null,
     /** An event heading above the sender and source conversation. Other message rows keep their layout. */
     heading: String? = null,
     /** In a selection (#2576): picked or not, drawn as a check before the avatar; null outside one. */
@@ -136,6 +145,7 @@ fun MessageItem(
                                 Spacer(Modifier.width(Tokens.Space.xs))
                                 JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
                             }
+                            titleTag?.let { Spacer(Modifier.width(Tokens.Space.xs)); JTag(it) }
                             if (unread > 0) { Spacer(Modifier.width(6.dp.dense)); JBadge(unread) }
                         }
                         time?.let {
@@ -150,6 +160,7 @@ fun MessageItem(
                         Spacer(Modifier.width(Tokens.Space.xs))
                         JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
                     }
+                    titleTag?.let { Spacer(Modifier.width(Tokens.Space.xs)); JTag(it) }
                     // The source already has its avatar mark and tag; it never squeezes an event title off its own row.
                     if (!prioritizeTitle) sourceLabel?.let { Spacer(Modifier.width(6.dp.dense)); Text(it, style = type.caption, color = palette.ink3, maxLines = 1) }
                     if (unread > 0) { Spacer(Modifier.width(6.dp.dense)); JBadge(unread) }

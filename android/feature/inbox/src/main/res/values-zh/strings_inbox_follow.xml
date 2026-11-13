@@ -26,5 +26,7 @@
     <string name="inbox_now_done_superseded">已被新的一条取代</string>
     <string name="inbox_row_sender">%1$s：%2$s</string>
     <string name="inbox_row_where">%1$s · %2$s</string>
+    <string name="inbox_time_tomorrow">明天</string>
+    <string name="inbox_time_yesterday">昨天</string>
     <string name="inbox_event_assistant_says">助手说</string>
 </resources>
