@@ -157,7 +157,7 @@ func TestGoldenInboxJudge(t *testing.T) {
 	items := goldenItems(t)
 	for _, c := range []struct{ name, item, owner, rules string }{
 		{"summary_rules", "dm", "示例用户", " 告警都不用交 "},
-		{"plain", "bot", "", ""},
+		{"plain", "dm", "", ""}, // the direct human Lark message remains eligible
 	} {
 		h := goldenInbox(t)
 		model, calls := captureModel(t, `{"handle":false,"reason":"r"}`)
@@ -167,7 +167,8 @@ func TestGoldenInboxJudge(t *testing.T) {
 		it := *items[c.item]
 		h.inbox.items[it.ID] = &it
 		it.Agent = &InboxAgent{State: AgentQueued}
-		h.linkTask(ctx, &it, nil)
+		h.linkTask(ctx, &it, []prompts.InboxTask{{ID: "todo_1", Title: "修登录崩溃", State: "在做", Last: "测试通过",
+			Notes: "客户端发版群反馈登录后崩溃，修好后回复陈晓。"}})
 		goldenCall(t, "inbox_judge."+c.name, onlyCall(t, calls()))
 	}
 }
