@@ -268,14 +268,16 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
   No thread in time is `codex_first_unconfirmed` with `delivered: unknown`: the message went in, so it is not sent again.
   First messages to one row go one at a time: a second one (another phone, a quick second tap) waits for the first, then goes to the thread it began as any message does.
   `/exit` or `/quit` quits Codex as for any agent, with nothing typed.
-  Modes, the queue and forking on a waiting row refuse with `codex_waiting`. A start whose Codex never shows its box and isn't running fails with `codex_no_box`.
+  Modes, the queue and forking on a waiting row refuse with `codex_waiting`. A start whose Codex never shows its box and isn't running fails with `codex_no_box`
+  (`codex_no_box_here` in a pane the user picked, which stays as it is).
   The message's echo (`client_msg_id`) is the thread's. The hub links a to-do to the thread the answer names (`hub/send.go`).
 - **The user may type the first message in the terminal instead**: rule 1, 2 or 4 attaches the thread.
 - **Codex quits before a first message** (or the tab closes): after 10 looks with no `codex` in the pane, the row and the pane's binding go. The terminal stays.
 - **Clients**: launchers of nodes that start Codex this way carry `prompt_optional: true`. The manager marks its own managed Codex launchers so when the node's Codex launchers are marked.
+  - **Run Agent Here** (#5504): Codex launchers of nodes that start them in a shell pane the user picked carry `run_here: true` (the manager marks its managed ones the same way). The start there is this one, with no first message, and answers the waiting row; one that fails leaves the user's pane open and queues nothing to close (`docs/integrations/terminal.md`, section 21).
   - New Agent offers the first message as optional for those launchers only. The web's work picker reads `prompt_required: false` from the start options.
   - The row says "Waiting for its first message" (it is not Needs you, not unread, and sends no push). Its chat says Codex is open on the computer and takes the first message.
-  - Web and iOS follow the answer's `session` to the thread, and follow the pane when the message was typed in the terminal (`web/src/lib/codex-waiting.ts`, iOS `ChatView.codexThread`). Android: not yet.
+  - Web, iOS and Android follow the first message answer's `session` from a waiting row to the thread, and follow the same computer's pane in the already-loaded session list when the message was typed in the terminal (`web/src/lib/codex-waiting.ts`, iOS `ChatView.codexThread`, Android `codexThreadOf` in `CodexWaiting.kt`). Android replaces the open route; it does not fetch extra pages when a filter excludes the thread.
 - **Verified**: Codex 0.153.4 and herdr 0.9.3 on a Mac (2026-11-12), two Codex in one directory:
   - the App's first message (quotes, `$HOME`, backticks, newline, Chinese, 2,098 characters) reached the rollout unchanged, attached in 1.9 seconds;
   - the other row's message, typed in its terminal, attached to its own thread;

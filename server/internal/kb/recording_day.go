@@ -442,6 +442,7 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	add, size := make([]RecordingSegment, 0, len(fresh)), 0
 	for i, sg := range fresh {
 		sg.Text, sg.N = strings.TrimSpace(sg.Text), r.Next+i+1
+		sg.Echo = false // Persona never speaks in an all-day recording (as clean does for the PUT)
 		if sg.Text == "" {
 			continue // its position is taken, and it is left out of the transcript
 		}

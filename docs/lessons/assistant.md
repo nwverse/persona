@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
+  automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
+  archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
+  instructions must stay hidden too. Preserve item-chain links and the main conversation.
+
 - Count repeated conditional instructions at the runtime-send boundary, not just in a prompt golden (#5665).
   Two adjacent decision blocks repeated the same handling rules, but the newer one also required recording the choice.
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
@@ -400,3 +405,13 @@ leader and read an answer full of its own labels. A leader's `todo_create` now o
 tree shows pieces no Agent has worked on as `planned`. Two traps found on the way: such a piece has an `origin`, so the
 To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves the tree; the leader touching it keeps it),
 and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.
+
+## A source read by pages must settle what left the page (#5993)
+
+The Inbox's mail rounds read each account's newest 40 INBOX messages, and every rule that files a mail item (read
+elsewhere, the 7-day window) ran only for threads on that page. Mail archived or deleted in the mail client, or pushed off
+by newer mail, left its item open for good: nothing else files an open item, so the open side grew with the mailbox
+(600 open items after 30 days of 60 mails a day, all read the same evening). A rule that only fires on what a bounded read
+returns needs a second path for what it no longer returns: here past-window items are filed without asking, and the rest are
+looked up by UID once a round (`inbox.mail_flags`), bounded, with a failed lookup changing nothing. Tests of such a round
+must wait for the background triage pass (`waitTriage`) before setting a tier by hand, or the fallback tier overwrites it.

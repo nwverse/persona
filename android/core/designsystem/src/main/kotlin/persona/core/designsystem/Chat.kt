@@ -138,9 +138,9 @@ fun UserBubbleFrame(modifier: Modifier = Modifier, footer: (@Composable () -> Un
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = when (style) {
-        AppStyle.Glass -> RoundedCornerShape(Tokens.Radius.bubble)
-        AppStyle.Brief -> RoundedCornerShape(22.dp.corner, 22.dp.corner, 6.dp.corner, 22.dp.corner)
-        AppStyle.Board -> RoundedCornerShape(10.dp.corner)
+        AppStyle.Glass -> RoundedCornerShape(Tokens.Radius.Standard.bubble.bubbleCorner)
+        AppStyle.Brief -> RoundedCornerShape(22.dp.bubbleCorner, 22.dp.bubbleCorner, 6.dp.bubbleCorner, 22.dp.bubbleCorner)
+        AppStyle.Board -> RoundedCornerShape(10.dp.bubbleCorner)
     }
     val chrome = LocalHomeChrome.current
     val bubble = { frame: Modifier ->
@@ -717,9 +717,9 @@ fun IncomingBubbleFrame(
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = when (style) {
-        AppStyle.Glass -> RoundedCornerShape(24.dp.corner, 24.dp.corner, 24.dp.corner, 8.dp.corner)
-        AppStyle.Brief -> RoundedCornerShape(22.dp.corner, 22.dp.corner, 22.dp.corner, 6.dp.corner)
-        AppStyle.Board -> RoundedCornerShape(10.dp.corner)
+        AppStyle.Glass -> RoundedCornerShape(24.dp.bubbleCorner, 24.dp.bubbleCorner, 24.dp.bubbleCorner, 8.dp.bubbleCorner)
+        AppStyle.Brief -> RoundedCornerShape(22.dp.bubbleCorner, 22.dp.bubbleCorner, 22.dp.bubbleCorner, 6.dp.bubbleCorner)
+        AppStyle.Board -> RoundedCornerShape(10.dp.bubbleCorner)
     }
     Row(modifier.fillMaxWidth().padding(vertical = Tokens.Space.sm), verticalAlignment = Alignment.Top) {
         avatar?.let { it(); Spacer(Modifier.width(10.dp.dense)) }
