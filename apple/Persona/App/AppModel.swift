@@ -61,9 +61,6 @@ final class AppModel {
     }
     /// The machines as menus list them (name, icon): changes only when one is added, removed or renamed.
     private(set) var machineChoices: [MachineChoice] = []
-    /// The harnesses, projects and models the Agents list menu's Filter offers (#6589): the list sets it from its
-    /// projection when a value comes or goes, so the menu, like `machineChoices`, is not drawn again on every push.
-    var agentFacets = AgentFacetChoices()
     /// `machines` without watching it, as `sessionsNow`: for `namedMachine(_:)` / `namedMachines`.
     @ObservationIgnored private(set) var machinesNow: [Machine] = []
     private(set) var sessionsByMachine: [MachineRef: [Session]] = [:] {

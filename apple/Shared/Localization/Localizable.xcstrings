@@ -2352,29 +2352,6 @@
         }
       }
     },
-    "Model: %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Model: %1$@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "モデル：%1$@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "模型：%1$@"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "Models": {
       "extractionState": "manual",
       "localizations": {
@@ -10681,29 +10658,6 @@
       },
       "extractionState" : "manual"
     },
-    "%lld On [Agents Menus 6589f4]" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld on"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 件オン"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已开启 %lld 个"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "%lld Picked" : {
       "localizations" : {
         "en" : {
@@ -12128,29 +12082,6 @@
           }
         }
       }
-    },
-    "%lld filters on, " : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld filters on, "
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 件のフィルタがオン、"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已开启 %lld 个筛选，"
-          }
-        }
-      },
-      "extractionState" : "manual"
     },
     "%lld findings" : {
       "localizations" : {
@@ -22620,29 +22551,6 @@
       },
       "extractionState" : "manual"
     },
-    "All Harnesses" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "All Harnesses"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべてのハーネス"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "全部 Harness"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "All Hubs" : {
       "localizations" : {
         "en" : {
@@ -22756,29 +22664,6 @@
           }
         }
       }
-    },
-    "All Projects" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "All Projects"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべてのプロジェクト"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "全部项目"
-          }
-        }
-      },
-      "extractionState" : "manual"
     },
     "All Runs" : {
       "localizations" : {
@@ -65627,52 +65512,6 @@
         }
       }
     },
-    "Harness" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Harness"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ハーネス"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Harness"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Harness: %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Harness: %1$@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ハーネス：%1$@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Harness：%1$@"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "Has Access To" : {
       "localizations" : {
         "en" : {
@@ -82125,29 +81964,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "模型设置"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Model [Agents Menus 6589f1]" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Model"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "モデル"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "模型"
           }
         }
       },
@@ -105435,29 +105251,6 @@
       },
       "extractionState" : "manual"
     },
-    "Pinned Only" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pinned Only"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ピン留めのみ"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "只看置顶"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "Pinned [Lark Chat View b57df9]" : {
       "localizations" : {
         "en" : {
@@ -106967,29 +106760,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "项目"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Project: %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Project: %1$@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "プロジェクト：%1$@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "项目：%1$@"
           }
         }
       },
@@ -114851,29 +114621,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已重置"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Reset [Agents Filters 6589f2]" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reset"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "リセット"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重置"
           }
         }
       },
@@ -126407,98 +126154,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "查看每个账号的窗口"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Shows every agent" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shows every agent"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべての Agent を表示"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示全部 Agent"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Shows every harness" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shows every harness"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべてのハーネスを表示"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示全部 Harness"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Shows every model" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shows every model"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべてのモデルを表示"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示全部模型"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Shows every project" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shows every project"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべてのプロジェクトを表示"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示全部项目"
           }
         }
       },

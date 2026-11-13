@@ -967,10 +967,6 @@ private struct AgentsList: View {
                 model.adopt(adopted)
                 openFromList(adopted.key)
             }
-            // the list menu's Filter offers what this list holds (#6589): set when a value comes or goes, never in body
-            .onChange(of: projection.facets, initial: true) { _, facets in
-                if model.agentFacets != facets { model.agentFacets = facets }
-            }
     }
 
     // Opaque helper boundaries keep the same List/modifier tree while allowing
@@ -990,7 +986,7 @@ private struct AgentsList: View {
                         AgentsHeaderRow(header: header, query: $query, begin: beginSearch) {
                             VStack(alignment: .leading, spacing: 0) {
                                 filterBar(base)
-                                filterChips
+                                machineFilterChip
                             }
                         }
                     } else {
@@ -998,7 +994,7 @@ private struct AgentsList: View {
                         // search is the system's drawer (`AgentsSystemSearch`): the filters alone, no second field (#1971).
                         VStack(alignment: .leading, spacing: 0) {
                             filterBar(base)
-                            filterChips
+                            machineFilterChip
                         }
                     }
                     #else
@@ -1202,9 +1198,6 @@ private struct AgentsList: View {
         // first row (above).
         .modifier(TopBar(abovePage: widthClass == .regular) {
             filterBar(base)
-            #if !os(macOS)
-            filterChips
-            #endif
             if showsHerdrNotices { herdrNoticesAbove } // beside the split: over the list, not its first section
         })
         .navigationTitle("Agents")
@@ -1349,10 +1342,9 @@ private struct AgentsList: View {
         return counts
     }
 
-    #if os(macOS)
     /// The machine the list is narrowed to, in the shell: its menu sits behind the selected Agents switch and says
     /// nothing while closed, so a machine chosen once hid every other computer's agents with no trace (#1659). A tap
-    /// shows every machine again. The Mac's (frozen, docs/apple/mac.md); iOS and visionOS draw it among `filterChips`.
+    /// shows every machine again.
     @ViewBuilder private var machineFilterChip: some View {
         if shell != nil, !machineFilter.isEmpty, let chosen = model.machineChoices.first(where: { $0.id == machineFilter }) {
             Button {
@@ -1369,80 +1361,6 @@ private struct AgentsList: View {
             .accessibilityHint("Shows all machines")
         }
     }
-
-    #endif
-
-    #if !os(macOS)
-    /// One filter the list menu set, as a chip that removes it.
-    private struct FilterChip: Identifiable {
-        /// Its accessibility identifier too ("agents.machineFilter" as before #6589).
-        var id: String
-        var text: String
-        var hint: String
-        var clear: () -> Void
-    }
-
-    /// The filters the list menu set (#6589), each a chip over the list that removes it, as the web shows its Filter's:
-    /// the machine in the shell (#1659; beside the split the menu's corner names it), the harness, project and model,
-    /// Pinned Only; Reset once two are on.
-    private var activeFilterChips: [FilterChip] {
-        var chips: [FilterChip] = []
-        if shell != nil, !machineFilter.isEmpty, let chosen = model.machineChoices.first(where: { $0.id == machineFilter }) {
-            chips.append(.init(id: "agents.machineFilter", text: String(localized: "Only \(chosen.name)"), hint: String(localized: "Shows all machines")) {
-                machineFilter = ""
-            })
-        }
-        let facets = model.agentFacets
-        if !harnessFilter.isEmpty {
-            let name = AgentFacetChoices.name(harnessFilter, in: facets.harnesses)
-            chips.append(.init(id: "agents.harnessFilter", text: String(localized: "Harness: \(name)"), hint: String(localized: "Shows every harness")) { harnessFilter = "" })
-        }
-        if !projectFilter.isEmpty {
-            chips.append(.init(id: "agents.projectFilter", text: String(localized: "Project: \(projectFilter)"), hint: String(localized: "Shows every project")) { projectFilter = "" })
-        }
-        if !modelFilter.isEmpty {
-            let name = AgentFacetChoices.name(modelFilter, in: facets.models)
-            chips.append(.init(id: "agents.modelFilter", text: String(localized: "Model: \(name)"), hint: String(localized: "Shows every model")) { modelFilter = "" })
-        }
-        if pinnedOnly {
-            chips.append(.init(id: "agents.pinnedFilter", text: String(localized: "Pinned Only"), hint: String(localized: "Shows every agent")) { pinnedOnly = false })
-        }
-        return chips
-    }
-
-    @ViewBuilder private var filterChips: some View {
-        let chips = activeFilterChips
-        if !chips.isEmpty {
-            FlowLayoutRow {
-                ForEach(chips) { chip in
-                    Button {
-                        Haptics.tap()
-                        withAnimation(Theme.Motion.standard) { chip.clear() }
-                    } label: {
-                        Chip(text: chip.text, symbol: Theme.Icon.clear, look: .tint(Theme.accent), shrinks: true)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier(chip.id)
-                    .accessibilityLabel(chip.text)
-                    .accessibilityHint(chip.hint)
-                }
-                if chips.count > 1 {
-                    Button {
-                        Haptics.tap()
-                        withAnimation(Theme.Motion.standard) { chips.forEach { $0.clear() } }
-                    } label: {
-                        Text("Reset [Agents Filters 6589f2]").font(Theme.Font.secondaryStrong).foregroundStyle(Theme.accent).lineLimit(1)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("agents.resetFilters")
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Theme.Space.page)
-            .padding(.bottom, Theme.Space.sm)
-        }
-    }
-    #endif
 
     /// A quick filter chosen (again): it starts from what matches now.
     private func choose(_ f: AgentFilter, _ base: [Session]) {

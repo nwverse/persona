@@ -28,9 +28,8 @@ nonisolated struct MachineChoice: Equatable, Identifiable {
     }
 }
 
-/// The menu at the top left of Agents: grouping, Cards / Compact List, folding, the filters (harness, project, model,
-/// Pinned Only, #6589; the machine), Machines. Shows the chosen machine's name in the corner, the filter mark and how many
-/// filters are on once another is; "All" keeps the plain filter icon.
+/// The menu at the top left of Agents: grouping, Cards / Compact List, folding, the machine filter, Machines. Shows the chosen
+/// machine's name in the corner; "All" keeps the plain filter icon.
 struct AgentsListMenu: View {
     @Environment(AppModel.self) private var model
     var actions: Actions
@@ -63,12 +62,6 @@ struct AgentsListMenu: View {
 
     @StoredValue("dev.machineFilter") private var machineFilter = ""
     @StoredValue(HubFilter.key) private var hubFilter = ""
-    // The web's Filter (#4397, #6589), kept as the search's `harness:` / `project:` / `model:` / `is:pinned` take them
-    // (`AgentSearchPlan.compile`); each active one is a chip over the list (`ChatsView.filterChips`).
-    @StoredValue("dev.harnessFilter") private var harnessFilter = ""
-    @StoredValue("dev.projectFilter") private var projectFilter = ""
-    @StoredValue("dev.modelFilter") private var modelFilter = ""
-    @StoredValue("dev.pinnedOnly") private var pinnedOnly = false
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
     /// The grouping the list shows: a stored By To-do is By Project on a hub without todos (`DevGrouping.resolved`).
     private var shownGrouping: DevGrouping { DevGrouping.resolvedNow(grouping) }
@@ -96,7 +89,6 @@ struct AgentsListMenu: View {
         } else {
             Menu { items(machines) } label: { label(chosen, hub: hub) }
                 .accessibilityLabel((hub.map { String(localized: "Current hub: \($0), ") } ?? "") + (chosen.map { String(localized: "Current machine: \($0.name), ") } ?? "")
-                                    + (facetCount > 0 ? String(localized: "\(facetCount + (chosen == nil ? 0 : 1)) filters on, ") : "")
                                     + String(localized: "Grouping: \(shownGrouping.title)"))
         }
     }
@@ -104,9 +96,6 @@ struct AgentsListMenu: View {
     @ViewBuilder private func items(_ machines: [MachineChoice]) -> some View {
             #if DEBUG || PERF_SIGNPOST
             let _ = PerfTrace.body("ListMenu.content")
-            #endif
-            #if !os(macOS)
-            filterMenu
             #endif
             Picker("Group By [Agents Menus 399ee6]", selection: groupingChoice) {
                 ForEach(DevGrouping.offeredNow) { g in Label(g.title, systemImage: g.symbol).tag(g) }
@@ -166,64 +155,8 @@ struct AgentsListMenu: View {
             }
     }
 
-    /// The filters on besides the machine (which names itself in the corner).
-    private var facetCount: Int {
-        #if os(macOS)
-        0 // the Mac's app is frozen (docs/apple/mac.md): its list menu keeps the machine alone
-        #else
-        [harnessFilter, projectFilter, modelFilter].filter { !$0.isEmpty }.count + (pinnedOnly ? 1 : 0)
-        #endif
-    }
-
-    #if !os(macOS)
-    /// The web's Filter (#6589), first in the menu as one submenu (the menu is long: under its groupings, sorts and
-    /// displays the choices were a scroll away): Harness, Project and Model as submenus, each listed once there are two
-    /// to choose from or one is chosen, and Pinned Only; how many are on under its name. The machine stays its own choice
-    /// further down, as before.
-    @ViewBuilder private var filterMenu: some View {
-        let facets = model.agentFacets
-        Menu {
-            if facets.harnesses.count > 1 || !harnessFilter.isEmpty {
-                Picker(selection: $harnessFilter) {
-                    Text("All Harnesses").tag("")
-                    ForEach(AgentFacetChoices.with(harnessFilter, in: facets.harnesses)) { Text($0.name).tag($0.id) }
-                } label: { Label("Harness", systemImage: Theme.Icon.agents) }
-                    .pickerStyle(.menu)
-            }
-            if facets.projects.count > 1 || !projectFilter.isEmpty {
-                Picker(selection: $projectFilter) {
-                    Text("All Projects").tag("")
-                    ForEach(AgentFacetChoices.with(projectFilter, in: facets.projects)) { Text($0.name).tag($0.id) }
-                } label: { Label("Project", systemImage: Theme.Icon.folder) }
-                    .pickerStyle(.menu)
-            }
-            if facets.models.count > 1 || !modelFilter.isEmpty {
-                Picker(selection: $modelFilter) {
-                    Text("All Models").tag("")
-                    ForEach(AgentFacetChoices.with(modelFilter, in: facets.models)) { Text($0.name).tag($0.id) }
-                } label: { Label("Model [Agents Menus 6589f1]", systemImage: Theme.Icon.model) }
-                    .pickerStyle(.menu)
-            }
-            Toggle(isOn: $pinnedOnly) { Label("Pinned Only", systemImage: Theme.Icon.pin) }
-        } label: {
-            Label("Filter", systemImage: facetCount > 0 ? Theme.Icon.filterActive : Theme.Icon.filter)
-            if facetCount > 0 { Text("\(facetCount) On [Agents Menus 6589f4]") }
-        }
-        Divider()
-    }
-    #endif
-
     @ViewBuilder private func label(_ chosen: MachineChoice?, hub: String?) -> some View {
-            if facetCount > 0 {
-                // Another filter is on: the filter mark and how many are, the machine among them (the web's count).
-                HStack(spacing: Theme.Space.xs) {
-                    ThemedIcon(Theme.Icon.filterActive)
-                    Text(facetCount + (chosen == nil ? 0 : 1), format: .number).monospacedDigit()
-                }
-                .font(Theme.Font.secondaryStrong)
-                .foregroundStyle(Theme.accent)
-                .fixedSize()
-            } else if let m = chosen {
+            if let m = chosen {
                 HStack(spacing: Theme.Space.sm) {
                     ThemedIcon(m.symbol)
                     Text(m.name).lineLimit(1)
