@@ -9984,6 +9984,35 @@ def mock_panes(mid):
     return {"hosts": [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes}]}
 
 
+def mock_panes_file(mid):
+    """MOCK_PANES_FILE=<json>: the answers of real computers saved locally ({"panes": {id: answer}}), handed out in order to
+    the mock's computers. The file stays out of the repository."""
+    answers = list(json.load(open(os.environ["MOCK_PANES_FILE"])).get("panes", {}).values())
+    ids = [m["id"] for m in MACHINES]
+    i = ids.index(mid) if mid in ids else -1
+    a = answers[i] if 0 <= i < len(answers) else {"hosts": []}
+    return a if "hosts" in a else {"hosts": []}
+
+
+def mock_panes_many(mid):
+    """MOCK_PANES_MANY=1: a real-sized answer (#7115): about 40 panes, a second host (tmux) whose pane ids repeat the first
+    host's, panes with no title / cwd / tab, and no engine on one computer."""
+    base = mock_panes(mid)
+    if mid == "studio":
+        return {"hosts": []}
+    host = base["hosts"][0] if base["hosts"] else {"kind": "herdr", "new_tab": True, "workspaces": [], "tabs": [], "panes": []}
+    n = sum(ord(c) for c in mid) % 7
+    panes = list(host["panes"])
+    for i in range(40):
+        panes.append({"pane": "w3:p%d" % (i + 1), "terminal": "pane:w3:p%d" % (i + 1), "tab_id": "w3:t%d" % (i % 9 + 1),
+                      "workspace_id": "w3", **({} if i % 3 else {"title": "zsh", "cwd": "/home/me/code/p%d" % i}),
+                      **({"foreground": "vim"} if i % 5 == 0 else {})})
+    host = dict(host, panes=panes)
+    twin = {"kind": "tmux", "new_tab": n % 2 == 0, "worktree": False, "workspaces": [{"id": "w1", "label": ""}],
+            "tabs": [], "panes": [dict(p, tab_id="") for p in panes[:12]]}
+    return {"hosts": [host, twin]}
+
+
 PASEO_MADE = []  # worktrees made on Paseo's workspaces from the web (#6295), in the catalog after PASEO_WORKSPACES
 
 
@@ -24515,6 +24544,10 @@ class H(BaseHTTPRequestHandler):
                                    "started_at": ago(minutes=40), "last_activity": ago()})
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/panes", p):
             time.sleep(float(os.environ.get("MOCK_PANES_DELAY", "0")))  # seconds: a computer slow to answer (#6153)
+            if os.environ.get("MOCK_PANES_FILE"):
+                return self.send_json(mock_panes_file(p.split("/")[4]))
+            if os.environ.get("MOCK_PANES_MANY"):
+                return self.send_json(mock_panes_many(p.split("/")[4]))
             return self.send_json(mock_panes(p.split("/")[4]))
         if p.startswith("/api/v1/sessions/") and p.endswith("/screen"):
             fail = os.environ.get("MOCK_SCREEN_FAIL_AFTER")
