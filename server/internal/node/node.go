@@ -119,7 +119,11 @@ type Node struct {
 	files   map[string]*transcript.File // session id -> parsed transcript
 	paths   map[string]string           // session id -> transcript path
 	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
-	watches map[string]*watch
+	// projectGlobs counts globProjects calls, each a read of every projects directory: one per row looked up again
+	// was a few hundred a list on a computer with many parked sessions, past the half minute a found path is trusted for.
+	projectGlobs atomic.Int64
+	listPush     listPush // the list pushes sends ask for, one build at a time (notifySessionsSoon)
+	watches      map[string]*watch
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
@@ -292,8 +296,8 @@ type Node struct {
 	hookFlights   hookFlights  // hook calls in progress by session: their process waits on them (model_restore.go)
 
 	// screens: live-screen hardware video channel (#3954). Login binding per `pair` and the busy count (screen.go).
-	// screenStart is the capture/encode helper seam (Persona Screen.app) filled by the PoC on a real Mac; while it is
-	// nil, screen.dial returns video_unavailable, so a node without the helper keeps today's RFB-only behaviour.
+	// screenStart starts the capture/encode helper (Persona Screen.app) for a stream: startScreenHelper on a Mac
+	// (screenhelper.go), nil elsewhere, where screen.dial returns video_unavailable and the screen stays RFB only.
 	screens     *screenLogins
 	screenStart func(ctx context.Context, id, pair string, keepAwake bool, done func()) error
 }
@@ -350,6 +354,9 @@ func New(version string) (*Node, error) {
 	n.sessionScope = scope
 	if n.uid, err = LoadMachineUID(dir); err != nil {
 		n.logger.Printf("machine uid: %v", err) // the hubs then treat this computer as theirs alone
+	}
+	if runtime.GOOS == "darwin" {
+		n.screenStart = n.startScreenHelper // Persona Screen, the live screen's video helper (#3954)
 	}
 	n.configureCodex(proto.CodexConfig{})
 	n.hosts = host.NewRegistry(nodeHosts(proto.EngineHerdr, false, n.logger.Printf)...) // herdr until engine.use, botmux until the hub says
@@ -1202,7 +1209,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			// still there (stopped.go).
 			ctx = n.inKeptTerminal(ctx, p.ResumeSessionID, r.cwd)
 		}
-		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, "", p.AgentType, r.execution)
+		// A hub that named the session id gets exactly that session (the async branch above already does): the hub
+		// uses it to reconcile a start whose answer never comes back by exact id. Only Claude starts run under a
+		// caller's id; the other agents pick their own inside n.start, which leaves an empty id to that path. An old
+		// hub sends nothing, so the behavior there is unchanged.
+		newID := ""
+		if validID(p.SessionID) {
+			newID = p.SessionID
+		}
+		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, newID, p.AgentType, r.execution)
 		if err == nil && p.ResumeSessionID != "" {
 			n.forkStarted(p.ResumeSessionID)
 		}
@@ -1256,6 +1271,25 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			id, err := send()
 			if err == nil && id != "" {
 				n.expectFirstLine(id, opts.ClientMsgID, p.Text, len(p.Images), at)
+			}
+			return map[string]any{"session_id": id}, err
+		}
+		var once struct {
+			OnceID string `json:"once_id"`
+		}
+		_ = json.Unmarshal(params, &once)
+		if p.NewSessionID == "" && p.SessionID != "" && once.OnceID != "" {
+			// A message its sender may try again under the same once_id (the manager's relays between conversations,
+			// relay_once.go): sent once. The sender waits a bounded time and asks again when no answer came in it; the
+			// first send may have written the line already, and a second one made the conversation read it twice. The
+			// id is no client_msg_id: a line that carries one reads as the owner's own message.
+			var id string
+			err := n.sends.once(once.OnceID, func() (err error) {
+				id, err = send()
+				return err
+			})
+			if err == nil && id == "" {
+				id = p.SessionID // the same message asked again while it went: the conversation it went to
 			}
 			return map[string]any{"session_id": id}, err
 		}
@@ -1514,6 +1548,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			Force        bool   `json:"force"`
 		}
 		_ = json.Unmarshal(params, &a)
+		ctx = worktreeComposerContext(ctx, params) // its refusals in the request's language (the hub sends it)
 		switch method {
 		case "worktree.add":
 			return n.worktreeAdd(ctx, p.Kind, p.Cwd, p.Branch, a.NameHint)
@@ -1761,8 +1796,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return map[string]any{"ok": true, "name": name}, nil
-	case "worktree.rename":
-		return ok(n.renameWorktree(ctx, p.Kind, p.WorkspaceID, p.Name))
+	case "worktree.rename": // its refusals in the request's language (the hub sends it)
+		return ok(n.renameWorktree(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Name))
 	case "session.rename":
 		return ok(n.renameSession(ctx, p.SessionID, p.TabName, p.Title))
 	case "todo.sync_session_tokens":
