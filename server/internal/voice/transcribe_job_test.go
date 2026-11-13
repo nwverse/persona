@@ -872,6 +872,33 @@ func TestTranscriptionReplayPoorReference(t *testing.T) {
 	}
 }
 
+// The live check's opening window as measured: a reference too short to check against (a few words of a live caption)
+// and of the two sessions one heard all of it while the other said nothing. One session is never taken uncorroborated:
+// the window gets a third session, as a window without a reference has, and is chosen as without one.
+func TestTranscriptionReplayPoorReferenceOneSession(t *testing.T) {
+	trFast(t)
+	_, srv, logs, live := trLive(t, voicetest.Script{Sentences: trScript, Mute: map[int]int{2: 0}})
+	tc := replayStart(t, srv, 40, []voicetest.Line{{Start: 0.5, End: 5.6, Text: "Ford cap 这词还是"}})
+	tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript[:2]}, 6.5), 1000)
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+	frames := tc.done()
+	defer func() {
+		if t.Failed() {
+			t.Log(logs.String())
+		}
+	}()
+	sameTexts(t, frames, trScript[:2])
+	if ws := windowsCover(t, frames, 6.5); ws[0].Kept {
+		t.Errorf("windows %s", windowList(ws))
+	}
+	if _, verbatim := live.Sessions(); verbatim != 3 {
+		t.Errorf("%d sessions for the window", verbatim)
+	}
+	if !strings.Contains(logs.String(), "too short to check the sessions against") {
+		t.Error("the log does not say the reference was too short")
+	}
+}
+
 // Without a reference, three sessions per window and two of them must agree; the reference's edges cut windows.
 func TestTranscriptionReplayWithoutAReference(t *testing.T) {
 	trFast(t)

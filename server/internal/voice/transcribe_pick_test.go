@@ -128,13 +128,33 @@ func TestPickReplay(t *testing.T) {
 		{"two rogues far from it and each other", &ref, []string{rogue, voicetest.InventedReplies[2]}, []bool{false, false}, 3, -1, true, trRefChecked},
 		{"a rogue that writes much does not make it short", &ref, []string{rogue + " " + rogue, said}, []bool{false, false}, 3, 1, false, trRefChecked},
 		{"sessions that wrote nothing do not outvote it", &ref, []string{"", ""}, []bool{false, false}, 3, -1, true, trRefChecked},
+		// Too short against the sessions that wrote text: one that wrote nothing does not make it long enough.
+		{"a short reference, a silent session", &caption, []string{opening, ""}, []bool{false, false}, 14, -1, true, trRefShort},
 		// A too-short reference keeps out no session: the one near it is no better than the one that heard more.
 		{"a short reference, the partial session near it", &short, []string{complete, partial}, []bool{false, false}, 14, 0, false, trRefShort},
 		{"a short reference, the partial session first", &short, []string{partial, complete}, []bool{false, false}, 14, 1, false, trRefShort},
 	} {
-		pick, kept, use := pickReplay(tt.ref, tt.texts, tt.stopped, tt.speech)
+		pick, kept, use := pickReplay(tt.ref, false, tt.texts, tt.stopped, tt.speech)
 		if pick != tt.pick || kept != tt.kept || use != tt.use {
 			t.Errorf("%s: %d %v %d, want %d %v %d", tt.name, pick, kept, use, tt.pick, tt.kept, tt.use)
+		}
+	}
+	// A reference set aside already (the window got a third session for it): chosen as without one, among the
+	// sessions that wrote text; one alone is never taken, and two that wrote nothing do not empty the window.
+	for _, tt := range []struct {
+		name    string
+		texts   []string
+		stopped []bool
+		pick    int
+		kept    bool
+	}{
+		{"set aside: the third session agrees", []string{opening, "", opening}, []bool{false, true, false}, 0, false},
+		{"set aside: the third agrees with neither", []string{opening, "", rogue}, []bool{false, true, false}, -1, true},
+		{"set aside: two that wrote nothing", []string{opening, "", ""}, []bool{false, false, false}, -1, true},
+	} {
+		pick, kept, use := pickReplay(&caption, true, tt.texts, tt.stopped, 14)
+		if pick != tt.pick || kept != tt.kept || use != trRefShort {
+			t.Errorf("%s: %d %v %d, want %d %v %d", tt.name, pick, kept, use, tt.pick, tt.kept, trRefShort)
 		}
 	}
 }
