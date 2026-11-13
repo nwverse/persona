@@ -33,6 +33,8 @@ func (s *Service) inboxRoutes() {
 	s.inboxFolderRoutes()
 	s.inboxParentRoutes()
 	s.inboxBulkRoutes()
+	s.inboxMergeRoutes()
+	s.inboxTodoRoutes()
 	s.inboxSuggestionRoutes()
 	s.inboxHandoffRoutes()
 	s.inboxHistoryRoutes()
@@ -57,6 +59,11 @@ func (s *Service) inboxRoutes() {
 		b := &s.inbox
 		b.mu.Lock()
 		it, ok := b.items[r.PathValue("id")]
+		if ok && it.MergedInto != "" { // a link or push naming a row merged into another opens that one
+			if sv := b.items[it.MergedInto]; sv != nil {
+				it = sv
+			}
+		}
 		var c InboxItem
 		if ok {
 			c = it.listed()

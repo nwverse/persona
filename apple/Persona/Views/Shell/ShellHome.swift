@@ -421,23 +421,52 @@ struct ShellNeedsYou: View {
 struct ShellDestinations: ViewModifier {
     @Binding var path: NavigationPath
     var enabled: Bool
+    /// The pages the Agents list registers too (a chat, a to-do, a machine, its terminals): off in the Sidebar layout
+    /// (#6332), whose one path has the Agents' (`AgentsDestinations`), the split's first pages without a back.
+    var agentRoutes = true
     @StateObject private var accounts = InboxAccountState()
 
     func body(content: Content) -> some View {
         if enabled {
             content
                 // ☰ beside Back on a place's pages: the sidebar opens at any depth, so a place is changed without
-                // popping it (docs/design/sidebar-navigation.md).
-                .navigationDestination(for: ShellRoute.self) { route in place(route).modifier(ShellPlaceSidebarButton()) }
-                .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id).modifier(ShellPlaceSidebarButton()) }
+                // popping it (docs/design/sidebar-navigation.md). In the Sidebar layout a place is the split's first
+                // page, with no back to the conversation under it (#6332).
+                .navigationDestination(for: ShellRoute.self) { route in
+                    place(route).modifier(ShellPlaceSidebarButton()).modifier(FirstPage(on: !agentRoutes))
+                }
                 .modifier(InboxDestinations(accounts: accounts.accounts))
-                .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).modifier(ShellPlaceSidebarButton()) }
-                .navigationDestination(for: TerminalsRoute.self) { r in TerminalsView(only: r.machine).modifier(ShellPlaceSidebarButton()) }
-                .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key) }
+                .modifier(AgentRoutes(on: agentRoutes))
                 .navigationDestination(for: InboxChatRoute.self) { r in ChatView(key: r.key, itemManager: r.manager).id(r.key) }
                 .environment(\.feishuOpen) { path.append($0) }
         } else {
             content
+        }
+    }
+
+    /// What the Agents list registers as well: here only where it does not (the shell, the iPad's Persona tab).
+    private struct AgentRoutes: ViewModifier {
+        var on: Bool
+
+        func body(content: Content) -> some View {
+            if on {
+                content
+                    .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id).modifier(ShellPlaceSidebarButton()) }
+                    .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).modifier(ShellPlaceSidebarButton()) }
+                    .navigationDestination(for: TerminalsRoute.self) { r in TerminalsView(only: r.machine).modifier(ShellPlaceSidebarButton()) }
+                    .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key) }
+            } else {
+                content
+            }
+        }
+    }
+
+    /// The Sidebar layout's places are the split's first pages: no back to the conversation under them (#6332).
+    private struct FirstPage: ViewModifier {
+        var on: Bool
+
+        func body(content: Content) -> some View {
+            if on { content.splitDetailPage() } else { content }
         }
     }
 
