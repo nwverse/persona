@@ -641,8 +641,9 @@ sending identity or confirmation behavior.
 - **A switch that mirrors another device** (#4741, Knowledge › Recordings' Today, `RecordingDayTodaySection`): the All-Day Recording switch is a `SettingsSwitchRow` whose value is the Apple Watch's reported state (on while it records or is paused, `RecordingDayWatchState.isOn`; off when it is off or stopped by itself, from low battery or storage, a failed write, an audio reset or the app ending, though a stopped day still continues with a tap on the watch and its line says "Stopped — tap Continue on your Apple Watch"), never the tap alone. Flipping it sends the watch a command. Until the watch's state answers it, for at most 2 minutes, the switch holds the asked value and its line says the command is on its way ("Tap Start on your Apple Watch to begin", "Stopping on your Apple Watch…"); after that the switch shows the watch's state again and the line says "Your Apple Watch hasn't answered. Open Persona on it." for 10 more minutes (`RecordingDayStatus.line`, `RecordingDaySwitch`). The line under the title always says where the action happens ("Paused — tap Continue on your Apple Watch"). Turning it on before the user agreed opens the consent sheet (3.6) instead, and the start goes once they agree. Why: the phone can't open the watch's microphone; a switch that flipped on the tap would claim a recording that hasn't started.
 - **Recap pages reuse the minutes' layout** (#4741, a recorded day's page, `RecordingDayView`): a compact header, then the recap drawn as a meeting's minutes are (`RecordingMinutesSections`, `docs/apple/recording.md` "Minutes"), then one last section: a **Transcript** link to the day's transcript on its own page (`RecordingDayTranscriptView`, by the hour), with the actions under it (**Erase Last 10 Minutes** on today's day while it is open, **Delete Recording**). A meeting's page instead shows its transcript inline, in a section of its own above its actions. The recap: summary with Copy and Share; the timeline as sections named for the time of day (Morning, Afternoon, Evening) with a meeting entry marked by `Theme.Icon.meetingMark` and its name; points and suggested to-dos as the minutes' items (a mark, the words, `RecordingMinutes.byline`, a time chip: `Chip` `.tint(Theme.accent)`, compact, with a 44 pt hit area, opening the transcript at that line and lighting it for 2 s). Before it exists the section says what it waits for, "Writing the recap…" with a spinner, or the failure with Retry, as minutes do. Suggested to-dos are read-only here, with a footer saying they are confirmed on the web.
 - Web rows: 32 px desktop, 44 px touch. Android rows: min 56 dp.
-- Web sidebar groups share visible disclosure chevrons and sticky, interactive headings in every grouping (to-do, computer, repository, project and state). Nested group headings stack below their parents and the measured Persona row; the next sibling replaces the current heading as it scrolls past. The Agents title, grouping segments and quick filters form one sticky toolbar below Persona (at the viewport top on the phone Agents page). One inward-chevron button toggles between Collapse all when any visible group is open and Expand all when they are all folded; its spoken label and tooltip name the next action. The toolbar stays above the section headings on an opaque theme background, with no fog over the first heading. The existing menu retains both explicit actions, affecting its groups and nested disclosures while keeping the block and grouping controls open. Individual folds remain independently reversible; flat conversation lists have no invented group headings.
+- Web sidebar groups share visible disclosure chevrons and sticky, interactive headings in every grouping (to-do, computer, repository, project and state). Nested group headings stack below their parents and the measured Persona row; the next sibling replaces the current heading as it scrolls past. The Agents title, grouping segments and quick filters form one sticky toolbar below Persona (at the viewport top on the phone Agents page). One chevron button (`GroupFoldButton`, drawn by `FoldAllButton` in `web/src/ui/FoldAllButton.tsx`) is the list's only Collapse all / Expand all; the list menu does not repeat them, and the keyboard shortcut stays (#6447). Its icon shows the next action like its label: corners pointing in (`foldToggle`) for Collapse all, pointing out (`unfoldToggle`) for Expand all, so a folded list's button reads as "open". It acts on the list under the controls only: the Agents title, grouping segments, quick filters, search and Filter never fold with it. Its action follows what is on screen, so a click always changes something (`agentsFoldAction`): Collapse all while any visible group is open folds every group to its heading, and Expand all when they are all folded opens them; with the list folded under the Agents title (the title's own click), Expand all opens the list and every group in it. The chat-list view, and a list with no groups at all (a grouping still loading, nothing listed), have no headings to fold to, so the button is not shown: folding a flat list's rows would leave a blank under the search that reads as an empty list, and a flat list gets no invented heading (below). A first fix folded the whole block there, taking the controls with it; the owner rejected it. Its spoken label names the next action, and the same words show in a tooltip under it on hover after 300 ms and on keyboard focus (a dark tooltip in the `--tooltip-*` colors, no native `title`), with no second line explaining them: the owner found Collapse all / Expand all needs none. Why: before #6447 it acted on the groups alone, so in the chat-list view and under a folded block a click only flipped its own label. The toolbar stays above the section headings on an opaque theme background, with no fog over the first heading. Individual folds remain independently reversible; flat conversation lists have no invented group headings.
 - A grouping's top level is one kind of row (#6458): in the web's **By to-do** that is the to-do's row (chevron, mark, title, count, state word, each in the same place), and the groups beside the to-dos (Opened in the terminal, Not on a to-do, Recent (not running)) are rows of that kind, never a heading of another look. A group's state is the most urgent of its sessions', after its count, as a to-do's is; a to-do's word is the one its own page uses (5.6). No grouping nests a location (repository, folder) under a grouping that is not by location. What a group holds, when its name does not say, is an ⓘ beside its title (3.8 "Info tips") and the group's empty state, never a line always shown under it. Rows that fold groups select no text (`select-none`): a drag over them painted the grey `::selection` behind each line.
+- A long list of records on a detail page (a to-do's Decisions, web and iOS, #6447): the first five show, with **Show all N** under them and **Show the first 5** to go back. The header carries the fold-all button with the Agents title row's meaning (the web's chevron icon, corners in to collapse and out to expand, and its name as the tooltip; iOS's Collapse All / Expand All symbols, `Theme.Icon.collapseAll` / `expandAll`): Collapse all while any record is shown folds the list away, Expand all shows it whole. The header's count is unchanged by what is shown. Nothing is stored: each to-do opens at the first five, and recording or revising one shows the whole list so the new one is in view. No button while the list is empty.
 - Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (what the user has to act on, then the unfinished work, then what just finished; only Shelved and Done start folded, Done last, #5707), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. A row that is only worth a look (Just finished) has a one-tap **Got it** under its words, the same secondary button as Restore (iOS: also a leading swipe action after the full swipe's own), which files it under Done at once with an Undo toast (4.4, reversible rung); opening the item counts as seeing it, without a word. Rules in `docs/assistant/todo-status-sop.md` ("Seen"). Why not the folder groups: they say where work lives, not who has to act. Why unfinished work above Just finished: what still has to be done should not take a scroll and a tap while finished work sits above it.
   - Section titles are the Agents list's state headers (`SectionHeader`: the name and a `CountBadge` in the state's tone; `FoldButton` for the folding ones), and the count is the items listed under the title. No separate summary line repeats them (#3712).
   - "N related" sits inside the row it belongs to, under its words; opened, the related rows come under it a level in, with a line down their side.
@@ -1597,6 +1598,60 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
+## HarmonyOS native structure
+
+HarmonyOS 7 / API 26 uses native ArkUI Navigation, destination titles, floating Tabs, lists, menus, sheets and
+confirmation dialogs. The window breakpoint selects stack (XS/SM/MD) or native split (LG/XL); device names do not.
+The master pane starts at 320 vp, drags from 280 to 440 vp and collapses to 64 vp. Its bottom tabs are 56 vp with a
+12 vp system-component margin; the system safe area is not added a second time.
+
+An Agent's detail title is omitted only while its identifying selected row is fully visible in the expanded master.
+Compact, collapsed, filtered-out, offscreen or different-owner contexts restore the native title. Child pages keep
+their own title and back action. A title already provided by the destination is not repeated in the body. Avoid
+explanatory subtitles, explanatory child controls and duplicate actions; native control placement, names and state
+must explain their purpose. Explicit target and consequence text remains necessary for a consequential decision.
+
+Glass, Brief and Board preserve this structure and the same fields/actions, using semantic own-message colors with
+light/dark resources. Device-wide Avatar and Accent preferences are independent of the Hub and style. Native
+`WithTheme` supplies both light and dark system tokens; an own-message subtree supplies readable bubble tokens.
+Avatar choices use intrinsic native list groups and Radio controls, with no fixed-height nested list or descriptive
+captions. Preference restoration completes before selection is enabled, and a failed write retains the previous
+selection. Native system materials belong to supported controls; the client does not simulate them with
+another navigation shell. Horizontal half-fold uses `FoldSplitContainer`: reading above, the current decision or
+composer below, with native crease avoidance and a scrollable interaction area. The view samples native crease capability at creation; an image that omits fold geometry retains ordinary native Column/Scroll layout, without fabricated hover regions. Configuration updates do not replace that view’s input or transcript subtree. Ordinary posture uses measured
+interaction height rather than a fixed 50/50 split. A system photo editor returns a separate selected copy; system preview owns supported
+image zoom and document viewing. The [HarmonyOS guide](../harmony/harmony.md) records the full interaction and
+verification contract. This is a new platform implementation and does not alter another client's default style.
+
+The composer uses native GridRow/GridCol spans and order. At an effective application font scale of 2 or higher, or when the pane width
+leaves too little writing space, the same input occupies a full row and full-width actions stack below it, Send before Attach, with single-line labels. The input and draft
+keep their identity; controls grow with their labels instead of clipping a fixed-height row. Native Ability configuration
+callbacks supply the actual application font scale. A local font multiplier is not a substitute for that system value.
+
+A HarmonyOS destination has one native route title and the Navigation-owned return action. Content does not repeat
+that title or add another route-back button. Local actions such as returning to a file's parent directory or closing
+a message thread keep their separate meaning. A missing resource title falls back to its identifier in the native
+bar. Secondary list actions, such as grouping, use the framework's textual button style.
+
+Persona assistant question cards remain in the native transcript List alongside the stable composer. Each card keeps
+its own request identity; ordinary sends leave withdrawal to the Hub, and non-blocking questions remain answerable.
+Open editable questions begin with their prompt, without a generic answer subtitle. Pending, unknown and read-only
+states stay explicit. Chat has no permanent Hub/computer/path subtitle. Agent permissions and plans keep their
+existing approval gates.
+
+Extension applications open from a root Navigation menu into a native destination and complete List, without adding
+a primary tab. Session actions share one native Menu with MenuItem rows of at least 48vp from the title's More item or the hidden-title pane's
+More button. These are the same captured actions, not two parallel toolbars.
+
+The file workspace uses native composed list items, three labeled system-icon controls and scrollable, automatically
+sized local tabs. Computer transfer uses the system sheet, named computer switches, a native Radio list and Progress.
+File names, machine names and complete paths wrap in scrolling content; they are confirmation data, not explanatory
+captions. The target List hands boundary scrolling to its native parent Scroll. One footer uses native Flex wrapping
+and minimum touch heights, with no second bottom inset. The composer and transcript scroll independently at large
+text sizes; verification must reach each complete action within its own viewport. Theme primary fills include matching
+readable foreground tokens in both modes. Reopening an active transfer retains its captured receiving computer and
+folder; pending or unknown outcomes never silently resend.
+
 ## 8. Inconsistencies and duplicate definitions
 
 | ID | What | Where | Impact | Recommended unification |
@@ -2136,35 +2191,27 @@ fetched from the hub and goes when the dialog closes. Reason: a link is how gate
 (principle 2); it reuses the paste view, `Menu`, `Dialog`, `Switch` and the copy notice, and adds no setting, style or
 motion.
 
+## Project source on the web (#6570)
+
+Audience: everyday users completing setup and chatting without promotional interruptions, and people who deliberately
+look for the project's source. Settings > General ends in **About Persona** with one ordinary **Source code** row,
+showing `github.com/nwverse/persona` as a link. Reuse `Group`, `Row` with its narrow-screen stacking, the existing
+link color and touch-target class; no new token, button, animation, popup or preference. The link opens a new tab
+only on activation. This project-information link is not a conversation link (4.6).
+
+The web has no setup toast, empty-Agents pill or launch-count milestone asking for stars. The former browser-local
+prompt state is ignored, not migrated or deleted; no hub data changes (principles 1–4 and 6).
+
 ## GitHub star prompts (#5761)
 
-Persona is open source, and, as Orca does, it asks for a GitHub star in three quiet places on the web and Android
-clients, with iOS to follow (#5910); the frozen Mac app, the watch and Vision have none. When each shows is one rule for every client, replayed from
-`spec/fixtures/star-prompt` (principle 4); the state is the device's own (browser storage, `UserDefaults`, device-wide
-preferences) and never goes to the hub. Whether the user really starred can't be known, so a tap on **Star on GitHub**
-from any of them counts and ends all three on that device. It opens the project outside the app, where the user's
-GitHub session is: a new tab on the web, the GitHub app or the browser on the phones, never the in-app links card (4.6).
+The Android client retains the three prompts below; iOS has a separate, unmerged implementation proposal (#5910).
+The web removed them in #6570. The frozen Mac app, the watch and Vision have none. The phone rules are replayed from
+`spec/fixtures/star-prompt`; state is device-local and never goes to the hub. A tap on **Star on GitHub** counts
+as finished without verifying a star, and opens GitHub outside the app.
 
-- **The empty Agents page's pill**: a small rounded pill, the star mark and **Star on GitHub** with a ✕ (**Hide**) at its
-  end, on the Agents page's empty surface: on the web the start area when nothing is open (pinned to its foot, under
-  "Open a session"; a phone's web never shows that area), on iOS and Android under "Start your first session". ✕ hides
-  it for good on that device.
-- **The milestone line**: once the device has started 20 Agents, a line in the hub notice's slot of the Agents list, in
-  its look (the star mark in the accent, the words in secondary text, ✕ at the end): "Enjoying Persona? It's open
-  source, and a star on GitHub helps others find it." with **Star on GitHub** under the words (beside them a narrow
-  sidebar cut the sentence short). ✕ (**Later**) doubles the count it waits for, past the Agents started so far, and
-  keeps it away three days. It never shows while a session needs the user, a card waits or a search is on, so it never
-  pushes a waiting row down (3.4, 4.8).
-- **The onboarding toast**: once per device, when first setup finishes (iOS: the checklist's **Get started**; Android:
-  the readiness screen's **Done**; the web: this tab seeing setup turn ready, or the first answer come, on a hub that
-  never answered a first message, so a long-time user whose computer went away and came back is not taken for a new
-  one), the platform's toast with an action: "All set! If you like Persona, a star helps others find it." and **Star on
-  GitHub**; it is short so the words fit a phone's three toast lines beside the button. On the web it stays until closed
-  (`sticky`); on the phones it goes after the platform's time for a toast with a button.
-
-Reason: the pill and the line live only in Agents, whose people know GitHub, and wait for a quiet moment; the toast is
-the one place an everyday user meets it, so it says what to do in plain words and goes away on its own on the phones
-(principles 1 and 2). They reuse the hub notice's line, each platform's toast with an action and the existing star
-icon (`Theme.Icon.gitHubStar`, an alias of the plugin star; Android `PersonaIcons.gitHubStar`; the web's `star`), and
-add no setting, style or motion. Deviation (principle 3): hiding the pill or putting the line off is not a setting with
-an undo; a prompt dismissed is a prompt answered, and the rule above already brings the line back less and less often.
+- **Empty Agents pill**: under the first-session empty state, with **Star on GitHub** and **Hide**. Hide permanently
+  removes the pill on that device.
+- **Milestone line**: initially after 20 new Agent starts. **Later** doubles the threshold past the current count
+  and waits three days. It stays away while requests or sessions need the user, or a search is active.
+- **Onboarding toast**: once per device on Android's setup **Done** (proposed iOS **Get started**), unless Star was
+  already tapped. It uses the platform's timed toast and action.

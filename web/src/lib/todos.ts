@@ -707,6 +707,18 @@ export function decisionSourceLabel(d: TodoDecision, todo: Todo, lookup: ReturnT
   return t("lib-todos.decision_in_question", { title: short });
 }
 
+/** How a to-do's Decisions list is shown (#6447, docs/assistant/todos.md "Decision records"): the first few, the
+ *  default each time a to-do opens; every one; or none, folded under its title. */
+export type DecisionsView = "first" | "all" | "folded";
+/** How many decisions the list shows before Show all. */
+export const DECISIONS_FIRST = 5;
+
+/** What `view` shows of `list` (the current decisions, or the full history), in its order. */
+export function shownDecisions<T>(list: readonly T[], view: DecisionsView): T[] {
+  if (view === "folded") return [];
+  return view === "first" ? list.slice(0, DECISIONS_FIRST) : [...list];
+}
+
 /** The decisions d may be marked as replacing: earlier ones (list order) that are in effect, not d itself. */
 export function supersedeCandidates(d: TodoDecision, all: TodoDecision[]): TodoDecision[] {
   const at = all.findIndex((x) => x.id === d.id);
