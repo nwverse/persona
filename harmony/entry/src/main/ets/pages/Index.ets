@@ -280,7 +280,7 @@ struct Index {
     const source = this.routeRow(param).data();
     this.openExtension(this.detailModel, effect.extensionId, effect.uiId, effect.title, effect.state, effect.context, Wire.text(source, 'navigation_extension'), Wire.text(source, 'navigation_ui'));
   }
-  private extensionMenus(name: string, param: Object): NavigationMenuItem[] { return [{ value: tr('refresh'), action: () => { if (this.activeChild === this.childKey(name, param)) this.extensionRefreshRevision++; } }]; }
+  private extensionMenus(name: string, param: Object): NavigationMenuItem[] { return [{ value: tr('refresh'), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.arrow_clockwise')), action: () => { if (this.activeChild === this.childKey(name, param)) this.extensionRefreshRevision++; } }]; }
   private settingsKind(param: Object): string { return NavigationContext.from('settings', param as string).page; }
   private targetReady(name: string, param: Object): boolean { return this.chatReady && this.detailRoute === this.childKey(name, param); }
   private settingsModel(param: Object): ClientModel { return NavigationContext.from('settings', param as string).scoped ? this.detailModel : this.model; }

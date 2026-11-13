@@ -77,7 +77,7 @@ export struct Conversation {
   private useNativeHover: boolean = nativeEnvironment.nativeHoverAvailable;
   @Local controlsHeight: number = 80;
   private stackedComposer(): boolean {
-    return this.availableWidth < 160 + 112 * Math.max(1, this.environment.fontScale) + 2 * Tokens.inset + 2 * Tokens.gap;
+    return this.environment.fontScale >= 2 || this.availableWidth < 160 + 112 * Math.max(1, this.environment.fontScale) + 2 * Tokens.inset + 2 * Tokens.gap;
   }
   private ordinarySplitRatio(): number {
     const secondary = Math.max(1, Math.min(this.controlsHeight, this.availableHeight * 0.65));

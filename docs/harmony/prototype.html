@@ -31,6 +31,9 @@
 .target-list{max-height:180px;overflow:auto;overscroll-behavior:contain;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.target-row{display:flex;align-items:center;gap:11px;min-height:48px;height:auto;border:0;border-bottom:1px solid var(--line);border-radius:0;margin:0;padding:8px 2px;background:transparent}.target-row:last-child{border-bottom:0}.target-row input{width:20px;height:20px;flex:0 0 auto}.target-row strong{font-size:calc(12px * var(--font-scale,1));font-weight:500;overflow-wrap:anywhere}.target-row.selected{border-color:transparent;box-shadow:none;background:color-mix(in srgb,var(--action) 7%,transparent)}
 .transfer-source>span{min-width:0;flex:1;overflow-wrap:anywhere}.transfer-source strong,.transfer-source small,.target-row strong,.target-path strong,.transfer-status h3,.transfer-meta span:last-child{overflow-wrap:anywhere;word-break:normal}.target-path{align-items:flex-start}.target-path strong{min-width:0;flex:1}.transfer-meta span:last-child{min-width:0}.sheet-actions{flex-wrap:wrap}.sheet-actions button{flex:1 1 max-content;min-width:0;white-space:normal;overflow-wrap:normal;word-break:normal}.sheet-actions .cancel,.sheet-actions .confirm{flex:1 1 max-content}.transfer-toolbar{flex-wrap:wrap}.transfer-toolbar button{flex:1 1 max-content;min-width:0;white-space:normal;overflow-wrap:anywhere}.wide-agent-title-actions{justify-content:flex-end}
 .review-guide{display:inline-block;margin-top:5px;color:#3157a4;font-size:12px;font-weight:650;text-decoration:none}.review-guide:hover{text-decoration:underline}.review-guide:focus-visible{outline:2px solid #3157a4;outline-offset:3px;border-radius:3px}.projection-disclaimer{margin:0;padding:9px 11px;border:1px solid #dfe3e8;border-radius:10px;background:#f8f9fa;color:#536071;font-size:11px;line-height:1.45}
+
+.composer .send-button{width:auto;min-width:64px;min-height:48px;height:auto;padding:10px 16px;border-radius:99px;font-family:inherit;font-size:calc(16px * var(--font-scale,1));line-height:1.2;font-weight:600;white-space:nowrap}
+.device[data-font-scale="2"] .composer,.device[data-font-scale="3.2"] .composer{display:grid;grid-template-columns:minmax(0,1fr);max-height:38%;overflow:auto;align-items:stretch}.device[data-font-scale="2"] .composer textarea,.device[data-font-scale="3.2"] .composer textarea{width:100%;min-width:0}.device[data-font-scale="2"] .composer .send-button,.device[data-font-scale="3.2"] .composer .send-button{width:100%;min-height:48px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -264,7 +267,7 @@ function conversationContent(){
 }
 function composerMarkup(){
   const c=conversation();
-  return `<form class="composer" data-testid="assistant-composer"><textarea id="composerInput" rows="1" data-action="draft" data-testid="composer-input" aria-label="Message Persona" placeholder="Message Persona">${esc(c.draft)}</textarea><button class="send-button" type="submit" data-action="send-message" data-testid="composer-send" aria-label="Send">${icon('send')}</button></form>`;
+  return `<form class="composer" data-testid="assistant-composer"><textarea id="composerInput" rows="1" data-action="draft" data-testid="composer-input" aria-label="Message Persona" placeholder="Message Persona">${esc(c.draft)}</textarea><button class="send-button" type="submit" data-action="send-message" data-testid="composer-send" aria-label="Send">Send</button></form>`;
 }
 function chatActionItems(){
   const items=[],machine=sourceMachine();

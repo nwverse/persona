@@ -133,6 +133,8 @@ The locked dependency notice inventory is bundled as a local application resourc
 
 The app and entry Ability refer to the same layered image. The 1024-square source foreground reuses Persona's approved artwork, the background is opaque and flat, and the startup image uses the approved flat icon. `harmony/scripts/export-icons.py` generates the resources and `harmony/icon-manifest.json`. SDK resource compilation can legitimately convert the icon layers to 512-square RGBA PNGs; inspect the packaged content and references rather than treating that size as a source-art rule.
 
+The native composer stacks input, Send and Attach at an effective application font scale of 2 or higher, and in narrower panes. Chinese and Japanese attachment labels stay concise. Grid span/order changes retain the same input node, draft and IME state; buttons keep single-line labels.
+
 ## Verification
 
 Run portable behavior tests with Node.js 24 or newer from `harmony/`:

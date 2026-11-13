@@ -1502,7 +1502,7 @@ interaction height rather than a fixed 50/50 split. A system photo editor return
 image zoom and document viewing. The [HarmonyOS guide](../harmony/harmony.md) records the full interaction and
 verification contract. This is a new platform implementation and does not alter another client's default style.
 
-The composer uses native GridRow/GridCol spans and order. When the effective application font scale or pane width
+The composer uses native GridRow/GridCol spans and order. At an effective application font scale of 2 or higher, or when the pane width
 leaves too little writing space, the same input occupies a full row and full-width actions stack below it, Send before Attach, with single-line labels. The input and draft
 keep their identity; controls grow with their labels instead of clipping a fixed-height row. Native Ability configuration
 callbacks supply the actual application font scale. A local font multiplier is not a substitute for that system value.
