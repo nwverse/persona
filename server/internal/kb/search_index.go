@@ -34,9 +34,12 @@ import (
 //
 // On disk:
 //
-//	.search/manifest.json    which files below make up the index, and what they were built with
-//	.search/seg-<n>.idx      segments (search_index_segment.go), immutable; a file's newest entry is the one used
-//	.search/log-<n>.log      the files read since the last segment was written, appended to; they come first
+//	.search/manifest.json       which files below make up the index, and what they were built with
+//	.search/seg-<n>-<id>.idx    segments (search_index_segment.go), immutable; a file's newest entry is the one used
+//	.search/log-<n>-<id>.log    the files read since the last segment was written, appended to; they come first
+//
+// <id> is drawn at random for every file, so a name is never used twice, whatever happens to the index in between
+// (it is removed, built again, put back from a copy): a file found under a name is the one that was written there.
 //
 // One process writes it, the one that holds the data dir (UpdateSearchIndex, search_index_update.go); a read-only
 // store uses what is there, and looks every indexFollowEvery whether the writer has published another.
@@ -45,7 +48,7 @@ const (
 	// can leave it out (the history import's backups do).
 	SearchIndexDir   = ".search"
 	indexManifest    = "manifest.json"
-	indexFormat      = 1
+	indexFormat      = 2
 	indexLogMagic    = "PKBLOG1\n"
 	indexLogMaxEntry = 256 << 20
 )
@@ -82,8 +85,8 @@ var errIndexVersion = errors.New("search index: written by another version")
 func damaged(err error) bool {
 	var syntax *json.SyntaxError
 	var typ *json.UnmarshalTypeError
-	return errors.Is(err, errSegment) || errors.Is(err, errIndexVersion) || errors.Is(err, fs.ErrNotExist) ||
-		errors.As(err, &syntax) || errors.As(err, &typ)
+	return errors.Is(err, errSegment) || errors.Is(err, errSegmentOther) || errors.Is(err, errIndexVersion) ||
+		errors.Is(err, fs.ErrNotExist) || errors.As(err, &syntax) || errors.As(err, &typ)
 }
 
 // docRef is where a file's entry is in a snapshot's segments, with what tells the file changed since.
@@ -103,22 +106,30 @@ type searchSnap struct {
 
 func (s *searchSnap) empty() bool { return s == nil || len(s.where) == 0 && len(s.log) == 0 }
 
-// searchIndex is a store's index: the snapshot searches use, and the writer's state.
-type searchIndex struct {
-	// update: one writer at a time (UpdateSearchIndex), for the whole of its run.
-	update sync.Mutex
-	// mu guards loading and publishing; held briefly.
-	mu     sync.Mutex
-	loaded bool
-	snap   atomic.Pointer[searchSnap]
+// indexState is what a store knows of the index on disk: the snapshot searches use, and what the next update goes
+// on from. Never changed once stored: loading and publishing store another.
+type indexState struct {
+	snap   *searchSnap
 	man    indexManifestFile
 	logLen int64 // the log's valid bytes
 	// logOld counts the log's entries that a later one replaced: still on disk until the log becomes a segment.
 	logOld int
-	// manStat is the manifest's mtime and size when it was read, and looked when a read-only store last compared
-	// them with the file's (UnixNano).
+	// manStat is the manifest's mtime and size when it was read, or written by this process.
 	manStat fileTime
-	looked  atomic.Int64
+}
+
+// searchIndex is a store's index.
+type searchIndex struct {
+	// update: one writer at a time (UpdateSearchIndex), for the whole of its run. A run takes the state it starts
+	// from and keeps its own manifest and log length from there on (indexUpdate), so a search that reads the index
+	// from disk again while it runs (reload: the index was removed under both) changes nothing the run reads.
+	update sync.Mutex
+	// mu guards loading and publishing: state is stored with it held. Held briefly.
+	mu sync.Mutex
+	// state: nil until the index is read from disk.
+	state atomic.Pointer[indexState]
+	// looked: when a read-only store last compared the manifest with the one it read (UnixNano).
+	looked atomic.Int64
 	// broken: a check failed while the index was read. It is not asked again until the writer rebuilt it.
 	broken atomic.Bool
 	// ready: the manifest's Complete (SearchIndexReady).
@@ -130,65 +141,76 @@ type searchIndex struct {
 
 func (s *Store) searchDir() string { return filepath.Join(s.Dir, SearchIndexDir) }
 
+// current is the snapshot in use; nil when the index has not been read.
+func (ix *searchIndex) current() *searchSnap {
+	if st := ix.state.Load(); st != nil {
+		return st.snap
+	}
+	return nil
+}
+
 // snapshot is the index to search with, read from disk the first time; nil when there is none to use. follow: the
 // store does not write the index (it is read-only), so the one on disk is read again when its manifest changed.
 func (ix *searchIndex) snapshot(dir string, follow bool) *searchSnap {
 	if follow {
 		now, last := time.Now().UnixNano(), ix.looked.Load()
 		if now-last >= int64(indexFollowEvery) && ix.looked.CompareAndSwap(last, now) {
-			ix.mu.Lock()
-			if ix.loaded && statFile(filepath.Join(dir, indexManifest)) != ix.manStat {
-				ix.loaded = false
-				ix.broken.Store(false)
-				ix.snap.Store(nil)
+			if st := ix.state.Load(); st != nil && statFile(filepath.Join(dir, indexManifest)) != st.manStat {
+				ix.mu.Lock()
+				if ix.state.Load() == st {
+					ix.state.Store(nil)
+					ix.broken.Store(false)
+				}
+				ix.mu.Unlock()
 			}
-			ix.mu.Unlock()
 		}
 	}
 	if ix.broken.Load() {
 		return nil
 	}
-	if snap := ix.snap.Load(); snap != nil {
-		return snap
+	if st := ix.state.Load(); st != nil {
+		return st.snap
 	}
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
-	if !ix.loaded && ix.loadLocked(dir) != nil {
-		return nil
+	st := ix.state.Load()
+	if st == nil {
+		var err error
+		if st, err = ix.loadLocked(dir); err != nil {
+			return nil
+		}
 	}
-	return ix.snap.Load()
+	return st.snap
 }
 
-// reload reads the index from disk again when snap is still the one in use: a file of it is gone, which is another
-// process's merge when the manifest names other files now, and damage when it still names that one.
+// reload reads the index from disk again when snap is still the one in use: a file of it is gone or is another
+// file now, which is the writer's merge or rebuild when the manifest names other files, and damage when it still
+// names that one.
 func (ix *searchIndex) reload(dir string, snap *searchSnap) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
-	if ix.snap.Load() == snap {
-		_ = ix.loadLocked(dir)
+	if ix.current() == snap {
+		_, _ = ix.loadLocked(dir)
 	}
 }
 
-// loadLocked reads the index from dir. One that does not check out leaves an empty index and broken set, for the
-// writer to start again; when reading failed for another reason nothing is loaded, and the next caller tries again.
-// ix.mu is held.
-func (ix *searchIndex) loadLocked(dir string) error {
-	ix.man, ix.logLen, ix.logOld = indexManifestFile{}, 0, 0
-	ix.manStat = statFile(filepath.Join(dir, indexManifest))
+// loadLocked reads the index from dir and stores it. One that does not check out is stored as an empty index with
+// broken set, for the writer to start again; when reading failed for another reason nothing is stored, and the next
+// caller tries again. ix.mu is held.
+func (ix *searchIndex) loadLocked(dir string) (*indexState, error) {
+	st := &indexState{snap: &searchSnap{}, manStat: statFile(filepath.Join(dir, indexManifest))}
 	snap, man, logLen, logOld, err := readIndex(dir)
 	switch {
 	case err == nil:
-		ix.man, ix.logLen, ix.logOld = man, logLen, logOld
-		ix.snap.Store(snap)
+		st.snap, st.man, st.logLen, st.logOld = snap, man, logLen, logOld
 		ix.ready.Store(man.Complete)
 	case damaged(err):
 		ix.broken.Store(true)
-		ix.snap.Store(&searchSnap{})
 	default:
-		return err
+		return nil, err
 	}
-	ix.loaded = true
-	return nil
+	ix.state.Store(st)
+	return st, nil
 }
 
 // readIndex reads the index at dir: an empty one when there is no manifest. logLen and logOld are the log's whole
@@ -257,7 +279,16 @@ func readIndexLog(path string) (docs map[string]*builtDoc, valid int64, old int,
 		return nil, 0, 0, err
 	}
 	defer f.Close()
-	r := bufio.NewReaderSize(f, 1<<20)
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return readIndexLogFrom(f, fi.Size())
+}
+
+// readIndexLogFrom reads a log of size bytes from f, as readIndexLog says.
+func readIndexLogFrom(f io.Reader, size int64) (docs map[string]*builtDoc, valid int64, old int, err error) {
+	r := bufio.NewReaderSize(io.LimitReader(f, size), int(min(size, 1<<20)))
 	head := make([]byte, len(indexLogMagic))
 	switch n, err := io.ReadFull(r, head); {
 	case err == nil && string(head) == indexLogMagic:
@@ -278,7 +309,8 @@ func readIndexLog(path string) (docs map[string]*builtDoc, valid int64, old int,
 			break
 		}
 		n := binary.LittleEndian.Uint32(frame[:])
-		if n == 0 || n > indexLogMaxEntry {
+		// A length the file cannot hold is not an entry's: nothing is set aside for it.
+		if n == 0 || n > indexLogMaxEntry || int64(n) > size-valid-int64(len(frame)) {
 			break
 		}
 		body := make([]byte, n)
@@ -409,10 +441,12 @@ func (ix *searchIndex) filter(dir string, ws []string, follow bool) *searchFilte
 		if err == nil {
 			return f
 		}
-		if ix.snap.Load() != snap {
+		if ix.current() != snap {
 			continue
 		}
-		if errors.Is(err, fs.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errSegmentOther) {
+			// The segment is not there, or the file there is another one: the index was merged or built again
+			// since snap was read. Nothing was taken from that file; the index as it is now is asked instead.
 			ix.reload(dir, snap)
 			continue
 		}
@@ -453,8 +487,13 @@ func (s *Store) SearchIndexWanted() bool { return s.search.purge.Load() || !s.Se
 // not keep what the knowledge base no longer has.
 func (s *Store) SearchIndexPurge() { s.search.purge.Store(true) }
 
-// writeIndexFile replaces path with data through a temporary file, synced before it is renamed: a manifest never
-// names a file that is not on disk yet.
+// writeIndexFile replaces path with data through a temporary file, synced before it is renamed. A segment is synced
+// before the manifest that names it is written (segWriter.finish), so the manifest's bytes and those of every
+// segment it names are written out before it takes the manifest's place. The directory itself is not synced: after
+// a power loss the manifest may be the one before (whose files the sweep may have removed already), or may name a
+// segment whose directory entry was lost. Both are a manifest naming a file that is not there, which whoever reads
+// it finds out (readIndex) and the next update answers by building the index again. The log is not synced at all:
+// it is read up to its last whole entry.
 func writeIndexFile(path string, data []byte) error {
 	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {

@@ -1,7 +1,9 @@
 package kb
 
 import (
+	"cmp"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -43,7 +45,10 @@ var indexSizes = struct {
 	maxSegs int
 	// Files are read readChunk at a time; an update asked to stop does between two.
 	readChunk int
-}{logFiles: 4096, logBytes: 16 << 20, batchKeys: 2 << 20, batchFiles: 1 << 16, maxSegs: 8, readChunk: 512}
+	// The long loops that read no file ask the context whether to stop as they go: the look at the files every
+	// lookAsks files, a merge every mergeAsks keys.
+	lookAsks, mergeAsks int
+}{logFiles: 4096, logBytes: 16 << 20, batchKeys: 2 << 20, batchFiles: 1 << 16, maxSegs: 8, readChunk: 512, lookAsks: 1024, mergeAsks: 4096}
 
 // SearchIndexStats is what one update did.
 type SearchIndexStats struct {
@@ -120,7 +125,8 @@ func each(n, workers int, f func(i int)) {
 // UpdateSearchIndex brings the search index up to date with the files: it reads those changed or added since it
 // last read them and takes out what it holds of files that are gone. The first run on an existing archive reads
 // everything, in batches written as it goes; searches meanwhile read the files it has not reached. When ctx ends
-// it stops after the batch in hand, and the next run goes on from there.
+// it stops: while it looks at the files and while it merges within a moment, while it reads them after the batch in
+// hand. The next run goes on from what was published.
 func (e *Engine) UpdateSearchIndex(ctx context.Context) (SearchIndexStats, error) {
 	if e.Store.ReadOnly() {
 		return SearchIndexStats{}, ErrReadOnly
@@ -146,9 +152,12 @@ type indexUpdate struct {
 	workers int
 	stats   SearchIndexStats
 
+	// The index as this update has it: what it started from (open) and published since. Its own, so nothing a
+	// search does to the store's state while it runs (searchIndex.reload) is read here.
 	snap   *searchSnap
 	man    indexManifestFile
-	logOld int // searchIndex.logOld as this update leaves it
+	logLen int64 // the log's valid bytes
+	logOld int   // the log's entries that a later one replaced
 	// What the look at the files found: which entries of each segment belong to a file that is still there (seen),
 	// and still as the entry says (alive); the same for the log.
 	seen, alive       []bitset
@@ -170,20 +179,23 @@ func (u *indexUpdate) run(ctx context.Context) error {
 		}
 	}()
 	ents := u.e.indexFiles()
-	todo, stats := u.look(ents)
+	todo, stats, err := u.look(ctx, ents)
+	if err != nil {
+		return err
+	}
 	if err := u.read(ctx, ents, todo, stats); err != nil {
 		return err
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if err := u.maintain(purge); err != nil {
+	if err := u.maintain(ctx, purge); err != nil {
 		return err
 	}
 	done = true
 	if !u.man.Complete {
 		u.man.Complete = true
-		if err := u.publish(u.snap, u.ix.logLen); err != nil {
+		if err := u.publish(u.snap, u.logLen); err != nil {
 			return err
 		}
 	}
@@ -195,38 +207,58 @@ func (u *indexUpdate) run(ctx context.Context) error {
 // update starts from nothing.
 func (u *indexUpdate) open() error {
 	ix := u.ix
+	manifest := filepath.Join(u.dir, indexManifest)
 	ix.mu.Lock()
-	defer ix.mu.Unlock()
-	if ix.loaded && statFile(filepath.Join(u.dir, indexManifest)) != ix.manStat {
-		// Not the manifest this process left: the index was removed or put back from outside (a person, a restore).
-		// What is there now is read, and checked as at a start.
-		ix.loaded = false
+	st := ix.state.Load()
+	if st != nil && !u.unchanged(st) {
+		// Not the index this process left: it was removed or put back from outside (a person, a restore). What is
+		// there now is read, and checked as at a start.
+		st = nil
 		ix.broken.Store(false)
 	}
-	if !ix.loaded {
-		if err := ix.loadLocked(u.dir); err != nil {
-			return err
-		}
+	var err error
+	if st == nil {
+		st, err = ix.loadLocked(u.dir)
 	}
-	if ix.broken.Load() {
+	if err == nil && ix.broken.Load() {
 		// The manifest first: without it there is no index, whatever else is still there (sweep removes that).
-		if err := os.Remove(filepath.Join(u.dir, indexManifest)); err != nil && !os.IsNotExist(err) {
-			return err
+		if err = os.Remove(manifest); err == nil || os.IsNotExist(err) {
+			err = nil
+			st = &indexState{snap: &searchSnap{}}
+			ix.state.Store(st)
+			ix.ready.Store(false)
+			ix.broken.Store(false)
+			u.stats.Rebuilt = true
 		}
-		ix.man, ix.logLen = indexManifestFile{}, 0
-		ix.snap.Store(&searchSnap{})
-		ix.ready.Store(false)
-		ix.broken.Store(false)
-		u.stats.Rebuilt = true
 	}
-	u.snap, u.man, u.logOld = ix.snap.Load(), ix.man, ix.logOld
+	ix.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	u.snap, u.man, u.logLen, u.logOld = st.snap, st.man, st.logLen, st.logOld
 	if u.man.Merged.IsZero() {
 		u.man.Merged = time.Now().UTC() // a new index: nothing in it is older than now
 	}
-	// What an update that died left behind, or a damaged index: gone before a file is written, and no new file
-	// takes the name of one that could not be removed.
-	u.man.Seq = max(u.man.Seq, u.sweep())
+	// What an update that died left behind, or a damaged index: gone before a file is written.
+	u.sweep()
 	return nil
+}
+
+// unchanged reports whether the index on disk is still the one st was read from or published as: the manifest by
+// its mtime and size, every segment by its footer (indexSeg.open). An update goes on from the files parts it holds
+// in memory (which entries are still good, what a merge keeps), so they must be those of the segments on disk.
+func (u *indexUpdate) unchanged(st *indexState) bool {
+	if statFile(filepath.Join(u.dir, indexManifest)) != st.manStat {
+		return false
+	}
+	for _, s := range st.snap.segs {
+		f, err := s.open()
+		if err != nil {
+			return false
+		}
+		f.Close()
+	}
+	return true
 }
 
 // indexFiles are the files the index holds, in the order searches read them: profile files, then message days
@@ -245,10 +277,24 @@ func (e *Engine) indexFiles() []*dirEnt {
 }
 
 // look stats every file and tells which the index must read (their indices in ents), noting which entries are
-// still good.
-func (u *indexUpdate) look(ents []*dirEnt) (todo []int, stats []fileTime) {
+// still good. It stops when ctx ends.
+func (u *indexUpdate) look(ctx context.Context, ents []*dirEnt) (todo []int, stats []fileTime, err error) {
 	stats = make([]fileTime, len(ents))
-	each(len(ents), u.workers, func(i int) { stats[i] = statFile(ents[i].path) })
+	asks := max(1, indexSizes.lookAsks)
+	var stopped atomic.Bool
+	each(len(ents), u.workers, func(i int) {
+		if stopped.Load() {
+			return
+		}
+		if i%asks == asks-1 && ctx.Err() != nil {
+			stopped.Store(true)
+			return
+		}
+		stats[i] = statFile(ents[i].path)
+	})
+	if stopped.Load() {
+		return nil, nil, cmp.Or(ctx.Err(), context.Canceled)
+	}
 	snap := u.snap
 	u.seen, u.alive = make([]bitset, len(snap.segs)), make([]bitset, len(snap.segs))
 	for i, s := range snap.segs {
@@ -282,7 +328,7 @@ func (u *indexUpdate) look(ents []*dirEnt) (todo []int, stats []fileTime) {
 		}
 		todo = append(todo, i)
 	}
-	return todo, stats
+	return todo, stats, nil
 }
 
 // read reads the files of todo into the index: a few go to the log, more than the log takes to segments.
@@ -344,16 +390,21 @@ func (u *indexUpdate) read(ctx context.Context, ents []*dirEnt, todo []int, stat
 	return u.appendLog(batch)
 }
 
-// name gives the index's next file name.
-func (u *indexUpdate) name(format string) string {
+// name gives a new file of the index its name, one no file of the index had before: the count, for whoever reads
+// the directory, and 64 bits drawn at random. The count alone would not do: it starts again whenever the index does
+// (built again after a failed check, .search removed), and a segment written under the name of an earlier one is
+// read by whoever still holds the earlier one's files part as if it were that one.
+func (u *indexUpdate) name(kind, ext string) string {
 	u.man.Seq++
-	return fmt.Sprintf(format, u.man.Seq)
+	var id [8]byte
+	_, _ = rand.Read(id[:]) // never fails
+	return fmt.Sprintf("%s-%06d-%x%s", kind, u.man.Seq, id, ext)
 }
 
 // addSegment writes docs as a new segment and publishes it. resetLog: the log's files are in docs, so the index
 // goes on with an empty one.
 func (u *indexUpdate) addSegment(docs []builtDoc, resetLog bool) error {
-	name := u.name("seg-%06d.idx")
+	name := u.name("seg", ".idx")
 	path := filepath.Join(u.dir, name)
 	if err := writeSeg(path, docs); err != nil {
 		return err
@@ -365,7 +416,7 @@ func (u *indexUpdate) addSegment(docs []builtDoc, resetLog bool) error {
 	next := &searchSnap{segs: append(append([]*indexSeg{}, u.snap.segs...), seg), log: u.snap.log}
 	next.where = cloneWhere(u.snap.where, len(u.snap.segs), seg)
 	u.man.Segments = append(append([]string{}, u.man.Segments...), name)
-	logLen := u.ix.logLen
+	logLen := u.logLen
 	if resetLog {
 		next.log, u.man.Log, logLen, u.logOld = nil, "", 0, 0
 		u.logSeen, u.logAlive = map[string]bool{}, map[string]bool{}
@@ -395,14 +446,14 @@ func (u *indexUpdate) appendLog(docs []builtDoc) error {
 		return nil
 	}
 	if u.man.Log == "" {
-		u.man.Log = u.name("log-%06d.log")
+		u.man.Log = u.name("log", ".log")
 	}
 	path := filepath.Join(u.dir, u.man.Log)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
 	}
-	logLen := u.ix.logLen
+	logLen := u.logLen
 	var buf []byte
 	if logLen == 0 {
 		buf = append(buf, indexLogMagic...)
@@ -449,23 +500,23 @@ func (u *indexUpdate) publish(next *searchSnap, logLen int64) error {
 	if err != nil {
 		return err
 	}
-	if err := writeIndexFile(filepath.Join(u.dir, indexManifest), raw); err != nil {
+	manifest := filepath.Join(u.dir, indexManifest)
+	if err := writeIndexFile(manifest, raw); err != nil {
 		return err
 	}
+	u.snap, u.logLen = next, logLen
 	u.ix.mu.Lock()
-	u.ix.man, u.ix.logLen, u.ix.logOld = u.man, logLen, u.logOld
-	u.ix.manStat = statFile(filepath.Join(u.dir, indexManifest))
-	u.ix.snap.Store(next)
+	u.ix.state.Store(&indexState{snap: next, man: u.man, logLen: logLen, logOld: u.logOld, manStat: statFile(manifest)})
 	u.ix.ready.Store(u.man.Complete)
 	u.ix.mu.Unlock()
-	u.snap = next
 	return nil
 }
 
 // maintain turns a full log into a segment, and writes the index again as one segment when there are too many or
 // it holds entries to drop (indexPurgeEvery): at once when purge, of files gone within indexPurgeEvery, of files
-// changed within indexMergeEvery or once they are a quarter of the index.
-func (u *indexUpdate) maintain(purge bool) error {
+// changed within indexMergeEvery or once they are a quarter of the index. A merge stops when ctx ends, and the next
+// update does it.
+func (u *indexUpdate) maintain(ctx context.Context, purge bool) error {
 	snap := u.snap
 	total, alive, gone := len(snap.log), len(u.logAlive), 0
 	for i, s := range snap.segs {
@@ -495,7 +546,7 @@ func (u *indexUpdate) maintain(purge bool) error {
 		stale > 0 && since >= indexMergeEvery ||
 		stale*4 > total+u.logOld
 	if !merge {
-		if len(snap.log) >= indexSizes.logFiles || u.ix.logLen >= indexSizes.logBytes {
+		if len(snap.log) >= indexSizes.logFiles || u.logLen >= indexSizes.logBytes {
 			return u.flushLog()
 		}
 		return nil
@@ -511,9 +562,9 @@ func (u *indexUpdate) maintain(purge bool) error {
 			inputs[i].keep = alive.has
 		}
 	}
-	name := u.name("seg-%06d.idx")
+	name := u.name("seg", ".idx")
 	path := filepath.Join(u.dir, name)
-	n, err := mergeSegs(path, inputs)
+	n, err := mergeSegs(ctx, path, inputs)
 	if err != nil {
 		return err
 	}
@@ -547,29 +598,20 @@ func (u *indexUpdate) liveLog() []builtDoc {
 	return docs
 }
 
-// sweep removes the index's files the manifest no longer names, and returns the highest number of those it could
-// not remove (open elsewhere, on a system that minds: they go at a later update).
-func (u *indexUpdate) sweep() (left uint64) {
+// sweep removes the index's files the manifest no longer names. One that cannot be removed (open elsewhere, on a
+// system that minds) goes at a later update; its name is not given to another file meanwhile (name).
+func (u *indexUpdate) sweep() {
 	named := map[string]bool{indexManifest: true, u.man.Log: true}
 	for _, s := range u.man.Segments {
 		named[s] = true
 	}
 	ents, err := os.ReadDir(u.dir)
 	if err != nil {
-		return 0
+		return
 	}
 	for _, d := range ents {
-		name := d.Name()
-		if d.IsDir() || named[name] || !indexOwned(name) {
-			continue
-		}
-		if os.Remove(filepath.Join(u.dir, name)) == nil {
-			continue
-		}
-		var n uint64
-		if _, err := fmt.Sscanf(strings.TrimLeft(name[4:], "0"), "%d", &n); err == nil {
-			left = max(left, n)
+		if name := d.Name(); !d.IsDir() && !named[name] && indexOwned(name) {
+			_ = os.Remove(filepath.Join(u.dir, name))
 		}
 	}
-	return left
 }

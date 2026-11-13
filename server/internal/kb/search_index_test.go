@@ -3,16 +3,20 @@ package kb
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -312,7 +316,7 @@ func TestMergeSegmentsKeepsTheChosenFiles(t *testing.T) {
 		inputs = append(inputs, in)
 	}
 	path := filepath.Join(dir, "seg-000009.idx")
-	n, err := mergeSegs(path, inputs)
+	n, err := mergeSegs(context.Background(), path, inputs)
 	if err != nil || n != kept {
 		t.Fatalf("merged %d files (%v), want %d", n, err, kept)
 	}
@@ -326,7 +330,7 @@ func TestMergeSegmentsKeepsTheChosenFiles(t *testing.T) {
 	checkSegment(t, seg, texts, testQueries(rng, texts))
 	// The same file kept from two segments is refused: one of the two entries would be the wrong one.
 	twice := filepath.Join(dir, "seg-000010.idx")
-	if _, err := mergeSegs(twice, []mergeInput{{seg: inputs[0].seg}, {seg: inputs[0].seg}}); err == nil {
+	if _, err := mergeSegs(context.Background(), twice, []mergeInput{{seg: inputs[0].seg}, {seg: inputs[0].seg}}); err == nil {
 		t.Fatal("a file kept from two segments was merged")
 	}
 	if _, err := os.Stat(twice); !os.IsNotExist(err) {
@@ -336,6 +340,8 @@ func TestMergeSegmentsKeepsTheChosenFiles(t *testing.T) {
 
 // A damaged segment is never believed: whatever byte is wrong or missing, it does not open, or the list a search
 // reads does not check out, or the answer is still the right one (the byte was in a list the search did not read).
+// The damaged copies are read from memory (readSeg and candidatesIn, which openSeg and candidates read a file
+// with): one for every byte of the segment.
 func TestDamagedSegmentIsNeverBelieved(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1273, 4))
 	docs, texts := testDocs(rng, "chats", 24)
@@ -357,15 +363,14 @@ func TestDamagedSegmentIsNeverBelieved(t *testing.T) {
 			holds[q][name] = hasAll(fold(text), words(q))
 		}
 	}
-	bad := filepath.Join(dir, "seg-000002.idx")
 	refused, caught := 0, 0
-	check := func(what string, damaged []byte) {
+	check := func(what string, bad []byte) {
 		t.Helper()
-		if err := os.WriteFile(bad, damaged, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		seg, err := openSeg(bad)
+		seg, err := readSeg(bytes.NewReader(bad), int64(len(bad)))
 		if err != nil {
+			if !damaged(err) {
+				t.Fatalf("%s: refused with %v, which does not say the segment is damaged", what, err)
+			}
 			refused++
 			return
 		}
@@ -374,9 +379,9 @@ func TestDamagedSegmentIsNeverBelieved(t *testing.T) {
 			if !ok {
 				continue
 			}
-			cand, err := seg.candidates(clauses)
+			cand, err := seg.candidatesIn(bytes.NewReader(bad), clauses)
 			if err != nil {
-				if !damaged2(err) {
+				if !damaged(err) {
 					t.Fatalf("%s: %q failed with %v, which does not say the segment is damaged", what, q, err)
 				}
 				caught++
@@ -392,10 +397,14 @@ func TestDamagedSegmentIsNeverBelieved(t *testing.T) {
 			}
 		}
 	}
+	check("whole", raw)
+	if refused != 0 || caught != 0 {
+		t.Fatalf("the whole segment: refused %d times, %d lists caught", refused, caught)
+	}
 	for i := range raw {
-		damaged := bytes.Clone(raw)
-		damaged[i] ^= 1 << (i % 8)
-		check(fmt.Sprintf("byte %d flipped", i), damaged)
+		bad := bytes.Clone(raw)
+		bad[i] ^= 1 << (i % 8)
+		check(fmt.Sprintf("byte %d flipped", i), bad)
 	}
 	for n := 0; n < len(raw); n += 1 + n/16 {
 		check(fmt.Sprintf("cut to %d bytes", n), raw[:n])
@@ -404,13 +413,37 @@ func TestDamagedSegmentIsNeverBelieved(t *testing.T) {
 	if refused == 0 || caught == 0 {
 		t.Fatalf("%d damaged segments refused, %d lists caught: the test no longer reaches both", refused, caught)
 	}
+	// And through the file, as the index reads it: a damaged footer does not open, and a list damaged after the
+	// segment was opened is caught by the search that reads it.
+	bad := bytes.Clone(raw)
+	bad[len(bad)-9] ^= 0x40
+	path := filepath.Join(dir, "seg-000002.idx")
+	if err := os.WriteFile(path, bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openSeg(path); !errors.Is(err, errSegment) {
+		t.Fatalf("a segment with a damaged footer opened: %v", err)
+	}
+	seg, err := openSeg(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range allSegKeys(t, seg) {
+		raw[seg.lists+int64(k.start)] ^= 0x80
+	}
+	if err := os.WriteFile(good, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clauses, _ := queryClauses(words("build"))
+	if _, err := seg.candidates(clauses); !errors.Is(err, errSegment) {
+		t.Fatalf("a search read a damaged list of the file: %v", err)
+	}
 }
-
-func damaged2(err error) bool { return damaged(err) }
 
 // The log is read up to its last whole entry: an append cut short, or bytes gone wrong after it was written, lose
 // the entries from there on (their files are read again) and never give an entry that was not written. A log cut
-// before its first entry is an empty one; one that starts with anything else is not a log.
+// before its first entry is an empty one; one that starts with anything else is not a log. The damaged copies are
+// read from memory (readIndexLogFrom, which readIndexLog reads a file with).
 func TestIndexLogStopsAtTheFirstBadEntry(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1273, 5))
 	docs, _ := testDocs(rng, "chats", 9)
@@ -420,16 +453,15 @@ func TestIndexLogStopsAtTheFirstBadEntry(t *testing.T) {
 		raw = encodeLogEntry(raw, &docs[i])
 		ends = append(ends, len(raw))
 	}
-	path := filepath.Join(t.TempDir(), "log-000001.log")
 	whole := func(n int) int { // the entries wholly within the first n bytes
 		return sort.SearchInts(ends, n+1) - 1
 	}
-	check := func(what string, data []byte, entries int) {
+	read := func(data []byte) (map[string]*builtDoc, int64, int, error) {
+		return readIndexLogFrom(bytes.NewReader(data), int64(len(data)))
+	}
+	check := func(what string, data []byte, entries int, read func([]byte) (map[string]*builtDoc, int64, int, error)) {
 		t.Helper()
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		got, valid, _, err := readIndexLog(path)
+		got, valid, _, err := read(data)
 		if entries < 0 {
 			if err == nil || !damaged(err) {
 				t.Fatalf("%s: read %d entries (%v), want it refused", what, len(got), err)
@@ -449,18 +481,40 @@ func TestIndexLogStopsAtTheFirstBadEntry(t *testing.T) {
 			}
 		}
 	}
-	check("whole", raw, len(docs))
+	check("whole", raw, len(docs), read)
 	for n := range len(raw) {
-		check(fmt.Sprintf("cut to %d bytes", n), raw[:n], max(0, whole(n)))
+		check(fmt.Sprintf("cut to %d bytes", n), raw[:n], max(0, whole(n)), read)
 	}
-	check("not a log", []byte("PKB"+"x"), -1)
+	check("not a log", []byte("PKB"+"x"), -1, read)
 	for i := range raw {
-		damaged := bytes.Clone(raw)
-		damaged[i] ^= 0x10
-		check(fmt.Sprintf("byte %d flipped", i), damaged, whole(i))
+		bad := bytes.Clone(raw)
+		bad[i] ^= 0x10
+		check(fmt.Sprintf("byte %d flipped", i), bad, whole(i), read)
 	}
+	// Through the file, as the index reads it: whole, cut inside its last entry, and not there.
+	path := filepath.Join(t.TempDir(), "log-000001.log")
+	fromFile := func(data []byte) (map[string]*builtDoc, int64, int, error) {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return readIndexLog(path)
+	}
+	check("the file, whole", raw, len(docs), fromFile)
+	check("the file, cut in its last entry", raw[:len(raw)-3], len(docs)-1, fromFile)
+	check("the file, not a log", []byte("PKB"+"x"), -1, fromFile)
 	if got, valid, _, err := readIndexLog(filepath.Join(t.TempDir(), "none.log")); err != nil || len(got) != 0 || valid != 0 {
 		t.Fatalf("no log file: %d entries, %d bytes, %v", len(got), valid, err)
+	}
+	// An entry whose length says more than the file holds is where the log ends, and nothing is set aside for the
+	// bytes it claims: here 200 MB, within what an entry may be.
+	long := binary.LittleEndian.AppendUint32(bytes.Clone(raw[:ends[1]]), 200<<20)
+	long = append(long, 1, 2, 3, 4, 'x', 'y', 'z')
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	check("an entry longer than the file", long, 1, read)
+	runtime.ReadMemStats(&after)
+	if got := after.TotalAlloc - before.TotalAlloc; got > 4<<20 {
+		t.Fatalf("reading a log of %d bytes whose last entry says 200 MB set %d bytes aside", len(long), got)
 	}
 }
 
@@ -942,10 +996,11 @@ func TestUpdateSearchIndexDropsOldEntriesInTime(t *testing.T) {
 	merged := func(ago time.Duration) *Engine {
 		t.Helper()
 		ix := &e.Store.search
-		man := ix.man
+		was := ix.state.Load()
+		man := was.man
 		man.Merged = time.Now().Add(-ago)
-		u := &indexUpdate{e: e, ix: ix, dir: e.Store.searchDir(), man: man}
-		if err := u.publish(ix.snap.Load(), ix.logLen); err != nil {
+		u := &indexUpdate{e: e, ix: ix, dir: e.Store.searchDir(), man: man, logOld: was.logOld}
+		if err := u.publish(was.snap, was.logLen); err != nil {
 			t.Fatal(err)
 		}
 		st, err := NewStore(e.Store.Dir)
@@ -1115,7 +1170,11 @@ func TestUpdateSearchIndexStartsAgainWhenDamaged(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			matchesWrite(t, p, strings.Replace(string(raw), `"format":1`, `"format":2`, 1))
+			now := fmt.Sprintf(`"format":%d`, indexFormat)
+			if !strings.Contains(string(raw), now) {
+				t.Fatalf("the manifest does not say %s: %s", now, raw)
+			}
+			matchesWrite(t, p, strings.Replace(string(raw), now, fmt.Sprintf(`"format":%d`, indexFormat-1), 1))
 		},
 		"segment's footer damaged": func(t *testing.T, e *Engine) {
 			_, man := manifest(t, e)
@@ -1472,4 +1531,483 @@ func TestSearchIndexOfAReadOnlyStore(t *testing.T) {
 	if !ro.SearchIndexReady() || (&Engine{Store: ro}).searchFilter(words("build")) == nil {
 		t.Fatal("a read-only store does not use the index that is there")
 	}
+}
+
+// The index built again while another process still holds the one before: a reader never maps the new index's lists
+// through the files table it read from the old one. The scenario of #1273's review: one segment; a read-only store
+// loads it; a day is renamed (its siblings' numbers in the segment shift, no length changes); the index is removed
+// and built again; the reader, which has not looked at the manifest since, finds what the files say.
+func TestSearchIndexBuiltAgainUnderAReader(t *testing.T) {
+	was := indexFollowEvery
+	t.Cleanup(func() { indexFollowEvery = was })
+	indexFollowEvery = time.Hour
+	indexSizesFor(t, func() { indexSizes.logFiles = 8 })
+	e := indexArchive(t)
+	day := func(d int) string { return fmt.Sprintf("chats/lark-c1/messages/2026-03-%02d.md", d) }
+	for d := 1; d <= 6; d++ {
+		writeOld(t, e, day(d), fmt.Sprintf("# 2026-03-%02d\n- 09:00 同事1: zqday%d only here\n", d, d), 50*time.Minute)
+	}
+	updateIndex(t, e)
+	_, man, _, _, err := readIndex(e.Store.searchDir())
+	if err != nil || len(man.Segments) != 1 || man.Log != "" {
+		t.Fatalf("the index is %+v (%v), want one segment", man, err)
+	}
+	first := man.Segments[0]
+	size := statFile(filepath.Join(e.Store.searchDir(), first)).size
+	ro, err := OpenReadOnly(e.Store.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &Engine{Store: ro}
+	check := func(step string) {
+		t.Helper()
+		for d := 1; d <= 7; d++ {
+			q := fmt.Sprintf("zqday%d", d)
+			want := findReference(&Engine{Store: ro}, q, 80)
+			if got := reader.Find(q, 80); !reflect.DeepEqual(got, want) && (len(got) > 0 || len(want) > 0) {
+				t.Fatalf("%s: Find(%q) of the reader:\n got %+v\nwant %+v", step, q, got, want)
+			}
+		}
+	}
+	check("the first index")
+	if reader.searchFilter(words("zqday4")) == nil {
+		t.Fatal("the reader does not use the index")
+	}
+	// The day moves to the end of its chat: the three days after it take the numbers before theirs.
+	if err := os.Rename(filepath.Join(e.Store.Dir, day(3)), filepath.Join(e.Store.Dir, day(7))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(e.Store.searchDir()); err != nil {
+		t.Fatal(err)
+	}
+	if stats := updateIndex(t, e); stats.Read != stats.Files {
+		t.Fatalf("the update after the index was removed: %+v, want every file read", stats)
+	}
+	_, man, _, _, err = readIndex(e.Store.searchDir())
+	if err != nil || len(man.Segments) != 1 {
+		t.Fatalf("the index built again is %+v (%v), want one segment", man, err)
+	}
+	t.Logf("first index: %s, %d bytes; built again: %s, %d bytes", first, size, man.Segments[0], statFile(filepath.Join(e.Store.searchDir(), man.Segments[0])).size)
+	check("the index built again")
+	if ro.search.broken.Load() || reader.searchFilter(words("zqday4")) == nil {
+		t.Fatal("the reader gave the index up instead of reading the one built again")
+	}
+}
+
+// Searches while the index is updated, and removed under both (rm -r .search is always safe): every search gives
+// what the files say, and the next update that is left alone leaves a whole index. The package's -race run checks
+// here that a search's reading of the index and an update's writing of it share nothing unguarded.
+func TestSearchesWhileTheIndexIsUpdatedAndRemoved(t *testing.T) {
+	smallSegments(t)
+	e := indexArchive(t)
+	queries := []string{"周报", "build", "nowhere", "draft", "进度 ok", "的", "同事1", "backend"}
+	wantFind, wantSearch := map[string][]Result{}, map[string][]Hit{}
+	for _, q := range queries {
+		wantFind[q], wantSearch[q] = findReference(e, q, 1<<20), searchByWalk(e, q, true, 1<<20)
+	}
+	var stop atomic.Bool
+	var searches, asked, updates atomic.Int64
+	wrong := make(chan string, 8)
+	var wg sync.WaitGroup
+	for g := range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := g; !stop.Load(); i++ {
+				q := queries[i%len(queries)]
+				if e.searchFilter(words(q)) != nil {
+					asked.Add(1)
+				}
+				if got := e.Find(q, 1<<20); !reflect.DeepEqual(got, wantFind[q]) && (len(got) > 0 || len(wantFind[q]) > 0) {
+					wrong <- fmt.Sprintf("Find(%q):\n got %+v\nwant %+v", q, got, wantFind[q])
+					return
+				}
+				if got := e.Search(q, true, 1<<20); !reflect.DeepEqual(got, wantSearch[q]) && (len(got) > 0 || len(wantSearch[q]) > 0) {
+					wrong <- fmt.Sprintf("Search(%q):\n got %+v\nwant %+v", q, got, wantSearch[q])
+					return
+				}
+				searches.Add(1)
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for !stop.Load() {
+			// An update whose files are removed under it fails; the one after starts again.
+			if _, err := e.UpdateSearchIndex(context.Background()); err == nil {
+				updates.Add(1)
+			}
+		}
+	}()
+	rng := rand.New(rand.NewPCG(1273, 6))
+	deadline := time.Now().Add(20 * time.Second)
+	for removed := 0; removed < 40 && time.Now().Before(deadline); removed++ {
+		// Sometimes right after an update finished, sometimes in the middle of one.
+		if removed%2 == 0 {
+			for n := updates.Load(); updates.Load() == n && time.Now().Before(deadline); {
+				time.Sleep(200 * time.Microsecond)
+			}
+		} else {
+			time.Sleep(time.Duration(rng.IntN(3000)) * time.Microsecond)
+		}
+		// The update may write a file while the directory is emptied: what was there is gone, the directory stays.
+		if err := os.RemoveAll(e.Store.searchDir()); err != nil && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+			t.Fatal(err)
+		}
+	}
+	stop.Store(true)
+	wg.Wait()
+	select {
+	case msg := <-wrong:
+		t.Fatal(msg)
+	default:
+	}
+	if searches.Load() == 0 || asked.Load() == 0 || updates.Load() == 0 {
+		t.Fatalf("%d searches (%d with an index to ask), %d updates finished: the test no longer runs them together", searches.Load(), asked.Load(), updates.Load())
+	}
+	// Left alone, the index is whole again after at most two updates (the first may find what the removal left).
+	if _, err := e.UpdateSearchIndex(context.Background()); err != nil {
+		updateIndex(t, e)
+	}
+	updateIndex(t, e)
+	checkIndexCurrent(t, e)
+	checkIndexFiles(t, e)
+	for _, q := range queries {
+		if got := e.Find(q, 1<<20); !reflect.DeepEqual(got, wantFind[q]) && (len(got) > 0 || len(wantFind[q]) > 0) {
+			t.Fatalf("Find(%q) afterwards:\n got %+v\nwant %+v", q, got, wantFind[q])
+		}
+	}
+}
+
+// The writer never gives a segment the name of another. Should a file be another segment all the same (put there by
+// hand, or written by a version that counted its files from one again), whoever holds the first one's files part
+// reads the index again instead of reading the second one's lists through it. The second here is the first one's
+// archive with a day renamed: the same keys, lengths and size, the files numbered otherwise, every checksum good.
+func TestSegmentUnderAnotherOnesNameIsNotReadThroughItsFiles(t *testing.T) {
+	was := indexFollowEvery
+	t.Cleanup(func() { indexFollowEvery = was })
+	indexFollowEvery = time.Hour
+	indexSizesFor(t, func() { indexSizes.logFiles = 8 })
+	e := indexArchive(t)
+	day := func(d int) string { return fmt.Sprintf("chats/lark-c1/messages/2026-03-%02d.md", d) }
+	for d := 1; d <= 6; d++ {
+		writeOld(t, e, day(d), fmt.Sprintf("# 2026-03-%02d\n- 09:00 同事1: zqday%d only here\n", d, d), 50*time.Minute)
+	}
+	one := func() (string, []byte) { // the index's one segment: its path and bytes
+		t.Helper()
+		_, man, _, _, err := readIndex(e.Store.searchDir())
+		if err != nil || len(man.Segments) != 1 || man.Log != "" {
+			t.Fatalf("the index is %+v (%v), want one segment", man, err)
+		}
+		p := filepath.Join(e.Store.searchDir(), man.Segments[0])
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p, raw
+	}
+	updateIndex(t, e)
+	first, firstRaw := one()
+	// Who holds the first index: a read-only store that has searched with it, and a search under way.
+	ro, err := OpenReadOnly(e.Store.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &Engine{Store: ro}
+	check := func(step string, eng *Engine) {
+		t.Helper()
+		for d := 1; d <= 7; d++ {
+			q := fmt.Sprintf("zqday%d", d)
+			want := findReference(&Engine{Store: eng.Store}, q, 80)
+			if got := eng.Find(q, 80); !reflect.DeepEqual(got, want) && (len(got) > 0 || len(want) > 0) {
+				t.Fatalf("%s: Find(%q):\n got %+v\nwant %+v", step, q, got, want)
+			}
+		}
+	}
+	check("the first index", reader)
+	held := e.Store.search.snapshot(e.Store.searchDir(), false)
+	if held == nil || len(held.segs) != 1 {
+		t.Fatalf("the writer's snapshot: %+v", held)
+	}
+	if err := os.Rename(filepath.Join(e.Store.Dir, day(3)), filepath.Join(e.Store.Dir, day(7))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(e.Store.searchDir()); err != nil {
+		t.Fatal(err)
+	}
+	updateIndex(t, e)
+	second, secondRaw := one()
+	if second == first || len(secondRaw) != len(firstRaw) || bytes.Equal(secondRaw, firstRaw) {
+		t.Fatalf("the second segment is %s, %d bytes; the first %s, %d bytes: want another name, the same size, other bytes", filepath.Base(second), len(secondRaw), filepath.Base(first), len(firstRaw))
+	}
+	// The second segment under the first one's name, as the manifest then says.
+	manifest := filepath.Join(e.Store.searchDir(), indexManifest)
+	man, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(second, first); err != nil {
+		t.Fatal(err)
+	}
+	matchesWrite(t, manifest, strings.Replace(string(man), filepath.Base(second), filepath.Base(first), 1))
+
+	clauses, _ := queryClauses(words("zqday4"))
+	if _, err := held.segs[0].candidates(clauses); !errors.Is(err, errSegmentOther) {
+		t.Fatalf("a search under way read the other segment: %v, want errSegmentOther", err)
+	}
+	if _, err := held.segs[0].cursor(); !errors.Is(err, errSegmentOther) {
+		t.Fatalf("a merge opened the other segment: %v, want errSegmentOther", err)
+	}
+	check("the second segment under the first one's name", reader)
+	if ro.search.broken.Load() || reader.searchFilter(words("zqday4")) == nil {
+		t.Fatal("the reader gave the index up instead of reading it again")
+	}
+
+	// The same under the process that writes: its files part is the second one's, the file becomes the first again
+	// with the manifest untouched. A merge that opens it refuses; the next update, which looks at its segments
+	// before it goes on from them, reads the index again (the first segment says nothing wrong of the files that are
+	// still as it read them) and does its work with that.
+	st, err := NewStore(e.Store.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &Engine{Store: st}
+	if stats := updateIndex(t, w); stats.Read != 0 || stats.Rebuilt {
+		t.Fatalf("the update of a new process: %+v, want nothing to do", stats)
+	}
+	manStat := statFile(manifest)
+	if err := os.WriteFile(first, firstRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if statFile(manifest) != manStat {
+		t.Fatal("the manifest changed")
+	}
+	wsnap := st.search.current()
+	if _, err := mergeSegs(context.Background(), filepath.Join(t.TempDir(), "merged.idx"), []mergeInput{{seg: wsnap.segs[0]}}); !errors.Is(err, errSegmentOther) || !damaged(err) {
+		t.Fatalf("a merge over the other segment: %v, want errSegmentOther", err)
+	}
+	if err := os.Remove(filepath.Join(e.Store.Dir, "chats/lark-c3/messages/2026-03-04.md")); err != nil {
+		t.Fatal(err)
+	}
+	w.Store.SearchIndexPurge()
+	// Read again: the first segment does not have the renamed day, which is read; the purge merges.
+	if stats := updateIndex(t, w); stats.Rebuilt || !stats.Merged || stats.Read != 1 {
+		t.Fatalf("the update over the other segment: %+v, want the index read again, the renamed day read, a merge", stats)
+	}
+	if st.search.current() == wsnap {
+		t.Fatal("the update went on from the files part it held")
+	}
+	checkIndexCurrent(t, w)
+	checkIndexFiles(t, w)
+	check("after the update over the other segment", w)
+
+	// And a search of the writing process that finds another segment under the name before any merge does: it reads
+	// the index again and goes on with it. The day goes back to its first name and the index is built once more by
+	// another store; that segment is then put under the name of the one w2 holds.
+	st2, err := NewStore(e.Store.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w2 := &Engine{Store: st2}
+	check("a new store", w2)
+	third, thirdRaw := one()
+	if err := os.Rename(filepath.Join(e.Store.Dir, day(7)), filepath.Join(e.Store.Dir, day(3))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(e.Store.searchDir()); err != nil {
+		t.Fatal(err)
+	}
+	st3, err := NewStore(e.Store.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateIndex(t, &Engine{Store: st3})
+	fourth, fourthRaw := one()
+	if len(fourthRaw) != len(thirdRaw) || bytes.Equal(fourthRaw, thirdRaw) {
+		t.Fatalf("the segments are %d and %d bytes, want the same size and other bytes", len(thirdRaw), len(fourthRaw))
+	}
+	if man, err = os.ReadFile(manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(fourth, third); err != nil {
+		t.Fatal(err)
+	}
+	matchesWrite(t, manifest, strings.Replace(string(man), filepath.Base(fourth), filepath.Base(third), 1))
+	check("the fourth segment under the third one's name", w2)
+	if st2.search.broken.Load() || w2.searchFilter(words("zqday4")) == nil {
+		t.Fatal("the writing process gave the index up instead of reading it again")
+	}
+}
+
+// A photo deleted from a recording takes its line out of photos.md; what the index read of that line goes at the
+// next update, as any text deleted on purpose (the file is still there, changed: without the purge its entry would
+// stay until the next merge).
+func TestPhotoDeleteDropsItsWordsFromTheSearchIndex(t *testing.T) {
+	e := goldenEngine(t, nil)
+	photoMeeting(t, e, recID, time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone))
+	addPhoto(t, e, recID, photoUpload(1, 1, "第一张", ""), false)
+	addPhoto(t, e, recID, photoUpload(2, 2, "zqphoto 第二张", ""), false)
+	if err := ageFiles(e.Store.Dir, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	updateIndex(t, e)
+	md := KindRecording + "/" + recID + "/" + photosText
+	key := wordClause("zqphoto").all[0]
+	if !indexEverHolds(t, e.Store.Dir, md, key) {
+		t.Fatal("the photo's word is not in the index: the test shows nothing")
+	}
+	if e.Store.search.purge.Load() {
+		t.Fatal("a purge is asked for before anything was deleted")
+	}
+	if ok, err := e.PhotoDelete(recID, 2); !ok || err != nil {
+		t.Fatalf("PhotoDelete: %v, %v", ok, err)
+	}
+	if !e.Store.search.purge.Load() {
+		t.Fatal("deleting a photo did not ask for the purge")
+	}
+	if got := e.Search("zqphoto", false, 10); len(got) != 0 {
+		t.Fatalf("the deleted photo's word is found: %+v", got)
+	}
+	if stats := updateIndex(t, e); !stats.Merged {
+		t.Fatalf("the update after: %+v, want a merge", stats)
+	}
+	if indexEverHolds(t, e.Store.Dir, md, key) {
+		t.Fatal("the index still has the deleted photo's word")
+	}
+}
+
+// A topic goes when the sources of all its points are forgotten, which is the one place a topic is removed: the
+// forgetting asks for the purge, so the topic's text leaves the index with the chats'.
+func TestForgottenTopicLeavesTheSearchIndex(t *testing.T) {
+	e := indexArchive(t)
+	st := e.Store
+	if err := st.PutChat(&Chat{ID: "lark-zq", Name: "zq 群", Kind: "group", Source: "lark"}); err != nil {
+		t.Fatal(err)
+	}
+	matchesWrite(t, st.path(KindChat, "lark-zq", "messages", "2026-03-01.md"), "# 2026-03-01\n- 09:00 同事1: 每周发布 zqpoint\n")
+	topic := &Topic{Slug: "zqtopic", Name: "zqtopic 发布节奏"}
+	points := topicFile{Points: []TopicPoint{{ID: "p1", Text: "每周发布 zqpoint", Sources: []TopicSource{{Kind: KindChat, ID: "lark-zq"}}}}}
+	if err := st.writeTopic(topic, points, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := ageFiles(st.Dir, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	updateIndex(t, e)
+	var name string
+	for n := range indexNames(t, st.Dir) {
+		if strings.HasPrefix(n, KindTopic+"/zqtopic/") {
+			name = n
+		}
+	}
+	if name == "" {
+		t.Fatal("the topic is not in the index: the test shows nothing")
+	}
+	got, err := e.ForgetSource("lark")
+	if err != nil || !slices.Contains(got.Items[KindTopic], "zqtopic") {
+		t.Fatalf("ForgetSource: %+v, %v; want the topic removed", got, err)
+	}
+	if !st.search.purge.Load() {
+		t.Fatal("forgetting the topic's sources did not ask for the purge")
+	}
+	if stats := updateIndex(t, e); !stats.Merged {
+		t.Fatalf("the update after: %+v, want a merge", stats)
+	}
+	for n := range indexNames(t, st.Dir) {
+		if strings.HasPrefix(n, KindTopic+"/") || strings.HasPrefix(n, KindChat+"/lark-zq/") {
+			t.Errorf("the index still names %s", n)
+		}
+	}
+	checkIndexCurrent(t, e)
+}
+
+// An update asked to stop while it looks at the files, or while it merges, stops there, not only between the
+// batches it reads: nothing more is published, no file of its own is left, the purge it was asked for is still
+// asked for, and the next update does the work.
+func TestUpdateSearchIndexStopsInTheLookAndTheMerge(t *testing.T) {
+	smallSegments(t)
+	indexSizesFor(t, func() { indexSizes.lookAsks, indexSizes.mergeAsks = 1, 1 })
+	e := indexArchive(t)
+	manifest := filepath.Join(e.Store.searchDir(), indexManifest)
+	// In the look: the context has ended before the first file is looked at.
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if stats, err := e.UpdateSearchIndex(ended); !errors.Is(err, context.Canceled) || stats.Files != 0 || stats.Read != 0 {
+		t.Fatalf("an update whose context has ended: %+v, %v; want it stopped before it looked at a file", stats, err)
+	}
+	if _, err := os.Stat(manifest); !os.IsNotExist(err) {
+		t.Fatalf("the stopped update published an index: %v", err)
+	}
+	updateIndex(t, e)
+	checkIndexCurrent(t, e)
+	before, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// In the merge: a day deleted on purpose is a merge at the next update; its context ends at the merge's third
+	// key (the look asks nothing of it here, the update once before it merges).
+	gone := "chats/lark-c3/messages/2026-03-04.md"
+	if err := os.Remove(filepath.Join(e.Store.Dir, gone)); err != nil {
+		t.Fatal(err)
+	}
+	e.Store.SearchIndexPurge()
+	indexSizesFor(t, func() { indexSizes.lookAsks = 1 << 20 })
+	ctx := &stopAfter{Context: context.Background()}
+	ctx.left.Store(3)
+	stats, err := e.UpdateSearchIndex(ctx)
+	if !errors.Is(err, context.Canceled) || stats.Merged {
+		t.Fatalf("an update stopped in its merge: %+v, %v; want it stopped, nothing merged", stats, err)
+	}
+	if ctx.left.Load() > -1 {
+		t.Fatalf("the merge asked its context %d times fewer than the test counts on", ctx.left.Load()+1)
+	}
+	if after, err := os.ReadFile(manifest); err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("the stopped merge changed the manifest (%v):\n%s\n%s", err, before, after)
+	}
+	checkIndexFiles(t, e) // the segment it was writing is gone
+	if !e.Store.search.purge.Load() {
+		t.Fatal("the purge is no longer asked for after the merge that was stopped")
+	}
+	if !indexNames(t, e.Store.Dir)[gone] {
+		t.Fatal("the deleted day's entry is gone already: the test no longer shows the next update dropping it")
+	}
+	if got, want := e.Find("build", 80), findReference(e, "build", 80); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Find after the stopped merge:\n got %+v\nwant %+v", got, want)
+	}
+	if stats := updateIndex(t, e); !stats.Merged {
+		t.Fatalf("the update after: %+v, want the merge", stats)
+	}
+	if indexNames(t, e.Store.Dir)[gone] || e.Store.search.purge.Load() {
+		t.Fatal("the deleted day's entry is still in the index after the merge")
+	}
+	checkIndexCurrent(t, e)
+	checkIndexFiles(t, e)
+}
+
+// An index started again after a failed check starts from nothing: what the store counted of the one before (the
+// entries of its log that later ones replaced, which bring the next merge forward) is not counted in the new one.
+func TestSearchIndexStartedAgainCountsNothingOfTheOneBefore(t *testing.T) {
+	e := indexArchive(t)
+	updateIndex(t, e)
+	day := "chats/lark-c0/messages/2026-03-01.md"
+	for i := range 3 {
+		writeOld(t, e, day, fmt.Sprintf("# 2026-03-01\n- 09:00 同事0: 改了 %d\n", i), time.Duration(50-i)*time.Minute)
+		if stats := updateIndex(t, e); stats.Read != 1 || stats.Merged {
+			t.Fatalf("update %d: %+v, want the day read into the log", i, stats)
+		}
+	}
+	ix := &e.Store.search
+	if st := ix.state.Load(); st.logOld != 3 || st.logLen == 0 {
+		t.Fatalf("the log has %d replaced entries in %d bytes, want 3", st.logOld, st.logLen)
+	}
+	ix.broken.Store(true) // as a search's failed check leaves it
+	if stats := updateIndex(t, e); !stats.Rebuilt || stats.Merged || stats.Read != stats.Files {
+		t.Fatalf("the update after the failed check: %+v, want the index started again", stats)
+	}
+	if st := ix.state.Load(); st.logOld != 0 || st.logLen == 0 || st.man.Seq != 1 {
+		t.Fatalf("the index started again: %d replaced entries, %d bytes of log, %d files named; want 0, some, 1", st.logOld, st.logLen, st.man.Seq)
+	}
+	checkIndexCurrent(t, e)
+	checkIndexFiles(t, e)
 }

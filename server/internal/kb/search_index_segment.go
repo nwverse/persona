@@ -3,6 +3,8 @@ package kb
 import (
 	"bufio"
 	"cmp"
+	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -18,23 +20,30 @@ import (
 // A segment is one immutable file of the search index: some files of the data dir (path, mtime, size, each with a
 // number), and for every key the numbers of the files that have it. Layout, in the order written:
 //
-//	"PKBSEG2\n"
+//	"PKBSEG3\n"
 //	lists      one per key, in key order: a kind byte, then nothing (every file), a bitmap, or the numbers as
 //	           varint gaps
 //	files      count; per file the bytes shared with the name before, the rest of its name, mtime, size
 //	keys       blocks of segBlockKeys keys: per key its gap to the key before, its list's length and CRC; then
 //	           the block's CRC
 //	blocks     count; per block its first key (as a gap), its length and the length of its keys' lists
-//	footer     where the four parts are, how many files, the CRCs of files and blocks, its own CRC
+//	footer     where the four parts are, the segment's id, how many files, the CRCs of files and blocks, its
+//	           own CRC
 //
 // An open segment keeps the files and the blocks part in memory; a search reads the blocks of the keys it asks
 // for, then their lists. Every part is checked before it is believed: files and blocks when the segment opens, a
 // block of keys and a list when they are read. A segment that fails a check is not used (searchIndex.broken), so a
 // damaged one costs time, never a result.
+//
+// A list is numbers into the files part, so it says something only next to the files part it was written with. A
+// segment is therefore never changed once written, its name is never given to another (indexUpdate.name), and its
+// footer carries an id drawn at random when it was written: whoever holds a segment's files part in memory checks,
+// each time it opens the file to read keys and lists, that the footer there is still the one it read (open). A file
+// that is another segment under the same name is not read through this one's files.
 const (
-	segMagic      = "PKBSEG2\n"
-	segFooterSize = 8*8 + 4*5
-	segFooterTag  = 0x32474553 // "SEG2"
+	segMagic      = "PKBSEG3\n"
+	segFooterSize = 8*8 + 8 + 4*5
+	segFooterTag  = 0x33474553 // "SEG3"
 	segBlockKeys  = 64
 
 	listEvery  = 0 // every file of the segment
@@ -45,6 +54,10 @@ const (
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
 var errSegment = errors.New("search index segment is damaged")
+
+// errSegmentOther: the file at a segment's path is not the segment that was opened there (another one was written
+// under its name, or its footer changed). Whoever holds it reads the index from disk again.
+var errSegmentOther = errors.New("search index segment was replaced")
 
 // segDoc is a file as a segment knows it. name is its path relative to the data dir, with slashes.
 type segDoc struct {
@@ -57,6 +70,9 @@ type segDoc struct {
 // from the file when asked for.
 type indexSeg struct {
 	path string
+	size int64
+	// foot is the file's footer as it was read: what tells this segment from any other (open).
+	foot [segFooterSize]byte
 	docs []segDoc
 	// Block i holds the keys from first[i] up to first[i+1]; it is at keyOff[i]..keyOff[i+1] of the keys part and
 	// its lists at listOff[i]..listOff[i+1] of the lists part.
@@ -80,6 +96,7 @@ type segWriter struct {
 	f, kf *os.File
 	w, kw *bufio.Writer
 	docs  []segDoc
+	id    [8]byte
 	n     uint64 // bytes of lists written
 	nkeys uint64 // bytes of the keys part written
 
@@ -112,6 +129,7 @@ func newSegWriter(path string, docs []segDoc) (*segWriter, error) {
 		return nil, err
 	}
 	w := &segWriter{f: f, kf: kf, w: bufio.NewWriterSize(f, 1<<18), kw: bufio.NewWriterSize(kf, 1<<16), docs: docs}
+	_, _ = rand.Read(w.id[:]) // never fails
 	_, w.err = w.w.WriteString(segMagic)
 	return w, nil
 }
@@ -240,6 +258,7 @@ func (w *segWriter) finish() (err error) {
 		foot = binary.LittleEndian.AppendUint64(foot, n)
 		off += n
 	}
+	foot = append(foot, w.id[:]...)
 	foot = binary.LittleEndian.AppendUint32(foot, uint32(len(w.docs)))
 	foot = binary.LittleEndian.AppendUint32(foot, crc32.Checksum(docs, crcTable))
 	foot = binary.LittleEndian.AppendUint32(foot, crc32.Checksum(blocks, crcTable))
@@ -256,7 +275,7 @@ func (w *segWriter) finish() (err error) {
 	return w.f.Sync()
 }
 
-// openSeg reads a segment's files and blocks part. Any part that does not check out is errSegment.
+// openSeg reads the segment at path: its files and blocks part. Any part that does not check out is errSegment.
 func openSeg(path string) (*indexSeg, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -267,7 +286,17 @@ func openSeg(path string) (*indexSeg, error) {
 	if err != nil {
 		return nil, err
 	}
-	size := fi.Size()
+	s, err := readSeg(f, fi.Size())
+	if err != nil {
+		return nil, err
+	}
+	s.path = path
+	return s, nil
+}
+
+// readSeg reads a segment of size bytes from f, all of it through f: the footer, the files and the blocks are one
+// file's.
+func readSeg(f io.ReaderAt, size int64) (*indexSeg, error) {
 	if size < int64(len(segMagic))+segFooterSize {
 		return nil, errSegment
 	}
@@ -275,7 +304,8 @@ func openSeg(path string) (*indexSeg, error) {
 	if _, err := f.ReadAt(head, 0); err != nil || string(head) != segMagic {
 		return nil, errSegment
 	}
-	foot := make([]byte, segFooterSize)
+	s := &indexSeg{size: size}
+	foot := s.foot[:]
 	if _, err := f.ReadAt(foot, size-segFooterSize); err != nil {
 		return nil, errSegment
 	}
@@ -303,16 +333,16 @@ func openSeg(path string) (*indexSeg, error) {
 		}
 		return buf, nil
 	}
-	docs, err := read(1, binary.LittleEndian.Uint32(foot[68:]))
+	docs, err := read(1, binary.LittleEndian.Uint32(foot[76:]))
 	if err != nil {
 		return nil, err
 	}
-	blocks, err := read(3, binary.LittleEndian.Uint32(foot[72:]))
+	blocks, err := read(3, binary.LittleEndian.Uint32(foot[80:]))
 	if err != nil {
 		return nil, err
 	}
-	s := &indexSeg{path: path, lists: int64(offs[0]), keys: int64(offs[2])}
-	if s.docs, err = readSegDocs(docs, binary.LittleEndian.Uint32(foot[64:])); err != nil {
+	s.lists, s.keys = int64(offs[0]), int64(offs[2])
+	if s.docs, err = readSegDocs(docs, binary.LittleEndian.Uint32(foot[72:])); err != nil {
 		return nil, err
 	}
 	if err := s.readBlocks(blocks, lens[2], lens[0]); err != nil {
@@ -564,13 +594,36 @@ func (s *indexSeg) ids(dst []uint32, list []byte, crc uint32) ([]uint32, error) 
 	return dst, nil
 }
 
-// candidates is the set of the segment's files that can hold every clause's word.
-func (s *indexSeg) candidates(clauses []gramClause) (bitset, error) {
+// open opens the segment's file to read keys and lists from, after checking that it is still the file s was read
+// from: its footer, id and checksums, is the one s holds. The file is then read through this handle alone, and a
+// segment's file is never written again, so what is read belongs to s.docs. Another file at the path (a segment
+// written under the same name, which the index's own writer never does) is errSegmentOther, never an answer.
+func (s *indexSeg) open() (*os.File, error) {
 	f, err := os.Open(s.path)
 	if err != nil {
 		return nil, err
 	}
+	var foot [segFooterSize]byte
+	if _, err := f.ReadAt(foot[:], s.size-segFooterSize); err != nil || foot != s.foot {
+		f.Close()
+		return nil, errSegmentOther
+	}
+	return f, nil
+}
+
+// candidates is the set of the segment's files that can hold every clause's word.
+func (s *indexSeg) candidates(clauses []gramClause) (bitset, error) {
+	f, err := s.open()
+	if err != nil {
+		return nil, err
+	}
 	defer f.Close()
+	return s.candidatesIn(f, clauses)
+}
+
+// candidatesIn is candidates read from f, the segment's file.
+func (s *indexSeg) candidatesIn(f io.ReaderAt, clauses []gramClause) (bitset, error) {
+	var err error
 	none := newBitset(len(s.docs))
 	// The keys every file must have, each looked up once; a key the segment does not have settles it.
 	var want []uint64
@@ -668,7 +721,7 @@ type segCursor struct {
 }
 
 func (s *indexSeg) cursor() (*segCursor, error) {
-	f, err := os.Open(s.path)
+	f, err := s.open()
 	if err != nil {
 		return nil, err
 	}
@@ -764,8 +817,8 @@ type mergeInput struct {
 
 // mergeSegs writes at path the segment of the kept files of every input, and returns how many there are. No file
 // may be kept from two inputs. The keys and lists are read and written one after another, so a merge holds one
-// key's files in memory, not the segments.
-func mergeSegs(path string, inputs []mergeInput) (int, error) {
+// key's files in memory, not the segments. When ctx ends it stops, leaving no file.
+func mergeSegs(ctx context.Context, path string, inputs []mergeInput) (int, error) {
 	type source struct {
 		cur   *segCursor
 		remap []uint32 // a file's number in the merged segment; dropped: not kept
@@ -815,7 +868,11 @@ func mergeSegs(path string, inputs []mergeInput) (int, error) {
 		return 0, err
 	}
 	var ids, out []uint32
-	for w.err == nil {
+	for n := 1; w.err == nil; n++ {
+		if n%max(1, indexSizes.mergeAsks) == 0 && ctx.Err() != nil {
+			w.err = ctx.Err()
+			break
+		}
 		key, any := uint64(0), false
 		for _, s := range srcs {
 			k, ok, err := s.cur.key()
