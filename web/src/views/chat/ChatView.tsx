@@ -42,6 +42,7 @@ import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, 
 import { EDIT_SEND_SETTLE_MS } from "../../lib/edit-last-key";
 import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
+import { foldsBackgroundRounds } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
@@ -1186,8 +1187,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // a line that comes out the same as last time keeps its object, so a push re-renders only the lines it changed
   // (lib/stable-lines.ts); the task index likewise, or every row reading the context would render again
   const lastLines = useRef<ChatLine[] | undefined>(undefined);
-  // the main conversation folds rounds it did not start from the user (docs/assistant/assistant.md "Background rounds")
-  const foldBackground = useStore((s) => s.assistant?.main_background_folded) !== false && isMain;
+  // the main conversation and the leader conversations fold rounds their user did not start: another conversation's
+  // relay, a scheduled patrol, a follow-up (docs/assistant/assistant.md "Background rounds", #6595). On a cold load the
+  // AssistantInfo has not arrived but the cached main id has: keep the main chat folded (the absent switch means on).
+  const foldBackground = useStore((s) =>
+    foldsBackgroundRounds(sid, s.assistant ?? (mainCache ? { main: mainCache.scope } : undefined)));
   const lines = useMemo(
     () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground })),
     [earlier.liveItems, lastLive, outgoing, foldBackground],

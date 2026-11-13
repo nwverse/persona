@@ -1107,10 +1107,15 @@ a reply, user input or different source resets it. Long content folds to three l
 control. No group-chat header, member list or per-source avatar is added. Quiet supervision rounds retain their existing
 folded trace, now labeled with their source mention.
 
-**Background rounds** (#4314, `docs/assistant/assistant.md` "Background rounds"): in the main conversation, while
-`main_background_folded` is on (Settings › Assistant › **Fold background rounds**, `settings/AssistantSettings.tsx`), a round
-whose first input's source is `conversation`, `followup` or `patrol` folds into the same line as a quiet supervision round,
-`@<source> · Background round` (`chatLines`' `background` option, `lib/turns.ts`; `SupervisionLine` in `views/chat/Lines.tsx`).
+**Background rounds** (#4314, leaders in #6595, `docs/assistant/assistant.md` "Background rounds"): in the main
+conversation and the leader conversations (`AssistantInfo.leaders`), while `main_background_folded` is on
+(Settings › Assistant › **Fold background rounds**, `settings/AssistantSettings.tsx`; gate `lib/background-fold.ts`
+`foldsBackgroundRounds`), a round whose first input's source is `conversation`, `followup` or `patrol` folds into the
+same line as a quiet supervision round, `@<source> · Background round` (`chatLines`' `background` option, `lib/turns.ts`;
+`SupervisionLine` in `views/chat/Lines.tsx`). An ordinary side conversation keeps showing every round. The hub's
+interject note (`<persona-context kind="context" title="插话">`) is stripped in `parseUserText` and never becomes an
+owner-bubble quote chip; `e2e/leader-background-rounds.mjs` checks the leader chat with synthetic data and takes the
+before/after screenshots.
 Opened, its inputs are source blocks, not raw model input; a scheduled task's or follow-up's input shows only its line,
 never the prompt (`promptHidden`), folded or not. The supervision visibility rule (`supervisionVisible`) keeps rounds that
 asked or told the user shown. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
@@ -1494,6 +1499,7 @@ Requests carry only these fields (anything else is dropped) and cannot specify a
 `panes/agent` answers `{session_id}`: Run agent here opens that chat as New agent opens the one it starts (`openSession` in `NodeActionDeps`, #3287).
 
 - Workspace titles select the exact workspace and toggle its remembered disclosure, just like the leading arrow, at every depth. Empty and populated rows behave alike; open a conversation through its Agent row.
+- **Repository display membership**: runtime logical spaces with verified Git worktree metadata join the unique catalog workspace at the same checkout on that computer and manager. `repositoryWorkspace` supplies display membership and pinned navigation. Workspace action attribution uses `sessionWorkspace` and the native catalog identity. Ambiguous checkout matches retain their separate rows.
 - **Workspace actions**: catalog-backed rows in **By repo** share a menu in the sidebar and phone Agents page (`views/WorktreeActions.tsx`, `lib/worktree-actions.ts`). Pointer, context-menu and keyboard entries use the same credential/manager/computer/host/runtime ID. Full-device access and current engine availability gate mutations. **Open worktree** opens a direct Agent, or offers New Agent at that existing destination; **New agent…** preserves its exact host, workspace ID and directory without creating another checkout. **Open parent worktree** selects the actual catalog parent and reveals its ancestors. Copy name/path remains separate from mutation rights.
 - **New child worktree…** uses `views/NewWorktree.tsx` and `lib/worktree-creation.ts`. The Git source project/workspace and base choose the starting code; the independently selected parent controls nesting. Advanced Orca choices are read from `worktree/prepare` with `composer:true`: generated or optional display name, actual refs, capability-gated branch override, GitHub source, note and sparse preset. The engine owns the resulting directory and IDs. Missing advanced support leaves an explicit basic branch/path mode; edited advanced choices are never silently downgraded. Legacy terminal-menu `New worktree…` continues to use the same host and helpers in `lib/worktree.ts`.
   The browser persists one exact request and UUID before sending it with `X-Persona-Op-Id`. Closing or reloading retains pending/unknown requests; **Check result** inspects/replays that receipt and never invents a fresh UUID after an uncertain result. Acknowledged creation displays the actual path/branch, refreshes the catalog and offers **Start agent in this worktree** through New Agent. No Agent is selected by default, engine setup tabs are preserved, and Agent launch retries never recreate the checkout.

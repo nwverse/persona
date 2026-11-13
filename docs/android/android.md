@@ -139,14 +139,16 @@ tasks**. A started plan is the dispatched line in the card's place, and the card
 kept the plan it was opened with (the tray's Review) says **✓ Started N tasks** instead of offering Start again. Tests:
 `TaskRecordsTest` (core/domain), `PlanCardConversationTest`, `PlanCardFailureReasonTest`.
 
-#### Background rounds fold into one line (#4314)
+#### Background rounds fold into one line (#4314, leaders in #6595)
 
-The main conversation folds the rounds it did not start, as web and iOS do (rules in
-[assistant.md](../assistant/assistant.md#background-rounds)):
+The main conversation and the leader (direction) conversations fold the rounds they did not start, as web and iOS do
+(rules in [assistant.md](../assistant/assistant.md#background-rounds)):
 
-- **Which rounds**: only in the main conversation (the tasks store's `mainConversation`, else the config's `main`) and
-  only while the hub's `main_background_folded` is on (`AssistantConfig.backgroundFolded`: a hub that omits it counts as
-  on). `AssistantConversation.project(…, BackgroundFolding)` (`core/domain/.../tasks/BackgroundRounds.kt`) starts a round
+- **Which rounds**: in the main conversation (the tasks store's `mainConversation`, else the config's `main`) or one of
+  the hub's leader ids (`ChatChromeBindings.leaderConversations`, from `AssistantSnapshot.leaders`; gate
+  `BackgroundFolding.foldsConversation`), and only while the hub's `main_background_folded` is on
+  (`AssistantConfig.backgroundFolded`: a hub that omits it counts as on). `AssistantConversation.project(…, BackgroundFolding)`
+  (`core/domain/.../tasks/BackgroundRounds.kt`) starts a round
   at a user input whose message source (`sourceOf`) is `conversation`, `followup` or `patrol` and ends it at the next
   genuine input, a queued one included; a system hint inside it does not end it. Such a round stays in the conversation
   rather than going to the background record; supervision and the other quiet rounds keep going there as before.
@@ -170,6 +172,10 @@ The main conversation folds the rounds it did not start, as web and iOS do (rule
 - **Switch**: Settings › Assistant › **Fold background rounds**, shown when the hub sends the field
   (`AssistantSettingsState.setMainBackgroundFolded`, as `main_tasks_quiet`). Off: the conversation and Needs you are
   exactly as before.
+- **Interject note** (#6595): the hub's mid-turn note `<persona-context kind="context" title="插话">`
+  (`prompts/assistant/interject.md`) is model instructions, not a picked quote: `MessageContext.isInterjectContext`
+  marks it and `messageModel` drops it from the rendered contexts (the text is already stripped from the bubble body),
+  while it stays in the model's input.
 - **Tests**: `BackgroundRoundsTest` (core/domain), `AssistantSettingsStateTest.backgroundFoldSwitchSavesAndComesBackOnFailure`,
   `HttpSettingsParityWireTest.mainBackgroundFoldedIsSentOnlyWhenSetAndOnWhenMissing`.
 
