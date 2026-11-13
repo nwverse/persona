@@ -80,6 +80,9 @@ type InboxChainEntry struct {
 	Messages []InboxChainMessage `json:"messages,omitempty"`
 	Link     *InboxChainLink     `json:"link,omitempty"`
 	Via      string              `json:"via,omitempty"`
+	// By is how a done entry filed the item, as a value rather than words: a done_by, or "muted" (filed by a mute,
+	// whose done_by is read). The state key tells done_muted from done_read by it.
+	By string `json:"by,omitempty"`
 }
 
 // InboxChainMessage is one message of a received batch.

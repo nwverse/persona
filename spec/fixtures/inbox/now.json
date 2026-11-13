@@ -3,7 +3,7 @@
   "operation": "inbox_now",
   "description": "The item's state key (now) and the words every app shows for it. Go checks that the manager computes expected.now and expected.section (status) from the item; iOS, the web app and Android check that the key and the item's fields give expected.text in each language. An item without now (an older hub) keeps each app's own state words and is not covered here.",
   "follow_by_lang": "When a case has input.follow_by_lang, an app checking language L reads follow.who and follow.next from follow_by_lang[L] (the model writes them in the user's language); Go reads the item as it is.",
-  "compose": "waiting: (follow.who ? waiting : waiting_anyone) + (follow.check_at ? look_again : '') + (follow.next ? next : ''). check_due: check_due + (follow.next ? next : ''). failed: handling.error ? failed : failed_plain. Every other key is its own text.",
+  "compose": "waiting: (follow.who ? waiting : waiting_anyone) + (follow.check_at ? look_again : '') + (follow.next ? next : ''). check_due: check_due + (follow.next ? next : ''). failed: handling.error ? failed : failed_plain. Every other key is its own text. Order when several hold: done first (by done_by, and by: muted on the newest done entry), then folded, the suggestion keys, the handling keys (looking, agent_working, waiting, failed), follow_up_ask before check_due, queued, then fyi or needs_you by tier. {reason} is handling.error as it was written (already in words, in the language of its time), never agent.error; without it, failed_plain. A key an app does not know, or no now at all, leaves the app on its own state words.",
   "texts": {
     "confirm_reply": {
       "en": "Waiting for you to confirm a reply",
@@ -12,8 +12,8 @@
     },
     "confirm_agent": {
       "en": "Waiting for you to start an Agent",
-      "zh-Hans": "等你点开始",
-      "ja": "開始の確認待ち"
+      "zh-Hans": "等你启动 Agent",
+      "ja": "Agentの開始待ち"
     },
     "decide": {
       "en": "Waiting for your decision",
@@ -216,8 +216,8 @@
         "section": "action",
         "text": {
           "en": "Waiting for you to start an Agent",
-          "zh-Hans": "等你点开始",
-          "ja": "開始の確認待ち"
+          "zh-Hans": "等你启动 Agent",
+          "ja": "Agentの開始待ち"
         }
       }
     },
@@ -488,11 +488,11 @@
             "next": "ask whether Friday works"
           },
           "zh-Hans": {
-            "who": "Alex 确认日期",
+            "who": "张三确认日期",
             "next": "问周五行不行"
           },
           "ja": {
-            "who": "Alexさんの日程確認",
+            "who": "田中さんの日程確認",
             "next": "金曜日で良いか聞く"
           }
         }
@@ -502,8 +502,8 @@
         "section": "working",
         "text": {
           "en": "Waiting for Alex to confirm the date · look again {time}: ask whether Friday works",
-          "zh-Hans": "等Alex 确认日期 · {time}再看：问周五行不行",
-          "ja": "Alexさんの日程確認を待っています · {time}に再確認：金曜日で良いか聞く"
+          "zh-Hans": "等张三确认日期 · {time}再看：问周五行不行",
+          "ja": "田中さんの日程確認を待っています · {time}に再確認：金曜日で良いか聞く"
         },
         "time": "2026-01-02T09:00:00Z"
       },
@@ -1131,7 +1131,8 @@
               "id": "c1",
               "at": "2026-01-01T10:00:00Z",
               "kind": "done",
-              "text": "Muted, done"
+              "text": "Muted, done",
+              "by": "muted"
             }
           ],
           "now": "done_muted"
@@ -1146,7 +1147,7 @@
           "ja": "ミュート済み"
         }
       },
-      "note": "How the manager tells a muted item from one read elsewhere is its own business; the apps only read now."
+      "note": "A muted item is done_by read; its newest done entry says by: muted (a value, not words), which is how the key is told apart from done_read."
     }
   ]
 }

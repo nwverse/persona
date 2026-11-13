@@ -46,7 +46,7 @@ const (
 	NowDoneUser       = "done_user"       // done: the user marked it done
 	NowDoneRead       = "done_read"       // done: read elsewhere
 	NowDoneDismissed  = "done_dismissed"  // done: the user dismissed it
-	NowDoneMuted      = "done_muted"      // done: muted
+	NowDoneMuted      = "done_muted"      // done: muted (done_by read; the newest done entry has By "muted")
 	NowDoneSuperseded = "done_superseded" // done: a newer item took its place
 )
 
