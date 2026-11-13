@@ -122,6 +122,63 @@ func TestMutesOfWhere(t *testing.T) {
 	}
 }
 
+// GET /api/v1/inbox lists where, and the mute menu it sends names the chat by where, not by the newest message's title.
+// Muting by that entry still mutes the chat's id, as before.
+func TestInboxWhereListed(t *testing.T) {
+	h := muteHub(t)
+	it := &InboxItem{ID: "lark:F1:5", Source: "lark", Kind: KindGroup, Title: "示例 A 周四下午可以", Where: "Example Group",
+		UpdatedAt: time.Now(), Last: "5", Count: 1, Lark: &InboxLark{FeedID: "F1", IsGroup: true, SenderID: "u1"}, Sender: "丙"}
+	h.inbox.mu.Lock()
+	h.inbox.items[it.ID] = it
+	h.inbox.mu.Unlock()
+	mux := h.routes()
+
+	code, out := inboxCall(t, mux, "GET", "/api/v1/inbox", "")
+	if code != 200 {
+		t.Fatalf("GET /api/v1/inbox: %d", code)
+	}
+	raw, _ := json.Marshal(out["items"])
+	for _, want := range []string{`"where":"Example Group"`, `"name":"Example Group","tag":"chat","value":"F1"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("the list does not carry %s: %s", want, raw)
+		}
+	}
+	if code, _ := inboxCall(t, mux, "POST", "/api/v1/inbox/mutes", `{"item_id":"`+it.ID+`","tag":"chat"}`); code != 200 {
+		t.Fatalf("muting the chat entry: %d", code)
+	}
+	if _, out := inboxCall(t, mux, "GET", "/api/v1/inbox/mutes", ""); !strings.Contains(fmt.Sprint(out["mutes"]), "Example Group") {
+		t.Fatalf("the mute kept another name: %v", out["mutes"])
+	}
+}
+
+// A chat renamed in the source is listed under its new name as soon as its next thing arrives — including a thing that
+// only moves its read position (the same last message, a new read marker).
+func TestMigratedRenameOnABlockOnlyWrite(t *testing.T) {
+	ctx := context.Background()
+	h := newInboxHub(t)
+	if err := h.inboxReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p := &extensionLark{}
+	h.addConnector(p, false)
+	now := time.Now()
+	thing := func(name, replyTo string) connector.InboxThing {
+		return connector.InboxThing{Thread: "chat:10", Kind: KindDM, Title: "Alice", At: now, Last: "5", Tags: chatTags(name),
+			Extra: &connector.ThingExtra{Source: "lark", Account: "feishu", AccountName: "飞书", LegacyID: "lark:10:5", Count: 1,
+				StartedAt: now, Lark: rawJSON(InboxLark{AccountID: 1, FeedID: "10", StartPosition: "5", ReplyTo: replyTo})}}
+	}
+	p.things = []connector.InboxThing{thing("Example Group", "")}
+	h.collectInbox(ctx, roundPoll)
+	if it := h.inbox.items["lark:10:5"]; it == nil || it.Where != "Example Group" {
+		t.Fatalf("first write: %+v", it)
+	}
+	p.things[0] = thing("Renamed Group", "m5") // same last message, another block (read further in the chat)
+	h.collectInbox(ctx, roundPoll)
+	if it := h.inbox.items["lark:10:5"]; it == nil || it.Lark == nil || it.Lark.ReplyTo != "m5" || it.Where != "Renamed Group" {
+		t.Fatalf("a rename on a blocks-only write did not follow: where %q, block %+v", it.Where, it.Lark)
+	}
+}
+
 // Grouped events take where on the model, fallback and done-event writes too; fallback title preservation does not
 // restore an old chat name, and the listed JSON carries the current one.
 func TestPutEventWhere(t *testing.T) {
