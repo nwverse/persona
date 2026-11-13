@@ -197,9 +197,11 @@ fun restoreSecondaryParents(stack: MutableList<NavKey>) {
     while (index < stack.size) {
         val key = stack[index]
         val parent = when (key) {
-            PairingRoute, ConnectionSettingsRoute, is SettingsPageRoute, is ExtensionUiRoute, is ExtensionRoute,
+            PairingRoute, ConnectionSettingsRoute, is SettingsPageRoute, is ExtensionRoute,
             is ModelProviderRoute, is ChannelRoute, is ManagerRoute, is ConnectorRoute,
             ExtensionMarketRoute, ExtensionMarketsRoute, is ExtensionCatalogRoute -> SettingsRoute.takeUnless { hasSettings }
+            // An extension page keeps the Assistant, Inbox or Settings stack it was opened from.
+            is ExtensionUiRoute -> null
             is InboxItemRoute, is InboxItemUiRoute, is LarkChatRoute -> InboxRoute.takeUnless { hasInbox }
             else -> null
         }
