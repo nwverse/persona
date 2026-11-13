@@ -1,0 +1,90 @@
+import XCTest
+
+/// The to-do's page at the text sizes (#6151), against the mock hub: its status line under the title and its two bottom
+/// buttons. At the accessibility sizes the status line wraps instead of squeezing each fact into a column a letter
+/// wide, and the buttons stack, Hand to Agent first, each across the page. PERSONA_SHOTS=<dir> saves the page as it
+/// opens, `page-<language>-<size>.png`, for the before / after pixel comparison. PERSONA_SHOOT says which:
+/// `zh:L,XL,XXL,XXXL,AX5;en:L,AX5` (default `zh:L,AX5`). PERSONA_BEFORE (the app built from main) shoots the same and
+/// checks nothing.
+final class TodoPageTextSizeTests: XCTestCase {
+    private var app: XCUIApplication!
+
+    private static let sizes = ["L": "UICTContentSizeCategoryL", "XL": "UICTContentSizeCategoryXL",
+                                "XXL": "UICTContentSizeCategoryXXL", "XXXL": "UICTContentSizeCategoryXXXL",
+                                "AX1": "UICTContentSizeCategoryAccessibilityM",
+                                "AX3": "UICTContentSizeCategoryAccessibilityXL",
+                                "AX5": "UICTContentSizeCategoryAccessibilityXXXL"]
+    private static let languages = ["zh": ("(zh-Hans)", "zh_CN"), "en": ("(en)", "en_US"), "ja": ("(ja)", "ja_JP")]
+
+    @MainActor func testTodoPageAtTheTextSizes() throws {
+        guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
+            throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)")
+        }
+        continueAfterFailure = true
+        let env = ProcessInfo.processInfo.environment
+        let before = env["PERSONA_BEFORE"] != nil
+        for part in (env["PERSONA_SHOOT"] ?? "zh:L,AX5").split(separator: ";") {
+            let pair = part.split(separator: ":").map(String.init)
+            let language = pair[0]
+            for size in pair[1].split(separator: ",").map(String.init) {
+                page(hub, language, size, check: !before && size.hasPrefix("AX"))
+            }
+        }
+    }
+
+    /// The mock's 「给 NAS 配自动备份」, known by its title in the bar (at the largest sizes the page's rows may be out of
+    /// sight).
+    @MainActor private func page(_ hub: String, _ language: String, _ size: String, check: Bool) {
+        let name = "给 NAS 配自动备份"
+        launch(hub, language, size, ["-openTodoTitled", name])
+        let title = app.navigationBars.staticTexts[name].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 60), "\(language) \(size): the to-do's page")
+        shot("page-\(language)-\(size)")
+        guard check else { return }
+        let screen = app.windows.firstMatch.frame
+        let hand = app.buttons["todo.handToAgent"].firstMatch, done = app.buttons["todo.toggleDone"].firstMatch
+        XCTAssertTrue(hand.waitForExistence(timeout: 5) && done.exists, "\(language) \(size): the bottom buttons")
+        for (button, what) in [(hand, "Hand to Agent"), (done, "Done")] {
+            XCTAssertGreaterThan(button.frame.width, screen.width * 0.8, "\(language) \(size): \(what) across the page \(button.frame)")
+        }
+        XCTAssertLessThanOrEqual(hand.frame.maxY, done.frame.minY + 1, "\(language) \(size): Hand to Agent above Done")
+        for id in ["todo.status.agents", "todo.status.created"] {
+            let fact = app.staticTexts[id].firstMatch
+            XCTAssertTrue(fact.exists, "\(language) \(size): \(id)")
+            // A column a letter wide was the bug: a fact is wider than it is tall, within the screen.
+            XCTAssertGreaterThan(fact.frame.width, fact.frame.height, "\(language) \(size): \(id) \(fact.frame)")
+            XCTAssertLessThanOrEqual(fact.frame.maxX, screen.maxX + 1, "\(language) \(size): \(id) \(fact.frame)")
+        }
+    }
+
+    @MainActor private func launch(_ hub: String, _ language: String, _ size: String, _ extra: [String]) {
+        app?.terminate()
+        XCUIDevice.shared.appearance = ProcessInfo.processInfo.environment["PERSONA_APPEARANCE"] == "dark" ? .dark : .light
+        app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        let (languages, locale) = Self.languages[language]!
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistantPage", "todos",
+                               "-AppleLanguages", languages, "-AppleLocale", locale,
+                               "-UIPreferredContentSizeCategoryName", Self.sizes[size]!] + extra
+        app.launchPinned()
+    }
+
+    /// The screen once two shots in a row are the same, so a view still settling is not counted as a difference.
+    @MainActor private func shot(_ name: String) {
+        var last = XCUIScreen.main.screenshot()
+        for _ in 0..<8 {
+            usleep(300_000)
+            let next = XCUIScreen.main.screenshot()
+            if next.pngRepresentation == last.pngRepresentation { break }
+            last = next
+        }
+        let a = XCTAttachment(screenshot: last)
+        a.name = name
+        a.lifetime = .keepAlways
+        add(a)
+        if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try? last.pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png"))
+        }
+    }
+}

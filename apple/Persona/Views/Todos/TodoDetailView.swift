@@ -5,6 +5,7 @@ struct TodoDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.tabIsActive) private var inFront
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var typeSize
     var todoID: String
 
     @State private var store = TodoStore.shared
@@ -190,19 +191,31 @@ struct TodoDetailView: View {
                         .focused($titleFocused)
                         .onSubmit { commitTitle() }
 
-                    HStack(spacing: Theme.Space.sm) {
-                        Chip(text: todo.statusLabel(status), look: .tone(todo.shownState(status).todoTone))
-                        Text("·")
-                            .foregroundStyle(.secondary)
-                        Text("\(activeAgents.count) agents")
-                            .font(Theme.Font.caption)
-                            .foregroundStyle(.secondary)
-                        if let d = todo.createdAt {
+                    if typeSize.isAccessibilitySize {
+                        // One row squeezed each fact into a column a letter wide (#6151): here the row wraps, and each
+                        // fact goes to the next line whole, with its "·".
+                        FlowLayoutRow(spacing: Theme.Space.sm) {
+                            Chip(text: todo.statusLabel(status), look: .tone(todo.shownState(status).todoTone))
+                            statusFact(Text("\(activeAgents.count) agents"), id: "todo.status.agents")
+                            if let d = todo.createdAt {
+                                statusFact(Text("Created \(Fmt.relative(d))"), id: "todo.status.created")
+                            }
+                        }
+                    } else {
+                        HStack(spacing: Theme.Space.sm) {
+                            Chip(text: todo.statusLabel(status), look: .tone(todo.shownState(status).todoTone))
                             Text("·")
                                 .foregroundStyle(.secondary)
-                            Text("Created \(Fmt.relative(d))")
+                            Text("\(activeAgents.count) agents")
                                 .font(Theme.Font.caption)
                                 .foregroundStyle(.secondary)
+                            if let d = todo.createdAt {
+                                Text("·")
+                                    .foregroundStyle(.secondary)
+                                Text("Created \(Fmt.relative(d))")
+                                    .font(Theme.Font.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
 
@@ -482,40 +495,76 @@ struct TodoDetailView: View {
         #endif
     }
 
-    private func bottomBar(_ todo: TodoItem) -> some View {
-        HStack(spacing: Theme.Space.m) {
-            // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
-            if !todo.isDone {
-                Button {
-                    showHandoff = true
-                } label: {
-                    HStack(spacing: Theme.Space.xs) {
-                        ThemedIcon(Theme.Icon.handToAI)
-                        Text("Hand to Agent").lineLimit(1).minimumScaleFactor(0.8)
-                    }
-                    .font(Theme.Font.heading)
-                    .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
-                }
-                .themedButton(prominent: true)
-                .controlSize(.large)
-            }
+    /// A fact in the status line at the accessibility sizes: its "·" before it, so the two wrap together.
+    private func statusFact(_ fact: Text, id: String) -> some View {
+        HStack(spacing: Theme.Space.sm) {
+            Text("·")
+                .foregroundStyle(.secondary)
+            fact
+                .font(Theme.Font.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier(id)
+        }
+    }
 
-            Button {
-                store.toggleDone(todo)
-            } label: {
-                HStack(spacing: Theme.Space.xs) {
-                    ThemedIcon(todo.isDone ? Theme.Icon.undo : Theme.Icon.done)
-                    Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).lineLimit(1).minimumScaleFactor(0.8)
+    /// How large the bottom buttons' words get (#6151). Stacked across the page at the accessibility sizes, Hand to
+    /// Agent in English and in Japanese still doesn't fit on one line at the largest; at this size every language's
+    /// label fits whole on a 375 pt-wide iPhone. A long press shows the label larger (the Large Content Viewer).
+    static let actionTypeSize: DynamicTypeSize = .accessibility1
+
+    private func bottomBar(_ todo: TodoItem) -> some View {
+        Group {
+            if typeSize.isAccessibilitySize {
+                // Side by side each label was cut to a letter: one above the other, Hand to Agent first
+                // (docs/design/DESIGN_SYSTEM.md 1.2 rule 3 (c)).
+                VStack(spacing: Theme.Space.s) {
+                    bottomButtons(todo)
                 }
-                .font(Theme.Font.heading)
-                .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+                .dynamicTypeSize(...Self.actionTypeSize)
+            } else {
+                HStack(spacing: Theme.Space.m) {
+                    bottomButtons(todo)
+                }
             }
-            .themedButton(prominent: false)
-            .controlSize(.large)
         }
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, Theme.Space.s)
         .background(Theme.pageBackground)
+    }
+
+    @ViewBuilder private func bottomButtons(_ todo: TodoItem) -> some View {
+        // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
+        if !todo.isDone {
+            Button {
+                showHandoff = true
+            } label: {
+                HStack(spacing: Theme.Space.xs) {
+                    ThemedIcon(Theme.Icon.handToAI)
+                    Text("Hand to Agent").lineLimit(1).minimumScaleFactor(0.8)
+                }
+                .font(Theme.Font.heading)
+                .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+            }
+            .themedButton(prominent: true)
+            .controlSize(.large)
+            .accessibilityShowsLargeContentViewer()
+            .accessibilityIdentifier("todo.handToAgent")
+        }
+
+        Button {
+            store.toggleDone(todo)
+        } label: {
+            HStack(spacing: Theme.Space.xs) {
+                ThemedIcon(todo.isDone ? Theme.Icon.undo : Theme.Icon.done)
+                Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).lineLimit(1).minimumScaleFactor(0.8)
+            }
+            .font(Theme.Font.heading)
+            .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+        }
+        .themedButton(prominent: false)
+        .controlSize(.large)
+        .accessibilityShowsLargeContentViewer()
+        .accessibilityIdentifier("todo.toggleDone")
     }
 }
 
