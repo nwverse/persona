@@ -28,6 +28,7 @@ READING_FILES = {
     "Views/Interactions/InteractionViews.swift": "a plan awaiting approval",
     "Views/Mail/MailViews.swift": "an email's body",
     "Views/Knowledge/KnowledgeView.swift": "a knowledge page's body",
+    "Views/Knowledge/KBCorrections.swift": "an entry's confirmed facts, written by the user and read like its profile",
     "Views/Todos/TodoDetailView.swift": "a to-do's notes, read and edited",
     "Recording/MeetingThreadView.swift": "a transcript's words in the meeting's thread",
     "Recording/RecordingDayView.swift": "a day's transcript lines",
