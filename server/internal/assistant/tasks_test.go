@@ -1248,6 +1248,99 @@ func TestSnapshotListsPlansWaitingToStart(t *testing.T) {
 	}
 }
 
+// The conversation that put up a plan card withdraws it while nothing of it has started (#6739): with a reason, kept as
+// a work event; the card no longer waits for Start, and the snapshot no longer lists it. Another conversation's plan, an
+// empty reason, an unknown plan, and one already started or withdrawn are refused, and nothing changes.
+func TestTaskPlanWithdraw(t *testing.T) {
+	s, _ := newTaskService(t)
+	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) { v.Main, v.MachineID = "main1", "box" })
+	plan := func() string {
+		t.Helper()
+		if _, err := s.toolTaskPlan(ctx, "main1", planArgs(false)); err != nil { // edits code: waits for "Start"
+			t.Fatal(err)
+		}
+		items, _, _ := s.feed(ctx, "main1", time.Time{})
+		return items[len(items)-1].Ref
+	}
+	withdraw := func(self, id, reason string) (string, error) {
+		return runJSON(t, s, self, "task_plan_withdraw", map[string]any{"plan_id": id, "reason": reason})
+	}
+	state := func(id string) string {
+		p, err := s.loadPlan(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.State
+	}
+	id := plan()
+	loc := s.location(ctx)
+	if plans, _ := s.snapshotPlans(ctx, loc, time.Now()); len(plans) != 1 || plans[0].ID != id ||
+		!strings.Contains(prompts.RenderSnapshot(prompts.Snapshot{Now: time.Now().In(loc), Zone: loc.String(), Plans: plans,
+			PlansTotal: 1}), "（"+id+"）") {
+		t.Fatalf("the snapshot does not name plan %s: %+v", id, plans)
+	}
+	for _, c := range []struct{ name, self, id, reason string }{
+		{"another conversation's", "conv1", id, "别处做完了"},
+		{"no reason", "main1", id, "  "},
+		{"unknown plan", "main1", "plan_nope", "别处做完了"},
+	} {
+		if _, err := withdraw(c.self, c.id, c.reason); err == nil {
+			t.Fatalf("%s: withdrawn", c.name)
+		}
+		if got := state(id); got != planOpen {
+			t.Fatalf("%s: plan is %s", c.name, got)
+		}
+	}
+	if len(testEvents(s)) != 0 {
+		t.Fatalf("a refusal recorded: %+v", testEvents(s))
+	}
+	out, err := withdraw("main1", id, "三件都已由别的任务做完")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state(id); got != planDismissed || !strings.Contains(out, "修登录崩溃") {
+		t.Fatalf("withdrawn: plan %s, answer %q", got, out)
+	}
+	if ev := testEvents(s); len(ev) != 1 || ev[0].Kind != taskPlanWithdrawnEvent || ev[0].Detail["plan"] != id ||
+		ev[0].Detail["reason"] != "三件都已由别的任务做完" || ev[0].Detail["conversation"] != "main1" {
+		t.Fatalf("record: %+v", ev)
+	}
+	if plans, total := s.snapshotPlans(ctx, loc, time.Now()); total != 0 || len(plans) != 0 {
+		t.Fatalf("a withdrawn plan still waits: %+v", plans)
+	}
+	if _, err := withdraw("main1", id, "再撤一次"); err == nil {
+		t.Fatal("a withdrawn plan withdrawn again")
+	}
+	started := plan()
+	if _, err := s.startPlan(ctx, started, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := withdraw("main1", started, "不做了"); err == nil || state(started) != planStarted {
+		t.Fatalf("a started plan: %v, %s", err, state(started))
+	}
+	if len(testEvents(s)) != 1 {
+		t.Fatalf("records: %+v", testEvents(s))
+	}
+}
+
+// A plan its own conversation withdrew is no answer of the owner's (#6739): the owner's starts before and after it count
+// as a run, as if it had never been put up; one the owner dismissed starts the count again.
+func TestWithdrawnPlanIsNoOwnerAnswer(t *testing.T) {
+	task := PlanTask{Title: "改代码", Machine: "box", Cwd: "/code/app", OwnerStarted: true}
+	plan := func(id, state string) *TaskPlan { return &TaskPlan{ID: id, State: state, Tasks: []PlanTask{task}} }
+	plans := []*TaskPlan{plan("plan_a", planStarted), plan("plan_w", planDismissed), plan("plan_b", planStarted)}
+	k := trustKey(task)
+	if runs, _ := rulePlanRuns(plans); runs[k] != 1 {
+		t.Fatalf("dismissed by the owner: run %d, want 1", runs[k])
+	}
+	withdrawn := []db.WorkEvent{{Kind: taskPlanWithdrawnEvent, Detail: map[string]any{"plan": "plan_w"}},
+		{Kind: taskReviewedEvent, Detail: map[string]any{"plan": "plan_a"}}}
+	if runs, _ := rulePlanRuns(withoutWithdrawn(plans, withdrawn)); runs[k] != 2 {
+		t.Fatalf("withdrawn by its conversation: run %d, want 2", runs[k])
+	}
+}
+
 // A task opened from a side conversation (not quiet; supervised by the main conversation since #4669) pushes a
 // failure notification when its agent cannot start, with reason and next steps, unless muted (#5081).
 func TestSideConversationTaskFailedToStartPushes(t *testing.T) {
