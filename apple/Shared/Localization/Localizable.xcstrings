@@ -33216,6 +33216,12 @@
     "Change the assistant's name" : {
       "extractionState" : "manual",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change the assistant's name"
+          }
+        },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
@@ -33233,6 +33239,12 @@
     "Edit name" : {
       "extractionState" : "manual",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit name"
+          }
+        },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
@@ -33250,6 +33262,12 @@
     "Name saved" : {
       "extractionState" : "manual",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name saved"
+          }
+        },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
@@ -33267,6 +33285,12 @@
     "Name your assistant" : {
       "extractionState" : "manual",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name your assistant"
+          }
+        },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
