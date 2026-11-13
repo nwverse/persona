@@ -1,0 +1,4 @@
+<resources>
+    <string name="settings_browser_login_scan">Scan browser sign-in code</string>
+    <string name="settings_browser_login_invalid">Scan the sign-in code on your computer.</string>
+</resources>

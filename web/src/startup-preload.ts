@@ -251,7 +251,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #6753's stopped-Agent dismissal adds 131 B to each language (ja 478,888 B, en 475,191 B, zh-Hans 476,178 B).
 // #6759's Agent skills selection adds 49 B more to ja (478,937 B; en 475,240 B, zh-Hans 476,227 B).
 // The 31 B room covers the hub's small build-environment difference.
-export const FIRST_SCREEN_BUDGET = 478_968;
+// Browser QR sign-in (#6557) adds 83 B of shared wiring on its original base.
+// Retain that allowance alongside the newer main feature allowances.
+export const FIRST_SCREEN_BUDGET = 479_051;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -436,7 +438,8 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
 // Preserve the 7 B feature allowance while retaining main's queue-panel idle reduction.
-export const IDLE_TIER_BUDGET = 44_590;
+// Browser QR sign-in (#6557) reserves 27 B of shared wiring.
+export const IDLE_TIER_BUDGET = 44_617;
 
 const gzip = promisify(gzipCompress);
 

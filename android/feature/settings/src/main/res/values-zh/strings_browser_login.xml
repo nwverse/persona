@@ -1,0 +1,4 @@
+<resources>
+    <string name="settings_browser_login_scan">扫描网页登录码</string>
+    <string name="settings_browser_login_invalid">请扫描电脑网页登录页上的二维码。</string>
+</resources>
