@@ -368,6 +368,7 @@ func TestWorktreeCreateFromLinkedCheckoutUsesMainRepository(t *testing.T) {
 			}
 
 			w.f.reset()
+			runPullGit(t, linked, "checkout", "--orphan", "unborn")
 			existingDest := filepath.Join(w.home, "trees", "existing-branch")
 			if _, err := request(t, w.n, "worktree.create", map[string]any{
 				"cwd": linked, "branch": "spare", "path": existingDest,
