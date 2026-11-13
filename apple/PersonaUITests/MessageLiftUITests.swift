@@ -735,7 +735,7 @@ final class MessageLiftUITests: XCTestCase {
                 XCTAssertTrue(shows(end), "the pressed line shows")
                 pressInLift(CGPoint(x: end.frame.minX + 12, y: end.frame.maxY - 12))
                 checkTheMenuIsClear("bottom" + tag)
-                // Quote (引用) is the menu's first item; at the largest accessibility size its row showed 拷贝 first (#6149).
+                // Quote (「引用」) is in the menu (#6149 saw its row start at 「拷贝」 at the largest accessibility size).
                 let items = editMenuItems("bottom" + tag)
                 XCTAssertTrue(items.all.contains("引用"), "\(tag): 引用 is in the edit menu: row \(items.row), all \(items.all)")
                 let copy = [app.menuItems["拷贝"].firstMatch, app.buttons["拷贝"].firstMatch].first { $0.exists && $0.isHittable }
