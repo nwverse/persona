@@ -95,6 +95,11 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     /// meeting-minutes.md「Choosing the mode」): `device` for the rest of the recording, kept with it so a relaunch with the
     /// newer manager back never streams or uploads its audio again.
     var hubRolledBack = false
+    /// Hub transcription stopped for this meeting (a fatal `error` the phone stops on, an unknown code included, or a
+    /// refused socket; docs/assistant/meeting-minutes.md「Audio from the phone」): where on its clock, and the code. Kept with
+    /// the recording, so its hub-mode time ends there for good, also after a relaunch: no socket, and no audio recorded
+    /// from then on goes up, live or as a gap. Nil while it may run.
+    var hubStopped: RecordingHubStop?
 
     nonisolated enum StopReason: String, Codable, Sendable {
         case unsupported
@@ -126,7 +131,7 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case role, session, sessionTitle, periods, live, liveSegments, spoken, stopped, room, photos, liveView, highlights,
              privateMark, mainPicked
-        case transcription, roles, hubTime, hubRolledBack
+        case transcription, roles, hubTime, hubRolledBack, hubStopped
     }
 
     init(from decoder: Decoder) throws {
@@ -155,12 +160,14 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         // None read: no hub-mode time, so none of its audio is ever uploaded after the meeting.
         hubTime = (try? c.decodeIfPresent([RecordingPeriod].self, forKey: .hubTime)) ?? []
         hubRolledBack = (try? c.decodeIfPresent(Bool.self, forKey: .hubRolledBack)) ?? false
+        hubStopped = try? c.decodeIfPresent(RecordingHubStop.self, forKey: .hubStopped)
     }
 
     /// The recording is a meeting that asked for `hub` from `at` on (its start, or a Note turned into a meeting): a
-    /// stretch of hub-mode time opens, unless one is open already or an older manager rolled the meeting back.
+    /// stretch of hub-mode time opens, unless one is open already, an older manager rolled the meeting back or hub
+    /// transcription stopped for it.
     mutating func openHubTime(at: Double) {
-        guard transcription == .hub, !hubRolledBack, hubTime.last.map({ $0.end != nil }) ?? true else { return }
+        guard transcription == .hub, !hubRolledBack, hubStopped == nil, hubTime.last.map({ $0.end != nil }) ?? true else { return }
         hubTime.append(RecordingPeriod(start: max(0, at, hubTime.last?.end ?? 0)))
     }
 
@@ -176,11 +183,18 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         hubRolledBack = true
     }
 
+    /// Hub transcription stopped for this meeting at `at`, with `code`: hub-mode time ends there, for the rest of the
+    /// recording (the first stop is kept).
+    mutating func stopHub(at: Double, code: String) {
+        closeHubTime(at: at)
+        if hubStopped == nil { hubStopped = RecordingHubStop(at: max(0, at), code: code) }
+    }
+
     /// The hub-mode stretches as `[from, to]` pairs on the recording's clock, an open one ending at `end` (the recording's
-    /// length): what gap uploads are clipped to.
+    /// length), none past where hub transcription stopped: what gap uploads are clipped to.
     func hubStretches(until end: Double) -> [(from: Double, to: Double)] {
         hubTime.compactMap { p in
-            let to = min(p.end ?? end, end)
+            let to = min(p.end ?? end, end, hubStopped?.at ?? end)
             return to > p.start ? (p.start, to) : nil
         }
     }
@@ -283,6 +297,13 @@ nonisolated struct RecordingPeriod: Codable, Hashable, Sendable {
     var end: Double?
 
     func holds(_ time: Double) -> Bool { time >= start && end.map { time <= $0 } ?? true }
+}
+
+/// Where on a recording's clock hub transcription stopped for it, and why (`RecordingAttendance.hubStopped`): the fatal
+/// `error`'s code, or `http_<status>` for a refused socket.
+nonisolated struct RecordingHubStop: Codable, Hashable, Sendable {
+    var at: Double
+    var code: String
 }
 
 /// The hub's side of attending (docs/assistant/meeting-minutes.md「Attendance fields」).

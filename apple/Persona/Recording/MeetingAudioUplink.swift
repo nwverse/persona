@@ -21,6 +21,8 @@ nonisolated final class MeetingAudioUplink: @unchecked Sendable {
     private var generation = 0
     /// `end` went: the recording stopped, and no audio of any later one ever joins the ring or the socket.
     private var finished = false
+    /// The recording stopped being a hub-mode meeting at this sample (`cut`): nothing from it on joins the ring or goes.
+    private var cutAt: Int64?
     private let queue = DispatchQueue(label: "persona.meeting-uplink", qos: .userInitiated)
 
     init(recording: UUID) {
@@ -33,14 +35,29 @@ nonisolated final class MeetingAudioUplink: @unchecked Sendable {
         feed(MeetingPCM.samples(buffer), at: MeetingAudioClock.sample(seconds))
     }
 
-    /// `samples` at sample `position` (the tests feed these directly); nothing once `end` went.
+    /// `samples` at sample `position` (the tests feed these directly); nothing once `end` went, nothing from the cut on.
     func feed(_ samples: [Int16], at position: Int64) {
         let streaming = lock.withLock { () -> Bool in
             guard !finished else { return false }
+            var samples = samples
+            if let cutAt {
+                guard position < cutAt else { return false }
+                if position + Int64(samples.count) > cutAt { samples = Array(samples.prefix(Int(cutAt - position))) }
+            }
             ring.append(samples, at: position)
             return ring.streaming && socket != nil
         }
         if streaming { queue.async { [weak self] in self?.pump() } }
+    }
+
+    /// The recording stopped being a hub-mode meeting at sample `position` (it turned into a Note there): no sample at or
+    /// past it joins the ring or goes on the socket, also one the tap hands over a moment later, so the uplink's last
+    /// sample is where hub-mode time ended.
+    func cut(at position: Int64) {
+        lock.withLock {
+            cutAt = min(cutAt ?? position, position)
+            ring.cut(at: position)
+        }
     }
 
     /// `end` went (`end`): later buffers are ignored.

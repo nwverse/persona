@@ -207,6 +207,9 @@ import UserNotifications
         guard capture.recordingID == recordingID, library.entry(recordingID)?.isMeeting == !on else { return }
         let start = on ? MeetingAttendees.startAttendance(AppModel.shared) : RecordingAttendance(role: .off)
         let at = capture.timeline
+        // Hub mode (phase 5): the uplink stops at `at` now, in the same step hub-mode time ends there, so no tap buffer of
+        // the Note reaches the hub while the switch's observers catch up.
+        if !on { MeetingTranscription.shared.becameNote(recordingID, at: at) }
         library.change(recordingID) { $0 = Self.switched($0, meeting: on, at: at, named: named, start: start) }
         let speaks = library.entry(recordingID).map { $0.isMeeting && $0.attendance?.sentRole.speaks == true } ?? false
         capture.setPlaysAloud(speaks)

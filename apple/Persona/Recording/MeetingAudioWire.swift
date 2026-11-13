@@ -424,6 +424,14 @@ nonisolated struct MeetingAudioRing: Sendable {
         }
     }
 
+    /// Nothing from `position` on is the meeting's (`MeetingAudioUplink.cut`): what the ring holds from there goes, and
+    /// is never sent.
+    mutating func cut(at position: Int64) {
+        guard started, position < end else { return }
+        end = max(start, position)
+        if let c = cursor, c > end { cursor = end }
+    }
+
     /// The socket went: nothing streams until the next `ready`.
     mutating func stop() {
         cursor = nil
@@ -509,7 +517,12 @@ nonisolated enum MeetingTranscriptionRule {
         case uploadFirst
         /// Try again in a while (a hiccup, or a frame the hub couldn't read: a fresh socket starts clean).
         case retry
-        /// No more socket for this meeting; the phone's own transcription goes on.
+        /// Another socket took the meeting over (`replaced`): hub transcription goes on through it, so this phone opens
+        /// no other socket while it runs (two would replace each other in turn), and its hub-mode time stays: what the hub
+        /// lacks still goes up as gaps after the meeting.
+        case yield
+        /// Hub transcription stopped for this meeting: no more socket, its hub-mode time ends here for good
+        /// (`RecordingAttendance.stopHub`), and the phone's own transcription goes on.
         case stop
     }
 
@@ -517,8 +530,9 @@ nonisolated enum MeetingTranscriptionRule {
         switch code {
         case "recording_not_found": .uploadFirst
         case "bad_frame", "hub_failed": .retry
-        // `replaced` (another socket has the meeting), `audio_full`, `recording_deleted`, `kb_read_only`, `not_hub`,
-        // `transcript_expired`, `transcription_final`, and every code the phone doesn't know.
+        case "replaced": .yield
+        // `audio_full`, `recording_deleted`, `kb_read_only`, `not_hub`, `transcript_expired`, `transcription_final`, and
+        // every code the phone doesn't know.
         default: .stop
         }
     }
@@ -555,6 +569,19 @@ nonisolated enum MeetingTranscriptionRule {
         case .unmetered: true
         case .metered, .unknown: !wifiOnly
         }
+    }
+
+    /// `mayStream` for a hub reached through a tunnel (its SSH tunnel, local proxy or in-app tunnel, `HubTransport.via`):
+    /// `tunnel` is when its requests began to go through it (nil: straight to the hub), `meteredUntil` the last moment the
+    /// phone's path was on cellular or an expensive network (nil: not since launch). The system's guard
+    /// (`URLRequest.keepOnWiFi`) covers only the hop to the tunnel's loopback address; the tunnel's own connection stays
+    /// on the path it was made on, so a tunnel opened on cellular keeps carrying the audio there after the phone joins
+    /// Wi-Fi. With **Hub transcription on Wi-Fi only**, audio goes through a tunnel only while the phone is on Wi-Fi and
+    /// has been off cellular since the tunnel began, checked right before each socket and each gap upload.
+    static func mayStream(wifiOnly: Bool, network: MeetingNetworkKind, tunnel: Date?, meteredUntil: Date?) -> Bool {
+        guard mayStream(wifiOnly: wifiOnly, network: network) else { return false }
+        guard wifiOnly, let tunnel else { return true }
+        return network == .unmetered && (meteredUntil.map { $0 < tunnel } ?? true)
     }
 
     /// What the page and the Live Activity show (docs/assistant/meeting-minutes.md「On the phone」).

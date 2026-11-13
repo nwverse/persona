@@ -12,14 +12,19 @@ final class MeetingNetwork {
     /// Unknown, so not Wi-Fi, until the monitor's first answer: with **Hub transcription on Wi-Fi only** nothing goes
     /// before the phone knows it is on Wi-Fi.
     private(set) var kind: MeetingNetworkKind = .unknown
+    /// The monitor's answers as they come, on its own queue: what the Wi-Fi rule decides on, since `kind` reaches the main
+    /// actor a hop later (a socket retried in between never goes on the path that just left).
+    nonisolated let latest = MeetingNetworkState()
     @ObservationIgnored private var monitor: NWPathMonitor?
 
     func start() {
         guard monitor == nil else { return }
         let monitor = NWPathMonitor()
         self.monitor = monitor
+        let state = latest
         monitor.pathUpdateHandler = { @Sendable path in
             let kind = MeetingNetwork.kind(path)
+            state.set(kind)
             Task { @MainActor in
                 if MeetingNetwork.shared.kind != kind { MeetingNetwork.shared.kind = kind }
             }
@@ -33,6 +38,29 @@ final class MeetingNetwork {
         guard path.status == .satisfied else { return .none }
         if path.usesInterfaceType(.cellular) || path.isExpensive { return .metered }
         return .unmetered
+    }
+}
+
+/// The phone's path as the Wi-Fi rule reads it (`MeetingNetwork.latest`): its kind now, and the last moment it was on
+/// cellular or an expensive network. A tunnel's own connection stays on the path it was made on, so with **Hub
+/// transcription on Wi-Fi only** one that began before that moment may still run over cellular
+/// (`MeetingTranscriptionRule.mayStream(wifiOnly:network:tunnel:meteredUntil:)`).
+nonisolated final class MeetingNetworkState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: MeetingNetworkKind = .unknown
+    private var leftMetered: Date?
+
+    var kind: MeetingNetworkKind { lock.withLock { current } }
+
+    /// The last moment the path was on cellular or an expensive network: now while it is, nil when it wasn't since launch.
+    var meteredUntil: Date? { lock.withLock { current == .metered ? Date() : leftMetered } }
+
+    /// The monitor answered `kind` at `now`.
+    func set(_ kind: MeetingNetworkKind, at now: Date = Date()) {
+        lock.withLock {
+            if current == .metered, kind != .metered { leftMetered = now }
+            current = kind
+        }
     }
 }
 

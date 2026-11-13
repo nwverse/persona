@@ -275,6 +275,30 @@ struct MeetingAudioRingTests {
         uplink.drain()
         #expect(socket.audio.count == sent && uplink.heldEnd == held)
     }
+
+    /// #3862 phase 5 follow-up: a meeting turned into a Note at a sample sends nothing from that sample on, also a
+    /// buffer the tap hands over after the switch, or one that straddles it.
+    @Test func nothingFromTheNoteOnGoes() {
+        let uplink = MeetingAudioUplink(recording: UUID())
+        uplink.feed(samples(3200), at: 0)
+        let socket = open(uplink)
+        uplink.ready(from: 0, generation: uplink.currentGeneration)
+        uplink.drain()
+        uplink.cut(at: 4000)
+        uplink.feed(samples(1600, from: 3200), at: 3200)
+        uplink.feed(samples(1600, from: 4800), at: 4800)
+        uplink.drain()
+        #expect(decoded(socket.audio.reduce(Data(), +)) == samples(4000), "the meeting's last sample is the one before the Note")
+        #expect(uplink.heldEnd == 0.25)
+        // Audio the ring held past the cut never goes either.
+        let late = MeetingAudioUplink(recording: UUID())
+        late.feed(samples(3200), at: 0)
+        let other = open(late)
+        late.cut(at: 1600)
+        late.ready(from: 0, generation: late.currentGeneration)
+        late.drain()
+        #expect(decoded(other.audio.reduce(Data(), +)) == samples(1600))
+    }
 }
 
 /// A value shared with a closure another queue runs (the tests' own).
@@ -309,7 +333,8 @@ struct MeetingTranscriptionRuleTests {
     @Test func errorsAreActedOnByTheirCode() {
         #expect(Rule.reaction(toError: "recording_not_found") == .uploadFirst)
         #expect(Rule.reaction(toError: "bad_frame") == .retry)
-        for code in ["replaced", "audio_full", "recording_deleted", "kb_read_only", "not_hub", "transcript_expired",
+        #expect(Rule.reaction(toError: "replaced") == .yield, "another socket has the meeting: hub transcription goes on")
+        for code in ["audio_full", "recording_deleted", "kb_read_only", "not_hub", "transcript_expired",
                      "transcription_final", "a_code_from_tomorrow", ""] {
             #expect(Rule.reaction(toError: code) == .stop, "\(code)")
         }
@@ -340,6 +365,38 @@ struct MeetingTranscriptionRuleTests {
         var put = URLRequest(url: try #require(URL(string: "https://hub.invalid/api/v1/recordings/x/audio?at=0")))
         put.keepOnWiFi(true)
         #expect(!put.allowsCellularAccess && !put.allowsExpensiveNetworkAccess)
+    }
+
+    /// #3862 phase 5 follow-up: through a tunnel the system's guard covers only the hop to its loopback address, and the
+    /// tunnel's own connection stays on the path it was made on. With Wi-Fi Only, audio goes through one only while the
+    /// phone is on Wi-Fi and has been off cellular since the tunnel began.
+    @Test func throughATunnelWiFiOnlyAsksForWiFiSinceTheTunnelBegan() {
+        let opened = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(Rule.mayStream(wifiOnly: true, network: .unmetered, tunnel: nil, meteredUntil: opened.addingTimeInterval(60)),
+                "straight to the hub: the system's own guard holds")
+        #expect(Rule.mayStream(wifiOnly: true, network: .unmetered, tunnel: opened, meteredUntil: nil), "never on cellular")
+        #expect(Rule.mayStream(wifiOnly: true, network: .unmetered, tunnel: opened, meteredUntil: opened.addingTimeInterval(-60)),
+                "on cellular only before the tunnel began")
+        #expect(!Rule.mayStream(wifiOnly: true, network: .unmetered, tunnel: opened, meteredUntil: opened.addingTimeInterval(60)),
+                "the tunnel began on cellular, then the phone joined Wi-Fi: it still runs over cellular")
+        #expect(!Rule.mayStream(wifiOnly: true, network: .metered, tunnel: opened, meteredUntil: nil))
+        #expect(!Rule.mayStream(wifiOnly: true, network: .unknown, tunnel: opened, meteredUntil: nil))
+        #expect(Rule.mayStream(wifiOnly: false, network: .metered, tunnel: opened, meteredUntil: .now), "cellular is allowed without the switch")
+        #expect(!Rule.mayStream(wifiOnly: false, network: .none, tunnel: opened, meteredUntil: nil))
+    }
+
+    /// The path's last moment on cellular: now while on it, the moment it left once off it.
+    @Test func thePathRemembersWhenItLeftCellular() throws {
+        let state = MeetingNetworkState()
+        #expect(state.kind == .unknown && state.meteredUntil == nil)
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        state.set(.unmetered, at: start)
+        #expect(state.meteredUntil == nil)
+        state.set(.metered, at: start.addingTimeInterval(10))
+        #expect(try #require(state.meteredUntil) > start.addingTimeInterval(10), "now, while on cellular")
+        state.set(.none, at: start.addingTimeInterval(20))
+        state.set(.unmetered, at: start.addingTimeInterval(30))
+        #expect(state.kind == .unmetered && state.meteredUntil == start.addingTimeInterval(20))
     }
 
     @Test func thePageShowsTheHubWhileItIsUpAndHealthy() {
@@ -507,6 +564,34 @@ struct MeetingTimelineTests {
         #expect(!MeetingTranscription.needsGaps(e, meeting: nil, expired: false, synced: true, done: false), "no hub-mode time: nothing")
     }
 
+    /// #3862 phase 5 follow-up: hub transcription stopped (a fatal error, an unknown code, a refused socket) ends hub-mode
+    /// time there for good: nothing after it goes up, a Note turned back into a meeting opens none, and it is kept.
+    @MainActor @Test func aStoppedMeetingKeepsItsAudioFromTheStopOn() throws {
+        var e = recording(hubStart, seconds: 900)
+        var a = hubStart
+        a.stopHub(at: 120, code: "a_code_from_tomorrow")
+        a.stopHub(at: 300, code: "later")
+        #expect(a.hubStopped == RecordingHubStop(at: 120, code: "a_code_from_tomorrow"), "the first stop is kept")
+        #expect(a.hubTime == [RecordingPeriod(start: 0, end: 120)])
+        e.attendance = a
+        e.active = false
+        e.expectedSegments = 1
+        #expect(MeetingTranscription.needsGaps(e, meeting: nil, expired: false, synced: true, done: false), "what came before may go")
+        #expect(MeetingTranscription.uploadable(e) == [MeetingGap(from: 0, to: 120)])
+        e = MeetingRecorder.switched(e, meeting: false, at: 400, named: nil, start: RecordingAttendance(role: .off))
+        e = MeetingRecorder.switched(e, meeting: true, at: 500, named: nil, start: hubStart)
+        #expect(e.attendance?.hubTime == [RecordingPeriod(start: 0, end: 120)], "a meeting again opens no hub-mode time")
+        var open = hubStart
+        open.hubTime = [RecordingPeriod(start: 0)]
+        open.hubStopped = RecordingHubStop(at: 200, code: "http_403")
+        e.attendance = open
+        #expect(MeetingTranscription.uploadable(e) == [MeetingGap(from: 0, to: 200)], "clipped at the stop whatever the stretches say")
+        let back = try JSON.decoder.decode(RecordingAttendance.self, from: JSON.encoder.encode(a))
+        #expect(back.hubStopped == a.hubStopped)
+        let before = try JSON.decoder.decode(RecordingAttendance.self, from: Data(#"{"role":"listener","transcription":"hub"}"#.utf8))
+        #expect(before.hubStopped == nil)
+    }
+
     private func meeting(_ attendance: RecordingAttendance) -> RecordingEntry {
         var e = RecordingEntry(id: UUID(), createdAt: Date(timeIntervalSince1970: 1_800_000_000), source: .phone, title: "Weekly", active: true)
         e.meeting = RecordingMeeting(title: "Weekly")
@@ -637,9 +722,20 @@ struct MeetingGapUploadTests {
         /// Where the recording is now (`Deps.position`).
         var position: Double?
         var linesAdded: [UUID] = []
-        /// Background time begun and ended for gap passes.
+        /// Background time begun and ended for gap passes, and how the system would take the latest back.
         var backgroundBegun = 0
         var backgroundEnded = 0
+        var expire: (@MainActor @Sendable () -> Void)?
+        /// Waits of these lengths are held until they are listed in `passing` (a test lets them go halfway).
+        var gated: Set<Duration> = []
+        /// Every gap `PUT` begun, by its `wifiOnly`; while `holdPuts`, each waits until it is stopped (the PUT on its way).
+        var puts: [Bool] = []
+        var holdPuts = false
+        var putsStopped = 0
+        /// The tunnel the hub's requests go through, since when (`Deps.tunnel`), and the last moment the path was on
+        /// cellular (`Deps.meteredUntil`).
+        var tunnel: Date?
+        var meteredUntil: Date?
     }
 
     private func make(_ rig: Rig) -> MeetingTranscription {
@@ -656,16 +752,33 @@ struct MeetingGapUploadTests {
             reupload: { rig.reuploads.append($0) },
             wait: { @MainActor duration in
                 rig.waits.append(duration)
+                if rig.gated.contains(duration) {
+                    while !rig.passing.contains(duration), !Task.isCancelled { try? await Task.sleep(for: .milliseconds(10)) }
+                    return
+                }
                 if duration >= .seconds(5), !rig.passing.contains(duration) { try? await Task.sleep(for: .seconds(600)) }
             },
             store: rig.store,
-            audio: { _, _ in rig.audio },
+            audio: { _, piece in rig.audio.map { (piece.at, $0.data) } },
             position: { _ in rig.position },
             linesAdded: { rig.linesAdded.append($0) },
-            background: { _ in
+            background: { _, expired in
                 rig.backgroundBegun += 1
+                rig.expire = expired
                 return { rig.backgroundEnded += 1 }
-            })
+            },
+            put: { @MainActor api, path, query, data, wifiOnly in
+                rig.puts.append(wifiOnly)
+                if rig.holdPuts {
+                    do { try await Task.sleep(for: .seconds(600)) } catch {
+                        rig.putsStopped += 1
+                        throw error
+                    }
+                }
+                return try await api.putBytes(path, query: query, data: data, wifiOnly: wifiOnly)
+            },
+            tunnel: { rig.tunnel },
+            meteredUntil: { rig.meteredUntil })
         return MeetingTranscription(deps: deps, library: rig.library)
     }
 
@@ -779,6 +892,7 @@ struct MeetingGapUploadTests {
         #expect(t.meeting(e.id).stopped == nil)
         rig.sockets.last?.drop(status: 403)
         #expect(t.meeting(e.id).stopped == "http_403")
+        #expect(rig.library.entry(e.id)?.attendance?.hubStopped?.code == "http_403", "a refused socket stops it for good")
     }
 
     @Test func anOlderManagerOpensNoSocketAndStopsARunningUplink() throws {
@@ -1066,7 +1180,7 @@ struct MeetingGapUploadTests {
         #expect(reads == 2 && rig.waits.contains(.seconds(15)), "\(rig.waits)")
         #expect(rig.hub.sent("PUT", base + "/audio").count == 1)
         await until("the background time ended") { rig.backgroundEnded == rig.backgroundBegun }
-        #expect(rig.backgroundBegun >= 2, "each pass under background time")
+        #expect(rig.backgroundBegun == 1, "one background time across the wait and the pass after it")
     }
 
     /// With Wi-Fi Only the gap upload itself keeps off cellular, whatever the network looked like.
@@ -1156,6 +1270,229 @@ struct MeetingGapUploadTests {
         live.append(e.id)
         await live.send(e.id)
         #expect(posts == 0, "POST …/live is 409 hub_transcribes in hub mode")
+    }
+
+    // MARK: Privacy follow-ups (#3862 phase 5)
+
+    private let readyFrame = #"{"type":"ready","from":0,"gaps":[],"next":0}"#
+
+    private func base(_ e: RecordingEntry) -> String { "/api/v1/recordings/\(e.id.uuidString.lowercased())" }
+
+    /// A fatal error ends hub-mode time where the recording is, kept with it: no socket after a relaunch, and after Stop
+    /// only what came before the stop goes up as gaps.
+    @Test func aFatalErrorEndsHubModeTimeForGood() async throws {
+        let rig = Rig(), t = make(rig)
+        var e = try meeting(rig)
+        t.uploaded(e, answer: .init(mode: "hub"))
+        t.follow(e.id, paused: false, entry: e)
+        let socket = try #require(rig.sockets.last)
+        socket.deliver(readyFrame)
+        rig.position = 600
+        socket.deliver(#"{"type":"error","code":"quota_exceeded_somewhere","fatal":true}"#)
+        let kept = try #require(rig.library.entry(e.id)?.attendance)
+        #expect(kept.hubStopped == RecordingHubStop(at: 600, code: "quota_exceeded_somewhere"))
+        #expect(kept.hubTime == [RecordingPeriod(start: 0, end: 600)], "hub-mode time ends at the stop")
+        #expect(!rig.listening && socket.closed)
+
+        // A relaunch while it still records: no socket, and the notice says the hub stopped.
+        e = try #require(rig.library.entry(e.id))
+        let relaunched = make(rig)
+        relaunched.uploaded(e, answer: .init(mode: "hub"))
+        relaunched.follow(e.id, paused: false, entry: e)
+        #expect(rig.sockets.count == 1 && !rig.listening)
+        #expect(relaunched.meeting(e.id).stopped == "quota_exceeded_somewhere" && relaunched.shown(e.id, role: .listener).fellBack)
+
+        // Stopped at 60:00: the 50 minutes after the stop stay on the phone; the 10 before it may still go.
+        relaunched.ended(e.id, at: 3600)
+        e = try #require(rig.library.entry(e.id))
+        e.active = false
+        e.expectedSegments = 1
+        e.segments = [RecordingSegment(index: 0, start: 0, duration: 3600, sentences: [])]
+        try rig.library.save(e)
+        rig.hub.on("GET", base(e) + "/live", json: #"{"transcription":{"mode":"hub","state":"finishing","gaps":[[0,3600]]}}"#)
+        rig.hub.on("PUT", base(e) + "/audio", json: #"{"gaps":[[0,3600]]}"#)
+        relaunched.kickGaps()
+        await until("the gap pass") { relaunched.meeting(e.id).gapUpload == .done }
+        #expect(rig.hub.sent("PUT", base(e) + "/audio").map { $0.query["at"] } == ["0", "300"], "nothing from the stop on")
+    }
+
+    /// `replaced`: another socket has the meeting. This phone opens none while it runs, but hub transcription goes on,
+    /// so hub-mode time stays open and the gaps may still go up after the meeting.
+    @Test func anotherSocketTakingOverLeavesHubModeTimeOpen() throws {
+        let rig = Rig(), t = make(rig)
+        let e = try meeting(rig)
+        t.uploaded(e, answer: .init(mode: "hub"))
+        t.follow(e.id, paused: false, entry: e)
+        let socket = try #require(rig.sockets.last)
+        socket.deliver(readyFrame)
+        socket.deliver(#"{"type":"error","code":"replaced","fatal":true}"#)
+        #expect(t.meeting(e.id).stopped == "replaced" && t.meeting(e.id).socket == .off && socket.closed && !rig.listening)
+        t.follow(e.id, paused: false, entry: e)
+        #expect(rig.sockets.count == 1, "this phone doesn't take it back")
+        let kept = try #require(rig.library.entry(e.id)?.attendance)
+        #expect(kept.hubStopped == nil && kept.hubTime == [RecordingPeriod(start: 0)])
+    }
+
+    /// A rollback recorded while a gap pass runs ends it before its next piece, and a recording deleted meanwhile is
+    /// skipped: both are read again before every piece and every recording of the pass.
+    @Test func aRollbackOrADeleteDuringAGapPassStopsIt() async throws {
+        let rig = Rig(), t = make(rig)
+        let a = try ended(rig, seconds: 900)
+        let b = try ended(rig, seconds: 900)
+        var first: UUID?
+        for e in [a, b] {
+            rig.hub.on("GET", base(e) + "/live", json: #"{"transcription":{"mode":"hub","state":"finishing","gaps":[[0,900]]}}"#)
+            rig.hub.on("PUT", base(e) + "/audio") { _ in
+                if first == nil, let now = rig.library.entry(e.id) {
+                    first = e.id
+                    // While its first piece goes: its next upload is answered by an older manager, and the other is deleted.
+                    t.uploaded(now, answer: .init(mode: nil))
+                    try rig.library.remove(e.id == a.id ? b.id : a.id)
+                }
+                return Data(#"{"gaps":[[0,900]]}"#.utf8)
+            }
+        }
+        t.uploaded(a, answer: .init(mode: "hub"))
+        await until("the first piece") { first != nil }
+        let rolled = try #require(first)
+        await until("the pass ended") { t.meeting(rolled).gapUpload == .done && rig.backgroundEnded == rig.backgroundBegun }
+        #expect(rig.hub.requests.filter { $0.method == "PUT" }.count == 1, "no piece after the rollback")
+        #expect(rig.hub.requests.filter { $0.method == "GET" }.count == 1, "nothing for the deleted one")
+        #expect(rig.library.entry(rolled)?.attendance?.hubRolledBack == true)
+    }
+
+    /// Turning Wi-Fi Only on stops a gap upload already going over cellular; the pass starts again under the rule.
+    @Test func turningWiFiOnlyOnStopsAGapUploadUnderWay() async throws {
+        let rig = Rig()
+        rig.network = .metered
+        let t = make(rig)
+        let e = try ended(rig)
+        rig.hub.on("GET", base(e) + "/live", json: #"{"transcription":{"mode":"hub","state":"finishing","gaps":[[0,2]]}}"#)
+        rig.hub.on("PUT", base(e) + "/audio", json: #"{"gaps":[]}"#)
+        rig.holdPuts = true
+        t.uploaded(e, answer: .init(mode: "hub"))
+        await until("the PUT on its way over cellular") { rig.puts == [false] }
+        t.wifiOnlyChanged(true)
+        await until("the PUT stopped") { rig.putsStopped == 1 }
+        await until("the pass again, under the rule") { t.meeting(e.id).gapUpload == .waitingForWiFi && rig.backgroundEnded == rig.backgroundBegun }
+        #expect(rig.puts == [false] && rig.hub.sent("PUT", base(e) + "/audio").isEmpty, "nothing more over cellular")
+        rig.holdPuts = false
+        rig.network = .unmetered
+        t.kickGaps()
+        await until("the gap pass on Wi-Fi") { t.meeting(e.id).gapUpload == .done }
+        #expect(rig.puts == [false, true] && rig.hub.sent("PUT", base(e) + "/audio").map(\.wifiOnly) == [true])
+    }
+
+    /// Through a tunnel (whose own connection the system's guard doesn't reach) with Wi-Fi Only: no socket while the
+    /// tunnel began before the phone left cellular; one that began on Wi-Fi opens, and closes once the path leaves it.
+    @Test func throughATunnelTheSocketWaitsForWiFiSinceItBegan() throws {
+        let rig = Rig()
+        rig.store.set(true, forKey: MeetingAttendanceDefaults.wifiOnlyKey)
+        let opened = Date()
+        rig.tunnel = opened
+        rig.meteredUntil = opened.addingTimeInterval(30)
+        let t = make(rig)
+        let e = try meeting(rig)
+        t.uploaded(e, answer: .init(mode: "hub"))
+        t.follow(e.id, paused: false, entry: e)
+        #expect(t.meeting(e.id).socket == .waitingForWiFi && rig.sockets.isEmpty && rig.listening, "on Wi-Fi, but the tunnel began on cellular")
+        rig.tunnel = opened.addingTimeInterval(60)
+        t.follow(e.id, paused: false, entry: e)
+        let socket = try #require(rig.sockets.last)
+        socket.deliver(readyFrame)
+        #expect(t.meeting(e.id).socket == .ready)
+        rig.network = .metered
+        rig.meteredUntil = opened.addingTimeInterval(90)
+        t.follow(e.id, paused: false, entry: e)
+        #expect(socket.closed && t.meeting(e.id).socket == .waitingForWiFi)
+        rig.network = .unmetered
+        t.follow(e.id, paused: false, entry: e)
+        #expect(rig.sockets.count == 1, "back on Wi-Fi, the same tunnel may still run over cellular")
+    }
+
+    /// Through a tunnel with Wi-Fi Only, a gap upload stops as the path leaves Wi-Fi, and none goes through that tunnel
+    /// again; one that began since does.
+    @Test func throughATunnelTheGapUploadStopsWhenThePathLeavesWiFi() async throws {
+        let rig = Rig()
+        rig.store.set(true, forKey: MeetingAttendanceDefaults.wifiOnlyKey)
+        rig.tunnel = Date()
+        let t = make(rig)
+        t.networkIs(.unmetered)
+        let e = try ended(rig)
+        rig.hub.on("GET", base(e) + "/live", json: #"{"transcription":{"mode":"hub","state":"finishing","gaps":[[0,2]]}}"#)
+        rig.hub.on("PUT", base(e) + "/audio", json: #"{"gaps":[]}"#)
+        rig.holdPuts = true
+        t.uploaded(e, answer: .init(mode: "hub"))
+        await until("the PUT on its way") { rig.puts == [true] }
+        rig.network = .metered
+        rig.meteredUntil = Date()
+        t.networkIs(.metered)
+        await until("the PUT stopped") { rig.putsStopped == 1 }
+        await until("waiting for Wi-Fi") { t.meeting(e.id).gapUpload == .waitingForWiFi && rig.backgroundEnded == rig.backgroundBegun }
+        rig.holdPuts = false
+        rig.network = .unmetered
+        t.networkIs(.unmetered)
+        await until("the pass on Wi-Fi") { rig.backgroundBegun == 2 && rig.backgroundEnded == 2 }
+        #expect(t.meeting(e.id).gapUpload == .waitingForWiFi && rig.puts == [true], "the same tunnel: nothing")
+        rig.tunnel = Date().addingTimeInterval(1)
+        t.kickGaps()
+        await until("through the new tunnel") { t.meeting(e.id).gapUpload == .done }
+        #expect(rig.puts == [true, true] && rig.hub.sent("PUT", base(e) + "/audio").count == 1)
+    }
+
+    /// Switching to a Note takes the uplink off the tap in the same step: nothing waits for the observation.
+    @Test func aNoteEndsTheUplinkAtOnce() throws {
+        let rig = Rig(), t = make(rig)
+        let e = try meeting(rig)
+        t.uploaded(e, answer: .init(mode: "hub"))
+        t.follow(e.id, paused: false, entry: e)
+        let socket = try #require(rig.sockets.last)
+        socket.deliver(readyFrame)
+        t.becameNote(e.id, at: 42)
+        #expect(!rig.listening && socket.closed && t.meeting(e.id).socket == .off)
+    }
+
+    /// A gap pass left `later` keeps its background time across the wait before the retry and the retry itself, so the
+    /// app isn't suspended in between; it ends once nothing is left `later`.
+    @Test func theBackgroundTimeIsHeldAcrossTheRetrysWait() async throws {
+        let rig = Rig(), t = make(rig)
+        let e = try ended(rig)
+        var reads = 0
+        rig.hub.on("GET", base(e) + "/live") { _ in
+            reads += 1
+            if reads == 1 { throw APIError(status: 503, message: "restarting", fields: ["code": "assistant_offline"]) }
+            return Data(#"{"transcription":{"mode":"hub","state":"finishing","gaps":[[0,2]]}}"#.utf8)
+        }
+        rig.hub.on("PUT", base(e) + "/audio", json: #"{"gaps":[]}"#)
+        rig.gated = [.seconds(15)]
+        t.uploaded(e, answer: .init(mode: "hub"))
+        await until("the retry's wait") { rig.waits.contains(.seconds(15)) }
+        #expect(rig.backgroundBegun == 1 && rig.backgroundEnded == 0, "held during the wait")
+        rig.passing = [.seconds(15)]
+        await until("the retry") { t.meeting(e.id).gapUpload == .done }
+        await until("ended once nothing is left") { rig.backgroundEnded == 1 }
+        #expect(rig.backgroundBegun == 1 && reads == 2)
+    }
+
+    /// Background time the system took back (it ended it itself) is asked for again by the retry's pass.
+    @Test func backgroundTimeTheSystemTookBackIsAskedForAgain() async throws {
+        let rig = Rig(), t = make(rig)
+        let e = try ended(rig)
+        var reads = 0
+        rig.hub.on("GET", base(e) + "/live") { _ in
+            reads += 1
+            if reads == 1 { throw APIError(status: 503, message: "restarting", fields: ["code": "assistant_offline"]) }
+            return Data(#"{"transcription":{"mode":"hub","state":"finishing","gaps":[[0,2]]}}"#.utf8)
+        }
+        rig.hub.on("PUT", base(e) + "/audio", json: #"{"gaps":[]}"#)
+        rig.gated = [.seconds(15)]
+        t.uploaded(e, answer: .init(mode: "hub"))
+        await until("the retry's wait") { rig.waits.contains(.seconds(15)) }
+        rig.expire?()
+        rig.passing = [.seconds(15)]
+        await until("the retry") { t.meeting(e.id).gapUpload == .done }
+        await until("its own time ended") { rig.backgroundEnded == 1 }
+        #expect(rig.backgroundBegun == 2, "the retry's pass asked again")
     }
 }
 
