@@ -10,11 +10,12 @@ import { memo, useCallback, useEffect, useRef, useState, type ReactNode, type Re
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
 import { onModelPicker, sessionLauncher } from "../../lib/model-switch";
+import { modelSupportsFast } from "../../lib/launcher-models";
 import { effortTitle } from "../../lib/session-actions";
-import { dropPick, launcherOffered, usePickedEffort, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
-import { ASSISTANT_MODEL_PICK_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
+import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
+import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  assistantLaunchers, ENGINE_SWITCH_FEATURE, engineSwitchable, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, type PillSetup,
+  assistantLaunchers, ENGINE_SWITCH_FEATURE, engineSwitchable, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
@@ -217,9 +218,10 @@ const AssistantModelPanel = lazyOverlay(() => import("./AssistantModelPanel").th
  *  new-conversation page, whose pick goes with the start. Persona chats switch whatever their state: the hub applies a
  *  pick from the next message. */
 export const AssistantModelPill = memo(function AssistantModelPill({ session }: { session?: Session }) {
-  useModelLists();
+  const version = useModelLists();
   const assistant = useStore((s) => s.assistant);
   const kept = useStore((s) => hubHas(s.features, ASSISTANT_MODEL_PICK_FEATURE));
+  const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE));
   const mid = session?.machine_id ?? assistant?.machine_id ?? "";
   const isMain = Boolean(session && assistant?.main === session.session_id);
   // Only the main conversation has a per-conversation model pick (#6911): a leader, the background supervisor or
@@ -232,6 +234,7 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
   const picked = usePickedLauncher(key);
   usePickedModel(key);
   usePickedEffort(key);
+  const tier = usePickedFast();
   const { info } = assistantLaunchers(mid);
   // the computer's default and what can run a Persona chat: once for the pill, again behind it on each opening
   useEffect(() => {
@@ -253,6 +256,18 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
     toast(t("chat-modelpill.pick_dropped", { launcher: picked }), "info");
   }, [key, picked, info, session, kept]);
   const setup = assistantSetup(chat, info);
+  // A hub or native catalog that can't honor Fast disarms the draft even while the lazy panel is closed. A manager
+  // change disarms it in the store, before this pill or its destination catalog answers.
+  useEffect(() => {
+    if (session || !tier) return;
+    if (!startServiceTier) {
+      pickFast(false);
+      return;
+    }
+    const list = modelList(mid, setup.provider).list;
+    if (!list) return;
+    if (!modelSupportsFast(currentModelRow(list.models, setup.model))) pickFast(false);
+  }, [key, mid, session, setup.provider, setup.model, tier, startServiceTier, version]);
   useEffect(() => {
     if (mid) void readModels(mid, setup.provider, { first: true });
   }, [mid, setup.provider]);
