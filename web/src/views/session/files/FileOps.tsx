@@ -3,7 +3,7 @@
 // to the trash (asked first, then "Moved to trash · Undo"). Both views share it: the drill-in list (FilesPanel) and the
 // tree (FilesTree). Each action shows only when the hub says it can (`upload_dir`, `file_edit`).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { api, credentialOwner, enc, errorText, fileDownloadURL, getToken, isAbort, subscribeCredentialOwner } from "../../../lib/api";
+import { api, credentialOwner, enc, errorText, fileDownloadURL, getToken, isAbort, onCredentialChange, subscribeCredentialOwner } from "../../../lib/api";
 import { onManagerChoice, shownManager, useShownManager } from "../../../lib/manager-choice";
 import { t } from "../../../i18n";
 import {
@@ -78,9 +78,20 @@ interface RemoteOperation {
 interface ActiveRemoteOperation {
   ac: AbortController;
   operationId: string;
-  workspace: WorkspaceOwner;
+  owner: MutationOwner;
   shown: boolean;
 }
+
+// The authoritative POST outlives a panel, but not its credential. Keep only the opaque owner and controller outside
+// React: navigation can drop every visible handle without making a later sign-out unable to retire the request.
+const remotePostCredentials = new Map<AbortController, string>();
+onCredentialChange((nextOwner) => {
+  remotePostCredentials.forEach((owner, ac) => {
+    if (owner === nextOwner) return;
+    ac.abort();
+    remotePostCredentials.delete(ac);
+  });
+});
 
 /** A question waiting for the user: replace or keep both, for an upload or a move. */
 interface NameAsk {
@@ -191,7 +202,7 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
   const [remoteOperations, setRemoteOperations] = useState<RemoteOperation[]>([]);
   const activeRemote = useRef(new Map<number, ActiveRemoteOperation>());
   const ownedUploads = uploads.filter((u) => u.credential.owner === owner);
-  const ownedRemoteOperations = remoteOperations.filter((op) => op.owner.workspaceOwner === workspaceOwner);
+  const ownedRemoteOperations = remoteOperations.filter((op) => op.owner === mutationOwner);
   const active = useRef(new Map<number, AbortController>());
   const nextId = useRef(0);
   const patch = useCallback((id: number, p: Partial<Upload>) => setUploads((us) => us.map((u) => (u.id === id ? { ...u, ...p } : u))), []);
@@ -209,14 +220,14 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
   }, [owner]);
   useEffect(() => {
     activeRemote.current.forEach((operation, id) => {
-      if (operation.workspace === workspaceOwner) return;
-      const credential = operation.workspace.credential;
+      if (operation.owner === mutationOwner) return;
+      const credential = operation.owner.credential;
       if (credential.owner !== credentialOwner() || credential.token !== getToken()) operation.ac.abort();
       // Navigation only hides the row and stops polling. The authoritative POST continues unless credentials died.
       activeRemote.current.delete(id);
     });
-    setRemoteOperations((ops) => ops.filter((op) => op.owner.workspaceOwner === workspaceOwner));
-  }, [workspaceOwner]);
+    setRemoteOperations((ops) => ops.filter((op) => op.owner === mutationOwner));
+  }, [mutationOwner]);
   const sending = ownedUploads.find((u) => u.state === "sending");
   const next = ownedUploads.find((u) => u.state === "queued");
   useEffect(() => {
@@ -291,9 +302,10 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
     const previous = activeRemote.current.get(op.id);
     const ac = new AbortController();
     const operationId = uuid();
-    activeRemote.current.set(op.id, { ac, operationId, workspace: op.owner.workspaceOwner, shown: previous?.shown ?? op.shown });
+    activeRemote.current.set(op.id, { ac, operationId, owner: op.owner, shown: previous?.shown ?? op.shown });
     patchRemote(op.id, { operationId, state: "running", bytesDone: 0, bytesTotal: 0, filesDone: 0, filesTotal: 0 });
     const candidate = op.owner;
+    remotePostCredentials.set(ac, candidate.credential.owner);
     const auth = { ...candidate.credential, isAuthContextCurrent: () => currentWorkspace(candidate.workspaceOwner) };
     let settled = false;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
@@ -302,23 +314,24 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
       if (!current()) return;
       try {
         const status = await fileOperation(candidate.mid, operationId, auth, ac.signal);
-        if (current()) patchRemote(op.id, {
-          bytesDone: status.bytes_done,
-          bytesTotal: status.bytes_total,
-          filesDone: status.files_done,
-          filesTotal: status.files_total,
-        });
+        if (current()) {
+          const active = activeRemote.current.get(op.id);
+          if (active) active.shown = true;
+          patchRemote(op.id, {
+            shown: true,
+            bytesDone: status.bytes_done,
+            bytesTotal: status.bytes_total,
+            filesDone: status.files_done,
+            filesTotal: status.files_total,
+          });
+        }
       } catch {
         // The POST remains authoritative; an old node or a transient read failure only leaves progress unknown.
       }
       if (current()) pollTimer = setTimeout(() => void poll(), 250);
     };
     const showTimer = setTimeout(() => {
-      if (!current()) return;
-      const active = activeRemote.current.get(op.id);
-      if (active) active.shown = true;
-      patchRemote(op.id, { shown: true });
-      void poll();
+      if (current()) void poll();
     }, 1000);
     try {
       let archiveName = op.name;
@@ -355,6 +368,7 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
       say(candidate.workspaceOwner, op.kind === "copy" ? opErrorText(e) : t("files-ops.zip_failed", { error: opErrorText(e) }), "error");
     } finally {
       settled = true;
+      remotePostCredentials.delete(ac);
       clearTimeout(showTimer);
       if (pollTimer) clearTimeout(pollTimer);
     }
@@ -388,7 +402,7 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
   }, []);
 
   const retryRemote = useCallback((op: RemoteOperation, conflict: Conflict | null) => {
-    if (op.state !== "conflict" || activeRemote.current.get(op.id)?.workspace !== op.owner.workspaceOwner) return;
+    if (op.state !== "conflict" || activeRemote.current.get(op.id)?.owner !== op.owner) return;
     if (!conflict) return cancelRemote(op.id);
     void executeRemote(op, conflict);
   }, [cancelRemote, executeRemote]);

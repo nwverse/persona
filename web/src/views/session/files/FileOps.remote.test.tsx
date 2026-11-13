@@ -16,6 +16,7 @@ window.matchMedia ??= ((media: string) => ({ matches: false, media, addEventList
 type Call = { path: string; body: Record<string, unknown>; signal?: AbortSignal | null; answer: (body: unknown, status?: number) => void };
 let host: HTMLDivElement, root: Root, ops: FileOps, calls: Call[];
 let pendingRemote = false;
+let operationAvailable = true;
 let remoteBytes = { done: 32, total: 100 };
 const changed = vi.fn();
 const target: OpTarget = { path: "/work/from/sample.txt", name: "sample.txt", dir: false };
@@ -31,14 +32,15 @@ async function click(label: string) {
   await flush();
 }
 async function answer(call: Call, body: unknown, status = 200) { await act(async () => call.answer(body, status)); await flush(); }
-function Harness({ cwd = "/work" }: { cwd?: string }) {
-  ops = useFileOps({ mid: "machine-a", cwd, path: "/work/from", onChanged: changed });
+function Harness({ cwd = "/work", path = "/work/from" }: { cwd?: string; path?: string }) {
+  ops = useFileOps({ mid: "machine-a", cwd, path, onChanged: changed });
   return <div>{ops.ui}</div>;
 }
 
 beforeEach(async () => {
   calls = [];
   pendingRemote = false;
+  operationAvailable = true;
   remoteBytes = { done: 32, total: 100 };
   changed.mockReset();
   resetManagerChoice(); setRosterDefault("manager-a"); chooseManager("manager-a");
@@ -51,6 +53,7 @@ beforeEach(async () => {
     if (url.pathname === "/api/v1/machines") return Promise.resolve(Response.json({ machines: [] }));
     if (url.pathname.includes("/files/operations/")) {
       calls.push({ path: url.pathname, body: {}, signal: init?.signal, answer: () => {} });
+      if (!operationAvailable) return Promise.resolve(Response.json({ error: "not found" }, { status: 404 }));
       return Promise.resolve(Response.json({ id: "synthetic-operation", kind: "copy", state: "running", files_done: 1, files_total: 2, bytes_done: remoteBytes.done, bytes_total: remoteBytes.total }));
     }
     const body = init?.body ? JSON.parse(String(init.body)) : {};
@@ -110,6 +113,18 @@ describe("remote file operations", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 
+  it("does not offer a false Cancel when operation lookup is unsupported", async () => {
+    vi.useFakeTimers();
+    pendingRemote = true;
+    operationAvailable = false;
+    await act(async () => ops.duplicate([target])); await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100); }); await flush();
+    expect(operationReads().length).toBeGreaterThan(0);
+    expect(host.querySelector('[role="progressbar"]')).toBeNull();
+    await answer(byRoute("copy")[0], { copied: [{ from: target.path, to: "/work/from/sample 2.txt" }] });
+    expect(changed).toHaveBeenCalledExactlyOnceWith(["/work/from"]);
+  });
+
   it("uses file progress when an operation has no source bytes", async () => {
     vi.useFakeTimers();
     pendingRemote = true;
@@ -136,6 +151,17 @@ describe("remote file operations", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 
+  it("retires an unmounted authoritative POST when credentials change", async () => {
+    vi.useFakeTimers();
+    pendingRemote = true;
+    await act(async () => ops.duplicate([target])); await flush();
+    const request = byRoute("copy")[0];
+    await act(async () => root.render(<div />)); await flush();
+    expect(request.signal?.aborted).toBe(false);
+    await act(async () => setToken("jd_synthetic-b")); await flush();
+    expect(request.signal?.aborted).toBe(true);
+  });
+
   it("does not abort the authoritative POST when the workspace changes", async () => {
     vi.useFakeTimers();
     pendingRemote = true;
@@ -144,6 +170,22 @@ describe("remote file operations", () => {
     await act(async () => root.render(<Harness cwd="/elsewhere" />)); await flush();
     expect(host.querySelector('[role="progressbar"]')).toBeNull();
     expect(byRoute("copy")[0].signal?.aborted).toBe(false);
+    await answer(byRoute("copy")[0], { copied: [{ from: target.path, to: "/work/from/sample 2.txt" }] });
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("does not abort or keep polling the original directory after path navigation", async () => {
+    vi.useFakeTimers();
+    pendingRemote = true;
+    await act(async () => ops.duplicate([target])); await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100); }); await flush();
+    expect(host.querySelector('[role="progressbar"]')).not.toBeNull();
+    const before = operationReads().length;
+    await act(async () => root.render(<Harness path="/work/elsewhere" />)); await flush();
+    expect(host.querySelector('[role="progressbar"]')).toBeNull();
+    expect(byRoute("copy")[0].signal?.aborted).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); }); await flush();
+    expect(operationReads()).toHaveLength(before);
     await answer(byRoute("copy")[0], { copied: [{ from: target.path, to: "/work/from/sample 2.txt" }] });
     expect(changed).not.toHaveBeenCalled();
   });
