@@ -3,7 +3,8 @@ import SwiftUI
 extension SettingsPage {
     @MainActor func belongsToCurrentAssistant(in model: AppModel) -> Bool {
         switch self {
-        case .models, .agents, .assistant, .claude, .codex, .modelConfiguration, .triage, .agentFollowUp, .connectors, .plugins, .channels,
+        case .models, .agents, .assistant, .claude, .codex, .modelConfiguration, .triage, .standingAuthorizations, .agentFollowUp,
+             .connectors, .plugins, .channels,
              .mail, .feishuBot, .sent, .skills,
              .knowledgeSelection, .pluginMarket, .marketExtension, .pluginMarkets, .inboxSources, .sourcesGraph, .computers:
             true
@@ -87,6 +88,8 @@ enum SettingsCatalog {
                   aliases: String(localized: "settings.search.devices")),
             .init(id: "triage", title: String(localized: "Session Triage"), symbol: Theme.Icon.triage, group: .assistant, page: .triage,
                   aliases: String(localized: "settings.search.triage")),
+            .init(id: "standing-authorizations", title: String(localized: "Standing Authorizations"), symbol: Theme.Icon.standingAuthorization,
+                  group: .assistant, page: .standingAuthorizations, aliases: String(localized: "settings.search.standing_authorizations")),
             .init(id: "agent-follow-up", title: String(localized: "Agent Follow-Up"), symbol: Theme.Icon.supervised, group: .assistant,
                   page: .agentFollowUp, aliases: String(localized: "settings.search.agent_follow_up")),
             .init(id: "claude", title: String(localized: "Claude Code Settings"), symbol: Theme.Icon.options, group: .assistant, page: .claude,

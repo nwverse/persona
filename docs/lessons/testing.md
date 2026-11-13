@@ -134,6 +134,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - Waiting for one effect does not wait for another made on a different goroutine (2026-11-09, #2152). A source page's tree changes first and its frame is sent later by the delivery goroutine (`ui_page_delivery.go`), so `TestPageNativeFiniteLoadStillStartsWithLoading`, which waited for the tree to say `loaded` and then counted delivered frames, failed only on busy CI. Wait for each effect you assert on (`pageAwait` for the frames too). To reproduce such a gap, slow the receiving side in a scratch copy (a fake `Notify` that sleeps 20 ms failed 10 of 10 runs), or run `go test -cpu 1 -count=60` with every core busy (4 of 60 failed); an idle machine passed 40 of 40.
 - A cancel on a fixed deadline counted from the start races the fake's own startup (2026-11-10, #2674). `TestToolCheckTimeoutStopsItsHelpers` gave the call 300 ms, but its fake had to start a shell and write its helper's pid first; on a busy machine the cancel came before there was a helper, and the test failed (1 of 30 runs with every core busy) without checking what it was about. Cancel once the fake shows it started (the pid file), and time the return from the cancel. Do not lengthen the deadline instead: it only makes the race rarer.
+- A child's `/proc/<pid>/environ` can read empty right after `exec.Cmd.Start` returns (2026-11-14, #7028). `Start` returns once the new program's close-on-exec has run, but the kernel lays out that program's environment later, in the ELF loader; reading it at once came back empty 1835 times in 2000 on the hub machine. `TestCodexTakeoverUsesOnlyTheSelectedWritersTerminalBridge` started `sleep 60` as its stand-in Codex writer and the takeover read the writer's environment a few calls later, so it refused with `codex_takeover_unavailable` about 3% of the time per subtest. A fixture whose code under test reads a child's `/proc` environment (or anything else set up after exec) waits until the child runs its own code: `/bin/sh -c 'echo ready; read -r line'` with stdin held open, then read that line. Keep the blocking step a builtin, since dash execs a last simple command such as `sleep` in place, which opens the same window again. A real process found by a scan has long been running.
 - A recovering assistant conversation's `busy` alone does not mark the end of its turn (2026-11-10, #3815). When recovery moves to the next model, `assistantSend` registers the replacement process (`spawnAssistant`) before it marks it busy and sends the retry, with the context snapshot and the mode sync in between. `sdkFixture.idle` waited for the registered process's `!busy`, so `TestAssistantRecoveryStopsAfterBothModelsAndTheirRetries` counted 2 of its 4 requests (9 of 400 runs on a busy Mac). The node publishes that gap as working (`busy || recovering` in `assistantSessions`); a wait for the end of a turn must use the same rule. To find such a gap, log the internal state at the moment the wait returns in a scratch test: slowing the fake CLI's `initialize`, the first guess, did not widen it.
 
 - Fixtures must use real response shapes (2026-11-06, #2938 / #2017). Assistant-feed `view_actions` is an object indexed by card key, empty as `{}` too. When both web and acceptance drivers mistook it for an array, array fixtures kept unit tests green while the real model lost answered state after reload. Use protocol objects covering empty objects, answered snapshots, and pagination; in a real browser also reload and check latest version, answered state, and no repeat sends.
@@ -714,6 +715,22 @@ Retain allow/deny assertions for data directories, private tmp, and proxy. Negat
 - Privilege-separated sessions have two processes (`sshd-session: user [priv]` and its child), with sockets in the child. Kill listener descendants too when simulating disconnection; killing only `[priv]` leaves connections alive. Stopping sshd without descendants leaves orphan sessions parented to 1 indefinitely.
 - `swift test` output arrives only after completion. Find hung cases with file traces or `sample <pid>`; Swift Testing `.timeLimit` cannot stop uncancellable waits.
 - System `.alert` buttons cannot be clicked through accessibility activation; `personactl.py tap` falls back to idb (not installed locally). Use XCUITest for alert-click flows (`app.alerts[...].buttons[...]`).
+
+## Home Screen widgets on a simulator (2026-11-14, #6946)
+
+- **A widget can be placed without touching the Home Screen**: with the simulator shut down, add an entry to
+  SpringBoard's `data/Library/SpringBoard/IconState.plist` (a page in `iconLists`: `elementType` `widget`,
+  `widgetIdentifier` the kind, `containerBundleIdentifier` the app, `bundleIdentifier` the widget extension, `gridSize`
+  `small` / `medium` / `large`, `iconType` `custom`, two fresh UUIDs), delete `DesiredIconState.plist`, then boot. A
+  widget with a static configuration draws from the App Group as on a phone (`-showHomeWidgetSample YES` fills it).
+- **Widgets with Edit Widget options (`AppIntentConfiguration`) never draw on the iOS 27 simulators here**, placed that
+  way or opened in Edit Widget, slim or stock: the extension logs "Unable to get LNAction from intent" after
+  `com.apple.siri.VoiceShortcuts.xpc` answers "No such process", WidgetKit gets no views (`CHSErrorDomain` 1101) and
+  keeps the placeholder entry, and the widget's buttons do nothing. The Agents widget shows the same, so it is not the
+  widget's code. Draw those widgets with the app's gallery (`-showHomeWidgets`, docs/apple/home-widgets.md
+  "Screenshots") and check their buttons on a device.
+- The gallery's rows (light and dark side by side) need a screen wider than an iPhone's: an iPad simulator made for
+  the shots and deleted after them.
 
 ## Verify nonempty udid before deleting simulators (2026-11-03)
 

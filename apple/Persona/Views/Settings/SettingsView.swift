@@ -406,6 +406,8 @@ enum SettingsPage: Hashable {
     case models, agents, appearance, about, pairing, computers
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
+    /// Assistant Profile › Standing Authorizations (#7002): the go-aheads Persona answers for the owner, each revocable.
+    case standingAuthorizations
     /// Assistant Profile › Agent Follow-Up (#7005): how Persona starts and follows up the work it hands out.
     case agentFollowUp
     /// Settings › Appearance › Layout (#2530): how the Agents list draws its agents.
@@ -541,6 +543,7 @@ private struct SettingsDestinations: ViewModifier {
         case .storage: StorageView()
         case .translation: TranslationSettingsView()
         case .triage: TriageSettingsView()
+        case .standingAuthorizations: StandingAuthorizationsView()
         case .agentFollowUp: AgentFollowUpView()
         case .modelConfiguration: ModelConfigurationView()
         case .hubs: HubsView()
