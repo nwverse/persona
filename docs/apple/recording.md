@@ -12,7 +12,7 @@ All-day recording (the watch records the whole day, the phone transcribes it as 
 ## Why send only text
 
 - Audio is roughly 14 MB / hour; the knowledge base searches text, so text is enough. The assistant needs "who said what at that day's meeting," not the audio itself.
-- Privacy: original audio stays on the phone (watch audio is still cleaned up after transfer to the phone) and never leaves the device; the hub holds only transcripts.
+- Privacy: by default original audio stays on the phone (watch audio is still cleaned up after transfer to the phone) and the hub holds only transcripts. A meeting has two exceptions, each said where it applies, in every language, as the contract's "Privacy per mode" Wording has it ([meeting-minutes.md](../assistant/meeting-minutes.md)): while the owner holds Talk, what is said then goes to the voice service (#3862 phase 4); and a meeting transcribed on the hub (hub mode, phase 5: picked at the start, or the default in Settings › Meetings) sends its audio, Talk included, through the hub to the speech service the hub is set up with (named when the owner chose another extension), and the hub deletes that audio once the meeting's minutes are written. The phone keeps its own audio as before, until `days` or the owner's delete. The texts: the microphone usage description (`apple/project.yml`, `apple/Persona/Resources/InfoPlist.xcstrings`), the meeting intent's description (`apple/LiveActivity/RecordingIntents.swift`), the line under Record and Settings › Meetings (`MeetingTranscriptionWords`), the recording page's footer, and the site's privacy page (`site/public/privacy/index.html`).
 - Recording entries are separate from meetings (`meetings`): a meeting is an external item from the Lark calendar, stored as one JSON document and batch-tagged by a model; a recording has a full transcript, its own retention period, and UUID-based writes and deletes from the phone. Their lifecycles differ, and combining them complicates cleanup and display.
 
 A recording marked as a meeting (`kind: "meeting"`, with the phone calendar's event in `calendar`) also gets structured minutes from the hub: [meeting-minutes.md](../assistant/meeting-minutes.md).
@@ -587,6 +587,152 @@ and its states are in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md) "Meeting pa
   voice in a room opened as a chat); `MeetingSpeakerTests` (an answer's stretch as it played, with its words, a voice
   resampled for the recorder's player); `RecordingSegmentWriterTests` (a press never placed before it happened, a release held
   back).
+
+#### Hub transcription (phase 5)
+
+The contract's "Phase 5: hub transcription" ([meeting-minutes.md](../assistant/meeting-minutes.md)): in hub mode the
+meeting's audio goes to the hub, which transcribes it, and the phone's own transcript fills where the hub has nothing.
+It has two parts: the data plane, what the phone sends and keeps and the one store the meeting page and the Live Activity
+read (`MeetingTranscription`); and the UI that shows it and the choices (`MeetingTranscriptionViews.swift`, the start,
+Settings › Meetings, the meeting page, the Live Activity, the recording's page). The wire and every rule are pure in `MeetingAudioWire.swift`, held to the contract by
+`MeetingTranscriptionTests`; the socket session is `MeetingAudioUplink`, the settings `MeetingTranscriptionSettings`.
+
+- **The flag** (`meeting_transcription`, only beside `meeting_conversation` and `meeting_live_view`;
+  `MeetingAttendanceDefaults.transcriptionFeature`) is snapshotted as the meeting starts, as `liveView` and `photos` are:
+  `RecordingAttendance.transcription` is the mode the meeting asked for, nil when the hub didn't list the flag (its
+  uploads then name no mode). A start asks for `MeetingAttendees.startTranscription`: the start sheet's pick (`hub` only
+  while `meeting_transcription_ready`), else the hub's `meeting_transcription_default`, `device` while the hub isn't
+  ready (`MeetingAttendanceDefaults.startMode`; one-tap starts read the default and readiness kept from the last
+  settings read, as the role's default is). A meeting that asked for a mode also keeps every role change with its time
+  (`RecordingAttendance.roles`), for the timeline.
+- **The upload** (`RecordingUpload`): such a meeting's every upload names its mode (`transcription`; the hub takes the
+  first and ignores the rest, so a lost upload changes nothing), and in hub mode carries `timeline`
+  (`MeetingTimeline`: the role changes and the spoken stretches that ended, `{roles: [{at, attendance}], speaking:
+  [{start, end, text?}]}`, the `complete: true` upload included). The timeline always fits the hub's limits: the first
+  100 role changes and 1000 stretches, malformed entries left out, a text cut at 4000 bytes on a character, so the hub
+  never ignores it whole. The `200`'s `transcription` and `transcription_problem` reach the store
+  (`RecordingSync.onTranscription`) before the attendance it carried counts as stored. Device transcription and
+  15-second segments keep running in hub mode: they are the fallback, they fill the gaps, they are the `segments`.
+- **The mode in effect** (`MeetingTranscriptionRule.decide`) is the `200`'s word, and `hub` only when the phone asked for
+  it, so a meeting's audio never leaves the phone unasked. A `200` without `transcription` is an older manager: `device`
+  for the rest of the recording (`olderManager`), a running uplink stopped, whatever a later `200` says. In hub mode no
+  `POST …/live` goes (`MeetingLive`, `hubTranscribes`; a `409 hub_transcribes` stops them too) and a heard ask sends no
+  `live_next` (`MeetingAsk`: the segment is still cut, for the fallback).
+- **The uplink** (`MeetingAudioUplink`): the second consumer of the recorder's one tap (`RecordingCapture.listenUplink`,
+  beside the meeting call's `listen`), stamped with the writer's frame position. It listens from the start of a meeting
+  that asked for `hub`, before the mode is in, into the last 60 seconds kept in memory whatever the hub acknowledged
+  (`MeetingAudioRing`, PCM16 16 kHz); a tap buffer costs a conversion and a copy under a lock on the tap's thread, the
+  sends run on a queue of their own, and nothing per buffer reaches the main thread (performance P1). Once the mode is
+  `hub` the socket opens (`GET …/audio`, `MeetingAudioEndpoint`, the device's bearer token, `HubVoiceSocket` with its
+  20-second ping): `start {at, timeline}` at once (`at` the oldest second held), then `speaking` on for a stretch Persona
+  is saying, then `role`; no audio before `ready`, then frames of about 100 ms (at most 64 KiB, whole samples) from
+  `ready.from`, a `seek` first when the hub's end is older than the oldest sample held. `role` goes on every change and
+  `speaking` on and off as Persona's answers (`MeetingSpeaker`) and the meeting call's voice (`MeetingCall`) start and
+  stop: one on while either says something, off once the last stops. It runs whatever the role, `off` included.
+- **The socket's life** (`MeetingTranscription.follow`): closed while the recording is paused, opened again on Continue;
+  after a drop opened again after 1, 2, 4, 8, 16, then every 30 seconds, at once when the network comes back, sending
+  again from the new `ready.from`; audio that fell out of the 60 seconds unacknowledged is a gap (`lost`). At Stop the
+  rest of the audio goes, then `end` at the last sample, and the hub's last lines are read for up to 20 seconds before the
+  socket counts as ended. Hub frames: `ready` (its `gaps`, and the positions missed while away read with `GET
+  …/live?parts=lines&from=`), `ack`, `interim`, `line` (kept by position), `problem` (`code: null` clears it) and `error`,
+  acted on by its code (`MeetingTranscriptionRule.reaction`): `recording_not_found` uploads first and tries again,
+  `bad_frame` tries again (three in a row stop it), every other code, an unknown one included, stops hub transcription
+  for the meeting while the phone's own goes on; a refused handshake (401, 403, 404) stops it too.
+- **Wi-Fi only** (`MeetingNetwork`, one `NWPathMonitor`; `MeetingTranscriptionRule.mayStream`): cellular data is
+  allowed unless the iPhone's **Hub transcription on Wi-Fi only** is on (`MeetingAttendanceDefaults.wifiOnlyKey`, off by
+  default, kept on the phone). Then on cellular or a network marked expensive no socket opens and no audio goes
+  (`waitingForWiFi`); the audio is still kept, so a return to Wi-Fi within the minute resends it, and the rest goes up as
+  gaps.
+- **The gaps after the meeting** (`MeetingTranscription.kickGaps`): for every ended room meeting that asked for `hub`,
+  within the hub's retention, once its last revision (the `complete: true` upload) is stored, the phone reads
+  `transcription` (`GET …/live?parts=transcription`) and, while the hub is `live` or `finishing` with gaps, uploads them
+  (`PUT …/audio?at=`, `MeetingGapUpload.plan`: at most 300 seconds a request, only what lies inside the phone's audio,
+  `at` a plain decimal exact to the sample, `MeetingAudioClock.query`), decoded from the phone's own segments off the
+  main thread (`MeetingSegmentAudio`), until no gap is left or the final pass started (`409 transcription_final`);
+  refusals in the contract's order each have their answer (`MeetingGapUpload.reaction`), and the Wi-Fi rule holds here
+  too. It runs at launch, after an upload of an ended meeting is stored, when the network changes and when the app
+  comes back.
+- **Retention on the phone**: the phone keeps a recording's audio until the hub's `days` or the owner's delete, whatever
+  the hub's state (`RecordingSync.purgeExpired`), so a hub-mode recording's audio is there for gap uploads at least until
+  `final` or `failed`, and never past `days`: an expired one is never uploaded (`MeetingTranscription.needsGaps`).
+- **The store** (`MeetingTranscription`, `@Observable`, `meeting(id)`): per recording `asked`, `decided` (`mode`,
+  `problem`, `olderManager`), `socket` (`off`, `waitingForMode`, `waitingForWiFi`, `connecting`, `ready`, `down`,
+  `paused`, `ending`, `ended`), `everUp`, the hub's `interim` and `lines` (`MeetingHubLine`, by position, `source` `hub`
+  or `device` when read from the live log), the standing `problem`, `stopped` (the code that stopped the uplink),
+  `acked`, the hub's `gaps`, the phone's `lost`, `hub` (`transcription` of `GET …/live` and `detail.meta`:
+  `MeetingTranscriptionView`, its `mode`, `state`, `gaps`, `problem`, `fallback`; `MeetingConversation` reads the
+  `transcription` part on `meeting_live` for a meeting that named a mode, never `interim`, which comes on the socket)
+  and `gapUpload`. `shown(id, role:)` (`MeetingTranscriptionRule.shown`) says what the page and the Live Activity show:
+  the hub's caption and lines while the socket is up and no problem other than `no_interim` stands, the phone's own
+  lines otherwise, with a notice once it has fallen back (a socket that was up and dropped, one down or waiting for
+  Wi-Fi, a problem, a stopped uplink; the first connect is not a fallback); with the role `off`, the hub's caption and
+  the phone's own lines. `MeetingTranscriptionView(meta:)` reads `detail.meta` for the recording's detail.
+- **Settings** (`MeetingTranscriptionSettings`, load → show → edit → save): the hub's `meeting_transcription_default`,
+  `meeting_glossary` (cleaned and refused as the hub would: one line each, repeats dropped case-insensitively, at most 200
+  terms of 40 characters) and `meeting_transcription_extension` (`choices`: the built-in contribution first, then every
+  installed extension's `transcription` contribution; shown only with more than the built-in one), the read-only
+  `meeting_transcription_ready`, and the Wi-Fi switch; a hub without them offers none (`offered`).
+- **The start** (`RecordingCaptureControls`, docs/design/DESIGN_SYSTEM.md "One Record entry (#5243)"): a room meeting's
+  options have **Transcription** (On This iPhone / On the Hub, a menu row like Persona's, `meeting-transcription-start`)
+  only while `MeetingAttendees.offersHub` (the flag and `meeting_transcription_ready`, read again as the page opens), the
+  hub's default shown until picked, the pick for that start only (`RecordingStartForm.pickedTranscription`, passed to
+  `startTranscription(picked:)`). One-tap starts (the Control, Siri, the activity) use the default, `device` while the hub
+  isn't ready. The line under Record says what the mode about to start sends (`MeetingTranscriptionWords.startPrivacy`):
+  hub mode's Wording, naming the extension the owner chose (`meeting_transcription_extension`, by its name from `GET
+  /api/v1/plugins`), else privacy mode's as before.
+- **Settings › Meetings** (`MeetingSettingsView`, `MeetingTranscriptionSettingsSections`), from a hub that has the fields:
+  **Transcription** with On This iPhone / On the Hub (the default, `PUT meeting_transcription_default`), under it what the
+  default sends (`modePrivacy`) and, while the hub can't transcribe, that meetings stay on this iPhone until it can;
+  **Speech Service** only when an installed extension contributes `transcription` beside the built-in one; **Glossary**
+  (its count) pushing `MeetingGlossaryPage`: a field and Add, the newest term first, a swipe deletes, each change saved
+  at once, a term over 40 characters or a 201st said and never sent; **Hub Transcription on Wi-Fi Only** in a section of
+  its own, with what it does and the data an hour costs.
+- **The meeting page** (`MeetingPage`): the subtitle adds "Transcribed on the hub" in hub mode (`MeetingPageSubtitle`, a
+  view of its own so the store's changes redraw only it). The Live box follows `shown`: the hub's newest lines (by
+  position) and its caption under them in the secondary color (read as "Being said: …"; nothing "behind" while one
+  shows) while the hub is up and healthy; else the phone's own lines with a notice under the box's title, why in words
+  (waiting for Wi-Fi, the hub stopped for this meeting, or not transcribing right now), the iPhone mark in the caution
+  color; with Persona off, the phone's own lines and the hub's caption. The line beside Talk (`MeetingPageBar`,
+  `MeetingTranscriptionWords.pagePrivacy`) says hub mode's Wording in a meeting the hub transcribes (its audio, Talk
+  included, goes through the hub), naming the extension the start or the settings read (`MeetingTranscription.service`),
+  and privacy mode's otherwise. Views that only ask whether the hub transcribes read `hubMeetings`, which changes with the
+  mode alone, never with a caption.
+- **The Live Activity** (`RecordingActivity.content`, `transcribed`): in hub mode the line is the hub's latest while the
+  page shows the hub's lines, else the phone's own with `fellBack` (the Lock Screen says "On iPhone: …" with the iPhone
+  mark, on the line's own lines, so the height is unchanged); `fellBack` goes at once, the line at most every 5 seconds as
+  before.
+- **The recording's page** (`RecordingTranscriptionRow`): for a meeting that named a mode, `detail.meta.transcription`
+  (read with the minutes, `RecordingMinutesModel.transcription`, polled while the hub is finishing) says "Transcribed on
+  the hub" with the hub's state ("The hub is finishing the transcript…" with a spinner until `final`, then final or
+  failed), the stretches it has no audio for, and the gap uploads (sending, or waiting for Wi-Fi); a meeting that asked
+  for the hub and stayed on the phone says so. Its footer says the audio went through the hub, not that it stayed here.
+- **Checking it**: `MeetingTranscriptionTests` (the frames, `?at=` as a plain decimal, the hub's frames read leniently,
+  PCM16 little-endian, `transcription` from `…/live` and `detail.meta`; the ring: nothing before `ready`, whole frames of
+  at most 100 ms and 64 KiB, the resend from `ready.from`, a seek when the hub is behind the ring, what falls out
+  unacknowledged as a gap, a jump in the clock; the uplink on a fake socket: start first, the open stretch and the role,
+  no audio before `ready`, a stale `ready`, the resend on a new socket, `end` after the last audio; the mode in effect,
+  never `hub` unasked, an older manager for good; every error code and close, the backoff; the Wi-Fi rule; what the page
+  shows; the start's mode; the flag only beside the conversation and the live view; the timeline's limits, cut texts and
+  malformed entries, the role changes kept; the upload's `transcription` and `timeline`; the gap plan, the refusals and
+  which meetings still need gaps; the store: listening before the mode, the socket's request, lines and problems,
+  missed lines read from the live log, an unknown error stopping it, a drop tried again, `recording_not_found`
+  uploading first, a refused handshake, an older manager, a device meeting, Wi-Fi only, pause and Continue, role and
+  speaking frames, `end` and the last lines, the `…/live` read, gap uploads until none is left, `transcription_final`,
+  Wi-Fi only holding them; no `POST …/live` in hub mode; the settings: the glossary's cleaning, the extension choice,
+  load and save, a refused change put back, a hub without them, the Wi-Fi switch; what the UI says: the privacy texts per
+  mode, the extension named only when chosen, the fallback notice's reasons, the recording page's facts, the Lock Screen's
+  hub line and the phone's own said so, `detail.meta.transcription` read leniently, the extensions read for the choice).
+  The UI test
+  `MeetingHubTranscriptionUITests` runs `-showMeetingSample room-hub` (a room meeting listening in that asked for `hub`,
+  canned audio into the tap) against the mock hub's hub mode ([testing.md](../operations/testing.md) "Meeting
+  transcription"): the upload asks for `hub` with its timeline, the socket sends `start`, the role and audio, the mock's
+  lines reach the store (read with `-probes YES` as `probe.meeting-transcription`), and an upstream problem makes it
+  fall back and the hub's sentences coming again bring it back. Its UI tests: the start offers On the Hub with the hub
+  ready, and its line says hub mode once picked, but not with `ready: false` or without hub transcription (`on: false`);
+  Settings › Meetings saves the default and the glossary (the mock's `GET /api/v1/assistant` has them) and refuses a
+  long term; the meeting page shows the hub's lines, then the fallback notice on `{"upstream": "failed"}`, the Lock
+  Screen the hub's line, then "On iPhone: …", and after Stop the recording's page says it was transcribed on the hub
+  and how far the hub is.
 
 ## All-day recording (Apple)
 

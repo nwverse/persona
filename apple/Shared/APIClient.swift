@@ -417,6 +417,33 @@ nonisolated struct APIClient: Sendable {
         return (http, bytes)
     }
 
+    /// `PUT` with `data` as an `application/octet-stream` body (a meeting's gap audio, #3862 phase 5: `PUT …/audio?at=`),
+    /// answered as `request` is. The fake transport gets the bytes as the body.
+    func putBytes(_ path: String, query: [String: String] = [:], data: Data, timeout: TimeInterval = 120) async throws -> Data {
+        let query = larkScoped(path, query)
+        if config.isDemo { throw APIError(status: 403, message: DemoText.notSent) }
+        let headers = clientMetadata.headers.merging(routing(path, query)) { _, manager in manager }
+        if let transport {
+            do {
+                return try await transport(LocalRequest(method: "PUT", path: path, query: query, body: data, headers: headers, timeout: timeout))
+            } catch var error as APIError {
+                error.requestPath = path
+                throw error
+            }
+        }
+        var req = URLRequest(url: url(path, query: query), timeoutInterval: timeout)
+        req.httpMethod = "PUT"
+        config.authorize(&req)
+        req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        clientMetadata.apply(to: &req)
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let requestID = String(UUID().uuidString.prefix(8)).lowercased()
+        req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
+        for (name, value) in headers { req.setValue(value, forHTTPHeaderField: name) }
+        let (body, response) = try await session.upload(for: req, from: data, delegate: HubRedirects.shared)
+        return try checked(body, response, requestID: requestID, path: path)
+    }
+
     /// A bounded, staged attachment sent from disk. The fake transport reads it only in tests.
     func uploadBytes(file: URL, path: String, query: [String: String], timeout: TimeInterval = 180) async throws -> Data {
         let query = larkScoped(path, query)
@@ -1235,12 +1262,24 @@ nonisolated struct APIClient: Sendable {
         /// The background supervisor's session id once the hub has made it (read-only); nil until then and from an
         /// older hub.
         var backgroundSupervisor: String?
+        /// Hub transcription (#3862 phase 5, docs/assistant/meeting-minutes.md「Choosing the mode」), all nil from a hub
+        /// without `meeting_transcription`: the mode a meeting starts with (`device` until changed, or `hub`), the names
+        /// and words the transcription should spell right (at most 200 of at most 40 characters), which contribution
+        /// transcribes (`""` the built-in voice extension's, else `<extension id>/<contribution id>`), and whether it
+        /// can now (read-only).
+        var meetingTranscriptionDefault: String?
+        var meetingGlossary: [String]?
+        var meetingTranscriptionExtension: String?
+        var meetingTranscriptionReady: Bool?
         enum CodingKeys: String, CodingKey {
             case launcher, cwd, conversations, timezone, main, leaders
             case machineID = "machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
             case mainBackgroundFolded = "main_background_folded"
             case meetingAttendanceDefault = "meeting_attendance_default", timezonePicked = "timezone_picked"
             case mainSupervisesOwnTasks = "main_supervises_own_tasks", backgroundSupervisor = "background_supervisor"
+            case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
+            case meetingTranscriptionExtension = "meeting_transcription_extension"
+            case meetingTranscriptionReady = "meeting_transcription_ready"
         }
 
         /// Whether conversation `id` is the built-in background supervisor (#5083): listed with the scheduled tasks'
@@ -1325,19 +1364,29 @@ nonisolated struct APIClient: Sendable {
         var mainBackgroundFolded: Bool?
         var meetingAttendanceDefault: String?
         var mainSupervisesOwnTasks: Bool?
+        /// Hub transcription's settings (phase 5); `[]` clears the glossary. `meeting_transcription_ready` is read-only.
+        var meetingTranscriptionDefault: String?
+        var meetingGlossary: [String]?
+        var meetingTranscriptionExtension: String?
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
             case mainBackgroundFolded = "main_background_folded", mainSupervisesOwnTasks = "main_supervises_own_tasks"
+            case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
+            case meetingTranscriptionExtension = "meeting_transcription_extension"
         }
     }
     func setAssistant(machine: String? = nil, launcher: String? = nil, timezone: String? = nil, notes: String? = nil,
                       mainTasksQuiet: Bool? = nil, mainBackgroundFolded: Bool? = nil,
-                      meetingAttendanceDefault: String? = nil, mainSupervisesOwnTasks: Bool? = nil) async throws -> AssistantState {
+                      meetingAttendanceDefault: String? = nil, mainSupervisesOwnTasks: Bool? = nil,
+                      meetingTranscriptionDefault: String? = nil, meetingGlossary: [String]? = nil,
+                      meetingTranscriptionExtension: String? = nil) async throws -> AssistantState {
         owned(try JSON.decoder.decode(AssistantState.self, from: try await request("PUT", "/api/v1/assistant",
             body: AssistantConfigBody(machineID: machine, launcher: launcher, timezone: timezone, notes: notes, mainTasksQuiet: mainTasksQuiet,
                                       mainBackgroundFolded: mainBackgroundFolded, meetingAttendanceDefault: meetingAttendanceDefault,
-                                      mainSupervisesOwnTasks: mainSupervisesOwnTasks))))
+                                      mainSupervisesOwnTasks: mainSupervisesOwnTasks,
+                                      meetingTranscriptionDefault: meetingTranscriptionDefault, meetingGlossary: meetingGlossary,
+                                      meetingTranscriptionExtension: meetingTranscriptionExtension))))
     }
     /// The Chat tab is open: the hub gets a claude process ready so the first message starts at once. With no launcher
     /// chosen the field is omitted and the hub warms its own default (#4200: the client never sends a made-up name).

@@ -265,13 +265,9 @@ struct MeetingPage: View {
     }
 
     /// "Persona takes part · On this iPhone · Private": the role (or that Persona can't take part now), where it records,
-    /// and the private mark when it is on.
+    /// in hub mode that the hub transcribes it (#3862 phase 5), and the private mark when it is on.
     private func subtitle(_ entry: RecordingEntry) -> some View {
-        let parts = [personaWords(entry), String(localized: "On this iPhone"), isPrivate(entry) ? String(localized: "Private") : nil]
-        return Text(parts.compactMap { $0 }.joined(separator: " · "))
-            .font(Theme.Font.secondary).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("meeting-page-subtitle")
+        MeetingPageSubtitle(id: entry.id, persona: personaWords(entry), privateMark: isPrivate(entry))
     }
 
     /// The role's words, unless it attends and the hub took the meeting without its room (an older manager,
@@ -730,10 +726,33 @@ struct MeetingPage: View {
     }
 }
 
+/// The subtitle under the meeting page's state line: the role, where it records, hub mode (#3862 phase 5) and the private
+/// mark. A view of its own, so the transcription store's changes (a caption a second in hub mode) redraw only it (P5).
+private struct MeetingPageSubtitle: View {
+    var id: UUID
+    var persona: String
+    var privateMark: Bool
+    @State private var transcription = MeetingTranscription.shared
+
+    var body: some View {
+        let parts = [persona, String(localized: "On this iPhone"),
+                     transcription.hubTranscribes(id) ? String(localized: "Transcribed on the hub") : nil,
+                     privateMark ? String(localized: "Private") : nil]
+        Text(parts.compactMap { $0 }.joined(separator: " · "))
+            .font(Theme.Font.secondary).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("meeting-page-subtitle")
+    }
+}
+
 /// The Live box: the newest transcript lines, how far the text is behind the room, and the whole transcript one tap away.
 /// A view of its own, so its lines are taken from the transcript (every segment sorted and filtered, `entry.sentences`)
 /// only when the recording changes, not on every pass of the page (P4). `folded` (the keyboard is up): only the newest
 /// line, so the thread under it keeps its height.
+///
+/// In hub mode (#3862 phase 5) it shows what `MeetingTranscription.shown` says: the hub's lines and its caption being
+/// said now while the audio socket is up and no problem but `no_interim` stands; else the phone's own lines with a notice
+/// that transcription has fallen back to this iPhone; with Persona off, the hub's caption under the phone's own lines.
 private struct MeetingLiveBox: View {
     var entry: RecordingEntry
     var exchanges: [MeetingAsk.Exchange]
@@ -741,19 +760,33 @@ private struct MeetingLiveBox: View {
 
     @Environment(\.dynamicTypeSize) private var size
     @State private var capture = RecordingCapture.shared
+    @State private var transcription = MeetingTranscription.shared
     @State private var rows: [LiveRow] = []
 
     private var paused: Bool { capture.state == .paused }
 
     var body: some View {
+        let hub = transcription.meeting(entry.id)
+        let shown = transcription.shown(entry.id, role: entry.attendance?.role ?? .off)
+        // The hub's newest lines, keyed by their place in its live log (never renumbered): three, so cheap here.
+        let lines = shown.hubLines ? hub.lines.suffix(Theme.Recording.liveLines).map {
+            LiveRow(id: "hub-\($0.n)", start: $0.start, end: $0.end, text: $0.text)
+        } : rows
+        let caption = shown.hubInterim ? hub.interim.flatMap { $0.text.isEmpty ? nil : $0 } : nil
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                 Text("Live").font(Theme.Font.captionStrong).foregroundStyle(.secondary)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: Theme.Space.s)
-                behind(rows.last)
+                // A caption is what is said now: nothing is behind.
+                if caption == nil { behind(lines.last) }
             }
-            ForEach(folded ? Array(rows.suffix(1)) : rows) { row in liveRow(row) }
+            if shown.fellBack { fallback(MeetingTranscriptionWords.fallback(hub)) }
+            // Folded, only the newest: the caption when there is one, else the last line.
+            ForEach(folded ? (caption == nil ? Array(lines.suffix(1)) : []) : lines) { row in
+                liveRow(row).accessibilityIdentifier(shown.hubLines ? "meeting-live-hub-line" : "meeting-live-line")
+            }
+            if let caption { interimRow(caption) }
             if !folded {
                 HStack {
                     Spacer(minLength: Theme.Space.flush)
@@ -803,6 +836,37 @@ private struct MeetingLiveBox: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    /// The hub's caption (#3862 phase 5): what is being said now, in the secondary color under the lines, replaced by the
+    /// next one; read as "Being said: …".
+    private func interimRow(_ caption: MeetingInterim) -> some View {
+        let stamp = Text(RecordingFormat.clock(caption.start)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+        let words = Text(caption.text).font(Theme.Font.body).foregroundStyle(.secondary).lineLimit(Theme.Recording.liveLineLength)
+        return Group {
+            if size.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) { stamp; words }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) { stamp; words }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Being said: \(caption.text)"))
+        .accessibilityIdentifier("meeting-live-interim")
+    }
+
+    /// The notice that hub transcription fell back to this iPhone (#3862 phase 5), under the box's title: why, in words,
+    /// with the phone's mark in the caution color.
+    private func fallback(_ words: String) -> some View {
+        Label {
+            Text(words).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            ThemedIcon(Theme.Icon.phone).foregroundStyle(Theme.caution)
+        }
+        .font(Theme.Font.caption)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("meeting-transcription-fallback")
     }
 
     /// "About 10 s behind" while the meeting records and its text lags; "Listening…" before the first line. The capture's

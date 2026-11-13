@@ -578,13 +578,19 @@ import OSLog
     /// what the voice said in it (`openSpan`); the answers said by then are not carried into the next stretch.
     private func played(_ on: Bool, recording: UUID) {
         if on {
-            if voiceStart == nil { voiceStart = (recording, capture.timeline) }
+            if voiceStart == nil {
+                voiceStart = (recording, capture.timeline)
+                // The audio socket says so in hub mode (#3862 phase 5), with what the voice has said of it yet.
+                MeetingTranscription.shared.speaking(recording, voice: .call, on: true, at: capture.timeline,
+                                                     text: openSpan(for: recording)?.text)
+            }
             return
         }
         guard let span = openSpan(for: recording) else { return }
         voiceStart = nil
         if callRecording == recording { keptAnswers = MeetingCallEcho.kept(call?.captions ?? [], before: keptAnswers) }
         library.change(recording) { $0.attendance?.spoken.append(span) }
+        MeetingTranscription.shared.speaking(recording, voice: .call, on: false, at: span.end, text: nil)
     }
 
     private static func seconds(_ duration: Duration) -> TimeInterval {

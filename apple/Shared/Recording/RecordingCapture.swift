@@ -100,6 +100,8 @@ final class RecordingCapture {
     @ObservationIgnored private(set) var cancelsEcho = false
     /// Who hears the converted audio besides the files (`listen`).
     @ObservationIgnored private var listener: (@Sendable (AVAudioPCMBuffer, Double) -> Void)?
+    /// The second consumer of the tap: the hub uplink (#3862 phase 5, `listenUplink`), beside the meeting call's.
+    @ObservationIgnored private var uplinkListener: (@Sendable (AVAudioPCMBuffer, Double) -> Void)?
     @ObservationIgnored private var writer: RecordingSegmentWriter?
     @ObservationIgnored private var ticker: Task<Void, Never>?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
@@ -310,7 +312,7 @@ final class RecordingCapture {
                 writer.voiceProcessing = echoCancellation
             }
             #endif
-            writer.listener = listener
+            writer.listener = listeners
             connect(writer)
             // Before the first buffer, so a start a moment before midnight still cuts on the exact sample.
             if day { planBoundary(for: entry.id, writer: writer) }
@@ -373,7 +375,27 @@ final class RecordingCapture {
     /// until it is taken away.
     func listen(_ sink: (@Sendable (AVAudioPCMBuffer, Double) -> Void)?) {
         listener = sink
-        writer?.listener = sink
+        writer?.listener = listeners
+    }
+
+    /// The hub uplink's own listener (#3862 phase 5, docs/assistant/meeting-minutes.md「On the phone」): every buffer of
+    /// the recording's audio, as `listen`'s sink gets it and beside it, stamped with the same clock (the writer's frame
+    /// position, paused time left out). One uplink; nil stops it.
+    func listenUplink(_ sink: (@Sendable (AVAudioPCMBuffer, Double) -> Void)?) {
+        uplinkListener = sink
+        writer?.listener = listeners
+    }
+
+    /// What the writer hands each buffer to: the call's listener and the uplink's, each when there is one.
+    private var listeners: (@Sendable (AVAudioPCMBuffer, Double) -> Void)? {
+        switch (listener, uplinkListener) {
+        case (nil, nil): nil
+        case (let one?, nil), (nil, let one?): one
+        case (let call?, let uplink?): { @Sendable buffer, at in
+            call(buffer, at)
+            uplink(buffer, at)
+        }
+        }
     }
 
     /// Where what the microphone takes at this moment will lie, on the clock of the listener's positions (`listen`): the
@@ -398,14 +420,14 @@ final class RecordingCapture {
     /// The made-up audio comes 100 ms at a time (`RecordingSamples.startTalkAudio`).
     private static let sampleBuffer: Double = 0.1
 
-    /// A made-up recording's audio (`-showMeetingSample room-…`): canned PCM handed to the listener as the tap would,
-    /// so Talk works with no microphone.
+    /// A made-up recording's audio (`-showMeetingSample room-…`): canned PCM handed to the listeners as the tap would,
+    /// so Talk and the hub uplink work with no microphone.
     func feedSample(_ buffer: AVAudioPCMBuffer) {
         guard isSample, state == .recording else { return }
         let at = sampleFed
         sampleFed += Double(buffer.frameLength) / buffer.format.sampleRate
         sampleFedAt = .now
-        listener?(buffer, at)
+        listeners?(buffer, at)
     }
 
     /// A made-up recording is being recorded (`showSample`): no microphone, no files.

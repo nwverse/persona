@@ -36,6 +36,8 @@ import UserNotifications
         capture.onStopping = { id in
             MeetingAsk.shared.ended(id)
             MeetingCall.shared.ended(id)
+            // The audio socket says `end` after the last audio (#3862 phase 5).
+            MeetingTranscription.shared.ended(id)
         }
         MeetingLive.shared.start()
         // The segment length follows what the meeting being recorded may send (#3862 phase 2).
@@ -46,6 +48,8 @@ import UserNotifications
         MeetingPhotos.shared.start()
         // The meeting call and Talk follow the room meeting being recorded (#3862 phase 4).
         MeetingCall.shared.start()
+        // Hub transcription (#3862 phase 5): the mode of every upload's 200, the uplink, the gaps after a meeting.
+        MeetingTranscription.shared.start()
         // A call that ended while the app was away (or never said so): coming back carries on, unless another app's audio
         // (a VoIP call without CallKit, still going) holds the route: taking the session would cut into that call.
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { @Sendable _ in

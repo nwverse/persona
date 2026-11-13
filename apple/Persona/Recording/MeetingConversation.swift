@@ -76,6 +76,9 @@ final class MeetingConversation {
         var readPhotos: (UUID) async -> Bool = { await MeetingPhotos.shared.refresh($0) }
         /// `meeting_live` reaches the phone now: the hub-level group's socket is open (the app behind closes it).
         var streaming: () -> Bool = { false }
+        /// `transcription` and `interim` of a read (#3862 phase 5, `MeetingTranscription.liveRead`), with which of them
+        /// the read asked for (an absent part asked for is the hub's word: none).
+        var transcription: (_ id: UUID, _ view: MeetingTranscriptionView?, _ interim: MeetingInterim?, _ read: Set<String>) -> Void = { _, _, _, _ in }
     }
 
     /// Longest Just me or `…/followup` text (the contract's limit, in characters).
@@ -210,10 +213,14 @@ final class MeetingConversation {
     }
 
     /// The parts of a `meeting_live` event the phone follows for `id`: phase 1's, `topics` for a meeting started with the
-    /// live view (`RecordingAttendance.liveView`) and `photos` for one that started with them (`RecordingAttendance.photos`).
+    /// live view (`RecordingAttendance.liveView`), `photos` for one that started with them (`RecordingAttendance.photos`)
+    /// and `transcription` for one that named a transcription mode (phase 5, `RecordingAttendance.transcription`). Never
+    /// `interim`: the caption comes on this phone's own audio socket, and reading it at the hub's pace (once a second)
+    /// would cost a request a second for nothing.
     func partsRead(for id: UUID) -> [String] {
         let attendance = library.entry(id)?.attendance
         return Self.readParts + (attendance?.liveView == true ? ["topics"] : []) + (attendance?.photos == true ? ["photos"] : [])
+            + (attendance?.transcription != nil ? ["transcription"] : [])
     }
 
     /// The meeting started while the hub took photos: the page shows them, and the hub's changes to them are read.
@@ -541,6 +548,12 @@ final class MeetingConversation {
         if let rev = answer.revs?["photos"], rev > (m.revs["photos"] ?? -1), takesPhotos(id) { photosChanged(id, rev: rev) }
         for (part, rev) in answer.revs ?? [:] where part != "photos" { m.revs[part] = max(rev, m.revs[part] ?? rev) }
         if meetings[id] != m { meetings[id] = m }
+        // Hub transcription's part (phase 5) is the transcription store's.
+        let read: Set<String> = switch wanted {
+        case .all: ["transcription", "interim"]
+        case .parts(let parts): Set(parts).intersection(["transcription", "interim"])
+        }
+        if !read.isEmpty { deps.transcription(id, answer.transcription, answer.interim, read) }
     }
 
     /// A watched recording, or a room meeting recorded here that runs or ended in the last 12 hours.
@@ -800,9 +813,12 @@ final class MeetingConversation {
         var topics: [MeetingTopic]?
         var topicsAt: String?
         var revs: [String: Int64]?
+        /// Phase 5: the mode and how far the hub got; the hub's caption now.
+        var transcription: MeetingTranscriptionView?
+        var interim: MeetingInterim?
 
         enum CodingKeys: String, CodingKey {
-            case room, privateMark = "private", followup, asks, topics, topicsAt = "topics_at", revs
+            case room, privateMark = "private", followup, asks, topics, topicsAt = "topics_at", revs, transcription, interim
         }
 
         init(from decoder: Decoder) throws {
@@ -814,6 +830,8 @@ final class MeetingConversation {
             topics = (try? c.decodeIfPresent([Lenient<MeetingTopic>].self, forKey: .topics))?.compactMap(\.value)
             topicsAt = try? c.decodeIfPresent(String.self, forKey: .topicsAt)
             revs = try? c.decodeIfPresent([String: Int64].self, forKey: .revs)
+            transcription = MeetingTranscriptionView(try? c.decodeIfPresent(JSONValue.self, forKey: .transcription))
+            interim = try? c.decodeIfPresent(MeetingInterim.self, forKey: .interim)
         }
     }
 
@@ -840,7 +858,10 @@ extension MeetingConversation.Deps {
                  }
                  return false
              },
-             streaming: { AppModel.shared.hub?.live.state == .connected })
+             streaming: { AppModel.shared.hub?.live.state == .connected },
+             transcription: { id, view, interim, read in
+                 MeetingTranscription.shared.liveRead(id, transcription: view, interim: interim, read: read)
+             })
     }
 }
 #endif
