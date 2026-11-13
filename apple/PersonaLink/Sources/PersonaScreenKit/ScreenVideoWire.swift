@@ -7,6 +7,9 @@ import Foundation
 /// a u8 type, then the body. The node and the hub relay these bytes without parsing them, so either side may add
 /// message types the other skips by length.
 public enum ScreenVideoWire {
+    /// The protocol version the helper speaks, sent in `hello` and reported as `screen_video.version`. 0 means no video.
+    public static let protocolVersion = 1
+
     /// A declared length over this closes the stream (design: "At most 4 MB").
     public static let maxMessageBytes = 4 * 1024 * 1024
 

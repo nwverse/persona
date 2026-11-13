@@ -483,6 +483,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - GitHub thread page (#1055): `MOCK_GITHUB_INBOX=1`, `-tab mail -openInboxItem github:review12` opens fictional example-org/example-repo#12:
   header (status/branches/three labels), Markdown description, request-changes/approve reviews, inline comment/reply, three checks (failed test logs), events.
   Comments are in `/mock/sent` and appended to timeline. `github:ci7` (CI failure) isn't a PR, opens hub-collected text. Data: `gh_thread_page` in `mock_hub.py`.
+- Lark via lark-cli (飞书 · 我的消息): `MOCK_LARKCLI_INBOX=1`, `-tab mail -openInboxItem larkcli:example_oncall` opens a mention in a made-up on-call group as its conversation: a post's Markdown with a picture by image key, an interactive message's `<card title=…>` and an untitled one, plain text. `MOCK_LARKCLI_INBOX=legacy` gives the page as an older hub did (empty kind and name), which the apps still draw as a chat. Data: `larkcli_thread_page` in `mock_hub.py`.
 - Lark conversation page: `-tab mail -openInboxItem lark:f3:300` (Weekend hiking group) opens full chat: three days/date separators, over a page before first unread (scroll up, `has_older`),
   images, quoted/emoji replies, bots, 75-reply thread with paged sheet; 12 unread from message 300, read through 299 (`read_position`).
   `MOCK_LARK_LOGGED_OUT=1` makes lists/chats/threads return 502 "Lark gateway isn't signed in to Lark" (`code: lark_not_logged_in`, like hub), testing errors. Fictional `_lark_f3` in `mock_hub.py`.

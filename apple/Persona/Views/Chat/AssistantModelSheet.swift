@@ -75,7 +75,8 @@ nonisolated enum AssistantModelChoice {
 }
 
 private extension String {
-    var emptyAsNil: String? { isEmpty ? nil : self }
+    // Read by the nonisolated `AssistantModelChoice`; the app target's default would make it main-actor only.
+    nonisolated var emptyAsNil: String? { isEmpty ? nil : self }
 }
 
 /// The main chat's model sheet model (#6542): the assistant computer's picker (`?purpose=assistant`), each launcher's

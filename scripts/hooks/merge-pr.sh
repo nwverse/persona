@@ -5,8 +5,26 @@
 # with this machine's private values (docs/operations/testing.md "Privacy scan"), then squash-merges exactly the head
 # and the message it scanned and deletes the branch. CI cannot do this: it does not have the values.
 set -euo pipefail
+expect_head="${PR_WATCH_EXPECT_HEAD:-}"
+expect_base="${PR_WATCH_EXPECT_BASE:-}"
+if [ "${1:-}" = "--expect-head" ]; then
+  expect_head="${2:?--expect-head requires a full SHA}"
+  expect_base="${4:?--expect-head requires --expect-base and a full SHA}"
+  [ "${3:-}" = "--expect-base" ] || { echo "merge-pr: --expect-head requires --expect-base" >&2; exit 2; }
+  shift 4
+fi
+if [ -n "$expect_head" ] && { [ "${#expect_head}" -ne 40 ] || [[ "$expect_head" = *[!0-9a-f]* ]]; }; then
+  echo "merge-pr: invalid expected head" >&2
+  exit 2
+fi
+if [ -n "$expect_base" ] && { [ "${#expect_base}" -ne 40 ] || [[ "$expect_base" = *[!0-9a-f]* ]]; }; then
+  echo "merge-pr: invalid expected base" >&2
+  exit 2
+fi
 if [ -z "${PR_WATCH_MERGE_LOCKED:-}" ]; then
   export PR_WATCH_MERGE_LOCKED=1
+  export PR_WATCH_EXPECT_HEAD="$expect_head"
+  export PR_WATCH_EXPECT_BASE="$expect_base"
   root="$(git rev-parse --show-toplevel)"
   git_common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)"
   python3 - "$git_common/persona-pr-merge.lock" "$root/scripts/hooks/merge-pr.sh" "$@" <<'PY'
@@ -46,9 +64,11 @@ for name, text in files.items():
 PY
 { IFS= read -r head; IFS= read -r branch; IFS= read -r same_repo; IFS= read -r base; } < "$tmp/fields"
 subject="$(<"$tmp/subject")"
+[ -z "$expect_head" ] || [ "$head" = "$expect_head" ] || { echo "merge-pr: the PR head differs from the reviewed head" >&2; exit 1; }
 # The fetched sha, not origin/<base>: that ref only moves when the clone's fetch refspec maps it.
 git -C "$root" fetch -q origin "refs/heads/$base"
 base_sha="$(git -C "$root" rev-parse FETCH_HEAD)"
+[ -z "$expect_base" ] || [ "$base_sha" = "$expect_base" ] || { echo "merge-pr: the PR base differs from the reviewed base" >&2; exit 1; }
 git -C "$root" fetch -q origin "pull/$pr/head"
 [ "$(git -C "$root" rev-parse FETCH_HEAD)" = "$head" ] || { echo "merge-pr: the PR moved while fetching; run it again" >&2; exit 1; }
 python3 "$root/scripts/privacy_check.py" --range "$base_sha..$head" --message "$tmp/message" \

@@ -13,7 +13,7 @@ This table only points the way. Values and rules live in the sections it names, 
 | A list of sessions or pending requests (Agents, Inbox, the Assistant home) | the Agents row styles, `StatusDot`, `AgentStateBadge` | 3.4: "Sessions that need the user", "The work-item row", "List controls"; 5.6 |
 | A pending request: a question, a plan, a tool approval | the session's pending area | 4.8 |
 | A page title or a session's details | `.pageTitle`, `.detailTitle` | 5.6 |
-| A button or a row of buttons | `.themedButton` | 1.2 rule 3, 3.7 |
+| A button or a row of buttons | `.themedButton`, `StackingButtonRow` | 1.2 rule 3, 3.7 |
 | A chip, a badge or a count | `Chip`, `FilterChip`, `CountBadge` | 3.8; principle 4 for what a number counts |
 | A card or another surface | `.surface` | 3.3 |
 | A page, a grouped page or a row | `.themedPage()`, `.themedGroupedPage()`, `.themedRow()`, `SettingsForm` | 3.4 |
@@ -62,7 +62,7 @@ Relationship to other docs:
 
 1. UI code uses only tokens: font level, `Theme.Space`, `Theme.Radius`, `Theme.Size` with `scaledFrame`, `Theme.Motion`, role colors, `Theme.Icon`. A plain `frame` is for lines of 4 pt or less.
 2. Never restyle an existing screen directly. A new look is a new `AppStyle` or `ThemeColor`. A change that brings a screen in line with this document is a fix, not a new look; when it changes what a primary screen shows, it is a large change (section 1.4).
-3. Button text never wraps (decided 2026-11-10). A button label stays on one line at every text size. When a label would be truncated, work through these in order: (a) shorten the copy, in every language; (b) ask whether a button is the right control here, since long or user-supplied text is content and belongs in a row, a list or the body, and a set of actions that doesn't fit goes into a menu (a decision row's actions are not hidden in a menu: see the exception below); (c) at accessibility text sizes (`dynamicTypeSize.isAccessibilitySize`) stack the whole button group vertically, primary action first, each label still on one line. Exception, decided in `docs/design/task-cards.md` P1 (#5569): on a narrow width the owner-decision row's text takes the full width and its buttons go below it, the secondary buttons together in one row (wrapping onto the next line whole when they do not fit) and the primary button on its own full-width line last, at every text size; there is no Actions menu. `minimumScaleFactor` is a last resort for small overflows such as long translations, never the fix for a label that is too long. HIG-003 and HIG-012 in `docs/design/HIG_AUDIT.md` are tracked against this rule.
+3. Button text never wraps (decided 2026-11-10). A button label stays on one line at every text size. When a label would be truncated, work through these in order: (a) shorten the copy, in every language; (b) ask whether a button is the right control here, since long or user-supplied text is content and belongs in a row, a list or the body, and a set of actions that doesn't fit goes into a menu (a decision row's actions are not hidden in a menu: see the exception below); (c) stack the whole button group vertically, primary action first, each label still on one line: at accessibility text sizes (`dynamicTypeSize.isAccessibilitySize`), and at any size where a label would not fit its share of the row. `StackingButtonRow` (3.7) decides that by measured width, not by text size (#6151). Exception, decided in `docs/design/task-cards.md` P1 (#5569): on a narrow width the owner-decision row's text takes the full width and its buttons go below it, the secondary buttons together in one row (wrapping onto the next line whole when they do not fit) and the primary button on its own full-width line last, at every text size; there is no Actions menu. `minimumScaleFactor` is a last resort for small overflows such as long translations, never the fix for a label that is too long. HIG-003 and HIG-012 in `docs/design/HIG_AUDIT.md` are tracked against this rule.
 4. Use `SecretField`, not `SecureField`, for tokens and keys. A key a secret provider's reference can stand in for uses
    `ProviderKeyField` (iOS) or `KeyField` (web): its **Use a reference** switch stays with that key (on the web, at the end
    of the key's label row, so in a list of computers' keys each switch sits with its own), and a reference is typed in plain
@@ -192,7 +192,7 @@ Dynamic Type behavior:
 
 - The user's Small, Standard or Large setting shifts the system size by -1, 0 or +1 (`apple/Persona/DesignSystem/TextSize.swift:6-36`). Web maps the same ratios (12/13, 1, 14/13) through a build-time rewrite. Android has no in-app setting.
 - Shapes scale with `scaledFrame`, capped at 1.6x (`apple/Persona/DesignSystem/TextSize.swift:98-108`). `tapTargetFrame` and `tapTargetHeight` never go below 44 pt.
-- Named caps: `Theme.Shell.topBarLargestTypeSize` is `.xxxLarge` (`apple/Shared/Design/Theme.swift:865`); `compactSwitchLargestTypeSize` is `.large`. Other caps are literal at the call site: `xxLarge` for a glyph inside a 44 pt button, `xLarge` for badges (DS-14).
+- The interface's cap is `Theme.interfaceLargestTypeSize` (`.xxxLarge`, section 6.2); reading content lifts it (`.readingContent()`). Named caps below it: `Theme.Shell.topBarLargestTypeSize` is `.xxxLarge` (`apple/Shared/Design/Theme.swift:865`); `compactSwitchLargestTypeSize` is `.large`. Other caps are literal at the call site: `xxLarge` for a glyph inside a 44 pt button, `xLarge` for badges (DS-14).
 - Documented fixed-size exceptions: Dynamic Island (`apple/Shared/Design/IslandMetrics.swift`), watch face (`apple/Shared/Design/WatchFaceTokens.swift`), Lark rich content that carries sender sizes.
 
 ### 2.3 Spacing
@@ -750,6 +750,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 
 - One style: `.themedButton(prominent:)` (`apple/Persona/DesignSystem/Styling.swift:127`), 185 uses. Glass, bordered or soft per style. Soft buttons have a 44 pt minimum and dim to 0.45 when disabled; glass prominent dims to 0.4.
 - Forms use `.formButton` and `FormAction`.
+- Buttons side by side in equal widths go in a `StackingButtonRow` (`apple/Persona/DesignSystem/StackingButtonRow.swift`, #6151). It keeps them in one row while every label fits its share whole, and stacks them otherwise, the first on top and each across the row (rule 3 (c) in 1.2). It decides by measured width, not by text size: a short label keeps its row at sizes where a long one, or a long translation, stacks. Each label is a `Text(…).buttonLabelLine()`, one line that may shrink to 0.8 for a small overflow, which tells the row how narrow its button can be with the words whole. A button whose label isn't one is taken to fit. First used by the to-do page's bottom buttons; other rows of equal buttons move to it when they are next touched.
 - Icon buttons use a 44 pt frame around a smaller visual (composer round button, viewer chrome).
 - Destructive actions use `role: .destructive`. Red is also used for risky-but-not-destructive actions (DS-24).
 - `SystemPasteButton` (`apple/Persona/DesignSystem/ClipboardButtons.swift`) wraps the system `PasteButton` for anything that sends what is on the phone's clipboard: a capsule in the accent with the system's own icon and word. Why not `.themedButton`: only the system Paste button reads the clipboard without iOS asking "Allow Paste?" first (the tap is the permission), and the system draws it, so it can be tinted and shaped but not restyled. Place it beside a themed button that does the same thing by reading the clipboard, with one line saying it sends without the prompt (the computer page's Clipboard section, #3064).
@@ -989,7 +990,7 @@ Toasts: error, success or info; one slot, so a new toast replaces the old. Durat
 
 The hub's link while it is down (Waiting for network, Connecting…, Updating…, or what only the user can fix) is said once: in the title of a page that has one (an Agent's chat), else by a pill floating under the home bar on the home pages (iOS `ShellLinkPill`, `docs/apple/shell.md` "Connection status and toasts"; Android `JLinkPill`, #4339). It moves nothing, takes no touches and is announced; a spinner while it retries, a caution mark when it cannot.
 
-### Web assistant skill mentions (#5357)
+### Web skill mentions (#5357)
 
 Reuse the composer's existing `ComposerPanel` surface, neutral sliding highlight, icon set, keyboard/IME/Escape
 behavior and context chips. A skill row has two lines: readable name plus source, then its description; the source
@@ -997,6 +998,8 @@ distinguishes equal names. Selecting it adds a removable skill chip rather than 
 Skill rows and the skill chip's remove target meet the Web 44 px touch size. The menu's loading, partial-inventory and
 failure status stays secondary and never disables ordinary chat. No new primary screen, setting, model choice or
 native client pattern is introduced. Use the existing surface/hover/ink/accent tokens in light/dark and narrow layouts.
+Ordinary Claude Code and Codex Agent chats use this same picker and chip. The catalog belongs to the actual session;
+unsupported or unavailable environments show the existing quiet failure status while text and other references remain usable.
 
 ### 3.11 Code blocks, inline code and quotes in replies
 
@@ -1582,11 +1585,23 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 
 ### 6.2 Dynamic Type
 
+**The rule (decided 2026-11-13): the interface stops at xxxLarge; reading content grows to AX5.**
+
+- **Interface** is everything the person operates or scans rather than reads: buttons, top and bottom bars, toolbars, menus' own drawing, the tab bar, segmented controls, filter strips, list rows' labels and values, page headers, the calendar, widgets, a card's controls, settings rows, badges, previews and summaries in lists, search-result snippets. It is capped at `Theme.interfaceLargestTypeSize` (xxxLarge, the largest size that is not an accessibility size). `RootView` sets the cap on the environment's `dynamicTypeSize`, so no view has to ask for it; a view that needs a smaller cap (a glyph in a fixed circle) still names one.
+- **Reading content** keeps growing to AX5: a chat message's body (the user's and the assistant's, replies, quotes, and the same in an Agent session; code blocks follow the reply and scroll sideways), an Inbox item's body and detail, knowledge and file preview bodies, a to-do's description and plan, meeting minutes, transcript and the messages in a meeting's conversation, and what is being typed in a text field (the field's own buttons stay capped, its line limit stays). A tool row, a "Worked for…" fold header, expanded tool output, a diff and the terminal are interface (the terminal has its own text size).
+- A view lifts the cap with `.readingContent()` (`apple/Persona/DesignSystem/ReadingSize.swift`): it sets the size the reader chose, kept by `RootView` in `\.readingTypeSize`. Put it on the text, not on a whole screen. `scripts/test/test_apple_reading_content.py` lists the files that may use it; adding a file needs the reason there.
+- The system draws its own menus, alerts, confirmation dialogs, share sheet and keyboard at the system's size; do not cap them.
+- Because the interface is capped, it needs no layout of its own for the accessibility sizes. Do not add one: no `isAccessibilitySize` branch and no `.accessibility1…5` in interface code (`PR 2` of #6448 removes the old ones). A control that still does not fit at xxLarge or xxxLarge uses the rules in section 1.2 (shorten, stack by the width that is there with `StackingButtonRow` or `firstFittingText`).
+- Large Content Viewer: a capped control shows its name and icon large on a long press (`accessibilityShowsLargeContentViewer`); VoiceOver reads the whole content as before.
+- Screenshots: an interface screen is shot at the largest size up to xxxLarge (`simctl ui <udid> content_size extra-extra-extra-large`); only a screen with reading content is also shot at AX5 (`accessibility-extra-extra-extra-large`).
+- Text Size (Small / Standard / Large) moves the system's size first and the cap comes after: the interface is `min(moved size, xxxLarge)`, reading content is the moved size. At the system's xxxLarge and above, Large has no effect on the interface (it is at the cap) and still adds a step to reading content; Small always takes a step off both.
+
 - Text uses `Theme.Font` levels only. Shapes use `scaledFrame`.
 - Rows with name plus chips stack at accessibility sizes (`NameWithChips`). Use `firstFittingText` when several candidate labels exist.
 - A date, or a date and a time, in a form row is a `FormDatePicker` (`apple/Persona/DesignSystem/FormDatePicker.swift`, #6108): the system's compact picker beside its label at the usual sizes; at the accessibility sizes, where the compact date and time are wider than the row and were cut off, the label on its own line and a wheel under it across the row (the wheel's words don't grow; that is the system's wheel). A sheet holding one sets its height with `formSheetDetents`, which opens it full height at those sizes. Used by New To-Do, the to-do's page (Due, Remind At) and "Change Due Date…"; new date rows use it too.
 - Caps are allowed for glyphs in fixed-size buttons and for top bars that must fit a small iPhone. They must be named, and the control must keep a 44 pt hit area.
 - A bar of fixed items (the message long-press bar, `MessageActionBar`) keeps its items at the default text size (`barTypeSize`), as the system's tab bars and toolbars do, so every word that fits there fits up to the accessibility sizes; each item has the Large Content Viewer (`accessibilityShowsLargeContentViewer`), so a long press shows its name large. Its words are short enough for their items at that size in every language (rule 3 (a) in section 1.2; Japanese 「文字選択」 for Select Text). At the accessibility sizes the actions become a list, one a row with its icon and whole name, growing up to `listTypeSize` (xxxLarge), and the lifted message is placed by the list's measured size (rule 3 (c)); never "…", never an icon left alone (#5019).
+- The to-do page's bottom buttons (Hand to Agent, Done / Reopen) are a `StackingButtonRow` (3.7). On an iPhone 17 Pro they sit side by side through xxxLarge in Chinese and through xLarge in English and Japanese, and stack beyond that, Hand to Agent first, each across the page; side by side, those labels were cut to "Hand to A…". The button's Japanese is the shorter 「エージェントへ」 (key `Hand to Agent [To-do Page Button]`), which fits the half-width button wherever the English does; the hand-off sheet's title keeps 「エージェントに任せる」 (#6151).
 - Never shrink to hide truncation of body text. For button labels `minimumScaleFactor` is a last resort only; follow rule 3 in section 1.2 (shorten the copy, reconsider the control, stack the group at accessibility sizes).
 
 ### 6.3 Accessibility baseline (the contract every component meets)
@@ -1598,7 +1613,7 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 5. A gesture-only action has an accessibility action or visible control.
 6. Animations: transitions and press effects respect Reduce Motion; every loop is listed in `ContinuousMotionTests`.
 7. Text contrast at least 4.5:1 (3:1 for text of 18 pt or larger, bold text, and non-text marks), verified for each style and theme color. Composite cases (text on a tinted fill) need a test. The exception is iOS's own palette, and Android's Glass with it (11-11): white words on the accent 3.5:1, the accent as a link 3:1, words on the user's bubble 4.5:1, with the system's secondary gray as it is (`apple/Shared/Design/PersonaPalette.swift`, `android/core/designsystem/src/test/kotlin/persona/core/designsystem/StyleContrastTest.kt`).
-8. Layouts survive the largest accessibility size without clipping.
+8. Layouts survive xxxLarge, the interface's largest size, without clipping, and reading content survives AX5 (section 6.2).
 9. Transient messages are announced to VoiceOver.
 10. Headers carry the header trait; modal sheets trap focus.
 

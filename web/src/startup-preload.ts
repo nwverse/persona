@@ -246,9 +246,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  */
 // #6575: verified runtime checkout display membership adds 79 B to the first screen on main at 2e57ac117
 // (ja 478,119 B to 478,198 B). Carry that measured feature allowance onto the current main budget.
-// #6542: the main chat model pill's revision-driven re-read adds ~10 B (ja measured 477,984 B on its own base), well
-// inside this cap raised by the features above; no further increase needed.
-export const FIRST_SCREEN_BUDGET = 478_775;
+// #6542: the main chat model pill's revision-driven re-read adds ~10 B (ja measured 477,984 B on its own base), but
+// #6741 measured en 475,060 B, ja 478,757 B, zh-Hans 476,047 B after later main landed; the hub measured ja 478,776 B.
+// #6753's stopped-Agent dismissal adds 131 B to each language (ja 478,888 B, en 475,191 B, zh-Hans 476,178 B).
+// #6759's Agent skills selection adds 49 B more to ja (478,937 B; en 475,240 B, zh-Hans 476,227 B).
+// The 31 B room covers the hub's small build-environment difference.
+export const FIRST_SCREEN_BUDGET = 478_968;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -421,7 +424,6 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * 44,444 B after, +598 B, of which 154 B fit the room main had: the merge of the manager's results into the palette's
  * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
  * query typed, off the idle tier; 31 B of room so the next main does not tip it). And 108 B for the same main
- * with the lead row-title restoration (#6400: 44,583 B after merging it, +108 B, of which 0 B fit the old room).
  * with the lead row-title restoration (#6400: 44,583 B after merging it, +108 B, of which 0 B fit the old room).
  * The foldable sidebar Recent (#6228) adds nothing to this tier: the fold stays on the first screen. Later mains then
  * drifted past 44,583 through shared-chunk minifier growth alone (#6512/#6521/#6528 changed no idle page's own source):

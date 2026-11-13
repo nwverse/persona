@@ -292,6 +292,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/image
 agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/sessions/{mid}/{sid}/share-catalog
 -                    GET /api/v1/sessions/{mid}/{sid}/share-preview/{preview_id}
+-                    GET /api/v1/sessions/{mid}/{sid}/skills
 -                    GET /api/v1/skills
 -                    GET /api/v1/subscriptions
 -                    GET /api/v1/subscriptions/-/graph
