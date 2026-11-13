@@ -51,7 +51,7 @@ func (s *Service) taskTarget(ctx context.Context, t Task, mainLauncher string) (
 	if b, err := s.resolveModel(ctx, "task."+t.ID); err == nil {
 		launcher = strings.TrimPrefix(b.Provider, "launcher.")
 	}
-	return s.settings(ctx).MachineID, launcher, true
+	return s.taskMachine(ctx, t), launcher, true
 }
 
 // readyFor reports whether the run of t can go by the readiness r: false, with the step, when a step that keeps the
@@ -67,7 +67,7 @@ func (s *Service) readyFor(ctx context.Context, t Task, r Readiness) (bool, Read
 			continue
 		}
 		switch {
-		case st.ID == StepComputer && (own || onMain):
+		case st.ID == StepComputer && (own && t.ExecutionMachineID == "" || onMain):
 			return false, st // with no computer at all the task's own conversation has nowhere to start
 		case st.ID != StepComputer && onMain && launcher == r.Launcher:
 			return false, st

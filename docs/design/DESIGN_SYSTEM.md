@@ -2267,12 +2267,14 @@ as finished without verifying a star, and opens GitHub outside the app.
 - **Onboarding toast**: once per device on Android's setup **Done** (proposed iOS **Get started**), unless Star was
   already tapped. It uses the platform's timed toast and action.
 
-## Repository link preview
 
-Settings › Assistant › Repositories reuses the existing `Dialog`, form controls, inset preview and `Loading`.
-A local parse of each link/provider change immediately replaces the provider, full path and canonical web root in
-an announced status region. Invalid input clears that preview and disables Save; it never leaves the old identity
-visible. The preview explicitly says remote existence is unconfirmed. Check and save is a separate explicit action,
-keeps the draft on failure, and a browser timeout asks the user to refresh because persistence is unconfirmed.
-This serves people binding a repository reference in advanced assistant settings; it adds no primary-screen
-options, style, theme or motion. See `docs/assistant/managers.md` for provider semantics and verification boundaries.
+## Scheduled task execution options
+
+The web task editor serves people scheduling specialist work as an optional **Execution options** group, closed by
+default. It reuses `Field`, native selects, `ModelPicker`, semantic surface/text tokens and the existing dialog.
+Main chat inheritance and the selected computer are shown inside the group; every choice can be cleared to inherit
+again. Launcher and model discovery use the selected computer's chat-compatible capabilities. A working directory
+is an existing path on that computer, explained under the field. Switching execution context may start a new chat;
+the hint says earlier chats are retained. Failed saves retain the draft, and saving/running disables the controls.
+Run history has a separate disclosure for its execution configuration, outside the button opening the conversation.
+This is a secondary form extension; primary screens, themes and chat input remain unchanged.

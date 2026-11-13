@@ -237,7 +237,11 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	if err := execution.check(launcher); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(cwd, 0o700); err != nil {
+	if execution.Strict {
+		if _, err := n.taskDirectory(cwd); err != nil {
+			return nil, err
+		}
+	} else if err := os.MkdirAll(cwd, 0o700); err != nil {
 		return nil, err
 	}
 	var err error

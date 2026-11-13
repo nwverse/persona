@@ -55,8 +55,10 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 		}
 	}
 	skills := filepath.Join(cwd, ".claude", "skills")
-	if err := assistantskills.Sync(skills, assistantskills.UserDir(), n.signedInConnectors(cwd), n.logger.Printf); err != nil {
-		n.logger.Printf("assistant: skills: %v", err)
+	if n.assistantDirectoryPrepared(cwd) {
+		if err := assistantskills.Sync(skills, assistantskills.UserDir(), n.signedInConnectors(cwd), n.logger.Printf); err != nil {
+			n.logger.Printf("assistant: skills: %v", err)
+		}
 	}
 	bin := n.assistantBin(cwd)
 	_ = os.MkdirAll(bin, 0o755)

@@ -39,6 +39,18 @@ export interface CronPreview {
   next_runs: string[] | null;
 }
 
+export interface TaskExecution {
+  machine_id: string;
+  launcher: string;
+  agent?: string;
+  model?: string;
+  effort?: string;
+  runtime?: string;
+  cwd?: string;
+  permission_mode?: string;
+  fingerprint?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -61,6 +73,13 @@ export interface Task {
   /** A conversation runs go into ("Continue the original chat"); empty = the task's own one. */
   session_id?: string;
   launcher?: string;
+  model?: string;
+  model_revision?: number;
+  execution_machine_id?: string;
+  cwd?: string;
+  execution?: TaskExecution;
+  execution_error?: string;
+  run_execution?: TaskExecution;
   permission_mode?: string;
   effort?: string;
   /** "Push when done" (hubs with the task_push feature): "" every run's answer, "asked" only what a run sends with notify_user.
@@ -83,6 +102,9 @@ export interface Task {
 }
 
 export interface Run {
+  conversation?: "source" | "resumed" | "new";
+  conversation_reason?: string;
+  execution?: TaskExecution;
   id: string;
   kind: string;
   ref_id: string;
@@ -321,6 +343,9 @@ export function validateTask(d: Task, now: Date): string | null {
 export function sameTask(a: Task, b: Task): boolean {
   if (a.title.trim() !== b.title.trim() || a.prompt.trim() !== b.prompt.trim() || a.repeat !== b.repeat || a.enabled !== b.enabled) return false;
   if ((a.session_id ?? "") !== (b.session_id ?? "")) return false;
+  for (const key of ["launcher", "model", "effort", "cwd", "execution_machine_id"] as const) {
+    if (key === "cwd" ? (a.cwd ?? "") !== (b.cwd ?? "") : (a[key] ?? "").trim() !== (b[key] ?? "").trim()) return false;
+  }
   if ((a.permission_mode ?? "") !== (b.permission_mode ?? "")) return false;
   if ((a.push ?? "") !== (b.push ?? "")) return false;
   if ((a.inbox ?? "") !== (b.inbox ?? "")) return false;
@@ -353,7 +378,7 @@ function untilBody(d: Task, saved?: Task | null): string | null | undefined {
   return draft ? draft.toISOString() : null;
 }
 
-/** The JSON for POST (no `saved`) or PUT. Models follow Models › Main chat; tasks only configure permissions.
+/** The JSON for POST (no `saved`) or PUT. Execution overrides are sparse; empty explicitly restores inheritance.
  *  `push` goes only when changed from `saved`. `session_id` "" makes runs use the task's own conversation; `at` is left out when there is none (Go can't read "").
  *  `until` follows untilBody: omit to keep, null to clear. */
 export function taskBody(d: Task, saved?: Task | null): Record<string, unknown> {
@@ -370,6 +395,12 @@ export function taskBody(d: Task, saved?: Task | null): Record<string, unknown> 
     session_id: d.session_id ?? "",
     permission_mode: d.permission_mode ?? "",
   };
+  for (const key of ["launcher", "model", "effort", "cwd", "execution_machine_id"] as const) {
+    const value = key === "cwd" ? d.cwd ?? "" : (d[key] ?? "").trim();
+    const previous = key === "cwd" ? saved?.cwd ?? "" : (saved?.[key] ?? "").trim();
+    if (value !== previous) body[key] = value;
+  }
+  if (["launcher", "model", "effort", "cwd", "execution_machine_id"].some((key) => key in body)) body.model_revision = saved?.model_revision ?? 0;
   const at = d.repeat === "daily" || d.repeat === "cron" ? null : parseTime(d.at);
   if (at) body.at = at.toISOString();
   const until = untilBody(d, saved);
@@ -519,8 +550,8 @@ export function runStatusWord(r: Pick<Run, "status">): string {
 
 /** "Run manually" / the error / "On time" / "21 seconds late" / "3 minutes late" / "2 hours late". */
 export function runDetail(r: Run): string {
-  if (r.manual) return t("lib-routines.run_manual");
   if (r.status !== "ok") return r.error || runStatusWord(r);
+  if (r.manual) return t("lib-routines.run_manual");
   const at = parseTime(r.at), due = parseTime(r.due);
   if (!at || !due) return runStatusWord(r);
   const late = (at.getTime() - due.getTime()) / 1000;

@@ -349,3 +349,12 @@ func (n *Node) writeCLIs(cwd string, clis map[string]string) {
 		_ = os.WriteFile(p, []byte(wrapper), 0o755)
 	}
 }
+
+// assistantDirectoryPrepared identifies directories whose generated assistant files the hub owns.
+// A user-selected task directory keeps its own instructions and skills.
+func (n *Node) assistantDirectoryPrepared(cwd string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	_, ok := n.assistantPrepared[assistantPrepareDir(cwd)]
+	return ok
+}

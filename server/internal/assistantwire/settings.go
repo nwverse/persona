@@ -47,6 +47,7 @@ const (
 // (docs/protocol/protocol.md "hub ↔ node"), passed through by the hub's device.call like the others.
 const (
 	// DeviceAssistantPrepare: {dir, claude_md, connectors, clis, plugin_skills} → {cwd, plugin_skills_need}.
+	DeviceAssistantDirectory = "assistant.directory" // {path} -> {cwd}; validates an existing directory without writes
 	DeviceAssistantPrepare   = "assistant.prepare"
 	DeviceAssistantExecution = "assistant.execution" // {session_id} → proto.AssistantExecution
 	// DeviceAssistantGuestPrepare: {dir, claude_md} → {cwd}: a guest conversation's directory (assistant/guest.go), only
@@ -74,6 +75,9 @@ const (
 
 // StartParams is assistant.start's params.
 type StartParams struct {
+	TaskModel      *ModelBinding `json:"-"`
+	Cwd            string        `json:"-"` // internal scheduled task directory; validated on the target computer
+	TaskExecution  bool          `json:"-"` // refuse execution substitutions
 	Text           string        `json:"text"`
 	Images         []proto.Image `json:"images,omitempty"`
 	Launcher       string        `json:"launcher,omitempty"`

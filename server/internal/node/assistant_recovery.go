@@ -343,6 +343,11 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 		r.retried[key] = true
 	}
 	same := !r.retried[key]
+	if !same && execution.Strict {
+		delete(n.recoveries, p.id)
+		n.mu.Unlock()
+		return false
+	}
 	if same {
 		r.retried[key] = true
 	}

@@ -41,5 +41,8 @@
   "cron_month": "月（1–12 または JAN–DEC）",
   "cron_day_of_week": "曜日（0–7 または SUN–SAT、0 と 7 は日曜日）",
   "cron_often": "{cron} は {gap} 分間隔で実行されます。定期タスクの実行は最短 {min} 分ごとです。",
-  "cron_never": "{cron} は実行されません：今後 5 年間に一致する日付がありません。"
+  "cron_never": "{cron} は実行されません：今後 5 年間に一致する日付がありません。",
+  "execution_offline": "選択したコンピュータはオフラインか利用できません。接続して再試行してください。",
+  "execution_directory": "この作業フォルダは使用できません。選択したコンピュータでフォルダを確認して再試行してください。詳細：{error}",
+  "execution_directory_whitespace": "作業フォルダのパスの前後に空白があります。空白を削除して再試行してください。"
 }
