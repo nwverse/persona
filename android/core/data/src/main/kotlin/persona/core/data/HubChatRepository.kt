@@ -496,8 +496,9 @@ class HubChatRepository(
             }
             is Action.FetchAfter -> entry.scope.launch {
                 // Match iOS: no settling delay on a real gap. `requests` and the in-flight gate collapse duplicates.
+                // `settle` already armed this fill; starting it again here would swallow its first page.
                 do {
-                    catchUp(entry)
+                    catchUp(entry, initial = action)
                 } while (entry.lock.withLock { entry.sync.behind })
             }
             is Action.FetchLatest -> entry.scope.launch { latest(entry) }
@@ -529,8 +530,12 @@ class HubChatRepository(
         finally { withContext(NonCancellable) { entry.lock.withLock { entry.sync.finishFill() } } }
     }
 
-    private suspend fun catchUp(entry: Entry) = entry.requests.withLock {
-        var actions = entry.lock.withLock { entry.sync.continueFill() }
+    private suspend fun catchUp(entry: Entry, initial: Action.FetchAfter? = null) = entry.requests.withLock {
+        var actions = entry.lock.withLock {
+            // A page waiting behind the initial/latest read still starts at the newest coverage, not its stale cursor.
+            if (initial == null) entry.sync.continueFill()
+            else listOf(Action.FetchAfter(entry.reducer.covered))
+        }
         try {
             while (actions.isNotEmpty()) {
                 actions = when (val action = actions.single()) {

@@ -290,9 +290,7 @@ class ChatRepositoriesTest {
         capped = true
         connection.events.emit(ItemsEvent(key.machineId, key.sessionId, listOf(item(20)), "h", 19, 20))
         runCurrent()
-        assertFalse(snapshot.verified)
-        advanceTimeBy(1500)
-        runCurrent()
+        // #7102 fills immediately, so all eight pages and the latest-page fallback can finish before this observation.
         assertEquals(8, queries.count { it.afterSeq != null })
         assertEquals(listOf(30), snapshot.items.map { it.seq })
         assertTrue(snapshot.verified)
