@@ -114,6 +114,7 @@ type Node struct {
 
 	mu      sync.Mutex
 	titleMu sync.Mutex // orders the custom-title lines renames write (rename.go retitle)
+	deltaMu sync.Mutex // orders the session.delta sends (emitDelta, flushPartial)
 	state   *stateFile
 	files   map[string]*transcript.File // session id -> parsed transcript
 	paths   map[string]string           // session id -> transcript path

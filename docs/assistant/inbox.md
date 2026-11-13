@@ -243,7 +243,9 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
   treating this version as triaged. If the user handled an event meanwhile, create a new continuation instead. An unchanged `last` is a retransmission, with no store / push (push once per ID + version). Muted events remain directly done.
 - **Fallback**: unavailable model (unconfigured, no quota, error, timeout) or invalid result invokes plugin `group.fallback` for structural grouping (reply / quote chains, topics, consecutive messages by one person, time gaps).
   Without `group.fallback`, do not write the batch; wait for the model and resubmit next round, like Inbox items without fallback.
-  It receives events under the same rules as `events`. Use plugin `rule_tier`, reason "Rule-based," `triaged_by: "rules"`; do not send this version back to the model. Validate fallback results by the same rules; invalid batches remain unwritten until the next round.
+  It receives events under the same rules as `events`. For an event the fallback opens, use plugin `rule_tier`, reason "Rule-based," `triaged_by: "rules"`; do not send this version back to the model.
+  When fallback messages join an existing event, only the messages and version advance: its title, summary, tier, reason, urgency and `triaged_by` stay unchanged (user policy tiers still apply), and `triaged_at` advances so this version is not retriaged.
+  Validate fallback results by the same rules; invalid batches remain unwritten until the next round.
 - **One pass per batch**: association runs in the background without delaying collection or pull-to-refresh. One batch per chat at a time (resubmitting the same batch or twice in one round still counts as one); at most 4 chats concurrently, others retry next round.
   Once every batch message belongs to an item, the plugin stops submitting it; unfinished batches resubmit remaining messages.
 - **List**: events are ordinary items with added `triaged_by`. `meta` and their chat membership stay on hub, not the list (plugin detail slot `inbox_item` receives meta through `ui.render`, #1681).
@@ -432,7 +434,7 @@ awaiting response → Working; failure → Needs you; otherwise `tier` (FYI / Ne
 **Event splitting**:
 - **Atomic threads** come from sources: connector `InboxThing.thread` (one Lark chat, mail thread, GitHub PR / issue).
 - **Noise stays one item per atomic thread** (`foldNoise`): all noise events newly created by the model in a grouping batch merge into that chat's open noise event, or one new noise event if absent. Noise events do not absorb higher-tier messages
-  (those create separate items), so noise is never split by topic, merged with other work, or upgraded.
+  (those create separate items), so noise is never split by topic, merged with other work, or upgraded. Fallback messages joining an existing noise event likewise leave its tier and title unchanged.
 - **FYI / Needs you** still split by topic ("Event grouping" above).
 - **New messages follow the existing event**: while it is being handled (`handling` looking / agent / waiting, or a suggestion awaiting you), new messages record only `received`; tier, title, summary, urgency stay unchanged,
   with no retriage (`TriagedAt` advances directly). Its handling chat decides what to do (below). Inactive items retriage as before.
