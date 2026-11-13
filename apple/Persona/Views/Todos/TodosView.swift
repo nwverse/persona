@@ -597,18 +597,27 @@ struct TodoRow: View {
                     }
                 }
 
-                HStack(spacing: Theme.Space.sm) {
-                    StatusDot(state: urgent?.status ?? (status == .done ? .idle : .unknown), size: Theme.Size.dotS)
-                    Text(todo.statusLabel(status))
-                        .font(Theme.Font.labelStrong)
-                        .foregroundStyle(todo.shownState(status).todoTone.text)
-                    if !activeAgents.isEmpty {
-                        Text("· \(activeAgents.count) agents")
-                            .font(Theme.Font.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                if let onSeen {
+                    // Got It ends the status line, under the time (#6578); where the words and it don't fit on one line
+                    // (the largest text sizes) it goes under them, still at the right, rather than squeezing them
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Theme.Space.sm) {
+                            statusWords(status: status, urgent: urgent, activeAgents: activeAgents)
+                            Spacer(minLength: Theme.Space.xs)
+                            seenButton(onSeen)
+                        }
+                        VStack(alignment: .trailing, spacing: Theme.Space.xs) {
+                            HStack(spacing: Theme.Space.sm) {
+                                statusWords(status: status, urgent: urgent, activeAgents: activeAgents)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            seenButton(onSeen)
+                        }
                     }
-                    if !todo.isDone { ReviewChip(todo: todo, compact: true) }
+                } else {
+                    HStack(spacing: Theme.Space.sm) {
+                        statusWords(status: status, urgent: urgent, activeAgents: activeAgents)
+                    }
                 }
 
                 // Nobody is working on it (#3618): under its state, where its supervision shows.
@@ -645,20 +654,6 @@ struct TodoRow: View {
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(.borderless)
                     .accessibilityIdentifier("todos.restore")
-                }
-
-                if let onSeen {
-                    Button(action: onSeen) {
-                        Label("Got It [To-do Seen]", systemImage: Theme.Icon.seen)
-                            .lineLimit(1)
-                            .scaledFrame(minHeight: Theme.Size.tapTarget, alignment: .leading)
-                            .contentShape(.rect)
-                    }
-                    .font(Theme.Font.captionStrong)
-                    .foregroundStyle(Theme.accent)
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel(Text("Got It: move \(todo.title) to Done"))
-                    .accessibilityIdentifier("todos.seen.\(todo.id)")
                 }
 
                 if failedOpen, let error = todo.startError {
@@ -708,6 +703,35 @@ struct TodoRow: View {
             }
             .padding(.vertical, Theme.Space.xs)
         }
+    }
+
+    /// The status line's words: the state, its agents, the review.
+    @ViewBuilder private func statusWords(status: TaskState, urgent: TodoMostUrgent?, activeAgents: [TodoItem.Agent]) -> some View {
+        StatusDot(state: urgent?.status ?? (status == .done ? .idle : .unknown), size: Theme.Size.dotS)
+        Text(todo.statusLabel(status))
+            .font(Theme.Font.labelStrong)
+            .foregroundStyle(todo.shownState(status).todoTone.text)
+        if !activeAgents.isEmpty {
+            Text("· \(activeAgents.count) agents")
+                .font(Theme.Font.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        if !todo.isDone { ReviewChip(todo: todo, compact: true) }
+    }
+
+    /// Got It (#5707) at the end of the status line, under the time (#6578): a compact accent chip, as the minutes' time
+    /// chip, whose capsule hangs over the line so the row is as tall as without it, hit like a finger-sized row
+    /// (`tapTargetOutset`). A borderless button in the row: its tap stays its own and never opens the to-do.
+    private func seenButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Chip(text: String(localized: "Got It [To-do Seen]"), symbol: Theme.Icon.seen, look: .tint(Theme.accent), compact: true)
+                .padding(.vertical, -Chip.compactInset)
+                .tapTargetOutset()
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(Text("Got It: move \(todo.title) to Done"))
+        .accessibilityIdentifier("todos.seen.\(todo.id)")
     }
 
     private func mostUrgentSummary(urgent: TodoMostUrgent?) -> String? {
