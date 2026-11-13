@@ -14,19 +14,20 @@ import (
 // ---- the suggestion tool (inbox_suggest; inbox_draft is its older name for a reply) ----
 
 type suggestIn struct {
-	Kind     string      `json:"kind"`
-	Text     string      `json:"text"`
-	Note     string      `json:"note"`
-	Handback bool        `json:"handback"`
-	Outcome  string      `json:"outcome"`
-	Recap    string      `json:"recap"`
-	Title    string      `json:"title"`
-	Summary  string      `json:"summary"`
-	Machine  string      `json:"machine"`
-	Cwd      string      `json:"cwd"`
-	Due      string      `json:"due"`
-	Related  []string    `json:"related"`
-	Changes  []DocChange `json:"changes"`
+	Kind     string         `json:"kind"`
+	Text     string         `json:"text"`
+	Note     string         `json:"note"`
+	Handback bool           `json:"handback"`
+	Outcome  string         `json:"outcome"`
+	Recap    string         `json:"recap"`
+	Title    string         `json:"title"`
+	Summary  string         `json:"summary"`
+	Machine  string         `json:"machine"`
+	Cwd      string         `json:"cwd"`
+	Due      string         `json:"due"`
+	Related  []string       `json:"related"`
+	Changes  []DocChange    `json:"changes"`
+	Follow   *suggestFollow `json:"follow"`
 	// Item names the event: needed from a conversation it was handed to (Hand to AI, inbox_handoff.go).
 	Item string `json:"item"`
 }
@@ -43,6 +44,9 @@ var errSuggestFiled = errSuggestion{"this inbox item is already filed, so the su
 // check holds a suggestion to the rules before anything is kept.
 func (in *suggestIn) check() error {
 	in.Kind, in.Text, in.Outcome = strings.TrimSpace(in.Kind), strings.TrimSpace(in.Text), strings.TrimSpace(in.Outcome)
+	if in.Kind != "" && in.Follow != nil {
+		return errSuggestion{"give either kind (reply, agent or conclusion) or follow, not both: follow says this turn only waits on the other side"}
+	}
 	switch in.Kind {
 	case "":
 		if strings.TrimSpace(in.Recap) == "" {
@@ -101,6 +105,16 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	if err := in.check(); err != nil {
 		return "", nil, nil, false, err
 	}
+	var follow *InboxFollow
+	var loc *time.Location
+	if in.Follow != nil {
+		var err error
+		follow, err = in.Follow.follow(time.Now())
+		if err != nil {
+			return "", nil, nil, false, err
+		}
+		loc = s.location(ctx)
+	}
 	if s.inboxReady(ctx) != nil {
 		return "", nil, nil, false, errInboxUnavailable
 	}
@@ -129,7 +143,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 			return "", nil, nil, false, errNotProcessing
 		}
 	}
-	if from == nil && in.Kind != "" && !it.open() {
+	if from == nil && (in.Kind != "" || in.Follow != nil) && !it.open() {
 		b.mu.Unlock()
 		return "", nil, nil, false, errSuggestFiled
 	}
@@ -161,7 +175,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	var card *MessageCard
 	var handed *handoffCard
 	stop := false
-	if from == nil && in.Kind == "" && it.open() && it.Handling != nil && it.Handling.State == HandlingLooking {
+	if from == nil && in.Kind == "" && in.Follow == nil && it.open() && it.Handling != nil && it.Handling.State == HandlingLooking {
 		// Only the recap: this turn changes nothing else, the event goes back to where it was.
 		back := it.Agent.Back
 		if it.Suggestion != nil || back == "" || back == HandlingLooking || back == HandlingFailed {
@@ -224,6 +238,13 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		}
 		handed = handoffCardOf(it, g, in.Outcome)
 	}
+	if in.Follow != nil && it.open() {
+		if g := legacySuggestion(it); g != nil {
+			it.SuggestSeq = max(it.SuggestSeq, 1)
+			it.Suggestion = g
+		}
+		b.waitForOtherSide(it, follow, ViaAssistant, now, loc, true)
+	}
 	id := it.ID
 	b.settle(w)
 	b.mu.Unlock()
@@ -275,6 +296,9 @@ func (s *Service) toolInboxSuggest(ctx context.Context, self string, args json.R
 	notice := ""
 	if titleIgnored {
 		notice = " The title was left unchanged because this item keeps its source's own title; the title argument was ignored."
+	}
+	if in.Follow != nil {
+		return "The recap and follow-up are updated; the item is waiting on the other side." + notice, nil
 	}
 	if in.Kind == "" {
 		return "The recap is updated." + notice, nil
