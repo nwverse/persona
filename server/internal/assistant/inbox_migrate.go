@@ -180,12 +180,22 @@ func fillMigrated(it *InboxItem, t connector.InboxThing) {
 	}
 }
 
-// whereOf is a chat tag's display name, trimmed; no named chat tag leaves the item's where unchanged.
+// whereOf is the chat tag's display name, or else the repository tag's name or value, trimmed.
 func whereOf(tags []connector.Tag) string {
 	for _, tag := range tags {
 		if tag.Key == connector.TagChat {
 			if name := strings.TrimSpace(tag.Name); name != "" {
 				return name
+			}
+		}
+	}
+	for _, tag := range tags {
+		if tag.Key == connector.TagRepo {
+			if name := strings.TrimSpace(tag.Name); name != "" {
+				return name
+			}
+			if value := strings.TrimSpace(tag.Value); value != "" {
+				return value
 			}
 		}
 	}

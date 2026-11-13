@@ -212,3 +212,26 @@ func TestPutEventWhere(t *testing.T) {
 		t.Fatalf("done event's next write: %+v", it)
 	}
 }
+
+// A generic connector names its chat, or else its repository by name or id; chat wins and no usable tag keeps where.
+func TestFillConnectorItemWhere(t *testing.T) {
+	repo := []connector.Tag{{Key: connector.TagRepo, Value: "example-org/example-repo", Name: "Example repository"}}
+	for _, tc := range []struct {
+		name, start, want string
+		tags              []connector.Tag
+	}{
+		{"chat", "", "Example Group", chatTags("Example Group")},
+		{"repository name", "", "Example repository", repo},
+		{"repository value", "", "example-org/example-repo", []connector.Tag{{Key: connector.TagRepo, Value: "example-org/example-repo"}}},
+		{"chat before repository", "", "Example Group", append(chatTags("Example Group"), repo...)},
+		{"none keeps it", "Existing place", "Existing place", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := &InboxItem{Where: tc.start}
+			fillConnectorItem(it, connector.InboxThing{Tags: tc.tags})
+			if it.Where != tc.want {
+				t.Fatalf("where = %q, want %q", it.Where, tc.want)
+			}
+		})
+	}
+}
