@@ -168,6 +168,43 @@ describe("a Persona chat's pill on a hub that keeps picks", () => {
     expect(calls.some((c) => c.url.includes("/assistant/conversations/c1/model"))).toBe(false);
   });
 
+  it("keeps its hooks when the main conversation changes away from this one (#7070)", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const s = chat();
+      await show(s);
+      expect(pill()).not.toBeNull();
+      getState().assistant!.main = "other";
+      expect(() => {
+        act(() => root.render(<AssistantModelPill session={{ ...s }} />));
+      }).not.toThrow();
+      await flush();
+      expect(pill()).toBeNull();
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("keeps its hooks when this conversation becomes the main one (#7070)", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const s = chat();
+      getState().assistant!.main = "other";
+      await show(s);
+      expect(pill()).toBeNull();
+      getState().assistant!.main = "c1";
+      expect(() => {
+        act(() => root.render(<AssistantModelPill session={{ ...s }} />));
+      }).not.toThrow();
+      await flush();
+      expect(pill()).not.toBeNull();
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("Codex's Fast goes through the speed request", async () => {
     await show(chat({ agent: "codex", service_tiers: [{ id: "default", name: "Standard" }, { id: "priority", name: "Fast" }] }));
     await open();
