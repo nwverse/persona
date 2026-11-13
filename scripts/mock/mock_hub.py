@@ -17596,8 +17596,8 @@ def features():
 
 
 _SEARCH_DROP = [re.compile(r"(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>\s*"),
-                re.compile(r"(?s)<(?:persona|jarvis)-context\b[^>]*>.*?</(?:persona|jarvis)-context>\s*"),
-                re.compile(r"<(?:persona|jarvis)-file\b[^>]*?/?>(?:\s*</(?:persona|jarvis)-file>)?")]
+                re.compile(r"(?s)<persona-context\b[^>]*>.*?</persona-context>\s*"),
+                re.compile(r"<persona-file\b[^>]*?/?>(?:\s*</persona-file>)?")]
 _SEARCH_PASTED = re.compile(r"(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>")
 _SEARCH_IMAGES = [re.compile(r"(?s)<attached_images>.*?</attached_images>"), re.compile(r"\[Image #\d+\]\s?")]
 _SEARCH_ACTION = re.compile(r'\n<persona-action view="[^"<>]*" action="[^"<>]*">\{[^<>]*\}</persona-action>$')
