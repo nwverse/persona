@@ -61,6 +61,9 @@ describe("the setup a Persona chat's next message runs on", () => {
     const running = chat({ isMain: true, session: session({ agent: "codex", launcher: "codex", model: "gpt-5.5" }) });
     expect(assistantSetup(running, info)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", source: "own" });
     expect(assistantPillView(running, assistantSetup(running, info), info, listOf("codex"))).toMatchObject({ engine: "codex", provider: "codex", model: "5.5" });
+    const fastRunning = chat({ isMain: true, session: session({ agent: "codex", launcher: "codex", model: "gpt-5.5", service_tier: "priority" }) });
+    expect(assistantSetup(fastRunning, info)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", fast: true, source: "own" });
+    expect(assistantPillView(fastRunning, assistantSetup(fastRunning, info), info, listOf("codex"))).toMatchObject({ engine: "codex", model: "5.5", fast: true });
     const sameKind = { ...info, def: { provider: "codex" } };
     expect(assistantSetup(running, sameKind)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", source: "default" });
     const unknown = { ...info, def: { provider: "gone" } };
