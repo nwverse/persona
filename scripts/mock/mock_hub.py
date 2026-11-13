@@ -343,6 +343,13 @@ def mock_workspaces():
                     result.append({"id": "catalog-" + wid, "machine_id": mid, "source": "orca", "source_id": wid,
                                    "title": branch, "cwd": path, "index": 20, "parent_source_id": WORKSPACE_LINEAGE[mid, wid],
                                    "online": True, "available": True})
+    if os.environ.get("MOCK_PASEO"):
+        for wid, title, path, branch in [(w, t, PASEO_ROOT if tree is None else PASEO_TREES + tree, b)
+                                         for w, t, tree, b in PASEO_WORKSPACES] + PASEO_MADE:
+            result.append({"id": "catalog-" + wid, "machine_id": "server", "source": "paseo", "source_id": wid, "title": title,
+                           "cwd": path, "branch": branch, "workspace_kind": "git", "is_main": path == PASEO_ROOT,
+                           "project_id": "prj_app", "project_name": "app", "project_path": PASEO_ROOT,
+                           "online": True, "available": True, "last_seen": ago()})
     return list({(w["machine_id"], w["source"], w["source_id"]): w for w in result}.values())
 
 
@@ -1162,12 +1169,21 @@ if os.environ.get("MOCK_ROW_EDGES"):
 PASEO_LEAD = "9a5e0000-0000-4000-8000-000000000002"
 PASEO_ASKS = "paseo-9a5e0000-0000-4000-8000-000000000003"
 PASEO_CODEX = "paseo-9a5e0000-0000-4000-8000-000000000004"
+# Paseo's workspaces (#6295), as the node lists them in the catalog: the main checkout, the two worktrees its agents work
+# in and one it made with no agent yet: (workspace id, title, folder under its worktrees root or None, branch).
+PASEO_ROOT, PASEO_TREES = "/home/me/code/app", "/home/me/.paseo/worktrees/1a2b3c4d/"
+PASEO_WORKSPACES = [("wks_5a1e000000000001", "Triage", None, "main"),
+                    ("wks_5a1e000000000002", "Fix the login flow", "brave-fox", "fix/login"),
+                    ("wks_5a1e000000000003", "Speed up the importer", "calm-owl", "perf/importer"),
+                    ("wks_5a1e000000000004", "Try the new parser", "quiet-elk", "spike/parser")]
 if os.environ.get("MOCK_PASEO"):
-    _paseo_root = "/home/me/code/app"
+    _paseo_root = PASEO_ROOT
     def _paseo(sid, title, workspace, tree, branch, status, state, minutes, last, agent="claude", **kw):
-        cwd = _paseo_root if tree is None else "/home/me/.paseo/worktrees/1a2b3c4d/" + tree
+        cwd = _paseo_root if tree is None else PASEO_TREES + tree
+        # each agent names its workspace (workspace_id, #6295); a Paseo workspace is still no terminal slot (slot_name only)
+        wid = next((w for w, t, _, _ in PASEO_WORKSPACES if t == workspace), None)
         row = dict(space_kind="paseo", space_id="prj_app", space_name="app", space_index=None, slot_id=None, slot_name=workspace,
-                   slot_index=None, pane_id=None, tab_id=None, workspace_id=None, host="paseo",
+                   slot_index=None, pane_id=None, tab_id=None, workspace_id=wid, host="paseo",
                    source_kind="runtime", source_instance_id="paseo", repo_root=_paseo_root, worktree=cwd, workspace_cwd=cwd,
                    branch=branch, launcher="claude" if agent == "claude" else "codex", started_by_persona=False,
                    # Paseo declares rename and close: the node lists both, rename not on an agent another one started (#6294),
@@ -3817,6 +3833,7 @@ def _manager_known(mid):
 def stamp_managers(path, obj):
     """The merged lists' `manager` on each item, as the hub adds it; the default manager's items too."""
     if not _stamps() or not isinstance(obj, dict): return obj
+    if MOCK_INBOX_SHOWCASE and path == "/api/v1/inbox": return obj
     dflt = MANAGERS["default"]
     if path in ("/api/v1/inbox", "/api/v1/inbox/done") and isinstance(obj.get("items"), list):
         obj = dict(obj, items=[dict(x, manager=inbox_owner(x.get("id"))) if isinstance(x, dict) else x for x in obj["items"]])
@@ -9650,10 +9667,20 @@ def mock_panes(mid):
     return {"hosts": [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes}]}
 
 
+PASEO_MADE = []  # worktrees made on Paseo's workspaces from the web (#6295), in the catalog after PASEO_WORKSPACES
+
+
 def worktree_route(h, p, body):
     """POST /api/v1/machines/{mid}/worktree/{prepare,create} (#2431)."""
     mid, verb = p.split("/")[4], p.split("/")[6]
     NODE_ACTIONS.append({"machine": mid, "route": "worktree/" + verb, **body})
+    if body.get("kind") == "paseo":  # Paseo makes it, in its own worktrees folder of the repository (#6295)
+        if verb == "prepare":
+            return h.send_json({"root": PASEO_ROOT, "repoName": "app", "branch": "main", "path": PASEO_TREES.rstrip("/"), "automatic_name": True})
+        branch, path = str(body.get("branch", "")), str(body.get("path", ""))
+        wid = "wks_5a1e00000000%04d" % (100 + len(PASEO_MADE))
+        PASEO_MADE.append((wid, branch, path, branch))
+        return h.send_json({"workspace_id": wid, "path": path, "branch": branch})
     if verb == "prepare":
         return h.send_json({"root": "/home/me/persona", "repoName": "persona", "branch": "main", "path": "/home/me/.herdr/worktrees/persona",
                             "choose_parent": body.get("kind") == "orca"})
@@ -10653,6 +10680,8 @@ def inbox_done_days(query):
 
 def inbox_for(query):
     """The list as the hub gives it: connectors' items only with ?sources=all."""
+    if MOCK_INBOX_SHOWCASE:
+        return copy.deepcopy(INBOX)
     all_sources = (query.get("sources") or [""])[0] == "all"
     return [dict({k: v for k, v in x.items() if k != "context"}, version=inbox_version(x)) for x in INBOX if all_sources or "connector" not in x]
 
@@ -11195,6 +11224,48 @@ def larkcli_area(h, method, p, raw):
                         "qr": {"size": len(WECHAT_QR_ROWS), "rows": WECHAT_QR_ROWS}}) or True
 
 
+
+# MOCK_LARKCLI_INBOX=1: a Lark mention read through lark-cli (飞书 · 我的消息) and its conversation page, as a hub that
+# reads the chat's own record gives it (kind group, the chat's name); =legacy: as an older hub gave it, an empty kind and
+# name (lark-cli's message list says neither). Its words are what lark-cli writes: a post's Markdown with a picture by
+# image key, an interactive message's <card title="…"> envelope, plain text. All made up.
+LARKCLI_INBOX = os.environ.get("MOCK_LARKCLI_INBOX", "")
+LARKCLI_THREAD = "larkcli:chat:oc_example_oncall"
+
+
+def larkcli_thread_page():
+    now = datetime.now(timezone.utc)
+    def at(h, m):
+        return now.replace(hour=h, minute=m, second=0, microsecond=0).isoformat().replace("+00:00", "Z")
+    a, b = {"id": "ou_example_a", "name": "示例同事"}, {"id": "ou_example_b", "name": "另一个示例同事"}
+    bot, helper = {"id": "cli_example_bot", "name": "示例值班机器人"}, {"id": "cli_example_helper", "name": "示例助手"}
+    msgs = [
+        {"id": "om_example_1", "at": at(1, 2), "sender": a, "text": "@示例用户 帮忙看下这个播放数的问题"},
+        {"id": "om_example_2", "at": at(1, 30), "sender": a, "text": "/save"},
+        {"id": "om_example_3", "at": at(1, 30), "sender": helper, "format": "markdown", "text": "<card>\n已将群聊转为常驻群，不会自动解散\n</card>"},
+        {"id": "om_example_4", "at": at(2, 13), "sender": bot, "format": "markdown", "text": (
+            "<card title=\"Oncall Notice\">\n本群已长时间未响应，工单已停留 **120** 小时，请确认是否结束。\n\n"
+            "如果问题已解决，请点击「已解决」；还没解决，请值班同学尽快响应。\n</card>")},
+        {"id": "om_example_5", "at": at(2, 16), "sender": b, "format": "markdown", "text": (
+            "**现象**：示例广告组的播放数低于展示数，漏斗倒挂；10-31 起自行恢复。\n"
+            "**已定位**\n- 问题在原始事件流：起播事件缺失，2 秒播放正常\n- 两端漏斗都正常，异常集中在一批未知端的请求\n"
+            "**请协助确认**\n1. 起播事件为什么没有上报\n2. 历史数据能否回补\n\n"
+            "[示例结论文档](https://example.com/doc)\n![Image](img_example_key)")},
+        {"id": "om_example_6", "at": at(2, 20), "sender": {"id": "ou_example_me", "name": "示例用户"}, "mine": True, "text": "收到，我来跟进"},
+    ]
+    legacy = LARKCLI_INBOX == "legacy"
+    return {"chat": {"id": LARKCLI_THREAD, "name": "" if legacy else "示例值班群", "kind": "" if legacy else "group"}, "messages": msgs}
+
+
+def larkcli_thread_area(h, method, p):
+    """The Lark (lark-cli) conversation page; True when it answered."""
+    if not LARKCLI_INBOX or method != "GET" or p != "/api/v1/connectors/larkcli/thread":
+        return False
+    if parse_qs(urlparse(h.path).query).get("thread", [""])[0] != LARKCLI_THREAD:
+        return h.send_json({"error": "没有叫这个的会话"}, 502) or True
+    return h.send_json(larkcli_thread_page()) or True
+
+
 TELEGRAM_MODE = os.environ.get("MOCK_TELEGRAM", "")
 TELEGRAM = {"enabled": TELEGRAM_MODE not in ("", "off"), "creds": TELEGRAM_MODE in ("signed_in", "limited"),
             "signed_in": TELEGRAM_MODE in ("signed_in", "limited"), "limited": TELEGRAM_MODE == "limited",
@@ -11461,6 +11532,17 @@ def telegram_area(h, method, p, raw):
     return False
 
 
+if LARKCLI_INBOX:
+    INBOX[1:1] = [
+        {"id": "larkcli:example_oncall", "source": "larkcli", "kind": "mention", "account": "larkcli", "account_name": "飞书 · 我的消息",
+         "title": "示例值班群", "sender": "示例值班机器人", "preview": "Oncall Notice", "count": 1,
+         "started_at": ago(minutes=30), "updated_at": ago(minutes=30), "tier": "action",
+         "summary": "值班群里在催你确认示例问题的进展", "reason": "被点名催响应", "read": False,
+         "context": "示例同事: @示例用户 帮忙看下这个播放数的问题\n另一个示例同事: **现象**：示例广告组的播放数低于展示数……\n示例值班机器人: <card title=\"Oncall Notice\">……</card>",
+         "connector": {"thread": LARKCLI_THREAD, "label": "飞书提及", "reply_to": "以你的身份发到「示例值班群」，会话里的人都能看到", "can_reply": True}},
+    ]
+
+
 if os.environ.get("MOCK_TELEGRAM_INBOX"):
     INBOX[1:1] = [
         {"id": "telegram:dm1", "source": "telegram", "kind": "dm", "account": "telegram", "account_name": "Telegram",
@@ -11697,6 +11779,18 @@ if MOCK_INBOX_EVENTS:
         }
         for _x in INBOX:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
+
+
+# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
+# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
+# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
+# now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
+MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
+if MOCK_INBOX_SHOWCASE:
+    _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                                  "spec", "fixtures", "inbox", "showcase.json")
+    with open(_showcase_path, encoding="utf-8") as _f:
+        INBOX[:] = json.load(_f)["items"]
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -20690,6 +20784,12 @@ if ENGINE_SETS:
     for _s in SESSIONS:
         if _s.get("session_id") == WIDGET:
             _s["host"], _s["also_open_in"] = "herdr", ["herdr-core"]
+if os.environ.get("MOCK_PASEO"):  # the server enables Paseo beside herdr: its workspaces are the catalog's (#6295)
+    for _m in MACHINES:
+        if _m["id"] == "server" and _m.get("online"):
+            _m["engines"] = [e for e in _m["engines"] if e["id"] != "paseo"] + [{"id": "paseo", "name": "Paseo", "available": True, "version": "0.14"}]
+            _m["engine_hosts"], _m["engine_default"] = ["herdr", "paseo"], "herdr"
+            _m["engine"] = legacy_engine(_m["engine_hosts"], _m["engine_default"])
 if RESUME_TERMINAL:  # the Mac mini enables no terminal engine: the empty set (#3302), herdr still named for older clients
     for _m in MACHINES:
         if _m["id"] == "mini":
@@ -22298,7 +22398,7 @@ MOCK_HELP = [
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
     "MOCK_CHILD_SESSIONS=1  The Paseo computer (MOCK_PASEO) with its agent's four created agents (one waiting for you, one working with a Codex subagent of its own, one done, one failed) and an agent whose creator is not listed: the hub folds them (folded_under / children) and the lead's chat draws a card for each (#5120)",
-    "MOCK_PASEO=1  A computer whose engine is Paseo: a project with its main checkout and two titled worktree workspaces, an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
+    "MOCK_PASEO=1  A computer that enables Paseo beside herdr: a project with its main checkout, two titled worktree workspaces and one with no agent, all in the workspace catalog (New worktree… makes one in Paseo's folder, #6295), an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
     "MOCK_PERMISSION_DIFF=1  Two chats wait on a Claude Code permission card for an Edit (longer than the card's preview) and a Write; the card shows the change (#4621)",
@@ -23362,6 +23462,9 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(t) if t else self.send_json({"error": "no such inbox item"}, 404)
         if p.startswith("/api/v1/inbox/"):
             iid = p[len("/api/v1/inbox/"):]
+            if MOCK_INBOX_SHOWCASE:
+                x = next((x for x in INBOX if x["id"] == iid), None)
+                if x is not None: return self.send_json(x)
             for x in INBOX + INBOX_HISTORY:  # an item done long ago: the history's (#2200)
                 if x["id"] == iid: return self.send_json(dict(x, context=x.get("context") or x["preview"]))
         if mail_area(self, "GET", p, q): return
@@ -23377,6 +23480,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/mail/messages": return self.send_json({"messages": [], "has_more": False})
         if p == "/api/v1/lark/unread-count": return self.send_json({"count": 4})
         if telegram_area(self, "GET", p, b""): return
+        if larkcli_thread_area(self, "GET", p): return
         if plugin_connector_area(self, "GET", p, b""): return
         if triage_route(self, "GET", p, b""): return
         if kb_selection_route(self, "GET", p, b""): return
@@ -23822,7 +23926,7 @@ class H(BaseHTTPRequestHandler):
         if plugins_route(self, p, self.last_body): return
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|close_finished|split|agent|git)|tabs/(close|rename))", p):
             return node_action(self, p, json.loads(self.last_body or b"{}"))
-        if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(prepare|create)", p):
+        if (os.environ.get("MOCK_TERMINAL_PANES") or os.environ.get("MOCK_PASEO")) and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(prepare|create)", p):
             return worktree_route(self, p, json.loads(self.last_body or b"{}"))
         if AGENT_WORKTREE and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(status|add|remove)", p):
             return agent_worktree_route(self, p, json.loads(self.last_body or b"{}"))
@@ -26044,6 +26148,7 @@ MOCK_HELP.append("MOCK_MOMENTS_FEED=<名字>  知识库的公司圈帖子带 fee
 MOCK_HELP.append("MOCK_NO_LARK=1  没装接飞书的扩展的 hub：features 里没有 lark / lark_moments / lark_attachments，/api/v1/lark/… 404，连接器里没有飞书")
 MOCK_HELP.append("MOCK_INBOX_TRIAGE=<状态>[:<条数>[:<来源名，逗号隔开>[:<原因>]]]  收件箱列表带 triage（新条目在等分拣，#1773）：unconfigured / paused / error / timeout / behind / ok；不设时没有 triage（老 hub）")
 MOCK_HELP.append("MOCK_INBOX_UNREAD=<来源名>[:<代码>[:<原因>]],…  收件箱 triage 的这些来源这一轮没读到（read_error / read_reason，#1849）：代码 timeout / rate_limited / failed；不写原因就没有 read_reason")
+MOCK_HELP.append("MOCK_INBOX_SHOWCASE=1  收件箱列表和单条详情使用 spec/fixtures/inbox/showcase.json 的 items（四端并排截图的同一场景，字段和时间保持夹具原值；客户端自己把时钟固定到 now_clock）；同时开 MOCK_INBOX_EVENTS 时以本开关为准")
 
 # ---------- area: commenting in the Feishu document reader (#1290) ----------
 # MOCK_DOC_COMMENTS=1: the plugin says `lark_doc_comments`; GET /api/v1/lark/raw/documents/comments has three made-up
