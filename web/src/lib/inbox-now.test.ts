@@ -38,8 +38,14 @@ const waitingAt = (lang: Lang, time: string) => ({
 })[lang];
 const clock = (d: Date) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 
+// The formatting locale keeps the system's region when the system speaks the interface language (docs/protocol/i18n.md,
+// "Formatting locale"), and Node's navigator reports the machine's locale: under en_AU the date reads "3 Jan", not
+// "Jan 3" (#7061, the same trap as formatList in #4955). The date words below are written for these regions.
+const SYSTEM_LANGUAGE: Record<Lang, string> = { en: "en-US", "zh-Hans": "zh-CN", ja: "ja-JP" };
+
 afterEach(async () => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   await initI18n("zh-Hans");
 }, 30_000);
 
@@ -64,6 +70,7 @@ for (const lang of LANGS) {
     }
 
     it("uses the local clock today, tomorrow, and a date farther ahead", async () => {
+      vi.spyOn(navigator, "languages", "get").mockReturnValue([SYSTEM_LANGUAGE[lang]]);
       await initI18n(lang);
       vi.useFakeTimers();
       vi.setSystemTime(new Date(2026, 0, 1, 12));
