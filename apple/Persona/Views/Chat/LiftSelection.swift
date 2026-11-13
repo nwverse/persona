@@ -48,6 +48,12 @@ nonisolated enum ReplyMetrics {
     static let inlineCode: CGFloat = 0.88
     static let quiet: CGFloat = 0.88
 
+    /// A list item's marker: its room, at least 1.5 em (MarkdownUI's markers, right-aligned in it), then the system
+    /// `Label`'s gap before the words, the same at every text size (34, 41 and 80 pt to the words at the default size,
+    /// xxxLarge and AX5, #6552).
+    static func markerRoom(of size: CGFloat) -> CGFloat { points(1.5, of: size) }
+    static let markerGap: CGFloat = 8
+
     /// A size in em as the chat draws it: MarkdownUI sets every run's font at a whole point (`round(size × scale)`),
     /// so inline code at 0.88 em of 17 is 15, not 14.96. Over a line of code the difference came to most of a point (#3188).
     static func points(_ em: CGFloat, of size: CGFloat) -> CGFloat { (em * size).rounded() }
@@ -736,9 +742,6 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
     /// The word under a point in the window; where there is none (a space, a mark), the character there.
     private func word(at point: CGPoint) -> UITextRange? {
         guard let pos = closestPosition(to: convert(point, from: nil)) else { return nil }
-        #if DEBUG
-        publishPress(point, pos) // TEMP #6552
-        #endif
         for direction in [UITextStorageDirection.forward, .backward] {
             if let w = tokenizer.rangeEnclosingPosition(pos, with: .word, inDirection: UITextDirection(rawValue: direction.rawValue)) {
                 return w
@@ -923,40 +926,6 @@ extension LiftUITextView {
             let s = lines.isEmpty ? "" : "lines=\(code(lines))/handles=\(code(handles))/shown=\(code([shown]))"
             if LiftLines.shared.picked != s { LiftLines.shared.picked = s }
         }
-    }
-}
-
-extension LiftUITextView {
-    /// TEMP #6552: where a press that starts a selection landed (`LiftLines.press`): the press in the window and in the
-    /// text view, the text view's frame in the window, its parts and their characters, the segments it snapped to (part,
-    /// box, rows), the character picked, and its lines within 400 pt of the press (first character, part, top and height
-    /// in the window, hidden, first characters).
-    func publishPress(_ point: CGPoint, _ pos: UITextPosition) {
-        guard LiftLines.on else { return }
-        func f(_ x: CGFloat) -> String { String(format: "%.1f", x) }
-        func clean(_ s: String) -> String { String(s.prefix(8)).replacingOccurrences(of: "|", with: "!").replacingOccurrences(of: "~", with: "-").replacingOccurrences(of: "\n", with: "/") }
-        let p = convert(point, from: nil), frame = convert(bounds, to: nil)
-        let at = offset(from: beginningOfDocument, to: pos)
-        let text = storage.string as NSString
-        var out = ["w=\(f(point.x)),\(f(point.y));v=\(f(p.x)),\(f(p.y));frame=\(f(frame.minX)),\(f(frame.minY)),\(f(frame.width)),\(f(frame.height))"
-            + ";inset=\(f(textContainerInset.top));at=\(at);len=\(storage.length);held=\(wordsHeld),\(snapHeld)"
-            + ";parts=\(parts.map(String.init).joined(separator: ","))"
-            + ";ranges=\(partRanges.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value.location)+\($0.value.length)" }.joined(separator: ","))"
-            + ";picked=\(at < text.length ? clean(text.substring(from: at)) : "end")"]
-        for s in segments {
-            out.append("seg=\(s.part.map(String.init) ?? "all");box=\(s.box.map { "\(f($0.lowerBound))-\(f($0.upperBound))" } ?? "none")"
-                + ";rows=\(s.rows.count);first=\(s.rows.first.map(f) ?? "-");last=\(s.rows.last.map(f) ?? "-");texts=\(s.texts.count)")
-        }
-        let origin = convert(CGPoint(x: textContainerInset.left, y: textContainerInset.top), to: nil)
-        layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: textContainer)) { rect, _, _, glyphs, _ in
-            guard abs(rect.minY + self.textContainerInset.top - p.y) < 400 else { return }
-            let chars = self.layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
-            let part = self.storage.attribute(.replyPart, at: chars.location, effectiveRange: nil) as? Int ?? -1
-            out.append("line=\(chars.location)+\(chars.length);part=\(part);y=\(f(origin.y + rect.minY));h=\(f(rect.height))"
-                + ";hidden=\(self.snapper.hidden.contains(glyphs.location) ? 1 : 0);t=\(clean(text.substring(with: chars)))")
-        }
-        let s = out.joined(separator: " ~ ")
-        if LiftLines.shared.press != s { LiftLines.shared.press = s }
     }
 }
 
@@ -1154,11 +1123,14 @@ enum ReplyText {
 
         init(_ words: LiftWords, design: UIFontDescriptor.SystemDesign = .default, traits: UITraitCollection) {
             self.design = design
-            let base = Self.designed(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits), design)
+            var base = Self.designed(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits), design)
             var quiet = false
             switch words {
-            case .plain(let c): color = UIColor(c)
-            case .reply(let q): quiet = q; color = q ? .secondaryLabel : .label
+            case .plain(let c): color = UIColor(c) // your bubble: the body style
+            case .reply(let q):
+                quiet = q
+                color = q ? .secondaryLabel : .label
+                base = base.withSize(Self.replySize(traits)) // MarkdownUI's size, not the body style's (#6552)
             }
             body = quiet ? base.withSize(ReplyMetrics.points(ReplyMetrics.quiet, of: base.pointSize)) : base
             code = .monospacedSystemFont(ofSize: ReplyMetrics.points(Theme.Level.code.size / Theme.Level.body.size, of: body.pointSize), weight: .regular)
@@ -1170,6 +1142,15 @@ enum ReplyText {
         }
 
         var size: CGFloat { body.pointSize }
+
+        /// The size of a reply's words in the chat at these traits: MarkdownUI scales the theme's size as `@ScaledMetric`
+        /// relative to body does (`UIFontMetrics`), and draws it at a whole point. That is not the body text style's
+        /// size past the default: 22 pt where body is 23 at xxxLarge, 48 where it is 53 at AX5. A text view in the body
+        /// style wrapped the words onto more lines than the chat, and a press near the end of a long answer picked words
+        /// lines above it (#6552).
+        static func replySize(_ traits: UITraitCollection) -> CGFloat {
+            UIFontMetrics(forTextStyle: .body).scaledValue(for: Theme.Level.body.size * Theme.Font.scale, compatibleWith: traits).rounded()
+        }
 
         /// `font` at weight `w`, in the words' design (code stays monospaced).
         func weight(_ font: UIFont, _ w: UIFont.Weight) -> UIFont {
@@ -1296,8 +1277,8 @@ enum ReplyText {
             self.parts = parts
         }
 
-        private var markerWidth: CGFloat { look.size * 1.5 }
-        private var markerGap: CGFloat { look.size * 0.5 } // the words at 2 em, as the chat's lists
+        private var markerWidth: CGFloat { ReplyMetrics.markerRoom(of: look.size) }
+        private var markerGap: CGFloat { ReplyMetrics.markerGap } // the words where the chat's lists put them (#6552)
 
         func read(_ markdown: String) {
             // Bold next to CJK punctuation is read as the chat reads it (`CJKEmphasis`, line for line); a table still
