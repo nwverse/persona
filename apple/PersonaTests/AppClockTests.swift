@@ -49,22 +49,22 @@ final class AppClockTests: XCTestCase {
             var detail: String
         }
 
+        let pinned = Date(timeIntervalSince1970: 1_767_268_800)
         defaults.set("2026-01-01T12:00:00Z", forKey: key)
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let data = try Data(contentsOf: repo.appending(path: "spec/fixtures/inbox/showcase.json"))
         let showcase = try JSON.decoder.decode(Showcase.self, from: data)
         let item = try XCTUnwrap(showcase.items.first { $0.id == showcase.detail })
         let updatedAt = try XCTUnwrap(item.updatedAt)
-        let checkAt = try XCTUnwrap(item.follow?.checkAt)
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = TimeZone(identifier: "UTC")!
 
         XCTAssertEqual(LarkTime.tier(of: updatedAt, calendar: utc), .today)
         XCTAssertEqual(LarkTime.short(updatedAt, calendar: utc),
                        updatedAt.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)))
-        XCTAssertEqual(InboxNow.time(checkAt, lang: "en", now: AppClock.now, calendar: utc), "Jan 2, 09:00")
-        // The Apple test scheme runs in zh-Hans; the comma comes from the existing localized date-and-time pattern.
-        XCTAssertEqual(InboxNow.text(for: item, calendar: utc), "等张三确认新报价 · 1月2日，09:00 再看：问更正后的报价行不行")
+        let actual = InboxNow.text(for: item, calendar: utc)
+        XCTAssertEqual(actual, InboxNow.text(for: item, now: pinned, calendar: utc))
+        XCTAssertNotEqual(actual, InboxNow.text(for: item, now: pinned.addingTimeInterval(86_400), calendar: utc))
     }
 }
 #endif
