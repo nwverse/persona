@@ -119,6 +119,7 @@ describe("收件箱事件：详情", () => {
     expect(text.indexOf("建议回复")).toBeLessThan(text.indexOf("处理链条"));
     expect(host.querySelector("[data-suggestion-text]")?.textContent).toBe(reply.suggestion!.text);
     expect(buttons()).toEqual(expect.arrayContaining(["驳回", "修改", "发送"]));
+    expect(buttons()).not.toContain("说一句");
     expect([...host.querySelectorAll("[data-chain-entry]")].map((e) => e.getAttribute("data-chain-entry"))).toEqual(["received", "triaged", "handling"]);
     expect(host.querySelector("[data-chain-toggle]")).toBeNull();
   });
@@ -156,9 +157,51 @@ describe("收件箱事件：详情", () => {
     expect(host.querySelector("[data-suggestion]")).toBeNull();
     act(() => root.render(<EventBody item={failed} onSource={() => {}} />));
     expect(host.querySelector("[data-event-failed]")?.textContent).toContain("处理超时了");
+    expect(buttons()).toContain("再试一次");
     act(() => root.render(<EventBody item={waiting} onSource={() => {}} />));
     expect(host.querySelector('[data-event-handling="waiting"]')?.textContent).toContain("等对方回复");
     expect(host.querySelector("[data-event-related]")?.textContent).toContain("评审材料");
+  });
+  it("说一句 without a suggestion sends version zero, the words and the item's manager", async () => {
+    const item: InboxItem = { ...failed, manager: "m-work", handling: undefined };
+    calls.suggestion = () => Promise.resolve({ ...item, handling: { owner: "manager", state: "looking" } });
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    expect(buttons()).not.toContain("再试一次");
+    await press("说一句");
+    const input = host.querySelector<HTMLInputElement>("[data-event-say-input]")!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      setValue.call(input, "接着看一下");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press("说一句");
+    await flush();
+    const sent = calls.list.find((c) => c.path.endsWith("/suggestion"));
+    expect(sent?.path).toBe("/inbox/lark:oc_demo6:600/suggestion");
+    expect(sent?.json).toMatchObject({ version: 0, action: "instruct", text: "接着看一下" });
+    expect(sent?.headers).toEqual({ "X-Persona-Manager": "m-work" });
+    expect(host.querySelector("[data-event-say]")).toBeNull();
+    expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["已交给 AI，等它重新出建议", "ok"]);
+  });
+  it("再试一次 sends the localized default instruction at once when now says failed", async () => {
+    const item = { ...failed, handling: undefined, now: "failed" } as InboxItem;
+    calls.suggestion = () => Promise.resolve({ ...item, handling: { owner: "manager", state: "looking" } });
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    expect(buttons()).toContain("再试一次");
+    expect(buttons()).not.toContain("说一句");
+    await press("再试一次");
+    await flush();
+    const sent = calls.list.find((c) => c.path.endsWith("/suggestion"));
+    expect(sent?.json).toMatchObject({ version: 0, action: "instruct", text: "请再试一次。" });
+    expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["已交给 AI，等它重新出建议", "ok"]);
+  });
+  it("a stale instruction refreshes the item and says why", async () => {
+    calls.suggestion = () => Promise.reject(new ApiError(409, "建议已更新", { code: "suggestion_stale" }));
+    act(() => root.render(<EventBody item={failed} onSource={() => {}} />));
+    await press("再试一次");
+    await flush();
+    expect(calls.list.some((c) => c.path === "/inbox?sources=all")).toBe(true);
+    expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["建议已更新", "info"]);
   });
   it("修改: edits the text and confirms it, or 说一句话 goes back as an instruction", async () => {
     act(() => root.render(<EventBody item={reply} onSource={() => {}} />));
@@ -259,6 +302,8 @@ describe("收件箱事件：已处理", () => {
     act(() => root.render(<EventBody item={managerDone} onSource={() => {}} />));
     expect(host.querySelector("[data-event-manager-done]")?.textContent).toBe("助手处理了");
     expect(host.querySelector("[data-suggestion]")).toBeNull();
+    expect(buttons()).not.toContain("说一句");
+    expect(buttons()).not.toContain("再试一次");
     const done = host.querySelector('[data-chain-entry="done"]')!;
     expect(done.textContent).toContain("管理者看完，不用管");
     expect(done.querySelector("button")!.disabled).toBe(true); // no link, nothing to expand

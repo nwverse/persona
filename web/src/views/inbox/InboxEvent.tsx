@@ -5,10 +5,10 @@
 // Drawn only for an item that carries this phase's fields (lib/inbox-events.ts `hasEvent`).
 import { useEffect, useRef, useState } from "react";
 import {
-  canExpand, chainIconMeaning, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
+  actOnSuggestion, canExpand, chainIconMeaning, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
   type ChainEntry, type ChainTap, type InboxSuggestion,
 } from "../../lib/inbox-events";
-import { conversationRoute, docChangeLine, isDone, itemKey, itemRoute, suggestionAct, useInbox, type InboxItem } from "../../lib/inbox";
+import { conversationRoute, docChangeLine, isDone, itemKey, itemPath, itemRoute, reloadInbox, replaceItem, suggestionAct, useInbox, type InboxItem } from "../../lib/inbox";
 import { otherManager } from "../../lib/manager-choice";
 import { connectorBrand } from "../../lib/connectors";
 import { stateOf } from "../../lib/format";
@@ -18,7 +18,7 @@ import { type Route } from "../../lib/router";
 import { openFromInbox } from "../../lib/inbox-nav";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
-import { Button, cx, Shimmer, Spinner } from "../../ui/atoms";
+import { Button, cx, Shimmer, Spinner, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
 import { useFoldScroll } from "../chat/fold-scroll";
@@ -133,45 +133,97 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
   return embedded ? <div className="flex max-h-[40%] shrink-0 flex-col border-b border-line">{body}</div> : body;
 }
 
-/** "In progress"'s state with a way into the processing conversation, or why the AI did not get through it. */
+/** The active state, its processing conversation, and a way to instruct an open item without a suggestion. */
 function HandlingLine({ item }: { item: InboxItem }) {
   const conversation = useConversation();
+  const [sayOpen, setSayOpen] = useState(false);
+  const [say, setSay] = useState("");
+  const [acting, setActing] = useState(false);
   const h = item.handling;
-  if (!h) return null;
+  const canSay = !isDone(item) && !item.suggestion;
+  const failed = canSay && (handlingFailed(item) || (item as InboxItem & { now?: string }).now === "failed");
+  if (!h && !canSay) return null;
   const word = handlingWord(item);
-  const to = h.machine_id && h.session_id ? conversation(h.machine_id, h.session_id) : undefined;
+  const to = h?.machine_id && h.session_id ? conversation(h.machine_id, h.session_id) : undefined;
+  const instruct = async (words: string) => {
+    const text = words.trim();
+    if (!text || acting) return;
+    setActing(true);
+    const r = await actOnSuggestion(itemPath(item.id), 0, "instruct", text, undefined, item.manager);
+    setActing(false);
+    if (r.ok) {
+      if (r.item?.id === item.id) replaceItem(r.item, item.manager);
+      setSay("");
+      setSayOpen(false);
+      toast(t("lib-inbox-events.instructed"), "ok");
+    } else if (r.stale) {
+      if (r.item) replaceItem(r.item, item.manager);
+      else void reloadInbox();
+      toast(r.error, "info");
+    } else {
+      toast(t("lib-inbox.suggestion_failed", { error: r.error }), "error");
+    }
+  };
   const open = to && (
     <button type="button" onClick={() => openFromInbox(to)} className="-mx-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1 text-[12px] font-medium whitespace-nowrap text-accent-ink transition-colors hover:bg-hover">
       {t("inbox-inboxevent.open_conversation")}
       <Icon name="chevronRight" size={11} stroke={2.4} />
     </button>
   );
-  // urgent item still being looked at: where the suggestion will be, "AI is preparing a suggestion"
-  if (preparing(item)) {
-    return (
-      <div className="flex min-w-0 items-center gap-2 rounded-[10px] bg-inset p-3 text-[12.5px] shadow-hairline" data-event-preparing>
-        <Spinner size={12} />
-        <Shimmer className="min-w-0 flex-1 truncate">{t("inbox-inboxevent.preparing")}</Shimmer>
-        {open}
-      </div>
-    );
-  }
-  if (h.state === "failed") {
-    return (
-      <div className="flex items-start gap-2 rounded-[10px] bg-red-tint p-3 text-[12.5px] text-red" role="status" data-event-failed>
-        <Icon name="warning" size={14} className="mt-px shrink-0" />
-        <span className="min-w-0 flex-1 leading-relaxed">{h.error ? t("inbox-inboxevent.failed_with", { error: h.error }) : t("inbox-inboxevent.failed")}</span>
-        {open}
-      </div>
-    );
-  }
-  if (!word) return null; // done: the chain's manager-handling entry opens the conversation
+  const action = canSay && (failed ? (
+    <Button tone="quiet" size="sm" icon="retry" busy={acting} onClick={() => void instruct(t("inbox-inboxevent.retry_text"))} testId="inbox-retry">{t("inbox-inboxevent.retry")}</Button>
+  ) : !sayOpen ? (
+    <Button tone="quiet" size="sm" icon="chat" onClick={() => setSayOpen(true)} testId="inbox-say">{t("inbox-inboxevent.say_something")}</Button>
+  ) : null);
+  const showSay = sayOpen && canSay && !failed;
+  if (!preparing(item) && !failed && !word && !action && !showSay) return null;
   return (
-    <div className="flex min-w-0 items-center gap-2 text-[12.5px] text-ink-2" data-event-handling={h.state}>
-      {h.state === "waiting" ? <Icon name="clock" size={13} className="shrink-0 text-ink-3" /> : <Spinner size={12} />}
-      <span className="min-w-0 truncate">{word}</span>
-      <span className="flex-1" />
-      {open}
+    <div className="flex flex-col gap-2">
+      {preparing(item) ? (
+        <div className="flex min-w-0 items-center gap-2 rounded-[10px] bg-inset p-3 text-[12.5px] shadow-hairline" data-event-preparing>
+          <Spinner size={12} />
+          <Shimmer className="min-w-0 flex-1 truncate">{t("inbox-inboxevent.preparing")}</Shimmer>
+          {open}
+          {action}
+        </div>
+      ) : failed ? (
+        <div className="flex items-start gap-2 rounded-[10px] bg-red-tint p-3 text-[12.5px] text-red" role="status" data-event-failed>
+          <Icon name="warning" size={14} className="mt-px shrink-0" />
+          <span className="min-w-0 flex-1 leading-relaxed">{h?.error ? t("inbox-inboxevent.failed_with", { error: h.error }) : t("inbox-inboxevent.failed")}</span>
+          {open}
+          {action}
+        </div>
+      ) : word ? (
+        <div className="flex min-w-0 items-center gap-2 text-[12.5px] text-ink-2" data-event-handling={h?.state}>
+          {h?.state === "waiting" ? <Icon name="clock" size={13} className="shrink-0 text-ink-3" /> : <Spinner size={12} />}
+          <span className="min-w-0 truncate">{word}</span>
+          <span className="flex-1" />
+          {open}
+          {action}
+        </div>
+      ) : action ? <div className="flex justify-end gap-2">{open}{action}</div> : null}
+      {showSay && (
+        <div className="flex flex-col gap-2" data-event-say>
+          <label className="flex h-8 items-center gap-2 rounded-control bg-field px-2.5 focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
+            <Icon name="chat" size={13} className="shrink-0 text-ink-3" />
+            <input
+              value={say}
+              onChange={(e) => setSay(e.target.value)}
+              placeholder={t("inbox-inboxevent.say_placeholder")}
+              aria-label={t("inbox-inboxevent.say_something")}
+              className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-3"
+              data-event-say-input
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.nativeEvent.isComposing && say.trim()) void instruct(say);
+              }}
+            />
+          </label>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button tone="quiet" size="sm" disabled={acting} onClick={() => { setSayOpen(false); setSay(""); }}>{t("common.cancel")}</Button>
+            <Button tone="accent" size="sm" icon="spark" disabled={!say.trim() || acting} busy={acting} onClick={() => void instruct(say)}>{t("inbox-inboxevent.say_something")}</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
