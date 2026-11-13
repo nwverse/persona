@@ -16,7 +16,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.test.core.app.ApplicationProvider
@@ -153,7 +153,8 @@ class InboxOneRowTest {
     @Test fun filingOneItemLeavesTheOtherOpenItemsOfTheSameChatAlone() {
         val inbox = FakeInbox(listOf(item("a", "First event", "First preview"), item("b", "Second event", "Second preview")))
         screen(inbox)
-        row("First event").performTouchInput { swipeRight() }
+        // Rows swipe one way only since #6633: the trailing swipe is Done, and Hand to AI lives in the long-press menu.
+        row("First event").performTouchInput { swipeLeft() }
         rule.waitForIdle()
         rule.runOnIdle {
             assertEquals("A gesture files this item only", listOf("a" to true), inbox.singles)
