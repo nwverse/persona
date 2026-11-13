@@ -199,10 +199,11 @@ class InboxHandOffRepositoryTest {
             assertEquals("m-2", repository.snapshot.value.records.single().manager)
         } finally {
             finishRecording.complete(Unit)
-            // Drain the background record, including any journal writes after the transport callback returns.
             advanceUntilIdle()
+            // Join the repository owner's real IO work too; the test scheduler alone does not drain Dispatchers.IO.
+            backgroundScope.coroutineContext[Job]!!.cancelAndJoin()
             AssistantManagerChoice.reset()
-            directory.deleteRecursively()
+            runCatching { directory.deleteRecursively() }
         }
     }
 
@@ -237,7 +238,8 @@ class InboxHandOffRepositoryTest {
             assertTrue(main.sent.isEmpty())
         } finally {
             advanceUntilIdle()
-            directory.deleteRecursively()
+            backgroundScope.coroutineContext[Job]!!.cancelAndJoin()
+            runCatching { directory.deleteRecursively() }
         }
     }
 
