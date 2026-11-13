@@ -85,6 +85,8 @@ Expanded Idle spaces in Agents reuse `AgentListOrder.ordered` across normal card
 | To-dos | List/details (sidebar To-dos with incomplete-count badge; new shell sidebar): priority Waiting for you > To review > In progress > Follow-up > Not started, completed at bottom; create title + description, tap circle or swipe right complete, swipe right reopen, swipe left delete. Details edit title/description, show current and past Agent sessions, remove failed starts; bottom Hand to Agent starts new or picks existing session with structured to-do context card |
 | Settings | Assistant (no model displayed/configured here; Model configuration › Main chat, #1291; Proactive work and memory pages, `AssistantProactiveViews.swift`: Scheduled tasks row-end toggles, existing edits save on leaving; new + with Meeting preparation / Weekly report / Agent check / End-of-day review templates uses Cancel / Add sheet so trying a template does not create it; Run now / View last result switches to Chat and opens that chat; one-time follow-ups, interval and scheduled tasks share page/editor; run settings model, permission mode, effort, Allow everything confirmation. Memory parses frontmatter, title prefers Chinese MEMORY.md index title, type badges, Markdown details, Edit whole file, swipe delete, read-only index row; About me edits notes, saves on leaving). Claude Code settings (allowlisted per-machine `~/.claude/settings.json`: exit recap, effort, always think, reply language etc., apply to all; then the computer's Live Replies switch, see "An agent's live reply", and Blocked Config Folders); Machines (online, session count, version, launchers, reconnect); Connectors (2026-11-01: This iPhone = old phone-data toggles/permissions; Email = old Inbox ⋯ account management; Lark = hub gateway status and purpose, `ConnectorsViews.swift`, `GET /api/v1/lark/status`; with hub `connectors`, add rows below Lark from `GET /api/v1/connectors` (2026-11-02, GitHub first: status, account, gh login from <machine>, last sync, generic `HubConnectorView`, DEBUG `-openConnectorGitHub YES`; in-App sign-in connectors (Telegram, `signsInHere`) add enable toggle, stepwise login, sign out, delete stored data, `ConnectorSignInSections`, DEBUG `-openConnectorTelegram YES`)); Notifications; Pair again |
 
+Inbox event detail (`InboxEventViews.swift`): the processing-state row offers **Say something** when an open item has no suggestion card, or **Try again** after processing fails. Both post `version: 0`, `action: "instruct"` through `InboxSuggestionModel`; Say something keeps the user's words on failure, Try again sends the localized "Please try again." A stale answer and a request error use the suggestion card's existing notice and error. The timeline folds to its newest three entries (all of them when there are at most three), oldest of the visible entries first, and **Show all (N)** restores the complete chain. Each icon follows `via`: a source id uses that source's brand or generic source mark; `assistant`, `agent` and `user` use the persona, Agents and person marks; without `via`, the existing kind icon stays. A `reported` entry always uses `Theme.Icon.reported`, a neutral compact **Assistant says** `Chip` and secondary text. Agent and Agent-stopped entries with a session link show that session's current `AgentState.label` in its `tone`, and nothing when the session is not listed. `InboxTimelineFixtureTests` replays every case in `spec/fixtures/inbox/timeline.json`; `InboxDetailTimelineUITests` covers folded / expanded chains and both instruction entries with `MOCK_INBOX_EVENTS=1`.
+
 Chat page:
 
 - Messages: user bubbles (coral), assistant Markdown (no bubble, reading first), thinking (one folded row), grouped tool steps (>2 fold into "N steps · Run 5 · Read 3",
@@ -1124,6 +1126,25 @@ hub; what each rule and per-item setting means is in `docs/assistant/knowledge.m
   (`apple/Persona/Views/Settings/`), `KnowledgeSelectionTests`. Screenshots: the mock hub answers the routes (`MOCK_KB_SELECTION=missing|future|fail` for
   an old hub, an unknown field and a refused save); `-tab settings -openKnowledgeSelection YES` opens the page, `rule`, `chat` or `doc` instead of `YES`
   with that sheet up. Demo Mode keeps the document in memory.
+
+## Inbox rows
+
+For people scanning what needs them, one matter keeps its title, time and AI summary. Its metadata line says where it is
+happening, who wrote the newest line and what they wrote: `where · sender: preview` in English, with the localized colon
+in Chinese and Japanese. A direct chat whose `where` equals its sender names that person once. Without `where` (an older
+hub, or mail), the existing source-specific line is unchanged. Search includes `where` in addition to title, sender,
+preview and summary; it still does not search context or triage reasons.
+
+When the manager sends the optional `now` key, `InboxNow` resolves the shared `spec/fixtures/inbox/now.json` table and
+compose rules in the interface language. On an open item, the complete sentence takes the existing mark line below the
+metadata, in the mark's current font and color (failure red, other states secondary), rather than competing with the
+metadata or its count badge for width. Waiting has a static clock, only queued / looking / Agent-working spins, and states
+that need the owner use the existing Needs you mark (failure stays red); FYI and folded states do not spin. Done rows keep
+today's absence of a mark; their done_* words belong to the detail. Waiting includes its named person, short check time
+and next step when present; failure uses only `handling.error`. An unknown or missing key keeps the existing
+`InboxEventText.mark` line and draft behavior, including its row height. The frozen native Mac row keeps its previous
+metadata and mark. `InboxNowTests` checks every shared state and row case in en, zh-Hans and ja, optional-field decoding,
+fallback and `where` search.
 
 ## Translation (Settings › Translation, 2026-10-31)
 
