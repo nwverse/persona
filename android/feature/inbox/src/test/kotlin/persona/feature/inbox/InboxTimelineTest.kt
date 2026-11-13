@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -19,6 +20,7 @@ import persona.core.contracts.inboxEventFields
 import persona.core.designsystem.InlineTone
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.resolve
+import persona.core.domain.inbox.InboxItem
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.stateWord
 import java.io.File
@@ -54,6 +56,16 @@ class InboxTimelineTest {
         assertEquals(InboxNowIcon(InlineTone.Failed, null), inboxNowIcon("failed"))
         for (key in listOf("done_replied", "done_manager", "done_user", "done_read", "done_dismissed", "done_muted",
             "done_superseded", "fyi", "folded")) assertEquals(InboxNowIcon(InlineTone.Done, null), inboxNowIcon(key))
+    }
+
+    @Test fun reportedUsesDetailOnceWithoutAnInlineDuplicate() {
+        val record = InboxRecord(InboxItem("event"))
+        val reported = InboxChainEntry("r1", kind = "reported", text = "Assistant says: sent it", detail = "sent it")
+        assertEquals("sent it", chainEntryText(reported))
+        assertEquals(ChainTarget.None, chainRowTarget(reported, record))
+        assertEquals("Assistant says: sent it", chainEntryText(reported.copy(detail = "  ")))
+        val linked = reported.copy(link = InboxChainLink(type = "session", machineId = "m1", sessionId = "s1"))
+        assertTrue(chainRowTarget(linked, record) is ChainTarget.Page)
     }
 
     private fun agent(machine: String, session: String, state: String, awaits: Boolean = false) = AgentSession(

@@ -77,6 +77,16 @@ internal fun chainAgentSession(entry: InboxChainEntry, sessions: List<AgentSessi
         ?: sessions.firstOrNull { GroupKeys.raw(it.session.machineId) == machine && it.session.sessionId == session }
 }
 
+/** A reported row shows the original words, not the old app's "Assistant says:" prefix a second time. */
+internal fun chainEntryText(entry: InboxChainEntry): String =
+    if (entry.kind == "reported") entry.detail?.takeIf { it.isNotBlank() } ?: entry.text else entry.text
+
+/** A reported detail is already on the row; it never opens a second copy inline. Other targets keep main's behavior. */
+internal fun chainRowTarget(entry: InboxChainEntry, record: InboxRecord): ChainTarget {
+    val target = chainTarget(entry, record)
+    return if (entry.kind == "reported" && target == ChainTarget.Inline) ChainTarget.None else target
+}
+
 /** The timeline's latest three steps, with the older of those three first; all of it once expanded. */
 internal fun LazyListScope.eventChain(
     record: InboxRecord,
@@ -140,7 +150,7 @@ private fun ChainRow(
     go: (ChainTarget) -> Unit,
 ) {
     val palette = PersonaTheme.palette
-    val target = chainTarget(entry, record)
+    val target = chainRowTarget(entry, record)
     var open by rememberSaveable(record.item.id, entry.id) { mutableStateOf(false) }
     val clock = LocalInboxClock.current
     val zone = LocalInboxZone.current
@@ -157,7 +167,7 @@ private fun ChainRow(
             if (time.isNotEmpty()) Text(time, style = PersonaTheme.type.micro, color = palette.ink3, maxLines = 1)
             ChainIcon(entry, record)
             if (reported) JTag(stringResource(R.string.inbox_event_assistant_says))
-            Text(entry.text.ifBlank { entry.kind }, Modifier.weight(1f, fill = false), style = PersonaTheme.type.callout,
+            Text(chainEntryText(entry).ifBlank { entry.kind }, Modifier.weight(1f, fill = false), style = PersonaTheme.type.callout,
                 color = if (reported) palette.ink2 else palette.ink, maxLines = if (open) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
             agentState?.let { Text(it, style = PersonaTheme.type.micro, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             if (target == ChainTarget.Inline) JIcon(if (open) PersonaIcons.collapse else PersonaIcons.expand, null,
