@@ -2,7 +2,7 @@
 // Which full conversation pages offer the Inbox way-back strip, and its precedence over the hand-off strip.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
@@ -24,6 +24,9 @@ import type { Session } from "../../lib/types";
 import { ChatView } from "./ChatView";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// Negative assertions must not pass merely because the lazy strip has not loaded yet. This also loads BackStrip's module.
+beforeAll(async () => { await import("./InboxBack"); });
 
 const row = () => ({ machine_id: "m1", session_id: "s1", title: "Checks", cwd: "", status: "idle", state: "idle", origin: "inbox", origin_ref: "i1" }) as Session;
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
@@ -56,12 +59,12 @@ async function open(view: React.ReactElement) {
 describe("the Inbox strip's place in ChatView", () => {
   it("appears on an Agent's full page", async () => {
     await open(<ChatView mid="m1" sid="s1" inPage />);
-    expect(host.querySelector("[data-inbox-back]")).not.toBeNull();
+    await vi.waitFor(() => expect(host.querySelector("[data-inbox-back]")).not.toBeNull(), { timeout: 2_000 });
   });
 
   it("appears on a non-main Persona conversation", async () => {
     await open(<ChatView mid="m1" sid="s1" assistant />);
-    expect(host.querySelector("[data-inbox-back]")).not.toBeNull();
+    await vi.waitFor(() => expect(host.querySelector("[data-inbox-back]")).not.toBeNull(), { timeout: 2_000 });
   });
 
   it("does not appear on the main conversation", async () => {
@@ -82,7 +85,7 @@ describe("the Inbox strip's place in ChatView", () => {
   it("keeps only the hand-off strip when both ways back exist", async () => {
     history.replaceState({ handoff: { path: "/persona/c0" } }, "", "/s/m1/s1");
     await open(<ChatView mid="m1" sid="s1" inPage />);
-    expect(host.querySelector("[data-handoff-back]")).not.toBeNull();
+    await vi.waitFor(() => expect(host.querySelector("[data-handoff-back]")).not.toBeNull(), { timeout: 2_000 });
     expect(host.querySelector("[data-inbox-back]")).toBeNull();
     act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.handoff_dismiss")}"]`)!.click());
     expect(host.querySelector("[data-handoff-back]")).toBeNull();
