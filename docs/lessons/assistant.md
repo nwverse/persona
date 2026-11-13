@@ -35,6 +35,8 @@
   titles, manual/custom titles and unknown sources. Apply this comparison at display and late-result boundaries,
   and test both directions plus service reconstruction without a new model call or counter reset.
 
+- A to-do's PR reference may exist only in `PRURL`, without appearing in its title or notes (#5458). Duplicate hints must read that link too; an open to-do still represents ongoing work when its linked Agent is idle.
+
 - Terminal spinner frames are presentation, not native-title changes (#5254). Comparing a saved `raw_title`
   byte for byte with a later inventory hid a successful automatic name while leaving its one-shot count spent.
   Use the same leading-spinner/whitespace comparison for display decoration and the model-result recheck.
