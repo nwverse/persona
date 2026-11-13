@@ -6,9 +6,9 @@
     "<a source id>": "source",
     "assistant": "persona",
     "agent": "agents",
-    "user": "person",
-    "(kind reported, any via)": "reported"
+    "user": "person"
   },
+  "reported_icon": "reported",
   "kind_icons_without_via": {
     "received": "received",
     "triaged": "triaged",
