@@ -635,12 +635,12 @@ No native client feature or build is part of this Web-only change.
 
 ## Workspace mentions (2026-11-06, #5594)
 
-In the assistant's composer (web), `@` also lists **workspaces**: the discovered workspaces of `GET /api/v1/workspaces` (host spaces, current session folders and folders bound on the workspace board, on every computer; see [workspace-board.md](../web/workspace-board.md), "Workspaces and status"). The list is read each time the menu opens, works whether or not the board is turned on, shows one row per computer and folder, and leaves out host spaces without a folder. Agents' composers don't offer it: an Agent already works in one folder.
+In the assistant's composer (web, and the iPhone/iPad shell composer's `ComposerMentionMenu` on #2599), `@` also lists **workspaces**: the discovered workspaces of `GET /api/v1/workspaces` (host spaces, current session folders and folders bound on the workspace board, on every computer; see [workspace-board.md](../web/workspace-board.md), "Workspaces and status"). The list is read each time the menu opens, works whether or not the board is turned on, shows one row per computer and folder, and leaves out host spaces without a folder. Agents' composers don't offer it: an Agent already works in one folder. On iOS the rows follow the folder's entries and precede sessions, match by title, folder, computer or branch, put title prefixes first and available before unavailable, and cap at eight; Health, visionOS and the frozen native Mac don't offer them. A failed workspace read (including an old hub's 404 or a manager's 503) leaves the other rows unchanged.
 
 - **Picking one** adds a "Workspace" chip. On send it goes in front of the message like a session quote, as `<persona-context kind="workspace" title="…" url="" machine="<machine id>" cwd="<folder>" branch="…">` with a short human-readable body.
 - **The manager fills it in** (`assistant/workspace_mention.go`): in `SendParams` for messages to the assistant's conversations and in `POST /api/v1/assistant/conversations` for a new one's first message (guest conversations excepted), each workspace block among the context blocks at the start of the message is replaced by `prompts/assistant/workspace_mention.md`. That block says to use that machine / cwd for `task_plan` and `agent_start` and when answering unless the message says otherwise, and lists the computer (and whether it is offline), folder, branch, the knowledge-base projects for the folder (`ProjectsForWork`) and the latest 5 Agents working in it or below (`sessions.list`, waited on for at most 3 s; the assistant's own conversations left out).
 - Blocks further into the message (inside quoted text) are never taken for mentions, and a block naming a computer the hub doesn't know stays as the client wrote it. The transcript keeps the filled-in block, so the chat's context row shows what the assistant was given.
-- **Not yet**: iOS / Mac (`PromptComposer.swift`) and Android composers. They only need to list the same endpoint and write the same tag; the manager side already handles their messages.
+- **Not yet**: the native Mac, Android, and BeautifulUI's separate legacy iOS `PromptComposer` menu. They only need to list the same endpoint and write the same tag; the manager side already handles their messages.
 
 ## Pitfalls
 
@@ -936,7 +936,15 @@ Legacy App `routines` / `followups` APIs still read / write this table (`docs/pr
 Many main-chat rounds are not started by the user: another Persona conversation hands work over with `conversation_send` /
 `conversation_new` (a supervisor message), a scheduled task or follow-up runs, and the hub's supervision wakes the chat.
 They used to fill the main chat and push the user's own exchanges out of sight. Since #4314 the apps fold the first two
-the way quiet supervision rounds already were (#1988, `docs/assistant/unified-entry.md` "Supervision"):
+the way quiet supervision rounds already were (#1988, `docs/assistant/unified-entry.md` "Supervision"). #6595 applies the
+same folding to the leader conversations (`AssistantInfo.leaders`, "Leader conversations" in
+`docs/assistant/unified-entry.md`): a leader's patrol, supervision and relayed (`conversation`) rounds, including its
+answers to them, fold by default with the same line, expand state and visibility rule as the main chat; the owner's own
+messages and the leader's answers to them, `ask_user` / `notify_user` rounds and `task_review` verdict cards stay open.
+It is the same `assistant.main_background_folded` switch (on unless turned off); an ordinary side conversation is
+unchanged. The hub's mid-turn interject note (`prompts/assistant/interject.md`,
+`<persona-context kind="context" title="插话">`) is model instructions and never renders as a quote in the owner's
+bubble on any client, while staying in the model's input:
 
 - **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
   the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
