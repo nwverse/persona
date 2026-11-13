@@ -362,11 +362,19 @@ func TestRuntimeWorktreeDeleteHasOneDeadline(t *testing.T) {
 	old := runtimeWorktreeDeadline
 	runtimeWorktreeDeadline = 500 * time.Millisecond
 	t.Cleanup(func() { runtimeWorktreeDeadline = old })
+	// Paseo's archive is held until the test ends: only the deadline ends the call. Should the node not give up, the
+	// archive goes ahead after 3 s, so that the test fails rather than hangs.
+	held := make(chan struct{})
+	t.Cleanup(func() { close(held) })
 	r.rt.mu.Lock()
 	prevAnswer := r.rt.answer
 	r.rt.answer = func(method string, params json.RawMessage) (any, error) {
 		if method == "workspace.archive" {
-			time.Sleep(3 * time.Second)
+			select {
+			case <-held:
+				return nil, errors.New("the test ended")
+			case <-time.After(3 * time.Second):
+			}
 		}
 		return prevAnswer(method, params)
 	}
@@ -487,7 +495,16 @@ func TestRuntimeAgentWorktreeRemoveFails(t *testing.T) {
 	old := runtimeRemoveDeadline
 	t.Cleanup(func() { runtimeRemoveDeadline = old })
 	runtimeRemoveDeadline = time.Second
-	archive(func() (any, error) { time.Sleep(4 * time.Second); return map[string]any{}, nil })
+	// no answer until the test ends (or after 4 s, so that a node that never gives up fails the test rather than hangs)
+	held := make(chan struct{})
+	t.Cleanup(func() { close(held) })
+	archive(func() (any, error) {
+		select {
+		case <-held:
+		case <-time.After(4 * time.Second):
+		}
+		return map[string]any{}, nil
+	})
 	start := time.Now()
 	remove("no answer", "didn’t answer while removing the worktree")
 	if took := time.Since(start); took > 3*time.Second {
