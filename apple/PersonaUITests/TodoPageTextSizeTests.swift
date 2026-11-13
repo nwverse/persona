@@ -2,10 +2,11 @@ import XCTest
 
 /// The to-do's page at the text sizes (#6151), against the mock hub: its status line under the title and its two bottom
 /// buttons. At the accessibility sizes the status line wraps instead of squeezing each fact into a column a letter
-/// wide, and the buttons stack, Hand to Agent first, each across the page. PERSONA_SHOTS=<dir> saves the page as it
-/// opens, `page-<language>-<size>.png`, for the before / after pixel comparison. PERSONA_SHOOT says which:
-/// `zh:L,XL,XXL,XXXL,AX5;en:L,AX5` (default `zh:L,AX5`). PERSONA_BEFORE (the app built from main) shoots the same and
-/// checks nothing.
+/// wide. The buttons (`StackingButtonRow`) sit side by side while both labels fit whole and stack, Hand to Agent
+/// first, each across the page, when one doesn't: on the iPhone 17 Pro from xxLarge in English and Japanese, at the
+/// accessibility sizes in Chinese. PERSONA_SHOTS=<dir> saves the page as it opens, `page-<language>-<size>.png`, for the
+/// before / after pixel comparison. PERSONA_SHOOT says which: `zh:L,XL,XXL,XXXL,AX5;en:L,AX5` (default `zh:L,AX5`).
+/// PERSONA_BEFORE (the app built from main) shoots the same and checks nothing.
 final class TodoPageTextSizeTests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -27,7 +28,7 @@ final class TodoPageTextSizeTests: XCTestCase {
             let pair = part.split(separator: ":").map(String.init)
             let language = pair[0]
             for size in pair[1].split(separator: ",").map(String.init) {
-                page(hub, language, size, check: !before && size.hasPrefix("AX"))
+                page(hub, language, size, check: !before)
             }
         }
     }
@@ -44,10 +45,19 @@ final class TodoPageTextSizeTests: XCTestCase {
         let screen = app.windows.firstMatch.frame
         let hand = app.buttons["todo.handToAgent"].firstMatch, done = app.buttons["todo.toggleDone"].firstMatch
         XCTAssertTrue(hand.waitForExistence(timeout: 5) && done.exists, "\(language) \(size): the bottom buttons")
-        for (button, what) in [(hand, "Hand to Agent"), (done, "Done")] {
-            XCTAssertGreaterThan(button.frame.width, screen.width * 0.8, "\(language) \(size): \(what) across the page \(button.frame)")
+        // Measured on the iPhone 17 Pro: "Hand to Agent" and 「エージェントへ」 stop fitting half the bar at xxLarge.
+        let stacked = size.hasPrefix("AX") || (language != "zh" && ["XXL", "XXXL"].contains(size))
+        if stacked {
+            for (button, what) in [(hand, "Hand to Agent"), (done, "Done")] {
+                XCTAssertGreaterThan(button.frame.width, screen.width * 0.8, "\(language) \(size): \(what) across the page \(button.frame)")
+            }
+            XCTAssertLessThanOrEqual(hand.frame.maxY, done.frame.minY + 1, "\(language) \(size): Hand to Agent above Done")
+        } else {
+            XCTAssertLessThan(hand.frame.width, screen.width * 0.55, "\(language) \(size): Hand to Agent beside Done \(hand.frame)")
+            XCTAssertEqual(hand.frame.midY, done.frame.midY, accuracy: 1, "\(language) \(size): one row")
+            XCTAssertLessThan(hand.frame.maxX, done.frame.minX, "\(language) \(size): Hand to Agent first")
         }
-        XCTAssertLessThanOrEqual(hand.frame.maxY, done.frame.minY + 1, "\(language) \(size): Hand to Agent above Done")
+        guard size.hasPrefix("AX") else { return }
         for id in ["todo.status.agents", "todo.status.created"] {
             let fact = app.staticTexts[id].firstMatch
             XCTAssertTrue(fact.exists, "\(language) \(size): \(id)")

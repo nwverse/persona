@@ -507,26 +507,18 @@ struct TodoDetailView: View {
         }
     }
 
-    /// How large the bottom buttons' words get (#6151). Stacked across the page at the accessibility sizes, Hand to
-    /// Agent in English still doesn't fit on one line at the largest; at this size every language's label fits whole
-    /// on a 375 pt-wide iPhone. A long press shows the label larger (the Large Content Viewer).
+    /// How large the bottom buttons' words get (#6151). Even across the page, Hand to Agent in English doesn't fit on
+    /// one line at the largest sizes; at this size every language's label fits whole on a 375 pt-wide iPhone. A long
+    /// press shows the label larger (the Large Content Viewer).
     static let actionTypeSize: DynamicTypeSize = .accessibility1
 
     private func bottomBar(_ todo: TodoItem) -> some View {
-        Group {
-            if typeSize.isAccessibilitySize {
-                // Side by side each label was cut to a letter: one above the other, Hand to Agent first
-                // (docs/design/DESIGN_SYSTEM.md 1.2 rule 3 (c)).
-                VStack(spacing: Theme.Space.s) {
-                    bottomButtons(todo)
-                }
-                .dynamicTypeSize(...Self.actionTypeSize)
-            } else {
-                HStack(spacing: Theme.Space.m) {
-                    bottomButtons(todo)
-                }
-            }
+        // Side by side while both labels fit whole, else one above the other, Hand to Agent first (#6151): side by side
+        // they were cut to "Hand to A…" from xxLarge and to a letter at the accessibility sizes.
+        StackingButtonRow(spacing: Theme.Space.m, stackedSpacing: Theme.Space.s) {
+            bottomButtons(todo)
         }
+        .dynamicTypeSize(...Self.actionTypeSize)
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, Theme.Space.s)
         .background(Theme.pageBackground)
@@ -541,7 +533,7 @@ struct TodoDetailView: View {
                 HStack(spacing: Theme.Space.xs) {
                     ThemedIcon(Theme.Icon.handToAI)
                     // Its own string (#6151): the sheet's title keeps the longer Japanese, which the half-width button cut off.
-                    Text("Hand to Agent [To-do Page Button]").lineLimit(1).minimumScaleFactor(0.8)
+                    Text("Hand to Agent [To-do Page Button]").buttonLabelLine()
                 }
                 .font(Theme.Font.heading)
                 .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
@@ -557,7 +549,7 @@ struct TodoDetailView: View {
         } label: {
             HStack(spacing: Theme.Space.xs) {
                 ThemedIcon(todo.isDone ? Theme.Icon.undo : Theme.Icon.done)
-                Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).lineLimit(1).minimumScaleFactor(0.8)
+                Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).buttonLabelLine()
             }
             .font(Theme.Font.heading)
             .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
