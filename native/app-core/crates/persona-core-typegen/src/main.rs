@@ -6,6 +6,8 @@
 //! Kotlin goes to android/core/rustcore. The generated files are committed, so a change to a wire type and its codecs
 //! land together.
 
+mod arkts;
+
 use std::path::{Path, PathBuf};
 
 use persona_core_runtime::wire::{
@@ -142,6 +144,7 @@ fn generated_swift(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 fn main() {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
     let kotlin_root = repository.join("android/core/rustcore/src/main/kotlin");
+    let arkts_root = repository.join("harmony/entry/src/main/ets/core/rustcore");
     let swift_root = repository.join("apple/Packages/PersonaCore");
     let registry = registry();
     if std::env::args().any(|a| a == "--check") {
@@ -149,14 +152,19 @@ fn main() {
         let _ = std::fs::remove_dir_all(&scratch);
         write_kotlin(&scratch.join("kotlin"), &registry);
         write_swift(&scratch.join("swift"), &registry);
+        arkts::write(&scratch.join("arkts"), &registry).expect("ArkTS codecs");
         let fresh_kotlin = generated(&scratch.join("kotlin"));
         let fresh_swift = generated_swift(&scratch.join("swift"));
+        let fresh_arkts = files(&scratch.join("arkts"));
         let _ = std::fs::remove_dir_all(&scratch);
-        if fresh_kotlin != generated(&kotlin_root) || fresh_swift != generated_swift(&swift_root) {
+        if fresh_kotlin != generated(&kotlin_root)
+            || fresh_swift != generated_swift(&swift_root)
+            || fresh_arkts != files(&arkts_root)
+        {
             eprintln!("persona-core-typegen: codecs are out of date; run `cargo run -p persona-core-typegen`");
             std::process::exit(1);
         }
-        println!("persona-core-typegen: Kotlin and Swift codecs up to date");
+        println!("persona-core-typegen: Kotlin, Swift and ArkTS codecs up to date");
         return;
     }
     for dir in ["persona/core/rustcore/wire", "com/novi"] {
@@ -167,9 +175,11 @@ fn main() {
     }
     write_kotlin(&kotlin_root, &registry);
     write_swift(&swift_root, &registry);
+    arkts::write(&arkts_root, &registry).expect("ArkTS codecs");
     println!(
-        "persona-core-typegen: wrote {} and {}",
+        "persona-core-typegen: wrote {}, {} and {}",
         kotlin_root.display(),
-        swift_root.display()
+        swift_root.display(),
+        arkts_root.display()
     );
 }

@@ -305,16 +305,27 @@ Phase 1 (#6871) lands in several PRs.
     `ListOp.Update`, the `from_seq == covered + 1` boundary, opened-fold retention and supervision promotion.
     Real-C XCTest and a native-Store XCTest replay the same JSON and effects/patches; macOS `swift test` exercises the
     same C binding under Swift 6 strict concurrency. Local verification used Xcode 27.2, so Xcode 26.0 is not verified.
+- **Android ABI packaging and real packaged-JNI replay.**
+  - `:core:rustcore-android` packages stripped arm64-v8a and x86_64 libraries with separate symbols, exact Cargo
+    notices, R8 keeps and uncompressed 16 KiB-aligned APK entries. The JVM/JNI and actual x86_64 emulator replays each
+    pass all 38 cases / 94 steps. arm64 hardware and a 16 KiB-kernel device remain unmeasured.
+  - Per-ABI stripped/package increments are 651,600 B (arm64-v8a) and 713,952 B (x86_64), with stripped gzip sizes
+    323,071 B and 343,371 B. These are not store download deltas. Emulator performance exceeded the p99 budgets:
+    dispatch 13,100.597 µs and drain+decode+apply 17,271.624 µs over 1,000 samples, so performance is not accepted.
+- **HarmonyOS binding, with device acceptance pending.**
+  - `persona-core-ohos` provides one ohos-rs NAPI library with a close-safe runtime registry and thread-safe callbacks.
+    The generated ArkTS codec has actual Node 24 round-trip tests; the adapter's fake-NAPI tests are not device proof.
+    Its host registry replays all 38 cases / 94 steps, and the runtime emits one Update rather than remove/reinsert
+    for a changed full item. The `coreReplay` ohosTest is ready to replay that same corpus through the real NAPI handle.
+  - The API 26 native SDK, HAP link, installed HAP and physical-device replay were not available in this environment;
+    no device or performance claim is made. Its exact 38-package / 71-notice runtime closure is checked on the host.
 - **Still to come.**
-  - iOS: the PersonaCore package and real-C XCTest have landed; physical-device performance, launch, memory and
-    download-size evidence remains open.
-  - HarmonyOS: the NAPI module and the on-device replay.
-  - Android: device libraries, 16 KB page alignment and per-ABI size measurements.
-  - Continuity: the Apple branch checked the port against the native Store and added the missing boundary and state
-    fixtures; the remaining clients must replay that updated corpus through their bindings before calling the slice
-    three-platform consistent. The wire addition `ListOp.Update` requires every patch consumer to handle it.
+  - iOS: physical-device performance, launch, memory and download-size evidence remains open; Xcode 26.0 is not verified.
+  - HarmonyOS: the API 26 `.so`, HAP build and on-device replay.
+  - Android: physical arm64, 16 KiB-kernel evidence and an iOS-referenced performance comparison.
+  - Continuity: both Apple bindings and Android's host/emulator replay pass the same corpus. HarmonyOS's native replay
+    must still run before calling the slice three-platform consistent.
   - The go / no-go measurements, with the iOS baseline named for every comparative measurement.
-  - License notices, with the first build that ships the library in an app.
 
 ### Migration rules (each domain)
 
