@@ -257,9 +257,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #6480: a to-do suggestion kind (its title, button and toast in lib-inbox-events, which the first screen's suggestion
 // rows and toasts name) and a merged row's list of sources raise the first screen to ja 479,163 B (en 475,454 B, zh-Hans 476,439 B), 184 B over the
 // old budget, which moves by 215 B. Merge and to-do texts are in lib-inbox-actions, outside the first screen. The 31 B room stays.
-// #5732 on main c1552d2e4b measures en 475,423 / ja 479,132 / zh-Hans 476,408 B versus this tree's 475,603 / 479,319 /
-// 476,601 B (+180/+187/+193 B). Preserve main's allowance and the largest measured increment: 479,194 + 193.
-export const FIRST_SCREEN_BUDGET = 479_387;
+// #6240: Fast on a new conversation adds 187 B to each language, measured in one environment against main at
+// c1552d2e4 (ja 479,132 B to 479,319 B; en 475,423 B to 475,610 B, zh-Hans 476,408 B to 476,595 B): the draft, its
+// place in the first request, and dropping it when the manager, the hub or the model can no longer honor it, which
+// has to run while the model panel (loaded on intent) is closed. Its 675 B of code compressed to 180 B, 304 B and
+// 187 B against three states of main: the cost follows the code around it. The budget moves by this one's 187 B.
+// #5732 on main 57110700a6 measures en 475,610 / ja 479,319 / zh-Hans 476,595 B versus this tree's 475,720 / 479,436 /
+// 476,718 B (+110/+117/+123 B). Preserve main's allowance and the largest measured increment: 479,381 + 123.
+export const FIRST_SCREEN_BUDGET = 479_504;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
