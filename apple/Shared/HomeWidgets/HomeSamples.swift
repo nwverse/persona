@@ -11,11 +11,22 @@ enum HomeSamples {
         return Calendar.current.date(from: c) ?? .now
     }()
 
+    /// Today's tokens by the hour, ending at now's hour as the hub's do (nothing after it): the gallery's 13:20 day,
+    /// moved with the clock like the events.
+    static func hourly(_ now: Date) -> [Int] {
+        let day = [0, 0, 0, 0, 0, 0, 0, 12_000, 48_000, 96_000, 150_000, 132_000, 88_000, 210_000]
+        let hour = Calendar.current.component(.hour, from: now)
+        return (0..<24).map { h in
+            let i = h - hour + day.count - 1
+            return h <= hour && day.indices.contains(i) ? day[i] : 0
+        }
+    }
+
     static func busy(zh: Bool = false, package: Bool = false, now: Date = HomeSamples.now) -> HomeSnapshot {
         func t(_ en: String, _ cn: String) -> String { zh ? cn : en }
         // At the gallery's 13:20 the day's events keep their times; at any other moment (the app's sample, written
-        // for Home Screen shots) they come the same while after it.
-        let shift = now.timeIntervalSince(HomeSamples.now)
+        // for Home Screen shots) they move by whole hours, so they still read as round times and still come after now.
+        let shift = (now.timeIntervalSince(HomeSamples.now) / 3600).rounded() * 3600
         func at(_ hour: Int, _ minute: Int) -> Double {
             var c = Calendar.current.dateComponents([.year, .month, .day], from: HomeSamples.now)
             c.hour = hour; c.minute = minute
@@ -45,7 +56,7 @@ enum HomeSamples {
             events: [
                 .init(title: t("Design review", "设计评审"), start: at(14, 0), end: at(15, 0)),
                 .init(title: t("1:1 with Alex", "和 Alex 一对一"), start: at(16, 30), end: at(17, 0)),
-                .init(title: t("Dinner with Sam", "和小林吃晚饭"), start: at(19, 0), end: at(21, 0)),
+                .init(title: t("Movie with Sam", "和小林看电影"), start: at(19, 0), end: at(21, 0)),
             ],
             source: .calendar)
         s.todos = .init(
@@ -66,7 +77,7 @@ enum HomeSamples {
                                                             .init(label: "7d", minutes: 10080, percent: 18, resetsAt: at(23, 30))]),
             ],
             tokensToday: 1_240_000, tpm: 3100,
-            hourly: [0, 0, 0, 0, 0, 0, 0, 12_000, 48_000, 96_000, 150_000, 132_000, 88_000, 210_000],
+            hourly: hourly(now),
             costToday: 3.4)
         s.machines = [
             .init(id: "studio", name: t("Studio", "工作室"), online: true, working: 2, needsYou: 1, load: 46, icon: "desktop"),
@@ -97,8 +108,8 @@ enum HomeSamples {
     }
 
     /// To-dos just ticked on the widget: one on its way to the hub, one the hub refused.
-    static func ticked(zh: Bool = false) -> HomeSnapshot {
-        var s = busy(zh: zh)
+    static func ticked(zh: Bool = false, now: Date = HomeSamples.now) -> HomeSnapshot {
+        var s = busy(zh: zh, now: now)
         s.todos?.items[1].tick = .ticking
         s.todos?.items[2].tick = .failed
         return s
