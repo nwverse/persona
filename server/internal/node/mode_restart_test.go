@@ -62,7 +62,14 @@ func TestBypassRestartWaitsForTheTurnToEnd(t *testing.T) {
 	if !row.BypassPending {
 		t.Fatal("the row does not say a restart waits")
 	}
-	time.Sleep(200 * time.Millisecond) // the try queueModeRestart started at once
+	// the try queueModeRestart started at once finds the agent busy and puts the restart off
+	waitFor(t, "the first try put off", func() bool {
+		sh := n.switches()
+		sh.mu.Lock()
+		defer sh.mu.Unlock()
+		r := sh.restarts[sidA]
+		return r != nil && !r.applying && !r.retryAt.IsZero()
+	})
 	if got := drove(f); len(got) != 0 {
 		t.Fatalf("drove a working agent: %q", got)
 	}
