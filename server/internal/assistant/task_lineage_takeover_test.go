@@ -85,6 +85,20 @@ func TestAgentSuperviseAfterCloseLinksTheTakeoverLineage(t *testing.T) {
 	if !shots[old.ID] || !shots[current.ID] {
 		t.Fatalf("snapshot is missing a lineage card: %v", shots)
 	}
+	// The continuation now belongs to a replacement Agent. Re-supervising the old one must not open another continuation.
+	s.todos.mu.Lock()
+	delete(s.todos.activeBySession, [2]string{"box", "s1"})
+	s.todos.activeBySession[[2]string{"box", "s2"}] = current.ID
+	s.todos.todos[current.ID].Agents[0].SessionID = "s2"
+	s.todos.mu.Unlock()
+	before := todoCount(s)
+	_, again, adoptErr := s.adoptAgent(context.Background(), "conv1", machine, agent, "再次接手", "", "重复接手", nil, 0, true)
+	if adoptErr == nil || !strings.Contains(adoptErr.Error(), "already carried on by to-do "+current.ID) || again {
+		t.Fatalf("reusing an existing continuation: made %v, err %v", again, adoptErr)
+	}
+	if got := todoCount(s); got != before {
+		t.Fatalf("a repeated takeover made another card: before %d, after %d", before, got)
+	}
 }
 
 // A newly titled agent_send task is new work, not an explicit takeover. It gets its own brief and acceptance criteria,

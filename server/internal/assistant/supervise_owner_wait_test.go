@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/ai"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -136,6 +138,34 @@ func TestOwnerWaitSurvivesJudgeFailure(t *testing.T) {
 		t.Fatalf("waiting task = %+v", cur)
 	}
 	waitFor(t, "the owner-action push", func() bool { return len(f.pushed()) == 1 })
+}
+
+// A missing judge model does not erase the deterministic owner-action verdict before it reaches the visible wait.
+func TestOwnerWaitSurvivesAnUnconfiguredJudge(t *testing.T) {
+	s, f, _ := modelService(t)
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
+	f.known["conv1"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Prepare the release", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv1", nil, 0)
+	todo = todoNow(s, todo.ID)
+	check, judgeErr := judgeTaskDoneWith(ctx, s.purposeModel("inbox.judge"), taskDoneInput{
+		Replies: []prompts.TaskDoneReply{{Text: "Spec 已完成，下一步由你发起实现。"}},
+	})
+	if !ai.IsNotConfigured(judgeErr) || check.Verdict != verdictNeedsUser {
+		t.Fatalf("the deterministic owner action was not kept before apply: %+v, %v", check, judgeErr)
+	}
+	work := time.Now().UTC()
+	s.applyTaskDone(ctx, todo, work, true, check, judgeErr)
+	cur := todoNow(s, todo.ID)
+	if cur.DoneAt != nil || cur.Supervision.State != reviewNeedsUser || cur.Supervision.Waits == nil {
+		t.Fatalf("an unconfigured judge erased the owner wait: %+v", cur)
+	}
+	waitFor(t, "the owner-action push without a judge", func() bool { return len(f.pushed()) == 1 })
 }
 
 // pick from) was accepted as done, and the decision was lost with it. The judge's needs_user is kept on the ledger, and

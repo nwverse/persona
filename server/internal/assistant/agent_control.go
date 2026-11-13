@@ -208,6 +208,11 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 	// Only an explicit adoption/takeover continues the closed card's brief. A newly titled agent_send task is new work,
 	// even when it reuses the same Agent; it must not rewrite the old card's scope or lineage (#5732).
 	continuing = continuing && update
+	if continuing {
+		if succ, ok := s.openSuccessor(previous.ID); ok {
+			return Todo{}, false, errContinued(previous.ID, succ)
+		}
+	}
 	title, retitle := s.adoptedTitle(ctx, c, title, prompt)
 	todo, err := s.newTodo(ctx, title, notes, self, "", quiet || s.quietTask(ctx, self))
 	if err != nil {
