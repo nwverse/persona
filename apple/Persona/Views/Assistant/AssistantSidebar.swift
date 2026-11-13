@@ -792,7 +792,7 @@ struct AssistantSidebar: View {
     #endif
     @State private var ending: Session?
     @State private var renaming: Session?
-    /// The chat whose 设为常驻 / 取消常驻 confirmation is open (#6214): the menu asks before the hub call.
+    /// The chat whose Pin / Unpin confirmation is open (#6214): the menu asks before the hub call.
     @State private var leaderConfirm: Session?
     @State private var showArchived = false
     @State private var autoList: AutoConversationsRoute?
