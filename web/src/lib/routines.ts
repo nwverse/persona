@@ -307,7 +307,7 @@ export function taskExecutionSummary(ex: Pick<TaskExecution, "launcher" | "agent
 export function runsWith(task: Pick<Task, "launcher" | "model" | "permission_mode" | "effort" | "execution">, names?: readonly TaskLauncherName[]): { text: string; danger: boolean } | null {
   const parts = (task.execution
     ? [taskExecutionSummary(task.execution, names, t(task.launcher ? "assistant-taskeditor.follow_launcher" : "assistant-taskeditor.follow_assistant")), modeLabel(task.permission_mode)]
-    : [task.launcher && launcherTitle(task.launcher, names), task.model, modeLabel(task.permission_mode), task.effort ? t("lib-routines.effort", { effort: effortLabel(task.effort) }) : ""]).filter(Boolean);
+    : [task.launcher && launcherTitle(task.launcher, names), modeLabel(task.permission_mode), task.effort ? t("lib-routines.effort", { effort: effortLabel(task.effort) }) : ""]).filter(Boolean);
   return parts.length ? { text: parts.join(" · "), danger: task.permission_mode === BYPASS } : null;
 }
 

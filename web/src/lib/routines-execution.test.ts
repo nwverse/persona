@@ -23,6 +23,7 @@ it("shows resolved inherited and overridden execution without losing model or ba
 it("keeps historical unconfigured tasks sparse and preserves their legacy display", () => {
   const legacy = JSON.parse('{"id":"old-task","title":"Daily check","prompt":"Check files","repeat":"daily","time":"09:00","enabled":true}');
   expect(runsWith(legacy)).toBeNull();
+  expect(runsWith({ ...legacy, model: "old-unused-model" })).toBeNull();
   const body = taskBody({ ...legacy, title: "Updated title" }, legacy);
   for (const key of ["launcher", "model", "effort", "execution_machine_id", "cwd", "model_revision"]) expect(body).not.toHaveProperty(key);
   expect(runsWith({ ...legacy, execution: { machine_id: "box", launcher: "claude" } })?.text).not.toMatch(/undefined|null/);
