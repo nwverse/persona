@@ -759,8 +759,8 @@ function RemoteOperationRow({ operation: op, onCancel }: { operation: RemoteOper
       <FileGlyph name={name} />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
-          <span className="truncate text-[12.5px] text-ink" title={op.dir}>{op.name}</span>
-          <span className="ml-auto shrink-0 text-[11px] text-ink-3 tabular-nums">{op.state === "done" ? t("files-ops.operation_done") : `${pct}%`}</span>
+          <span className="truncate text-xs text-ink" title={op.dir}>{op.name}</span>
+          <span className="ml-auto shrink-0 text-xs text-ink-3 tabular-nums">{op.state === "done" ? t("files-ops.operation_done") : `${pct}%`}</span>
         </span>
         <span
           role="progressbar"
