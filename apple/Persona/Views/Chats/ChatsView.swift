@@ -1619,7 +1619,8 @@ private struct AgentsList: View {
             .accessibilityLabel("New Session [Chats View 58e21b]")
             .accessibilityIdentifier("sidebar-agents-new")
         }
-        .padding(.leading, Theme.Space.page + Theme.Space.s)
+        // Where the Persona rows' headings start (their row's inset and their own), so the three headings line up.
+        .padding(.leading, Theme.Space.s + Theme.Space.m)
         .padding(.trailing, Theme.Space.s)
         .padding(.top, Theme.Space.s)
         .scaledFrame(minHeight: Theme.Size.tapTarget)

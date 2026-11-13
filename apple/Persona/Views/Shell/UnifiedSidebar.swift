@@ -181,7 +181,10 @@ struct SidebarUsageStrip: View {
 
     var body: some View {
         let accounts = UsageWindows.top(UsageWindows.live(store.accounts))
-        Group {
+        VStack(spacing: 0) {
+            // Always in the column, so the numbers are asked for before there are any (a task on nothing never runs).
+            Color.clear.frame(height: Theme.Size.nonvisualProbe)
+                .tabActiveTask(id: model.groupIDs.joined(separator: ",")) { await store.keepFresh(model) }
             if !accounts.isEmpty {
                 Button(action: openMachines) {
                     HStack(spacing: Theme.Space.l) {
@@ -211,7 +214,6 @@ struct SidebarUsageStrip: View {
                 .accessibilityIdentifier("sidebar-usage")
             }
         }
-        .tabActiveTask(id: model.groupIDs.joined(separator: ",")) { await store.keepFresh(model) }
     }
 }
 #endif

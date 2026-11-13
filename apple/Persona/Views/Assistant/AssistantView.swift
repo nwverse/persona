@@ -420,6 +420,10 @@ struct AssistantView: View {
     /// A page the shell asked for (the drawer, the home page): from the conversation's root, so back comes to it.
     private func show(_ page: ShellPage?) {
         guard let page else { return }
+        #if os(iOS)
+        // The Sidebar layout shades the place shown beside it, whoever asked for it (its row, a route, #6332).
+        if embedded { unified?.shownPlace = page.isSidebarPlace ? page : nil }
+        #endif
         backToRoot()
         switch page {
         case .newConversation: newConversation()
