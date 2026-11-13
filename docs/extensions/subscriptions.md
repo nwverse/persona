@@ -2,6 +2,8 @@
 
 Source subscriptions let the manager pull new information from a connector's read-only tools into the Inbox or knowledge base. The design is tracked in #2036. The optional catalog protocol (#2037), the manager's storage, validation, scheduler, runner and API (#2038), delivery to the Inbox and the knowledge base (#2039) and drafting a recipe with a model (#2040), the pages (#2041, "Pages"), push sources a device fills itself (#3848, "Push sources") and the assistant's tools (#5240, "Assistant tools") are implemented. A catalog alone does not turn on polling or store source content.
 
+Moving the Inbox's built-in sources (iMessage, GitHub, Lark, mail) onto subscriptions, with what subscription items still lack and the per-source switch, is planned in `docs/design/proposals/inbox-sources-migration.md` (#6150).
+
 ## Source catalog
 
 A connector may declare `catalog`, without changing connector protocol version 2. It implements `connector.Catalog` in process, or answers `connector.catalog.list` and `connector.catalog.call` through the extension protocol. Schema and SDK types live in `schema/extension/connector.schema.json`, generated into the Go and TypeScript SDKs. `ext.Methods` accepts the generated request and result types like other connector methods.
@@ -149,7 +151,7 @@ Reading is open to every device; changing anything, dry runs included, needs ful
 | `DELETE /api/v1/subscriptions/{id}?data=1` | 204; removes its seen keys and pending items. With `data=1` it first switches both destinations off and has the Inbox and the knowledge base remove what they took ("Destinations"); 503 `assistant_offline` while the assistant is away, the subscription left off for another delete |
 | `POST /api/v1/subscriptions/-/push` | `{items: [{key?, title?, body?, app?, link?, time?}]}` from a full-access device → `{subscription, new, count}`: the device's push source, made on its first push (no items: only made). 400 `bad_request` for more than 20 items or one with neither a title nor a body, 429 `rate_limited` with `retry_after` past 300 items an hour ("Push sources") |
 | `POST /api/v1/subscriptions/-/ui` | the pages below, with an extension page's request and answer; every device may draw them, actions need full access |
-| `GET /api/v1/subscriptions/-/graph?locale=&tz=` | Inbox Sources as relations (#5741, "Pages"): `{extensions, reads, sources, destinations}`; every device may read it |
+| `GET /api/v1/subscriptions/-/graph?locale=&tz=&ui_version=` | Inbox Sources as relations (#5741, "Pages"): `{extensions, reads, sources, destinations}`; every device may read it |
 
 A subscription's `state` is `off` (both destinations off), `ok`, `failing`, `not_connected`, `rate_limited` or `needs_recipe`, with `error {code, message}`. The message is one English sentence without source content; clients localize the code. The manager reports the `source_subscriptions` feature now that subscriptions deliver (`features.deliver`, #2039), and the apps show their entry rows only with it; beside it `subscription_push` says a device can push ("Push sources"); it broadcasts `subscription` `{id, connector, revision, state, removed}` when one is saved, runs or is deleted.
 
@@ -203,8 +205,13 @@ source, `push` for a device's own), `sources` and `destinations` (`inbox`, `kb`)
 problem: signed out, failing, `needs_recipe` and `not_connected` don't; `rate_limited` does), `to`, the sources it may duplicate
 (the list's Possible duplicate), the page `state` that shows it, and for a subscription `ask` (Set Up with the assistant's
 `open_url`). A destination counts the sources with it on and how many of them are reading. A source with neither destination on
-is left out. Sources come grouped by extension (Persona's own first) and, inside one, by read, reads in the order of their first
-source, so columns drawn in that order cross no links. The manager reports `inbox_sources_graph` with it.
+is left out. A source's `icon` is one the app's `ui_version` has, as on its pages (the hub's own version when the request
+says none, as the web's doesn't; the iPhone sends its pages' version). Sources come grouped by extension (Persona's own first) and, inside one, by read, reads in the order of their first
+source, so columns drawn in that order cross no links. The manager reports `inbox_sources_graph` with it. The iPhone app says it
+draws the view itself with `context.graph` in these page requests (never handed to an extension), and the list then starts
+with a **Source Relationships** row whose press answers `open_url` `persona://sources-graph`: the app pushes the view (a tree per
+extension with filters, a sheet for the picked source). Only these pages may answer it, and a device that may only look may
+press it too, as it changes nothing. The frozen Mac app sends no `context.graph`.
 
 | Page (`state.p`) | What it shows |
 | --- | --- |
