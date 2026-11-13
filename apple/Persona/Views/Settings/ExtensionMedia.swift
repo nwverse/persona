@@ -58,7 +58,7 @@ struct ExtensionPicture: View {
         do {
             let data: Data
             if let s = src.url, let url = ExtensionComponentRowLabel<EmptyView>.image(s) {
-                data = try await ExtensionRemoteImage.session.data(from: url).0
+                data = try await ExtensionImageCache.session.data(from: url).0
             } else if let path = src.path, let model {
                 data = try await model.picture(path, pixels: pixels)
             } else {
