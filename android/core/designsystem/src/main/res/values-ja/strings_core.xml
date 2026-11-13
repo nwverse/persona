@@ -117,6 +117,15 @@
     </plurals>
     <string name="designsystem_core_list_separator">、</string>
     <string name="designsystem_core_repo_other">その他</string>
+    <string name="designsystem_core_direction_doing">作業中</string>
+    <string name="designsystem_core_direction_needs_you">対応待ち</string>
+    <string name="designsystem_core_direction_stuck">停滞中</string>
+    <string name="designsystem_core_direction_review">検収待ち</string>
+    <string name="designsystem_core_direction_planned">未着手</string>
+    <string name="designsystem_core_direction_secretary">書記官</string>
+    <string name="designsystem_core_direction_untitled">チャット</string>
+    <string name="designsystem_core_direction_count_working">作業中 %1$d</string>
+    <string name="designsystem_core_direction_count_needs_you">対応待ち %1$d</string>
     <string name="designsystem_core_inbox_action">要対応</string>
     <string name="designsystem_core_inbox_fyi">参考</string>
     <string name="designsystem_core_inbox_noise">折りたたみ済み</string>

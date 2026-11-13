@@ -316,6 +316,7 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectors") { p.append(SettingsPage.connectors) }
         else if d.bool(forKey: "openSkills") { p.append(SettingsPage.skills) }
         else if d.bool(forKey: "openInboxSources") { p.append(SettingsPage.inboxSources) } // Settings › Inbox Sources (#5278)
+        else if d.bool(forKey: "openSourcesGraph") { p.append(SettingsPage.inboxSources); p.append(SettingsPage.sourcesGraph) } // › Source Relationships (#5741)
         else if let scope = str("openSubscriptions") { // the source subscription pages: `all`, or their first state (#2041)
             p.append(SettingsPage.subscriptions(state: scope == "all" ? nil : scope))
         }
@@ -428,6 +429,8 @@ enum SettingsPage: Hashable {
     /// Settings › Inbox Sources (#5278): the same pages unnarrowed, every source of the Inbox, once the manager reports
     /// `inbox_sources`.
     case inboxSources
+    /// Inbox Sources' relationship view (#5741), pushed from its Source Relationships row.
+    case sourcesGraph
     /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「Extension marketplace」).
     case pluginMarket
     case marketExtension(market: String, id: String)
@@ -470,6 +473,7 @@ private struct SettingsDestinations: ViewModifier {
             .navigationDestination(for: ModelPurposeRoute.self) { r in ModelPurposeEditorView(purposeID: r.id).splitDetailPage() }
             .navigationDestination(for: ModelLauncherRoute.self) { r in ModelLauncherDetailView(name: r.name).splitDetailPage() }
             .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).splitDetailPage() }
+            .navigationDestination(for: TerminalsRoute.self) { r in TerminalsView(only: r.machine).splitDetailPage() }
             .navigationDestination(for: MessagesChatsRoute.self) { r in MessagesChatListView(manager: r.manager).splitDetailPage() }
             .navigationDestination(for: MessagesThreadRoute.self) { r in MessagesThreadView(id: r.id, name: r.name, manager: r.manager).splitDetailPage() }
             .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key).splitDetailPage(ownsBack: true) }
@@ -551,6 +555,7 @@ private struct SettingsDestinations: ViewModifier {
                               manager: manager ?? model.assistantManagerID)
         case .inboxSources:
             ExtensionPageView(plugin: SubscriptionsUI.id, ui: SubscriptionsUI.page, title: String(localized: "Inbox Sources"), manager: model.assistantManagerID)
+        case .sourcesGraph: SourcesGraphView(manager: model.assistantManagerID)
         case .pluginMarket: ExtensionMarketView()
         case .marketExtension(let market, let id): MarketExtensionDetailView(market: market, id: id)
         case .pluginMarkets: ExtensionMarketsView()

@@ -277,9 +277,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
         }
         #if os(iOS)
-        // `-showHomeWidgetSample YES`: the widgets draw the gallery's made-up snapshot, written at once (Home Screen
-        // screenshots without a hub, docs/apple/home-widgets.md「Screenshots」).
-        if d.bool(forKey: "showHomeWidgetSample") { HomeWidgetWriter.shared.showSample() }
+        // `-showHomeWidgetSample YES` (or `ticked`): the widgets draw the gallery's made-up snapshot, written at once
+        // (Home Screen screenshots without a hub, docs/apple/home-widgets.md「Screenshots」).
+        if let sample = d.string(forKey: "showHomeWidgetSample"), sample != "NO" { HomeWidgetWriter.shared.showSample(sample) }
         #endif
         if let phase = d.string(forKey: "showFleetSample") {
             LiveActivityController.shared.showSample(phase, details: d.bool(forKey: "fleetDetails"), island: d.string(forKey: "fleetIsland"),
@@ -374,6 +374,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // That group's hub (`hub_id`, the key); unknown: every group.
         let group = AppModel.shared.pushGroup(info)
         AppModel.shared.wakeLinks(group)
+        #if os(iOS)
+        HomeWidgetData.shared.refresh() // the calendar, Health and the usage the widgets show, when due
+        #endif
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
             #if os(iOS)

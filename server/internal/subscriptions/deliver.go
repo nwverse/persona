@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kbwire"
@@ -48,10 +49,17 @@ type InboxSource struct {
 	Name   string            // its label
 	Kinds  map[string]string // what its kinds of items are, for the models
 	Things []connector.InboxThing
+	// ReadError says it is behind while its Inbox is on (readErrorOf): the short code a built-in's failed read has.
+	ReadError string
+	// Connector and SourceName are what it reads, for the AI twin; Chats the knowledge-base chat of each row's thread
+	// (deliverer.chatOf) while its knowledge base is on (#6222).
+	Connector  string
+	SourceName string
+	Chats      map[string]string
 }
 
-// InboxSources are the subscriptions as Inbox sources: one's items while its Inbox is on, a notice once it has failed
-// for a day, and the notice's end once it pulls again.
+// InboxSources are the subscriptions as Inbox sources: one's items while its Inbox is on, its read error while it is
+// behind (#6189), a notice once it has failed for a day, and the notice's end once it pulls again.
 func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 	all, err := s.o.Store.ListSubscriptions(ctx)
 	if err != nil {
@@ -59,6 +67,7 @@ func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 	}
 	now := s.now()
 	out := []InboxSource{}
+	replying := s.replying(ctx)
 	for _, sub := range all {
 		src := InboxSource{ID: sub.ID, Name: sub.Label, Kinds: kindsOf(sub.Label), Things: []connector.InboxThing{}}
 		catchup, live, err := s.inboxHeld(ctx, sub, now)
@@ -66,11 +75,72 @@ func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 			return nil, err
 		}
 		d := s.deliverer(sub, now)
+		d.replies = replying[sub.Connector] && sub.RunState != StateNotConnected
+		if kbFrom(sub) != nil {
+			d.chats = map[string]string{}
+		}
 		src.Things = append(src.Things, d.inboxThings(catchup, live)...)
+		src.Connector, src.SourceName, src.Chats = sub.Connector, cmpOr(sub.SourceName, sub.Source), d.chats
 		src.Things = append(src.Things, d.failing())
+		if inboxFrom(sub) != nil {
+			src.ReadError = readErrorOf(sub.RunState)
+		}
 		out = append(out, src)
 	}
 	return out, nil
+}
+
+// replying are the connectors that are on and answer an inbox reply (connector.Inbox), by id. Their status is not
+// asked on every round (it may be a call to the extension): a subscription that could not reach its connector says so
+// itself (StateNotConnected), and ReplyTarget asks before a reply goes.
+func (s *Service) replying(ctx context.Context) map[string]bool {
+	out := map[string]bool{}
+	if s.o.Connectors == nil { // a service that only delivers (the assistant's tests): no connector to reply through
+		return out
+	}
+	for _, info := range s.o.Connectors.All(ctx) {
+		if _, ok := connector.As[connector.Inbox](info.Conn); ok && info.Enabled {
+			out[info.ID] = true
+		}
+	}
+	return out
+}
+
+// ReplyTarget is where a reply to a row of subscription id goes (#6198): its connector, and the thread the connector
+// knows the row's newest item by (the recipe's thread, else the item's id). last is the row's newest item (the thing's
+// Last, the item's id in the source). ok is false when the subscription, the item or its reply_to is gone, the item has
+// no id of the source's, or the connector cannot reply now: the reply is refused as for a row that cannot be replied to.
+func (s *Service) ReplyTarget(ctx context.Context, id, last string) (conn connector.Inbox, thread string, ok bool) {
+	sub, err := s.o.Store.GetSubscription(ctx, id)
+	if err != nil || sub == nil || last == "" || strings.HasPrefix(last, weakPrefix) || s.o.Connectors == nil {
+		return nil, "", false
+	}
+	h, err := s.o.Store.HeldItem(ctx, id, last)
+	if err != nil || h == nil || h.ReplyTo == "" {
+		return nil, "", false
+	}
+	info, found := s.o.Connectors.Find(ctx, sub.Connector)
+	if !found || !info.ready() {
+		return nil, "", false
+	}
+	in, ok := connector.As[connector.Inbox](info.Conn)
+	if !ok {
+		return nil, "", false
+	}
+	return in, cmpOr(h.Thread, h.UID), true
+}
+
+// readErrorOf is how a subscription in state says it is behind, as a built-in's failed read does (#6189): its last run
+// failed, or nothing is read until its recipe is fixed, or the connector asked it to wait. A connector that cannot be
+// called now is no failure (a built-in's is off), and the others read.
+func readErrorOf(state string) string {
+	switch state {
+	case StateFailing, StateNeedsRecipe:
+		return assistantwire.ReadFailed
+	case StateRateLimited:
+		return assistantwire.ReadRateLimited
+	}
+	return ""
 }
 
 func kindsOf(label string) map[string]string {
@@ -152,6 +222,11 @@ type deliverer struct {
 	lang  i18n.Lang
 	loc   *time.Location
 	rules string
+	// replies: the subscription's connector is on and answers an inbox reply (Service.replying), so a row whose newest
+	// item has reply_to can be replied to (#6198).
+	replies bool
+	// chats, while the subscription's knowledge base is on, gets each row's thread → its knowledge-base chat (#6222).
+	chats map[string]string
 }
 
 func (s *Service) deliverer(sub Subscription, now time.Time) deliverer {
@@ -289,13 +364,24 @@ func OwnsThread(id, thread string) bool {
 	return id != "" && strings.HasPrefix(thread, threadPrefix(id))
 }
 
-// tags are a thing's: the subscription it came from, and the sender of a row of items (#5306), which the Inbox can mute
-// as it mutes a connector's (lowercased, as people are told apart by name here). A digest, a snapshot and the failure
-// notice have no one sender.
-func (d deliverer) tags(sender string) []connector.Tag {
+// tags are a thing's: the subscription it came from, and the sender and chat of a row's newest item, which the Inbox
+// can mute as it mutes a connector's (#5306). The sender matches by the recipe's sender_id when it maps one, as a
+// built-in's mutes do (#6165), else by name, lowercased, as people are told apart by name here; the chat only by its
+// id. A digest, a snapshot and the failure notice have no one sender (nil).
+func (d deliverer) tags(it *Item) []connector.Tag {
 	out := []connector.Tag{{Key: "source", Value: d.sub.ID, Name: d.sub.Label}}
-	if name := strings.TrimSpace(sender); name != "" {
+	if it == nil {
+		return out
+	}
+	name := strings.TrimSpace(it.Sender)
+	switch {
+	case it.SenderID != "":
+		out = append(out, connector.Tag{Key: connector.TagSender, Value: it.SenderID, Name: cmpOr(name, it.SenderID)})
+	case name != "":
 		out = append(out, connector.Tag{Key: connector.TagSender, Value: strings.ToLower(name), Name: name})
+	}
+	if it.Chat != "" {
+		out = append(out, connector.Tag{Key: connector.TagChat, Value: it.Chat, Name: cmpOr(it.ChatName, it.Chat)})
 	}
 	return out
 }
@@ -349,9 +435,16 @@ func (d deliverer) threadThing(key string, items []Held) connector.InboxThing {
 	b.WriteString(d.block(last.Item, heldAt(last)))
 	t := connector.InboxThing{Thread: d.thread(key), Kind: cmpOr(last.Kind, d.sub.Recipe.Kind), Label: d.sub.Label,
 		Title: last.Title, Sender: last.Sender, Preview: clip(oneLine(last.Body), previewMost), Context: b.String(),
-		At: heldAt(last), Last: last.UID, Rules: d.rules, Extra: d.fallback(due), Tags: d.tags(last.Sender)}
+		At: heldAt(last), Last: last.UID, Rules: d.rules, Extra: d.fallback(due), Tags: d.tags(&last.Item),
+		Read: last.Seen} // read in the source up to its newest item: read here (#6176)
 	if strings.HasPrefix(last.Link, "https://") {
 		t.URL = last.Link
+	}
+	if last.ReplyTo != "" && d.replies && !strings.HasPrefix(last.UID, weakPrefix) {
+		t.ReplyTo, t.CanReply = last.ReplyTo, true // the reply goes to its connector with this item (Service.ReplyTarget)
+	}
+	if d.chats != nil {
+		d.chats[t.Thread] = d.chatOf(last).ID
 	}
 	if n := d.newestPull(items); n > 1 {
 		if t.Extra == nil {
@@ -450,14 +543,19 @@ func (d deliverer) digestThing(items []Held) connector.InboxThing {
 	}
 	return connector.InboxThing{Thread: thread, Kind: wire.ConnectorSubscriptionKindSubDigest, Label: d.sub.Label,
 		Title: title, Preview: clip(oneLine(cmpOr(items[0].Title, items[0].Body)), previewMost), Context: strings.Join(lines, "\n"),
-		At: heldAt(items[0]), Last: "digest:" + hashOf(uids...)[:24], Rules: d.rules, Extra: d.fallback(false), Tags: d.tags("")}
+		At: heldAt(items[0]), Last: "digest:" + hashOf(uids...)[:24], Rules: d.rules, Extra: d.fallback(false), Tags: d.tags(nil),
+		Read: !slices.ContainsFunc(items, func(h Held) bool { return !h.Seen })} // every item read in the source (#6176)
 }
 
 // snapshotThing is a snapshot that changed: the state as the source answered it.
 func (d deliverer) snapshotThing(h Held) connector.InboxThing {
-	return connector.InboxThing{Thread: d.thread("snapshot"), Kind: cmpOr(h.Kind, wire.ConnectorSubscriptionKindSubUpdate),
+	t := connector.InboxThing{Thread: d.thread("snapshot"), Kind: cmpOr(h.Kind, wire.ConnectorSubscriptionKindSubUpdate),
 		Label: d.sub.Label, Title: cmpOr(h.Title, d.sub.Label), Preview: clip(oneLine(h.Body), previewMost),
-		Context: clip(h.Body, contextBodyMost), At: h.Stored, Last: h.UID, Rules: d.rules, Extra: d.fallback(false), Tags: d.tags("")}
+		Context: clip(h.Body, contextBodyMost), At: h.Stored, Last: h.UID, Rules: d.rules, Extra: d.fallback(false), Tags: d.tags(nil)}
+	if d.chats != nil {
+		d.chats[t.Thread] = d.chatOf(h).ID
+	}
+	return t
 }
 
 // failing is the subscription's failure notice: FYI by rule once it has not pulled for failingNotice (one a
@@ -481,7 +579,7 @@ func (d deliverer) failing() connector.InboxThing {
 	return connector.InboxThing{Thread: d.thread("failing"), Kind: KindFailing, Label: d.sub.Label,
 		Title:   i18n.T(d.lang, "subscriptions-deliver.failing_title", i18n.Args{"label": d.sub.Label, "since": d.when(*since)}),
 		Preview: reason, Context: reason, At: since.Add(failingNotice), Last: "failing:" + strconv.FormatInt(since.Unix(), 10),
-		Tier: connector.TierFYI, Why: i18n.T(d.lang, "subscriptions-deliver.failing_why"), Tags: d.tags("")}
+		Tier: connector.TierFYI, Why: i18n.T(d.lang, "subscriptions-deliver.failing_why"), Tags: d.tags(nil)}
 }
 
 // ---- the knowledge base ----

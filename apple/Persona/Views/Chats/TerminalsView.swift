@@ -13,8 +13,8 @@ nonisolated struct TerminalsRoute: Hashable {
 struct TerminalsView: View {
     @Environment(AppModel.self) private var model
     let only: String?
-    @State private var lists: [String: TerminalPanes] = [:]
-    @State private var failures: [String: String] = [:]
+    /// Each computer's answer and its request, by `MachineRef.path`.
+    @State private var loads: [String: TerminalsLoad] = [:]
     @State private var open: TerminalTarget?
     @State private var closing: CloseTarget?
     @State private var finished: FinishedTarget?
@@ -79,17 +79,37 @@ struct TerminalsView: View {
     // MARK: - Rows
 
     @ViewBuilder private func content(_ ref: MachineRef) -> some View {
-        if let error = failures[ref.path] {
-            Text(error).font(Theme.Font.label).foregroundStyle(.secondary).themedRow()
-        } else if let list = lists[ref.path] {
+        let load = loads[ref.path] ?? TerminalsLoad()
+        switch load.shown {
+        case .failed(let error):
+            problem(error, ref)
+        case .late(let request):
+            problem(TerminalsLoad.withRequest(String(localized: "This computer hasn't answered yet."), request), ref)
+        case .rows(let list):
             let rows = TerminalsList.rows(list)
             if rows.isEmpty {
                 Text("No terminals on this computer.").font(Theme.Font.label).foregroundStyle(.secondary).themedRow()
             }
             ForEach(rows) { r in row(r, on: ref, in: list).themedRow() }
-        } else {
-            ProgressView().frame(maxWidth: .infinity).themedRow() // its panes are on their way
+        case .waiting:
+            // Its panes are on their way; no answer within `patience` says so, with Retry (#6153). The row's own task
+            // times it, so the page on screen can't sit on a bare spinner even if no load of its own ran.
+            ProgressView().frame(maxWidth: .infinity).themedRow()
+                .task(id: load.request) {
+                    try? await Task.sleep(for: TerminalsLoad.patience)
+                    if !Task.isCancelled { loads[ref.path, default: TerminalsLoad()].expire(load.request) }
+                }
         }
+    }
+
+    /// Why a computer's terminals aren't listed, with Retry.
+    private func problem(_ text: String, _ ref: MachineRef) -> some View {
+        HStack(spacing: Theme.Space.m) {
+            Text(text).font(Theme.Font.label).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Button("Retry") { Task { await load([ref.path]) } }.foregroundStyle(Theme.accent).lineLimit(1).accessibilityIdentifier("terminals.retry")
+        }
+        .themedRow()
     }
 
     private func row(_ r: TerminalsList.Row, on ref: MachineRef, in list: TerminalPanes) -> some View {
@@ -134,7 +154,7 @@ struct TerminalsView: View {
             ThemedIcon(m.symbol)
             Text(m.name).lineLimit(1)
             Spacer(minLength: 0)
-            if let list = lists[ref.path] {
+            if let list = loads[ref.path]?.list {
                 Menu {
                     ForEach(TerminalsList.spaces(list), id: \.id) { s in
                         Button { newTerminal(on: ref, space: s) } label: {
@@ -199,19 +219,31 @@ struct TerminalsView: View {
         open = TerminalTarget(key: SessionKey(group: ref.group, machineID: ref.id, sessionID: session))
     }
 
-    private func load() async {
-        await withTaskGroup(of: (String, Result<TerminalPanes, Error>).self) { group in
-            for m in machines {
+    /// A new request for each computer (`only`: those), under its own short id (`X-Client-Request-Id`, which the hub's
+    /// log keeps), so a report of a stuck page can be matched to the hub's log.
+    private func load(_ only: Set<String>? = nil) async {
+        await withTaskGroup(of: (String, String, Result<TerminalPanes, Error>).self) { group in
+            for m in machines where only?.contains(m.id) ?? true {
                 let ref = MachineRef(path: m.id)
-                guard let api = model.api(ref.group) else { continue }
+                var api = model.api(ref.group)
+                #if DEBUG
+                if UserDefaults.standard.bool(forKey: "showTerminalsUnlinked") { api = nil } // screenshots of the state below
+                #endif
+                guard let api else {
+                    loads[m.id] = TerminalsLoad(failure: String(localized: "Not connected to this computer's hub yet"))
+                    continue
+                }
+                let id = TerminalsLoad.newRequest()
+                loads[m.id, default: TerminalsLoad()].start(id)
                 group.addTask {
-                    do { return (m.id, .success(try await api.terminalPanes(machine: ref.id))) } catch { return (m.id, .failure(error)) }
+                    do { return (m.id, id, .success(try await api.terminalPanes(machine: ref.id, requestID: id))) } catch { return (m.id, id, .failure(error)) }
                 }
             }
-            for await (path, result) in group {
+            for await (path, id, result) in group {
                 switch result {
-                case .success(let list): lists[path] = list; failures[path] = nil
-                case .failure(let error): failures[path] = error.shown ?? error.localizedDescription
+                case .success(let list): loads[path]?.answer(id, list)
+                case .failure(let error) where error.isCancellation: break // left: no answer runs late, with Retry
+                case .failure(let error): loads[path]?.fail(id, TerminalsLoad.withRequest(error.shown ?? error.localizedDescription, id))
                 }
             }
         }
@@ -362,6 +394,62 @@ nonisolated enum TerminalsList {
     static func folder(_ cwd: String?) -> String {
         guard let cwd, !cwd.isEmpty else { return "" }
         return (cwd as NSString).lastPathComponent
+    }
+}
+
+/// One computer's answer on the Terminals page and the request on its way (#6153): pure, so it is tested without a
+/// hub or a clock. A computer always ends up listed, failed or late (with Retry), never on a bare spinner.
+nonisolated struct TerminalsLoad {
+    var list: TerminalPanes?
+    var failure: String?
+    /// The latest request's short id; an answer to an older one is ignored, the newer one answers or runs late.
+    var request: String?
+    /// No answer to `request` within `patience`.
+    var late = false
+
+    /// How long a computer's spinner turns before the page says it hasn't answered (the request itself waits 30 s).
+    static let patience: Duration = .seconds(15)
+
+    enum Shown: Equatable { case waiting, rows(TerminalPanes), failed(String), late(String?) }
+
+    var shown: Shown {
+        if let failure { return .failed(failure) }
+        if let list { return .rows(list) }
+        return late ? .late(request) : .waiting
+    }
+
+    /// A new request: the old failure and lateness go; the list stays until the answer.
+    mutating func start(_ id: String) {
+        request = id
+        failure = nil
+        late = false
+    }
+
+    mutating func answer(_ id: String, _ list: TerminalPanes) {
+        guard id == request else { return }
+        self.list = list
+        failure = nil
+        late = false
+    }
+
+    mutating func fail(_ id: String, _ message: String) {
+        guard id == request else { return }
+        failure = message
+    }
+
+    /// `patience` ran out for `id` (nil: the spinner showed with no request of this page's on its way).
+    mutating func expire(_ id: String?) {
+        guard id == request, list == nil, failure == nil else { return }
+        late = true
+    }
+
+    /// An id as `APIClient` makes one: 8 lowercase hex characters.
+    static func newRequest() -> String { String(UUID().uuidString.prefix(8)).lowercased() }
+
+    /// `text` naming request `id`, unless it does already (a server error says its request).
+    static func withRequest(_ text: String, _ id: String?) -> String {
+        guard let id, !text.contains(id) else { return text }
+        return String(localized: "\(text) (request \(id))")
     }
 }
 

@@ -170,8 +170,8 @@ The table and red lines are in `docs/apple/ios.md` ("Design language", Motion); 
   there. The two exceptions are measured ones: a glyph swapped inside the same round button (Telegram's send) and the quote bar fading in
   quicker than out (Telegram's input panel), kept as measured.
 - **No easing under the finger.** An animation on a drag makes the content trail the finger, which reads as lag. Track the gesture with
-  `transaction.animation = nil` / plain state writes and hand the finger's speed to the release animation (`drawer(velocity:)`,
-  `attachOpen(velocity:)`), so the motion carries on instead of starting over.
+  `transaction.animation = nil` / plain state writes and hand the finger's speed to the release animation (`drawer(velocity:)`),
+  so the motion carries on instead of starting over.
 - **Continuous motion is registered.** Each loop costs battery and attention, and a loop nobody asked about is how a pulsing avatar or a
   spinning gear ships. `ContinuousMotionTests` scans the app targets for `repeatForever`, `TimelineView(.animation…)`, `phaseAnimator`,
   `repeatCount = .infinity` and `startAnimating()`; a new one fails until it is registered with its reason and the file that reads Reduce
@@ -1661,6 +1661,9 @@ no initial Working row so the message shifted by one row, and pending local remo
 
 ## A view that places itself over the whole screen gets no keyboard avoidance (2026-11-10, #3004)
 
+Superseded for the + panel by #4312: it is a system sheet now, its bar a `safeAreaInset` that the system's keyboard
+avoidance moves; the points on `Keyboard.dismiss()` and XCUITest's `typeText` below still hold.
+
 - The + panel (`AttachSheet`) measures the screen in a `GeometryReader` (size plus safe-area insets, which with the keyboard
   up include it) and places the sheet with `.position` under `ignoresSafeArea(.container)`. The keyboard only shrank the
   space it was placed in, the sheet kept its full height, and the caption bar at its bottom sat under the keyboard.
@@ -2195,3 +2198,18 @@ the page starts loading rather than leaving a banner that no longer does anythin
 Handing the composer something while the card is up has its own trap: the composer focused its field when a picture arrived
 in `composerInbox`, and focusing a field under a sheet closes the sheet. A preview screenshot closed the card it was taken
 from. The chat now tells its composer the card covers it (`composerCovered`), and the picture lands without the keyboard.
+
+## A start that waits for permission takes its turn when it is asked for (2026-11-13, #3407)
+
+The composer's mic started dictation in a `Task` whose `Dictation.start` waited for permission, and stopping checked
+`if dictation.isListening { dictation.stop() }`. Inside that wait (a few milliseconds once granted, the system's prompts
+the first time) nothing was listening yet: a send, leaving the page or saving a to-do stopped nothing, and the start
+listened afterwards into the emptied box. A hold after a tap made a second start that found the microphone in use,
+toasted and ended the hold, while the tap's dictation went on. The TLA+ model in `apple/verify/composer-hold/` found both.
+
+- An action that starts asynchronous work takes its turn in its own synchronous step (`Dictation.start` sets the turn,
+  then makes the task), not when the task first runs: tasks may run in another order than they were made.
+- After every suspension, check that the turn is still yours before taking a shared resource; a start whose turn has
+  passed ends without a word. Make `stop()` pass the turn, and call it unconditionally rather than behind `isListening`.
+- A newer start of the same owner takes over from an older one already holding the resource instead of failing as "in
+  use". Test the orderings with the wait held open (`Dictation.permission`, `DictationTurnTests`) and rerun the model.

@@ -142,6 +142,9 @@ type fakeHub struct {
 	failAssistant  error               // assistant.send fails with it (a launcher that cannot start)
 	// refuseConfigDir: assistant.send with a config_dir fails as the hub refuses it for a node too old for one
 	refuseConfigDir bool
+	// elsewhere: the conversations in another profile than meetingProfile, by id: a resume that asks for a config_dir
+	// fails, as the node refuses to move a conversation to another profile
+	elsewhere map[string]bool
 
 	// The launchers' health (launcher_health.go): launchers.check's answers by "machine/launcher" (none: it works),
 	// the checks and repairs asked for, launchers.repair's answer (nil: the node has no such method) and what a repair
@@ -515,6 +518,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		if _, set := a["config_dir"]; set && f.refuseConfigDir {
 			return nil, &rpc.Error{Code: proto.CodeNodeOutdated, Message: "update Persona on this computer"}
+		}
+		if sid, _ := a["session_id"].(string); a["config_dir"] != nil && f.elsewhere[sid] {
+			return nil, errors.New("config_dir cannot move an existing conversation; start a new conversation instead")
 		}
 		f.sends = append(f.sends, a)
 		id, _ := a["session_id"].(string)

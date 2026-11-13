@@ -2,6 +2,8 @@
 
 Source subscriptions let the manager pull new information from a connector's read-only tools into the Inbox or knowledge base. The design is tracked in #2036. The optional catalog protocol (#2037), the manager's storage, validation, scheduler, runner and API (#2038), delivery to the Inbox and the knowledge base (#2039) and drafting a recipe with a model (#2040), the pages (#2041, "Pages"), push sources a device fills itself (#3848, "Push sources") and the assistant's tools (#5240, "Assistant tools") are implemented. A catalog alone does not turn on polling or store source content.
 
+Moving the Inbox's built-in sources (iMessage, GitHub, Lark, mail) onto subscriptions, with what subscription items still lack and the per-source switch, is planned in `docs/design/proposals/inbox-sources-migration.md` (#6150).
+
 ## Source catalog
 
 A connector may declare `catalog`, without changing connector protocol version 2. It implements `connector.Catalog` in process, or answers `connector.catalog.list` and `connector.catalog.call` through the extension protocol. Schema and SDK types live in `schema/extension/connector.schema.json`, generated into the Go and TypeScript SDKs. `ext.Methods` accepts the generated request and result types like other connector methods.
@@ -59,7 +61,12 @@ A recipe is a description of one pull, independent of its schedule and enabled d
     "time": "$.time",
     "body": "$.body",
     "link": "$.link",
-    "due_date": "$.due_date"
+    "due_date": "$.due_date",
+    "sender_id": "$.sender_id",
+    "chat": "$.chat.id",
+    "chat_name": "$.chat.name",
+    "seen": "$.read",
+    "reply_to": "$.reply_line"
   },
   "kind": "sub_notice",
   "group_by": "thread"
@@ -67,6 +74,14 @@ A recipe is a description of one pull, independent of its schedule and enabled d
 ```
 
 Required fields are `mode`, `tool`, `kind`, and `group_by`. The tool must be a short name in this source. `args` defaults to `{}`; it is an object, and strings can contain the runner's `{{since}}` and `{{since_date}}` variables. `items_path` defaults to `$`. Field paths are relative to one item; all are optional at the protocol layer. Supported path syntax is `$`, `.field` (letters/underscore followed by letters, digits, underscore or hyphen), and `[index]`. Wildcards, filters, recursive descent and expressions are not supported.
+
+`sender_id`, `chat` and `chat_name` say who and where, for mutes and policies (#6165). They are not part of an item's content: they don't enter its content hash, so adding them to a recipe makes no item look changed. A row's `sender` tag matches by `sender_id` when the recipe maps it, kept as the source writes it, as a built-in's mutes match (a Lark sender id). Without it, the tag is the lowercased display name. With `chat` mapped, the row also gets a `chat` tag named by `chat_name` (the id when there is none), so its menu offers to mute the chat. The tags are the row's newest item's.
+
+`seen` is whether the item was already seen in the source (#6176). It is seen when its value is true, a non-zero number, or `true`, `1`, `yes`, `read` or `seen` in any case; anything else, or nothing, is unseen. An item pulled seen is held seen. When a later run reads an item it already holds as seen, it marks the held item seen in the same transaction as its other writes. Seen never turns off, as the Inbox's read state comes in from the source only. A row is read when its newest item is, a digest when all its items are, and the Inbox treats a read row as it treats a connector's thing read elsewhere (`docs/assistant/inbox.md` "Connector: GitHub (2026-11-02)"): it closes it unless it needs the user, and a read move never starts an item. Rows are sent again on every round for 8 days, so no separate settling is needed for read state. Like the identity fields, `seen` isn't part of the content hash.
+
+`reply_to` is the line saying where a reply goes and who sees it, as a built-in item's `ReplyTo` ("Comment on example-org/example-repo#12 (anyone who can see the repo)"; #6198). A row gets it with `can_reply` when its newest item has one, the item has an id from the source (not the weak hash id), the subscription's connector is on and has an inbox (`connector.Inbox`), and the subscription hasn't found it unreachable (`not_connected`). The connectors' status isn't asked on every round. The Inbox's `inbox.reply` for the row then goes to that connector's `Reply`, with the item's own thread (the recipe's `thread`, else its id) and its id as `last`, after the manager checks the connector can be called (`Service.ReplyTarget`). A row whose item or `reply_to` is gone, or whose connector can't be called, gets the usual "can't reply". The assistant and the apps need nothing new: they offer Draft and say where a reply goes only for a row with `can_reply`.
+
+The setup form has no pickers for these five: saving it keeps the recipe's own while the subscription reads the same tool.
 
 An items recipe can opt into resumable pagination. Cursor pagination sets both `cursor_arg` (the top-level tool argument that takes the cursor) and `next_cursor_path` (where the result's next cursor is); a missing, null or empty cursor is terminal. Page pagination sets `page_arg` (a positive integer argument, default 1) and can set `next_page_path` to the result's next page number, or to a boolean that is true when another page exists. Without `next_page_path`, a full requested page continues and a short page is terminal. The two strategies cannot be combined. Every leased run reads one page and commits its new items, dedup keys and bounded continuation in one transaction. A continuation keeps the original window and is due immediately, still subject to the connector's call gap, budget and backoff. `since_at` and destination catch-up advance only after the terminal page. Repeated cursors/pages, invalid values and the 100-page safety cap pause the subscription in `needs_recipe` instead of skipping ahead. Recipes without these mappings keep their legacy one-page behavior.
 
@@ -149,7 +164,7 @@ Reading is open to every device; changing anything, dry runs included, needs ful
 | `DELETE /api/v1/subscriptions/{id}?data=1` | 204; removes its seen keys and pending items. With `data=1` it first switches both destinations off and has the Inbox and the knowledge base remove what they took ("Destinations"); 503 `assistant_offline` while the assistant is away, the subscription left off for another delete |
 | `POST /api/v1/subscriptions/-/push` | `{items: [{key?, title?, body?, app?, link?, time?}]}` from a full-access device → `{subscription, new, count}`: the device's push source, made on its first push (no items: only made). 400 `bad_request` for more than 20 items or one with neither a title nor a body, 429 `rate_limited` with `retry_after` past 300 items an hour ("Push sources") |
 | `POST /api/v1/subscriptions/-/ui` | the pages below, with an extension page's request and answer; every device may draw them, actions need full access |
-| `GET /api/v1/subscriptions/-/graph?locale=&tz=` | Inbox Sources as relations (#5741, "Pages"): `{extensions, reads, sources, destinations}`; every device may read it |
+| `GET /api/v1/subscriptions/-/graph?locale=&tz=&ui_version=` | Inbox Sources as relations (#5741, "Pages"): `{extensions, reads, sources, destinations}`; every device may read it |
 
 A subscription's `state` is `off` (both destinations off), `ok`, `failing`, `not_connected`, `rate_limited` or `needs_recipe`, with `error {code, message}`. The message is one English sentence without source content; clients localize the code. The manager reports the `source_subscriptions` feature now that subscriptions deliver (`features.deliver`, #2039), and the apps show their entry rows only with it; beside it `subscription_push` says a device can push ("Push sources"); it broadcasts `subscription` `{id, connector, revision, state, removed}` when one is saved, runs or is deleted.
 
@@ -167,6 +182,8 @@ Every subscription is an internal source of the manager, beside the connectors a
 - **Catch-up.** Turning the Inbox on (also after the knowledge base was on alone, and again after it was off) records the time, and the first terminal page that succeeds after it marks the end of the catch-up. Until then the Inbox gets nothing. The catch-up is what was stored from a day before the Inbox was turned on up to that run: three items or fewer come in as rows (as `group_by` groups them); more become one `sub_digest` row, `sub:<subscription>:catchup`, triaged once, its context a line an item (time · sender · title link), newest first, at most 50 and then "and N more". Items whose due date was still ahead when the catch-up ended stay out of the digest, in the rows. Later items come in as rows, a new thread row even for a thread in the digest.
 - **Snapshots** come in as one row, `sub:<subscription>:snapshot`, the newest kept state (a snapshot is kept only when its content changed, so an unchanged one never moves the row).
 - **Failure notice.** A subscription that is on and has not pulled for 24 hours (`failing_since`) adds one FYI row by rule, `sub:<subscription>:failing` of kind `sub_failing` ("<label> hasn't pulled anything since <time>" with the reason for the error's code). It is one row a failure (`last` is the failure's start) and is filed as done (read) once the subscription pulls again.
+- **For the AI twin** (#6222): a subscription's source in the round also says what it reads (`via`: the connector's id; `via_source`: the source's name), and, while its knowledge base is on, the knowledge-base chat of each row's thread (`chats`, under the subscription's archive). The twin's prompt names the subscription and the connector, and gets that chat's summary (`docs/assistant/inbox.md` "AI twin: handling chats and suggestions (from phase 1, 2026-11-05)").
+- **Read error.** Before that, from the first round after a failed run, a subscription whose Inbox is on hands its round a `read_error`, as a built-in's failed read does (#6189). It is `failed` while it is `failing` or `needs_recipe`, and `rate_limited` while it is `rate_limited`; there is none while it is `ok` or `not_connected` (as a built-in whose connector can't be called now is off). The apps list the source as behind, and the rows it holds are still applied. The error clears on the first round after a run succeeds.
 - The texts the manager writes (the digest's title and its "and N more", the due line, the notice) are in the user's language (`subscriptions-deliver` catalogs). The kinds are described for the models in `server/internal/prompts/inbox/kinds/subscription.md`, handed in with the round as the source's kinds.
 - A round reads at most the newest 300 items stored after the catch-up and 500 of the catch-up.
 - **A changed recipe.** Everything a new recipe pulls is new to the dedup keys, though much of it happened before the change. `existing` on the change says what its first run's items become (#5240); the same recipe saved again changes nothing here:
@@ -203,8 +220,13 @@ source, `push` for a device's own), `sources` and `destinations` (`inbox`, `kb`)
 problem: signed out, failing, `needs_recipe` and `not_connected` don't; `rate_limited` does), `to`, the sources it may duplicate
 (the list's Possible duplicate), the page `state` that shows it, and for a subscription `ask` (Set Up with the assistant's
 `open_url`). A destination counts the sources with it on and how many of them are reading. A source with neither destination on
-is left out. Sources come grouped by extension (Persona's own first) and, inside one, by read, reads in the order of their first
-source, so columns drawn in that order cross no links. The manager reports `inbox_sources_graph` with it.
+is left out. A source's `icon` is one the app's `ui_version` has, as on its pages (the hub's own version when the request
+says none, as the web's doesn't; the iPhone sends its pages' version). Sources come grouped by extension (Persona's own first) and, inside one, by read, reads in the order of their first
+source, so columns drawn in that order cross no links. The manager reports `inbox_sources_graph` with it. The iPhone app says it
+draws the view itself with `context.graph` in these page requests (never handed to an extension), and the list then starts
+with a **Source Relationships** row whose press answers `open_url` `persona://sources-graph`: the app pushes the view (a tree per
+extension with filters, a sheet for the picked source). Only these pages may answer it, and a device that may only look may
+press it too, as it changes nothing. The frozen Mac app sends no `context.graph`.
 
 | Page (`state.p`) | What it shows |
 | --- | --- |

@@ -2511,7 +2511,7 @@ A row's extra actions open from a right click, a half-second press on a touch sc
 The component showcase's version 6 pages are `web/src/showcase/v6` (with their pictures in `web/src/showcase/images`) until the showcase extension's own snapshots have them.
 
 **iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, the styles
-(the 45 icons, named colors, `title` / `headline`) and row actions; see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+(the 45 icons, named colors, `title` / `headline`), row actions, charts and sparks, tiles (grid, carousel) and the new fields; see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)
 
@@ -2960,6 +2960,20 @@ Views, components, actions, responses, placements and context all use schema-gen
 - UI version 6's row actions (#827, `ExtensionRowActions.swift`): a row's `actions` in a long press's menu (a right click on the Mac), usual ones first and destructive ones red and last,
   with their icons; those with `swipe` also under a swipe from the trailing edge (the destructive one at the edge, a full swipe runs none); one with `confirm` asks in an alert with **Cancel**
   (a stream page asks in its own way); VoiceOver has them as the row's actions; on a card without a page they are left out. Screenshots of `showcase › row-actions`.
+- UI version 6's charts (#827): `area` (`DataChart`'s areas: overlapping and see-through with their lines, or stacked), `candlestick` (`CandleChart`: one series of open / high / low /
+  close, volume bars under it when every point has one, rising green unless `rising` is red, the falling one the other color; holding a candle reads its prices), a series' named `color`
+  (after its tone); `spark` (`TrendLine`) before a row's value, under a metric's number and a stat's, in its named color, else its tone's, else the quiet ink. Unit tests
+  `ExtensionChartsTests`; screenshots of `showcase › chart-v6` and `showcase › spark`.
+- UI version 6's tiles (#827, `ExtensionTiles.swift`): a `grid` in as many columns as fit (two on a phone, at most `max_columns`, 4 when absent), a `carousel` in one line that scrolls
+  sideways and snaps to a tile (narrow, regular, or wide: most of the width), both on the page's background as wide as the sections. A tile has its picture across the top (https; a hub one
+  comes with pictures) or its icon in its color, the title, a state line, a value and a spark, a badge and a switch in its corner (the controls' model: shown at once, confirm asks); `active`,
+  or its switch on, lays its color under and around it, the text staying in the ink. Tapping does its action, a long press shows its `actions`; VoiceOver reads it as one element. Unit tests
+  `ExtensionTilesTests`; screenshots of `showcase › grid`, `carousel` and `home-demo`.
+- UI version 6's fields (#827, `ExtensionFields.swift`, `ExtensionFieldValues.swift`): `date`, `time` and `datetime` with the system's picker, held to `earliest`…`latest` (a pair the wrong
+  way round allows any), written as the wire writes them in the page's time zone (this device's, `context.tz`); empty, the row says **Not Set** and a tap sets it to now (held to the range)
+  rather than showing a date nobody chose, and a set one has a clear button. `multichoice`: a menu of toggles that stays open while picking, the chosen ones named beside the label, sent as a
+  JSON array in the choices' order (anything else reads as none chosen). `multiline`: a field that grows from 3 to 8 lines. A field's `detail` is a line of help under it. Unit tests
+  `ExtensionFieldValuesTests`; screenshots of `showcase › inputs-v6`.
 - UI version 5's code review (#827, "UI version 5: code review"), drawn in parts (pages send 4 until all of version 6 is drawn too, so the hub strips these fields for iOS meanwhile).
   Reading (`ExtensionCodeReview.swift`, the code page): the words that changed in a removed and added pair on a stronger fill (PersonaKit's `LineDiff` word comparison, worked out once per hunk);
   generated files and lockfiles (by the extension's `generated` or the web's path list), changes over 400 lines and viewed files start folded with a line saying why and **Show**; a generated
