@@ -591,6 +591,9 @@ func (h *Manager) computerCall(ctx context.Context, m *Machine, session, convers
 	}
 	if callID := mcpwait.CallFrom(ctx); callID != "" {
 		params["call_id"] = callID
+		if origin := mcpwait.MachineFrom(ctx); origin != "" && origin != m.cfg.ID {
+			params["wait_machine"] = origin
+		}
 	}
 	if err := m.callBuiltin(ctx, "computer.call", params, &res); err != nil {
 		if backend == "lcu" && strings.Contains(err.Error(), "is not a tool") {

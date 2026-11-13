@@ -5,6 +5,7 @@ package mcpwait
 import "context"
 
 type callContextKey struct{}
+type machineContextKey struct{}
 
 // WithCall returns ctx with callID attached. An empty ID leaves the context unchanged, preserving old-call behavior.
 func WithCall(ctx context.Context, callID string) context.Context {
@@ -18,4 +19,19 @@ func WithCall(ctx context.Context, callID string) context.Context {
 func CallFrom(ctx context.Context) string {
 	callID, _ := ctx.Value(callContextKey{}).(string)
 	return callID
+}
+
+// WithMachine attaches the originating node's routing ID when a tool operates a different computer. It is correlation
+// metadata on those existing requests, never part of the enum-only wait event.
+func WithMachine(ctx context.Context, machine string) context.Context {
+	if machine == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, machineContextKey{}, machine)
+}
+
+// MachineFrom returns the originating node's routing ID, or "" when the tool stays on the calling node.
+func MachineFrom(ctx context.Context) string {
+	machine, _ := ctx.Value(machineContextKey{}).(string)
+	return machine
 }

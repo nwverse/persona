@@ -28,12 +28,13 @@ var (
 
 // computerCall is one computer.call a fake node got.
 type computerCallSeen struct {
-	Session    string         `json:"session"`
-	Tool       string         `json:"tool"`
-	Args       map[string]any `json:"args"`
-	KeepAwake  bool           `json:"keep_awake"`
-	ClickSound string         `json:"click_sound"`
-	CallID     string         `json:"call_id"`
+	Session     string         `json:"session"`
+	Tool        string         `json:"tool"`
+	Args        map[string]any `json:"args"`
+	KeepAwake   bool           `json:"keep_awake"`
+	ClickSound  string         `json:"click_sound"`
+	CallID      string         `json:"call_id"`
+	WaitMachine string         `json:"wait_machine"`
 }
 
 // computerMac is a Mac whose node answers computer.status and computer.call as a node with Cua Driver set up does, and
@@ -285,6 +286,11 @@ func TestComputerToolsCallTheNode(t *testing.T) {
 		json.RawMessage(`{"machine": "mac", "steps": `+steps+`}`))
 	if _, calls = seen(); res.IsError || calls[len(calls)-1].CallID != "call-computer" {
 		t.Fatalf("an opted-in computer call lost its MCP correlator: %+v, %+v", calls[len(calls)-1], res)
+	}
+	remoteCtx := mcpwait.WithMachine(mcpwait.WithCall(ctx, "call-remote"), "origin")
+	res = h.callComputerTool(remoteCtx, "conv1234-5678", "computer_run", json.RawMessage(`{"machine": "mac", "steps": `+steps+`}`))
+	if _, calls = seen(); res.IsError || calls[len(calls)-1].CallID != "call-remote" || calls[len(calls)-1].WaitMachine != "origin" {
+		t.Fatalf("a cross-computer call lost its originating route: %+v, %+v", calls[len(calls)-1], res)
 	}
 	if got := stepActions(json.RawMessage(steps)); strings.Join(got, " ") != "click press_key" {
 		t.Fatalf("the log names the actions only: %v", got)

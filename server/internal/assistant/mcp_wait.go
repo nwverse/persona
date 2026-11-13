@@ -38,7 +38,7 @@ func (s *Service) mcpWaitContext(ctx context.Context, machine, callID string, en
 	r.mu.Lock()
 	r.publishLocked(proto.MCPWaitComputer)
 	r.mu.Unlock()
-	ctx = mcpwait.WithCall(ctx, callID)
+	ctx = mcpwait.WithMachine(mcpwait.WithCall(ctx, callID), machine)
 	return context.WithValue(ctx, mcpWaitContextKey{}, r)
 }
 

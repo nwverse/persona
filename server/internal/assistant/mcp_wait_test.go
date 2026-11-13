@@ -214,6 +214,33 @@ func TestMCPWaitComputerElicitUsesSeparateRPCCorrelator(t *testing.T) {
 	}
 }
 
+func TestMCPWaitComputerElicitRoutesToOriginatingMachine(t *testing.T) {
+	ft, events := newMCPWaitTest(t)
+	ix := proto.Interaction{ID: "ix_lcu_remote", MachineID: "target", SessionID: "session", Kind: proto.IxPermission,
+		ToolName: "computer_run", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
+	ft.s.SetExtensions(&mcpWaitElicitExtension{answer: func(ctx context.Context) (map[string]any, error) {
+		_, err := ft.s.askHub(ctx, ix)
+		return map[string]any{"action": "accept"}, err
+	}})
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := ft.s.NodeRequest(context.Background(), "target", "computer.elicit",
+			json.RawMessage(`{"conversation":"session","params":{},"call_id":"call-remote","wait_machine":"mac"}`))
+		done <- err
+	}()
+	nextMCPWaitEvent(t, events, "call-remote", proto.MCPWaitComputer)
+	nextMCPWaitEvent(t, events, "call-remote", proto.MCPWaitApproval)
+	ft.waitPending(1)
+	allow := true
+	if err := ft.s.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+		t.Fatal(err)
+	}
+	nextMCPWaitEvent(t, events, "call-remote", proto.MCPWaitComputer)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMCPWaitNestedWaitRestoresPreviousKind(t *testing.T) {
 	ft, events := newMCPWaitTest(t)
 	ctx := ft.s.mcpWaitContext(context.Background(), "mac", "call-nested", true)

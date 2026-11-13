@@ -70,6 +70,9 @@ func (n *Node) elicitLCU(ctx context.Context, conversation string, params json.R
 	if callID := mcpwait.CallFrom(ctx); callID != "" {
 		request["call_id"] = callID
 	}
+	if origin := mcpwait.MachineFrom(ctx); origin != "" {
+		request["wait_machine"] = origin
+	}
 	if err := n.peer.Call(ctx, "computer.elicit", request, &out); err != nil {
 		return map[string]any{"action": "cancel"}, nil
 	}
@@ -88,6 +91,7 @@ func (n *Node) lcuComputerCall(ctx context.Context, params json.RawMessage) (*pr
 		Args         json.RawMessage `json:"args"`
 		KeepAwake    bool            `json:"keep_awake"`
 		CallID       string          `json:"call_id"`
+		WaitMachine  string          `json:"wait_machine"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
@@ -101,7 +105,8 @@ func (n *Node) lcuComputerCall(ctx context.Context, params json.RawMessage) (*pr
 	}
 	ctx, cancel := context.WithTimeout(ctx, lcuCallTimeout)
 	defer cancel()
-	return n.lcuSession().call(mcpwait.WithCall(ctx, p.CallID), name, args, p.Session, p.Conversation)
+	ctx = mcpwait.WithMachine(mcpwait.WithCall(ctx, p.CallID), p.WaitMachine)
+	return n.lcuSession().call(ctx, name, args, p.Session, p.Conversation)
 }
 
 func (s *lcuSession) call(ctx context.Context, name string, args map[string]any, session, conversation string) (*proto.ComputerResult, error) {

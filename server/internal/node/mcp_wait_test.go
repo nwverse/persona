@@ -197,7 +197,7 @@ func TestLCUElicitForwardsOnlyAnOptedInCallID(t *testing.T) {
 	h2nR, h2nW := io.Pipe()
 	n.peer = rpc.New("n", n2hW)
 	hub := rpc.New("h", h2nW)
-	called := make(chan map[string]any, 2)
+	called := make(chan map[string]any, 3)
 	hub.OnRequest = func(_ context.Context, method string, params json.RawMessage) (any, error) {
 		if method != "computer.elicit" {
 			t.Fatalf("method = %q", method)
@@ -211,19 +211,26 @@ func TestLCUElicitForwardsOnlyAnOptedInCallID(t *testing.T) {
 	go func() { _ = n.peer.Serve(ctx, h2nR) }()
 	defer func() { _ = n2hW.Close(); _ = h2nW.Close() }()
 
-	for _, callID := range []string{"call-lcu", ""} {
-		ctx := mcpwait.WithCall(ctx, callID)
+	for _, tc := range []struct{ callID, origin string }{{callID: "call-lcu"}, {callID: "call-remote", origin: "origin"}, {}} {
+		ctx := mcpwait.WithMachine(mcpwait.WithCall(ctx, tc.callID), tc.origin)
 		if _, err := n.elicitLCU(ctx, "conversation", json.RawMessage(`{"message":"private question"}`)); err != nil {
 			t.Fatal(err)
 		}
 		select {
 		case params := <-called:
 			got, _ := params["call_id"].(string)
-			if got != callID {
-				t.Fatalf("computer.elicit call ID = %q, want %q: %v", got, callID, params)
+			if got != tc.callID {
+				t.Fatalf("computer.elicit call ID = %q, want %q: %v", got, tc.callID, params)
+			}
+			origin, _ := params["wait_machine"].(string)
+			if origin != tc.origin {
+				t.Fatalf("computer.elicit origin = %q, want %q: %v", origin, tc.origin, params)
 			}
 			wantFields := 2
-			if callID != "" {
+			if tc.callID != "" {
+				wantFields++
+			}
+			if tc.origin != "" {
 				wantFields++
 			}
 			if len(params) != wantFields || params["conversation"] != "conversation" || params["params"] == nil {
