@@ -303,7 +303,7 @@
  "web/src/views/settings/ProviderLinkCopy.tsx": 6,
  "web/src/views/settings/ProviderPaste.tsx": 13,
  "web/src/views/settings/ProviderScope.tsx": 8,
- "web/src/views/settings/ProviderWizard.tsx": 54,
+ "web/src/views/settings/ProviderWizard.tsx": 56,
  "web/src/views/settings/Repositories.tsx": 15,
  "web/src/views/settings/SentSettings.tsx": 20,
  "web/src/views/settings/SettingsParts.tsx": 10,
