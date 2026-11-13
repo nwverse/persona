@@ -240,6 +240,14 @@
     }
   },
   "size": {
+    "cardColumn": {
+      "$type": "dimension",
+      "$value": {
+        "value": 330,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.cardColumn: minimum adaptive card column; 330 iOS pt / Android dp in each platform's logical units, not physical pixels"
+    },
     "iconXS": {
       "$type": "dimension",
       "$value": {

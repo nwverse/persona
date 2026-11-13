@@ -298,7 +298,8 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time) []superviseSign
 		return nil
 	}
 	var out []superviseSignal
-	for _, c := range agents {
+	// An agent the task was handed over from is not watched: it would raise stalled from its last update forever (#6483).
+	for _, c := range currentTaskAgents(agents, supersededAgents(t, agents)) {
 		base := superviseSignal{Todo: t.ID, Machine: c.MachineID, Session: c.SessionID}
 		switch {
 		case c.State == proto.StateNeedsYou || c.PendingInteractions > 0:
