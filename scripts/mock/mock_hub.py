@@ -2948,7 +2948,7 @@ RULE_SUGGESTIONS = {
     "rs_mock_delegate": {
         "id": "rs_mock_delegate", "kind": "delegate",
         # The hub's own words (server/internal/i18n/locales/en/assistant-rule_suggest.json "delegate"), Settings and all.
-        "text": "You took the recommendation 3 times. Let Persona answer agents' own-call questions for you? You can turn this on in Settings.",
+        "text": "You took the recommendation 3 times. Let Persona answer agents' own-call questions for you?",
         "scope": {}, "creates": "", "setting": "agents.delegate", "count": 3},
 } if os.environ.get("MOCK_RULE_SUGGESTIONS") == "1" else {}
 RULE_SUGGESTIONS_ANSWERED = set()  # answered with Always or Not now
