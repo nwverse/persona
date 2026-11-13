@@ -5,7 +5,7 @@ import XCTest
 final class ProviderImportLinkUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = true }
 
-    private var hub: String { ProcessInfo.processInfo.environment["TEST_RUNNER_PERSONA_RUN_HUB"] ?? "http://127.0.0.1:18760" }
+    private var hub: String { ProcessInfo.processInfo.environment["PERSONA_RUN_HUB"] ?? "http://127.0.0.1:18760" }
 
     private func link(_ payload: String, version: Int = 1) -> URL {
         let data = Data(payload.utf8).base64EncodedString()
