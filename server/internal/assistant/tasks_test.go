@@ -570,7 +570,8 @@ func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 // Only a task the hub judged done or its supervisor accepted opens again, and only for an agent that still belongs to it: not
 // a cancelled task or one the user closed (done by hand while its agent still started, #2954), not one whose start failed (that goes
 // through Retry), not one the agent was released or dismissed from, and not when the agent works for an open todo now. An
-// accepted one only when its conversation or supervisor sent the agent more since: any other turn is other work (#6726).
+// accepted one whose agent its plan did not start only when its conversation or supervisor sent the agent more since:
+// any other turn of such an agent is other work (#6726).
 func TestWhichClosedTaskReopens(t *testing.T) {
 	done := time.Now().Add(-time.Hour)
 	released := done.Add(time.Minute)
@@ -586,6 +587,8 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 	legacyCancelled.Supervision = &Supervision{State: reviewCancelled}
 	handedOn := task(db.DoneByReview, s1) // its supervision moved to conv2
 	handedOn.Supervision = &Supervision{Supervisor: "conv2", State: reviewAccepted}
+	planned := task(db.DoneByReview, s1) // its plan started the agent
+	planned.PlanID, planned.Supervision = "plan_1", &Supervision{State: reviewAccepted}
 	since, before := done.Add(time.Minute), done.Add(-time.Minute)
 	for _, c := range []struct {
 		name    string
@@ -594,6 +597,7 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 		reopens bool
 	}{
 		{"judged done", []Todo{task(db.DoneByAuto, s1)}, nil, true},
+		{"accepted, its plan started the agent", []Todo{planned}, nil, true},
 		{"reviewed, other work", []Todo{task(db.DoneByReview, s1)}, nil, false},
 		{"accepted, other work", []Todo{accepted}, nil, false},
 		{"accepted, its conversation sent more", []Todo{accepted}, &agentSent{"conv1", since}, true},
