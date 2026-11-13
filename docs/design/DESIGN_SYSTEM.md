@@ -1974,6 +1974,27 @@ page the user watches during the meeting is the page they keep writing in after 
   never came up and no asks) there is no divider: the thread is the follow-up alone, and until it starts one secondary
   line says what to ask ("Ask Persona about this meeting: what was decided, who does what, or a follow-up email."),
   shown once the hub has answered for the meeting, so it never flashes over a follow-up or room made elsewhere.
+- **Hub transcription (phase 5)**: in a meeting the hub transcribes, the subtitle adds "Transcribed on the hub" (the
+  mode is said on the page, as the start chose it). The Live box keeps its look and shows what the hub has while its
+  audio socket is up and no problem other than captions missing stands: the hub's newest lines, then its caption being
+  said now under them in the secondary color (read as "Being said: …"; no "behind" figure while a caption shows, folded
+  to the caption alone while the keyboard is up). Otherwise it shows this iPhone's own lines with a notice under its
+  title: one caption line, the iPhone mark (`Theme.Icon.phone`) in `Theme.caution` and why in words (waiting for Wi-Fi,
+  the hub stopped transcribing this meeting, or it isn't transcribing right now), "Showing this iPhone's transcript". Not
+  a `NoticeBanner`: it is about the box's lines, so it sits in the box rather than pushing the page down, and goes by
+  itself when the hub is back. It never shows for what isn't a fallback: a pause, the end after Stop, or a reconnect of
+  up to 5 seconds (a notice that flashes on every blip teaches people to ignore it). With Persona off, the phone's own
+  lines and the hub's caption. With the Highlights card (phase 2b) on top, which shows no lines, the hub's lines are on
+  the Full Transcript page, in the timeline's rows in place of the phone's (no gap marker under them: the caption says
+  what is being said now), and its caption under the last row (never cut there); a fallback shows the phone's own lines
+  there with the same notice above them, and the notice also sits under the card's title, as in the Live box, so the
+  page says it without a tap. A highlight's time lights the hub's lines in its minute then. The Lock Screen's line is
+  the hub's latest, or "On iPhone: …" with the iPhone mark once it fell back (docs/apple/live-activity.md "Recording").
+  The recording's page says how it was transcribed in its header (`Theme.Icon.meetingTranscription`, a caption block:
+  "Transcribed on the hub", "The hub is finishing the transcript…" with a small spinner until final, the stretches the
+  hub has no audio for, the gap uploads), and its footer says the audio went through the hub, from what the phone knows
+  until the hub's word arrives (never "the original audio isn't uploaded" while it may have been). Reason: the owner chose
+  where the audio goes, so the page says it, and a fallback must never pass for the hub's text.
 - **Talk about this meeting (phase 6)**: on the recording's page one row, in the section under the header beside
   Private Meeting, drawn as that row (a `Label` with the style's `Theme.Icon.conversation`, one line), pushing the after
   mode; it shows for any recording that ended (not rolling or all-day) with text, minutes or a conversation the hub holds
@@ -1991,7 +2012,7 @@ page the user watches during the meeting is the page they keep writing in after 
   Persona heard nothing; both go after a few seconds. VoiceOver can't hold: its double tap opens a talk window (as the
   Lock Screen's tap), the next ends it; its hint says where the words go. Where a span goes to the voice service (taking
   part, the extension takes meeting calls) a caption line of its own under the caption shows the contract's privacy
-  Wording until a span went while it showed ("Audio stays on this iPhone, except while you hold Talk: what is said then
+  Wording (hub mode's in a meeting the hub transcribes, phase 5) until a span went while it showed ("Audio stays on this iPhone, except while you hold Talk: what is said then
   goes to the voice service."), beside a word after a span rather than replaced by it, and the line under Record says it
   before the meeting starts. Until a span went under it, a span from anywhere (held, VoiceOver's, the Lock Screen's) is
   asked without the call unless that line had been on screen for a second as it opened; the Lock Screen has no room for
@@ -2094,8 +2115,11 @@ page the user watches during the meeting is the page they keep writing in after 
   `meeting-ask-field`, `meeting-ask-send`
   (the two shared with the live bar's typed question), `meeting-ask-caption`, `meeting-ask-notice`, `recording-more`,
   `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`,
-  `meeting-followup-empty`, `meeting-voice` (and the chat's `voice-bar`, `voice-ended`); at the start
-  `meeting-private-start`; on the recording's page `recording-private` and `recording-talk`; the sheet's
+  `meeting-followup-empty`, `meeting-voice` (and the chat's `voice-bar`, `voice-ended`); hub transcription's
+  `meeting-live-hub-line`, `meeting-live-line` (the phone's own), `meeting-live-interim`, `meeting-transcription-fallback`,
+  and on the transcript `recording-timeline-hub-line` and `meeting-transcript-interim`;
+  at the start `meeting-private-start` and `meeting-transcription-start`; on the recording's page `recording-private`,
+  `recording-talk` and `recording-transcription`; the sheet's
   shared ones (`recording-now-title`, `recording-live-timer`, `recording-live-hide`, `recording-pause`,
   `recording-bookmark`, `recording-stop`, `recording-wrapup-title`, `recording-wrapup-open`, `recording-wrapup-done`)
   keep their names. UI tests: `MeetingConversationUITests`, `MeetingLiveViewUITests` (the topics),
@@ -2103,7 +2127,8 @@ page the user watches during the meeting is the page they keep writing in after 
   transcript lit, the keyboard, the waiting line before the first highlights and with the keyboard, a hub without the
   flag, a meeting started without it, a room that is unavailable, Persona turned off before any; no transcript on the
   card),
-  `TalkAboutMeetingUITests`.
+  `TalkAboutMeetingUITests`, `MeetingHubTranscriptionUITests` (hub transcription, in the Live box and with the
+  Highlights card).
 - Platforms: the web shows the same thread on the recording detail (**Conversation**, with **Talk about this meeting**
   from phase 6); Android has no meeting page yet.
 
@@ -2125,7 +2150,11 @@ to press; impromptu talks are meetings too (principles 1 and 4).
 - **The Recordings page**: Record is the one prominent button (`.themedButton(prominent: true)`, one line, the icon going
   at accessibility sizes), with the calendar line under it. The options follow as one row each: **Type**, a menu
   `Picker` (Meeting / Note, Meeting for every start, never remembered), then for a meeting Persona, Private Meeting or Who
-  Attends, then language and microphone. Note hides the meeting's options and the calendar line and shows one caption
+  Attends, **Transcription** (On This iPhone / On the Hub, a menu row with `Theme.Icon.meetingTranscription`, the hub's
+  default shown until picked, for that start only; only on a hub with hub transcription that can transcribe now, #3862
+  phase 5, so it never offers what can't be had), then language and microphone. The line under the options says what
+  the start sends: hub mode's privacy Wording (the extension named when the owner chose another) once On the Hub is
+  picked or is the default. Note hides the meeting's options and the calendar line and shows one caption
   ("No minutes, and Persona stays out."); the same Record button then records a note (progressive disclosure, principle 2).
   Note is never a second button (section 3.7).
 - **While it records**: the live sheet's page menu ends with the same choice, Meeting and Note with their marks (a menu
@@ -2133,6 +2162,15 @@ to press; impromptu talks are meetings too (principles 1 and 4).
   "Recording options" for VoiceOver, apart from the Persona strip's "Persona" and the bar's "More"). Turning a meeting into
   a note turns Persona off, and the sheet shows the live view; turning it back makes it a meeting with Persona's part as a
   start would get it, and a room meeting's page again.
+- **Settings › Meetings** (#3862 phase 5) adds, from a hub with hub transcription, a **Transcription** section: the
+  default as an inline picker (as Persona in Meetings is), what it sends in the footer; **Speech Service**, a menu row,
+  only when an extension beside the built-in one can transcribe; **Glossary**, a row with its count that pushes a list
+  page (a field with **Add** on its row, the newest term first, swipe to delete, a refused term said in `Theme.danger`
+  under the field; one change at a time: while one saves, Add, Return and swipe do nothing and the field keeps its text,
+  which empties only once the hub kept the term). **Hub Transcription on Wi-Fi Only**, a switch in a section of its own (it is this iPhone's, not the
+  hub's), with what it does in the footer. Identifiers: `settings-meeting-transcription` (the picker; its options go by
+  their words), `settings-meeting-transcription-service`, `settings-meeting-glossary`, `settings-meeting-wifi-only`,
+  `settings-meeting-transcription-not-ready`, `glossary-field`, `glossary-add`, `glossary-term`, `glossary-problem`.
 - Identifiers for tests: `recording-meeting-start` (Record), `recording-kind` and `recording-kind-detail` at the start,
   `recording-page-menu` and `recording-kind-now` while recording; `sidebar-meeting-recording` for the drawer's Recordings row. UI
   tests: `RecordEntryUITests`.

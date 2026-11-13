@@ -718,6 +718,12 @@ extension Theme {
         static let attendanceOff = "waveform.slash"
         /// Talk to Persona in the meeting (#3862 phase 4): held on the meeting page, a talk window from the Live Activity.
         static let talk = "mic.circle"
+        /// How a meeting is transcribed (#3862 phase 5: on this iPhone or on the hub): speech written as text, as captions.
+        static let meetingTranscription = voiceCaptions
+        /// The names and words the hub's transcription should spell right (#3862 phase 5, the meeting glossary).
+        static let glossary = "character.book.closed"
+        /// Hub transcription on Wi-Fi only (#3862 phase 5): Wi-Fi.
+        static let wifiOnly = pluginWifi
         /// The calendar event a meeting recording is named after (docs/apple/recording.md).
         static let calendarEvent = "calendar.day.timeline.left"
         /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).
