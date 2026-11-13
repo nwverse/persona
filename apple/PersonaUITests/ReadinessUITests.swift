@@ -145,7 +145,7 @@ final class ReadinessUITests: XCTestCase {
         XCTAssertTrue(model.waitForExistence(timeout: 10), "no Codex model:\n\(app.debugDescription)")
         model.tap()
         let scoped = app.descendants(matching: .any).matching(
-            NSPredicate(format: "label CONTAINS %@", "默认模型连接：claude。当前对话使用 codex。")).firstMatch
+            NSPredicate(format: "label CONTAINS %@", "这是默认模型连接的限流提醒；当前对话使用另一个模型连接。")).firstMatch
         XCTAssertTrue(scoped.waitForExistence(timeout: 5), "the card does not distinguish default and active launchers:\n\(app.debugDescription)")
         shot(app, "readiness-rate-limited-codex")
 

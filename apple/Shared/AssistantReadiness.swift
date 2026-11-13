@@ -24,7 +24,7 @@ nonisolated struct AssistantReadiness: Codable, Hashable, Sendable {
         var version: String?
         var title: String?
         var detail: String?
-        /// A rate limit's reset window, or its newest evidence time when no reset is known.
+        /// A rate limit's main turn time, health-only reset window, or other newest evidence time.
         var occurrence: String?
         var action: Action?
         var altActions: [Action]?

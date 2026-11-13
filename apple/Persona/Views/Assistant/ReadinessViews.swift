@@ -153,8 +153,9 @@ struct ReadinessHomeCard: View {
     nonisolated static func scopedDetail(_ step: AssistantReadiness.Step, activeLauncher: String?) -> String? {
         guard step.code == "rate_limited", let affected = step.launcher, let activeLauncher,
               !affected.isEmpty, !activeLauncher.isEmpty, affected != activeLauncher else { return step.detail }
-        let scope = String(localized: "Default launcher: \(affected). This conversation uses \(activeLauncher).")
-        return [step.detail, scope].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
+        let scope = String(localized: "This warning is for the default model connection. This conversation uses another model connection.")
+        if let detail = step.detail, !detail.isEmpty { return detail + "\n" + scope }
+        return scope
     }
 
     var body: some View {

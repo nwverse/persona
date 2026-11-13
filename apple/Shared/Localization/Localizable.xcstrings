@@ -49407,24 +49407,24 @@
       },
       "extractionState" : "manual"
     },
-    "Default launcher: %@. This conversation uses %@." : {
+    "This warning is for the default model connection. This conversation uses another model connection." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Default launcher: %1$@. This conversation uses %2$@."
+            "value" : "This warning is for the default model connection. This conversation uses another model connection."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "デフォルトの接続: %1$@。この会話では%2$@を使用しています。"
+            "value" : "この警告はデフォルトのモデル接続に関するものです。この会話では別のモデル接続を使用しています。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "默认模型连接：%1$@。当前对话使用 %2$@。"
+            "value" : "这是默认模型连接的限流提醒；当前对话使用另一个模型连接。"
           }
         }
       },

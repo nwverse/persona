@@ -109,7 +109,7 @@ type ReadinessStep struct {
 	Version    string            `json:"version,omitempty"` // Claude Code's, when known
 	Title      string            `json:"title,omitempty"`
 	Detail     string            `json:"detail,omitempty"`
-	Occurrence string            `json:"occurrence,omitempty"` // rate_limited: the reset window, else the newest evidence's time
+	Occurrence string            `json:"occurrence,omitempty"` // rate_limited: main turn time, health-only reset window, or newest evidence time
 	Action     *ReadinessAction  `json:"action,omitempty"`
 	AltActions []ReadinessAction `json:"alt_actions,omitempty"`
 }
@@ -499,11 +499,7 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 	if hasMain && (main.Launcher == "" || main.Launcher == launcher) {
 		switch {
 		case main.TurnError != "":
-			occurrence := ""
-			if reset, ok := usageLimitReset(main); ok {
-				occurrence = reset.UTC().Format(time.RFC3339Nano) // the settled health record comes from this same turn
-			}
-			ev = append(ev, readinessEvidence{at: main.UpdatedAt, text: main.TurnError, code: sessionTurnErrorCode(main), occurrence: occurrence})
+			ev = append(ev, readinessEvidence{at: main.UpdatedAt, text: main.TurnError, code: sessionTurnErrorCode(main)})
 		case answeredWell(main):
 			ev = append(ev, readinessEvidence{at: main.UpdatedAt, ok: true})
 		}
@@ -579,6 +575,13 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 				st.Occurrence = newest.occurrence
 				if st.Occurrence == "" {
 					st.Occurrence = newest.at.UTC().Format(time.RFC3339Nano)
+				}
+				if hasMain && (main.Launcher == "" || main.Launcher == launcher) && !main.UpdatedAt.IsZero() {
+					if reset, ok := usageLimitReset(main); ok && st.Occurrence == reset.UTC().Format(time.RFC3339Nano) {
+						// A newer health record can be this same turn settled. Keep the turn's identity so another turn
+						// within one reset window is still a new failure; health-only evidence keeps the reset identity.
+						st.Occurrence = main.UpdatedAt.UTC().Format(time.RFC3339Nano)
+					}
 				}
 			}
 			st.Machine = d.ID

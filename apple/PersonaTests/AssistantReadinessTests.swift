@@ -139,7 +139,7 @@ struct AssistantReadinessTests {
         #expect(m.homeCardStep?.launcher == "codex")
     }
 
-    @Test func usageLimitCardNamesDefaultAndActiveLaunchers() throws {
+    @Test func usageLimitCardExplainsDefaultAndActiveLaunchers() throws {
         let limited = try decode(#"""
         {"version":1,"mode":"full","ready":true,"launcher":"claude","steps":[
           {"id":"computer","state":"ok"},{"id":"claude","state":"ok"},
@@ -148,9 +148,9 @@ struct AssistantReadinessTests {
         """#)
         let step = try #require(limited.step("model"))
         let scoped = ReadinessHomeCard.scopedDetail(step, activeLauncher: "codex")
-        let format = String(localized: "Default launcher: %@. This conversation uses %@.")
-        let scope = String(format: format, "claude", "codex")
+        let scope = String(localized: "This warning is for the default model connection. This conversation uses another model connection.")
         #expect(scoped == "Try again after the reset.\n" + scope)
+        #expect(scoped?.contains("claude") == false && scoped?.contains("codex") == false, "everyday copy must not expose raw launcher IDs")
         #expect(ReadinessHomeCard.scopedDetail(step, activeLauncher: "claude") == step.detail)
     }
 
