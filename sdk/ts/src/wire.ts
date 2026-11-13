@@ -3241,6 +3241,8 @@ export const CONNECTOR_SUBSCRIPTION_KINDS = ["sub_mail", "sub_message", "sub_not
 
 /**
  * Paths relative to one item. Only $, .field and [index] are supported; no expressions or recursive descent.
+ * sender_id, chat and chat_name name who and where for mutes and policies (the Inbox row's sender and chat tags);
+ * they are not part of an item's content.
  */
 export interface ConnectorSubscriptionFields {
   id?: string;
@@ -3251,17 +3253,29 @@ export interface ConnectorSubscriptionFields {
   body?: string;
   link?: string;
   due_date?: string;
+  /** The sender's stable id; without it the sender tag is the lowercased display name. */
+  sender_id?: string;
+  /** The conversation's stable id: the row gets a chat tag. */
+  chat?: string;
+  /** The conversation's name, the chat tag's name. */
+  chat_name?: string;
 }
 
 /**
  * A pull recipe, not a schedule. args is an object (default {}); strings may contain {{since}} or {{since_date}}.
- * items_path defaults to $; fields are relative to one item. Text results require snapshot mode. Runtime
- * argument/schema and mapped-value validation belongs to the subscription runner.
+ * cursor_arg and next_cursor_path opt into cursor pagination; page_arg and optional next_page_path opt into page
+ * pagination (without next_page_path, a full requested page continues). items_path defaults to $; fields are relative
+ * to one item. Text results require snapshot mode. Runtime argument/schema and mapped-value validation belongs to the
+ * subscription runner.
  */
 export interface ConnectorSubscriptionRecipe {
   mode: ConnectorSubscriptionMode;
   tool: string;
   args?: unknown;
+  cursor_arg?: string;
+  next_cursor_path?: string;
+  page_arg?: string;
+  next_page_path?: string;
   items_path?: string;
   fields?: ConnectorSubscriptionFields;
   kind: ConnectorSubscriptionKind;
@@ -4858,6 +4872,12 @@ export interface KBRecordingSegment {
    * absent on other recordings.
    */
   n?: number;
+  /**
+   * The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md
+   * "Persona's echo"): kept in the transcript but not what the meeting said, so leave it out of anything read as the
+   * meeting's words; absent (false) on every other line.
+   */
+  echo?: boolean;
 }
 
 /**

@@ -155,8 +155,9 @@ struct TodoDetailView: View {
         }
     }
 
+    /// Ends dictation, and a start still asking for permission with it (#3407).
     private func stopDictation() {
-        if dictation.isListening { dictation.stop() }
+        dictation.stop()
     }
 
     /// Deletes the todo and leaves its page; a failed delete keeps the page and shows the error.

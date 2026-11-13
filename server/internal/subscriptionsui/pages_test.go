@@ -470,6 +470,29 @@ func TestSetup(t *testing.T) {
 	}
 }
 
+// The setup form has no pickers for who and where (#6165): saving it keeps the recipe's sender_id, chat and chat_name
+// while the subscription reads the same tool, and drops them for another tool, whose paths they would not fit.
+func TestSetupKeepsTheRecipesSenderAndChatIDs(t *testing.T) {
+	f := newFake()
+	sub := f.subs["sub_outlook"]
+	own := *sub.Recipe.Fields
+	own.SenderID, own.Chat, own.ChatName = "$.from.address", "$.conversationId", "$.topic"
+	sub.Recipe.Fields = &own
+	f.subs["sub_outlook"] = sub
+	src := &f.cats[0].Sources[0]
+	src.Tools = append(src.Tools, subscriptions.CatalogTool{Name: "list_flagged", Title: "Flagged", Subscribable: true})
+	form := map[string]string{"f.title": "$.subject", "f.sender": "$.from.name", "f.id": "$.id", "kind": "sub_mail", "group_by": "thread"}
+	handle(t, f, env(i18n.En, true), state{P: pageSetup, ID: "sub_outlook", C: "apps", S: "outlook", T: "search_messages", I: "$.value"}, "save", form)
+	got := f.patches["sub_outlook"][0].Recipe.Fields
+	if got.SenderID != own.SenderID || got.Chat != own.Chat || got.ChatName != own.ChatName || got.Title != "$.subject" {
+		t.Fatalf("saved fields: %+v", got)
+	}
+	handle(t, f, env(i18n.En, true), state{P: pageSetup, ID: "sub_outlook", C: "apps", S: "outlook", T: "list_flagged", I: "$.value"}, "save", form)
+	if got := f.patches["sub_outlook"][1].Recipe.Fields; got.SenderID != "" || got.Chat != "" || got.ChatName != "" {
+		t.Fatalf("another tool kept them: %+v", got)
+	}
+}
+
 // Runs: newest first, failures marked, nothing but counts.
 func TestRuns(t *testing.T) {
 	v := draw(t, newFake(), env(i18n.En, true), state{P: pageRuns, ID: "sub_github"})

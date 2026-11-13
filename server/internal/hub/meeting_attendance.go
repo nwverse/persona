@@ -25,6 +25,14 @@ const featureMeetingPhotos = assistantwire.CapabilityMeetingPhotos
 // docs/assistant/meeting-minutes.md "Phase 2: live view"); only with meeting_conversation.
 const featureMeetingLiveView = assistantwire.CapabilityMeetingLiveView
 
+// featureMeetingHighlights: the default manager takes the meeting conversation's highlights (phase 2b,
+// docs/assistant/meeting-minutes.md "Phase 2b: highlights"); only with meeting_live_view.
+const featureMeetingHighlights = assistantwire.CapabilityMeetingHighlights
+
+// featureMeetingEcho: the default manager takes Persona's echo marked on a meeting's upload (#5905,
+// docs/assistant/meeting-minutes.md "Persona's echo"); only with meeting_attendance.
+const featureMeetingEcho = assistantwire.CapabilityMeetingEcho
+
 // meetingAttendanceFeatures is the feature while the default manager is connected and named the capability in its
 // hello; nothing otherwise, so a phone offers no role to an older manager, which would ignore it.
 func (h *Hub) meetingAttendanceFeatures() []string {
@@ -60,6 +68,26 @@ func (h *Hub) meetingLiveViewFeatures() []string {
 		return nil
 	}
 	return []string{featureMeetingLiveView}
+}
+
+// meetingHighlightsFeatures is meeting_highlights while the default manager names it beside meeting_live_view (and so
+// meeting_conversation and meeting_attendance); nothing otherwise, so no app looks for highlights a manager never
+// keeps.
+func (h *Hub) meetingHighlightsFeatures() []string {
+	if len(h.meetingLiveViewFeatures()) == 0 || !h.defaultManagerNames(assistantwire.CapabilityMeetingHighlights) {
+		return nil
+	}
+	return []string{featureMeetingHighlights}
+}
+
+// meetingEchoFeatures is meeting_echo while the default manager names it beside meeting_attendance (Persona speaks
+// only in a meeting it attends); nothing otherwise, so a phone sends no echo line to a manager that would put it into
+// the minutes.
+func (h *Hub) meetingEchoFeatures() []string {
+	if len(h.meetingAttendanceFeatures()) == 0 || !h.defaultManagerNames(assistantwire.CapabilityMeetingEcho) {
+		return nil
+	}
+	return []string{featureMeetingEcho}
 }
 
 // defaultManagerNames: the default manager (the one the recordings' routes go to) is connected and named capability

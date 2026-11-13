@@ -246,9 +246,9 @@ export interface NewAgentPreset {
   launcher?: string;
   /** The native project owning a desktop start, even when another project shares its folder. */
   desktopProjectId?: string;
-  /** A message forwarded to a new Agent (#3899): its card over the first message, which carries it in front; and the
-   *  pictures it had, attached. */
-  forward?: ContextRef;
+  /** Messages forwarded to a new Agent (#3899; several at once, #3838): their card over the first message, which carries
+   *  them in front; and the pictures they had, attached. */
+  forwards?: ContextRef[];
   images?: DraftImage[];
   /** An exact workspace destination takes precedence over the legacy machine/folder preset. */
   workspace?: WorkspaceTarget;

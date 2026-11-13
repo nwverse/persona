@@ -172,11 +172,17 @@ Starting from a board card passes its `source_id` as `desktop_project_id`, prese
 
 The `codex-app` launcher is offered while the desktop bus is available and a usable Codex CLI can be found. It needs no terminal engine. This is the local integration of upstream PR #5755, stacked on the Claude desktop launcher from PR #5528, with Windows process handling; it does not imply those PRs have merged.
 
+`launchers.list` identifies it with `source: "codex_app"` and `agent: "codex"`; a login-shell launcher with the same name takes precedence. The node prefers the desktop app's bundled CLI, then PATH or known Codex install locations. `launchers.models` returns an empty catalog with `locked`, and Settings › Models' Test has no standalone command to run. Run Agent Here and new terminal starts refuse this native launcher; an existing desktop chat continues through its normal message route. The implementation is in `node/codexapp_new.go` (#5726).
+
 A short-lived app-server creates metadata with `thread/start` and `thread/name/set`, then exits without a model turn. Persona opens the new thread through the desktop protocol handler and sends the first message through `thread-follower-start-turn` to its owning window. Threads created by this flow carry originator `persona_codex_app` and are recognized as desktop chats. The App uses its own model and permission settings; Plan mode is refused. The first message is required because a chat without one is not visible in the App sidebar.
+
+The app's `codex://new` link only fills its composer. The metadata client uses the node's `CODEX_HOME`; `thread/name/set` persists the new thread before the first turn, and the title is the first message's first line or `name_hint`, spaces folded and limited to 40 characters. It never resumes another thread. Persona's assistant threads retain originator `persona` and are not classified as these desktop chats. A missing prompt (`codex_needs_prompt`), stopped app (`codex_read_only`), Plan mode (`readonly_unsupported`) or `secret_ticket` (`secret_env_agent`) is refused before chat creation.
 
 If metadata creation returns a thread ID but naming or first-message delivery fails, `desktop_start_incomplete` retains that session and reports `created: true` plus `first_message_delivered`. Retry sends to the existing session instead of creating another chat. An unknown first-message outcome remains uncertain to the user; a transport failure before the thread ID is known also remains uncertain. See the [new-session protocol](../protocol/protocol.md#new-session).
 
 An explicit folder may be an existing absolute directory or one new child under an existing parent. A blank folder creates a unique directory under `~/Documents/Codex/<date>/`. The chat follows the App's project assignment for its folder. Windows tests exercise metadata creation, safe process arguments and mocked owner delivery; real Windows creation and message delivery remain unverified. See [Windows support](../operations/windows.md#desktop-projects-and-new-sessions).
+
+The temporary folder's slug comes from ASCII words in the first message's first line, falling back to `chat` and adding `-2`, `-3` and so on when occupied. Upstream acceptance on November 12, 2026 used Codex App 26.1106 and its Codex 0.167 on macOS without a terminal engine: the start answered after 16.7 seconds, the App replied after 24 seconds, and the chat appeared among chats with no project. This does not validate Windows creation or native project synchronization. Tests: `node/codexapp_new_test.go`.
 
 ## Windows
 
@@ -289,14 +295,16 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
   No thread in time is `codex_first_unconfirmed` with `delivered: unknown`: the message went in, so it is not sent again.
   First messages to one row go one at a time: a second one (another phone, a quick second tap) waits for the first, then goes to the thread it began as any message does.
   `/exit` or `/quit` quits Codex as for any agent, with nothing typed.
-  Modes, the queue and forking on a waiting row refuse with `codex_waiting`. A start whose Codex never shows its box and isn't running fails with `codex_no_box`.
+  Modes, the queue and forking on a waiting row refuse with `codex_waiting`. A start whose Codex never shows its box and isn't running fails with `codex_no_box`
+  (`codex_no_box_here` in a pane the user picked, which stays as it is).
   The message's echo (`client_msg_id`) is the thread's. The hub links a to-do to the thread the answer names (`hub/send.go`).
 - **The user may type the first message in the terminal instead**: rule 1, 2 or 4 attaches the thread.
 - **Codex quits before a first message** (or the tab closes): after 10 looks with no `codex` in the pane, the row and the pane's binding go. The terminal stays.
 - **Clients**: launchers of nodes that start Codex this way carry `prompt_optional: true`. The manager marks its own managed Codex launchers so when the node's Codex launchers are marked.
+  - **Run Agent Here** (#5504): Codex launchers of nodes that start them in a shell pane the user picked carry `run_here: true` (the manager marks its managed ones the same way). The start there is this one, with no first message, and answers the waiting row; one that fails leaves the user's pane open and queues nothing to close (`docs/integrations/terminal.md`, section 21).
   - New Agent offers the first message as optional for those launchers only. The web's work picker reads `prompt_required: false` from the start options.
   - The row says "Waiting for its first message" (it is not Needs you, not unread, and sends no push). Its chat says Codex is open on the computer and takes the first message.
-  - Web and iOS follow the answer's `session` to the thread, and follow the pane when the message was typed in the terminal (`web/src/lib/codex-waiting.ts`, iOS `ChatView.codexThread`). Android: not yet.
+  - Web, iOS and Android follow the first message answer's `session` from a waiting row to the thread, and follow the same computer's pane in the already-loaded session list when the message was typed in the terminal (`web/src/lib/codex-waiting.ts`, iOS `ChatView.codexThread`, Android `codexThreadOf` in `CodexWaiting.kt`). Android replaces the open route; it does not fetch extra pages when a filter excludes the thread.
 - **Verified**: Codex 0.153.4 and herdr 0.9.3 on a Mac (2026-11-12), two Codex in one directory:
   - the App's first message (quotes, `$HOME`, backticks, newline, Chinese, 2,098 characters) reached the rollout unchanged, attached in 1.9 seconds;
   - the other row's message, typed in its terminal, attached to its own thread;

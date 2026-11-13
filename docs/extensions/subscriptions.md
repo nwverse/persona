@@ -2,6 +2,8 @@
 
 Source subscriptions let the manager pull new information from a connector's read-only tools into the Inbox or knowledge base. The design is tracked in #2036. The optional catalog protocol (#2037), the manager's storage, validation, scheduler, runner and API (#2038), delivery to the Inbox and the knowledge base (#2039) and drafting a recipe with a model (#2040), the pages (#2041, "Pages"), push sources a device fills itself (#3848, "Push sources") and the assistant's tools (#5240, "Assistant tools") are implemented. A catalog alone does not turn on polling or store source content.
 
+Moving the Inbox's built-in sources (iMessage, GitHub, Lark, mail) onto subscriptions, with what subscription items still lack and the per-source switch, is planned in `docs/design/proposals/inbox-sources-migration.md` (#6150).
+
 ## Source catalog
 
 A connector may declare `catalog`, without changing connector protocol version 2. It implements `connector.Catalog` in process, or answers `connector.catalog.list` and `connector.catalog.call` through the extension protocol. Schema and SDK types live in `schema/extension/connector.schema.json`, generated into the Go and TypeScript SDKs. `ext.Methods` accepts the generated request and result types like other connector methods.
@@ -59,7 +61,10 @@ A recipe is a description of one pull, independent of its schedule and enabled d
     "time": "$.time",
     "body": "$.body",
     "link": "$.link",
-    "due_date": "$.due_date"
+    "due_date": "$.due_date",
+    "sender_id": "$.sender_id",
+    "chat": "$.chat.id",
+    "chat_name": "$.chat.name"
   },
   "kind": "sub_notice",
   "group_by": "thread"
@@ -67,6 +72,10 @@ A recipe is a description of one pull, independent of its schedule and enabled d
 ```
 
 Required fields are `mode`, `tool`, `kind`, and `group_by`. The tool must be a short name in this source. `args` defaults to `{}`; it is an object, and strings can contain the runner's `{{since}}` and `{{since_date}}` variables. `items_path` defaults to `$`. Field paths are relative to one item; all are optional at the protocol layer. Supported path syntax is `$`, `.field` (letters/underscore followed by letters, digits, underscore or hyphen), and `[index]`. Wildcards, filters, recursive descent and expressions are not supported.
+
+`sender_id`, `chat` and `chat_name` say who and where, for mutes and policies (#6165). They are not part of an item's content: they don't enter its content hash, so adding them to a recipe makes no item look changed. A row's `sender` tag matches by `sender_id` when the recipe maps it, kept as the source writes it, as a built-in's mutes match (a Lark sender id). Without it, the tag is the lowercased display name. With `chat` mapped, the row also gets a `chat` tag named by `chat_name` (the id when there is none), so its menu offers to mute the chat. The tags are the row's newest item's. The setup form has no pickers for these three: saving it keeps the recipe's own while the subscription reads the same tool.
+
+An items recipe can opt into resumable pagination. Cursor pagination sets both `cursor_arg` (the top-level tool argument that takes the cursor) and `next_cursor_path` (where the result's next cursor is); a missing, null or empty cursor is terminal. Page pagination sets `page_arg` (a positive integer argument, default 1) and can set `next_page_path` to the result's next page number, or to a boolean that is true when another page exists. Without `next_page_path`, a full requested page continues and a short page is terminal. The two strategies cannot be combined. Every leased run reads one page and commits its new items, dedup keys and bounded continuation in one transaction. A continuation keeps the original window and is due immediately, still subject to the connector's call gap, budget and backoff. `since_at` and destination catch-up advance only after the terminal page. Repeated cursors/pages, invalid values and the 100-page safety cap pause the subscription in `needs_recipe` instead of skipping ahead. Recipes without these mappings keep their legacy one-page behavior.
 
 `mode` is `items` for arriving items or `snapshot` for state such as a balance. Text results can only be snapshots. `group_by` is `thread` or `source`: how the items are grouped into Inbox rows and knowledge-base chats ("Destinations"). `source` is for a source that is one conversation (a group chat, a channel), `thread` for items that stand on their own (articles, notifications) or belong to one of several conversations, with `thread` mapped where there is one. `kind` is one of `sub_mail`, `sub_message`, `sub_notice`, `sub_deadline`, `sub_event`, `sub_update`, or `sub_digest`.
 
@@ -113,12 +122,12 @@ Manager migration `0482_subscriptions.sql`:
 - `subscription_seen`: dedup keys per subscription, the newest 5000 and none older than 400 days.
 - `subscription_items`: new items for the destinations, bodies cut to 8000 characters. They are kept past what the destinations read: 8 days (the Inbox's 7-day window and a day), 30 days while the knowledge base is on (one that stops reading for longer misses them). Each run prunes the older ones; their dedup keys stay.
 
-A run writes its seen keys, its items and the cursor in one transaction; nothing is kept from a run that did not finish.
+A run writes its seen keys, its items and the cursor or bounded page continuation in one transaction; nothing is kept from a run that did not finish.
 
 ### Running
 
 - The manager looks for due subscriptions every 30 seconds, and at once after a change or Run now, after waiting a random 0–60 seconds at startup. A run holds a 5-minute lease. A run that died is made again once its lease ends, and the seen keys keep it from adding anything twice.
-- Each run reads from an hour before the newest item it has, or a day back the first time. Only one page is read; a full page of new items is reported as `maybe_more` by the dry run.
+- Each run reads from an hour before the newest item it has, or a day back the first time. A paginated recipe reads one page per leased run, resumes the same original window after a restart and schedules the next page immediately after each commit; its window advances only after the terminal page. A legacy recipe reads one page, and a full page of new items is reported as `maybe_more` by the dry run.
 - Limits are per connector, shared by its subscriptions:
   - one call at a time, at least 20 seconds apart with jitter;
   - at most `max_calls_per_hour` calls an hour (default 120); a run over the budget moves to when the budget allows;
@@ -143,11 +152,11 @@ Reading is open to every device; changing anything, dry runs included, needs ful
 | `POST /api/v1/subscriptions` | `{connector, source, recipe?, recipe_origin?, label?}` → 201 and the subscription, both destinations off; without a recipe, the source's first own one (422 `needs_recipe` when it has none: draft one). `recipe_origin: "model"` with a recipe records a draft taken as it was; otherwise a given recipe is the user's |
 | `POST /api/v1/subscriptions/{id}/generate` | Drafts a recipe with the model. A subscription's `id`, with `{revision?}`: the draft that passes is saved (`recipe_origin: "model"`, `recipe_at` now), its run state starts over (`needs_recipe` clears), and its switches, label, rules and interval stay (a new mode takes that mode's default interval) → `{recipe, note, dry_run, subscription}`; 409 `conflict` when it is at another revision, before or after drafting. `-` with `{connector, source}`: a source not subscribed yet → `{recipe, note, dry_run}`, nothing written. A draft that still fails is 422 with the check's code, `dry_run` and `recipe` (the draft as far as it got, for the manual editor). 503 `no_model` when no model is set up for it, 502 `model_failed` when a call failed (503 with `retry_after` while the model's connection is held) |
 | `PUT /api/v1/subscriptions/{id}` | `{revision, label?, recipe?, existing?, to_inbox?, to_kb?, interval_seconds?, daily_at?, triage_rules?, fallback_tier?}`; `existing` goes with a recipe that changes ("Destinations", A changed recipe); 409 `conflict` at another revision, 422 `interval_too_short` |
-| `POST /api/v1/subscriptions/{id}/run` | 202: runs as soon as the connector's limits allow, also while it is off |
+| `POST /api/v1/subscriptions/{id}/run` | 202: runs as soon as the connector's limits allow, also while it is off; a manually started paginated pull finishes its continuation, then stops |
 | `DELETE /api/v1/subscriptions/{id}?data=1` | 204; removes its seen keys and pending items. With `data=1` it first switches both destinations off and has the Inbox and the knowledge base remove what they took ("Destinations"); 503 `assistant_offline` while the assistant is away, the subscription left off for another delete |
 | `POST /api/v1/subscriptions/-/push` | `{items: [{key?, title?, body?, app?, link?, time?}]}` from a full-access device → `{subscription, new, count}`: the device's push source, made on its first push (no items: only made). 400 `bad_request` for more than 20 items or one with neither a title nor a body, 429 `rate_limited` with `retry_after` past 300 items an hour ("Push sources") |
 | `POST /api/v1/subscriptions/-/ui` | the pages below, with an extension page's request and answer; every device may draw them, actions need full access |
-| `GET /api/v1/subscriptions/-/graph?locale=&tz=` | Inbox Sources as relations (#5741, "Pages"): `{extensions, reads, sources, destinations}`; every device may read it |
+| `GET /api/v1/subscriptions/-/graph?locale=&tz=&ui_version=` | Inbox Sources as relations (#5741, "Pages"): `{extensions, reads, sources, destinations}`; every device may read it |
 
 A subscription's `state` is `off` (both destinations off), `ok`, `failing`, `not_connected`, `rate_limited` or `needs_recipe`, with `error {code, message}`. The message is one English sentence without source content; clients localize the code. The manager reports the `source_subscriptions` feature now that subscriptions deliver (`features.deliver`, #2039), and the apps show their entry rows only with it; beside it `subscription_push` says a device can push ("Push sources"); it broadcasts `subscription` `{id, connector, revision, state, removed}` when one is saved, runs or is deleted.
 
@@ -162,14 +171,14 @@ Every subscription is an internal source of the manager, beside the connectors a
 - **When the grouping changes** (a recipe changed to the other `group_by` without a new catch-up, i.e. `existing` `baseline` or `deliver`; and the upgrade to #5671, before which every row was a thread's or an item's whatever `group_by` said), the rows made before stay as they are: open ones stay open and go down the list as newer rows come in, and nothing is regrouped into the new row. The subscription keeps the grouping its rows are made by and from when (`inbox_group`, `inbox_group_from` in its data); until its next run that succeeds marks the change, the Inbox gets no rows of it, and from then on only the items stored by that run and later. Moving the earlier rows into the new one was not done: it would take rows the user may be reading or have in Needs you out from under them, and fold what they had read into a row that looks new. A pull that a new catch-up ends (turning the Inbox on, a recipe changed with `digest`) starts the rows with the recipe's grouping, as the catch-up holds nothing delivered before. A new item still waiting for the model when the grouping changes (fallback `wait`) does not come in, as it was stored before the change.
 - Rules: the subscription's `triage_rules`, else its extension's own `triage_rules` setting, else none (the Inbox's `inbox.rules`).
 - Fallback (`extra.rule_tier`, used only when no model can triage the item), by `fallback_tier`: `""` FYI, and Needs you for a row with an item with a due date or of kind `sub_deadline`; `fyi` or `action` for everything; `wait` none, so new items wait for the model.
-- **Catch-up.** Turning the Inbox on (also after the knowledge base was on alone, and again after it was off) records the time, and the first run that succeeds after it marks the end of the catch-up. Until then the Inbox gets nothing. The catch-up is what was stored from a day before the Inbox was turned on up to that run: three items or fewer come in as rows (as `group_by` groups them); more become one `sub_digest` row, `sub:<subscription>:catchup`, triaged once, its context a line an item (time · sender · title link), newest first, at most 50 and then "and N more". Items whose due date was still ahead when the catch-up ended stay out of the digest, in the rows. Later items come in as rows, a new thread row even for a thread in the digest.
+- **Catch-up.** Turning the Inbox on (also after the knowledge base was on alone, and again after it was off) records the time, and the first terminal page that succeeds after it marks the end of the catch-up. Until then the Inbox gets nothing. The catch-up is what was stored from a day before the Inbox was turned on up to that run: three items or fewer come in as rows (as `group_by` groups them); more become one `sub_digest` row, `sub:<subscription>:catchup`, triaged once, its context a line an item (time · sender · title link), newest first, at most 50 and then "and N more". Items whose due date was still ahead when the catch-up ended stay out of the digest, in the rows. Later items come in as rows, a new thread row even for a thread in the digest.
 - **Snapshots** come in as one row, `sub:<subscription>:snapshot`, the newest kept state (a snapshot is kept only when its content changed, so an unchanged one never moves the row).
 - **Failure notice.** A subscription that is on and has not pulled for 24 hours (`failing_since`) adds one FYI row by rule, `sub:<subscription>:failing` of kind `sub_failing` ("<label> hasn't pulled anything since <time>" with the reason for the error's code). It is one row a failure (`last` is the failure's start) and is filed as done (read) once the subscription pulls again.
 - The texts the manager writes (the digest's title and its "and N more", the due line, the notice) are in the user's language (`subscriptions-deliver` catalogs). The kinds are described for the models in `server/internal/prompts/inbox/kinds/subscription.md`, handed in with the round as the source's kinds.
 - A round reads at most the newest 300 items stored after the catch-up and 500 of the catch-up.
 - **A changed recipe.** Everything a new recipe pulls is new to the dedup keys, though much of it happened before the change. `existing` on the change says what its first run's items become (#5240); the same recipe saved again changes nothing here:
   - `digest`, the default (also for a recipe regenerated with the model): while the Inbox was on and stays on, its catch-up starts again at the change instead of a day before, so what the new recipe finds at once comes in as rows when 3 or fewer, else as one `sub_digest` row of its own (`sub:<subscription>:catchup-<unix time of the change>`, "<label>: N items found when its recipe changed"); later items come in as rows. Turning the Inbox off and on again catches up on the day before as always. The knowledge base keeps each item.
-  - `baseline`: the next run that succeeds records what it finds as seen and keeps none of it (its run counts them as `baseline`); only what arrives later comes in, to the Inbox and the knowledge base alike. For a change that finds what was delivered already, such as a new field mapping.
+  - `baseline`: the next pull that reaches a terminal page records what it finds as seen and keeps none of it (each page's run counts its baseline items); only what arrives later comes in, to the Inbox and the knowledge base alike. For a change that finds what was delivered already, such as a new field mapping.
   - `deliver`: each comes in as a new item.
 
 **Knowledge base.** `connectors.archives` lists the subscriptions with "Add to knowledge base" on, and `connectors.changes {id: <subscription>, cursor}` pages through their held items (100 a call): the cursor is the last stored position read, and the knowledge base moves it once it has written the batch (`cursors/<subscription>.json`). It starts a day before the knowledge base was turned on: the first run's page for a new subscription, and the same for a cursor kept from before the knowledge base was last off (what was stored while it was off is skipped). The knowledge base reads it on its own schedule (10 minutes) and soon after a run that kept items.
@@ -201,8 +210,13 @@ source, `push` for a device's own), `sources` and `destinations` (`inbox`, `kb`)
 problem: signed out, failing, `needs_recipe` and `not_connected` don't; `rate_limited` does), `to`, the sources it may duplicate
 (the list's Possible duplicate), the page `state` that shows it, and for a subscription `ask` (Set Up with the assistant's
 `open_url`). A destination counts the sources with it on and how many of them are reading. A source with neither destination on
-is left out. Sources come grouped by extension (Persona's own first) and, inside one, by read, reads in the order of their first
-source, so columns drawn in that order cross no links. The manager reports `inbox_sources_graph` with it.
+is left out. A source's `icon` is one the app's `ui_version` has, as on its pages (the hub's own version when the request
+says none, as the web's doesn't; the iPhone sends its pages' version). Sources come grouped by extension (Persona's own first) and, inside one, by read, reads in the order of their first
+source, so columns drawn in that order cross no links. The manager reports `inbox_sources_graph` with it. The iPhone app says it
+draws the view itself with `context.graph` in these page requests (never handed to an extension), and the list then starts
+with a **Source Relationships** row whose press answers `open_url` `persona://sources-graph`: the app pushes the view (a tree per
+extension with filters, a sheet for the picked source). Only these pages may answer it, and a device that may only look may
+press it too, as it changes nothing. The frozen Mac app sends no `context.graph`.
 
 | Page (`state.p`) | What it shows |
 | --- | --- |

@@ -122,6 +122,14 @@ running Agent to another provider".
   chat of a session that shows the switch. The assistant's messages, a task's supervision, channels and the phone apps
   send without it: their message goes on the launcher the agent runs on, and the switch keeps waiting. A switch picked
   more than a day ago is no longer shown on the row and is dropped when a message comes.
+- **The assistant's switch, when the user asks for it** (`agent_switch`, #5973): the main conversation picks the switch
+  and sends at once with `switch_now`, which implies `apply_switch` and is carried out now or not at all. Wherever the
+  user's message would go on the old launcher and leave the switch waiting (a busy agent, a draft or a dialog in the
+  box, an agent that is not running, a runtime's session) the message is refused with nothing typed (`switch_busy` for a
+  busy agent, else the usual code) and the switch is dropped, so none waits for the user's next message. A node without
+  the `launcher_switch_now` capability is refused by the hub (`node_outdated`) before anything is typed. An agent a
+  usage limit stopped is sent `agents/limit_continue` when the assistant gives no text; its pending usage-limit
+  continuation is not sent afterwards (its turn moved on: `workGuard` drops the wake).
 - **A busy agent is not switched**: one that works, waits for the user, is starting, or has background work a quit
   would end gets the message on its launcher as always, and the switch waits for a later message. Background work is the
   row's (running subagents and workflows, a `/loop`) and every background command or monitor of its claude process,
@@ -411,7 +419,11 @@ It also lists the transcript every unarchived session of the index runs, however
 
 The `claude-desktop` launcher is offered when the desktop session index and a usable Claude CLI are present. This is the local integration of upstream PR #5528, extended to Windows; its inclusion here does not mean the upstream PR has merged. It needs no terminal engine and uses the desktop app's provider, model and permission mode. Plan mode is refused, and terminal-only controls are hidden in **New agent**.
 
+`launchers.list` identifies it with `source: "claude_desktop"` and `agent: "claude"`; a login-shell launcher with the same name takes precedence. The model catalog is empty with `locked` explaining the app's settings, and Settings › Models' Test has no standalone command to run. The implementation is in `node/claudedesktop_new.go` (#5480). Run Agent Here and switching a running terminal session to this launcher are refused; a known desktop session can use the import recovery below.
+
 For a directory-based start, the node writes a new transcript with the local-only command `claude -p --session-id <new id> "/rename <title>"`, imports it with `claude://resume?session=<id>`, waits for the desktop index, then sends the first message through the owning session's peer inbox. The seed command makes no model request. A supplied folder must exist or be a new final child of an existing folder; leaving it blank uses the desktop temporary-session folder. Workflow board keeps its project title in Persona and uses the folder for session grouping. Importing a session does not create a native saved environment with that title or synchronize a native sidebar project name.
+
+The app's new-session links only fill its composer, so they cannot replace this import route. The seed process removes inherited Agent variables and `CLAUDE_CONFIG_DIR` so the transcript is written where the app reads it; the local rename command needs no CLI model sign-in. The title uses the first line of the first message or `name_hint`, spaces folded and limited to 40 characters, falling back to the folder name. The node waits up to 15 seconds for the imported index entry. Without a folder, it uses `临时会话` beside the largest group of existing session folders, falling back to `~/Documents` or home. Relative paths, files and missing parents are refused. A first-message slash command (`peer_command`) and `secret_ticket` (`secret_env_agent`) are also refused before seeding.
 
 Existing named environments can be discovered and bound, but the verified import protocol cannot guarantee that a new session joins a selected environment. A `desktop_project_id` beginning with `claude-environment:` is therefore refused with `claude_desktop_project_unsupported` before any transcript seed, import or message delivery, including during import recovery. Clear the selection to start by directory instead. Directory-based `claude-project:` selections remain supported when the chosen folder is within that directory; a mismatch is refused with `claude_desktop_project_mismatch`.
 
@@ -420,6 +432,8 @@ Native saved-environment creation and renaming belong to the desktop renderer's 
 Creation acknowledges success only after import and any supplied first message finish. If a transcript exists but setup or delivery fails, `desktop_start_incomplete` returns `created: true`, the existing session and its first-message delivery state. A retry with content sends to that session. For an empty conversation, retry `session.start` with `launcher: "claude-desktop"`, that `resume_session_id`, `prompt: ""` and `async: false`: it validates the known session, retries import and waits for the index without seeding another transcript or starting a model turn. Archived or replaced sessions are refused. See the [new-session protocol](../protocol/protocol.md#new-session).
 
 Windows launch/import and inbox behavior have automated and mock-protocol coverage; a complete new-session or message-delivery run in the real Windows app remains unverified. Existing inbox approval and unsupported-command limits still apply. See [Windows support](../operations/windows.md#desktop-projects-and-new-sessions) for the shared validation scope.
+
+Upstream acceptance on November 12, 2026 used Claude.app 5.1231.2 with a third-party provider and Claude Code 2.1.311 on macOS: the start answered after 3.4 seconds, the first message was taken 2 seconds later, and the reply arrived 6 seconds after the start. That result predates the synchronous delivery and recovery changes here and does not validate the Windows path. Tests: `node/claudedesktop_new_test.go`.
 
 ## Blocking configuration directories (#676)
 
