@@ -589,7 +589,7 @@ nonisolated enum TabRename {
     static let maxLength = 80
 
     /// A tab to rename: a plain terminal's (its row, its terminal page).
-    struct Target: Identifiable, Equatable, Sendable {
+    nonisolated struct Target: Identifiable, Equatable, Sendable {
         var machine: MachineRef
         var tabID: String
         /// The engine's kind ("" from a node that does not say: herdr), sent as `kind`.
