@@ -64,19 +64,25 @@ function TokenHint({ onFix }: { onFix: () => void }) {
 
 // ── the catalog ─────────────────────────────────────────
 
+const askKey = (q: string, market: string) => `${market}\n${q}`;
+
 export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => void; onOpen: (it: CatalogItem) => void; onMarkets: () => void }) {
   const [q, setQ] = useState("");
   const [market, setMarket] = useState("");
   const [data, setData] = useState<Catalog | null>(null);
+  // the search + market the list in `data` answers: a response for an earlier one (or a query still waiting out its typing pause) is
+  // not the page's current results, so the page says it is updating instead of presenting them as the answer (#6468)
+  const [answered, setAnswered] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [tokenFor, setTokenFor] = useState<Market | null>(null);
   const seq = useRef(0);
   const load = (refresh = false) => {
     const n = ++seq.current;
+    const asked = askKey(q, market);
     setLoading(true);
     getCatalog(q, market, refresh)
-      .then((c) => n === seq.current && (setData(c), setError("")))
+      .then((c) => n === seq.current && (setData(c), setAnswered(asked), setError("")))
       .catch((e) => n === seq.current && setError(errorText(e)))
       .finally(() => n === seq.current && setLoading(false));
   };
@@ -88,6 +94,7 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
   }, [q, market]);
 
   const markets = data?.markets ?? [];
+  const updating = !error && (loading || (data !== null && answered !== askKey(q, market)));
   const broken = markets.filter((m) => m.error);
   // nothing listed because the market(s) shown could not be read: not "This marketplace has no extensions yet" under "can't read right now" (#4480)
   // with several markets and none picked there is no single "this marketplace": say what was read is empty (some may be unreadable)
@@ -119,7 +126,7 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
           spellCheck={false}
           className="h-9 min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
         />
-        {loading && data && <Spinner />}
+        {updating && <Spinner />}
         {q && <IconButton icon="x" label={t("settings-extensionmarket.clear_search")} onClick={() => setQ("")} size={24} iconSize={12} />}
       </div>
       {markets.length > 1 && (
@@ -171,14 +178,20 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
         ),
       )}
 
-      <Group title={data ? t("settings-extensionmarket.extension_count", { count: data.extensions.length }) : t("settings-extensionmarket.extensions")}>
+      <Group title={data && !error && !updating ? t("settings-extensionmarket.extension_count", { count: data.extensions.length }) : t("settings-extensionmarket.extensions")}>
+        {updating && data && (
+          <p role="status" className="flex items-center gap-2 px-4 py-2 text-[12px] text-ink-3">
+            <Spinner />
+            {t("settings-extensionmarket.updating")}
+          </p>
+        )}
         {!data && !error && (
           <div className="px-4 py-3">
             <Loading />
           </div>
         )}
         {error && <Problem text={t("settings-extensionmarket.catalog_failed", { error })} onRetry={() => load()} busy={loading} />}
-        {data && markets.length === 0 && (
+        {data && !error && markets.length === 0 && (
           <div className="flex flex-col items-center gap-2 px-6 py-8 text-center">
             <span className="flex size-10 items-center justify-center rounded-[10px] bg-inset text-ink-3 shadow-hairline">
               <Icon name="extension" size={18} />
@@ -190,17 +203,18 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
             </Button>
           </div>
         )}
-        {data && markets.length > 0 && data.extensions.length === 0 && (
+        {data && !error && !updating && markets.length > 0 && data.extensions.length === 0 && (
           <p className="px-4 py-6 text-center text-[12.5px] text-ink-3">{q ? t("settings-extensionmarket.not_found", { query: q.trim() }) : unread ? t("settings-extensionmarket.market_unread") : !market && markets.length > 1 ? t("settings-extensionmarket.markets_read_empty") : t("settings-extensionmarket.market_empty")}</p>
         )}
-        {data?.extensions.map((it, i) => {
+        {!error && data?.extensions.map((it, i) => {
           const st = itemState(it);
           return (
             <button
               key={`${it.market}/${it.id}`}
               type="button"
               onClick={() => onOpen(it)}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-hover"
+              aria-busy={updating || undefined}
+              className={cx("flex w-full items-center gap-3 px-4 py-3 text-left transition-[colors,opacity] hover:bg-hover", updating && "opacity-50")}
               style={{ animation: `fade-up 320ms ${EASE} ${Math.min(i, 8) * 30}ms both` }}
             >
               <ExtensionLogo url={it.icon_url} manager="" iconSize={16} className={cx("flex size-9 shrink-0 items-center justify-center rounded-[9px]", it.installed ? "bg-accent-tint text-accent-ink" : "bg-inset text-ink-3 shadow-hairline")} />
