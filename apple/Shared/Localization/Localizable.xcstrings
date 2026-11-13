@@ -13257,6 +13257,29 @@
       },
       "extractionState" : "manual"
     },
+    "A chat [Standing Authorization source]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チャット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一个对话"
+          }
+        }
+      }
+    },
     "A check or start with it that works clears this." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -80847,6 +80870,29 @@
         }
       }
     },
+    "Main chat [Standing Authorization source]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Main chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主对话"
+          }
+        }
+      }
+    },
     "Main worktree" : {
       "localizations" : {
         "en" : {
@@ -131134,6 +131180,29 @@
       },
       "extractionState" : "manual"
     },
+    "Settings [Standing Authorization source]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Settings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置"
+          }
+        }
+      }
+    },
     "Settings and pairing info, kept when you clear caches" : {
       "localizations" : {
         "en" : {
@@ -140262,6 +140331,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Suggested rule: the same answer %lld times in 14 days, confirmed with Always. [Standing Authorization source]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suggested rule: the same answer %1$lld times in 14 days, confirmed with Always."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提案されたルール：14 日間に同じ回答が %1$lld 回あり、「常に」で確認されました。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建议的规则：14 天内 %1$lld 次相同的回答，点「总是」确认。"
+          }
+        }
+      }
     },
     "Suggestion" : {
       "localizations" : {
@@ -186236,8 +186328,7 @@
           }
         }
       }
-    }
-,
+    },
     "Assistant says" : {
       "extractionState" : "manual",
       "localizations" : {

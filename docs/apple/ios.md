@@ -1797,7 +1797,10 @@ for `standing_authorizations` opens it. The frozen Mac app compiles the same vie
   weather on MacBook" (the folder's name and the computer's), then the conditions and the day it was granted. The full
   folder, the owner's own words, the source and whether the authorized work can be undone are on the grant's page,
   with **Lasts: Until you revoke it** (grants have no expiry). Unknown actions and conditions show as the hub wrote
-  them (`StandingAuthorizationText`).
+  them (`StandingAuthorizationText`). The source is words, not a code: the hub's own sentence for a suggested rule
+  confirmed with Always (in the owner's language when it was made) and the usual words the assistant writes (main chat,
+  a chat, Settings) are worded in the app's language whichever of en, zh-Hans or ja they were written in
+  (`StandingAuthorizationText.source`); anything else shows as written, as on the web.
 - **Requests**: `GET /api/v1/assistant/standing-authorizations` and `DELETE …/{id}` through the client of the assistant
   the page first read for (`StandingAuthorizationsModel`, `currentAssistantSettings`). A 403 says only a device with
   full access can see them; any other failure shows Retry, and a failed refresh with the list on screen is a toast.

@@ -54,6 +54,24 @@ struct StandingAuthorizationsTests {
         #expect(message.contains("example") && message.contains("Laptop") && message.contains(merge))
     }
 
+    /// The hub keeps a grant's source as words: the ones it writes itself and the usual ones are worded in the app's
+    /// language, whatever language they were written in; anything else stays as written.
+    @Test func aKnownSourceIsWordedInTheAppsLanguage() {
+        let suggested = String(localized: "Suggested rule: the same answer \(3) times in 14 days, confirmed with Always. [Standing Authorization source]")
+        for raw in ["Suggested rule: the same answer 3 times in 14 days, confirmed with Always.",
+                    "建议的规则：14 天内 3 次相同的回答，点「总是」确认。", // i18n-ignore: the hub's sentence
+                    "提案されたルール：14 日間に同じ回答が 3 回あり、「常に」で確認されました。"] { // i18n-ignore: the hub's sentence
+            #expect(StandingAuthorizationText.source(raw) == suggested, "\(raw)")
+        }
+        let main = String(localized: "Main chat [Standing Authorization source]")
+        for raw in ["Main conversation", " main chat. ", "主对话", "メインチャット"] { // i18n-ignore: sources as written
+            #expect(StandingAuthorizationText.source(raw) == main, "\(raw)")
+        }
+        #expect(StandingAuthorizationText.source("Settings") == String(localized: "Settings [Standing Authorization source]"))
+        #expect(StandingAuthorizationText.source("conversation") == String(localized: "A chat [Standing Authorization source]"))
+        #expect(StandingAuthorizationText.source("Weekly review with Sam") == "Weekly review with Sam", "unknown words stay")
+    }
+
     @Test func theListIsReadForThePagesAssistant() async {
         for (shown, named) in [("work", "work"), (nil, nil)] as [(String?, String?)] {
             let hub = FakeHub()

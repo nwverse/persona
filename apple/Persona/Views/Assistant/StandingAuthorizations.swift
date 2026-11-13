@@ -137,6 +137,42 @@ enum StandingAuthorizationText {
         }
     }
 
+    /// Where a grant came from, in the app's language. The hub keeps it as words, not a code: the sentence it writes
+    /// itself for a suggested rule confirmed with Always (`assistant-rule_suggest.source`, in the owner's language when it
+    /// was made), or what the assistant wrote ("Main conversation"). Those it knows in en, zh-Hans or ja are worded
+    /// again here; anything else stays as written.
+    static func source(_ raw: String) -> String {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let n = suggestedRuleCount(text) {
+            return String(localized: "Suggested rule: the same answer \(n) times in 14 days, confirmed with Always. [Standing Authorization source]")
+        }
+        let key = text.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".。 "))
+        switch key {
+        case "main conversation", "the main conversation", "main chat", "the main chat",
+             "主对话", "主会话", "主聊天", "メインチャット", "メインの会話", "メイン会話": // i18n-ignore: the words a grant's source may hold
+            return String(localized: "Main chat [Standing Authorization source]")
+        case "conversation", "a conversation", "chat", "a chat", "对话", "会话", "会話", "チャット": // i18n-ignore: the words a grant's source may hold
+            return String(localized: "A chat [Standing Authorization source]")
+        case "settings", "设置", "設定": // i18n-ignore: the words a grant's source may hold
+            return String(localized: "Settings [Standing Authorization source]")
+        default:
+            return text
+        }
+    }
+
+    /// The count in the hub's suggested-rule sentence, in any of its three languages; nil for other words.
+    private static func suggestedRuleCount(_ text: String) -> Int? {
+        let patterns = [
+            #"^Suggested rule: the same answer (\d+) times in 14 days, confirmed with Always\.$"#,
+            #"^建议的规则：14 天内 (\d+) 次相同的回答，点「总是」确认。$"#, // i18n-ignore: the hub's sentence
+            #"^提案されたルール：14 日間に同じ回答が (\d+) 回あり、「常に」で確認されました。$"#, // i18n-ignore: the hub's sentence
+        ]
+        for pattern in patterns {
+            if let match = text.firstMatch(of: try! Regex(pattern)), let n = match.output[1].substring.flatMap({ Int($0) }) { return n }
+        }
+        return nil
+    }
+
     /// "In weather on MacBook".
     static func place(_ grant: StandingAuthorization, machine: String) -> String {
         String(localized: "In \(grant.folderName) on \(machine) [Standing Authorization]")
@@ -385,7 +421,7 @@ private struct StandingAuthorizationDetail: View {
                 if !grant.source.isEmpty {
                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                         Text("From [Standing Authorization]")
-                        Text(grant.source).font(Theme.Font.caption).foregroundStyle(.secondary)
+                        Text(StandingAuthorizationText.source(grant.source)).font(Theme.Font.caption).foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
                 }
