@@ -4,7 +4,7 @@ import XCTest
 /// and the Received chain row open the chat itself, and a slow edge drag returns to the item with View original usable.
 /// Against scripts/mock/mock_hub.py with MOCK_INBOX_EVENTS=1 MOCK_EXTENSIONS=1 MOCK_INBOX_ITEM_UI=1 (PERSONA_MOCK_HUB),
 /// so an extension really declares inbox_item for this source. Runs on a phone and at regular width (>600): the phone
-/// opens Inbox from its drawer, while regular width uses the persistent sidebar and the detail column's own leading edge.
+/// opens Inbox from its drawer, while regular width uses the persistent sidebar and a slow drag from the window's leading edge.
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> saves every step (exposed to the test runner as PERSONA_SHOTS).
 final class InboxSourceDirectTests: XCTestCase {
     private static let itemID = "lark:oc_demo1:100"
@@ -179,23 +179,12 @@ final class InboxSourceDirectTests: XCTestCase {
 
     // MARK: - Navigation and evidence
 
-    /// Back as a finger does it. At regular width the gesture belongs to the detail column, not the window's outer edge.
+    /// Back as a finger does it. A regular-width navigation bar spans the window, whose leading edge starts the pop.
     @MainActor private func swipeBack() {
         sleep(1) // once the push has settled
         let window = app.windows.firstMatch
-        let start: XCUICoordinate
-        if regularWidth {
-            // The system starts interactive-pop at the detail navigation bar's leading edge, not the divider's handle.
-            guard let bar = app.navigationBars.allElementsBoundByIndex.last(where: { $0.exists && $0.frame.minX > 50 }) else {
-                return XCTFail("no detail-column navigation bar:\n\(app.debugDescription)")
-            }
-            let x = bar.frame.minX - window.frame.minX + 2
-            start = window.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: x, dy: window.frame.height * 0.5))
-        } else {
-            start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.5))
-        }
-        let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+        let start = window.coordinate(withNormalizedOffset: CGVector(dx: regularWidth ? 0.0 : 0.005, dy: 0.5))
+        let end = window.coordinate(withNormalizedOffset: CGVector(dx: regularWidth ? 0.6 : 0.9, dy: 0.5))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
     }
 
