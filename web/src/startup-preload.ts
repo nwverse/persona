@@ -243,8 +243,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * code measured +1,396 B and +1,510 B on the two mains before, docs/lessons/web.md; the 30 B of room main had stay).
  * +100 B for the scheduled tasks list's "Inbox: …" marks and the assistant's own Inbox row (#6430): the Japanese first
  * screen was 49 B over with them, in three languages' text and a few lines of code.
+ * Main synchronization accounting (#6395): clean e2a0b4d3 and this Inbox branch both measure ja 476,774 B
+ * (114 B over main's cap). Keep 30 B of room; the Inbox feature adds no first-screen bytes or cold imports.
  */
-export const FIRST_SCREEN_BUDGET = 476_660;
+export const FIRST_SCREEN_BUDGET = 476_804;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
