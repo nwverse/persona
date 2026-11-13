@@ -406,6 +406,13 @@ type Item struct {
 	DueDate        *time.Time `json:"due_date,omitempty"`
 	Kind           string     `json:"kind"`
 	Snapshot       bool       `json:"snapshot,omitempty"`
+	// SenderID, Chat and ChatName say who and where for mutes and policies (deliverer.tags), not what the item says.
+	SenderID string `json:"sender_id,omitempty"`
+	Chat     string `json:"chat,omitempty"`
+	ChatName string `json:"chat_name,omitempty"`
+	// Seen: the item was seen in the source (#6176), when the pull that stored it or a later one read it so; never
+	// turned off again.
+	Seen bool `json:"seen,omitempty"`
 }
 
 // Seen is a dedup key kept for a subscription (subscription_seen).
