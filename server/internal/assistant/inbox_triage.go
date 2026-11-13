@@ -448,9 +448,13 @@ func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID strin
 	wait := followDirect && !fromCard && file && !kept && it.open() && it.Agent != nil && it.Agent.SessionID != ""
 	kept = kept || wait
 	once.keptOpen = kept
+	if c.Mail != nil {
+		once.clientID = text
+	}
 	b.noteSent(it, now)
 	tell := false
 	if wait {
+		it.Suggestion = nil // the user's own reply supersedes a suggestion still waiting for confirmation
 		it.Agent.SentOf = c.Last
 		b.waitForOtherSide(it, defaultInboxFollow(now), ViaUser, now, loc, true)
 		b.tell(it, inboxNote{Name: prompts.NoteSent, Text: text}, false, now)
@@ -491,9 +495,18 @@ func (s *Service) replyMail(ctx context.Context, r inboxReplyReq) (bool, error) 
 	if m == nil || len(m.UIDs) == 0 {
 		return false, errCannotReply
 	}
+	b := &s.inbox
+	b.mu.Lock()
+	repeated := r.once.repeated(r.live, r.text)
+	b.mu.Unlock()
+	if repeated {
+		return true, nil
+	}
 	var sent assistantwire.InboxSent
 	err := s.appCall(ctx, AppInbox, inboxReplyMail, map[string]any{"account_id": m.AccountID, "uid": m.UIDs[len(m.UIDs)-1],
 		"mailbox": m.Mailbox, "text": r.text, "send_id": r.sendID}, &sent)
 	s.inboxSent(sent, r.sendID)
-	return sent.Already, err
+	// A hub "already" can be the first answer this manager got after an in-doubt send: this manager still writes the
+	// resulting item state. Only the local repeat check above may skip that write.
+	return false, err
 }
