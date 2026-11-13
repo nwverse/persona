@@ -507,28 +507,42 @@ struct VNCPage: View {
     #if os(iOS) || os(visionOS)
     /// A one-line reason under the bars when the video channel falls back to VNC (#3954).
     private func fallbackBanner(_ f: ScreenVideoFallback) -> some View {
-        HStack(spacing: Theme.Space.xs) {
+        let line = HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
             ThemedIcon(Theme.Icon.info).font(Theme.Font.caption).foregroundStyle(Theme.caution)
-            Text(f.message).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("screen-fallback")
-            // The one reason the user can fix themselves: say where, in one sentence.
-            if f == .notAllowed {
-                Button { fallbackHelp = true } label: { Text("How to turn it on").font(Theme.Font.label) }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.accent)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .accessibilityIdentifier("screen-fallback-help")
-            }
+            Text(Self.fallbackLine(f)).font(Theme.Font.label).foregroundStyle(.secondary)
+                .lineLimit(3).fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Theme.Space.page)
         .padding(.bottom, Theme.Space.xs)
+        return Group {
+            if f == .notAllowed {
+                // The one reason the user can fix themselves: the whole line is the way to the one sentence saying where
+                // (a whole-width target, and "How to turn it on" wraps with the words at any text size).
+                Button { fallbackHelp = true } label: { line.contentShape(.rect) }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(Text("How to turn it on"))
+                    .accessibilityIdentifier("screen-fallback-help")
+            } else {
+                line.accessibilityElement(children: .combine).accessibilityIdentifier("screen-fallback")
+            }
+        }
         .alert("Turn On Video for This Mac", isPresented: $fallbackHelp) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(ScreenVideoFallback.howToAllow)
         }
+    }
+
+    /// The fallback's words; the not-allowed one ends with "How to turn it on" in the accent color.
+    private static func fallbackLine(_ f: ScreenVideoFallback) -> AttributedString {
+        var line = AttributedString(f.message)
+        if f == .notAllowed {
+            var how = AttributedString(String(localized: "How to turn it on"))
+            how.foregroundColor = Theme.accent
+            line += AttributedString(" ") + how
+        }
+        return line
     }
 
     /// The reading the stats overlay draws (#3954): the video channel's while its picture shows, else RFB's. A

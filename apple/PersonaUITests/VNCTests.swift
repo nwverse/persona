@@ -983,7 +983,7 @@ final class VNCTests: XCTestCase {
         XCTAssertEqual(start?["max_kbps"] as? Int, 12_000, "Wi-Fi's cap: \(state)")
         XCTAssertEqual(start?["codecs"] as? [String], ["hevc", "h264"])
         XCTAssertGreaterThan(state["reports"] as? Int ?? 0, 0, "the phone reports frames")
-        func says(_ words: String) -> XCUIElement { app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch }
+        func says(_ words: String) -> XCUIElement { app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch }
         XCTAssertFalse(app.descendants(matching: .any)["screen-fallback"].exists, "nothing to explain")
         shot(app, "vnc-video")
 
@@ -998,9 +998,9 @@ final class VNCTests: XCTestCase {
         // The Mac took Persona Screen's permission away: the one reason the user fixes, so the line says where.
         try mock(hub!, "/mock/screen-video?pause=permission")
         XCTAssertTrue(picture(screen, "vnc"), "not allowed: VNC again")
-        XCTAssertTrue(says("还没允许视频").waitForExistence(timeout: 5), "why:\n\(app.debugDescription)")
-        let how = app.buttons["screen-fallback-help"].firstMatch
+        let how = app.buttons["screen-fallback-help"].firstMatch // the whole line: why, and how to turn it on
         XCTAssertTrue(how.waitForExistence(timeout: 5), "how to turn it on:\n\(app.debugDescription)")
+        XCTAssertTrue(how.label.contains("还没允许视频"), "why: \(how.label)")
         shot(app, "vnc-video-not-allowed")
         how.tap()
         let alert = app.alerts.firstMatch
@@ -1011,7 +1011,7 @@ final class VNCTests: XCTestCase {
         alert.buttons.firstMatch.tap()
         try mock(hub!, "/mock/screen-video?resume=1")
         XCTAssertTrue(picture(screen, "video"), "allowed again: video")
-        XCTAssertTrue(says("还没允许视频").waitForNonExistence(timeout: 5), "the line goes with video back")
+        XCTAssertTrue(how.waitForNonExistence(timeout: 5), "the line goes with video back")
 
         try mock(hub!, "/mock/screen-video?drop=1")
         XCTAssertTrue(picture(screen, "vnc"), "dropped: VNC again")
