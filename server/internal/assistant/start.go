@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -110,13 +112,22 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		Instructions string          `json:"instructions"`
 		Skills       json.RawMessage `json:"skills"`
 	}
-	if err := s.appCall(ctx, AppPlugins, PluginsAssistant, map[string]any{"machine_id": machine}, &plugins); err != nil {
+	// The digest of the hub's own part lets the extensions' data instructions ride along when it changes (the
+	// conversation restarts for it anyway) instead of restarting it on their own (extmgr extension_assistant_data.go).
+	pluginParams := map[string]any{"machine_id": machine}
+	var own string
+	if space != SpaceHealth {
+		own = s.claudeMD(ctx, machine, conns.LarkCLI)
+		sum := sha256.Sum256([]byte(own))
+		pluginParams["base_digest"] = hex.EncodeToString(sum[:16])
+	}
+	if err := s.appCall(ctx, AppPlugins, PluginsAssistant, pluginParams, &plugins); err != nil {
 		return "", false, err
 	}
 	if len(plugins.Skills) == 0 {
 		plugins.Skills = json.RawMessage("null")
 	}
-	dir, md := s.assistantRel(), s.claudeMD(ctx, machine, conns.LarkCLI)+plugins.Instructions
+	dir, md := s.assistantRel(), own+plugins.Instructions
 	if space == SpaceHealth {
 		dir, md = s.healthRel(), s.healthClaudeMD(ctx, machine)
 	}
@@ -302,6 +313,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			return proto.Session{}, refusePick(http.StatusBadRequest, err)
 		}
 	}
+	if err := s.validateSkillSelections(ctx, machine, "", params); err != nil {
+		return proto.Session{}, err
+	}
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
@@ -385,9 +399,11 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 	return sess, nil
 }
 
-// startConversation starts a new conversation of the assistant's own (a scheduled task's, conversation_new's).
+// startConversation starts a new conversation of the assistant's own (the background supervisor's, a scheduled task's,
+// conversation_new's). Nobody is in front of it to sign in, so it starts signed in as a meeting's do (startSignedIn):
+// in the profile the assistant's conversations had, not a new private one with no login in it (#6015).
 func (s *Service) startConversation(ctx context.Context, p startParams) (proto.Session, error) {
-	return s.start(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
+	return s.startSignedIn(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
 		Origin: p.Origin, OriginRef: p.OriginRef})
 }
 
@@ -969,6 +985,9 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	}
 	delete(p.Params, "via")
 	params, own, err := s.sendParamsOwn(ctx, p)
+	if err == nil {
+		err = s.validateSkillSelections(ctx, p.MachineID, p.SessionID, params)
+	}
 	switch {
 	case !p.Human || !own || marked: // anyone else's id, a person's carrying another's words (a mail handed on, the
 		// old main conversation's) or sent by Siri or the share sheet, never counts, nor does a person's id once

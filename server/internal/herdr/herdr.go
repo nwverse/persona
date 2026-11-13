@@ -141,7 +141,7 @@ const worktreeTimeout = 2 * time.Minute
 
 // timeoutOf is how long a call may take: a worktree checkout is slow, everything else is one quick request.
 func timeoutOf(method string) time.Duration {
-	if method == "worktree.create" {
+	if method == "worktree.create" || method == "worktree.remove" || method == "workspace.close" {
 		return worktreeTimeout
 	}
 	return rpcTimeout
@@ -572,12 +572,30 @@ type WorktreeCreated struct {
 
 // WorktreeCreate has herdr make a Git worktree checkout at path (an absolute path) from the repository of a workspace
 // and open it as a workspace grouped under that one, without moving the computer's focus. An existing local branch is
-// checked out; any other name becomes a new branch from the workspace's HEAD. herdr never forces anything: a branch
+// checked out; any other name becomes a new branch from base when given, else from the workspace's HEAD. herdr never forces anything: a branch
 // checked out elsewhere, or a path git refuses, is an error.
-func (c *Client) WorktreeCreate(ctx context.Context, workspace, branch, path string) (*WorktreeCreated, error) {
+func (c *Client) WorktreeCreate(ctx context.Context, workspace, branch, path string, base ...string) (*WorktreeCreated, error) {
+	params := map[string]any{"workspace_id": workspace, "branch": branch, "path": path, "focus": false}
+	args := []string{"worktree", "create", "--workspace", workspace, "--branch", branch, "--path", path}
+	if len(base) > 0 && base[0] != "" {
+		params["base"] = base[0]
+		args = append(args, "--base", base[0])
+	}
 	var res WorktreeCreated
-	err := c.call(ctx, "worktree.create", map[string]any{"workspace_id": workspace, "branch": branch, "path": path, "focus": false}, &res,
-		"worktree", "create", "--workspace", workspace, "--branch", branch, "--path", path, "--no-focus")
+	err := c.call(ctx, "worktree.create", params, &res, append(args, "--no-focus")...)
+	return &res, err
+}
+
+// WorktreeCreateFromCwd is WorktreeCreate from a main checkout that has no open workspace.
+func (c *Client) WorktreeCreateFromCwd(ctx context.Context, cwd, branch, path string, base ...string) (*WorktreeCreated, error) {
+	params := map[string]any{"cwd": cwd, "branch": branch, "path": path, "focus": false}
+	args := []string{"worktree", "create", "--cwd", cwd, "--branch", branch, "--path", path}
+	if len(base) > 0 && base[0] != "" {
+		params["base"] = base[0]
+		args = append(args, "--base", base[0])
+	}
+	var res WorktreeCreated
+	err := c.call(ctx, "worktree.create", params, &res, append(args, "--no-focus")...)
 	return &res, err
 }
 
@@ -595,6 +613,18 @@ func (c *Client) TabRename(ctx context.Context, tab, label string) error {
 func (c *Client) WorkspaceRename(ctx context.Context, workspace, label string) error {
 	return c.call(ctx, "workspace.rename", map[string]any{"workspace_id": workspace, "label": label}, nil,
 		"workspace", "rename", workspace, label)
+}
+
+func (c *Client) WorkspaceClose(ctx context.Context, workspace string) error {
+	return c.call(ctx, "workspace.close", map[string]any{"workspace_id": workspace}, nil, "workspace", "close", workspace)
+}
+
+func (c *Client) WorktreeRemove(ctx context.Context, workspace string, force bool) error {
+	args := []string{"worktree", "remove", "--workspace", workspace}
+	if force {
+		args = append(args, "--force")
+	}
+	return c.call(ctx, "worktree.remove", map[string]any{"workspace_id": workspace, "force": force}, nil, args...)
 }
 
 func (c *Client) TabClose(ctx context.Context, tab string) error {

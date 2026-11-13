@@ -146,19 +146,20 @@ class OutboxMessageSender(
     fun connectActivity(busy: (SessionKey) -> Boolean) { this.busy = busy }
 
     override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) =
-        enqueue(session, text, clientMessageId, clearDraft, null, null)
+        enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now()))
 
     override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) =
-        enqueue(session, text, clientMessageId, clearDraft, launcher, model)
+        enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now(), launcher = launcher, model = model))
 
-    private suspend fun enqueue(
-        session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?,
-    ) = lifecycle.withLock {
+    override suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) =
+        enqueue(OutboxEntry(clientMessageId, session, text, createdAt = now(), applySwitch = true))
+
+    private suspend fun enqueue(entry: OutboxEntry) = lifecycle.withLock {
         check(job.isActive) { "Pairing scope is closed" }
-        require(text.isNotBlank() && clientMessageId.isNotBlank())
-        require(session.machineId.isNotBlank() && session.sessionId.isNotBlank())
-        store.enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now(), launcher = launcher, model = model))
-        if (transport.readyToSend.value) receiptState.preparing(session, clientMessageId, false)
+        require(entry.text.isNotBlank() && entry.clientMessageId.isNotBlank())
+        require(entry.session.machineId.isNotBlank() && entry.session.sessionId.isNotBlank())
+        store.enqueue(entry)
+        if (transport.readyToSend.value) receiptState.preparing(entry.session, entry.clientMessageId, false)
         wake.trySend(Unit)
         Unit
     }
@@ -535,7 +536,7 @@ class OutboxMessageSender(
 
     private fun request(entry: OutboxEntry) = MessageRequest(
         hubScope, entry.session, entry.text, entry.clientMessageId, entry.clearDraft,
-        opId = entry.operationId, launcher = entry.launcher, model = entry.model,
+        opId = entry.operationId, launcher = entry.launcher, model = entry.model, applySwitch = entry.applySwitch,
     )
 
     private sealed interface MainTarget {
@@ -606,7 +607,7 @@ class OutboxMessageSender(
         private val reconcilable = uncertain + setOf(OutboxState.Sent, OutboxState.NeedsConfirmation)
         private val dispatchable = setOf(OutboxState.Queued, OutboxState.WaitingForNetwork)
         private val hidden = setOf(OutboxState.Cancelled, OutboxState.Shown)
-        private val refusals = setOf("input_draft", "dialog_open", "op_id_reused", "invalid", "stale_session")
+        private val refusals = setOf("input_draft", "dialog_open", "codex_not_ready", "codex_first_text", "codex_waiting", "op_id_reused", "invalid", "stale_session")
         /** A message that keeps coming back waiting while the link is up goes again this often (iOS retryOutboxSoon). */
         private const val StallRetryMillis = 10_000L
         /** …and is refused after this long, about six tries (iOS OutboxWait.connectedLimit). */
@@ -620,6 +621,8 @@ class OutboxMessageSender(
             MessageTransportResult.NotSent -> OutboxState.WaitingForNetwork
             MessageTransportResult.NoReceipt -> OutboxState.Unknown
             is MessageTransportResult.HubError -> when {
+                // Its first paste may already be in Codex. Only the user can decide whether to send it again.
+                result.code == "codex_first_unconfirmed" && result.delivered == "unknown" -> OutboxState.NeedsConfirmation
                 result.delivered == "unknown" -> OutboxState.Verifying
                 result.delivered == "yes" -> OutboxState.Sent
                 result.code in refusals || result.code in SetupFailureCodes -> OutboxState.Refused

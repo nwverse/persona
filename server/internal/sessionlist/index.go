@@ -35,6 +35,9 @@ type Item struct {
 	// BackgroundWaiting: a working row that only waits on background commands (#6045). It stays in State's count
 	// (older apps call it working) and is counted apart in Counts.BackgroundWaiting too.
 	BackgroundWaiting bool
+	// Private: a row a reader with Options.NoPrivate is never shown, in its rows, totals or counts (a health-space
+	// conversation, which an extension's token does not see).
+	Private bool
 	// Fold is the item's place in the session hierarchy (#5120); nil for an item folded under none that shows its own
 	// State and BackgroundWaiting, as every item without children does. It sits behind a pointer to keep Item in its
 	// allocation size class: an adapter builds a whole batch as one []Item, as the hub does on every pass.
@@ -83,6 +86,16 @@ type Options struct {
 	Roots   bool
 	Under   string
 	Summary bool
+	// NoPrivate leaves the Private items out of the rows, the totals and every count; like Manager it is the adapter's
+	// to set (who asks), not a key Parse reads, and it binds a cursor as the other filters do.
+	NoPrivate bool
+	// Places (place=["<machine>","<project>"], repeatable) selects the items at any of these machine and project
+	// pairs: one project's directories across computers. Spaces (space=["<machine>","<group>"]) does the same by
+	// machine and group. An empty key selects the items of that machine without the attribute. Each combines with
+	// the other filters and binds a cursor as they do, whatever order its pairs come in. At most maxPlaces each,
+	// every pair with a machine.
+	Places []Place
+	Spaces []Place
 }
 
 // Page contains transport values rather than adapter-specific session types.
@@ -140,7 +153,9 @@ type journalEntry struct {
 
 type filters struct {
 	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under string
-	Roots                                                                               bool
+	// Places and Spaces are Options' as placesKey spells them: filters stay comparable.
+	Places, Spaces   string
+	Roots, NoPrivate bool
 }
 
 type binding struct {

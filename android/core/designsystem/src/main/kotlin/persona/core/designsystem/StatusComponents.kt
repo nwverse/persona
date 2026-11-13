@@ -33,10 +33,18 @@ import persona.core.designsystem.icons.PhIcons
  * A status mark: a glowing dot in glass, a dot in brief, a small square holder on the board.
  * Decorative for accessibility; always pair it with visible text. [waiting]: the working agents it stands for only wait in
  * the background, so Glass draws it in that state's lighter tone ([PersonaPalette.backgroundWaiting]) without the darker rim.
+ * [spinning]: a lead row whose Agents work while its own conversation is idle (#6230). It draws the working spinner instead
+ * of a dot, so "something under this row is running" reads the same as a turn the conversation runs itself; reduced motion
+ * freezes it as a static arc.
  */
 @Composable
-fun JStatusDot(status: Status, modifier: Modifier = Modifier, size: Dp = 8.dp, waiting: Boolean = false) {
+fun JStatusDot(status: Status, modifier: Modifier = Modifier, size: Dp = 8.dp, waiting: Boolean = false, spinning: Boolean = false) {
     val tone = PersonaTheme.palette.status(status, waiting)
+    if (spinning) {
+        // the dense row's mark slot is small; the arc keeps the dot's footprint rather than the 20dp default spinner
+        JSpinner(modifier.size(size + 4.dp), color = tone.dot, stroke = 1.8.dp)
+        return
+    }
     when (PersonaTheme.style) {
         AppStyle.Glass -> {
             val breath = needsYouBreath(status == Status.NeedsYou && !PersonaTheme.reduceMotion)
@@ -53,6 +61,19 @@ fun JStatusDot(status: Status, modifier: Modifier = Modifier, size: Dp = 8.dp, w
         AppStyle.Brief -> Box(modifier.size(size).clip(CircleShape).background(tone.dot).border(1.dp, tone.text, CircleShape).clearAndSetSemantics {})
         AppStyle.Board -> Box(modifier.size(size).clip(RoundedCornerShape(2.dp)).background(tone.dot).border(1.dp, tone.text, RoundedCornerShape(2.dp)).clearAndSetSemantics {})
     }
+}
+
+/**
+ * An agent's state dot where iOS draws `StatusDot(state:size:waiting:)` small (the chat header's second line, its slim bar):
+ * [JStatusDot], or, on Glass, the clock of one that only waits in the background ([waiting]), as wide as the ring around a
+ * working dot (1.7 times) in that state's lighter tone ([PersonaPalette.backgroundWaiting]). Brief and Board keep the dot.
+ */
+@Composable
+fun JStateDot(status: Status, size: Dp, waiting: Boolean = false, modifier: Modifier = Modifier) {
+    if (waiting && PersonaTheme.style == AppStyle.Glass) {
+        JIcon(persona.core.designsystem.icons.PersonaIcons.backgroundWaiting, null, modifier, size = size * WaitClockScale,
+            tint = PersonaTheme.palette.backgroundWaiting.dot, decorative = true)
+    } else JStatusDot(status, modifier, size)
 }
 
 /**

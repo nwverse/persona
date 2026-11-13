@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -45,6 +46,7 @@ func worktreeUnsupported(kind string) error {
 // worktreeRepo is the repository a workspace is in.
 type worktreeRepo struct {
 	root, name, branch string
+	mainRoot           string // the main checkout when root is a linked worktree
 }
 
 // repoOfWorkspace finds the repository of a workspace the host lists, and the host that makes its worktrees. Without
@@ -75,7 +77,7 @@ func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string)
 			return nil, "", repo, err
 		}
 		// The requested Git directory is authoritative, even when no terminal space holds it.
-		// An empty workspace selects Git creation below, preserving checkout isolation.
+		// Only a matched directory within that repository may supply a workspace ID.
 		dir, err = n.gitDir(dir)
 		if err != nil {
 			return nil, "", repo, err
@@ -100,6 +102,22 @@ func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string)
 	return h, workspace, repo, nil
 }
 
+// requireCommit refuses a repository nobody has committed to: no ref names a commit (an unborn HEAD and nothing
+// fetched), so a new worktree has no base (git: "invalid reference: main") and would hold none of the folder's files
+// anyway. The code lets the hub run an inferred task in the folder itself instead (#5548). A repository with commits on
+// some ref passes even when HEAD is an orphan branch, and a git that cannot answer is its own error, never "no commits".
+func requireCommit(ctx context.Context, repo worktreeRepo) error {
+	out, err := git(ctx, repo.root, "rev-list", "-n", "1", "--all")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) != "" {
+		return nil
+	}
+	return &rpc.Error{Code: proto.CodeWorktreeNoCommits,
+		Message: i18n.T(i18n.From(ctx), "worktree-composer.no_commits", i18n.Args{"path": repo.root})}
+}
+
 // repoAt is the repository dir is in: its root, the branch checked out there and its name (a linked worktree is named
 // for its repository).
 func repoAt(ctx context.Context, dir string) (worktreeRepo, error) {
@@ -122,7 +140,11 @@ func repoAt(ctx context.Context, dir string) (worktreeRepo, error) {
 			c = filepath.Join(repo.root, c)
 		}
 		if c = filepath.Clean(c); filepath.Base(c) == ".git" {
-			repo.name = filepath.Base(filepath.Dir(c)) // a linked worktree is named for its repository
+			mainRoot := filepath.Dir(c)
+			repo.name = filepath.Base(mainRoot) // a linked worktree is named for its repository
+			if mainRoot != filepath.Clean(repo.root) {
+				repo.mainRoot = mainRoot
+			}
 		} else if c != filepath.Clean(repo.root) {
 			repo.name = strings.TrimSuffix(filepath.Base(c), ".git") // a bare repository
 		}
@@ -213,6 +235,9 @@ func (n *Node) worktreePrepare(ctx context.Context, kind, workspace, cwd string)
 	if err != nil {
 		return proto.WorktreePrepare{}, err
 	}
+	if err = requireCommit(ctx, repo); err != nil {
+		return proto.WorktreePrepare{}, err
+	}
 	return proto.WorktreePrepare{Root: repo.root, RepoName: repo.name, Branch: repo.branch, Path: n.worktreesDir(h, repo.name),
 		ChooseParent: h.Kind() == host.Orca, AutomaticName: true}, nil
 }
@@ -277,6 +302,9 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 	if err != nil {
 		return res, err
 	}
+	if err = requireCommit(ctx, repo); err != nil {
+		return res, err
+	}
 	if err := checkBranch(ctx, repo.root, branch); err != nil {
 		return res, err
 	}
@@ -297,8 +325,25 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 			return res, errors.New("This terminal host cannot choose a different parent workspace")
 		}
 		created, err = w.CreateWorktreeUnder(ctx, workspace, branch, dest, parent)
-	} else if w, ok := h.(host.Worktreer); ok && w.CanWorktree() && workspace != "" {
-		created, err = w.CreateWorktree(ctx, workspace, branch, dest)
+	} else if w, ok := h.(host.Worktreer); ok && w.CanWorktree() {
+		if main, ok := h.(interface {
+			CreateWorktreeFromMain(context.Context, string, string, string, string, string) (*host.Created, error)
+		}); ok && repo.mainRoot != "" {
+			base := ""
+			if !branchExists(ctx, repo.root, branch) {
+				var baseErr error
+				base, baseErr = git(ctx, repo.root, "rev-parse", "HEAD")
+				if baseErr != nil {
+					return res, baseErr
+				}
+				base = strings.TrimSpace(base)
+			}
+			created, err = main.CreateWorktreeFromMain(ctx, workspace, repo.mainRoot, base, branch, dest)
+		} else if workspace != "" {
+			created, err = w.CreateWorktree(ctx, workspace, branch, dest)
+		} else {
+			created, err = n.worktreeByGit(ctx, h, repo, branch, dest)
+		}
 	} else {
 		created, err = n.worktreeByGit(ctx, h, repo, branch, dest)
 	}
@@ -352,6 +397,9 @@ func (n *Node) worktreeCreateAutomatic(ctx context.Context, kind, workspace, cwd
 			return n.worktreeCreate(ctx, kind, workspace, cwd, branch, path, parent)
 		}
 		return res, errors.New("Could not find an unused worktree name")
+	}
+	if err = requireCommit(ctx, repo); err != nil { // the loop above checks through worktreeCreate
+		return res, err
 	}
 	created, err := w.CreateGeneratedWorktree(ctx, workspace, parent)
 	if err != nil {

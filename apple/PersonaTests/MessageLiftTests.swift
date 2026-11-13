@@ -117,6 +117,32 @@ struct MessageLiftTests {
         #expect(speed(10, 0) == 0, "nothing shown, nothing to scroll")
     }
 
+    /// A finger that goes down on a selection's handle drags that end (#5982): since iOS 27 the selection changes only
+    /// once the finger lifts, so the handle is told by where the finger went down, the nearer knob within reach.
+    @Test func aFingerOnAHandleDragsThatEnd() {
+        let start = CGRect(x: 40, y: 100, width: 300, height: 22), end = CGRect(x: 0, y: 400, width: 120, height: 22)
+        func handle(_ x: CGFloat, _ y: CGFloat) -> LiftLayout.End? {
+            LiftLayout.handle(at: CGPoint(x: x, y: y), start: start, end: end, reach: 44)
+        }
+        #expect(handle(119, 426) == .end, "under the end's last word")
+        #expect(handle(40, 96) == .start, "over the start's first word")
+        #expect(handle(200, 250) == nil, "on the words between: no handle")
+        #expect(handle(120, 470) == nil, "past reach")
+        // The two knobs close together (a short selection): the nearer.
+        let near = CGRect(x: 60, y: 100, width: 40, height: 22)
+        #expect(LiftLayout.handle(at: CGPoint(x: 64, y: 104), start: near, end: near, reach: 44) == .start)
+        #expect(LiftLayout.handle(at: CGPoint(x: 98, y: 120), start: near, end: near, reach: 44) == .end)
+        #expect(LiftLayout.handle(at: CGPoint(x: 64, y: 104), start: nil, end: nil, reach: 44) == nil, "no selection")
+    }
+
+    /// A handle touched at an edge scrolls only once it has moved: touching it is no drag (#5982).
+    @Test func aHandleScrollsOnlyOnceItMoved() {
+        let down = CGPoint(x: 100, y: 700)
+        #expect(!LiftLayout.moved(down, from: down))
+        #expect(!LiftLayout.moved(CGPoint(x: 103, y: 704), from: down), "a finger's jitter")
+        #expect(LiftLayout.moved(CGPoint(x: 100, y: 690), from: down))
+    }
+
     /// The text view over selected words puts its lines on the chat's (#3188): each on the nearest row ahead, a line
     /// the chat has no row for passed over with the move before it, and after a picture the next line on the next row.
     @Test func theTextViewsLinesGoOnTheChats() {
