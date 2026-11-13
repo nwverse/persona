@@ -73,7 +73,7 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
       </header>
       <div className="flex min-h-0 flex-1">
         <section aria-label={t("inbox-inbox.list")} className={cx("min-h-0 w-full flex-col @3xl:flex @3xl:w-[380px] @3xl:shrink-0 @3xl:border-r @3xl:border-line", id ? "hidden" : "flex")}>
-          <InboxList selected={item ?? (id ? { id, manager } : undefined)} picked={picked} onPicked={setPicked} />
+          <InboxList key={view.revision} selected={item ?? (id ? { id, manager } : undefined)} picked={picked} onPicked={setPicked} />
         </section>
         <section aria-label={t("inbox-inbox.detail")} className={cx("min-h-0 min-w-0 flex-1 flex-col @3xl:flex", id ? "flex" : "hidden")}>
           {id ? <InboxDetail item={item} loaded={loaded && !routing} /> : <DetailPlaceholder />}

@@ -3,6 +3,7 @@
 // after another route remounts the Inbox can put back what that entry showed. Updates never write browser history.
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { uuid } from "./format";
+import { takeReturn } from "./router";
 
 const ENTRY = "personaInboxView";
 const SETTLE_MS = 1500;
@@ -17,8 +18,10 @@ type ViewState = {
 };
 
 export interface InboxViewMemory {
-  /** Whether this mount brought back a snapshot (as opposed to starting a fresh visit). */
+  /** Whether the current view brought back a snapshot (as opposed to starting a fresh visit). */
   readonly restored: boolean;
+  /** Changes when an in-Inbox Back / Forward brings back another item entry's snapshot. */
+  readonly revision: number;
   /** The current history entry's identifier; attached on the page's first layout effect. */
   readonly entryId: string | null;
   listQuery(): string;
@@ -64,15 +67,26 @@ function currentEntryId(): string | null {
 }
 
 class ViewMemory implements InboxViewMemory {
-  readonly restored: boolean;
   private id: string | null;
   private state: ViewState;
+  private returned = false;
+  private version = 0;
 
-  constructor(restore: boolean) {
-    this.id = restore ? currentEntryId() : null;
-    const saved = this.id ? entries.get(this.id) : undefined;
-    this.restored = saved !== undefined;
+  constructor(returned: boolean) {
+    this.id = currentEntryId();
+    // Merely mounting again on the same entry is a fresh visit. Only the router's Back / Forward marker brings a
+    // snapshot back; this also keeps a test, a reload and a plain remount from picking up the previous mount's state.
+    const saved = returned && this.id ? entries.get(this.id) : undefined;
+    this.returned = saved !== undefined;
     this.state = saved ? copyState(saved) : emptyState();
+  }
+
+  get restored(): boolean {
+    return this.returned;
+  }
+
+  get revision(): number {
+    return this.version;
   }
 
   get entryId(): string | null {
@@ -111,18 +125,28 @@ class ViewMemory implements InboxViewMemory {
     this.state.chain = { item: itemKey, open };
   }
 
-  attach(): void {
-    if (typeof history === "undefined") return;
+  /** Change entries before children initialize from the view. Only Back / Forward to an item reads its saved snapshot;
+   *  a push carries the view on screen, and Back to the always-mounted list keeps its current place. */
+  enter(returned: boolean, item: boolean): void {
     const actual = currentEntryId();
-    if (this.id && actual === this.id) {
-      entries.set(this.id, this.state);
-      return;
-    }
-    // An in-Inbox push keeps the view on screen. Give its new entry a copy, leaving the previous entry's snapshot alone.
+    if (this.id === actual) return;
     if (this.id) entries.set(this.id, this.state);
     this.id = actual ?? `${load}:i${++nextEntry}`;
-    this.state = copyState(this.state);
-    if (!actual) history.replaceState({ ...objectState(history.state), [ENTRY]: this.id }, "");
+    const saved = returned && item && actual ? entries.get(actual) : undefined;
+    this.state = copyState(saved ?? this.state);
+    if (saved) {
+      this.returned = true;
+      this.version++;
+    }
+    entries.set(this.id, this.state);
+  }
+
+  attach(): void {
+    if (typeof history === "undefined") return;
+    if (!this.id) this.id = `${load}:i${++nextEntry}`;
+    // `enter` has already chosen the snapshot during render. The effect only stamps a newly pushed entry; in particular
+    // an unmount cleanup after navigate must never write browser history (it now belongs to another route).
+    if (!currentEntryId()) history.replaceState({ ...objectState(history.state), [ENTRY]: this.id }, "");
     entries.set(this.id, this.state);
   }
 
@@ -141,8 +165,11 @@ export function resetInboxViewMemoryForTests(): void {
 /** The page owns entry attachment. `id` and `manager` make an in-Inbox row navigation attach the pushed entry too. */
 export function useInboxViewMemory(id?: string, manager?: string): InboxViewMemory {
   const ref = useRef<ViewMemory | null>(null);
-  if (!ref.current) ref.current = new ViewMemory(true);
+  if (!ref.current) ref.current = new ViewMemory(takeReturn());
   const memory = ref.current;
+  // navigate and popstate update the address before React draws. Choose the entry now, before InboxList's and Chain's
+  // useState initializers read it; the layout effect below only stamps a new entry after the commit.
+  if (memory.entryId !== currentEntryId()) memory.enter(takeReturn(), id !== undefined);
   useLayoutEffect(() => {
     memory.attach();
   }, [memory, id, manager]);
@@ -217,9 +244,6 @@ export function useInboxListScroll(
     if (!el) return;
     const save = () => view.setListScroll(el.scrollTop);
     el.addEventListener("scroll", save, { passive: true });
-    return () => {
-      save();
-      el.removeEventListener("scroll", save);
-    };
+    return () => el.removeEventListener("scroll", save);
   }, [box, view]);
 }

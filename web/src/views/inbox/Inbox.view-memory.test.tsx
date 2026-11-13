@@ -155,6 +155,20 @@ describe("Inbox history-entry view memory", () => {
     expect(chainRows()).toHaveLength(1);
   });
 
+  it("restores an already-visited item immediately on an in-Inbox Back", async () => {
+    await setSearch("chat");
+    await openItem("a1");
+    await act(async () => chainToggle().click());
+    await openItem("a2");
+    await setSearch("chat a2");
+    expect(chainRows()).toHaveLength(1);
+
+    await act(async () => popped(() => history.back()));
+    await show("a1");
+    expect(search().value).toBe("chat");
+    expect(chainRows()).toHaveLength(2);
+  });
+
   it("does not let a post-reload entry reuse an old entry's identifier and snapshot", async () => {
     await setSearch("before reload");
     const oldEntry = (history.state as Record<string, unknown>).personaInboxView;

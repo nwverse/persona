@@ -286,7 +286,13 @@ function ChainIcon({ kind }: { kind: string }) {
 export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: SourceAt) => void }) {
   const view = useInboxView();
   const key = itemKey(item);
+  const revision = view.revision;
   const [open, setOpen] = useState(() => view.chainOpen(key));
+  const [seen, setSeen] = useState({ key, revision });
+  if (seen.key !== key || seen.revision !== revision) {
+    setSeen({ key, revision });
+    setOpen(view.chainOpen(key));
+  }
   useEffect(() => view.setChainOpen(key, open), [view, key, open]);
   const conversation = useConversation();
   const all = item.chain ?? [];
