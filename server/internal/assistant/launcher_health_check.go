@@ -69,6 +69,8 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 	devices := s.devices(ctx)
 	b := &s.health
 	var wg sync.WaitGroup
+	round := time.Now()
+	var scheduled time.Duration // machines started so far, times healthStagger: see healthStagger
 	for _, d := range devices {
 		b.mu.Lock()
 		s.healthLoadLocked(ctx)
@@ -83,6 +85,8 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 			continue
 		}
 		wg.Add(1)
+		due := round.Add(scheduled) // an absolute time, so a goroutine that is scheduled late does not slip into the one before
+		scheduled += healthStagger
 		go func() {
 			defer wg.Done()
 			defer func() {
@@ -90,6 +94,13 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 				delete(b.checking, d.ID)
 				b.mu.Unlock()
 			}()
+			if left := time.Until(due); left > 0 { // not healthRound's wait: this goroutine only
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(left):
+				}
+			}
 			s.checkMachine(ctx, d, cfg, cameOnline, "")
 			s.repairMachine(ctx, d, cfg)
 		}()
