@@ -48,10 +48,18 @@ entry points. Extension management remains in Settings and is distinct from exte
 The Assistant tab's menu (the selected tab on Glass, the title elsewhere) has iOS's items in iOS's order (#4339 C18,
 `assistantMenu`): **Connection details** while the hub is out of reach, **Knowledge**, **Details** (the assistant's settings
 page, iOS's profile), Android's **Voice chat**, **Back to main chat** (off the main chat only); **Copy directory**, **Copy
-info** (iOS `AssistantCopyText`), **Copy session ID** and **Copy diagnostics**; the main chat's **Compact context** and
-**New main chat**; **Session info** and, while it works, **Interrupt**. **Launcher** is reached through Details; iOS's
+info** (iOS `AssistantCopyText`), **Copy session ID** and **Copy diagnostics**; the main chat's **Compact context**,
+**Clear context** and **New main chat**; **Session info** and, while it works, **Interrupt**. **Launcher** is reached through Details; iOS's
 per-chat launcher pick is the stored pick's (#5055), and its **Screen** needs a live screen Android doesn't have. Tests
 `AssistantMenuTest`; screenshots `AssistantDetailsShotsTest`. Other styles retain their existing More section.
+**Clear context** (#5100, the web's #5095, hub feature `assistant_main_clear`; none in the demo) posts
+`POST /api/v1/assistant/main/clear` with the main chat on screen as `expect`, without asking. The page then stays a
+conversation page: an empty middle and the composer at the bottom, not the centered start page; its first message starts
+the new main chat. A 409 `main_changed` refreshes and opens the main chat the hub has, with the hub's words, as New main
+chat does; any other failure is a toast with the reason ("Couldn't clear the context: …"). In the main chat the composer's
+"/" list and "+" sheet offer `/clear` too, which clears the same way (`LocalMainChatClear`); `/clear` sent alone does it,
+anything more is a message, a failure puts `/clear` back in the box, and on the cleared page it does nothing. Tests
+`ClearContextTest`, `MainChatClearTest`.
 It has no native Health destination or archived-chat browser; this change does not invent either feature.
 Recent, pinned and automatic conversation history, pinning, archive actions and New conversation are retained.
 

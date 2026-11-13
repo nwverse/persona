@@ -293,7 +293,10 @@ fun ChatComposer(
     LaunchedEffect(state.focusRequest) { if (state.focusRequest > 0) focusRequester.requestFocus() }
     // A read-only session (enabled = false) offers nothing to type with: no +, no mic, no "/" list, no send.
     val dictate = dictation?.takeIf { enabled }
-    val suggestions = if (enabled) SlashCommand.suggestions(state.value.text, canClear && !working, model = onModel != null, loop = loop) else emptyList()
+    // The main conversation's /clear (#5100): offered while it works too (the hub stops the turn), and it never asks first.
+    val mainClear = LocalMainChatClear.current?.takeIf { enabled }
+    val suggestions = if (enabled) SlashCommand.suggestions(state.value.text, canClear && !working || mainClear != null,
+        model = onModel != null, loop = loop) else emptyList()
     val hint = if (enabled && loop) loopHint(state.value.text, resources) else null
     // @: the word being typed just before the caret, while nothing is selected and no "/" list is open.
     val selection = state.value.selection
@@ -350,10 +353,23 @@ fun ChatComposer(
     }
     val extensionPrompts = if (enabled) LocalExtensionPrompts.current else emptyList()
     val quick = ExtensionPromptText.matching(extensionPrompts, state.value.text)
-    // Picking a quick message puts its words in the box to send; /clear empties the box and asks first.
+    // The main conversation's /clear: the box empties and the hub clears it; /clear goes back into the box if it did not.
+    fun clearMain(clear: MainChatClear) {
+        state.beginEdit()
+        state.value = TextFieldValue()
+        clear.clear { state.value = TextFieldValue(SlashCommand.CLEAR, TextRange(SlashCommand.CLEAR.length)) }
+    }
+    // /clear sent alone in the main conversation clears it instead of going to Persona (web `isClearCommand`).
+    fun send() {
+        val clear = mainClear
+        if (clear != null && isMainClearCommand(state.value.text, state.attachments.size, extraContent)) clearMain(clear) else onSend()
+    }
+    // Picking a quick message puts its words in the box to send; /clear empties the box and asks first (the main
+    // conversation's clears at once).
     fun pick(command: SlashCommand) {
         state.beginEdit()
         when {
+            command.clear && mainClear != null -> clearMain(mainClear)
             command.clear -> { state.value = TextFieldValue(); confirmClear = true }
             command.model -> { state.value = TextFieldValue(); onModel?.invoke() }
             else -> state.value = TextFieldValue(command.text, TextRange(command.text.length))
@@ -396,7 +412,7 @@ fun ChatComposer(
             dictate?.let { JIconButton(PhIcons.Microphone, stringResource(R.string.chat_composer_dictate), it, enabled = !sending) }
             when {
                 blockedLabel != null && enabled -> BlockedSendButton(blockedLabel, onBlocked)
-                hasContent -> SendButton(onClick = onSend, enabled = canSend, loading = sending)
+                hasContent -> SendButton(onClick = ::send, enabled = canSend, loading = sending)
                 working && canInterrupt -> {
                     SendButton(onClick = {
                         if (service != null) {
@@ -425,7 +441,7 @@ fun ChatComposer(
             ComposerSuggestions(quick.map { ComposerSuggestion(it.title, it.extensionName, key = "${it.extension}/${it.id}", flexible = true) },
                 onPick = { picked -> quick.firstOrNull { "${it.extension}/${it.id}" == picked.key }?.let { state.fillQuickPrompt(it) } },
                 modifier = Modifier.padding(vertical = Tokens.Space.xs))
-            ComposerSuggestions(suggestions.map { ComposerSuggestion(it.word, it.detail, destructive = it.clear) },
+            ComposerSuggestions(suggestions.map { ComposerSuggestion(it.word, it.detail, destructive = it.clear && mainClear == null) },
                 onPick = { picked -> suggestions.firstOrNull { it.word == picked.word }?.let(::pick) },
                 modifier = Modifier.padding(vertical = Tokens.Space.xs))
             // The @ menu: Persona's open tasks, files this chat used, the session folder's entries, then other sessions; a word
@@ -466,7 +482,7 @@ fun ChatComposer(
     // Same draft and caret as the field; collapsing puts the caret back in the field. Sending closes it.
     if (expandedEditor) ExpandedComposer(state.value, { state.beginEdit(); state.value = it }, composerPlaceholder,
         onCollapse = { expandedEditor = false; state.focusRequest++ }, enabled = enabled) {
-        SendButton(onClick = { expandedEditor = false; onSend() }, enabled = canSend && hasContent && blockedLabel == null, loading = sending)
+        SendButton(onClick = { expandedEditor = false; send() }, enabled = canSend && hasContent && blockedLabel == null, loading = sending)
     }
     if (menu) ChatActionsSheet(onDismiss = { menu = false }, title = stringResource(R.string.chat_composer_menu_title), actions = buildList {
         // Photos picks pictures and videos (iOS mediaPicker), four together at most.
@@ -482,6 +498,7 @@ fun ChatComposer(
         extensionPrompts.forEach { prompt -> add(JAction(prompt.title) { menu = false; state.fillQuickPrompt(prompt) }) }
         SlashCommand.all(resources).forEach { command -> add(JAction(command.title) { menu = false; onCommand(command.text) }) }
         if (canClear && !working) add(JAction(SlashCommand.clearCommand(resources).title, destructive = true) { menu = false; confirmClear = true })
+        else if (mainClear != null) add(JAction(SlashCommand.clearCommand(resources).title) { menu = false; clearMain(mainClear) })
     })
     if (confirmClear) JDialog(onDismiss = { confirmClear = false }, title = stringResource(R.string.chat_composer_clear_title),
         text = stringResource(R.string.chat_composer_clear_text, agentName),
