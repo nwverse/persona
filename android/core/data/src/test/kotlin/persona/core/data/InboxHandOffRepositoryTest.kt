@@ -6,6 +6,7 @@ import persona.feature.inbox.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -198,6 +199,8 @@ class InboxHandOffRepositoryTest {
             assertEquals("m-2", repository.snapshot.value.records.single().manager)
         } finally {
             finishRecording.complete(Unit)
+            // Drain the background record, including any journal writes after the transport callback returns.
+            advanceUntilIdle()
             AssistantManagerChoice.reset()
             directory.deleteRecursively()
         }
@@ -232,7 +235,10 @@ class InboxHandOffRepositoryTest {
             assertEquals(failures.size, attempts)
             assertEquals(failures.indices.map { Triple(key, "Handle this", "op-$it") }, agents.sent)
             assertTrue(main.sent.isEmpty())
-        } finally { directory.deleteRecursively() }
+        } finally {
+            advanceUntilIdle()
+            directory.deleteRecursively()
+        }
     }
 
     /** Another manager's item handed to Persona with no Agent: its own manager's main conversation, not this phone's main queue. */
