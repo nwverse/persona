@@ -38,7 +38,16 @@ import persona.core.navigation.Navigator
 @Composable
 fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, navigator: Navigator) {
     val inbox by repository.snapshot.collectAsStateWithLifecycle()
-    val record = inbox.records.inboxRecord(route.itemId)
+    val listedRecord = inbox.records.inboxRecord(route.itemId)
+    var lookup by remember(route.itemId) { mutableStateOf<InboxItemLookupResult?>(null) }
+    var lookupAttempt by remember(route.itemId) { mutableIntStateOf(0) }
+    LaunchedEffect(repository, route.itemId, listedRecord, lookupAttempt) {
+        if (listedRecord == null) {
+            lookup = null
+            lookup = readInboxItem(repository, route.itemId)
+        } else lookup = null
+    }
+    val record = listedRecord ?: (lookup as? InboxItemLookupResult.Found)?.record
     val pages = LocalInboxItemPages.current
     val feedback = LocalAppFeedback.current
     val res = LocalResources.current
@@ -65,7 +74,10 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
         onRefresh = {
             scope.launch {
                 refreshing = true
-                try { repository.refreshNow() } catch (e: CancellationException) { throw e } catch (_: Exception) { } finally { refreshing = false }
+                try {
+                    repository.refreshNow()
+                    if (record == null) lookupAttempt++
+                } catch (e: CancellationException) { throw e } catch (_: Exception) { } finally { refreshing = false }
             }
         },
         actions = {
@@ -82,7 +94,15 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
         },
     ) {
         if (record == null) {
-            item("event-missing") { StatusText(stringResource(R.string.inbox_item_missing)) }
+            when (val result = lookup) {
+                null -> item("event-loading") { JLoading(text = stringResource(R.string.inbox_loading)) }
+                is InboxItemLookupResult.Failed -> item("event-failed") {
+                    JNotice(stringResource(R.string.inbox_refresh_failed), actionLabel = stringResource(R.string.inbox_retry),
+                        onAction = { lookupAttempt++ })
+                }
+                InboxItemLookupResult.Missing -> item("event-missing") { StatusText(stringResource(R.string.inbox_item_missing)) }
+                is InboxItemLookupResult.Found -> Unit
+            }
             return@JListPage
         }
         item("event-source") {
