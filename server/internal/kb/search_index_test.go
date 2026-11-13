@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -567,6 +568,28 @@ func indexArchive(t *testing.T) *Engine {
 	return e
 }
 
+// dayArchive is the smallest archive an update and a search have something to do in: the chat lark-c2 with its
+// first days of March 2026, a line each, all old enough to be indexed. For the tests that are about one file or
+// about the index's own files, where every other file of indexArchive would only be opened, again and again.
+func dayArchive(t *testing.T, days int) *Engine {
+	t.Helper()
+	st, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutChat(&Chat{ID: "lark-c2", Name: "群聊 2", Kind: "group"}); err != nil {
+		t.Fatal(err)
+	}
+	for d := 1; d <= days; d++ {
+		day := fmt.Sprintf("2026-03-%02d", d)
+		matchesWrite(t, st.path(KindChat, "lark-c2", "messages", day+".md"), fmt.Sprintf("# %s\n- 09:00 同事2: 今天的进度同步一下 build ok #%d\n", day, d))
+	}
+	if err := ageFiles(st.Dir, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	return &Engine{Store: st}
+}
+
 // writeOld writes a file of the archive and sets its mtime back by age (an hour and more is old enough to index).
 func writeOld(t *testing.T, e *Engine, rel, text string, age time.Duration) {
 	t.Helper()
@@ -995,19 +1018,7 @@ func TestUpdateSearchIndexDropsOldEntriesInTime(t *testing.T) {
 	// merged sets back when the index was last merged, as a new process finds it.
 	merged := func(ago time.Duration) *Engine {
 		t.Helper()
-		ix := &e.Store.search
-		was := ix.state.Load()
-		man := was.man
-		man.Merged = time.Now().Add(-ago)
-		u := &indexUpdate{e: e, ix: ix, dir: e.Store.searchDir(), man: man, logOld: was.logOld}
-		if err := u.publish(was.snap, was.logLen); err != nil {
-			t.Fatal(err)
-		}
-		st, err := NewStore(e.Store.Dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return &Engine{Store: st}
+		return indexMergedAt(t, e, time.Now().Add(-ago))
 	}
 	e = merged(indexPurgeEvery + time.Minute)
 	if stats := updateIndex(t, e); !stats.Merged {
@@ -1030,6 +1041,52 @@ func TestUpdateSearchIndexDropsOldEntriesInTime(t *testing.T) {
 	e = merged(indexMergeEvery + time.Minute)
 	if stats := updateIndex(t, e); !stats.Merged || stats.Dropped != 1 {
 		t.Fatalf("a changed file a day after the merge: %+v, want a merge dropping one entry", stats)
+	}
+	checkIndexCurrent(t, e)
+	checkIndexFiles(t, e)
+}
+
+// indexMergedAt writes at into e's manifest as the time the index was last merged, and gives the engine of a new
+// store: the index as a new process finds it.
+func indexMergedAt(t *testing.T, e *Engine, at time.Time) *Engine {
+	t.Helper()
+	ix := &e.Store.search
+	was := ix.state.Load()
+	man := was.man
+	man.Merged = at
+	u := &indexUpdate{e: e, ix: ix, dir: e.Store.searchDir(), man: man, logOld: was.logOld}
+	if err := u.publish(was.snap, was.logLen); err != nil {
+		t.Fatal(err)
+	}
+	st, err := NewStore(e.Store.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Engine{Store: st}
+}
+
+// A manifest whose last merge is yet to come (the clock was set back since, or one bit of its time is not the one
+// written: a year of 3026) does not put off the merges that are due by time until then: the entry of a file that
+// is gone is dropped at the next update, and the manifest has the time of that merge.
+func TestUpdateSearchIndexWhoseLastMergeIsYetToCome(t *testing.T) {
+	e := dayArchive(t, 4)
+	updateIndex(t, e)
+	gone := "chats/lark-c2/messages/2026-03-04.md"
+	if err := os.Remove(filepath.Join(e.Store.Dir, gone)); err != nil {
+		t.Fatal(err)
+	}
+	if stats := updateIndex(t, e); stats.Merged || !indexNames(t, e.Store.Dir)[gone] {
+		t.Fatalf("update right after: %+v, want no merge yet and the entry still on disk", stats)
+	}
+	e = indexMergedAt(t, e, time.Now().AddDate(1000, 0, 0))
+	if stats := updateIndex(t, e); !stats.Merged || stats.Dropped != 1 {
+		t.Fatalf("update with a last merge a thousand years ahead: %+v, want a merge dropping one entry", stats)
+	}
+	if indexNames(t, e.Store.Dir)[gone] {
+		t.Fatal("the deleted file's entry is still on disk")
+	}
+	if _, man, _, _, err := readIndex(e.Store.searchDir()); err != nil || man.Merged.After(time.Now()) {
+		t.Fatalf("the manifest after the merge says it was merged at %v (%v)", man.Merged, err)
 	}
 	checkIndexCurrent(t, e)
 	checkIndexFiles(t, e)
@@ -1204,6 +1261,36 @@ func TestUpdateSearchIndexStartsAgainWhenDamaged(t *testing.T) {
 				t.Fatal(err)
 			}
 			matchesWrite(t, p, strings.Replace(string(raw), man.Segments[0], "../"+man.Segments[0], 1))
+		},
+		// Whole JSON of the right types, and a time the decoder refuses: neither a syntax error nor a type error.
+		"manifest's time is not one": func(t *testing.T, e *Engine) {
+			p, _ := manifest(t, e)
+			raw, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := fields["merged"].(string); !ok {
+				t.Fatalf("the manifest has no merged time: %s", raw)
+			}
+			fields["merged"] = "the day before"
+			if raw, err = json.Marshal(fields); err != nil {
+				t.Fatal(err)
+			}
+			matchesWrite(t, p, string(raw))
+		},
+		// A name the index gives no file. Read as the log, the directory fails as reading a directory does, at every
+		// try: not an error that says the index is wrong.
+		"manifest names the directory as its log": func(t *testing.T, e *Engine) {
+			p, man := manifest(t, e)
+			raw, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			matchesWrite(t, p, strings.Replace(string(raw), man.Log, ".", 1))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -2010,4 +2097,585 @@ func TestSearchIndexStartedAgainCountsNothingOfTheOneBefore(t *testing.T) {
 	}
 	checkIndexCurrent(t, e)
 	checkIndexFiles(t, e)
+}
+
+// swappedDay is a day of the archive that a test replaces under an update: p holds first as the update's look sees
+// it (was); other is text of the same size. Its steps are called from the update's goroutines, so they report with
+// Error.
+type swappedDay struct {
+	t            *testing.T
+	p, aside     string
+	first, other string
+	was          fileTime
+}
+
+func (f *swappedDay) do(err error) {
+	if err != nil {
+		f.t.Error(err)
+	}
+}
+
+// moveAway moves the file with the first text aside (its mtime stays) and puts the other text in its place, as
+// another file with another mtime.
+func (f *swappedDay) moveAway() {
+	f.do(os.Rename(f.p, f.aside))
+	f.do(os.WriteFile(f.p, []byte(f.other), 0o600))
+	at := time.Unix(0, f.was.mod).Add(5 * time.Minute)
+	f.do(os.Chtimes(f.p, at, at))
+}
+
+// writeOther writes the other text into the file that is there (the same file: whoever has it open reads it).
+func (f *swappedDay) writeOther() { f.do(os.WriteFile(f.p, []byte(f.other), 0o600)) }
+
+// copyAside keeps a copy of the first text aside, with its mtime: what a backup holds.
+func (f *swappedDay) copyAside() {
+	f.do(os.WriteFile(f.aside, []byte(f.first), 0o600))
+	f.do(os.Chtimes(f.aside, time.Unix(0, f.was.mod), time.Unix(0, f.was.mod)))
+}
+
+// moveBack moves the file aside into place: the first text under its own mtime, as a rename or a tool that
+// restores by writing beside and renaming leaves it.
+func (f *swappedDay) moveBack() { f.do(os.Rename(f.aside, f.p)) }
+
+// writeBack writes the first text into the file that is there and gives it its mtime back, as a tool that restores
+// in place does.
+func (f *swappedDay) writeBack() {
+	f.do(os.WriteFile(f.p, []byte(f.first), 0o600))
+	f.do(os.Chtimes(f.p, time.Unix(0, f.was.mod), time.Unix(0, f.was.mod)))
+}
+
+// restore leaves the first text in place under its own mtime, however far the case got.
+func (f *swappedDay) restore() {
+	f.t.Helper()
+	if _, err := os.Stat(f.aside); err == nil {
+		f.moveBack()
+	} else if raw, err := os.ReadFile(f.p); err != nil || string(raw) != f.first {
+		f.writeBack()
+	}
+	if raw, err := os.ReadFile(f.p); err != nil || string(raw) != f.first || statFile(f.p) != f.was {
+		f.t.Fatalf("the first text is not back as it was: %q (%v), %+v, want %+v", raw, err, statFile(f.p), f.was)
+	}
+}
+
+// An update looks at every file first and reads later, so the file it reads can be another than the one it looked
+// at. What it keeps must still be true: the bytes that had this mtime and size have these keys. Here a day is
+// replaced by text of the same size once the update has looked, and the first text is back under its own mtime
+// afterwards: moved back, or put back by a sync or backup tool, as another file or into the one that is there. Were
+// the other text's keys kept under the first one's mtime and size, the day would be ruled out for the first one's
+// words from then on (#1273's second review). In every case a search gives what reading the files gives: at once,
+// after two more updates, and in a new process; and the update keeps the day only when what it read is the first
+// text.
+func TestUpdateSearchIndexKeepsOnlyTheFileItLookedAt(t *testing.T) {
+	const day = "chats/lark-c2/messages/2026-03-03.md"
+	const first = "# 2026-03-03\n- 09:00 同事2: zqfirst only here\n"
+	const other = "# 2026-03-03\n- 09:00 同事2: zqother only here\n"
+	if len(first) != len(other) {
+		t.Fatal("the two texts are not of one size")
+	}
+	cases := []struct {
+		name string
+		// at is what happens to the day at a moment of the update.
+		at func(f *swappedDay, moment string)
+		// reach: the moments the update must be at for the day, or the case replaces nothing.
+		reach []string
+		// kept: what the update read is the first text, which had the mtime and size it looked at: it may keep it.
+		kept bool
+		// segments: also with an update that writes segments (the read is the same; what takes the files is not).
+		segments bool
+	}{
+		{
+			// #1273's second review: nothing tells the read that the file is not the one looked at, but the file.
+			name: "replaced before it is opened, the first moved back afterwards",
+			at: func(f *swappedDay, moment string) {
+				if moment == hookLooked {
+					f.moveAway()
+				}
+			},
+			reach:    []string{hookLooked},
+			segments: true,
+		},
+		{
+			// What only the look at the open file before it is read tells: the other text is read, and by the time
+			// the file is asked again it is the first one's, written back into it with its mtime.
+			name: "replaced before it is opened, the first written back in place once it is read",
+			at: func(f *swappedDay, moment string) {
+				switch moment {
+				case hookLooked:
+					f.moveAway()
+				case hookRead:
+					f.do(os.Remove(f.aside))
+					f.writeBack()
+				}
+			},
+			reach: []string{hookLooked},
+		},
+		{
+			// What only the look at the open file after it is read tells, and only asked of the file, not of its
+			// path: the other text was written into it, and the path is a copy of the first one's by then.
+			name: "written in place once it is opened, a copy of the first moved in once it is read",
+			at: func(f *swappedDay, moment string) {
+				switch moment {
+				case hookOpened:
+					f.copyAside()
+					f.writeOther()
+				case hookRead:
+					f.moveBack()
+				}
+			},
+			reach: []string{hookOpened, hookRead},
+		},
+		{
+			// The file read is the one opened: moved away, it is still the first text, and that is kept, under the
+			// mtime and size that were its own.
+			name: "moved away once it is opened, moved back afterwards",
+			at: func(f *swappedDay, moment string) {
+				if moment == hookOpened {
+					f.moveAway()
+				}
+			},
+			reach: []string{hookOpened, hookRead},
+			kept:  true,
+		},
+	}
+	check := func(t *testing.T, e *Engine, step string) {
+		t.Helper()
+		for _, q := range []string{"zqfirst", "zqother"} {
+			if got, want := e.Find(q, 80), findReference(e, q, 80); !reflect.DeepEqual(got, want) && (len(got) > 0 || len(want) > 0) {
+				t.Errorf("%s: Find(%q):\n got %+v\nwant %+v", step, q, got, want)
+			}
+			if got, want := e.Search(q, true, 10), searchByWalk(e, q, true, 10); !reflect.DeepEqual(got, want) && (len(got) > 0 || len(want) > 0) {
+				t.Errorf("%s: Search(%q):\n got %+v\nwant %+v", step, q, got, want)
+			}
+			if got, want := e.Matches(KindChat, "lark-c2", q, 10), matchesReadingEveryFile(e, KindChat, "lark-c2", q, 10); !reflect.DeepEqual(got, want) && (len(got) > 0 || len(want) > 0) {
+				t.Errorf("%s: Matches(%q):\n got %+v\nwant %+v", step, q, got, want)
+			}
+		}
+		if got := findReference(e, "zqfirst", 80); len(got) != 1 {
+			t.Fatalf("%s: reading the files finds the first text's word in %d entries, want 1", step, len(got))
+		}
+	}
+	for _, c := range cases {
+		for _, mode := range []string{"log", "segments"} {
+			if mode == "segments" && !c.segments {
+				continue
+			}
+			t.Run(c.name+"/"+mode, func(t *testing.T) {
+				if mode == "segments" {
+					smallSegments(t)
+				}
+				e := dayArchive(t, 4)
+				writeOld(t, e, day, first, 50*time.Minute)
+				p := filepath.Join(e.Store.Dir, filepath.FromSlash(day))
+				f := &swappedDay{t: t, p: p, aside: filepath.Join(t.TempDir(), "aside.md"), first: first, other: other, was: statFile(p)}
+				files := len(e.indexFiles())
+				var mu sync.Mutex
+				reached := map[string]bool{}
+				e.Store.search.hook = func(moment, name string) {
+					if name != "" && name != day {
+						return
+					}
+					mu.Lock()
+					defer mu.Unlock()
+					reached[moment] = true
+					c.at(f, moment)
+				}
+				stats := updateIndex(t, e)
+				e.Store.search.hook = nil
+				for _, m := range c.reach {
+					if !reached[m] {
+						t.Fatalf("the update was never at %q for the day: the case replaces nothing", m)
+					}
+				}
+				held, ok := indexHolds(t, e.Store.Dir)[day]
+				f.restore()
+				check(t, e, "after the update")
+				if ok && held.mod == f.was.mod && held.size == f.was.size && !slices.Equal(held.keys, fileGrams(fold(first))) {
+					t.Errorf("the index has the day by the first text's mtime and size, with keys that are not its text's")
+				}
+				if want := files - 1; !c.kept && (ok || stats.Read != want || stats.Waiting != 1) {
+					t.Errorf("the update kept what it read of a file that was not the one it looked at (in the index: %v): %+v, want %d read and 1 waiting", ok, stats, want)
+				}
+				if c.kept && (!ok || stats.Read != files || stats.Waiting != 0) {
+					t.Errorf("the update did not keep the file it looked at and read (in the index: %v): %+v, want %d read", ok, stats, files)
+				}
+				updateIndex(t, e)
+				updateIndex(t, e)
+				check(t, e, "after two more updates")
+				again, err := NewStore(e.Store.Dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				e = &Engine{Store: again}
+				check(t, e, "a new store")
+				checkIndexCurrent(t, e)
+			})
+		}
+	}
+}
+
+// damageEveryList damages the first byte of every list of the segment at p and leaves its files and keys whole:
+// the segment opens, and no list of it passes its check.
+func damageEveryList(t *testing.T, p string) {
+	t.Helper()
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seg, err := openSeg(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range allSegKeys(t, seg) {
+		raw[seg.lists+int64(k.start)] ^= 0x80
+	}
+	if err := os.WriteFile(p, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A search that finds the index damaged says so of the index it read, never of another: by the time it says it,
+// the index may have been built again and read by someone else. Said of a read-only store that holds nothing at
+// that moment (another search's look at the manifest has just dropped what it held), "broken" was for good: the
+// look compared the manifest with a state that was not there, and nothing else read the index again (#1273's second
+// review). Said of the writer's new index, it cost a second rebuild.
+func TestSearchMarksOnlyTheIndexItReadAsDamaged(t *testing.T) {
+	was := indexFollowEvery
+	t.Cleanup(func() { indexFollowEvery = was })
+	// one segment with every list damaged, and the store that wrote it
+	damagedIndex := func(t *testing.T) *Engine {
+		t.Helper()
+		smallSegments(t)
+		e := dayArchive(t, 3)
+		updateIndex(t, e)
+		_, man, _, _, err := readIndex(e.Store.searchDir())
+		if err != nil || len(man.Segments) != 1 {
+			t.Fatalf("the index is %+v (%v), want one segment", man, err)
+		}
+		return e
+	}
+	// rebuild is the writer starting the index again, as after rm -r .search; the new manifest is not the old one
+	// to whoever compares their mtimes, however fast it was written.
+	rebuild := func(t *testing.T, e *Engine) {
+		t.Helper()
+		manifest := filepath.Join(e.Store.searchDir(), indexManifest)
+		before := statFile(manifest)
+		if err := os.RemoveAll(e.Store.searchDir()); err != nil {
+			t.Error(err)
+		}
+		if stats, err := e.UpdateSearchIndex(context.Background()); err != nil || stats.Read != stats.Files {
+			t.Errorf("building the index again: %+v, %v", stats, err)
+		}
+		if statFile(manifest) == before {
+			t.Error("the manifest written again has the mtime and size of the one before: the test would not tell them apart")
+		}
+	}
+	t.Run("a read-only store whose other search has just dropped what it held", func(t *testing.T) {
+		indexFollowEvery = time.Hour
+		e := damagedIndex(t)
+		ro, err := OpenReadOnly(e.Store.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader := &Engine{Store: ro}
+		if reader.searchFilter(words("build")) == nil {
+			t.Fatal("the read-only store does not use the index")
+		}
+		_, man, _, _, _ := readIndex(e.Store.searchDir())
+		damageEveryList(t, filepath.Join(e.Store.searchDir(), man.Segments[0]))
+		var found, dropped atomic.Bool
+		looked, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		ro.search.hook = func(moment, _ string) {
+			switch {
+			case moment == hookDamaged && found.CompareAndSwap(false, true):
+				// The first search has found the damage and not said so yet. The writer builds the index again, and
+				// a second search's look sees the new manifest and drops the state: it stops there.
+				rebuild(t, e)
+				indexFollowEvery = 0
+				go func() {
+					defer close(done)
+					reader.searchFilter(words("build"))
+				}()
+				select {
+				case <-looked:
+				case <-time.After(10 * time.Second):
+					t.Error("the second search never looked at the manifest")
+				}
+			case moment == hookFollowed && dropped.CompareAndSwap(false, true):
+				close(looked)
+				<-release
+			}
+		}
+		first := reader.searchFilter(words("build"))
+		close(release)
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the second search never ended")
+		}
+		if !found.Load() || !dropped.Load() {
+			t.Fatalf("the first search found damage: %v, the second dropped the state: %v; the test no longer drives the two", found.Load(), dropped.Load())
+		}
+		if first == nil || ro.search.broken.Load() {
+			t.Errorf("the search that found the old index damaged said so of another: it got an index: %v, broken: %v", first != nil, ro.search.broken.Load())
+		}
+		// Whatever the two did, the index on disk is whole, and the store uses it: now and at every later look.
+		for i := range 3 {
+			if !ro.SearchIndexReady() || reader.searchFilter(words("build")) == nil {
+				t.Fatalf("look %d after the two searches: the read-only store has no index (state held: %v, broken: %v), and the one on disk is whole",
+					i+1, ro.search.state.Load() != nil, ro.search.broken.Load())
+			}
+		}
+		if got, want := reader.Find("进度", 80), findReference(reader, "进度", 80); len(want) == 0 || !reflect.DeepEqual(got, want) {
+			t.Fatalf("Find of the read-only store:\n got %+v\nwant %+v", got, want)
+		}
+	})
+	// The state that was for good, however a store came to it: nothing held and marked broken. Nothing leaves a
+	// store so any more; were one left so, its next look at the manifest reads the index.
+	t.Run("a read-only store that holds nothing and is marked broken", func(t *testing.T) {
+		indexFollowEvery = 0
+		e := dayArchive(t, 3)
+		updateIndex(t, e)
+		ro, err := OpenReadOnly(e.Store.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader := &Engine{Store: ro}
+		ro.search.mu.Lock()
+		ro.search.state.Store(nil)
+		ro.search.broken.Store(true)
+		ro.search.mu.Unlock()
+		if !ro.SearchIndexReady() || reader.searchFilter(words("build")) == nil {
+			t.Fatal("the read-only store has no index at its next look, and the one on disk is whole")
+		}
+	})
+	// An update's failed check is of the index the update works with. Here the index is removed under it and a
+	// search reads what is there instead (nothing): the update fails for want of its files, and marks nothing.
+	t.Run("the writer, whose index was removed and read again while its update ran", func(t *testing.T) {
+		e := damagedIndex(t)
+		if err := os.Remove(filepath.Join(e.Store.Dir, "chats/lark-c2/messages/2026-03-02.md")); err != nil {
+			t.Fatal(err)
+		}
+		e.Store.SearchIndexPurge() // the update merges, which reads every segment
+		var removed atomic.Bool
+		e.Store.search.hook = func(moment, _ string) {
+			if moment == hookLooked && removed.CompareAndSwap(false, true) {
+				if err := os.RemoveAll(e.Store.searchDir()); err != nil {
+					t.Error(err)
+				}
+				if e.searchFilter(words("build")) != nil {
+					t.Error("a search has an index to ask after it was removed")
+				}
+			}
+		}
+		stats, err := e.UpdateSearchIndex(context.Background())
+		e.Store.search.hook = nil
+		if !removed.Load() || err == nil || !damaged(err) {
+			t.Fatalf("the update over the removed index: %+v, %v; want it to fail for want of its files", stats, err)
+		}
+		if e.Store.search.broken.Load() {
+			t.Error("the update marked the index a search read since (none) as having failed a check")
+		}
+		files := len(e.indexFiles())
+		if stats := updateIndex(t, e); stats.Rebuilt || stats.Read != files {
+			t.Fatalf("the update after: %+v, want all %d files read into a new index, with nothing to start again", stats, files)
+		}
+		checkIndexCurrent(t, e)
+		checkIndexFiles(t, e)
+	})
+	t.Run("the writer, whose update has built the index again", func(t *testing.T) {
+		e := damagedIndex(t)
+		_, man, _, _, _ := readIndex(e.Store.searchDir())
+		damageEveryList(t, filepath.Join(e.Store.searchDir(), man.Segments[0]))
+		// A new store, as a process started over the damaged index: its searches read the segment's lists.
+		st, err := NewStore(e.Store.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e = &Engine{Store: st}
+		var found atomic.Bool
+		st.search.hook = func(moment, _ string) {
+			if moment == hookDamaged && found.CompareAndSwap(false, true) {
+				rebuild(t, e)
+			}
+		}
+		first := e.searchFilter(words("build"))
+		if !found.Load() {
+			t.Fatal("the search found no damage: the test no longer drives it")
+		}
+		if first == nil || st.search.broken.Load() || !st.SearchIndexReady() {
+			t.Fatalf("the search that found the old index damaged said so of the one built since: it got an index: %v, broken: %v", first != nil, st.search.broken.Load())
+		}
+		if stats := updateIndex(t, e); stats.Rebuilt || stats.Read != 0 {
+			t.Fatalf("the update after: %+v, want nothing to do: the index was whole", stats)
+		}
+		checkIndexCurrent(t, e)
+	})
+}
+
+// manifestKind says what a manifest's bytes are to the decoder, next to the manifest man they were made from: what
+// kind of error, or which fields say something else (and whether that is nothing).
+func manifestKind(man indexManifestFile, raw []byte) string {
+	var got indexManifestFile
+	if err := json.Unmarshal(raw, &got); err != nil {
+		return fmt.Sprintf("does not decode (%T)", err)
+	}
+	var other []string
+	say := func(field string, same, zero bool) {
+		switch {
+		case same:
+		case zero:
+			other = append(other, field+" (none)")
+		default:
+			other = append(other, field)
+		}
+	}
+	say("format", got.Format == man.Format, got.Format == 0)
+	say("tables", got.Tables == man.Tables, got.Tables == "")
+	say("seq", got.Seq == man.Seq, got.Seq == 0)
+	say("segments", slices.Equal(got.Segments, man.Segments), len(got.Segments) == 0)
+	say("log", got.Log == man.Log, got.Log == "")
+	say("merged", got.Merged.Equal(man.Merged), got.Merged.IsZero())
+	say("complete", got.Complete == man.Complete, !got.Complete)
+	if len(other) == 0 {
+		return "decodes, and says the same"
+	}
+	return "decodes, with another " + strings.Join(other, ", ")
+}
+
+// Whatever one flipped bit makes of the manifest, it is a manifest or it is damage, and the index is whole after
+// the next update, or after the one that follows an update that found the damage: the index as it was, or one
+// built again from the files. Never an update that fails twice in a row: that store would have no index until
+// someone removed .search, and say so once (#1273's second review: a time that does not parse was neither a syntax
+// error nor a type error, so not damage).
+//
+// Every flip is decoded; an update is run over the first two flips of each kind (manifestKind), and over every
+// flip with PERSONA_KB_DIFF_DEPTH=2.
+func TestUpdateSearchIndexAfterAnyFlipOfItsManifest(t *testing.T) {
+	indexSizesFor(t, func() { indexSizes.logFiles = 2 })
+	e := dayArchive(t, 3)
+	st := e.Store
+	updateIndex(t, e)
+	writeOld(t, e, "chats/lark-c2/messages/2026-03-01.md", "# 2026-03-01\n- 09:00 同事2: 改了\n", 50*time.Minute)
+	updateIndex(t, e)
+	dir := st.searchDir()
+	_, man, _, _, err := readIndex(dir)
+	if err != nil || len(man.Segments) != 1 || man.Log == "" || man.Merged.IsZero() || !man.Complete {
+		t.Fatalf("the index is %+v (%v), want one segment, a log, a time and complete", man, err)
+	}
+	checkIndexCurrent(t, e)
+	// The index as it is, to put back before every flip.
+	whole := map[string][]byte{}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range ents {
+		if whole[d.Name()], err = os.ReadFile(filepath.Join(dir, d.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw := whole[indexManifest]
+	put := func(manifest []byte) {
+		t.Helper()
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for name, data := range whole {
+			if name == indexManifest {
+				data = manifest
+			}
+			if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	every := diffDepth() >= 2
+	kinds := map[string]int{}
+	flips, ran, notDamage := 0, 0, 0
+	for i := range raw {
+		for _, mask := range []byte{0x01, 0x10, 0x80} {
+			flipped := bytes.Clone(raw)
+			flipped[i] ^= mask
+			flips++
+			kind := manifestKind(man, flipped)
+			if _, err := decodeManifest(flipped); err != nil && !damaged(err) {
+				// No update builds the index again over an error that is not damage: it comes back at every try.
+				if notDamage++; notDamage <= 3 {
+					t.Errorf("byte %d ^ %#02x (%s): reading the manifest fails with %q, which is not taken as damage", i, mask, kind, err)
+				}
+			}
+			if kinds[kind]++; kinds[kind] > 2 && !every {
+				continue
+			}
+			ran++
+			put(flipped)
+			st, err := NewStore(st.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := &Engine{Store: st}
+			if _, err := e.UpdateSearchIndex(context.Background()); err != nil {
+				if _, again := e.UpdateSearchIndex(context.Background()); again != nil {
+					t.Fatalf("byte %d ^ %#02x (%s): two updates in a row failed: %v; then: %v", i, mask, kind, err, again)
+				}
+			}
+			if !st.SearchIndexReady() {
+				t.Fatalf("byte %d ^ %#02x (%s): no index after the update", i, mask, kind)
+			}
+			checkIndexCurrent(t, e)
+			checkIndexFiles(t, e)
+		}
+	}
+	if notDamage > 3 {
+		t.Errorf("and %d more flips of the %d", notDamage-3, flips)
+	}
+	names := make([]string, 0, len(kinds))
+	for kind, n := range kinds {
+		names = append(names, fmt.Sprintf("%d %s", n, kind))
+	}
+	sort.Strings(names)
+	t.Logf("%d flips of a manifest of %d bytes decoded, updates run over %d of them; by kind:\n  %s", flips, len(raw), ran, strings.Join(names, "\n  "))
+}
+
+// The names the index gives its files, without what is new in them at every write, are the kinds a log of its
+// failures tells files apart by (SearchIndexFileKind): two files of a kind are one, and no two kinds are.
+func TestSearchIndexFileKindOfTheNamesTheIndexGives(t *testing.T) {
+	dir := t.TempDir()
+	u := &indexUpdate{dir: dir}
+	tmp := func() string {
+		f, err := os.CreateTemp(dir, indexManifest+".tmp-*") // as writeIndexFile names it
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		return f.Name()
+	}
+	kinds := map[string]string{}
+	for want, names := range map[string][2]string{
+		"seg-*.idx":           {u.name("seg", ".idx"), u.name("seg", ".idx")},
+		"seg-*.idx.tmp":       {u.name("seg", ".idx") + ".tmp", u.name("seg", ".idx") + ".tmp"}, // segWriter's keys part
+		"log-*.log":           {u.name("log", ".log"), u.name("log", ".log")},
+		"manifest.json.tmp-*": {tmp(), tmp()},
+		indexManifest:         {indexManifest, indexManifest},
+		SearchIndexDir:        {SearchIndexDir, SearchIndexDir},
+	} {
+		if names[0] == names[1] && strings.Contains(want, "*") {
+			t.Fatalf("%s: the two names are one: %s", want, names[0])
+		}
+		for _, name := range names {
+			if !indexOwned(filepath.Base(name)) && want != SearchIndexDir {
+				t.Errorf("%s is not a name of the index's files", name)
+			}
+			if got := SearchIndexFileKind(filepath.Join(dir, name)); got != want {
+				t.Errorf("SearchIndexFileKind(%q) = %q, want %q", name, got, want)
+			}
+		}
+		if other, ok := kinds[want]; ok {
+			t.Errorf("%s and %s are one kind", other, names[0])
+		}
+		kinds[want] = names[0]
+	}
 }

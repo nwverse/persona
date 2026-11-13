@@ -5,7 +5,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -54,7 +57,7 @@ var indexSizes = struct {
 type SearchIndexStats struct {
 	Files   int  // files searches read from disk
 	Read    int  // read into the index by this update
-	Waiting int  // not in the index: changed too recently, or too large
+	Waiting int  // not in the index: changed too recently, too large, or another file by the time it was read
 	Dropped int  // entries of files gone or changed, taken out
 	Merged  bool // the segments were written again as one
 	Rebuilt bool // the index on disk did not check out and was started again
@@ -90,6 +93,15 @@ type fileTime struct {
 
 func statFile(p string) fileTime {
 	fi, err := os.Stat(p)
+	if err != nil {
+		return fileTime{}
+	}
+	return fileTime{mod: fi.ModTime().UnixNano(), size: fi.Size(), ok: true}
+}
+
+// openTime is statFile of an open file: of that file, whatever its path names by now.
+func openTime(f *os.File) fileTime {
+	fi, err := f.Stat()
 	if err != nil {
 		return fileTime{}
 	}
@@ -137,9 +149,10 @@ func (e *Engine) UpdateSearchIndex(ctx context.Context) (SearchIndexStats, error
 	u := &indexUpdate{e: e, ix: ix, dir: e.Store.searchDir(), start: time.Now(), workers: max(1, min(4, runtime.GOMAXPROCS(0)/2))}
 	err := u.run(ctx)
 	u.stats.Took = time.Since(u.start)
-	if err != nil && damaged(err) {
-		// A part of the index did not check out while it was merged: the next update starts it again.
-		ix.broken.Store(true)
+	if err != nil && damaged(err) && u.snap != nil {
+		// A part of the index did not check out while it was merged: the next update starts it again, if it is
+		// still the index in use (a search that found it gone has read the one on disk meanwhile: spoil).
+		ix.spoil(u.snap)
 	}
 	return u.stats, err
 }
@@ -183,6 +196,7 @@ func (u *indexUpdate) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	u.ix.at(hookLooked, "")
 	if err := u.read(ctx, ents, todo, stats); err != nil {
 		return err
 	}
@@ -359,19 +373,24 @@ func (u *indexUpdate) read(ctx context.Context, ents []*dirEnt, todo []int, stat
 	}
 	chunk := indexSizes.readChunk
 	docs := make([]*builtDoc, chunk)
+	other := make([]bool, chunk) // there, and not (or not for the whole read) the file the look saw
 	for start := 0; start < len(todo) && ctx.Err() == nil; start += chunk {
 		part := todo[start:min(len(todo), start+chunk)]
 		each(len(part), u.workers, func(i int) {
 			d, st := ents[part[i]], stats[part[i]]
-			docs[i] = nil
-			raw, err := os.ReadFile(d.path)
-			if err != nil || int64(len(raw)) != st.size {
-				return // changing, or gone: the next update
+			docs[i], other[i] = nil, false
+			raw, gone, ok := u.readLooked(d, st)
+			if !ok {
+				other[i] = !gone
+				return // changing, another file, or gone: the search reads it, and the next update looks again
 			}
 			docs[i] = &builtDoc{segDoc: segDoc{name: d.rel, mod: st.mod, size: st.size}, keys: fileGrams(fold(string(raw)))}
 		})
-		for _, d := range docs[:len(part)] {
+		for i, d := range docs[:len(part)] {
 			if d == nil {
+				if other[i] {
+					u.stats.Waiting++
+				}
 				continue
 			}
 			batch = append(batch, *d)
@@ -388,6 +407,40 @@ func (u *indexUpdate) read(ctx context.Context, ents []*dirEnt, todo []int, stat
 		return flush()
 	}
 	return u.appendLog(batch)
+}
+
+// readLooked reads the file at d.path if it is the file the look saw there as st, and for as long as it is read:
+// its bytes and ok, or gone when no file is there any more.
+//
+// The look and the read are two moments (in a first build the look at every file lies between them), and an entry
+// says that the bytes which had this mtime and size have these keys. So the mtime and size have to be those of the
+// very bytes read: the file is opened, asked through the handle, read through the handle and asked through it
+// again, and both answers have to be the look's. Asking the path again would not do: by then it can name the file
+// the look saw once more (moved back, put back by a sync or backup tool) while the bytes read were those of the
+// file that was there in between, and the entry would rule the file out for words it holds, for good. What this
+// cannot see is the index's first limit (docs/assistant/knowledge.md, "Search index (#1273)"): the same file
+// written to the same size and its mtime set back to what it was, here within the one read.
+func (u *indexUpdate) readLooked(d *dirEnt, st fileTime) (raw []byte, gone, ok bool) {
+	f, err := os.Open(d.path)
+	if err != nil {
+		return nil, errors.Is(err, fs.ErrNotExist), false
+	}
+	defer f.Close()
+	if openTime(f) != st {
+		return nil, false, false
+	}
+	u.ix.at(hookOpened, d.rel)
+	// One byte more than its size: a file that grew since does not end there.
+	raw = make([]byte, st.size+1)
+	n, err := io.ReadFull(f, raw)
+	if int64(n) != st.size || err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, false, false
+	}
+	u.ix.at(hookRead, d.rel)
+	if openTime(f) != st {
+		return nil, false, false
+	}
+	return raw[:n], false, true
 }
 
 // name gives a new file of the index its name, one no file of the index had before: the count, for whoever reads
@@ -540,6 +593,11 @@ func (u *indexUpdate) maintain(ctx context.Context, purge bool) error {
 	// stale: the entries no search uses, those the log still has of a file it read again too.
 	stale := total - alive + u.logOld
 	since := time.Since(u.man.Merged)
+	if since < 0 {
+		// A last merge that is yet to come: the clock was set back, or the manifest's time is not the one written.
+		// Taken as long ago: waiting for that time would keep what is to be dropped for as long as it is away.
+		since = indexMergeEvery
+	}
 	merge := len(snap.segs) > indexSizes.maxSegs ||
 		stale > 0 && purge ||
 		gone > 0 && since >= indexPurgeEvery ||

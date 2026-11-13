@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"io/fs"
@@ -80,13 +81,15 @@ type indexManifestFile struct {
 // errIndexVersion: the index was written with another format or other folding tables.
 var errIndexVersion = errors.New("search index: written by another version")
 
+// errManifest: the manifest was read, and what was read is not a manifest of this index: it does not decode,
+// whatever the decoder found wrong with it, or it names a file the index never gives a name like that.
+var errManifest = errors.New("search index manifest is damaged")
+
 // damaged reports whether err says the index itself is wrong (so it is built again), not that reading it failed
 // this time (so it is tried again).
 func damaged(err error) bool {
-	var syntax *json.SyntaxError
-	var typ *json.UnmarshalTypeError
 	return errors.Is(err, errSegment) || errors.Is(err, errSegmentOther) || errors.Is(err, errIndexVersion) ||
-		errors.Is(err, fs.ErrNotExist) || errors.As(err, &syntax) || errors.As(err, &typ)
+		errors.Is(err, errManifest) || errors.Is(err, fs.ErrNotExist)
 }
 
 // docRef is where a file's entry is in a snapshot's segments, with what tells the file changed since.
@@ -130,13 +133,35 @@ type searchIndex struct {
 	state atomic.Pointer[indexState]
 	// looked: when a read-only store last compared the manifest with the one it read (UnixNano).
 	looked atomic.Int64
-	// broken: a check failed while the index was read. It is not asked again until the writer rebuilt it.
+	// broken: a check of the index in state failed. It is not asked again until the writer rebuilt it. Set with mu
+	// held, and only of the state that failed the check (loadLocked, spoil).
 	broken atomic.Bool
 	// ready: the manifest's Complete (SearchIndexReady).
 	ready atomic.Bool
 	// purge: files were deleted on purpose (a source forgotten, retention): the next update drops their entries
 	// at once instead of within the hour.
 	purge atomic.Bool
+	// hook is nil but in a test, which sets it before the store is used: it is called at the moments named below
+	// (name: the file of the archive the moment is about, if one), for the test to do there what another process or
+	// goroutine can do at such a moment and no test could otherwise time.
+	hook func(at, name string)
+}
+
+// The moments a test's hook is called at (searchIndex.hook).
+const (
+	hookLooked  = "update: looked"  // an update has looked at every file and has read none yet
+	hookOpened  = "update: opened"  // it has opened name, found it as the look did, and has not read it yet
+	hookRead    = "update: read"    // it has read name and has not yet asked again what it read
+	hookDamaged = "search: damaged" // a search found a part of the index damaged and has not yet said so
+	// A read-only store's look found another manifest than the one it read, dropped what it held, and has not
+	// read the index again yet.
+	hookFollowed = "search: followed"
+)
+
+func (ix *searchIndex) at(moment, name string) {
+	if ix.hook != nil {
+		ix.hook(moment, name)
+	}
 }
 
 func (s *Store) searchDir() string { return filepath.Join(s.Dir, SearchIndexDir) }
@@ -155,14 +180,7 @@ func (ix *searchIndex) snapshot(dir string, follow bool) *searchSnap {
 	if follow {
 		now, last := time.Now().UnixNano(), ix.looked.Load()
 		if now-last >= int64(indexFollowEvery) && ix.looked.CompareAndSwap(last, now) {
-			if st := ix.state.Load(); st != nil && statFile(filepath.Join(dir, indexManifest)) != st.manStat {
-				ix.mu.Lock()
-				if ix.state.Load() == st {
-					ix.state.Store(nil)
-					ix.broken.Store(false)
-				}
-				ix.mu.Unlock()
-			}
+			ix.follow(dir)
 		}
 	}
 	if ix.broken.Load() {
@@ -181,6 +199,41 @@ func (ix *searchIndex) snapshot(dir string, follow bool) *searchSnap {
 		}
 	}
 	return st.snap
+}
+
+// follow is a read-only store's look at the manifest. When it is not the one the store read, what the store holds
+// is dropped together with what was found wrong with it, and the next search reads the index that is there now.
+// A store that holds nothing has nothing to compare: it is left to read the index, whatever it was marked as (a
+// store with no index and "broken" set would otherwise never read one again: nothing else clears the mark of a
+// read-only store).
+func (ix *searchIndex) follow(dir string) {
+	st := ix.state.Load()
+	if st != nil && statFile(filepath.Join(dir, indexManifest)) == st.manStat {
+		return
+	}
+	ix.mu.Lock()
+	if ix.state.Load() == st {
+		ix.state.Store(nil)
+		ix.broken.Store(false)
+	}
+	ix.mu.Unlock()
+	if st != nil {
+		ix.at(hookFollowed, "")
+	}
+}
+
+// spoil marks the index as having failed a check, if snap, the snapshot that failed it, is still the one in use,
+// and reports whether it is. The check says nothing of an index read or published since: marking that one would
+// send searches past a whole index, cost the writer a second rebuild, and leave a read-only store that has just
+// dropped its state (follow) marked with nothing to compare a new manifest with.
+func (ix *searchIndex) spoil(snap *searchSnap) bool {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if ix.current() != snap {
+		return false
+	}
+	ix.broken.Store(true)
+	return true
 }
 
 // reload reads the index from disk again when snap is still the one in use: a file of it is gone or is another
@@ -223,17 +276,11 @@ func readIndex(dir string) (snap *searchSnap, man indexManifestFile, logLen int6
 	if err != nil {
 		return nil, man, 0, 0, err
 	}
-	if err := json.Unmarshal(raw, &man); err != nil {
+	if man, err = decodeManifest(raw); err != nil {
 		return nil, man, 0, 0, err
-	}
-	if man.Format != indexFormat || man.Tables != indexTables {
-		return nil, man, 0, 0, errIndexVersion
 	}
 	snap = &searchSnap{}
 	for _, name := range man.Segments {
-		if name != filepath.Base(name) {
-			return nil, man, 0, 0, errSegment
-		}
 		seg, err := openSeg(filepath.Join(dir, name))
 		if err != nil {
 			return nil, man, 0, 0, err
@@ -242,14 +289,40 @@ func readIndex(dir string) (snap *searchSnap, man indexManifestFile, logLen int6
 	}
 	snap.where = whereOf(snap.segs)
 	if man.Log != "" {
-		if man.Log != filepath.Base(man.Log) {
-			return nil, man, 0, 0, errSegment
-		}
 		if snap.log, logLen, logOld, err = readIndexLog(filepath.Join(dir, man.Log)); err != nil {
 			return nil, man, 0, 0, err
 		}
 	}
 	return snap, man, logLen, logOld, nil
+}
+
+// decodeManifest is the manifest whose bytes are raw. Bytes that are not one are damage (errManifest), whatever
+// the decoder says of them: a value of another type, a time that is not one, anything a later decoder minds. Were
+// one of these an error like "the disk could not be read", every update would fail on it the same way and the
+// index would never be built again. The files it names have the names the index gives its files (indexUpdate.name)
+// and no others: nothing else in the directory, or outside it, is read as a segment or a log.
+func decodeManifest(raw []byte) (man indexManifestFile, err error) {
+	if err := json.Unmarshal(raw, &man); err != nil {
+		return man, fmt.Errorf("%w: %v", errManifest, err)
+	}
+	if man.Format != indexFormat || man.Tables != indexTables {
+		return man, errIndexVersion
+	}
+	for _, name := range man.Segments {
+		if !indexNamed(name, "seg-", ".idx") {
+			return man, fmt.Errorf("%w: it names %q as a segment", errManifest, name)
+		}
+	}
+	if man.Log != "" && !indexNamed(man.Log, "log-", ".log") {
+		return man, fmt.Errorf("%w: it names %q as its log", errManifest, man.Log)
+	}
+	return man, nil
+}
+
+// indexNamed reports whether name is one the index gives a file of that kind: in its directory, kind first and ext
+// last.
+func indexNamed(name, kind, ext string) bool {
+	return name == filepath.Base(name) && strings.HasPrefix(name, kind) && strings.HasSuffix(name, ext)
 }
 
 // whereOf maps every path of segs to its entry in the newest segment that has one.
@@ -451,7 +524,10 @@ func (ix *searchIndex) filter(dir string, ws []string, follow bool) *searchFilte
 			continue
 		}
 		if damaged(err) {
-			ix.broken.Store(true)
+			ix.at(hookDamaged, "")
+			if !ix.spoil(snap) {
+				continue // another index is in use by now: that one is asked
+			}
 		}
 		return nil
 	}
@@ -524,6 +600,26 @@ func indexOwned(name string) bool {
 	return name == indexManifest || strings.HasPrefix(name, indexManifest+".tmp-") ||
 		strings.HasPrefix(name, "seg-") && (strings.HasSuffix(name, ".idx") || strings.HasSuffix(name, ".tmp")) ||
 		strings.HasPrefix(name, "log-") && strings.HasSuffix(name, ".log")
+}
+
+// SearchIndexFileKind is the name of the file of the index at path, without its directory and without what is new
+// in the name every time a file is written: a segment's or a log's number and id (indexUpdate.name), a temporary
+// file's ending (writeIndexFile). Whoever logs an update's failures tells by it whether the file one failed at is
+// the kind of file the last one failed at. Any other name is returned as it is.
+func SearchIndexFileKind(path string) string {
+	name := filepath.Base(path)
+	if base, _, ok := strings.Cut(name, ".tmp-"); ok {
+		return base + ".tmp-*"
+	}
+	for _, kind := range []string{"seg-", "log-"} {
+		if rest, ok := strings.CutPrefix(name, kind); ok {
+			if i := strings.IndexByte(rest, '.'); i >= 0 {
+				return kind + "*" + rest[i:]
+			}
+			return kind + "*"
+		}
+	}
+	return name
 }
 
 // cloneWhere copies where for a new snapshot that adds seg (at index i) to it.
