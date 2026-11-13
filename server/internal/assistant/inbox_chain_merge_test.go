@@ -220,3 +220,99 @@ func TestInboxChainMergeSupervisorCounts(t *testing.T) {
 		t.Fatalf("first signal after loading: %+v, ok %v, watermark %d", got.Inbox, ok, it.Agent.signaled)
 	}
 }
+
+// A merged Feishu run opens the chat at its first batch's first message, not at the first message of its latest batch.
+func TestInboxChainMergedLarkKeepsFirstPosition(t *testing.T) {
+	b := newInbox()
+	at := time.Now().Add(-time.Hour)
+	it := &InboxItem{ID: "lark:1", Source: "lark", Kind: KindDM, Title: "Alice", Sender: "Alice", Count: 3, Last: "102",
+		StartedAt: at, UpdatedAt: at, Lark: &InboxLark{FeedID: "f", StartPosition: "100"}}
+	b.noteReceived(it, inboxSeen{}, chainMergeMessages(1, 3))
+	if e := it.Chain[0]; e.Link == nil || e.Link.Position != "100" || e.Count != 3 {
+		t.Fatalf("first batch: %+v", e)
+	}
+	prev := seenOf(it)
+	it.Count, it.Last, it.UpdatedAt = 5, "104", at.Add(time.Minute)
+	b.noteReceived(it, prev, chainMergeMessages(4, 5))
+	if len(it.Chain) != 1 {
+		t.Fatalf("the batches did not merge: %+v", it.Chain)
+	}
+	e := it.Chain[0]
+	// The latest batch alone would start at 103; the run keeps where it began.
+	if e.Count != 5 || e.Link == nil || e.Link.Position != "100" {
+		t.Fatalf("merged entry: %+v, link %+v", e, e.Link)
+	}
+}
+
+// A run whose senders differed has no sender; a later batch from the first sender does not put one back.
+func TestInboxChainMergedReceivedSenderStaysCleared(t *testing.T) {
+	b := newInbox()
+	b.lang = func() i18n.Lang { return i18n.En }
+	at := time.Now().Add(-time.Hour)
+	it := chainMergeItem(at)
+	b.noteReceived(it, inboxSeen{}, chainMergeMessages(1, 1))
+	prev := seenOf(it)
+	it.Count, it.Last, it.UpdatedAt, it.Sender = 2, "2", at.Add(time.Minute), "Bob"
+	b.noteReceived(it, prev, []InboxChainMessage{{Sender: "Bob", Text: "b"}})
+	prev = seenOf(it)
+	it.Count, it.Last, it.UpdatedAt, it.Sender = 3, "3", at.Add(2*time.Minute), "Alice"
+	b.noteReceived(it, prev, []InboxChainMessage{{Sender: "Alice", Text: "a"}})
+	e := it.Chain[0]
+	if len(it.Chain) != 1 || e.Sender != "" || e.Text != i18n.T(i18n.En, "assistant-inbox_chain.received", i18n.Args{"count": 3}) {
+		t.Fatalf("sender came back: %+v", e)
+	}
+}
+
+// Chains written before the merge keep their consecutive received entries as they are: only the newest entry takes what
+// comes in now.
+func TestInboxChainOldConsecutiveReceivedsStay(t *testing.T) {
+	b := newInbox()
+	at := time.Now().Add(-time.Hour)
+	it := &InboxItem{ID: "old", Source: "chat", Kind: KindGroup, Sender: "Alice", Count: 3, Last: "3", StartedAt: at, UpdatedAt: at,
+		ChainSeq: 2, Chain: []InboxChainEntry{
+			{ID: "c1", Kind: ChainReceived, Count: 1, Sender: "Alice", At: at},
+			{ID: "c2", Kind: ChainReceived, Count: 2, Sender: "Alice", At: at.Add(time.Minute)},
+		}}
+	prev := seenOf(it)
+	it.Count, it.Last, it.UpdatedAt = 5, "5", at.Add(2*time.Minute)
+	b.noteReceived(it, prev, chainMergeMessages(4, 5))
+	if len(it.Chain) != 2 || it.Chain[0].Count != 1 || it.Chain[1].ID != "c2" || it.Chain[1].Count != 4 {
+		t.Fatalf("old run rewritten: %+v", it.Chain)
+	}
+}
+
+// An item from before chains gets its synthesized received entry, and a batch that comes in later adds to that entry
+// rather than a second one.
+func TestInboxChainMergesIntoSynthesizedReceived(t *testing.T) {
+	b := newInbox()
+	at := time.Now().Add(-time.Hour)
+	old := &InboxItem{ID: "pre", Source: "chat", Kind: KindGroup, Title: "Topic", Sender: "Alice", Count: 2, Last: "2",
+		StartedAt: at, UpdatedAt: at, Connector: &InboxConnector{Thread: "t"}}
+	b.stored(old)
+	if len(old.Chain) != 1 || old.Chain[0].Via != "chat" {
+		t.Fatalf("backfill: %+v", old.Chain)
+	}
+	prev := seenOf(old)
+	old.Count, old.Last, old.UpdatedAt = 4, "4", at.Add(time.Minute)
+	b.noteReceived(old, prev, chainMergeMessages(3, 4))
+	if len(old.Chain) != 1 || old.ChainSeq != 1 {
+		t.Fatalf("backfilled entry not merged into: seq %d, %+v", old.ChainSeq, old.Chain)
+	}
+	if e := old.Chain[0]; e.ID != "c1" || e.Count != 4 || len(e.Messages) != 2 {
+		t.Fatalf("merged backfill: %+v", e)
+	}
+}
+
+// The supervisor's watermark is the item count, which mail sets to its unread count: when mails were read elsewhere
+// between two batches the count can fall below it, and the next batch is then counted as one (the known deviation, at
+// least one message, and the signal still goes out).
+func TestInboxChainMergeSupervisorMailCountFalls(t *testing.T) {
+	it := &InboxItem{ID: "mail:1", Source: "mail", Kind: KindMail, Count: 5, Last: "5"}
+	if _, seq := receivedSince(it, 0, false); seq != 5 {
+		t.Fatalf("watermark %d", seq)
+	}
+	it.Count, it.Last = 3, "6" // two mails read elsewhere, one new
+	if n, seq := receivedSince(it, 5, false); n != 1 || seq != 3 {
+		t.Fatalf("after the count fell: %d messages, watermark %d", n, seq)
+	}
+}
