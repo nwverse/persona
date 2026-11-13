@@ -291,14 +291,7 @@ func (j *trJob) begin(f extwire.TranscriptionFrame) bool {
 		j.textLang = f.Language
 	}
 	j.glossary = cleanGlossary(f.Glossary)
-	lang := i18n.Resolve(j.textLang)
-	if lang == "" {
-		lang = j.uiLang
-	}
-	if lang == "" {
-		lang = j.pl.link.language()
-	}
-	j.lang = string(firstNonEmpty(string(lang), string(i18n.ZhHans)))
+	j.lang = string(trInstructionsLang(j.textLang, j.uiLang, j.pl.link.language()))
 
 	ctx, cancel := context.WithTimeout(j.ctx, startTimeout)
 	p, model, err := j.pl.transcriber(ctx)
@@ -349,6 +342,21 @@ func (j *trJob) begin(f extwire.TranscriptionFrame) bool {
 		j.open(sl, 0, "first")
 	}
 	return true
+}
+
+// trInstructionsLang is the language of a job's instructions: the recording's (tag) when it is Chinese, English or
+// Japanese, since the meeting's language is what the model hears, else the hub's (the caller's, else the hub link's),
+// else Chinese.
+func trInstructionsLang(tag string, caller, hub i18n.Lang) i18n.Lang {
+	if prompts.ChineseScript(tag) != "" {
+		return i18n.ZhHans
+	}
+	for _, l := range []i18n.Lang{i18n.Match(tag), caller, hub} {
+		if l != "" {
+			return l
+		}
+	}
+	return i18n.ZhHans
 }
 
 // cleanGlossary is the start's glossary as the instructions take it: each term on one line, trimmed and cut to

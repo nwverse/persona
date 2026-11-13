@@ -1,8 +1,9 @@
 // Package voicetest is a scripted stand-in for a GPT-Live-compatible upstream, for tests of the built-in voice
 // extension's meeting transcription and of the manager that runs it (docs/assistant/voice.md "Transcription"). Its
 // sessions hear the audio PCM makes of a script and answer with the frame shapes the measured service sends: interim
-// captions on a caption session (one that asks for the caption extension) as the measured service writes them, one
-// item for the whole session; one reply per sentence on a verbatim session; usage and the session's close.
+// captions on a caption session (one told only to listen, granted the caption extension) as the measured service
+// writes them, one item for the whole session; one reply per sentence on a verbatim session (with the extension, also
+// captions of its own, an item per reply); usage and the session's close.
 //
 // The audio carries the script: each 20 ms block of a sentence holds the sentence's number in its level, so a session
 // knows which sentence it hears wherever its audio starts (a reconnect, a rollover, a window of the final pass).
@@ -24,6 +25,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 // Line is one sentence of the script, in recording seconds.
@@ -45,8 +49,8 @@ type Script struct {
 	Mute map[int]int
 	// NoCaptions: the caption extension is not granted (session.started echoes extensions {}).
 	NoCaptions bool
-	// RefuseCaptions: a session start that asks for it is refused with an unsupported_extension error (the socket stays
-	// open).
+	// RefuseCaptions: a session start that asks for it, caption or verbatim, is refused with an unsupported_extension
+	// error (the socket stays open).
 	RefuseCaptions bool
 	// CaptionItems: each sentence's captions are an item of their own, with start_ms its start and is_final on its
 	// last one (a service that splits its captions by sentence). Without it, as the measured service: a caption
@@ -54,13 +58,18 @@ type Script struct {
 	// counted from the session's start (not its first audio), and never changes; no caption is ever final; the text
 	// grows through a sentence and the next sentence's text replaces it.
 	CaptionItems bool
+	// Bursts: a verbatim session that was not granted the caption extension writes its replies only every this many
+	// sentences, one sentence per line (and the ones left once it heard 2 s without speech), as the measured service
+	// did with a prompt it did not follow sentence by sentence. 0: a reply per sentence. With the extension it
+	// replies per sentence: the extension makes the service end a turn at each sentence.
+	Bursts int
 	// TextOnlyRefused: a session start with output_modalities is refused with an unknown_parameter error.
 	TextOnlyRefused bool
 	// ExpiresIn: each session ends this long after it started (session.started's expires_at says when; the service
 	// then closes it); 0: far in the future, never.
 	ExpiresIn time.Duration
-	// RefuseVerbatim: the first n session starts of verbatim sessions (no caption extension asked) are refused with an
-	// upstream_unavailable error, as a service that is briefly overloaded does.
+	// RefuseVerbatim: the first n session starts of verbatim sessions (any but the caption session's instructions) are
+	// refused with an upstream_unavailable error, as a service that is briefly overloaded does.
 	RefuseVerbatim int
 	// DropAfter: verbatim session n is closed by the service once it got this many seconds of audio.
 	DropAfter map[int]float64
@@ -93,6 +102,16 @@ var InventedReplies = []string{
 	"Could you please repeat the last part, I could not follow what was decided?",
 	"Okay.",
 }
+
+// listening are the caption session's instructions in every language. The measured service follows them: a session
+// told them never replies, whatever extensions it asked for, and it is the stand-in's caption session.
+var listening = func() map[string]bool {
+	m := map[string]bool{}
+	for _, l := range i18n.Langs {
+		m[prompts.RenderVoiceTranscribeCaption(prompts.VoiceTranscribe{Lang: string(l)})] = true
+	}
+	return m
+}()
 
 const (
 	rate      = 16000
@@ -278,9 +297,10 @@ type conn struct {
 	fastTurn bool
 	delayed  int // the replies delayed so far (ReplyJitter takes turns)
 
-	vn      int  // its number among the verbatim sessions, 0 for a caption session
-	caption bool // a caption session whose extension was granted
-	started bool
+	vn       int  // its number among the verbatim sessions, 0 for a caption session
+	caption  bool // a caption session whose extension was granted
+	partials bool // a verbatim session whose extension was granted: captions of its own, an item per turn
+	started  bool
 	// startedAt is when session.started went out, lead how long after it the first audio came: the measured service's
 	// start_ms counts from the session's start.
 	startedAt time.Time
@@ -297,6 +317,7 @@ type conn struct {
 	usage     int64
 	replied   map[int]bool
 	replyNo   int
+	burst     []string // a verbatim session's sentences held for its next reply (Bursts)
 	// The caption session's caption: the item it writes, its start_ms, the sentence it is of, whether it has text
 	// that has not been written whole yet.
 	capItem  string
@@ -361,6 +382,8 @@ func (c *conn) start(raw json.RawMessage) {
 	ext, _ := sess["extensions"].(map[string]any)
 	_, asks := ext["input_transcript_partial"]
 	_, textOnly := sess["output_modalities"]
+	ins, _ := sess["instructions"].(string)
+	listener := listening[ins]
 	l := c.l
 	l.mu.Lock()
 	l.starts = append(l.starts, sess)
@@ -374,21 +397,24 @@ func (c *conn) start(raw json.RawMessage) {
 		c.send(map[string]any{"type": "error", "error": map[string]any{"code": "unknown_parameter", "param": "session.output_modalities",
 			"message": "unknown parameter"}})
 		return
-	case !asks && l.refuseVerbatim():
+	case !listener && l.refuseVerbatim():
 		c.send(map[string]any{"type": "error", "error": map[string]any{"code": "upstream_unavailable", "message": "overloaded"}})
 		_ = c.ws.Close(websocket.StatusTryAgainLater, "overloaded")
 		return
 	}
 	granted := map[string]any{}
+	if asks && !l.s.NoCaptions {
+		granted["input_transcript_partial"] = "v1"
+	}
 	l.mu.Lock()
 	switch {
-	case asks && !l.s.NoCaptions:
-		granted["input_transcript_partial"] = "v1"
+	case listener && len(granted) > 0:
 		c.caption = true
 		l.captions++
-	case !asks:
+	case !listener:
 		l.verbatim++
 		c.vn = l.verbatim
+		c.partials = len(granted) > 0
 	}
 	l.mu.Unlock()
 	c.started, c.startedAt, c.capIdx = true, time.Now(), -1
@@ -441,10 +467,17 @@ func (c *conn) audio(pcm []byte) bool {
 			}
 		} else if c.turn && at+block-c.voice >= gap {
 			c.endTurn()
+		} else if !c.turn && len(c.burst) > 0 && at+block-c.voice >= 2*rate {
+			c.later(strings.Join(c.burst, "\n"))
+			c.burst = nil
 		}
-		if c.caption && c.turn && at+block-c.partial >= rate/5 {
+		if (c.caption || c.partials) && c.turn && at+block-c.partial >= rate/5 {
 			c.partial = at + block
-			c.sentenceCaption(false)
+			if c.caption {
+				c.sentenceCaption(false)
+			} else {
+				c.turnCaption()
+			}
 		}
 		if at+block-c.usage >= rate {
 			c.usage = at + block
@@ -521,6 +554,20 @@ func (c *conn) sentenceCaption(whole bool) {
 	c.sendCaption(c.capItem, c.capStart, text, whole && c.l.s.CaptionItems)
 }
 
+// turnCaption sends a verbatim session's caption of its turn so far: an item per turn, as the measured service's
+// verbatim sessions with the extension had (an item per reply). The adapter does not use them.
+func (c *conn) turnCaption() {
+	var b strings.Builder
+	for k, i := range c.idx {
+		text := c.text(i)
+		if k == len(c.idx)-1 {
+			text = c.heardOf(i, text)
+		}
+		b.WriteString(text)
+	}
+	c.sendCaption(fmt.Sprintf("item-%d-%d", c.n, c.item), c.sessionMS(c.from), b.String(), false)
+}
+
 // heardOf is as much of sentence i's text as the turn has heard of it.
 func (c *conn) heardOf(i int, text string) string {
 	if i < 0 || i >= len(c.l.s.Sentences) {
@@ -576,6 +623,13 @@ func (c *conn) endTurn() {
 		}
 		if c.l.s.Merge[i] {
 			c.held = text
+			continue
+		}
+		if c.l.s.Bursts > 0 && !c.partials {
+			if c.burst = append(c.burst, text); len(c.burst) >= c.l.s.Bursts {
+				c.later(strings.Join(c.burst, "\n"))
+				c.burst = nil
+			}
 			continue
 		}
 		c.later(text)

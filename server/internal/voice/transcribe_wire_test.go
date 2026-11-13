@@ -7,11 +7,12 @@ import (
 	"time"
 )
 
-// A transcription session's start: the live dialect's at 16 kHz, text-only output, the caption extension asked for on
-// the caption session only, no voice, no tools, and no language setting anywhere.
+// A transcription session's start: the live dialect's at 16 kHz, text-only output, the caption extension when asked
+// for (every session asks unless the provider is known not to grant it), no voice, no tools, and no language setting
+// anywhere.
 func TestTranscribeWireStartShape(t *testing.T) {
 	for _, tt := range []struct {
-		caption, textOnly bool
+		partial, textOnly bool
 		want              string
 	}{
 		{true, true, `{"session":{"audio":{"format":{"rate":16000,"type":"audio/pcm"}},"delegation":{"type":"client"},` +
@@ -21,9 +22,9 @@ func TestTranscribeWireStartShape(t *testing.T) {
 		{false, false, `{"session":{"audio":{"format":{"rate":16000,"type":"audio/pcm"}},"delegation":{"type":"client"},` +
 			`"instructions":"listen","model":"m1"},"type":"session.start"}`},
 	} {
-		b, _ := json.Marshal(transcribeStart("m1", "listen", tt.caption, tt.textOnly))
+		b, _ := json.Marshal(transcribeStart("m1", "listen", tt.partial, tt.textOnly))
 		if string(b) != tt.want {
-			t.Errorf("caption %v, text only %v:\n%s\nwant\n%s", tt.caption, tt.textOnly, b, tt.want)
+			t.Errorf("partial %v, text only %v:\n%s\nwant\n%s", tt.partial, tt.textOnly, b, tt.want)
 		}
 	}
 }
@@ -79,12 +80,12 @@ func TestTranscribeWireDecodesMeasuredFrames(t *testing.T) {
 	}
 }
 
-// Which field of a start the service refused: the caption extension on a caption session, the text-only output, or
-// neither.
+// Which field of a start the service refused: the caption extension when the start asked for it, the text-only
+// output, or neither.
 func TestRefusedField(t *testing.T) {
 	for _, tt := range []struct {
 		r       sessionRefused
-		caption bool
+		partial bool
 		want    string
 	}{
 		{sessionRefused{code: "unsupported_extension", param: "session.extensions"}, true, "captions"},
@@ -97,8 +98,8 @@ func TestRefusedField(t *testing.T) {
 		{sessionRefused{code: "invalid_api_key", text: "bad key"}, true, ""},
 		{sessionRefused{code: "rate_limited"}, false, ""},
 	} {
-		if got := refusedField(&tt.r, tt.caption); got != tt.want {
-			t.Errorf("%+v caption %v: %q, want %q", tt.r, tt.caption, got, tt.want)
+		if got := refusedField(&tt.r, tt.partial); got != tt.want {
+			t.Errorf("%+v partial %v: %q, want %q", tt.r, tt.partial, got, tt.want)
 		}
 	}
 }

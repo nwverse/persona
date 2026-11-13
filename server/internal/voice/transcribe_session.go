@@ -259,8 +259,12 @@ type trUp struct {
 	err      error
 }
 
-// connect dials and starts s (in its own goroutine): the outcome goes to the job loop. A service that refuses the
-// text-only output gets the session again without it, remembered for that provider: its output audio is billed.
+// connect dials and starts s (in its own goroutine): the outcome goes to the job loop. Every session asks for the
+// interim-caption extension (a verbatim session uses none of its captions: with it the service ends a turn at each
+// sentence) unless the provider is known not to grant it. A service that refuses it on a verbatim session gets the
+// session again without it, and one that refuses the text-only output gets it again without that (its output audio
+// is then billed); both are remembered for that provider. A refusal on the caption session ends the job's captions
+// (errNoCaptions, sessionUp).
 func (s *trSession) connect(ctx context.Context, instructions string) {
 	j := s.j
 	go func() {
@@ -268,15 +272,31 @@ func (s *trSession) connect(ctx context.Context, instructions string) {
 		sctx, cancel := context.WithTimeout(ctx, startTimeout)
 		defer cancel()
 		caption := s.kind == trCaption
+		partial := caption || j.memo().captions.Load() != trNotGranted
 		textOnly := !j.memo().noTextOnly.Load()
-		up, started, err := j.startOne(sctx, caption, textOnly, instructions)
-		var refused *sessionRefused
-		if err != nil && textOnly && errors.As(err, &refused) && upstreamCode(err) == "" && refusedField(refused, caption) == "text_only" {
-			if j.memo().noTextOnly.CompareAndSwap(false, true) {
-				j.logf("provider %s: the service refused text-only output (%s): its sessions get output audio, which is billed", j.p.ID,
-					firstNonEmpty(refused.code, "no code"))
+		var up upLink
+		var started tevent
+		var err error
+		for {
+			up, started, err = j.startOne(sctx, partial, textOnly, instructions)
+			var refused *sessionRefused
+			switch {
+			case err == nil:
+			case !caption && partial && errors.Is(err, errNoCaptions):
+				if j.memo().captions.Swap(trNotGranted) != trNotGranted {
+					j.logf("provider %s: the service refused the interim-caption extension: verbatim sessions start without it", j.p.ID)
+				}
+				partial = false
+				continue
+			case textOnly && errors.As(err, &refused) && upstreamCode(err) == "" && refusedField(refused, partial) == "text_only":
+				if j.memo().noTextOnly.CompareAndSwap(false, true) {
+					j.logf("provider %s: the service refused text-only output (%s): its sessions get output audio, which is billed", j.p.ID,
+						firstNonEmpty(refused.code, "no code"))
+				}
+				textOnly = false
+				continue
 			}
-			up, started, err = j.startOne(sctx, caption, false, instructions)
+			break
 		}
 		granted := started.captions
 		if err == nil {
@@ -302,13 +322,13 @@ func (s *trSession) connect(ctx context.Context, instructions string) {
 }
 
 // startOne dials the upstream and starts one session on it: its session.started (whether the caption extension was
-// granted, when the session ends). A refusal of the caption extension is errNoCaptions.
-func (j *trJob) startOne(ctx context.Context, caption, textOnly bool, instructions string) (upLink, tevent, error) {
+// granted, when the session ends). partial asks for the caption extension; its refusal is errNoCaptions.
+func (j *trJob) startOne(ctx context.Context, partial, textOnly bool, instructions string) (upLink, tevent, error) {
 	up, err := dialUpstream(ctx, j.p, liveWire{}, j.model)
 	if err != nil {
 		return nil, tevent{}, err
 	}
-	if err := writeJSON(ctx, up, transcribeStart(j.model, instructions, caption, textOnly)); err != nil {
+	if err := writeJSON(ctx, up, transcribeStart(j.model, instructions, partial, textOnly)); err != nil {
 		_ = up.CloseNow()
 		return nil, tevent{}, err
 	}
@@ -334,7 +354,7 @@ func (j *trJob) startOne(ctx context.Context, caption, textOnly bool, instructio
 				switch {
 				case e.code == codeUpstreamUnavailable:
 					return nil, tevent{}, &upstreamError{code: codeUpstreamUnavailable, err: r}
-				case caption && refusedField(r, true) == "captions":
+				case partial && refusedField(r, partial) == "captions":
 					return nil, tevent{}, fmt.Errorf("%w (%s)", errNoCaptions, firstNonEmpty(e.code, "no code"))
 				}
 				return nil, tevent{}, r

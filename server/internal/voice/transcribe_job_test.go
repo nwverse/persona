@@ -16,6 +16,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/voice/voicetest"
 )
 
@@ -291,13 +292,14 @@ func TestTranscriptionLiveSentences(t *testing.T) {
 			s["voice"] != nil || s["tools"] != nil {
 			t.Errorf("session start %s", b)
 		}
+		if ext, _ := json.Marshal(s["extensions"]); string(ext) != `{"input_transcript_partial":"v1"}` {
+			t.Errorf("a session did not ask for the caption extension: %s", b)
+		}
 		ins, _ := s["instructions"].(string)
-		if _, ok := s["extensions"]; ok {
+		switch {
+		case ins == prompts.RenderVoiceTranscribeCaption(prompts.VoiceTranscribe{Lang: "zh-Hans"}):
 			captions++
-			if strings.Contains(ins, "Alice") {
-				t.Errorf("the caption session has the glossary: %s", ins)
-			}
-		} else if !strings.Contains(ins, "- Alice") || !strings.Contains(ins, "zh-CN") {
+		case !strings.Contains(ins, "- Alice") || !strings.Contains(ins, "zh-CN"):
 			t.Errorf("verbatim instructions: %s", ins)
 		}
 	}
@@ -404,7 +406,7 @@ func TestTranscriptionWithoutCaptions(t *testing.T) {
 	for _, refuse := range []bool{false, true} {
 		t.Run(map[bool]string{false: "not granted", true: "refused"}[refuse], func(t *testing.T) {
 			trFast(t)
-			_, srv, _, live := trLive(t, voicetest.Script{Sentences: trScript, NoCaptions: !refuse, RefuseCaptions: refuse})
+			_, srv, logs, live := trLive(t, voicetest.Script{Sentences: trScript, NoCaptions: !refuse, RefuseCaptions: refuse})
 			tc := startTr(t, srv, liveStart())
 			ready := tc.next(extwire.TFReady)
 			if strings.Join(ready.Features, ",") != "live" {
@@ -423,6 +425,9 @@ func TestTranscriptionWithoutCaptions(t *testing.T) {
 			if _, verbatim := live.Sessions(); verbatim != 3 {
 				t.Errorf("%d verbatim sessions", verbatim)
 			}
+			if refuse != strings.Contains(logs.String(), "refused the interim-caption extension: verbatim sessions start without it") {
+				t.Errorf("log:\n%s", logs)
+			}
 			asked := len(live.Starts())
 			tc = startTr(t, srv, liveStart())
 			if ready := tc.next(extwire.TFReady); strings.Join(ready.Features, ",") != "live" {
@@ -436,6 +441,69 @@ func TestTranscriptionWithoutCaptions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Verbatim sessions ask for the caption extension too (and do not use its captions): with it the measured service ends
+// a turn at each sentence and replies to each, where without it (and a prompt it does not follow sentence by
+// sentence) it wrote several sentences in one late reply. Every sentence comes in its window, none left to the
+// captions.
+func TestTranscriptionVerbatimSessionsAskForCaptions(t *testing.T) {
+	trFast(t)
+	_, srv, logs, live := trLive(t, voicetest.Script{Sentences: trScript, CaptionNoise: 0.1, Bursts: 3})
+	tc := startTr(t, srv, liveStart())
+	tc.next(extwire.TFReady)
+	tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 20)
+	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+	frames := tc.done()
+	defer func() {
+		if t.Failed() {
+			t.Log(logs.String())
+		}
+	}()
+	sameTexts(t, frames, trScript)
+	if strings.Contains(logs.String(), "(dropped)") || strings.Contains(logs.String(), "the captions' text") {
+		t.Error("a verbatim session was dropped")
+	}
+	for _, s := range live.Starts() {
+		if _, ok := s["extensions"]; !ok {
+			t.Errorf("a session did not ask for the caption extension: %v", s["instructions"])
+		}
+	}
+}
+
+// The instructions are in the recording's language when it is Chinese, English or Japanese (the language the model
+// hears), else in the hub's (the caller's).
+func TestTranscriptionInstructionsLanguage(t *testing.T) {
+	trFast(t)
+	_, srv, _, live := trLive(t, voicetest.Script{Sentences: trScript})
+	opening := map[string]string{"zh-Hans": "你是", "en": "You are", "ja": "あなたは"}
+	for _, tt := range []struct{ tag, hub, want string }{
+		{"en-US", "zh-Hans", "en"},
+		{"ja-JP", "en", "ja"},
+		{"zh-TW", "en", "zh-Hans"},
+		{"yue-HK", "en", "zh-Hans"},
+		{"ko-KR", "ja", "ja"},
+		{"", "en", "en"},
+	} {
+		asked := len(live.Starts())
+		tc, _, err := dialTr(t, srv, TranscriptionContribution, http.Header{extwire.HeaderRole: {roleFull}, extwire.HeaderLang: {tt.hub}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tc.send(extwire.TranscriptionFrame{Type: extwire.TFStart, Mode: extwire.TranscriptionLive, Language: tt.tag, At: extwire.F(0.0)})
+		tc.next(extwire.TFReady)
+		tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+		tc.done()
+		starts := live.Starts()[asked:]
+		if len(starts) == 0 {
+			t.Fatalf("%q: no session", tt.tag)
+		}
+		for _, s := range starts {
+			if ins, _ := s["instructions"].(string); !strings.HasPrefix(ins, opening[tt.want]) {
+				t.Errorf("%q (hub %s): instructions not in %s:\n%s", tt.tag, tt.hub, tt.want, ins)
+			}
+		}
 	}
 }
 
@@ -1002,20 +1070,27 @@ func TestTranscriptionMergedReply(t *testing.T) {
 }
 
 // A service that refuses text-only output: its sessions start again without it (remembered for the provider), and
-// the sentences come as before.
+// the sentences come as before; one that also refuses the caption extension gets its verbatim sessions without both.
 func TestTranscriptionTextOnlyRefused(t *testing.T) {
-	trFast(t)
-	_, srv, logs, live := trLive(t, voicetest.Script{Sentences: trScript, TextOnlyRefused: true})
-	tc := startTr(t, srv, liveStart())
-	tc.next(extwire.TFReady)
-	tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 20)
-	tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
-	sameTexts(t, tc.done(), trScript)
-	if !strings.Contains(logs.String(), "refused text-only output") {
-		t.Errorf("log:\n%s", logs)
-	}
-	starts := live.Starts()
-	if _, textOnly := starts[len(starts)-1]["output_modalities"]; textOnly {
-		t.Error("a session started with text-only output after the service refused it")
+	for name, captions := range map[string]bool{"text only": false, "and the extension": true} {
+		t.Run(name, func(t *testing.T) {
+			trFast(t)
+			_, srv, logs, live := trLive(t, voicetest.Script{Sentences: trScript, TextOnlyRefused: true, RefuseCaptions: captions})
+			tc := startTr(t, srv, liveStart())
+			tc.next(extwire.TFReady)
+			tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 20)
+			tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+			sameTexts(t, tc.done(), trScript)
+			if !strings.Contains(logs.String(), "refused text-only output") {
+				t.Errorf("log:\n%s", logs)
+			}
+			starts := live.Starts()
+			if _, textOnly := starts[len(starts)-1]["output_modalities"]; textOnly {
+				t.Error("a session started with text-only output after the service refused it")
+			}
+			if _, verbatim := live.Sessions(); captions && verbatim != 3 {
+				t.Errorf("%d verbatim sessions", verbatim)
+			}
+		})
 	}
 }
