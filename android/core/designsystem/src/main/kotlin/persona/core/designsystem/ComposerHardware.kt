@@ -47,7 +47,8 @@ fun ComposerDropTargetFrame(
         AppStyle.Board -> RoundedCornerShape(Tokens.Radius.control)
     }
     val spec = if (PersonaTheme.reduceMotion) snap<Color>() else tween(PersonaTheme.motion.standard)
-    val edge by animateColorAsState(if (enabled && active) PersonaTheme.palette.accent else Color.Transparent, spec, label = "composer drop")
+    val inactiveEdge = PersonaTheme.palette.accent.copy(alpha = 0f)
+    val edge by animateColorAsState(if (enabled && active) PersonaTheme.palette.accent else inactiveEdge, spec, label = "composer drop")
     Box(modifier.border(Tokens.Size.lineMedium, edge, shape)
         .then(if (enabled) Modifier.testTag("composer-drop-target") else Modifier).semantics {
             if (enabled && active) stateDescription = if (importing) importingLabel else label

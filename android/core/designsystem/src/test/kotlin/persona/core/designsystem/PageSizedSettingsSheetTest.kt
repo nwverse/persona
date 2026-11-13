@@ -22,7 +22,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.getUnclippedBounds
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTextReplacement
@@ -52,9 +52,9 @@ class PageSizedSettingsSheetTest {
             }
         }
         rule.onNodeWithTag("settings-content").assertExists()
-        val bounds = rule.onNodeWithTag("settings-page-card").getUnclippedBounds()
-        assertTrue(bounds.width <= SettingsPageSizing.maximumWidth)
-        assertTrue(bounds.height <= SettingsPageSizing.maximumHeight)
+        val bounds = rule.onNodeWithTag("settings-page-card").getUnclippedBoundsInRoot()
+        assertTrue(bounds.right - bounds.left <= SettingsPageSizing.maximumWidth)
+        assertTrue(bounds.bottom - bounds.top <= SettingsPageSizing.maximumHeight)
         assertTrue(bounds.left >= SettingsPageSizing.minimumWindowMargin)
         assertTrue(bounds.top >= SettingsPageSizing.minimumWindowMargin)
     }
