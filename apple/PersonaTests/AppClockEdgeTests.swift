@@ -43,12 +43,17 @@ final class AppClockEdgeTests: XCTestCase {
     func testEveryThreadReadsTheSamePinnedMoment() {
         defaults.set("2026-01-01T12:00:00Z", forKey: key)
         let lock = NSLock()
-        var seen = Set<Date>()
+        let seen = Seen()
         DispatchQueue.concurrentPerform(iterations: 64) { _ in
             let value = AppClock.now
-            lock.withLock { seen.insert(value) }
+            lock.withLock { seen.values.append(value) }
         }
-        XCTAssertEqual(seen, [pinned])
+        XCTAssertEqual(Set(seen.values), [pinned])
+    }
+
+    /// What the threads above collect: a reference type so the concurrent closure mutates one place, behind the lock.
+    private final class Seen: @unchecked Sendable {
+        var values: [Date] = []
     }
 
     /// A new launch reads the argument again (what `resetForTests` models): the same process keeps its first value.
