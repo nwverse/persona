@@ -18,16 +18,19 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.IOException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.InboxEventFields
-import persona.core.contracts.api.HubCodedFailure
 import persona.core.contracts.api.InboxEntry
 import persona.core.contracts.api.InboxParentRef
+import persona.core.hub.HubError
+import persona.core.hub.HubFailure
 import persona.core.designsystem.AppFeedback
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.FeedbackNotice
@@ -51,14 +54,38 @@ class InboxSameMatterSheetTest {
         val newer = record("newer", "Alpha", manager = "m2", at = "2026-11-13T07:00:00Z")
         val older = record("older", "Beta", manager = "m2", at = "2026-11-12T07:00:00Z")
         val place = record("place", "Gamma", manager = "m2", at = "2026-11-13T06:00:00Z")
-        val records = listOf(current, child, grandchild, done, other, newer, older, place)
-        val all = sameMatterCandidates(records, current, listOf(child), "")
-        assertEquals(listOf("newer", "place", "grandchild", "older"), all.map { it.hubItemId })
-        assertEquals(listOf("newer"), sameMatterCandidates(records, current, listOf(child), "alpha").map { it.hubItemId })
-        assertEquals(listOf("place"), sameMatterCandidates(records, current, listOf(child), "WAREHOUSE") {
+        val belowDone = record("below-done", "Below done", manager = "m2", at = "2026-11-13T02:00:00Z")
+        val records = listOf(current, child, grandchild, done, other, newer, older, place, belowDone)
+        val descendants = listOf(child, grandchild, done, belowDone)
+        val all = sameMatterCandidates(records, current, descendants, "")
+        assertEquals(listOf("newer", "place", "older"), all.map { it.hubItemId })
+        assertEquals(listOf("newer"), sameMatterCandidates(records, current, descendants, "alpha").map { it.hubItemId })
+        assertEquals(listOf("place"), sameMatterCandidates(records, current, descendants, "WAREHOUSE") {
             if (it.hubItemId == "place") "Warehouse" else null
         }.map { it.hubItemId })
-        assertTrue("only direct children are excluded; a deeper cycle is the hub's 409", grandchild.hubItemId in all.map { it.hubItemId })
+        assertTrue("all descendants are excluded, including those below a done item", all.none { it.hubItemId in setOf("grandchild", "below-done") })
+    }
+
+    @Test fun descendantsIncludeDoneIntermediateItemsAndStopAtEightWithVisited() = runTest {
+        val nodes = (0..10).map { index -> record("n$index", "N$index", done = index == 3) }
+        val root = InboxLineage(InboxParentRef("inbox", "n0"), nodes[0], children = listOf(nodes[1]))
+        val children = (1..9).associate { index -> "n$index" to listOf(nodes[index + 1]) }.toMutableMap()
+        children["n2"] = listOf(nodes[3], nodes[0]) // A malformed cycle back to the root must not loop forever.
+        children["n4"] = listOf(nodes[5], nodes[1]) // A repeated child is read once too.
+        val repository = FakeRepository(nodes, root, children)
+        val descendants = inboxSameMatterDescendants(repository, root)
+        assertEquals((1..8).map { "n$it" }, descendants.map { it.hubItemId })
+        assertTrue("the done intermediate stays in the chain", "n3" in descendants.map { it.hubItemId })
+        assertFalse("depth nine is outside the server's cap", "n9" in descendants.map { it.hubItemId })
+        assertEquals(7, repository.lineCalls)
+    }
+
+    @Test fun cycleDetectionRecognizesEveryLocalizedHubMessageButNotParentDepth() {
+        for (message in listOf("that parent would make a cycle", "这个关联会形成循环，请选择其他内容。", "この関連付けは循環します。別の項目を選択してください。")) {
+            assertTrue(message, isInboxParentCycle(HubFailure(HubError.Server, message, status = 409, code = "conflict")))
+        }
+        assertFalse(isInboxParentCycle(HubFailure(HubError.Server, "that parent would be too deep", status = 409, code = "conflict")))
+        assertFalse(isInboxParentCycle(HubFailure(HubError.Server, "that parent would make a cycle", status = 500, code = "conflict")))
     }
 
     @Test fun pickerFiltersSearchesAndLinksTheRawParentWithoutAConfirmation() {
@@ -98,15 +125,19 @@ class InboxSameMatterSheetTest {
         val current = record("current", "Current")
         val alpha = record("alpha", "Alpha")
         val tree = InboxLineage(InboxParentRef("inbox", "current"), current)
-        val repository = FakeRepository(listOf(current, alpha), tree).apply { writeError = CodedFailure(409, "parent_cycle") }
+        val repository = FakeRepository(listOf(current, alpha), tree).apply {
+            writeError = HubFailure(HubError.Server, "这个关联会形成循环，请选择其他内容。", status = 409, code = "conflict")
+        }
         var dismisses = 0
         rule.setContent { Sheet(repository, current, tree, { dismisses++ }, {}) }
         rule.onNode(hasSetTextAction()).performTextReplacement("Alpha")
         rule.onNode(hasText("Alpha", substring = true) and hasClickAction() and !hasSetTextAction()).performClick()
         rule.waitForIdle()
-        assertEquals(1, feedback.failures)
-        assertTrue(feedback.notices.isEmpty())
+        assertEquals(0, feedback.failures)
+        assertEquals("这个关联会形成循环，请选择其他内容。", feedback.notices.single().message)
+        assertEquals(FeedbackStyle.Error, feedback.notices.single().style)
         assertEquals(0, dismisses)
+        rule.onNodeWithText("that parent would make a cycle").assertDoesNotExist()
         rule.onNodeWithText("是同一件事…").assertExists()
         rule.onNode(hasText("Alpha", substring = true) and hasClickAction() and !hasSetTextAction()).assertExists()
     }
@@ -128,6 +159,22 @@ class InboxSameMatterSheetTest {
         rule.onNodeWithText("重试").performClick()
         rule.onNode(hasText("Alpha", substring = true) and hasClickAction() and !hasSetTextAction()).assertExists()
         assertEquals(2, repository.lineCalls)
+    }
+
+    @Test fun anOldHubWithoutTheTreeRouteDegradesToNoKnownDescendantsWithoutRetry() {
+        val current = record("current", "Current")
+        val alpha = record("alpha", "Alpha")
+        val tree = InboxLineage(InboxParentRef("inbox", "current"), current)
+        val repository = FakeRepository(listOf(current, alpha), tree).apply { nullRead = true }
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                CompositionLocalProvider(LocalAppFeedback provides feedback) {
+                    InboxSameMatterSheet(repository, current, initialTree = null, onDismiss = {}, onLinked = {})
+                }
+            }
+        }
+        rule.onNode(hasText("Alpha", substring = true) and hasClickAction() and !hasSetTextAction()).assertExists()
+        rule.onNodeWithText("重试").assertDoesNotExist()
     }
 
     @Test fun moreMenuLoadsThePickerOnlyWhenItIsOpened() {
@@ -162,7 +209,7 @@ class InboxSameMatterSheetTest {
         }
         rule.onNodeWithText("是同一件事…").performClick()
         rule.onNode(hasSetTextAction()).assertExists()
-        assertEquals(1, repository.lineCalls)
+        assertEquals(2, repository.lineCalls) // the root, then its direct child's descendants, still only after opening
     }
 
     @Composable
@@ -187,9 +234,11 @@ class InboxSameMatterSheetTest {
         override fun notice(message: String, style: FeedbackStyle): Boolean { notices += FeedbackNotice(message, style = style); return true }
     }
 
-    private class CodedFailure(override val status: Int, override val code: String) : IOException("refused"), HubCodedFailure
-
-    private class FakeRepository(records: List<InboxRecord>, private val line: InboxLineage) : InboxRepository {
+    private class FakeRepository(
+        records: List<InboxRecord>,
+        private val line: InboxLineage,
+        private val childrenById: Map<String, List<InboxRecord>> = emptyMap(),
+    ) : InboxRepository {
         override val entries = MutableStateFlow(emptyList<InboxEntry>())
         override val snapshot = MutableStateFlow(InboxSnapshot(records = records))
         override suspend fun refresh() = Unit
@@ -203,12 +252,15 @@ class InboxSameMatterSheetTest {
         override suspend fun downloadFile(file: LarkPart.File): String = error("unused")
         var lineCalls = 0
         var failRead = false
+        var nullRead = false
         var writeError: Exception? = null
         val writes = mutableListOf<Pair<InboxRecord, InboxParentRef?>>()
-        override suspend fun inboxLine(item: InboxRecord): InboxLineage {
+        override suspend fun inboxLine(item: InboxRecord): InboxLineage? {
             lineCalls++
             if (failRead) throw IOException("read failed")
-            return line
+            if (nullRead) return null
+            if (item.hubItemId == line.node.id) return line
+            return InboxLineage(InboxParentRef("inbox", item.hubItemId), item, children = childrenById[item.hubItemId].orEmpty())
         }
         override suspend fun setInboxParent(item: InboxRecord, parent: InboxParentRef?) {
             writes += item to parent

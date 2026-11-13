@@ -28,6 +28,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import persona.core.contracts.api.InboxParentRef
 import persona.core.contracts.parseTime
+import persona.core.hub.HubFailure
 import persona.core.designsystem.FeedbackStyle
 import persona.core.designsystem.GroupPosition
 import persona.core.designsystem.JAction
@@ -45,12 +46,32 @@ import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.icons.PersonaIcons
 
-/** Open items this one can join: same manager, not itself or its direct children, newest first, title / where search. */
+private const val MAX_SAME_MATTER_DEPTH = 8
+
+/** Every descendant, not only the root's direct children. Each item is read once; malformed cycles and depth are bounded. */
+internal suspend fun inboxSameMatterDescendants(repository: InboxRepository, root: InboxLineage): List<InboxRecord> {
+    val visited = mutableSetOf(root.item?.item?.id ?: root.node.id)
+    val descendants = mutableListOf<InboxRecord>()
+    var frontier = root.children
+    var depth = 1
+    while (frontier.isNotEmpty() && depth <= MAX_SAME_MATTER_DEPTH) {
+        val next = mutableListOf<InboxRecord>()
+        for (item in frontier) if (visited.add(item.item.id)) {
+            descendants += item
+            if (depth < MAX_SAME_MATTER_DEPTH) next += repository.inboxLine(item)?.children.orEmpty()
+        }
+        frontier = next
+        depth++
+    }
+    return descendants
+}
+
+/** Open items this one can join: same manager, not itself or any descendant, newest first, title / where search. */
 internal fun sameMatterCandidates(
-    records: List<InboxRecord>, current: InboxRecord, children: List<InboxRecord>, query: String,
+    records: List<InboxRecord>, current: InboxRecord, descendants: List<InboxRecord>, query: String,
     where: (InboxRecord) -> String? = ::sameMatterWhere,
 ): List<InboxRecord> {
-    val excluded = buildSet { add(current.item.id); children.mapTo(this) { it.item.id } }
+    val excluded = buildSet { add(current.item.id); descendants.mapTo(this) { it.item.id } }
     val manager = InboxItemKey.appId("", current.manager)
     val q = query.trim()
     return records.filter { candidate ->
@@ -77,7 +98,18 @@ internal fun sameMatterLegacyMeta(record: InboxRecord, res: Resources): String? 
 
 internal fun sameMatterMeta(record: InboxRecord, res: Resources): String? = sameMatterLegacyMeta(record, res)
 
-/** Pick another open item as this item's parent. The tree is read only when the caller did not already have one. */
+private val inboxParentCycleWords = setOf(
+    "that parent would make a cycle",
+    "这个关联会形成循环，请选择其他内容。", // i18n-ignore: exact localized hub error used to classify the refusal, never displayed
+    "この関連付けは循環します。別の項目を選択してください。", // i18n-ignore: exact localized hub error used to classify the refusal, never displayed
+)
+
+/** The hub localizes this error, so English alone is not a discriminator. parent_deep has different words and stays generic. */
+internal fun isInboxParentCycle(error: Throwable): Boolean = HubFailure.from(error).let {
+    it.status == 409 && it.code == "conflict" && it.message in inboxParentCycleWords
+}
+
+/** Pick another open item as this item's parent. A missing root tree is read lazily; each descendant is then read once. */
 @Composable
 internal fun InboxSameMatterSheet(
     repository: InboxRepository,
@@ -92,29 +124,33 @@ internal fun InboxSameMatterSheet(
     val scope = rememberCoroutineScope()
     var query by rememberSaveable(record.item.id) { mutableStateOf("") }
     var tree by remember(record.item.id) { mutableStateOf(initialTree) }
-    var loading by remember(record.item.id) { mutableStateOf(initialTree == null) }
+    var descendants by remember(record.item.id) { mutableStateOf<List<InboxRecord>?>(null) }
+    var loading by remember(record.item.id) { mutableStateOf(true) }
     var failed by remember(record.item.id) { mutableStateOf(false) }
     var attempt by remember(record.item.id) { mutableIntStateOf(0) }
     var busy by remember(record.item.id) { mutableStateOf(false) }
     var writeFailed by remember(record.item.id) { mutableStateOf(false) }
+    var cycleFailed by remember(record.item.id) { mutableStateOf(false) }
     LaunchedEffect(record.item.id, initialTree, attempt) {
-        if (initialTree != null) {
-            tree = initialTree; loading = false; failed = false
-            return@LaunchedEffect
-        }
-        loading = true; failed = false
-        tree = try {
+        loading = true; failed = false; descendants = null
+        val base = if (initialTree != null) initialTree else try {
             repository.inboxLine(record) ?: InboxLineage(InboxParentRef("inbox", record.hubItemId), record)
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { null }
+        tree = base
+        if (base != null) descendants = try { inboxSameMatterDescendants(repository, base) }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
+        // A partial descendant list could offer exactly the cycle this picker must prevent. Retry instead of showing it.
         loading = false
-        failed = tree == null
+        failed = tree == null || descendants == null
     }
-    val candidates = sameMatterCandidates(snapshot.records, record, tree?.children.orEmpty(), query)
+    val candidates = sameMatterCandidates(snapshot.records, record, descendants.orEmpty(), query)
     JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_line_same), dismissible = !busy) {
         Column(Modifier.fillMaxWidth().imePadding()) {
             JSearchField(query, { query = it }, stringResource(R.string.inbox_line_search_placeholder), Modifier.fillMaxWidth())
             if (writeFailed) JNotice(stringResource(R.string.inbox_failed_retry), Modifier.padding(top = Tokens.Space.s))
+            if (cycleFailed) JNotice(stringResource(R.string.inbox_line_cycle), Modifier.padding(top = Tokens.Space.s))
             when {
                 loading -> Box(Modifier.weight(1f, fill = false).fillMaxWidth(), contentAlignment = Alignment.Center) { JLoading() }
                 failed -> Box(Modifier.weight(1f, fill = false).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -127,7 +163,7 @@ internal fun InboxSameMatterSheet(
                     itemsIndexed(candidates, key = { _, candidate -> candidate.item.id }) { index, candidate ->
                         JGroupItem(GroupPosition.of(index, candidates.size)) {
                             JRow(candidate.item.title, subtitle = sameMatterMeta(candidate, res), enabled = !busy, onClick = {
-                                busy = true; writeFailed = false
+                                busy = true; writeFailed = false; cycleFailed = false
                                 scope.launch {
                                     try {
                                         repository.setInboxParent(record, InboxParentRef("inbox", candidate.hubItemId))
@@ -139,8 +175,12 @@ internal fun InboxSameMatterSheet(
                                         onLinked(fresh)
                                         feedback?.notice(res.getString(R.string.inbox_line_linked, candidate.item.title), FeedbackStyle.Success)
                                     } catch (e: CancellationException) { throw e }
-                                    catch (e: Exception) { if (feedback?.failure(e, operation = true) != true) writeFailed = true }
-                                    finally { busy = false }
+                                    catch (e: Exception) {
+                                        if (isInboxParentCycle(e)) {
+                                            val message = res.getString(R.string.inbox_line_cycle)
+                                            if (feedback?.notice(message, FeedbackStyle.Error) != true) cycleFailed = true
+                                        } else if (feedback?.failure(e, operation = true) != true) writeFailed = true
+                                    } finally { busy = false }
                                 }
                             })
                         }

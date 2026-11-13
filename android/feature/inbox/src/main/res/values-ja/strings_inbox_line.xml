@@ -18,4 +18,5 @@
     <string name="inbox_line_retry">もう一度試す</string>
     <string name="inbox_line_retry_text">もう一度試してください。</string>
     <string name="inbox_line_instructed">AI に伝えました。新しい提案を待っています</string>
+    <string name="inbox_line_cycle">この関連付けは循環します。別の項目を選択してください。</string>
 </resources>
