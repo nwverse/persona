@@ -1125,6 +1125,25 @@ hub; what each rule and per-item setting means is in `docs/assistant/knowledge.m
   an old hub, an unknown field and a refused save); `-tab settings -openKnowledgeSelection YES` opens the page, `rule`, `chat` or `doc` instead of `YES`
   with that sheet up. Demo Mode keeps the document in memory.
 
+## Inbox rows
+
+For people scanning what needs them, one matter keeps its title, time and AI summary. Its metadata line says where it is
+happening, who wrote the newest line and what they wrote: `where · sender: preview` in English, with the localized colon
+in Chinese and Japanese. A direct chat whose `where` equals its sender names that person once. Without `where` (an older
+hub, or mail), the existing source-specific line is unchanged. Search includes `where` in addition to title, sender,
+preview and summary; it still does not search context or triage reasons.
+
+When the manager sends the optional `now` key, `InboxNow` resolves the shared `spec/fixtures/inbox/now.json` table and
+compose rules in the interface language. On an open item, the complete sentence takes the existing mark line below the
+metadata, in the mark's current font and color (failure red, other states secondary), rather than competing with the
+metadata or its count badge for width. Waiting has a static clock, only queued / looking / Agent-working spins, and states
+that need the owner use the existing Needs you mark (failure stays red); FYI and folded states do not spin. Done rows keep
+today's absence of a mark; their done_* words belong to the detail. Waiting includes its named person, short check time
+and next step when present; failure uses only `handling.error`. An unknown or missing key keeps the existing
+`InboxEventText.mark` line and draft behavior, including its row height. The frozen native Mac row keeps its previous
+metadata and mark. `InboxNowTests` checks every shared state and row case in en, zh-Hans and ja, optional-field decoding,
+fallback and `where` search.
+
 ## Translation (Settings › Translation, 2026-10-31)
 
 With Automatic translation enabled, content not in the target language (Simplified Chinese by default) translates automatically; you can switch back to the original anytime.
