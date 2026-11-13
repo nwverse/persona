@@ -57,14 +57,17 @@ const inboxFollowUpAskChecks = 3
 // inbox_list_memo.go). An unknown done_by has no mapped key: leave Now empty so the apps keep their own done words.
 func (it *InboxItem) nowKey() string {
 	if !it.open() {
-		for i := len(it.Chain) - 1; i >= 0; i-- {
-			if it.Chain[i].Kind != ChainDone {
-				continue
+		// Replied and superseded filings do not add a done entry, so an old muted entry is stale for them.
+		if it.DoneBy == "read" {
+			for i := len(it.Chain) - 1; i >= 0; i-- {
+				if it.Chain[i].Kind != ChainDone {
+					continue
+				}
+				if it.Chain[i].By == DoneByMuted {
+					return NowDoneMuted
+				}
+				break // only the newest done entry describes this filing
 			}
-			if it.Chain[i].By == DoneByMuted {
-				return NowDoneMuted
-			}
-			break // only the newest done entry describes this filing
 		}
 		switch it.DoneBy {
 		case "replied":
