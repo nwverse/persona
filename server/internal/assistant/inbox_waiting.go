@@ -93,10 +93,15 @@ func defaultInboxFollow(now time.Time) *InboxFollow {
 	return &InboxFollow{CheckAt: &at}
 }
 
-// waitForOtherSide records what the item waits on and a server-written chain entry. clearTurn drops an interrupted
-// turn's wake and restoration state when this reply or follow is its outcome; a confirmed reply keeps any newer work
-// that arrived while it was being sent. Under b.mu.
+// waitForOtherSide records what the item waits on and a server-written chain entry. Rewriting a follow keeps Checks
+// (only new messages reset them) and clears Due. clearTurn drops an interrupted turn's wake and restoration state when
+// this reply or follow is its outcome; a confirmed reply keeps any newer work that arrived while it was being sent.
+// Under b.mu.
 func (b *inboxBook) waitForOtherSide(it *InboxItem, follow *InboxFollow, via string, now time.Time, loc *time.Location, clearTurn bool) {
+	if it.Follow != nil {
+		follow.Checks = it.Follow.Checks
+	}
+	follow.Due = false
 	it.Follow = follow
 	if clearTurn && it.Agent != nil {
 		it.Agent.Wake, it.Agent.Back = false, ""
