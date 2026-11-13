@@ -70,6 +70,36 @@ func TestAgentStartAdoptsTheSessionThatStartedLate(t *testing.T) {
 	}
 }
 
+// The user can close the pre-created card while session.start is in flight. The node has still launched the Agent:
+// return started-with-warning, keep it linked to the closed card for cleanup, and never invite a duplicate start.
+func TestAgentStartReportsStartedWhenTaskClosesDuringLaunch(t *testing.T) {
+	s, f := newQuietService(t)
+	f.onStart = func(f *fakeHub, a map[string]any) {
+		id, _ := a["creation_id"].(string)
+		now := time.Now().UTC()
+		s.todos.mu.Lock()
+		if todo := s.todos.todos[id]; todo != nil {
+			todo.DoneAt = &now
+		}
+		s.todos.mu.Unlock()
+	}
+	res, err := s.runTool(context.Background(), "server", "conv1", "agent_start",
+		json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"看看 CI"}`))
+	if err != nil {
+		t.Fatalf("a successfully started Agent must not read as a start failure: %v", err)
+	}
+	if !strings.Contains(res, "Started on ") || !strings.Contains(res, "Warning") || !strings.Contains(res, "Do NOT start it again") {
+		t.Fatalf("started-with-warning result = %q", res)
+	}
+	if len(f.starts) != 1 {
+		t.Fatalf("the start was attempted %d times, want 1", len(f.starts))
+	}
+	todo := onlyTodo(s)
+	if todo.DoneAt == nil || len(todo.Agents) != 1 {
+		t.Fatalf("the started Agent is not linked to the closed card for cleanup: %+v", todo)
+	}
+}
+
 // An unanswered start still has its task from before the request. When the session appears later, its persisted
 // creation id links it back to that same card without guessing from cwd or adopting a manual session (#5732).
 func TestAgentStartUnknownKeepsPendingTaskAndLinksByCreationID(t *testing.T) {

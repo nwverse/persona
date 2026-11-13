@@ -146,13 +146,14 @@ func (s *Service) noteOwnerWait(ctx context.Context, t Todo, work time.Time, rea
 		return
 	}
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigIdle, Key: work.UTC().Format(time.RFC3339Nano), Detail: "要用户决定：" + reason}) // i18n-ignore: the supervision message is the assistant's prompt
-	if changed && !t.Quiet {
+	if changed {
+		// Quiet suppresses routine notices, not an action only the owner can take (#5732).
 		go s.notifyTaskNeedsUser(context.WithoutCancel(ctx), t, work, reason)
 	}
 }
 
 // notifyTaskNeedsUser pushes an action only the owner can take. Its stable id deduplicates delivery retries, and its
-// body names the reason and the task's web link. Quiet tasks stay in their supervision message instead.
+// body names the reason and the task's web link. Quiet tasks receive this push too; their routine notices stay quiet.
 func (s *Service) notifyTaskNeedsUser(ctx context.Context, t Todo, work time.Time, reason string) {
 	here := s.settings(ctx).MachineID
 	conversation := t.Origin
@@ -194,9 +195,11 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 			return false
 		}
 		v.Waits = nil // its agent goes on: the owner's answer reached it, or the work changed (#1277)
-		if v.State != reviewPending && v.State != reviewParked {
+		if v.State != reviewPending && v.State != reviewParked && v.State != reviewNeedsUser {
 			return true
 		}
+		// A judge-written owner wait ends with this work too. A needs_user review/decision card has no Waits and was
+		// returned above, so it is not cleared here (#5732).
 		v.State = ""
 		if v.Round > 0 {
 			v.State = reviewRework

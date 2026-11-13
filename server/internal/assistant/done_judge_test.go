@@ -118,6 +118,8 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"negated manual operation", "不用你本人操作，已经全部完成。", verdictDone, ""},
 		{"negated owner start", "无需由你发起，已自动开始。", verdictDone, ""},
 		{"negated offer", "不需要你决定要不要继续，已按原方案完成。", verdictDone, ""},
+		{"conditional English guidance", "If you need to roll back, run make rollback.", verdictDone, ""},
+		{"Chinese narrative about a choice", "评估了要不要拆分模块，结论是不拆。", verdictDone, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &cannedJSON{answer: `{"verdict":"done","reason":"finished"}`}

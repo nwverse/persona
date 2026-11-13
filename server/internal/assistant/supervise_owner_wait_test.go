@@ -64,6 +64,33 @@ func TestNeedsUserJudgmentWaitsAndPushesOnce(t *testing.T) {
 	}
 }
 
+// Main-dispatched tasks are quiet by default, but an owner-only action still gets its one push. Quiet suppresses
+// routine task notices, never the request the owner must answer (#5732).
+func TestMainQuietNeedsUserJudgmentPushesOnce(t *testing.T) {
+	s, f := newQuietService(t)
+	withWebBot(f, testWeb)
+	if _, err := s.toolTaskPlan(context.Background(), "conv1", planArgs(true)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the main task's agent", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	todo := onlyTodo(s)
+	if !todo.Quiet || todo.Supervision == nil || todo.Supervision.Supervisor != "conv1" {
+		t.Fatalf("main quiet task = %+v", todo)
+	}
+	f.judge = `{"verdict":"needs_user","reason":"需要你本人操作"}`
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "Spec 已完成，下一步由你发起实现。", 0)
+	waitFor(t, "the main quiet task's visible owner wait", func() bool {
+		return todoNow(s, todo.ID).Supervision.State == reviewNeedsUser
+	})
+	waitFor(t, "the main quiet task's owner-action push", func() bool { return len(f.pushed()) == 1 })
+	cur := todoNow(s, todo.ID)
+	s.superviseJudged(context.Background(), cur, cur.Supervision.Waits.Work, taskDoneCheck{Verdict: verdictNeedsUser, Reason: "需要你本人操作"}, nil)
+	if got := len(f.pushed()); got != 1 {
+		t.Fatalf("same main quiet wait pushed %d times", got)
+	}
+}
+
 // Needs-user pushes follow the conversation supervision route, not a task leader's machine/session reference.
 // Manual leaders and the legacy background escalate this owner decision to main as well (#5732).
 func TestNeedsUserPushGoesToMainForEverySupervisedTopology(t *testing.T) {
@@ -150,16 +177,31 @@ func TestAcceptedIsRefusedWhileTheWorkWaitsOnTheOwner(t *testing.T) {
 	}
 }
 
-// The owner's answer reaches the agent and it goes on: the wait is over, and once the judge finds the work done the task
-// is accepted as usual.
+// The owner's answer reaches the agent and it goes on: the wait is over, a later not-done verdict still reaches main,
+// and once the judge finds the work done the task is accepted as usual.
 func TestOwnerWaitEndsWhenTheAgentGoesOn(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	ctx := context.Background()
 	stopOnOwner(t, s, f, todo.ID)
 
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	waitFor(t, "the visible owner wait cleared by work", func() bool {
+		v := todoNow(s, todo.ID).Supervision
+		return v.Waits == nil && v.State != reviewNeedsUser
+	})
+	f.judge = `{"verdict":"not_done","reason":"还没发"}`
+	agentTurn(s, f, proto.StatusDone, "我按选定的 A 版改了，但还没发", 0)
+	waitFor(t, "the following not-done verdict reaches main", func() bool {
+		for _, text := range f.noticesTo("conv1") {
+			if strings.Contains(text, "还没发") {
+				return true
+			}
+		}
+		return false
+	})
+
 	f.judge = `{"verdict":"done","reason":"按用户选的 A 版发了"}`
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	waitFor(t, "the wait cleared by work", func() bool { return todoNow(s, todo.ID).Supervision.Waits == nil })
 	agentTurn(s, f, proto.StatusDone, "按你选的 A 版发出去了，PR https://github.com/o/r/pull/7 已合并", 0)
 	waitFor(t, "waits for review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
 

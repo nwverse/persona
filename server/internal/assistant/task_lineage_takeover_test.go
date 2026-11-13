@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -83,5 +84,55 @@ func TestAgentSuperviseAfterCloseLinksTheTakeoverLineage(t *testing.T) {
 	}
 	if !shots[old.ID] || !shots[current.ID] {
 		t.Fatalf("snapshot is missing a lineage card: %v", shots)
+	}
+}
+
+// A newly titled agent_send task is new work, not an explicit takeover. It gets its own brief and acceptance criteria,
+// leaves the closed card's result and scope alone, and creates no lineage in either direction (#5732).
+func TestAgentSendAfterCloseStartsAnIndependentBrief(t *testing.T) {
+	s, f, old := newSupervisedService(t)
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	raw, _ := json.Marshal(map[string]any{"todo_id": old.ID, "verdict": "accepted", "note": "Spec 已验收"})
+	if _, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw); err != nil {
+		t.Fatal(err)
+	}
+	agent, ok := s.session(context.Background(), "box", "s1")
+	if !ok {
+		t.Fatal("closed task agent is missing")
+	}
+	agent.SessionID = "s1000000"
+	f.setSessions("box", agent)
+	s.todos.mu.Lock()
+	s.todos.todos[old.ID].Agents[0].SessionID = agent.SessionID
+	s.todos.mu.Unlock()
+	if _, err := runJSON(t, s, "conv1", "agent_send", map[string]any{
+		"machine": "box", "session_id": "s1000000", "text": "整理一份独立周报",
+		"task": map[string]any{"title": "整理周报", "done_when": []string{"周报链接贴回来"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var current Todo
+	for _, td := range s.todosOf(context.Background(), "*") {
+		if td.DoneAt == nil {
+			current = td
+		}
+	}
+	if current.ID == "" || current.ID == old.ID || current.Supervision == nil ||
+		len(current.Supervision.DoneWhen) != 1 || current.Supervision.DoneWhen[0] != "周报链接贴回来" {
+		t.Fatalf("independent task = %+v", current)
+	}
+	oldBrief, oldOK := s.briefOfTodo(old.ID)
+	newBrief, newOK := s.briefOfTodo(current.ID)
+	if !oldOK || !newOK || oldBrief.ID == newBrief.ID {
+		t.Fatalf("the new task inherited the closed task's brief: old=%+v new=%+v", oldBrief, newBrief)
+	}
+	if len(oldBrief.Criteria) != 2 || oldBrief.Criteria[0] != "PR 合并到 master" || oldBrief.Criteria[1] != "浅色 / 深色截图贴进 PR" {
+		t.Fatalf("the closed brief's criteria changed: %+v", oldBrief.Criteria)
+	}
+	listed := listedTodos(t, s)
+	oldLineage, _ := json.Marshal(listed[old.ID]["lineage"])
+	newLineage, _ := json.Marshal(listed[current.ID]["lineage"])
+	if strings.Contains(string(oldLineage), "superseded_by") || strings.Contains(string(newLineage), "continues") {
+		t.Fatalf("unrelated work formed lineage: old=%s new=%s", oldLineage, newLineage)
 	}
 }

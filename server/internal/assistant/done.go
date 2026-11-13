@@ -91,6 +91,9 @@ func ownerActionLine(text string) string {
 			if !strings.Contains(compact, p.marker) {
 				continue
 			}
+			if p.marker == "要不要" && !strings.ContainsAny(line, "？?") {
+				continue // evaluating whether to do something is narrative, not asking the owner to choose (#5732)
+			}
 			negated := false
 			for _, n := range p.negations {
 				negated = negated || strings.Contains(compact, n)
@@ -113,6 +116,10 @@ func ownerActionLine(text string) string {
 		} {
 			if !strings.Contains(lower, p.marker) {
 				continue
+			}
+			if (p.marker == "you need to" || p.marker == "you'll need to") &&
+				(strings.Contains(lower, "if "+p.marker) || strings.Contains(lower, "when "+p.marker) || strings.Contains(lower, "whenever "+p.marker)) {
+				continue // conditional guidance is not an owner-only next step (#5732)
 			}
 			negated := false
 			for _, n := range p.negations {

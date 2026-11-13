@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -596,11 +597,23 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		s.recordStartSuccess(ctx, am.ID, launcher)
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
-		if err := s.linkPreparedAgentTask(ctx, task, am, a.Cwd, res.Session.SessionID); err != nil {
-			return "", err
+		linkErr := s.linkPreparedAgentTask(ctx, task, am, a.Cwd, res.Session.SessionID)
+		closedDuringStart := errors.Is(linkErr, db.ErrTodoCompleted)
+		if closedDuringStart {
+			// The user closed the card while the node was starting it. Keep the Agent on that done card so the close
+			// loop can retire it, exactly as task_plan does; never turn this successful launch into a retryable error.
+			linkErr = s.linkTodoAgentOfDoneTask(ctx, task.ID, am.ID, res.Session.SessionID, task.Title, a.Cwd, "")
+		}
+		warning := ""
+		switch {
+		case linkErr != nil:
+			warning = fmt.Sprintf(" Warning: the Agent started, but its task link could not be recorded: %v. "+
+				"Do NOT start it again; use the existing session.", linkErr)
+		case closedDuringStart:
+			warning = " Warning: the task closed while the Agent started; it remains linked to that task for cleanup. Do NOT start it again."
 		}
 		return fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
-			"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note), nil
+			"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note) + warning, nil
 	}
 	return "", fmt.Errorf("unknown tool %s", name)
 }
