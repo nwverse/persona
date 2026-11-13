@@ -1052,6 +1052,8 @@ Use an invalidation revision as the task key and handle the flag after completio
 - With class-valued dictionaries (`CGMutablePath`), `dict[k, default: X].method()` only reads and never inserts the default; modifications are lost (entire terminal border lines disappeared).
 - Trailing closures match the first closure parameter positionally. With two optional closures (`SpaceMenuItems.rename`, `open`),
   inserting a new one first silently reroutes existing `SpaceMenuItems(group:) { rename }` calls. Add optional closures last and label call sites.
+  For a public component with older single and multiple trailing-closure callers, keep its original initializer and add a separate,
+  explicitly labeled overload; `ApprovalCardTests.legacyTrailingClosuresStayOnSubmit` checks both forms.
 - In Chinese locale, SwiftUI `.dateTime.hour(.twoDigits(amPM: .omitted))` uses 12-hour time, showing 17:00 as 05:00; for 24-hour times use fixed `HH:mm` (`AssistantScheduleText.hm`).
 - Types in `apple/Shared` default to MainActor isolation; new pure-data enums used by `nonisolated` structs need `nonisolated`, otherwise isolated-conformance errors result.
   PersonaTests has no default isolation: mark test structs using app static methods, properties or key paths `@MainActor` (like `ChatStoreTests`),

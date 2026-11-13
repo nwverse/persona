@@ -163,7 +163,6 @@ public struct ApprovalCard<Context: View>: View {
         customPlaceholder: String = "Something else…",
         sentMessage: String = "Answers sent",
         options: Options = Options(),
-        onSkip: ((ApprovalAnswers) -> Void)? = nil,
         onSubmit: ((ApprovalAnswers) -> Void)? = nil,
         onDismiss: (() -> Void)? = nil,
         @ViewBuilder context: @escaping (Int) -> Context
@@ -176,7 +175,7 @@ public struct ApprovalCard<Context: View>: View {
         self.sendLabel = sendLabel
         self.customPlaceholder = customPlaceholder
         self.sentMessage = sentMessage
-        self.onSkip = onSkip
+        self.onSkip = nil
         self.onSubmit = onSubmit
         self.onDismiss = onDismiss
         _index = State(initialValue: min(max(0, startAt), max(0, questions.count - 1)))
@@ -492,13 +491,35 @@ public extension ApprovalCard where Context == EmptyView {
         customPlaceholder: String = "Something else…",
         sentMessage: String = "Answers sent",
         options: Options = Options(),
-        onSkip: ((ApprovalAnswers) -> Void)? = nil,
         onSubmit: ((ApprovalAnswers) -> Void)? = nil,
         onDismiss: (() -> Void)? = nil
     ) {
         self.init(questions: questions, startAt: startAt, answers: answers, submitted: submitted, skipLabel: skipLabel,
                   continueLabel: continueLabel, sendLabel: sendLabel, customPlaceholder: customPlaceholder,
-                  sentMessage: sentMessage, options: options, onSkip: onSkip, onSubmit: onSubmit, onDismiss: onDismiss) { _ in EmptyView() }
+                  sentMessage: sentMessage, options: options, onSubmit: onSubmit, onDismiss: onDismiss) { _ in EmptyView() }
+    }
+
+    /// Whole-card cancellation is a separate, explicitly labeled overload: adding it to the original initializer would
+    /// let an existing unlabeled trailing closure bind to Skip instead of Submit.
+    init(
+        questions: [ApprovalQuestion],
+        startAt: Int = 0,
+        answers: ApprovalAnswers = ApprovalAnswers(),
+        submitted: Bool = false,
+        skipLabel: String? = "Skip",
+        continueLabel: String = "Continue",
+        sendLabel: String = "Send",
+        customPlaceholder: String = "Something else…",
+        sentMessage: String = "Answers sent",
+        options: Options = Options(),
+        onSkip: ((ApprovalAnswers) -> Void)?,
+        onSubmit: ((ApprovalAnswers) -> Void)? = nil,
+        onDismiss: (() -> Void)? = nil
+    ) {
+        self.init(questions: questions, startAt: startAt, answers: answers, submitted: submitted, skipLabel: skipLabel,
+                  continueLabel: continueLabel, sendLabel: sendLabel, customPlaceholder: customPlaceholder,
+                  sentMessage: sentMessage, options: options, onSubmit: onSubmit, onDismiss: onDismiss)
+        self.onSkip = onSkip
     }
 }
 
