@@ -251,9 +251,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * And 176 B for side sessions drawn under their parent, with main's own growth (#5935: main at 2d9596043 measured ja
  * 477,447 B, 67 B over the budget before; this change takes it to 477,525 B, +78 B: lib/side-sessions.ts's
  * arrangement, the paged list's use of it for its order and the Earlier split, and a row's parent identity in
- * lib/runtime-list.ts; 31 B of room).
+ * lib/runtime-list.ts; 31 B of room). And 394 B for main's latest additions (#6515: ja 477,950 B, with 0 B of room;
+ * the existing screen is unchanged by this accounting).
  */
-export const FIRST_SCREEN_BUDGET = 477_556;
+export const FIRST_SCREEN_BUDGET = 477_950;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -428,9 +429,10 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
  * query typed, off the idle tier; 31 B of room so the next main does not tip it). And 108 B for the same main
  * with the lead row-title restoration (#6400: 44,583 B after merging it, +108 B, of which 0 B fit the old room).
+ * And 141 B for the later additions: 44,724 B as measured, with 0 B of room.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 44_583;
+export const IDLE_TIER_BUDGET = 44_724;
 
 const gzip = promisify(gzipCompress);
 
