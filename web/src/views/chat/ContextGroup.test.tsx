@@ -16,6 +16,7 @@ const cs = [
 
 describe("ContextGroup", () => {
   beforeAll(async () => {
+    // Load before any component mounts, so chunk completion cannot escape an act scope.
     await import("./ContextDetails");
   }, 60_000);
 
