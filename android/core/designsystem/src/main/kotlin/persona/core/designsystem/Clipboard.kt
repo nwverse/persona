@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 
 /**
  * Upper bound for text placed directly on the system clipboard.
@@ -81,12 +82,17 @@ fun rememberCopy(): (text: String, notice: String?) -> Boolean {
     val context = LocalContext.current
     val feedback = LocalAppFeedback.current
     val haptics = rememberHaptics()
-    return remember(context, feedback, haptics) {
+    val resources = LocalResources.current
+    return remember(context, resources, feedback, haptics) {
         { text, notice ->
-            val plain = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) context.getString(R.string.designsystem_copied) else null
-            val copied = copyTextSafely(context, text, feedback = feedback,
+            val plain = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) resources.getString(R.string.designsystem_copied) else null
+            var said: String? = null
+            val copied = copyTextSafely(context, text, onNotice = { said = it },
                 successNotice = notice?.takeIf { it.isNotEmpty() } ?: if (notice == null) plain else null)
-            haptics(if (copied) Haptic.Success else Haptic.Error)
+            val style = if (copied) FeedbackStyle.Success else FeedbackStyle.Error
+            // A shown toast plays its style's haptic; without one, the haptic plays here.
+            val shown = said?.let { feedback?.notice(it, style) } == true
+            if (!shown) haptics(style.haptic ?: Haptic.Tap)
             copied
         }
     }

@@ -4,8 +4,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -15,7 +15,7 @@ import (
 // machine_id filtering. Presence matters: malformed new parameters must be
 // parsed and rejected rather than silently falling back to the legacy API.
 func Enabled(v url.Values) bool {
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source"} {
+	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id", "place", "space", "catalog"} {
 		if _, exists := v[key]; exists {
 			return true
 		}
@@ -23,103 +23,12 @@ func Enabled(v url.Values) bool {
 	return false
 }
 
-var runtimeKeys = [...]string{"facets", "project_id", "harness", "group_by", "sort", "direction", "agents_only", "scope"}
-
-func RuntimeEnabled(v url.Values) bool { return runtimeDimensions(v) || Enabled(v) }
-
-func runtimeDimensions(v url.Values) bool {
-	if len(v["machine_id"]) > 1 {
-		return true
-	}
-	for _, k := range runtimeKeys {
-		if _, present := v[k]; present {
-			return true
-		}
-	}
-	return false
-}
-
-// ParseRuntime leaves personal-agent adapters on Parse's existing contract.
-func ParseRuntime(v url.Values) (Options, error) {
-	if !runtimeDimensions(v) {
-		return Parse(v)
-	}
-	legacy := make(url.Values, len(v))
-	for k, values := range v {
-		if k != "machine_id" {
-			legacy[k] = values
-		}
-	}
-	o, err := Parse(legacy)
-	if err != nil {
-		return Options{}, err
-	}
-	for _, k := range runtimeKeys {
-		if values, present := v[k]; present && k != "project_id" && k != "harness" && (len(values) != 1 || values[0] == "") {
-			return Options{}, failure("invalid_query", k+" requires exactly one nonempty value")
-		}
-	}
-	for k, dst := range map[string]*bool{"facets": &o.Facets, "agents_only": &o.AgentsOnly} {
-		if v.Has(k) {
-			if *dst, err = boolean(v.Get(k)); err != nil {
-				return Options{}, err
-			}
-		}
-	}
-	for k, dst := range map[string]*string{"machine_id": &o.machines, "project_id": &o.projects, "harness": &o.harnesses} {
-		if values, present := v[k]; present {
-			if len(values) == 0 || len(values) > maxLimit {
-				return Options{}, failure("invalid_query", k+" has an invalid number of values")
-			}
-			for _, value := range values {
-				if value == "" || strings.ContainsRune(value, 0) || !utf8.ValidString(value) || utf8.RuneCountInString(value) > 256 {
-					return Options{}, failure("invalid_query", k+" requires nonempty identifiers of at most 256 Unicode characters")
-				}
-			}
-			*dst = valueSet(values)
-		}
-	}
-	if v.Has("scope") {
-		if v.Get("scope") != "work" {
-			return Options{}, failure("invalid_query", "scope must be work")
-		}
-		o.WorkOnly = true
-	}
-	o.Sort, o.Direction, o.GroupBy = v.Get("sort"), v.Get("direction"), v.Get("group_by")
-	return validate(o)
-}
-
-// UsesDimensions tells runtime adapters to authorize before slicing the view.
-func (o Options) UsesDimensions() bool {
-	return o.Facets || o.AgentsOnly || o.WorkOnly || o.Sort != "" || o.Direction != "" || o.GroupBy != "" ||
-		o.machines != "" || o.projects != "" || o.harnesses != ""
-}
-
-// RestrictMachines binds a runtime view to its current authorization scope. An
-// empty scope matches no records; the zero (unset) scope matches all machines.
-func (o *Options) RestrictMachines(ids []string) { o.scope = valueSet(ids) }
-
-func valueSet(values []string) string {
-	ids := slices.Clone(values)
-	ids = slices.DeleteFunc(ids, func(id string) bool { return id == "" || strings.ContainsRune(id, 0) })
-	slices.Sort(ids)
-	ids = slices.Compact(ids)
-	if len(ids) == 0 {
-		return "\x00"
-	}
-	return "\x00" + strings.Join(ids, "\x00") + "\x00"
-}
-
-func setMatches(set, value string) bool {
-	return set == "" || (!strings.ContainsRune(value, 0) && strings.Contains(set, "\x00"+value+"\x00"))
-}
-
 // Parse strictly validates recognized parameters. Unknown parameters remain
-// available to adapters. The counts selector is validated but is not an Options
-// field: adapters choose the counts endpoint, while Query ignores the selector.
+// available to adapters. The counts and catalog selectors are validated but are not
+// Options fields: adapters choose those answers, while Query ignores the selectors.
 func Parse(v url.Values) (Options, error) {
 	o := Options{Limit: defaultLimit}
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "machine_id", "project", "group", "source", "provider", "q", "counts", "pane_source"} {
+	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "machine_id", "project", "group", "source", "provider", "q", "counts", "with_counts", "pane_source", "roots", "parent_session_id", "catalog"} {
 		if values, exists := v[key]; exists && len(values) != 1 {
 			return Options{}, failure("invalid_query", key+" must have exactly one value")
 		}
@@ -138,10 +47,25 @@ func Parse(v url.Values) (Options, error) {
 		}
 		o.Summary = b
 	}
-	if values, exists := v["counts"]; exists {
-		if _, err := boolean(values[0]); err != nil {
+	for _, key := range []string{"counts", "with_counts", "catalog"} {
+		if values, exists := v[key]; exists {
+			if _, err := boolean(values[0]); err != nil {
+				return Options{}, err
+			}
+		}
+	}
+	if values, exists := v["roots"]; exists {
+		b, err := boolean(values[0])
+		if err != nil {
 			return Options{}, err
 		}
+		o.Roots = b
+	}
+	if values, exists := v["parent_session_id"]; exists {
+		if values[0] == "" {
+			return Options{}, failure("invalid_query", "parent_session_id must not be empty")
+		}
+		o.Under = values[0]
 	}
 	o.Cursor, o.Since = v.Get("cursor"), v.Get("since")
 	if _, exists := v["cursor"]; exists && o.Cursor == "" {
@@ -159,7 +83,49 @@ func Parse(v url.Values) (Options, error) {
 		}
 		o.PaneSource = values[0]
 	}
+	var err error
+	if o.Places, err = parsePlaces(v, "place"); err != nil {
+		return Options{}, err
+	}
+	if o.Spaces, err = parsePlaces(v, "space"); err != nil {
+		return Options{}, err
+	}
 	return validate(o)
+}
+
+// validPlaces: at most maxPlaces pairs, each naming a machine.
+func validPlaces(key string, places []Place) error {
+	if len(places) > maxPlaces {
+		return failure("invalid_query", key+" takes between 1 and 64 values")
+	}
+	for _, p := range places {
+		if p.Machine == "" {
+			return failure("invalid_query", key+" must name a machine")
+		}
+	}
+	return nil
+}
+
+// parsePlaces reads a repeatable key of machine and attribute pairs. Unlike the other keys it takes several values:
+// each is one pair, spelled as the JSON array a row's composite identity is, so neither part needs a separator it
+// could not contain.
+func parsePlaces(v url.Values, key string) ([]Place, error) {
+	values, exists := v[key]
+	if !exists {
+		return nil, nil
+	}
+	if len(values) == 0 || len(values) > maxPlaces {
+		return nil, failure("invalid_query", key+" takes between 1 and 64 values")
+	}
+	places := make([]Place, 0, len(values))
+	for _, value := range values {
+		var pair []string
+		if err := json.Unmarshal([]byte(value), &pair); err != nil || len(pair) != 2 {
+			return nil, failure("invalid_query", key+" must be a JSON array of a machine id and a value")
+		}
+		places = append(places, Place{Machine: pair[0], Key: pair[1]})
+	}
+	return places, nil
 }
 
 func boolean(s string) (bool, error) {
@@ -182,9 +148,6 @@ func positiveInteger(s string) (int, error) {
 }
 
 func validate(o Options) (Options, error) {
-	if o.WorkOnly && o.AgentsOnly {
-		return Options{}, failure("invalid_query", "scope=work cannot be combined with agents_only=1")
-	}
 	if o.ID != "" && (o.Cursor != "" || o.Since != "") {
 		return Options{}, failure("invalid_query", "exact identity cannot be combined with cursor or since")
 	}
@@ -193,6 +156,19 @@ func validate(o Options) (Options, error) {
 	}
 	if o.Limit < 1 || o.Limit > maxLimit {
 		return Options{}, failure("invalid_query", "limit must be between 1 and 200")
+	}
+	if o.Under != "" && o.Machine == "" {
+		return Options{}, failure("invalid_query", "parent_session_id requires machine_id")
+	}
+	if o.Under != "" && o.Roots {
+		// The rows folded under a session are never roots: together they would always select nothing.
+		return Options{}, failure("invalid_query", "roots cannot be combined with parent_session_id")
+	}
+	if err := validPlaces("place", o.Places); err != nil {
+		return Options{}, err
+	}
+	if err := validPlaces("space", o.Spaces); err != nil {
+		return Options{}, err
 	}
 	switch o.PaneSource {
 	case "", "terminal", "feishu", "desktop", "unknown":
@@ -217,28 +193,6 @@ func validate(o Options) (Options, error) {
 			return Options{}, err
 		}
 	}
-	if _, err := groupDimensions(o.GroupBy); err != nil {
-		return Options{}, err
-	}
-	switch o.Sort {
-	case "", "recent", "created", "title":
-	default:
-		return Options{}, failure("invalid_query", "sort is not supported")
-	}
-	switch o.Direction {
-	case "", "asc", "desc":
-	default:
-		return Options{}, failure("invalid_query", "direction is not supported")
-	}
-	if o.Sort == "" && o.Direction != "" {
-		o.Sort = "recent"
-	}
-	if o.Sort != "" && o.Direction == "" {
-		o.Direction = "desc"
-		if o.Sort == "title" {
-			o.Direction = "asc"
-		}
-	}
 	o.Q = normalizeQ(o.Q)
 	return o, nil
 }
@@ -247,11 +201,11 @@ func normalizeQ(s string) string { return strings.ToLower(s) }
 
 func (o Options) filters() filters {
 	return filters{ID: o.ID, State: o.State, Machine: o.Machine, Project: o.Project, Group: o.Group, Source: o.Source, Provider: o.Provider, Q: o.Q, PaneSource: o.PaneSource, Manager: o.Manager,
-		machines: o.machines, projects: o.projects, harnesses: o.harnesses, scope: o.scope, agentsOnly: o.AgentsOnly, workOnly: o.WorkOnly}
+		Roots: o.Roots, Under: o.Under, NoPrivate: o.NoPrivate, Places: placesKey(o.Places), Spaces: placesKey(o.Spaces)}
 }
 
 func (o Options) binding() binding {
-	return binding{filters: o.filters(), Summary: o.Summary, Since: o.Since, viewOptions: o.view()}
+	return binding{filters: o.filters(), Summary: o.Summary, Since: o.Since}
 }
 
 func validTokenPart(s string) bool {

@@ -42,6 +42,12 @@ export function defaultSocketPath() {
  *   method that is present turns on the matching capability (caps in runtime.hello).
  * @property {() => Promise<object[]>} listSessions - its sessions as Session rows (session_id, title, cwd, status,
  *   updated_at, rev, last_text, space_*…; docs/protocol/protocol.md "Data types").
+ * @property {() => string[] | undefined | Promise<string[] | undefined>} [unlistedTranscripts] - the Claude transcripts
+ *   on this computer that are sessions of its own though listSessions does not list them (archived in the runtime), by
+ *   Claude session id; undefined while it cannot say yet (its archive not read): the node then keeps the ones it was
+ *   told last. Sent with every list once named, an empty array too (runtime.sessions' unlisted_transcripts): the node
+ *   keeps listing them as sessions not running. Only a runtime that runs Claude Code's command line itself needs it:
+ *   its transcripts read like a script's one-shot `claude -p` runs, which the node leaves out.
  * @property {(params: object) => Promise<object>} items - one session.items page (before_seq / turns / limit /
  *   after_seq / from_seq + through_seq → items, has_more, history, to_seq, from_seq, more_after, more).
  * @property {(sessionId: string) => Promise<number | {to_seq: number, history?: string}>} [cursor] - the session's
@@ -54,6 +60,8 @@ export function defaultSocketPath() {
  * @property {(params: {cwd: string, prompt?: string}) => Promise<{session: object}>} [start]
  * @property {(params: {session_id: string, title: string}) => Promise<void>} [rename]
  * @property {(params: {session_id: string}) => Promise<void>} [close]
+ * @property {(params: {session_id: string, prompt: string, occurrence: number, prompts_after?: number, restore: string}) => Promise<object>} [rewind] -
+ *   native conversation rewind, with target validation and rewritten history published through append.
  * @property {(params: {session_id: string}) => Promise<void>} [archive] - the runtime's own reversible archive of an
  *   idle session, without stopping or closing anything (caps.archive: only with unarchive too). The session the user
  *   archives in Persona is archived here as well; already archived answers as done.
@@ -66,6 +74,9 @@ export function defaultSocketPath() {
  * @property {(params: {session_id: string, permission_mode?: string, effort?: string, model?: string}) => Promise<void>} [modes] - the
  *   phone's permission mode / effort for a session (caps.modes; model requires options.modelSwitch); values are Persona's: default / acceptEdits / plan /
  *   auto / bypassPermissions, low … max.
+ * @property {(params: {session_id: string}) => Promise<void>} [seen] - the user saw the session in Persona (caps.seen): a
+ *   runtime that keeps an unread mark of its own (Paseo's requiresAttention) clears it, so the session is not unread
+ *   there too. The node sends it only for a session the runtime lists as done (unread).
  * @property {() => boolean} [hasLocalClient] - the runtime's own UI is open (the policy gives it first turn).
  * @property {(sessionId: string, watching: boolean, o?: { transcript: boolean }) => void} [watchChanged] - the phone
  *   started (or stopped) watching a session: a runtime that follows a session only while it is watched (Paseo's
@@ -142,6 +153,7 @@ export function createRuntime(driver, options) {
   let pushing // the push under way (a promise), if any
   let pushAgain = false
   const listed = new Set() // ids in the last pushed list
+  let unlisted // the Claude transcripts the driver named last (driver.unlistedTranscripts); undefined until it has
   const watched = new Map() // session id -> { last, catchingUp, held: [], batch, timer }
   const streams = new Map() // session id -> { text, timer, sentAt }
   const pending = new Map() // session id -> interactions waiting on the phone
@@ -229,6 +241,8 @@ export function createRuntime(driver, options) {
     if (typeof driver.modes === 'function' && options.modelSwitch === true) caps.model = true
     if (typeof driver.models === 'function') caps.models = true
     if (typeof driver.check === 'function') caps.check = true
+    if (typeof driver.rewind === 'function') caps.rewind = true
+    if (typeof driver.seen === 'function') caps.seen = true
     // Its own archive, both ways: an archive Persona could not undo is not offered.
     if (typeof driver.archive === 'function' && typeof driver.unarchive === 'function') caps.archive = true
     if (options.resume === true && caps.start) caps.resume = true
@@ -428,6 +442,17 @@ export function createRuntime(driver, options) {
   async function push() {
     try {
       const rows = await driver.listSessions()
+      // Read before the list counts as sent: nothing is awaited between `listed` and the push, or a card for a session
+      // new in the list could go ahead of it (ask reads `listed`) and be refused. What the driver cannot say now (it
+      // answers nothing, or throws) does not hold the list back, and the transcripts it named last stay named.
+      if (typeof driver.unlistedTranscripts === 'function') {
+        try {
+          const named = await driver.unlistedTranscripts()
+          if (Array.isArray(named)) unlisted = named.filter((id) => typeof id === 'string' && id)
+        } catch (err) {
+          log(`persona: unlisted transcripts: ${err.message}`)
+        }
+      }
       const list = []
       for (const row of rows ?? []) {
         if (!row?.session_id) continue
@@ -436,7 +461,8 @@ export function createRuntime(driver, options) {
       }
       listed.clear()
       for (const s of list) listed.add(s.session_id)
-      peer?.notify('runtime.sessions', { sessions: list })
+      // Named, even when none: the node keeps what a list without the field leaves unsaid.
+      peer?.notify('runtime.sessions', unlisted ? { sessions: list, unlisted_transcripts: unlisted } : { sessions: list })
     } catch (err) {
       log(`persona: list sessions: ${err.message}`)
     }
@@ -614,7 +640,7 @@ export function createRuntime(driver, options) {
     const s = streams.get(sessionId)
     if (s) clearTimeout(s.timer)
     streams.delete(sessionId)
-    if (watched.has(sessionId)) peer?.notify('session.delta', { session_id: sessionId, text: '' })
+    if (s || watched.has(sessionId)) peer?.notify('session.delta', { session_id: sessionId, text: '' })
   }
 
   // ---- asking the phone ----
@@ -733,9 +759,17 @@ export function createRuntime(driver, options) {
       case 'session.interrupt':
         await need(driver.interrupt, 'interrupt')(params)
         return { ok: true }
+      case 'session.rewind': {
+        const result = await need(driver.rewind, 'rewind')(params)
+        schedulePush()
+        return result
+      }
       case 'session.rename':
         await need(driver.rename, 'rename')(params)
         schedulePush()
+        return { ok: true }
+      case 'session.seen':
+        await need(driver.seen, 'seen')(params)
         return { ok: true }
       case 'session.close':
         await need(driver.close, 'close')(params)

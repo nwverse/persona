@@ -58,16 +58,23 @@ nonisolated struct TodoAsk: Codable, Hashable, Sendable {
     var responses: [String]?
     /// The fixed answer already given while the decision still waits (`explain_first`).
     var response: String?
+    /// A decision that can wait, held for the next briefing: nothing was pushed for it (#4930, #5803;
+    /// docs/assistant/todos.md "Decisions that can wait"). Absent from a hub before it, and once the briefing brought it.
+    var forBriefing: Bool?
+    /// A standing rule the hub suggests on this decision (#4929, #5802): the owner gave this go-ahead for this
+    /// directory three times. A hub from before sends none.
+    var suggestion: RuleSuggestion?
 
     enum CodingKeys: String, CodingKey {
-        case outcome, verdict, recommend, question, options, background, deadline, responses, response
+        case outcome, verdict, recommend, question, options, background, deadline, responses, response, suggestion
         case askedAt = "asked_at", whyOwner = "why_owner", costOfWaiting = "cost_of_waiting", defaultAction = "default"
+        case forBriefing = "for_briefing"
     }
 
     init(outcome: String? = nil, verdict: String? = nil, recommend: String? = nil, askedAt: String,
          question: String? = nil, whyOwner: String? = nil, options: [Option]? = nil, costOfWaiting: String? = nil,
          background: String? = nil, deadline: String? = nil, defaultAction: String? = nil, responses: [String]? = nil,
-         response: String? = nil) {
+         response: String? = nil, forBriefing: Bool? = nil, suggestion: RuleSuggestion? = nil) {
         self.outcome = outcome
         self.verdict = verdict
         self.recommend = recommend
@@ -81,6 +88,8 @@ nonisolated struct TodoAsk: Codable, Hashable, Sendable {
         self.defaultAction = defaultAction
         self.responses = responses
         self.response = response
+        self.forBriefing = forBriefing
+        self.suggestion = suggestion
     }
 
     init(from decoder: Decoder) throws {
@@ -99,14 +108,22 @@ nonisolated struct TodoAsk: Codable, Hashable, Sendable {
         defaultAction = try? c.decodeIfPresent(String.self, forKey: .defaultAction)
         responses = try? c.decodeIfPresent([String].self, forKey: .responses)
         response = try? c.decodeIfPresent(String.self, forKey: .response)
+        forBriefing = (try? c.decodeIfPresent(Bool.self, forKey: .forBriefing)) ?? nil
+        suggestion = (try? c.decodeIfPresent(RuleSuggestion.self, forKey: .suggestion)) ?? nil
     }
+
+    /// Held for the next briefing and not pushed.
+    var isForBriefing: Bool { forBriefing == true }
 
     func row(for todo: TodoItem) -> BriefBody.Row {
         let waited = JSON.parseDate(askedAt).map { Int(max(0, Date.now.timeIntervalSince($0))) } ?? 0
         return BriefBody.Row(id: todo.id, title: todo.title, waitedS: waited, askedAt: askedAt,
-                             verdict: verdict, outcome: outcome, recommend: recommend)
+                             verdict: verdict, outcome: outcome, recommend: recommend,
+                             forBriefing: isForBriefing, suggestion: suggestion)
     }
+}
 
+nonisolated extension TodoAsk {
     /// The options of a decision that can be answered on its row (the web's `askOptions`): a decision with at least
     /// two of them, each with a label. None for any other ask, which keeps its one button.
     var decisionOptions: [Option] {

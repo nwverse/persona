@@ -296,6 +296,15 @@ class RepositoryTests(unittest.TestCase):
                 self.assertEqual(self.catalog.values[f"status.{mode}.{state}.text"], base)
                 for part, opacity in (("dot", dot_alpha), ("tint", tint_alpha)):
                     self.assertEqual(self.catalog.values[f"status.{mode}.{state}.{part}"], {**base, "alpha": base["alpha"] * opacity})
+        # Waiting in the background: Working's dot made lighter, its words the secondary gray.
+        waiting = re.search(r'static let backgroundWaiting = StatusTone\(dot: working.dot.opacity\(([0-9.]+)\), text: .secondary, tint: working.dot.opacity\(([0-9.]+)\)\)', swift)
+        self.assertIsNotNone(waiting, "StatusPalette.backgroundWaiting not found")
+        dot_alpha, tint_alpha = map(float, waiting.groups())
+        for mode in gen.MODES:
+            working = self.catalog.values[f"status.{mode}.working.dot"]
+            self.assertEqual(self.catalog.values[f"status.{mode}.backgroundWaiting.text"], self.catalog.values[f"system.{mode}.secondary"])
+            for part, opacity in (("dot", dot_alpha), ("tint", tint_alpha)):
+                self.assertEqual(self.catalog.values[f"status.{mode}.backgroundWaiting.{part}"], {**working, "alpha": working["alpha"] * opacity})
 
     def test_ios_theme_explicit_colors_match(self):
         # Since 2026-11-01 iOS keeps a look as UI style × theme color (apple/Shared/Design): each catalog style is its component
@@ -426,6 +435,17 @@ class RepositoryTests(unittest.TestCase):
                 tokens.setdefault(name, {})[part] = value["value"] if isinstance(value, dict) and "value" in value else value
         self.assertEqual(len(expected), 9)
         self.assertEqual(expected, tokens)
+
+    def test_android_glass_reading_sizes_use_font_units(self):
+        # Android's intentional reading-size difference (#5780) does not enter the shared iOS levels above.
+        self.assertEqual(self.catalog.values["type.body.size"], {"value": 17, "unit": "px"})
+        self.assertEqual(self.catalog.values["typeGlass.body.size"], {"value": 16, "unit": "px"})
+        self.assertEqual(self.catalog.values["typeGlass.secondary.size"], {"value": 14, "unit": "px"})
+        block = gen.render_kotlin(self.catalog, "persona.core.designsystem").split("object TypeGlass {", 1)[1]
+        self.assertIn("val size: TextUnit = 16.sp", block)
+        self.assertIn("val size: TextUnit = 14.sp", block)
+        for path, expected in (("typeGlass.body.size", "1rem"), ("typeGlass.secondary.size", "0.875rem")):
+            self.assertEqual(gen.css_value(self.catalog.tokens[path]["$type"], self.catalog.values[path], path), expected)
 
     def test_ios_motion_matches(self):
         # The shared motions (phase 1 R3) as Theme.Motion writes them; the rest of Theme.Motion belongs to single components

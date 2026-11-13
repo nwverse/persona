@@ -47,15 +47,14 @@ it("keeps the other settings groups when the standing authorizations import fail
   const root = createRoot(host);
   try {
     await act(async () => root.render(<PageBoundary page="settings"><AssistantSettings /></PageBoundary>));
-    await vi.waitFor(async () => {
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    await vi.waitFor(() => {
       expect(host.querySelector('[role="alert"]')).not.toBeNull();
+      expect(host.querySelectorAll('[role="alert"]')).toHaveLength(1);
+      expect(host.textContent).toContain(t("settings-nav.tab_model_config"));
+      expect(host.querySelector(`select[aria-label="${t("settings-assistantsettings.default_permissions")}"]`)).not.toBeNull();
+      expect(host.querySelector("textarea")).not.toBeNull();
+      expect(reportBoundary).toHaveBeenCalledWith(expect.objectContaining({ cause: expect.any(TypeError) }), "page_boundary", false, expect.any(String));
     }, { timeout: 20_000 });
-    expect(host.querySelectorAll('[role="alert"]')).toHaveLength(1);
-    expect(host.textContent).toContain(t("settings-nav.tab_model_config"));
-    expect(host.querySelector(`select[aria-label="${t("settings-assistantsettings.default_permissions")}"]`)).not.toBeNull();
-    expect(host.querySelector("textarea")).not.toBeNull();
-    expect(reportBoundary).toHaveBeenCalledWith(expect.objectContaining({ cause: expect.any(TypeError) }), "page_boundary", false, expect.any(String));
   } finally {
     await act(async () => root.unmount()); host.remove();
     sessionStorage.removeItem("persona.chunkReload");

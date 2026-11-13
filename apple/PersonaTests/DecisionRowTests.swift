@@ -67,6 +67,19 @@ import Testing
         #expect(ask.decisionOptions.isEmpty && ask.questionLine == "v")
     }
 
+    /// A decision held for the briefing (#5803) with a suggested rule (#5802) keeps both beside its options: one decoder
+    /// reads them all, the encoded ask reads back the same, and a suggestion in an odd shape leaves the rest.
+    @Test func aDecisionKeepsItsBriefingMarkAndSuggestedRule() throws {
+        let rule = #"{"id":"rs_merge","kind":"standing_authorization","text":"t","scope":{"directory":"/code/example","action":"merge"},"creates":"standing_authorization","count":3}"#
+        let held = try todo(String(decision().dropLast()) + #","for_briefing":true,"suggestion":\#(rule)}"#)
+        let ask = try #require(held.openAsk)
+        #expect(ask.decisionOptions.count == 3 && ask.isForBriefing && ask.suggestion?.id == "rs_merge")
+        #expect(ask.row(for: held).forBriefing && ask.row(for: held).suggestion == ask.suggestion)
+        #expect(try JSON.decoder.decode(TodoAsk.self, from: JSON.encoder.encode(ask)) == ask)
+        let odd = try #require(try todo(String(decision().dropLast()) + #","for_briefing":"yes","suggestion":7}"#).openAsk)
+        #expect(odd.decisionOptions.count == 3 && !odd.isForBriefing && (odd.suggestion?.id ?? "").isEmpty)
+    }
+
     /// Options on its row: a decision with at least two that have a label. A conclusion that only tells has none, and
     /// neither has a decision with one option left.
     @Test func onlyADecisionWithTwoLabelledOptionsIsAnsweredOnItsRow() {

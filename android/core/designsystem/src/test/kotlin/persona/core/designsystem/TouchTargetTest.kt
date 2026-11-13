@@ -55,6 +55,9 @@ class TouchTargetTest {
                 Case(style, "chip") { tag, tapped -> JChip("全部", Modifier.testTag(tag), onClick = tapped) },
                 Case(style, "switch") { tag, tapped -> JSwitch(false, { tapped() }, Modifier.testTag(tag)) },
                 Case(style, "heading action") { tag, tapped -> HeadingAction(PhIcons.Gauge, "用量", tapped, Modifier.testTag(tag)) },
+                Case(style, "toast action", cell = "撤销") { tag, tapped ->
+                    JToast(FeedbackNotice("已归档", FeedbackAction("撤销") { tapped() }), dismiss = {}, modifier = Modifier.testTag(tag))
+                },
                 Case(style, "segment", cell = "Agents") { tag, tapped ->
                     JSegmented(listOf(JSegment("助手"), JSegment("Agents")), 0, { if (it == 1) tapped() }, Modifier.testTag(tag))
                 },

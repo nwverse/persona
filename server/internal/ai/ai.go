@@ -36,6 +36,7 @@ type Client struct {
 	cfg     Config
 	http    *http.Client
 	resolve func(context.Context) (*Client, error)
+	run     func(context.Context, Request) (Reply, error)
 }
 
 // NewResolved resolves the execution configuration at the start of every request.
@@ -47,7 +48,18 @@ func NewResolved(resolve func(context.Context) (*Client, error)) *Client {
 func (c *Client) Config() Config { return c.cfg }
 
 func New(cfg Config) *Client {
-	return &Client{cfg: cfg, http: &http.Client{Timeout: 60 * time.Second}}
+	return NewWith(cfg, nil)
+}
+
+// NewWith is New sending its requests through transport (nil: this machine's network).
+func NewWith(cfg Config, transport http.RoundTripper) *Client {
+	return &Client{cfg: cfg, http: &http.Client{Timeout: 60 * time.Second, Transport: transport}}
+}
+
+// NewRun is a client whose requests run answers instead of an HTTP API: no gate, no key (a launcher's CLI on a
+// computer, cfg.RunLauncher).
+func NewRun(cfg Config, run func(context.Context, Request) (Reply, error)) *Client {
+	return &Client{cfg: cfg, run: run}
 }
 
 func (c *Client) key() (string, error) {
@@ -95,7 +107,10 @@ type Message struct {
 type Request struct {
 	System    string
 	Messages  []Message
-	MaxTokens int // output limit for Messages and Chat Completions; Responses is sent none (some relays reject it)
+	MaxTokens int // output limit for Messages and Chat Completions
+	// BoundOutput also enforces MaxTokens on Responses. Cost-sensitive background calls
+	// fail closed when a relay refuses the bound; legacy callers keep their existing behavior.
+	BoundOutput bool
 }
 
 // Usage is what one request spent, as the upstream counted it (zero where it did not say).
@@ -130,6 +145,11 @@ func (c *Client) Chat(ctx context.Context, r Request) (Reply, error) {
 			return Reply{}, err
 		}
 		return resolved.Chat(ctx, r)
+	}
+	if c.run != nil {
+		reply, err := c.run(ctx, r)
+		reply.Model = cmp.Or(reply.Model, c.cfg.Model)
+		return reply, err
 	}
 	if !c.cfg.Configured() {
 		return Reply{}, errNotConfigured
@@ -464,6 +484,9 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 		input = append(input, map[string]any{"role": m.Role, "content": m.Content})
 	}
 	req := map[string]any{"model": c.cfg.Model, "store": false, "stream": true, "input": input}
+	if r.BoundOutput && r.MaxTokens > 0 {
+		req["max_output_tokens"] = r.MaxTokens
+	}
 	if c.cfg.ReasoningEffort != "" {
 		effort := c.cfg.ReasoningEffort
 		switch strings.ToLower(strings.TrimSpace(effort)) {

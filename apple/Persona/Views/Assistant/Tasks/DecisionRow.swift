@@ -119,16 +119,20 @@ struct TodoAskRow: View {
     var ask: TodoAsk
     var group: String
     var open: (() -> Void)? = nil
+    /// Later and Don't handle belong on the row (the Needs You tray), as on `BriefAcceptRow` given its `decision`.
+    var deferrable = false
+    /// False where a line right above already says the title (a Needs You row opened in place).
+    var showsTitle = true
 
     var body: some View {
         #if os(macOS)
         // The native Mac app is frozen (docs/apple/mac.md): it keeps the one button it had.
-        BriefAcceptRow(row: ask.row(for: todo), group: group, open: open)
+        BriefAcceptRow(row: ask.row(for: todo), group: group, open: open, decision: deferrable ? todo : nil, showsTitle: showsTitle)
         #else
         if ask.decisionOptions.isEmpty {
-            BriefAcceptRow(row: ask.row(for: todo), group: group, open: open)
+            BriefAcceptRow(row: ask.row(for: todo), group: group, open: open, decision: deferrable ? todo : nil, showsTitle: showsTitle)
         } else {
-            DecisionRow(todo: todo, ask: ask, group: group, open: open)
+            DecisionRow(todo: todo, ask: ask, group: group, open: open, showsTitle: showsTitle, deferrable: deferrable)
         }
         #endif
     }
@@ -144,6 +148,10 @@ struct DecisionRow: View {
     var ask: TodoAsk
     var group: String
     var open: (() -> Void)? = nil
+    /// False where a line right above already says the title (a Needs You row opened in place).
+    var showsTitle = true
+    /// Later and Don't handle under the options (the Needs You tray), as `BriefAcceptRow` has them for a decision.
+    var deferrable = false
     var answers: DecisionAnswers = .shared
     /// Complete Directly (#3038) goes through the briefing's actions, as `BriefAcceptRow`'s button does.
     var actions: BriefActions = .shared
@@ -168,10 +176,12 @@ struct DecisionRow: View {
         // Completed directly: the task is done, and the row goes as `BriefAcceptRow` does.
         if completion != .completed {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                Text(todo.title)
-                    .font(Theme.Font.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if showsTitle {
+                    Text(todo.title)
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 Text(ask.questionLine)
                     .font(Theme.Font.secondaryMedium)
                     .fixedSize(horizontal: false, vertical: true)
@@ -197,7 +207,15 @@ struct DecisionRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("decision.default")
                 }
+                // Held for the briefing (#5803): nothing was pushed for it, which is why it did not ring.
+                if ask.isForBriefing, state?.ended != true { BriefHeldMark(id: todo.id) }
                 footer.padding(.top, Theme.Space.xs)
+                if deferrable, state?.ended != true, completion == nil || completion == .busy {
+                    DecisionDeferButtons(todo: todo, busy: busy)
+                }
+                // A go-ahead the owner gave three times carries a suggested rule (#5802), under the row as on
+                // `BriefAcceptRow`.
+                RuleSuggestionLine(suggestion: ask.suggestion, card: .todo(todo.id, round: ask.askedAt), group: group)
             }
             .padding(.vertical, Theme.Space.xs)
             .accessibilityElement(children: .contain)
@@ -290,7 +308,8 @@ struct DecisionRow: View {
         return indices
     }
 
-    /// The options as buttons (`buttonIndices`), "Other…", and the menu with the rest.
+    /// The options as buttons (`buttonIndices`), "Other…", and the menu with the rest; each a finger's height
+    /// (`buttonLabelHeight`), as `BriefAcceptRow`'s buttons and Later / Don't handle under them are.
     @ViewBuilder private func controls(shown: Int) -> some View {
         let indices = buttonIndices(shown: shown)
         ForEach(indices, id: \.self) { index in
@@ -299,7 +318,7 @@ struct DecisionRow: View {
         Button {
             if let open { open() } else { TasksStore.shared.detailTask = todo.id }
         } label: {
-            Text("Other…").lineLimit(1)
+            Text("Other…").lineLimit(1).buttonLabelHeight()
         }
         .font(Theme.Font.captionStrong)
         .themedButton()
@@ -312,7 +331,7 @@ struct DecisionRow: View {
         } label: {
             // An icon-only themed button takes its glyph's size (docs/lessons/ios.md): a line of the buttons' own
             // text gives it their height, and the icon token its width. While Complete Directly is out it spins.
-            Text(verbatim: " ").lineLimit(1)
+            Text(verbatim: " ").lineLimit(1).buttonLabelHeight()
                 .scaledFrame(width: Theme.Size.icon)
                 .overlay {
                     if completion == .busy { ProgressView().controlSize(.small) } else { ThemedIcon(Theme.Icon.more) }
@@ -335,7 +354,10 @@ struct DecisionRow: View {
         return Button {
             Task { await answers.choose(index, of: ask, todo: todo.id, group: group) }
         } label: {
-            Text(label(option, index: index)).lineLimit(1).opacity(sending ? 0 : 1)
+            // Its own height kept: a minimum-height frame alone gives way to a short proposal (the one column at the
+            // accessibility sizes) and the words spill out of the capsule; Other… and ⋯ are fixed whole.
+            Text(label(option, index: index)).lineLimit(1).buttonLabelHeight().fixedSize(horizontal: false, vertical: true)
+                .opacity(sending ? 0 : 1)
                 .overlay { if sending { ProgressView().controlSize(.small) } }
         }
         .font(Theme.Font.captionStrong)
@@ -394,6 +416,41 @@ struct DecisionRow: View {
         case .decideYourself: String(localized: "Persona decides and records what it assumed.")
         case .notWhatIAsked: String(localized: "The work pauses until Persona checks it against your request.")
         case .explainFirst: String(localized: "Persona asks again with what this is and why.")
+        }
+    }
+}
+
+/// Later (this app session) and Don't handle (kept by the hub, undoable) under a decision's options in the Needs You
+/// tray (docs/design/task-cards.md D9): the same two buttons `BriefAcceptRow` has for a decision without options.
+private struct DecisionDeferButtons: View {
+    var todo: TodoItem
+    /// An answer of the row is out.
+    var busy: Bool
+    private var store: TasksStore { .shared }
+
+    var body: some View {
+        let waiting = busy || store.busyDecisions.contains(todo.id)
+        FlowLayoutRow(spacing: Theme.Space.s) {
+            Button {
+                withAnimation(Theme.Motion.state) { store.laterDecision(todo) }
+            } label: {
+                Text("Later [Task Views 9d2ca2]").lineLimit(1).buttonLabelHeight()
+            }
+            .font(Theme.Font.captionStrong)
+            .themedButton()
+            .disabled(waiting || TasksStore.decisionKey(todo) == nil)
+            .accessibilityLabel(String(localized: "Later: \(todo.title)"))
+            .accessibilityIdentifier("decision.later.\(todo.id)")
+            Button {
+                Task { await store.dismissDecision(todo) }
+            } label: {
+                Text("Do not handle [Task Draft]").lineLimit(1).buttonLabelHeight()
+            }
+            .font(Theme.Font.captionStrong)
+            .themedButton()
+            .disabled(waiting || todo.decisionReview == nil)
+            .accessibilityLabel(String(localized: "Don't handle: \(todo.title)"))
+            .accessibilityIdentifier("decision.dismiss.\(todo.id)")
         }
     }
 }

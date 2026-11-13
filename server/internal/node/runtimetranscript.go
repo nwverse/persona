@@ -219,7 +219,6 @@ func (n *Node) mergeRuntimeTranscript(s *proto.Session) string {
 		s.PermissionMode, s.Effort = n.currentModes(s.SessionID, m)
 	}
 	setRuntimeContext(s, m)
-	s.Inventory = m.inventory
 	s.ModelFallback = m.modelFallback
 	s.LastText, s.Rev = snippet(m.lastText), st.Size()
 	if u := lastUsed(m, st); u.After(s.UpdatedAt) {

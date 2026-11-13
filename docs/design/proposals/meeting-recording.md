@@ -313,7 +313,7 @@ Swiping the sheet down or Hide keeps recording and leaves the now-recording card
 6. Bottom bar: pinned with `.safeAreaInset(edge: .bottom)`, always reachable, never scrolls (the large-type layout below keeps
    it that way). Ask Persona is the **only solid, prominent control** (DS 3.7: one per group).
    - Row 1, only when Persona attends: "Ask Persona" full width (id `meeting-ask`), a round keyboard button beside it
-     (id `meeting-ask-type`, opens the existing text-entry alert). Ask shows a busy label and is disabled while `ask.busy`.
+     (id `meeting-ask-type`; it opened a text-entry alert, since #4486 an inline question row in the bar, DESIGN_SYSTEM 4.4). Ask shows a busy label and is disabled while `ask.busy`.
    - Row 2: Pause / Continue (left), Stop (center), Bookmark (right): three standard-weight buttons, icon over label, each at least
      44 pt. Stop is a constant `stop.fill` icon in the neutral button style, not a red fill and not a morphing record button
      (Voice Memos' morph rested on unverified knowledge, section 3, and the sheet has no start button for it to morph from). Pause
@@ -573,9 +573,9 @@ transcription and library path, and a rule for replacing partial text in place. 
    **below a gap marker** ("Transcribing the last N s") in arrival order, and never between transcribed sentences. When the
    segment lands, its sentences arrive as one group above the marker, the marker's items re-sort by time, and the marker moves or
    goes. The group animates once with `reveal`. While the reader is detached the scroll position is anchored to the row at the top
-   of the viewport (`scrollPosition` by id), and the "N new" count counts items inserted below that anchor. Sentences spoken by
-   Persona itself are filtered out (`attendance.spokenBy`), so a row can disappear after appearing; this is accepted and not animated
-   under the finger.
+   of the viewport (`scrollPosition` by id), and the "N new" count counts items inserted below that anchor. Persona's echo
+   (a sentence that overlaps a stretch it spoke in and says its answer's words, `attendance.echo`, #5905) is filtered out, so a row can
+   disappear after appearing; this is accepted and not animated under the finger.
 6. The follow and unread logic are a pure function with unit tests (section 15).
 7. VoiceOver: transcript lines are an ordinary readable list and are not announced one by one; arriving Persona answers and state
    changes are (section 11).
