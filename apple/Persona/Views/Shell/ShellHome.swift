@@ -199,6 +199,7 @@ private struct ShellErrorNote: View {
 /// the rest are. A tap opens it where it lives.
 struct ShellNeedsYou: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.pushInboxChat) private var pushChat
     /// How tall it may be (`NeedsRoom`).
     var maxHeight: CGFloat = .infinity
     var openInbox: (InboxItem) -> Void
@@ -281,7 +282,7 @@ struct ShellNeedsYou: View {
     @ViewBuilder private func beautifulRow(_ line: Line) -> some View {
         switch line {
         case .agent(let ix):
-            Button { model.open(ix.sessionKey) } label: {
+            Button { InboxEventOpen.session(ix.sessionKey, manager: false, owner: nil, model: model, push: pushChat) } label: {
                 BUIListRow(agentName(ix), detail: oneLine(ix.summary ?? ix.questions?.first?.question ?? ix.title),
                            accessory: .disclosure, detailLines: 1) {
                     IconTile(ix.symbol, tint: Theme.needsYou)
@@ -339,7 +340,7 @@ struct ShellNeedsYou: View {
     @ViewBuilder private func row(_ line: Line) -> some View {
         switch line {
         case .agent(let ix):
-            Button { model.open(ix.sessionKey) } label: {
+            Button { InboxEventOpen.session(ix.sessionKey, manager: false, owner: nil, model: model, push: pushChat) } label: {
                 HStack(spacing: Theme.Space.m) {
                     ThemedIcon(ix.symbol)
                         .font(Theme.Font.heading)

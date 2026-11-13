@@ -2,6 +2,19 @@ import BeautifulUI
 import PhotosUI
 import SwiftUI
 
+/// The Assistant stack's conversation-selection rules, pure so every launch and reconnect case can be tested.
+nonisolated enum AssistantCurrentNavigation {
+    /// An automatic nil-to-main selection leaves every page already pushed over the conversation alone.
+    static func keepsPushedPages(old: SessionKey?, new: SessionKey?, main: SessionKey?) -> Bool {
+        old == nil && new != nil && new == main
+    }
+
+    /// A real hub-group change clears pages belonging to the old hub; initial pairing and reconnects do not.
+    static func clearsPushedPages(oldHub: String?, newHub: String?) -> Bool {
+        oldHub != nil && newHub != nil && oldHub != newHub
+    }
+}
+
 /// The Persona tab: one personal assistant (a Claude session in ~/.persona/assistant on the hub's machine) that can reach the
 /// user's computers, iPhone data, mail, company data and the knowledge base. One conversation is the main one (where the
 /// user usually talks to it, and where other pages hand things to it); the others are side conversations.
@@ -288,9 +301,13 @@ struct AssistantView: View {
             // ⇧⌘N, a quick action) leaves it behind.
             .onChange(of: model.assistantCurrent) { old, new in
                 // The app picking the main conversation by itself once the hub answers (none was open) is not the user
-                // opening one: Recordings, opened by a Control or the home screen's menu at launch, stays.
-                if showRecordings, old == nil, new == model.assistantMain { return }
+                // opening one: any page already pushed at launch stays. User-driven changes still go back to the root.
+                if AssistantCurrentNavigation.keepsPushedPages(old: old, new: new, main: model.assistantMain) { return }
                 backToRoot()
+            }
+            .onChange(of: model.hub?.group) { old, new in
+                // A pushed inbox and its items belong to the old hub. Initial pairing (nil → a group) and reconnects stay.
+                if AssistantCurrentNavigation.clearsPushedPages(oldHub: old, newHub: new) { backToRoot() }
             }
             .onChange(of: model.assistantManagerID) {
                 starterLauncher = nil // a launcher of the assistant shown before
@@ -367,7 +384,7 @@ struct AssistantView: View {
             }
             #endif
         }
-        .environment(\.pushInboxChat, shell == nil ? nil : { path.append($0) })
+        .environment(\.pushInboxChat, (shell != nil || padPlaces) ? { path.append($0) } : nil)
         #if os(macOS)
         // Its pushed pages (Knowledge, Scheduled Tasks, To-dos…) go back from the title row, not the system's button (#2318).
         .environment(\.macSectionStack, true)
