@@ -61,6 +61,7 @@ struct FileInfoSheet: View {
     @State private var info: FileInfo?
     @State private var error: String?
     @State private var loading = true
+    @State private var editingMode = false
 
     private var name: String {
         let n = (path as NSString).lastPathComponent
@@ -69,6 +70,12 @@ struct FileInfoSheet: View {
     private var home: String? { model.machine(machine)?.home }
     private var windows: Bool { model.machine(machine)?.os?.lowercased() == "windows" }
     private var isDir: Bool { info.map { $0.kind == "dir" } ?? entry?.dir ?? false }
+    /// Permissions can be changed here (#5831): the hub has `file_chmod`, the computer is not Windows, the folder takes changes.
+    private var canChangeMode: Bool {
+        let f = model.features(machine.group)
+        return (f.isEmpty || f.contains("file_chmod")) && FilesNavigation.writable((path as NSString).deletingLastPathComponent, home: home)
+            && info?.symlink != true
+    }
     private var hubHasInfo: Bool {
         let f = model.features(machine.group)
         return f.isEmpty || f.contains("file_info")
@@ -99,6 +106,11 @@ struct FileInfoSheet: View {
                             row(String(localized: "Owner"), info?.group.map { String(localized: "\(owner) (group \($0))") } ?? owner)
                         }
                         row(String(localized: "Permission Code"), "\(FilePermissions.symbolic(mode)) · \(FilePermissions.octal(mode))", mono: true)
+                        if canChangeMode {
+                            Button { editingMode = true } label: { Label("Change Permissions…", systemImage: Theme.Icon.edit) }
+                                .themedRow()
+                                .accessibilityIdentifier("files.info.permissions")
+                        }
                     }
                 }
                 Section {
@@ -123,6 +135,10 @@ struct FileInfoSheet: View {
             .accessibilityIdentifier("files.info")
         }
         .task(id: path) { await load() }
+        .sheet(isPresented: $editingMode) {
+            FilePermissionsSheet(machine: machine, path: path, cwd: cwd, mode: info?.mode) { _ in Task { await load() } }
+                .presentationDetents([.medium, .large])
+        }
     }
 
     private var header: some View {

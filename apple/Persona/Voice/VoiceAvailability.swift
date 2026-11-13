@@ -45,6 +45,9 @@ nonisolated struct VoiceInfo: Decodable, Equatable, Sendable {
 extension VoiceInfo {
     /// The extension can say a given text in the realtime voice (`POST …/speak`, #5004); older ones can't.
     nonisolated static let speakFeature = "speak"
+    /// The extension sends anyway what its user-speech gate held back (a resend of a run refused `unprompted`), and its
+    /// `start` takes `speech_gate` (#5904): the bar's Send Anyway and the setting Only Send What I Just Said.
+    nonisolated static let speechGateFeature = "speech_gate"
 }
 
 /// The realtime voice saying a text (`POST …/speak`): mono PCM16, little-endian, at `rate`, in pieces as they come.

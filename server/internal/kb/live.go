@@ -246,7 +246,7 @@ func (r Recording) AttendanceRole() string {
 
 // UnmarshalJSON reads an upload like the default does, except that a value of the wrong type for attendance or
 // attending_session does not fail it (the same request carries the transcript): normalizeAttendance turns attending
-// off for it.
+// off for it. Nor does a malformed spoken (readSpoken).
 func (u *RecordingUpload) UnmarshalJSON(data []byte) error {
 	type plain RecordingUpload
 	aux := struct {
@@ -255,10 +255,12 @@ func (u *RecordingUpload) UnmarshalJSON(data []byte) error {
 		AttendingSession json.RawMessage `json:"attending_session"`
 		Room             json.RawMessage `json:"room"`
 		Private          json.RawMessage `json:"private"`
+		Spoken           json.RawMessage `json:"spoken"`
 	}{plain: (*plain)(u)}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
+	u.Spoken = readSpoken(aux.Spoken)
 	u.readRoomAndPrivate(aux.Room, aux.Private)
 	u.Attendance, u.AttendingSession, u.badRole, u.badSession = "", nil, false, false
 	if raw := aux.Attendance; !jsonNull(raw) {

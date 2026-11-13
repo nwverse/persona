@@ -522,6 +522,9 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 	zone := e.Store.Zone()
 	lines := make([]minutesLine, 0, len(segs))
 	for i, sg := range segs {
+		if sg.Echo {
+			continue // Persona's own answer, heard by the microphone: not the meeting's (N still counts it, citations index segments.json)
+		}
 		if t := strings.Join(strings.Fields(sg.Text), " "); t != "" {
 			lines = append(lines, minutesLine{N: i + 1, At: sg.Start, Text: clip(t, minutesLineRunes)})
 		}

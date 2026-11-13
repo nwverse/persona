@@ -17,17 +17,24 @@ import { historyBack, historyForward, historyGo, parentPath, pathSegments, writa
 import { hitFolder, hitName, nameEntries, searchNames, type NameHit } from "../../lib/files-find-name";
 import { ago, bytes, shortPath } from "../../lib/format";
 import { openPanel } from "../../lib/panel";
+import { navigate } from "../../lib/router";
 import { notePlace } from "../../lib/panel-memory";
-import { useStore } from "../../lib/store";
+import { FILE_MKDIR_FEATURE, FILE_WRITE_FEATURE } from "../../lib/file-ops";
+
+/** New terminals take a folder (#5832). */
+const PANE_CWD_FEATURE = "pane_cwd";
+import { hubHas, useStore } from "../../lib/store";
 import { useFsLive } from "../../lib/use-fs-live";
 import { NARROW, useMedia } from "../../lib/viewport";
-import { Button, copyText, cx, IconButton, Loading, Menu, useMenu } from "../../ui/atoms";
+import { Button, copyText, cx, IconButton, Loading, Menu, toast, useMenu } from "../../ui/atoms";
 import type { MenuAt, MenuItem } from "../../ui/menu-model";
 import { Icon } from "../../ui/icons";
 import { SearchField } from "../../ui/SearchField";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { PanelHeader } from "../../ui/PanelHeader";
 import { FileInfoDialog } from "./files/FileInfo";
+import { FILE_CHMOD_FEATURE, PermissionsDialog } from "./files/Permissions";
+import { NewItemDialog, type NewKind } from "./files/NewItem";
 import { FileView } from "./files/FileView";
 import { DropHint, dragHasFiles, RowCheck, rowClick, rowFrameProps, RowMore, SelectionBar, useFileOps, type OpTarget, type RowOps } from "./files/FileOps";
 import { FilesTree } from "./files/FilesTree";
@@ -73,7 +80,11 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
   // where it is, kept when the page leaves the session so coming back opens it here again (#5150)
   useEffect(() => notePlace({ mid, sid, cwd }, { path: dir === cwd ? undefined : dir, file: open.at(-1) }), [mid, sid, cwd, dir, open]);
   const menu = useMenu();
+  const newMenu = useMenu();
+  const features = useStore((s) => s.features);
+  const [newKind, setNewKind] = useState<NewKind | null>(null);
   const [info, setInfo] = useState<{ path: string; entry?: FsEntry } | null>(null);
+  const [perm, setPerm] = useState<{ path: string; mode?: number } | null>(null);
   const [query, setQuery] = useState("");
   useEffect(() => setQuery(""), [dir]);
 
@@ -146,6 +157,19 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
   const shown = here?.listing?.path ?? (dir === "~" && home ? home : dir.startsWith("~/") && home ? home + dir.slice(1) : dir);
   const sessionFolder = cwd.startsWith("/") ? cwd.replace(/\/+$/, "") || "/" : null;
   const writable = writableHere(shown, home);
+  // permissions (#5831): where the computer takes changes, not on Windows
+  const canChmod = writable && hubHas(features, FILE_CHMOD_FEATURE) && machine?.os?.toLowerCase() !== "windows";
+  // Open Terminal Here (#5832): a new tab on the computer in that folder, in the session's workspace when it has one
+  const canTerminal = hubHas(features, PANE_CWD_FEATURE);
+  const workspace = useStore((s) => s.sessions[mid]?.find((x) => x.session_id === sid)?.workspace_id);
+  const openTerminal = async (folder: string) => {
+    try {
+      const r = await api<{ terminal: string }>(`/machines/${enc(mid)}/panes`, { method: "POST", json: { cwd: folder, ...(workspace ? { workspace_id: workspace } : {}) } });
+      navigate({ name: "terminal", mid, id: r.terminal, view: "terminals" });
+    } catch (e) {
+      toast(t("files-nav.terminal_failed", { error: errorText(e) }), "error");
+    }
+  };
   // A broken link says what it says (Info); a folder opens; a file opens in the viewer.
   const enter = (e: FsEntry) => (e.link_broken ? setInfo({ path: joinPath(shown, e.name), entry: e }) : e.dir ? go(joinPath(shown, e.name)) : setOpen([joinPath(shown, e.name)]));
 
@@ -194,6 +218,9 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
                 {sync && <span className="text-[11px] text-ink-3 tabular-nums">{sync}</span>}
                 {changes > 0 && <span className="rounded-full bg-field px-1.5 text-[11px] text-ink-2 tabular-nums">{changes}</span>}
               </button>
+              {here_dir && (hubHas(features, FILE_MKDIR_FEATURE) || hubHas(features, FILE_WRITE_FEATURE)) && (
+                <IconButton icon="plus" label={t("files-new.new")} onClick={newMenu.open} active={Boolean(newMenu.anchor)} />
+              )}
               {ops.canUpload && here_dir && <IconButton icon="upload" label={t("files-ops.upload")} onClick={() => ops.choose(here_dir)} />}
               <IconButton icon="more" label={t("session-filespanel.more")} onClick={menu.open} active={Boolean(menu.anchor)} />
             </>
@@ -207,6 +234,7 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
             items={[
               { key: "tree", label: t("files-tree.treeView"), checked: tree, onSelect: () => chooseView(tree ? "drill" : "tree") },
               { key: "hidden", label: t("session-filespanel.show_hidden"), checked: showHidden, onSelect: () => setShowHidden(!showHidden) },
+              ...(canTerminal ? [{ key: "terminal", label: t("files-nav.open_terminal"), icon: "terminal" as const, onSelect: () => void openTerminal(shown) }] : []),
               { key: "info", label: t("files-info.info"), icon: "info", onSelect: () => setInfo({ path: shown }) },
               { key: "copy", label: t("session-filespanel.copy_path"), icon: "copy", onSelect: () => copyText(shown) },
               ...(sessionFolder && shown !== sessionFolder ? [{ key: "session", label: t("files-nav.session_folder"), icon: "folder" as const, onSelect: () => go(sessionFolder) }] : []),
@@ -216,10 +244,24 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
             ]}
           />
         )}
+        {newMenu.anchor && (
+          <Menu
+            anchor={newMenu.anchor}
+            onClose={newMenu.close}
+            align="right"
+            items={[
+              ...(hubHas(features, FILE_MKDIR_FEATURE) ? [{ key: "folder", label: t("files-new.new_folder"), icon: "folder" as const, onSelect: () => setNewKind("folder") }] : []),
+              ...(hubHas(features, FILE_WRITE_FEATURE) ? [{ key: "text", label: t("files-new.new_text"), icon: "file" as const, onSelect: () => setNewKind("text") }] : []),
+              ...(ops.canUpload ? [{ key: "upload", label: t("files-ops.upload"), icon: "upload" as const, divider: true, onSelect: () => ops.choose(here_dir) }] : []),
+            ]}
+          />
+        )}
         {rowMenu?.scope === ops.scope && (
           <Menu
             items={beforeTrash(ops.rowItems(rowMenu.x, rowMenu.open), [
               { key: "info", label: t("files-info.info"), icon: "info", divider: true, onSelect: () => setInfo({ path: rowMenu.x.path }) },
+              ...(canChmod ? [{ key: "perm", label: t("files-perm.menu"), icon: "shield" as const, onSelect: () => setPerm({ path: rowMenu.x.path }) }] : []),
+              ...(canTerminal && rowMenu.x.dir ? [{ key: "terminal", label: t("files-nav.open_terminal"), icon: "terminal" as const, onSelect: () => void openTerminal(rowMenu.x.path) }] : []),
             ])}
             anchor={rowMenu.at.anchor ?? null}
             point={rowMenu.at.point}
@@ -306,7 +348,33 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
         </div>
         {ops.ui}
       </div>
-      {info && <FileInfoDialog mid={mid} cwd={cwd} path={info.path} entry={info.entry} onClose={() => setInfo(null)} onGoTo={goTo} />}
+      {newKind && (
+        <NewItemDialog
+          mid={mid}
+          cwd={cwd}
+          dir={shown}
+          folderName={fileName(shown) || shown}
+          kind={newKind}
+          onClose={() => setNewKind(null)}
+          onMade={(p, kind) => {
+            setReloads((n) => n + 1);
+            setHighlight(fileName(p));
+            if (kind === "text") setOpen([p]);
+          }}
+        />
+      )}
+      {info && (
+        <FileInfoDialog
+          mid={mid}
+          cwd={cwd}
+          path={info.path}
+          entry={info.entry}
+          onClose={() => setInfo(null)}
+          onGoTo={goTo}
+          onChangeMode={canChmod && info.path !== shown ? (mode) => { setPerm({ path: info.path, mode }); setInfo(null); } : undefined}
+        />
+      )}
+      {perm && <PermissionsDialog mid={mid} cwd={cwd} path={perm.path} mode={perm.mode} onClose={() => setPerm(null)} onChanged={() => setReloads((n) => n + 1)} />}
       {viewing && (
         <FileView
           key={viewing}

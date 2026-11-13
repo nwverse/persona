@@ -2510,8 +2510,8 @@ A hub picture that fails to load may have outlived its token, so the page is dra
 A row's extra actions open from a right click, a half-second press on a touch screen and the … button at its end (no swipe on the web).
 The component showcase's version 6 pages are `web/src/showcase/v6` (with their pictures in `web/src/showcase/images`) until the showcase extension's own snapshots have them.
 
-**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, and the styles
-(the 45 icons, named colors, `title` / `headline`; see "App: Settings › Extensions" below). One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, the styles
+(the 45 icons, named colors, `title` / `headline`) and row actions; see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)
 
@@ -2957,6 +2957,9 @@ Views, components, actions, responses, placements and context all use schema-gen
   a row's icon in its color on the design system's `IconTile`, a metric's icon before its label, an empty state's mark, and a badge as a soft tint of the color behind words in the text's
   own color (a tone, when it has one, wins). `text` takes `title` and `headline` (heading levels for VoiceOver). Unit tests `ExtensionStylesTests` read the schema's names; screenshots of
   `showcase › styles` with `ExtensionShowcaseShotsUITests`.
+- UI version 6's row actions (#827, `ExtensionRowActions.swift`): a row's `actions` in a long press's menu (a right click on the Mac), usual ones first and destructive ones red and last,
+  with their icons; those with `swipe` also under a swipe from the trailing edge (the destructive one at the edge, a full swipe runs none); one with `confirm` asks in an alert with **Cancel**
+  (a stream page asks in its own way); VoiceOver has them as the row's actions; on a card without a page they are left out. Screenshots of `showcase › row-actions`.
 - UI version 5's code review (#827, "UI version 5: code review"), drawn in parts (pages send 4 until all of version 6 is drawn too, so the hub strips these fields for iOS meanwhile).
   Reading (`ExtensionCodeReview.swift`, the code page): the words that changed in a removed and added pair on a stronger fill (PersonaKit's `LineDiff` word comparison, worked out once per hunk);
   generated files and lockfiles (by the extension's `generated` or the web's path list), changes over 400 lines and viewed files start folded with a line saying why and **Show**; a generated
