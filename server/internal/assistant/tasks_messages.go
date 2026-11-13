@@ -249,7 +249,11 @@ func (s *Service) activeTasks(ctx context.Context) []prompts.InboxTask {
 			t.State == taskStateLabel("cancelled") {
 			continue
 		}
-		out = append(out, prompts.InboxTask{ID: t.ID, Title: t.Title, State: t.State, Last: t.Last})
+		task := prompts.InboxTask{ID: t.ID, Title: t.Title, State: t.State, Last: t.Last}
+		if full, ok := s.todoNow(t.ID); ok {
+			task.Notes = clip(full.Notes, 1200)
+		}
+		out = append(out, task)
 	}
 	return out
 }
