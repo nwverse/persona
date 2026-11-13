@@ -436,7 +436,7 @@ SHOTS_PY
       capture "$theme" pairing --es debug.openPairing true
       capture "$theme" diagnostics --es debug.openDiagnostics true
       for page in notifications readiness; do capture "$theme" "settings-$page" --es debug.openLink "'persona://open?target=settings&page=$page'"; done
-      for page in machines knowledge phone catalog; do capture "$theme" "$page" --es debug.openPage "$page"; done
+      for page in machines terminals knowledge phone catalog; do capture "$theme" "$page" --es debug.openPage "$page"; done
       # Settings › Managers (docs/assistant/managers.md): the mock's roster, a manager on another computer and the hub's own (Delete off).
       # The install code sheet is drawn by ManagersShotsTest (feature/settings, build/managers-shots/).
       capture "$theme" settings-managers --es debug.openPage managers
