@@ -373,26 +373,22 @@ func TestInboxReplyWithAConversationWaits(t *testing.T) {
 		t.Fatalf("the conversation was told new messages: %s", told)
 	}
 	// Delivery empties Pending after the send (keepToldSince), so wait for that rather than read it at once.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	waitFor(t, "the notice delivery", func() bool {
 		h.inbox.mu.Lock()
 		pending, startedNow := len(it.Agent.Pending), it.Agent.StartedAt
 		handling := it.Handling.State
 		h.inbox.mu.Unlock()
-		if pending == 0 {
-			if handling != HandlingWaiting {
-				t.Fatalf("after delivery: handling %q", handling)
-			}
-			if (started == nil) != (startedNow == nil) || started != nil && !started.Equal(*startedNow) {
-				t.Fatalf("the notice started a turn: started_at %v → %v", started, startedNow)
-			}
-			break
+		if pending != 0 {
+			return false
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the notice was not delivered: %d notes pending", pending)
+		if handling != HandlingWaiting {
+			t.Fatalf("after delivery: handling %q", handling)
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
+		if (started == nil) != (startedNow == nil) || started != nil && !started.Equal(*startedNow) {
+			t.Fatalf("the notice started a turn: started_at %v → %v", started, startedNow)
+		}
+		return true
+	})
 	// Listed, it is in progress waiting, not filed.
 	h.inbox.mu.Lock()
 	l := it.listed()

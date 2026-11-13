@@ -168,12 +168,12 @@ func TestStartScreenHelperJoinsTheStreamAndEndsWithScreenSharing(t *testing.T) {
 		t.Fatalf("video streams bound to the pair = %d, want 1", bound)
 	}
 
+	n.screens.mu.Lock()
+	video := n.screens.byID["K"].video[0]
+	n.screens.mu.Unlock()
 	_ = tee.Close() // screen sharing ends: the video ends with it, and its slot is released once
-	deadline := time.Now().Add(2 * time.Second)
-	for released.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	time.Sleep(50 * time.Millisecond) // the stream pump closing it again must not release twice
+	waitFor(t, "the video slot to be released", func() bool { return released.Load() == 1 })
+	_ = video.Close() // the stream pump closing the same helper again must not release twice
 	if got := released.Load(); got != 1 {
 		t.Fatalf("slot released %d times, want 1", got)
 	}

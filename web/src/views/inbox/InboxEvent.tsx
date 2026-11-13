@@ -123,7 +123,7 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
             {item.recap && (
               <div>
                 <p className="text-[11.5px] font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
-                <p className="mt-0.5 text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2" data-event-recap>{item.recap}</p>
+                <p className="mt-0.5 text-meta leading-relaxed whitespace-pre-wrap text-ink-2" data-event-recap>{item.recap}</p>
               </div>
             )}
           </section>
@@ -272,7 +272,7 @@ export function SuggestionCard({ item, suggestion: s }: { item: InboxItem; sugge
             onChange={(e) => setText(e.target.value)}
             aria-label={t("inbox-inboxevent.edit_text")}
             rows={Math.min(8, Math.max(3, text.split("\n").length + 1))}
-            className="w-full resize-y rounded-control bg-field px-2.5 py-2 text-[13px] leading-relaxed text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]"
+            className="w-full resize-y rounded-control bg-field px-2.5 py-2 text-meta leading-relaxed text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]"
             data-suggestion-editor
           />
           <label className="flex h-8 items-center gap-2 rounded-control bg-field px-2.5 focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
@@ -301,7 +301,7 @@ export function SuggestionCard({ item, suggestion: s }: { item: InboxItem; sugge
         </div>
       ) : (
         <>
-          <p className="mt-1.5 text-[13px] leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{s.text}</p>
+          <p className="mt-1.5 text-meta leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{s.text}</p>
           {(s.changes ?? []).map((c) => (
             <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-[11.5px] text-ink-2">
               <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />
