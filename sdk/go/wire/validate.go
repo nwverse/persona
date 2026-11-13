@@ -38,7 +38,75 @@ var (
 	// siblings holds, for each schema node with a $ref, its other keywords
 	// but description (refSiblings). Filled with refs, read-only after.
 	siblings map[unsafe.Pointer]map[string]any
+	// present holds, for each schema node of the loaded schemas (and each
+	// refSiblings rest), which keywords check reads it has. Filled with refs,
+	// read-only after.
+	present map[unsafe.Pointer]keywords
 )
+
+// keywords is a set of the schema keywords check reads, one bit each, so a
+// node is asked only for the keywords it has: most carry two or three of them.
+type keywords uint32
+
+const (
+	kwRef keywords = 1 << iota
+	kwAllOf
+	kwAnyOf
+	kwNot
+	kwOneOf
+	kwType
+	kwConst
+	kwEnum
+	kwMinLength
+	kwMaxLength
+	kwPattern
+	kwMinimum
+	kwMaximum
+	kwMinItems
+	kwMaxItems
+	kwUniqueItems
+	kwItems
+	kwProperties
+	kwRequired
+	kwMinProperties
+	kwMaxProperties
+	kwAdditionalProperties
+	kwPropertyNames
+)
+
+var keywordBits = map[string]keywords{
+	"$ref": kwRef, "allOf": kwAllOf, "anyOf": kwAnyOf, "not": kwNot, "oneOf": kwOneOf, "type": kwType,
+	"const": kwConst, "enum": kwEnum, "minLength": kwMinLength, "maxLength": kwMaxLength, "pattern": kwPattern,
+	"minimum": kwMinimum, "maximum": kwMaximum, "minItems": kwMinItems, "maxItems": kwMaxItems,
+	"uniqueItems": kwUniqueItems, "items": kwItems, "properties": kwProperties, "required": kwRequired,
+	"minProperties": kwMinProperties, "maxProperties": kwMaxProperties,
+	"additionalProperties": kwAdditionalProperties, "propertyNames": kwPropertyNames,
+}
+
+// keywordsOf is the keywords s has, from present for the loaded schemas.
+func keywordsOf(s map[string]any) keywords {
+	if k, ok := present[mapKey(s)]; ok {
+		return k
+	}
+	return keywordsIn(s)
+}
+
+// member is s[name] when s has the keyword bit (have is keywordsOf(s)), else
+// nil without looking: check's keywords are all absent from most nodes.
+func member(s map[string]any, have, bit keywords, name string) any {
+	if have&bit == 0 {
+		return nil
+	}
+	return s[name]
+}
+
+func keywordsIn(s map[string]any) keywords {
+	var k keywords
+	for name := range s {
+		k |= keywordBits[name]
+	}
+	return k
+}
 
 type refSite struct{ ref, here string }
 
@@ -69,6 +137,7 @@ func loadSchemas() {
 	}
 	refs = map[refSite]refTarget{}
 	siblings = map[unsafe.Pointer]map[string]any{}
+	present = map[unsafe.Pointer]keywords{}
 	for name, doc := range files {
 		collectRefs(doc, name)
 	}
@@ -80,8 +149,11 @@ func loadSchemas() {
 func collectRefs(node any, here string) {
 	switch value := node.(type) {
 	case map[string]any:
+		present[mapKey(value)] = keywordsIn(value)
 		if _, ok := value["$ref"].(string); ok {
-			siblings[mapKey(value)] = refSiblingsOf(value)
+			rest := refSiblingsOf(value)
+			siblings[mapKey(value)] = rest
+			present[mapKey(rest)] = keywordsIn(rest)
 		}
 		for key, member := range value {
 			if key == "$ref" {
