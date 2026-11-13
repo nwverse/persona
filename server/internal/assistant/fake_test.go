@@ -60,6 +60,7 @@ type fakeHub struct {
 	devicesOther  []string                   // devices.list's ids kept out of it (pending, leaving, absorbed)
 	sessions      map[string][]proto.Session // by machine: the machines there are
 	sessionsFail  map[string]int             // by machine: sessions.list fails offline this many more times (then recovers)
+	itemsFail     int                        // session.items fails this many more times (then recovers)
 	items         []proto.Item               // session.items answers this
 	pageTurns     bool                       // and only the last n turns of it to "turns": n, as the node does (else all of it)
 	itemsPage     int                        // > 0: session.items with after_seq pages them by seq, this many a page
@@ -160,6 +161,7 @@ type fakeHub struct {
 	onRepair  func(f *fakeHub)
 	onSend    func(f *fakeHub, p map[string]any) // runs (under the fake's lock) after each session.send
 	onStart   func(f *fakeHub, p map[string]any) // runs (under the fake's lock) when session.start arrives, before slowStart blocks
+	onList    func(f *fakeHub, machine string)   // runs (under the fake's lock) before a sessions.list is answered, which then sends the list as it left it
 	// onAssistantSend runs (under the fake's lock) when assistant.send arrives, before it is answered
 	onAssistantSend func(f *fakeHub, p map[string]any)
 	// doctor is each machine's node.doctor claude-version detail (none: the report has no such check).
@@ -216,9 +218,16 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	f.mu.Lock()
 	f.itemReads++
 	read, hooks := f.itemReads, f.readHooks
+	fail := f.itemsFail > 0
+	if fail {
+		f.itemsFail--
+	}
 	f.mu.Unlock()
 	if hooks.before != nil {
 		hooks.before(read)
+	}
+	if fail {
+		return nil, errors.New("the node did not answer")
 	}
 	result, err := f.deviceCall(ctx, p)
 	if hooks.after != nil {
@@ -287,6 +296,10 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.sessionsFail[p.Device] > 0 { // a node that answers offline for a few tries, then recovers
 			f.sessionsFail[p.Device]--
 			return nil, fmt.Errorf("%s: %w", p.Device, apierr.ErrOffline)
+		}
+		if f.onList != nil {
+			f.onList(f, p.Device)
+			list = f.sessions[p.Device]
 		}
 		return json.Marshal(map[string]any{"sessions": slices.Clone(list), "muted": f.muted[p.Device]})
 	case DeviceSessionGet:
@@ -518,6 +531,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		if _, set := a["config_dir"]; set && f.refuseConfigDir {
 			return nil, &rpc.Error{Code: proto.CodeNodeOutdated, Message: "update Persona on this computer"}
+		}
+		if l, _ := a["launcher"].(string); a["config_dir"] != nil && launcherAgent(l) != "claude" { // node/assistant.go's preflight
+			return nil, errors.New("config_dir is only supported for Claude assistant conversations")
 		}
 		if sid, _ := a["session_id"].(string); a["config_dir"] != nil && f.elsewhere[sid] {
 			return nil, errors.New("config_dir cannot move an existing conversation; start a new conversation instead")

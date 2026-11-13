@@ -16,6 +16,7 @@ struct PersonaApp: App {
                 #if DEBUG && os(iOS)
                 .modifier(TreeSwapFlip()) // `-swapTreeAway YES` (#2836)
                 .overlay { HomeGalleryOverlay() } // `-showHomeWidgets YES`: every widget, every size (docs/apple/home-widgets.md)
+                .overlay { ButtonContrastOverlay() } // `-showButtonContrast YES`: secondary buttons on every surface (#6157)
                 #endif
                 .environment(model)
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
@@ -101,6 +102,7 @@ struct PersonaApp: App {
                 }
                 #if os(iOS)
                 ClipboardOfferWatcher.shared.returned(model) // copied something elsewhere: offer to send it to a computer
+                RemindersImporter.shared.activate(model) // Reminders imported as to-dos, when that is on (#4009)
                 #endif
             } else if new == .background {
                 #if os(iOS)
@@ -200,6 +202,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             ScreenCredentials.forgetAll()
             ScreenUnlock.forgetAll()
         }
+        #if DEBUG
+        // `-openScreenDemo YES`: open the live-screen page on a placeholder Mac (no hub needed) for screenshots of the
+        // picture switcher and the connection-stats overlay; pair with -showScreenStatsDemo / -showScreenFallbackDemo (#3954).
+        if d.bool(forKey: "openScreenDemo") {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(600))
+                AppModel.shared.screenOpen = ScreenOpen(machine: MachineRef(id: "Studio"))
+            }
+        }
+        #endif
         // `-showLarkSendFresh YES`: no Feishu draft and no outbox (unsent, failed messages) from an earlier run:
         // LarkSendTests found earlier runs' failed messages and drafts in the chat (#1627).
         if d.bool(forKey: "showLarkSendFresh") {

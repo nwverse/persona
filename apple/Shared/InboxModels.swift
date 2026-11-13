@@ -9,6 +9,8 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var account: String
     var accountName: String
     var title: String
+    /// Where the matter happens: a chat name, the other person in a direct chat, or a repository. Older hubs leave it out.
+    var `where`: String? = nil
     var sender: String?
     var avatar: String?
     var preview: String
@@ -59,6 +61,9 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var recap: String?
     var handling: Handling?
     var suggestion: Suggestion?
+    /// What the matter waits on and when to look again. `now` is the manager's state key; clients put it in words.
+    var follow: Follow? = nil
+    var now: String? = nil
     var chain: [ChainEntry]?
     /// A done item listed with only its newest chain entry (the app asks with `chain=last`, #4742): how many it has.
     /// GET /api/v1/inbox/{id} has them all (InboxChainSection reads it when the item opens). nil: `chain` is all of it.
@@ -67,6 +72,24 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     /// The conversations it was handed to with Hand to AI's main chat (#1194), oldest first: they may write back to
     /// it, and the main conversation offers "Wrap up" for it (#5932). Older hubs leave it out.
     var handoffs: [Handoff]?
+
+    /// The follow-up facts a client reads (spec/fixtures/inbox/now.json); the manager keeps the counters and due flag.
+    nonisolated struct Follow: Codable, Hashable, Sendable {
+        var who: String?
+        var next: String?
+        var checkAt: Date?
+
+        init(who: String? = nil, next: String? = nil, checkAt: Date? = nil) {
+            self.who = who
+            self.next = next
+            self.checkAt = checkAt
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case who, next
+            case checkAt = "check_at"
+        }
+    }
 
     /// One hand-off of the item to a conversation (POST /api/v1/inbox/{id}/handoff).
     nonisolated struct Handoff: Codable, Hashable, Sendable {
@@ -283,8 +306,8 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, source, kind, account, title, sender, avatar, preview, count, tier, summary, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
-        case status, urgent, recap, handling, suggestion, chain, related, manager, handoffs
+        case id, source, kind, account, title, `where`, sender, avatar, preview, count, tier, summary, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
+        case status, urgent, recap, handling, suggestion, follow, now, chain, related, manager, handoffs
         case accountName = "account_name", startedAt = "started_at", updatedAt = "updated_at", doneAt = "done_at", doneBy = "done_by"
         case chainCount = "chain_count"
     }
@@ -650,6 +673,18 @@ extension APIClient {
     private struct InboxHandoffBody: Encodable { var text: String; var clientID: String
         enum CodingKeys: String, CodingKey { case text, clientID = "client_id" }
     }
+    private nonisolated struct InboxHandoffRecordBody: Encodable, Sendable {
+        struct Session: Encodable, Sendable {
+            var machineID: String
+            var sessionID: String
+            enum CodingKeys: String, CodingKey { case machineID = "machine_id", sessionID = "session_id" }
+        }
+        var session: Session
+        var kind: InboxHandoffRecordKind
+        var title: String
+        var clientID: String
+        enum CodingKeys: String, CodingKey { case session, kind, title, clientID = "client_id" }
+    }
     private nonisolated struct InboxHandoffResponse: Decodable, Sendable {
         struct Ref: Decodable, Sendable { var machineID: String; var sessionID: String
             enum CodingKeys: String, CodingKey { case machineID = "machine_id", sessionID = "session_id" }
@@ -696,10 +731,26 @@ extension APIClient {
         return InboxHandoffAnswer(item: r.item, session: SessionKey(group: group, machineID: r.session.machineID, sessionID: r.session.sessionID))
     }
 
+    /// Records a new conversation or Agent hand-off after the client delivered its message. With no `text`, this only
+    /// links the session to the item; it never sends another message. Older hubs may answer 400 / 404 / 405, which the
+    /// caller treats as an unavailable record rather than a failed hand-off.
+    func inboxHandoffRecord(_ id: String, session: SessionKey, kind: InboxHandoffRecordKind, title: String, clientID: UUID) async throws {
+        try await post("/api/v1/inbox/" + id + "/handoff",
+                       body: InboxHandoffRecordBody(
+                        session: .init(machineID: session.machineID, sessionID: session.sessionID),
+                        kind: kind, title: title, clientID: clientID.uuidString.lowercased()))
+    }
+
     /// Moves one row's status in the document; the item comes back read again.
     func inboxDocStatus(_ id: String, _ change: InboxItem.DocChange) async throws -> InboxItem {
         try await post("/api/v1/inbox/" + id + "/doc/status", body: change, timeout: 60, as: InboxItem.self)
     }
+}
+
+/// The destination recorded for an already-delivered hand-off.
+nonisolated enum InboxHandoffRecordKind: String, Encodable, Hashable, Sendable {
+    case agent
+    case conversation
 }
 
 /// What `POST /api/v1/inbox/{id}/handoff` answers: the item (nil from a hub that leaves it out) and the conversation it
