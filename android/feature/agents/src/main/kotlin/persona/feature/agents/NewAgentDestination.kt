@@ -34,9 +34,11 @@ internal fun NewAgentDestination(route: NewAgentRoute, navigator: Navigator, dep
         return
     }
     val prefill = NewAgentPrefill(route.machineId, route.cwd, route.prompt)
+    val starPrompt = persona.core.designsystem.LocalStarPrompt.current
     val model = viewModel(key = "new-agent-page:${service.scope}:${System.identityHashCode(service)}:${route.hashCode()}") {
         NewAgentViewModel(service, wiring.creationPreferences?.let { AgentCreationPreferences(context, it) } ?: AgentCreationPreferences(context),
-            dependencies.sessions().machines, sender = dependencies.sender(), adopt = dependencies.sessions()::adopt, prefill = prefill)
+            dependencies.sessions().machines, sender = dependencies.sender(), adopt = dependencies.sessions()::adopt, prefill = prefill,
+            usage = dependencies.machines()?.let { m -> { id: String -> m.usageWindows(id) } }, launched = { starPrompt?.launched() })
     }
     val state by model.state.collectAsStateWithLifecycle()
     val machines by dependencies.sessions().machines.collectAsStateWithLifecycle()
@@ -65,5 +67,6 @@ internal fun NewAgentDestination(route: NewAgentRoute, navigator: Navigator, dep
             }
         }
     }
-    NewAgentPage(model, machines, connection == ConnectionState.Online, onBack = navigator::back, initialModelQuery = modelQuery)
+    NewAgentPage(model, machines, connection == ConnectionState.Online, onBack = navigator::back, initialModelQuery = modelQuery,
+        onAddProvider = { navigator.navigate(persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Providers)) })
 }

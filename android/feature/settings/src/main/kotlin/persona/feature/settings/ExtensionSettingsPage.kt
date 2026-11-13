@@ -39,6 +39,8 @@ internal fun ExtensionSettingsPage(
     updates: ExtensionSettingsUpdates, onEnabled: (Boolean) -> Unit, onAutoUpgrade: (Boolean) -> Unit,
     onCheck: () -> Unit, onUpgrade: ((String, String) -> Unit)?, onUninstall: () -> Unit,
     configuration: LazyListScope.() -> Unit, information: LazyListScope.() -> Unit,
+    /** A pack's members by their installed names (#4122). */
+    memberNames: Map<String, String> = emptyMap(),
 ) {
     JListPage(title = detail?.extension?.name?.ifBlank { null } ?: stringResource(R.string.settings_ext_title),
         onBack = onBack, largeTitle = false, refreshing = refreshing, onRefresh = onRefresh) {
@@ -62,7 +64,7 @@ internal fun ExtensionSettingsPage(
         item("configuration-title") { JSectionHeader(stringResource(R.string.settings_extension_configuration)) }
         configuration()
         hostInformation(detail)
-        installedExtensionModel(detail)
+        installedExtensionModel(detail, memberNames)
         information()
         item("updates-title") { JSectionHeader(stringResource(R.string.settings_extension_updates)) }
         item("updates-check") {
@@ -97,8 +99,10 @@ internal fun ExtensionSettingsPage(
         }
         item("updates-auto") {
             JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.s)) {
+                // While the assistant's automatic extension updates are off it stays at its own saved value, grayed (#4748, the
+                // web's): that value applies again once they are on. Unknown (loading, an older hub) stays editable.
                 JSwitchRow(stringResource(R.string.settings_ext_auto_upgrade), extension.autoUpgrade ?: false, onAutoUpgrade,
-                    enabled = !busy && !updates.checking && capabilities.automatic && extension.autoUpgradePaused == null)
+                    enabled = !busy && !updates.checking && capabilities.automatic && extension.autoUpgradePaused == null && updates.globalAuto != false)
             }
         }
         item("updates-auto-note") { HostSettingsNote(stringResource(when {

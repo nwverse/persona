@@ -305,6 +305,12 @@ nonisolated enum TodosLogic {
         return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
     }
 
+    /// The day `date` is in, written as a `due_date` ("yyyy-MM-dd"): what `dueDay` reads back.
+    public static func dayKey(_ date: Date, calendar: Calendar = .current) -> String {
+        let c = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0) // i18n-ignore: wire format
+    }
+
     /// The moment a todo is due by: its `due_at`, or the end of its due day; nil without either.
     public static func dueBy(_ todo: TodoItem, calendar: Calendar = .current) -> Date? {
         if let at = todo.dueAt { return at }
@@ -583,6 +589,15 @@ extension APIClient {
     public func updateTodoPlan(id: String, _ change: TodoPlanChange) async throws -> TodoItem {
         let encId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let data = try await request("PATCH", "/api/v1/todos/\(encId)", body: change)
+        return try JSON.decoder.decode(TodoResponse.self, from: data).todo
+    }
+
+    /// Got It on a Just finished to-do, or opening it (#5707, docs/assistant/todo-status-sop.md "Seen"): the hub marks it
+    /// seen (`PUT …/seen`) or, with `seen` false, takes the mark off (`DELETE`, Undo), and answers the to-do. Only for a
+    /// hub that lists `todo_seen` (`TodoSeen.feature`).
+    public func setTodoSeen(id: String, seen: Bool) async throws -> TodoItem {
+        let encId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let data = try await request(seen ? "PUT" : "DELETE", "/api/v1/todos/\(encId)/seen")
         return try JSON.decoder.decode(TodoResponse.self, from: data).todo
     }
 

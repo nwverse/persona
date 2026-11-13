@@ -133,10 +133,10 @@ func (d *DB) SubscriptionSeen(ctx context.Context, id string, uids []string) (ma
 }
 
 // CommitSubscriptionRun writes a run of subscription id at once: merge turns the stored row's data and revision into
-// the data to keep, the new dedup keys and items are added, the old keys pruned, and the lease released. A subscription
-// deleted meanwhile keeps nothing.
+// the data to keep, the new dedup keys and items are added, the held items of read (uids) marked seen, the old keys
+// pruned, and the lease released. A subscription deleted meanwhile keeps nothing.
 func (d *DB) CommitSubscriptionRun(ctx context.Context, id string, merge func(data []byte, revision int64) ([]byte, error),
-	seen []SubscriptionSeenRow, items []SubscriptionItemRow, now time.Time) error {
+	seen []SubscriptionSeenRow, items []SubscriptionItemRow, read []string, now time.Time) error {
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -172,6 +172,13 @@ func (d *DB) CommitSubscriptionRun(ctx context.Context, id string, merge func(da
 	for _, it := range items {
 		if _, err := tx.Exec(ctx, `INSERT INTO subscription_items (subscription_id, uid, data, created_at) VALUES ($1, $2, $3, $4)`,
 			id, it.UID, it.Data, now); err != nil {
+			return err
+		}
+	}
+	if len(read) > 0 {
+		// Held items read in the source since they were stored (#6176): their data says so; never unmarked.
+		if _, err := tx.Exec(ctx, `UPDATE subscription_items SET data = jsonb_set(data::jsonb, '{seen}', 'true')::json
+			WHERE subscription_id = $1 AND uid = ANY($2::text[]) AND (data->>'seen') IS DISTINCT FROM 'true'`, id, read); err != nil {
 			return err
 		}
 	}

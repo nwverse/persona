@@ -136,9 +136,13 @@ final class ComposerKeyboardTests: XCTestCase {
         XCTAssertEqual(field.value as? String, "first line\nsecond line", "dismissal must preserve the draft")
         for (id, frame) in frames {
             let now = app.buttons[id].firstMatch.frame
-            XCTAssertEqual(now.width, frame.width, accuracy: 1, "\(id) tap width changed")
             XCTAssertEqual(now.height, frame.height, accuracy: 1, "\(id) tap height changed")
-            if id != "shell-composer-modes" {
+            if id == "shell-composer-modes" {
+                // The hide-keyboard button leaves the row: a long model label gets that room back, never less.
+                XCTAssertGreaterThanOrEqual(now.width, frame.width - 1, "\(id) got narrower after dismissal")
+                XCTAssertLessThanOrEqual(now.maxX, app.buttons["shell-composer-mic"].firstMatch.frame.minX + 1, "\(id) ran into the mic")
+            } else {
+                XCTAssertEqual(now.width, frame.width, accuracy: 1, "\(id) tap width changed")
                 XCTAssertEqual(now.minX, frame.minX, accuracy: 1, "\(id) moved horizontally after dismissal")
             }
         }

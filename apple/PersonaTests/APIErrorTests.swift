@@ -5,10 +5,10 @@ import Testing
 struct APIErrorTests {
     @Test func knowledgeRefusalsKeepTheirMeaningAndDiagnostics() {
         for (status, code, text) in [
-            (503, "kb_disabled", String(localized: "This manager has turned off the knowledge base. Enable it in the manager configuration to use it.")),
+            (503, "kb_disabled", String(localized: "This assistant has turned off the knowledge base. Enable it in the assistant's configuration to use it.")),
             (503, "kb_unavailable", String(localized: "The knowledge base isn't ready yet. Try again shortly.")),
-            (403, "kb_read_only", String(localized: "The knowledge base is read-only. Change the manager configuration before editing or syncing recordings.")),
-            (503, "assistant_offline", String(localized: "The manager is offline or restarting. Try again shortly."))
+            (403, "kb_read_only", String(localized: "The knowledge base is read-only. Change the assistant's configuration before editing or syncing recordings.")),
+            (503, "assistant_offline", String(localized: "The assistant is offline or restarting. Try again shortly."))
         ] {
             let error = APIError(status: status, message: "Request failed: timeout", fields: ["code": code, "detail": "private diagnostic"], requestID: "request-1")
             #expect(error.errorDescription?.hasPrefix(text) == true)
@@ -96,6 +96,47 @@ struct APIErrorTests {
         #expect(error.errorDescription?.contains("request-1") == true)
         #expect(error.errorDescription?.contains("private") == false)
         #expect(error.message == "private internal exception")
+    }
+
+    @Test(arguments: ["worktree/prepare", "worktree/create", "panes/agent", "panes/split", "tabs/close"])
+    func nodeMenuInternalFailuresKeepTheNodesReason(route: String) async throws {
+        let reason = "already used by worktree"
+        let api = APIClient(config: .demo, transport: { _ in
+            throw APIError(status: 502, message: reason, fields: ["code": "internal"], requestID: "request-1")
+        })
+        do {
+            _ = try await api.nodeAction(machine: "m", route, ["pane": "p"])
+            Issue.record("expected the node to refuse")
+        } catch let error as APIError {
+            #expect(error.requestPath == "/api/v1/machines/m/\(route)")
+            #expect(error.errorDescription?.contains(reason) == true, "the node-menu action must not replace the actionable reason with HTTP 502")
+        }
+    }
+
+    @Test func nodeMenuHubInternalFailuresStayGeneric() async throws {
+        let api = APIClient(config: .demo, transport: { _ in
+            throw APIError(status: 503, message: "private hub exception", fields: ["code": "internal"])
+        })
+        do {
+            _ = try await api.nodeAction(machine: "m", "worktree/create", ["branch": "x"])
+            Issue.record("expected the hub to refuse before calling the node")
+        } catch let error as APIError {
+            #expect(error.errorDescription?.contains("HTTP 503") == true)
+            #expect(error.errorDescription?.contains("private") == false)
+        }
+    }
+
+    @Test func anOrdinaryPostStillHidesInternalExceptions() async throws {
+        let api = APIClient(config: .demo, transport: { _ in
+            throw APIError(status: 502, message: "private internal exception", fields: ["code": "internal"])
+        })
+        do {
+            _ = try await api.post("/api/v1/other", body: ["x": "y"])
+            Issue.record("expected a refusal")
+        } catch let error as APIError {
+            #expect(error.errorDescription?.contains("HTTP 502") == true)
+            #expect(error.errorDescription?.contains("private") == false)
+        }
     }
 
     @Test func answersAreShownAsTheyAre() {

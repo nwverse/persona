@@ -9,6 +9,8 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -31,6 +33,10 @@ const (
 	codeOpIDReused        = "op_id_reused"
 	codeAsksFull          = "asks_full"
 	codeAskBusy           = "ask_busy"
+	codeMeetingEnded      = "meeting_ended" // the room ended: ask in the follow-up
+	codeNotMeeting        = "not_meeting"
+	codeMeetingRunning    = "meeting_running"
+	codeNoMaterial        = "no_material"
 )
 
 // The bodies the attending routes read at most.
@@ -91,18 +97,37 @@ func (s *Service) meetingRoutes() {
 		if e == nil {
 			return
 		}
+		from, hasFrom, fromOK := liveFrom(r)
 		l, rec, err := s.asksRead(e, r.PathValue("id"))
 		if err != nil {
 			writeMeetingError(w, err)
+			return
+		}
+		if !fromOK { // after 410 and 404, as POST reads its body
+			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-meeting.bad_from"))
 			return
 		}
 		asks := make([]askView, 0, len(l.Asks))
 		for _, a := range l.Asks {
 			asks = append(asks, viewAsk(a))
 		}
-		apierr.WriteJSON(w, s.liveView(r.Context(), l, rec, asks))
+		view := s.liveView(r.Context(), l, rec, asks)
+		if rev := e.PhotosRev(rec.ID); rev > 0 { // photos has a revision and no field: GET …/photos reads them
+			view.Revs[kb.PartPhotos] = rev
+		}
+		if hasFrom {
+			lines, more := liveLines(l, from)
+			view.Lines, view.More = &lines, more
+		}
+		if parts := r.URL.Query().Get("parts"); parts != "" {
+			apierr.WriteJSON(w, view.only(strings.Split(parts, ",")))
+			return
+		}
+		apierr.WriteJSON(w, view)
 	})
 	s.askRoute()
+	s.meetingConversationRoutes()
+	s.meetingPhotoRoutes()
 }
 
 // meetingCaller: the request carries full credentials; anything else has been answered 403 forbidden.
@@ -158,7 +183,8 @@ func meetingRecording(w http.ResponseWriter, e *kb.Engine, id string) (kb.Live, 
 	return l, rec, true
 }
 
-// writeMeetingError answers the knowledge base's refusals of an attending route as the contract codes them.
+// writeMeetingError answers the knowledge base's refusals of a meeting route as the contract codes them (the photos'
+// too, meeting_photos.go).
 func writeMeetingError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, kb.ErrRecordingDeleted):
@@ -169,8 +195,20 @@ func writeMeetingError(w http.ResponseWriter, err error) {
 		apierr.WriteCode(w, http.StatusForbidden, assistantwire.CodeKBReadOnly, i18n.Err("assistant-kb_routes.read_only"))
 	case errors.Is(err, kb.ErrNotAttending):
 		apierr.WriteCode(w, http.StatusConflict, codeNotAttending, i18n.Err("assistant-meeting.not_attending"))
-	case errors.Is(err, kb.ErrBadLive):
+	case errors.Is(err, kb.ErrBadLive), errors.Is(err, kb.ErrBadPhoto):
 		apierr.Write(w, http.StatusBadRequest, err)
+	case errors.Is(err, kb.ErrNotMeeting):
+		apierr.WriteCode(w, http.StatusConflict, codeNotMeeting, i18n.Err("assistant-meeting.not_meeting"))
+	case errors.Is(err, kb.ErrTranscriptExpired):
+		apierr.WriteCode(w, http.StatusConflict, codeTranscriptExpired, i18n.Err("assistant-meeting.transcript_expired"))
+	case errors.Is(err, kb.ErrPhotoNotFound):
+		apierr.WriteCode(w, http.StatusNotFound, codePhotoNotFound, i18n.Err("assistant-meeting.photo_not_found"))
+	case errors.Is(err, kb.ErrPhotoDeleted):
+		apierr.WriteCode(w, http.StatusGone, codePhotoDeleted, i18n.Err("assistant-meeting.photo_deleted"))
+	case errors.Is(err, kb.ErrOpIDReused):
+		apierr.WriteCode(w, http.StatusConflict, codeOpIDReused, i18n.Err("assistant-meeting.photo_id_reused"))
+	case errors.Is(err, kb.ErrPhotosFull):
+		apierr.WriteCode(w, http.StatusRequestEntityTooLarge, codePhotosFull, i18n.Err("assistant-meeting.photos_full", i18n.Args{"max": kb.MaxPhotos}))
 	default:
 		apierr.Write(w, http.StatusInternalServerError, err)
 	}
@@ -235,6 +273,42 @@ func wholeNumber(raw json.RawMessage) (int64, bool) {
 	return int64(f), true
 }
 
+// maxLiveLines is how many live lines one GET …/live?from= gives at most (more says there are more).
+const maxLiveLines = 500
+
+// liveFrom is GET …/live's from (phase 2's live lines from that position): has says it was given, ok that it is a
+// whole number of 0 or more (400 otherwise).
+func liveFrom(r *http.Request) (from int, has, ok bool) {
+	vals, has := r.URL.Query()["from"]
+	if !has {
+		return 0, false, true
+	}
+	v := vals[0]
+	if v == "" || strings.Trim(v, "0123456789") != "" {
+		return 0, true, false
+	}
+	n, err := strconv.Atoi(v)
+	return n, true, err == nil
+}
+
+// liveLine is one position of the live log as GET …/live gives it ("" text included: a placeholder position).
+type liveLine struct {
+	N     int     `json:"n"`
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Text  string  `json:"text"`
+}
+
+// liveLines are l's positions from from, at most maxLiveLines, and whether more follow them.
+func liveLines(l kb.Live, from int) ([]liveLine, bool) {
+	out := []liveLine{}
+	for n := from; n < len(l.Segments) && len(out) < maxLiveLines; n++ {
+		sg := l.Segments[n]
+		out = append(out, liveLine{N: n, Start: sg.Start, End: sg.End, Text: sg.Text})
+	}
+	return out, from+len(out) < len(l.Segments)
+}
+
 // meetingLiveView is what …/live answers: the live log's count, the role in effect and the session being fed. With
 // attending off it is only the role, the counts and the questions.
 type meetingLiveView struct {
@@ -244,6 +318,79 @@ type meetingLiveView struct {
 	Fed              int           `json:"fed"`
 	Problem          string        `json:"problem,omitempty"`
 	Asks             *[]askView    `json:"asks,omitempty"` // GET only
+	// The meeting conversation (#3862): the private mark (absent until chosen), a room meeting's room, the follow-up
+	// once made, and each part's revision (GET only).
+	Private  *bool            `json:"private,omitempty"`
+	Room     *kb.RoomView     `json:"room,omitempty"`
+	Followup *kb.ConvView     `json:"followup,omitempty"`
+	Revs     map[string]int64 `json:"revs,omitempty"`
+	// The live view (#3862 phase 2), GET only: the live lines from ?from= (none without it) with more when there are
+	// more, and the room's topics ([] before the first) with their last change. Never in detail.meta.
+	Lines    *[]liveLine     `json:"lines,omitempty"`
+	More     bool            `json:"more,omitempty"`
+	Topics   *[]kb.LiveTopic `json:"topics,omitempty"`
+	TopicsAt *time.Time      `json:"topics_at,omitempty"`
+	// The highlights (#3862 phase 2b), GET only: the room's highlights so far ([] before the first) with their last
+	// change. Never in detail.meta.
+	Highlights   *[]kb.LiveHighlight `json:"highlights,omitempty"`
+	HighlightsAt *time.Time          `json:"highlights_at,omitempty"`
+}
+
+// only is v cut to parts (GET …/live?parts=asks,room): those of them it has, with their revisions.
+func (v meetingLiveView) only(parts []string) map[string]any {
+	out := map[string]any{}
+	revs := map[string]int64{}
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		switch p {
+		case kb.PartAsks:
+			if v.Asks != nil {
+				out[p] = *v.Asks
+			}
+		case kb.PartRoom:
+			if v.Room != nil {
+				out[p] = v.Room
+			}
+		case kb.PartPrivate:
+			if v.Private != nil {
+				out[p] = *v.Private
+			}
+		case kb.PartFollowup:
+			if v.Followup != nil {
+				out[p] = v.Followup
+			}
+		case kb.PartPhotos:
+			// Only its revision: the photos are read with GET …/photos.
+		case kb.PartLines:
+			if v.Lines != nil { // only with ?from=
+				out[p] = *v.Lines
+				if v.More {
+					out["more"] = true
+				}
+			}
+		case kb.PartTopics:
+			if v.Topics != nil {
+				out[p] = *v.Topics
+			}
+			if v.TopicsAt != nil {
+				out["topics_at"] = v.TopicsAt
+			}
+		case kb.PartHighlights:
+			if v.Highlights != nil {
+				out[p] = *v.Highlights
+			}
+			if v.HighlightsAt != nil {
+				out["highlights_at"] = v.HighlightsAt
+			}
+		default:
+			continue
+		}
+		if rev, ok := v.Revs[p]; ok {
+			revs[p] = rev
+		}
+	}
+	out["revs"] = revs
+	return out
 }
 
 // attendeeView is the session an attended meeting is fed to; Main says it is the main chat.
@@ -259,7 +406,45 @@ func (s *Service) liveView(ctx context.Context, l kb.Live, rec kb.Recording, ask
 	if asks != nil {
 		out.Asks = &asks
 	}
-	if rec.Attendance == "" {
+	out.Revs = map[string]int64{kb.PartAsks: l.AsksRev, kb.PartLines: int64(len(l.Segments)), kb.PartTopics: l.TopicsRev,
+		kb.PartHighlights: l.HighlightsRev}
+	if m := rec.Conv; m != nil {
+		out.Private, out.Room, out.Followup = m.Private, m.RoomView(), m.FollowupView()
+		for _, p := range []string{kb.PartRoom, kb.PartPrivate, kb.PartFollowup} {
+			if rev, ok := m.Revs[p]; ok {
+				out.Revs[p] = rev
+			}
+		}
+	}
+	if asks == nil {
+		out.Revs = nil // POST …/live: GET reads them, the topics and the highlights
+	} else {
+		topics := l.Topics
+		if topics == nil {
+			topics = []kb.LiveTopic{}
+		}
+		out.Topics = &topics
+		if !l.TopicsAt.IsZero() {
+			at := l.TopicsAt
+			out.TopicsAt = &at
+		}
+		highlights := l.Highlights
+		if highlights == nil {
+			highlights = []kb.LiveHighlight{}
+		}
+		out.Highlights = &highlights
+		if !l.HighlightsAt.IsZero() {
+			at := l.HighlightsAt
+			out.HighlightsAt = &at
+		}
+	}
+	if rec.RoomMeeting() {
+		if l.Full { // the room's own problems are its room's
+			out.Problem = codeLiveFull
+		}
+		return out
+	}
+	if !rec.Attending() {
 		return out
 	}
 	if ref, main, ok := s.meetingAttendee(ctx, rec); ok {

@@ -6,10 +6,13 @@ import { CONTEXT_RE, FILE_RE, PERSONA_SERVERS, canonicalTool } from "./compatibi
 import { t } from "../i18n";
 import { errorSignature, isRetryText, parseAPIError, type APIErrorInfo } from "./api-errors";
 import { foldCompactions, isCompaction } from "./compaction";
+import { engineSwitchOf, type EngineSwitch } from "./engine-switch";
 import { injectedOf } from "./injected";
+import { markModelChanges, type ModelChange } from "./model-change";
 import { sourceKey, sourceOf, userSourceSentinel } from "./message-source";
-import { attachedAgentNotices } from "./task-association";
-import type { Injected, Item, MessageSource } from "./types";
+import { attachedAgentNotices, taskCalls } from "./task-association";
+import { addUsage, countUsage, itemUsage, markFirstUsage, type TurnUsage } from "./turn-usage";
+import type { Injected, Item, MessageSource, TokenUsage } from "./types";
 
 export type Step =
   | { kind: "tool"; id: string; use: Item; result?: Item; images: Item[] }
@@ -43,6 +46,11 @@ export interface UserMessage {
   continuedSource?: boolean;
   /** Original injected input blocks, before display parsing or shortening. */
   rawInput?: Item[];
+  /** A scheduled task's or follow-up's input while background rounds fold (docs/assistant/assistant.md "Background
+   *  rounds"): only its one line is shown, never the prompt (`injected.detail`, `rawInput`). */
+  promptHidden?: boolean;
+  /** Inside an opened background round: drawn as its source block, not as the raw model input supervision shows. */
+  sourceInTrace?: boolean;
 }
 
 /** A <persona-file kind="video" path="…" name="…" size="…" duration="…"/> in a message (docs/protocol/protocol.md "Sending video"). */
@@ -59,6 +67,8 @@ export interface Context {
   title?: string;
   url?: string;
   text: string;
+  /** Its other attributes as written (a forward's `msg` and metadata, a workspace's `machine`); absent when it has none. */
+  attrs?: Record<string, string>;
 }
 
 export interface Segment {
@@ -74,13 +84,33 @@ export interface Segment {
   folds: Item[];
   /** Part of a supervision round: its visibility tools stay outside the ordinary work fold. */
   supervision?: boolean;
+  /** Its reply came from another model than the previous visible reply (lib/model-change.ts): a divider before it. */
+  modelChange?: ModelChange;
+  /** Its message is the first the conversation's new engine got (#5054, lib/engine-switch.ts): the switch divider
+   *  before it, with the handoff its block carried (never a context chip). */
+  engineSwitch?: EngineSwitch;
+  /** The exchange ended in a model API error or an interruption after everything in it (turnLines, lineError): its last
+   *  words are not a finished reply, and say so (cindy's "This reply did not complete", #5314). */
+  cut?: boolean;
+  /** What its items used (#5426, lib/turn-usage.ts): every item counts, those it does not show too (a tool's result, a
+   *  Codex turn's duration, a stopped turn's notice); each subagent counts once in the chat, in the exchange that
+   *  launched it (chatLines' lineUsage). Absent when none of them carries tokens. */
+  usage?: TurnUsage;
 }
 
-function blockOrder(a: Item, b: Item) {
+function blockPart(id: string) {
+  return Number(id.split("#")[1] ?? 0);
+}
+
+function blockOrder(a: Pick<Item, "id" | "seq">, b: Pick<Item, "id" | "seq">) {
   if (a.seq !== b.seq) return a.seq - b.seq;
-  const ia = Number(a.id.split("#")[1] ?? 0);
-  const ib = Number(b.id.split("#")[1] ?? 0);
-  return ia - ib;
+  return blockPart(a.id) - blockPart(b.id);
+}
+
+/** Fold bounds are seq + numeric block, not seq alone: a final answer can share the fold's last line. */
+function insideFold(i: Item, f: Item) {
+  if (!f.fold || blockOrder(i, f) < 0 || i.seq > f.fold.through_seq) return false;
+  return i.seq < f.fold.through_seq || !f.fold.through_id || blockPart(i.id) <= blockPart(f.fold.through_id);
 }
 
 export function sortItems(items: Item[]): Item[] {
@@ -98,14 +128,15 @@ export function mergeItems(have: Item[], batch: Item[]): Item[] {
     byId.set(it.id, next);
   }
   const all = [...byId.values()];
-  const work = all.filter((i) => i.kind === "tool_use" || i.kind === "tool_result" || i.kind === "thinking");
+  const work = all.filter((i) => i.kind === "tool_use" || i.kind === "tool_result" || i.kind === "thinking" ||
+    (i.kind === "text" && i.role === "assistant")); // text inside a fold's range is its narration; outside it is the answer
   const promotedFolds = all.filter((i) => i.fold?.supervision_user);
-  const kept = all.filter((f) => f.kind !== "fold" || !f.fold || !work.some((i) => i.seq >= f.seq && i.seq <= f.fold!.through_seq));
+  const kept = all.filter((f) => f.kind !== "fold" || !f.fold || !work.some((i) => insideFold(i, f)));
   // An overlapping page may replace only part of a fold. Its authoritative promotion must survive that replacement,
   // even if the real visibility tool is on the part that has not arrived yet, or a later receipt says silent.
   if (!promotedFolds.length) return sortItems(kept);
   const realWork = new Set(work);
-  return sortItems(kept.map((i) => realWork.has(i) && promotedFolds.some((f) => i.seq >= f.seq && i.seq <= f.fold!.through_seq) ? { ...i, supervisionUser: true } : i));
+  return sortItems(kept.map((i) => realWork.has(i) && promotedFolds.some((f) => insideFold(i, f)) ? { ...i, supervisionUser: true } : i));
 }
 
 /** `have` without what a fold of this fresh page now stands for. Left in, a step kept from before the fold existed
@@ -113,15 +144,22 @@ export function mergeItems(have: Item[], batch: Item[]): Item[] {
 export function withoutFolded(have: Item[], page: Item[]): Item[] {
   const folds = page.filter((f) => f.fold);
   if (!folds.length) return have;
-  return have.filter((i) => !((i.kind === "thinking" || i.kind === "fold" || i.tool_use_id) && folds.some((f) => i.seq >= f.seq && i.seq <= f.fold!.through_seq)));
+  return have.filter((i) => !((i.kind === "thinking" || (i.kind === "text" && i.role === "assistant") || i.kind === "fold" || i.tool_use_id) && folds.some((f) => insideFold(i, f))));
 }
 
 // Only the canonical persona-context tag is recognized.
 
 const ATTR_RE = /(\w+)="([^"]*)"/g;
 
+const NAMED_ENTITIES: Record<string, string> = { quot: '"', apos: "'", lt: "<", gt: ">", amp: "&" };
+
+/** One pass, so an escaped entity stays itself; numeric ones too (Go's html.EscapeString writes `&#34;` and `&#39;`). */
 function unescapeAttr(s: string) {
-  return s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  return s.replace(/&(quot|apos|lt|gt|amp|#\d+|#[xX][0-9a-fA-F]+);/g, (m, e: string) => {
+    if (e[0] !== "#") return NAMED_ENTITIES[e];
+    const code = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1));
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+  });
 }
 
 /** A tag's `name="value"` attributes, unescaped. */
@@ -166,13 +204,27 @@ export function formatDuration(seconds: number): string {
   return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
 }
 
+// The node's <persona-view-errors> feedback after the assistant's snapshot (its last rich views failed their check):
+// for the model, never the user's words. A hub before #4315 gave it as a user item of its own, or before the message.
+const VIEW_ERRORS_RE = /<persona-view-errors\b[^>]*>[\s\S]*?<\/persona-view-errors>\s*/g;
+
+/** What a user line says without the view feedback the node put before it (#4315). */
+export function withoutViewErrors(raw: string): string {
+  return raw.includes("<persona-view-errors") ? raw.replace(VIEW_ERRORS_RE, "") : raw;
+}
+
+/** An older hub's user item holding nothing but that feedback: no message of the user's. */
+export function viewFeedbackOnly(it: Item): boolean {
+  return it.role === "user" && it.kind === "text" && !!it.text?.includes("<persona-view-errors") && !withoutViewErrors(it.text).trim();
+}
+
 export function parseUserText(raw: string): { text: string; contexts: Context[]; files: AttachedFile[]; photos: string[] } {
   const contexts: Context[] = [];
   const files: AttachedFile[] = [];
   const photos: string[] = [];
-  let text = raw.replace(CONTEXT_RE, (_, attrs: string, body: string) => {
-    const a = tagAttrs(attrs);
-    contexts.push({ kind: a.kind ?? "context", title: a.title, url: a.url, text: body.trim() });
+  let text = withoutViewErrors(raw).replace(CONTEXT_RE, (_, attrs: string, body: string) => {
+    const { kind, title, url, ...rest } = tagAttrs(attrs);
+    contexts.push({ kind: kind ?? "context", title, url, text: body.trim(), ...(Object.keys(rest).length ? { attrs: rest } : {}) });
     return "";
   });
   text = text.replace(FILE_RE, (_, attrs: string) => {
@@ -217,8 +269,9 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
   };
 
   for (const it of items) {
-    if (attached.has(it.id)) continue;
+    if (attached.has(it.id)) continue; // what its subagent used: chatLines counts it where it was launched
     const entry = it.id.split("#")[0];
+    if (viewFeedbackOnly(it)) continue;
     if (isUserMessage(it)) {
       if (cur?.user?.injected && entry === lastUserEntry && !cur.steps.length && !cur.answer && !cur.user.rawInput!.some((i) => i.id === it.id)) {
         cur.user.rawInput!.push(it);
@@ -246,7 +299,13 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
       else {
         const p = parseUserText(it.text ?? "");
         cur.user!.text = cur.user!.text ? `${cur.user!.text}\n${p.text}` : p.text;
-        cur.user!.contexts.push(...p.contexts.filter((c) => c.kind !== "message-source"));
+        for (const c of p.contexts) {
+          if (c.kind === "message-source") continue;
+          // a real switch is the divider, not a chip; a block that only looks like one (pasted, naming no engines) stays a chip
+          const sw = engineSwitchOf(c);
+          if (sw) cur.engineSwitch ??= sw;
+          else cur.user!.contexts.push(c);
+        }
         if (p.files.length) cur.user!.files = [...(cur.user!.files ?? []), ...p.files];
         if (p.photos.length) cur.user!.photos = [...new Set([...(cur.user!.photos ?? []), ...p.photos])];
       }
@@ -257,6 +316,7 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
       cur.start = it.ts;
     }
     if (it.ts) cur.end = it.ts;
+    countUsage(cur, it);
     switch (it.kind) {
       case "tool_use": {
         const st: Extract<Step, { kind: "tool" }> = { kind: "tool", id: it.id, use: it, result: it.tool_use_id ? results?.get(it.tool_use_id) : undefined, images: [] };
@@ -364,17 +424,122 @@ export function toolChip(use: Item): string {
     return "";
   };
   const name = use.tool_name ?? "";
+  const tool = name.startsWith("mcp__") && !isPersonaTool(name) ? "" : name;
+  const newer = ownEntry(CLAUDE_TOOL_CHIP, tool);
   let v = "";
-  if (name === "Bash" || name === "exec_command" || name === "shell") v = pick("description", "command", "cmd");
-  else if (/^(Read|Edit|Write|MultiEdit|NotebookEdit)$/.test(name)) v = shortFile(pick("file_path", "notebook_path"));
-  else if (name === "Grep" || name === "Glob") v = pick("pattern");
-  else if (name === "WebFetch") v = pick("url");
-  else if (name === "WebSearch") v = pick("query");
-  else if (name === "Task" || name === "Agent") v = pick("description", "prompt");
-  else if (name === "TodoWrite") v = t("lib-turns.update_todos");
-  else v = pick("description", "command", "file_path", "path", "query", "url", "prompt", "pattern", "name");
+  if (tool === "Bash" || tool === "exec_command" || tool === "shell" || tool === "PowerShell") v = pick("description", "command", "cmd");
+  else if (/^(Read|Edit|Write|MultiEdit|NotebookEdit)$/.test(tool)) v = shortFile(pick("file_path", "notebook_path"));
+  else if (tool === "Grep" || tool === "Glob") v = pick("pattern");
+  else if (tool === "WebFetch") v = pick("url");
+  else if (tool === "WebSearch") v = pick("query");
+  else if (tool === "Task" || tool === "Agent") v = pick("description", "prompt");
+  else if (tool === "TodoWrite") v = t("lib-turns.update_todos");
+  else if (newer) v = newer(inp, pick);
+  else v = pickSubject(inp);
   if (!v && Array.isArray(inp.command)) v = (inp.command as unknown[]).join(" ");
-  return v.split("\n")[0].slice(0, 200);
+  return v.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 200) ?? "";
+}
+
+/** The fields that say what an unknown tool's call is about, the most telling first (iOS ToolNaming.subjectKeys). */
+export const SUBJECT_KEYS = ["description", "title", "subject", "name", "file_path", "filePath", "notebook_path", "path", "url", "uri", "query", "pattern", "command", "prompt"];
+const PATH_KEYS = new Set(["file_path", "filePath", "notebook_path", "path"]);
+
+/** An unknown tool's subject: the first of SUBJECT_KEYS it has (a path by its file's name), else its first string by field name. */
+export function pickSubject(inp: Record<string, unknown>): string {
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  for (const k of SUBJECT_KEYS) if (str(inp[k])) return PATH_KEYS.has(k) ? baseFileName(str(inp[k])) : str(inp[k]);
+  for (const k of Object.keys(inp).sort()) if (str(inp[k])) return str(inp[k]);
+  return "";
+}
+
+const baseFileName = (p: string) => p.split(/[/\\]/).filter(Boolean).pop() ?? p;
+
+type PickToolField = (...keys: string[]) => string;
+/** What Claude Code's newer tools are about (iOS ToolPresentation.subject). */
+const CLAUDE_TOOL_CHIP: Record<string, (inp: Record<string, unknown>, pick: PickToolField) => string> = {
+  TaskCreate: (_, pick) => pick("subject", "description"),
+  TaskUpdate: (inp, pick) => pick("subject", "activeForm") || (inp.taskId != null ? `#${String(inp.taskId)}` : ""),
+  TaskGet: (inp) => (inp.taskId != null ? `#${String(inp.taskId)}` : ""),
+  TaskList: () => "",
+  ListAgents: () => "",
+  CronList: () => "",
+  ExitWorktree: () => "",
+  TaskStop: (_, pick) => pick("task_id", "shell_id"),
+  KillShell: (_, pick) => pick("shell_id", "task_id"),
+  KillBash: (_, pick) => pick("shell_id", "task_id"),
+  TaskOutput: (_, pick) => pick("task_id"),
+  BashOutput: (_, pick) => pick("bash_id", "task_id"),
+  SendMessage: (_, pick) => [pick("to", "recipient"), pick("summary") || pick("message", "content").split("\n")[0]].filter(Boolean).join(" · "),
+  Monitor: (inp, pick) => pick("description", "command") || String((inp.ws as Record<string, unknown> | undefined)?.url ?? ""),
+  ScheduleWakeup: (_, pick) => pick("reason"),
+  CronCreate: (_, pick) => [pick("cron"), pick("prompt").split("\n")[0]].filter(Boolean).join(" · "),
+  CronDelete: (_, pick) => pick("id"),
+  RemoteTrigger: (_, pick) => [humanizeTool(pick("action")), pick("trigger_id")].filter(Boolean).join(" · "),
+  LSP: (inp, pick) =>
+    inp.operation === "workspaceSymbol" && pick("query") ? pick("query") : [baseFileName(pick("filePath")), inp.line != null ? String(inp.line) : ""].filter(Boolean).join(":"),
+  EnterWorktree: (_, pick) => pick("name") || baseFileName(pick("path")),
+  SendUserFile: (inp, pick) => {
+    const list = [inp.files, inp.file_paths, inp.paths].find(Array.isArray) as unknown[] | undefined;
+    const paths = (list ?? []).map((f) => (typeof f === "string" ? f : String((f as Record<string, unknown>)?.path ?? (f as Record<string, unknown>)?.file_path ?? ""))).filter(Boolean);
+    if (pick("file_path", "path")) paths.push(pick("file_path", "path"));
+    return paths.length ? paths.map(baseFileName).join(", ") : pick("caption");
+  },
+  Artifact: (_, pick) => pick("title") || baseFileName(pick("file_path")) || pick("url"),
+  PushNotification: (_, pick) => pick("message"),
+  ReportFindings: (inp) => {
+    const findings = Array.isArray(inp.findings) ? (inp.findings as Record<string, unknown>[]) : [];
+    if (findings.length === 1) return String(findings[0]?.short_summary ?? findings[0]?.summary ?? "");
+    return findings.length ? t("lib-turns.findings", { count: findings.length }) : "";
+  },
+  ToolSearch: (_, pick) => (pick("query").startsWith("select:") ? pick("query").slice(7).split(",").join(", ") : pick("query")),
+  WaitForMcpServers: (inp, pick) => (Array.isArray(inp.servers) ? (inp.servers as unknown[]).map(String).join(", ") : pick("server")),
+  ListMcpResourcesTool: (_, pick) => pick("server"),
+  ReadMcpResourceTool: (_, pick) => pick("uri", "server"),
+  Skill: (_, pick) => pick("skill", "command"),
+};
+
+/** A table's entry for a key that comes from data (a tool's name, a word of it): its own entries only, so a tool or a
+ *  word called "constructor" or "toString" is not mistaken for one of Object's methods. */
+export function ownEntry<T>(table: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
+/** Words spelled their own way wherever they show up in a name (iOS ToolNaming.spelled). */
+// i18n-ignore-start: product names and acronyms, the same in every language
+const SPELLED: Record<string, string> = {
+  api: "API", ai: "AI", aws: "AWS", ci: "CI", cli: "CLI", csv: "CSV", devtools: "DevTools", dns: "DNS", gcp: "GCP", github: "GitHub",
+  gitlab: "GitLab", graphql: "GraphQL", html: "HTML", http: "HTTP", https: "HTTPS", id: "ID", ids: "IDs", ide: "IDE", ios: "iOS",
+  json: "JSON", llm: "LLM", lsp: "LSP", macos: "macOS", mcp: "MCP", oauth: "OAuth", openai: "OpenAI", pdf: "PDF", pr: "PR", prs: "PRs",
+  sdk: "SDK", sql: "SQL", ssh: "SSH", ui: "UI", uri: "URI", url: "URL", urls: "URLs", youtube: "YouTube",
+};
+// i18n-ignore-end
+const SPELLED_VALUES = new Set(Object.values(SPELLED));
+
+/** An identifier cut into words at _ - . / : and spaces, and where camel case turns ("getPRComments": get, PR, Comments). */
+export function nameWords(id: string): string[] {
+  return id
+    .split(/[_\-./: ]+/)
+    .flatMap((part) => part.split(/(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/))
+    .filter(Boolean);
+}
+
+/** An identifier in words, the first capitalized: "create_issue" is "Create issue", "getPRComments" "Get PR comments" (iOS ToolNaming.humanize). */
+export function humanizeTool(id: string): string {
+  const words = nameWords(id).map((w) => ownEntry(SPELLED, w.toLowerCase()) ?? (w.length > 1 && /^[A-Z0-9]+$/.test(w) ? w : w.toLowerCase()));
+  if (!words.length) return "";
+  const [first, ...rest] = words;
+  return [SPELLED_VALUES.has(first) ? first : first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(" ");
+}
+
+/** An MCP server's name as a name: "github" is "GitHub", "chrome-devtools" "Chrome DevTools"; a plugin's server and a
+ *  claude.ai connector read as their own name, once (iOS ToolNaming.serverName). */
+export function mcpServerName(server: string): string {
+  let s = server;
+  for (const prefix of ["plugin_", "claude_ai_"]) if (s.startsWith(prefix) && s.length > prefix.length) s = s.slice(prefix.length);
+  let words = nameWords(s);
+  const half = words.length / 2;
+  if (half >= 1 && Number.isInteger(half) && words.slice(0, half).join(" ").toLowerCase() === words.slice(half).join(" ").toLowerCase()) words = words.slice(0, half);
+  return words.map((w) => ownEntry(SPELLED, w.toLowerCase()) ?? w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
 export function shortFile(p: string) {
@@ -406,7 +571,8 @@ export const TOOL_LABEL: Record<string, string> = {
 
 export function toolLabel(name?: string): string {
   if (!name) return t("lib-turns.tool");
-  if (TOOL_LABEL[name]) return TOOL_LABEL[name];
+  const label = ownEntry(TOOL_LABEL, name);
+  if (label) return label;
   // mcp__<server>__<tool>, and the server may have underscores itself (mcp__plugin_x_y__tool), like the apps
   if (name.startsWith("mcp__")) return name.slice(name.lastIndexOf("__") + 2).replace(/_/g, " ");
   return name;
@@ -426,12 +592,20 @@ export function mcpServer(name?: string): string | null {
   return i > 0 ? rest.slice(0, i) : rest || null;
 }
 
-/** A tool's name for a sentence (a permission card): an MCP tool as "Persona · mail send", others as written. */
+/** A tool's name for a sentence (a permission card): Persona's own MCP tool as "Persona · mail send", another server's
+ *  in words ("GitHub · Create issue", #2986), others as written. */
 export function toolDisplayName(name?: string): string {
   const server = mcpServer(name);
   if (server === null) return name || toolLabel();
-  const tool = name!.slice(5 + server.length + 2).replace(/_/g, " ");
-  return tool ? `${mcpServerLabel(server)} · ${tool}` : mcpServerLabel(server);
+  const raw = name!.slice(5 + server.length + 2);
+  if (PERSONA_SERVERS.has(server.replace(/^plugin_/, ""))) return raw ? `Persona · ${raw.replace(/_/g, " ")}` : "Persona";
+  const tool = humanizeTool(raw);
+  return tool ? `${mcpServerName(server)} · ${tool}` : mcpServerName(server);
+}
+
+/** The tool a card asks about, for its title: the manager's name for its own tools when it gave one (tool_title). */
+export function cardToolName(ix: { tool_name?: string; tool_title?: string }): string {
+  return ix.tool_title || toolDisplayName(ix.tool_name);
 }
 
 /** The MCP server ids that are Persona itself (`persona` today, `persona` if it is ever renamed; plugin_ dropped). */
@@ -498,7 +672,7 @@ const PERSONA_VERB_KEY: Record<string, string> = {
 export function personaToolVerb(name?: string): { verb: string; what?: string } | null {
   if (!isPersonaTool(name)) return null;
   const base = name!.slice(name!.lastIndexOf("__") + 2);
-  const key = PERSONA_VERB_KEY[canonicalTool(base)];
+  const key = ownEntry(PERSONA_VERB_KEY, canonicalTool(base));
   if (key) return { verb: t(`lib-turns.${key}`) };
   const family = /^(phone|mail)_(.+)$/.exec(base);
   if (family) return { verb: t(family[1] === "phone" ? "lib-turns.persona_phone" : "lib-turns.persona_mail"), what: family[2].replace(/_/g, " ") };
@@ -581,7 +755,24 @@ export function supervisionVisible(ordered: Item[], results: ReadonlyMap<string,
   return false;
 }
 
-export function buildBlocks(items: Item[]): Block[] {
+/** Message sources whose rounds fold in the main conversation while `assistant.main_background_folded` is on
+ *  (docs/assistant/assistant.md "Background rounds"): another conversation's message, a scheduled task, a follow-up. */
+const BACKGROUND_SOURCES: ReadonlySet<string> = new Set(["conversation", "followup", "patrol"]);
+
+/** The input's source when it starts a background round. A `followup` is one only as a scheduled follow-up (the hub
+ *  titles those): Persona continuing the user's own work after a usage limit reset (`limit_continue`) or waking the chat
+ *  for what it said it waits on (`wake`) carries the same source, and folding it would hide the answer to the user. */
+export function backgroundSource(it: Item): MessageSource | undefined {
+  if (!isUserInput(it) || it.kind !== "text") return undefined;
+  const injected = injectedOf(it);
+  const source = sourceOf(it, injected);
+  if (!source || !BACKGROUND_SOURCES.has(source.kind)) return undefined;
+  if (source.kind === "followup" && (injected?.state === "limit_continue" || injected?.state === "wake" || !source.title?.trim())) return undefined;
+  return source;
+}
+
+/** `background`: background rounds are separate rounds like supervision ones (a queued real message never joins them). */
+export function buildBlocks(items: Item[], background = false): Block[] {
   const blocks: Block[] = [];
   let cur: Turn | null = null;
   // the last exchange as it was before closing, and where it sits: a background task that reports back after a recap
@@ -615,12 +806,13 @@ export function buildBlocks(items: Item[]): Block[] {
   };
 
   for (const [i, it] of items.entries()) {
+    if (viewFeedbackOnly(it)) continue;
     if (isUserInput(it)) {
       const entry = it.id.split("#")[0];
       const prev: Item | undefined = cur ? cur.ordered[cur.ordered.length - 1] : undefined;
       // Supervision is a separate round even when queued. A later real message must never join its fold.
       const sameMessage = prev && isUserInput(prev) && entry === lastUserEntry;
-      const supervision = injectedOf(it)?.state === "supervise";
+      const supervision = injectedOf(it)?.state === "supervise" || (background && !!backgroundSource(it));
       const supervising = supervisionRound;
       if (cur && (sameMessage || (it.queued && !supervision && !supervising))) {
         cur.users.push(it);
@@ -652,6 +844,13 @@ export function buildBlocks(items: Item[]): Block[] {
       blocks.push({ kind: "row", item: it });
       continue;
     }
+    if (it.kind === "notice" && it.model_refusal) {
+      // #2528: an upstream refusal (and the model Claude Code moved to) is a line of its own after the exchange, never
+      // folded into the work row where it would go unseen
+      if (!cur) cur = newTurn(it.id);
+      cur.trailing.push(it);
+      continue;
+    }
     if (it.kind === "notice") {
       const raw = last.raw;
       const closed = blocks[last.index];
@@ -668,7 +867,7 @@ export function buildBlocks(items: Item[]): Block[] {
         // e.g. a background command finishing after a recap: part of the (next) work, never its own line
         cur = newTurn(it.id);
         add(cur, it);
-      } else if (!it.task && (it.text ?? "").includes("中断")) { // i18n-ignore: the transcript's interrupt notice
+      } else if (isInterruptNotice(it)) {
         cur.trailing.push(it);
       } else {
         add(cur, it);
@@ -682,9 +881,15 @@ export function buildBlocks(items: Item[]): Block[] {
   return blocks;
 }
 
+/** The transcript's "Interrupted" notice: a line of its own after the exchange it stopped. */
+function isInterruptNotice(it: Item): boolean {
+  return it.kind === "notice" && !it.task && (it.text ?? "").includes("中断"); // i18n-ignore: the transcript's interrupt notice
+}
+
 export type ChatLine =
-  /** A quiet supervision round, including all its segments and notices, never the next real input. */
-  | { kind: "supervision"; id: string; lines: ChatLine[]; live: boolean }
+  /** A quiet supervision round, including all its segments and notices, never the next real input. `source`: a
+   *  background round's (another conversation, a scheduled task, a follow-up); absent for supervision. */
+  | { kind: "supervision"; id: string; lines: ChatLine[]; live: boolean; source?: MessageSource }
   /** A message (or none), one work row for what the agent did after it, the agent's last words. */
   | { kind: "segment"; id: string; seg: Segment; live: boolean; wakes?: Turn }
   /** A notice of its own line: a wake that opens new work, "Interrupted" after an exchange. */
@@ -699,6 +904,10 @@ export type ChatLine =
 export interface ChatLinesOptions {
   /** The agent is at work: the last exchange is the live one. */
   live?: boolean;
+  /** Fold background rounds (the main conversation while `assistant.main_background_folded` is on): rounds another
+   *  conversation, a scheduled task or a follow-up started fold like quiet supervision rounds, and a scheduled task's
+   *  prompt is not shown (docs/assistant/assistant.md "Background rounds"). */
+  background?: boolean;
 }
 
 function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>): ChatLine[] {
@@ -712,6 +921,13 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
     ordered = ordered.slice(1);
   }
   const segs = segments(ordered, results);
+  // what the background task that woke it used is the work it woke
+  if (ordered !== t.ordered && segs[0]) countUsage(segs[0], t.ordered[0]);
+  // stopped after everything it did (not an exchange that went on after it): its last words are not a finished reply
+  const end = segs.at(-1), at = t.ordered.at(-1)?.seq ?? 0;
+  if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && n.seq > at)) end.cut = true;
+  // what a stopped turn's notice carries (a Codex turn's total) is its last exchange's
+  if (end) for (const n of t.trailing) countUsage(end, n);
   segs.forEach((seg, k) => {
     if (k === 0 && !seg.user && wokeAt) seg.start = wokeAt;
     const last = k === segs.length - 1;
@@ -726,7 +942,8 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
 export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[] {
   const attached = attachedAgentNotices(items);
   const feed = items.filter((i) => !attached.has(i.id));
-  const blocks = buildBlocks(foldCompactions(feed));
+  const background = opts.background === true;
+  const blocks = buildBlocks(foldCompactions(feed), background);
   const source = feed.at(-1);
   // A wake can reopen a turn before a recap. Select the owner of the latest source item, not the last drawn block.
   const active = opts.live && source ? blocks.find((b) => b.kind === "turn" && (b.turn.ordered.some((i) => i.id === source.id) || b.turn.trailing.some((i) => i.id === source.id))) : undefined;
@@ -736,16 +953,19 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   const results = new Map(items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => [i.tool_use_id!, i]));
   // A recap or compaction can split one round into several blocks. Supervision lasts until the next actual input,
   // not merely until one Turn closes; orphan continuation segments and live prose still belong to that round.
-  let round: { lines: ChatLine[]; ordered: Item[]; live: boolean } | undefined;
+  let round: { lines: ChatLine[]; ordered: Item[]; live: boolean; source?: MessageSource } | undefined;
   const flush = () => {
     if (!round) return;
     if (supervisionVisible(round.ordered, results, round.live)) out.push(...round.lines);
-    else out.push({ kind: "supervision", id: round.lines[0].id, lines: round.lines, live: round.live });
+    else out.push({ kind: "supervision", id: round.lines[0].id, lines: round.lines, live: round.live, ...(round.source ? { source: round.source } : {}) });
     round = undefined;
   };
   const append = (lines: ChatLine[], ordered: Item[], live: boolean) => {
     if (!round) { out.push(...lines); return; }
-    for (const line of lines) if (line.kind === "segment") line.seg.supervision = true;
+    for (const line of lines) if (line.kind === "segment") {
+      line.seg.supervision = true;
+      if (round.source && line.seg.user) line.seg.user.sourceInTrace = true;
+    }
     round.lines.push(...lines);
     round.ordered.push(...ordered);
     round.live ||= live;
@@ -753,7 +973,9 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   for (const b of blocks) {
     if (b.kind === "turn" && b.turn.users.length) {
       flush();
+      const source = background && b.turn.users[0] ? backgroundSource(b.turn.users[0]) : undefined;
       if (b.turn.users.some((i) => injectedOf(i)?.state === "supervise")) round = { lines: [], ordered: [], live: false };
+      else if (source) round = { lines: [], ordered: [], live: false, source };
     }
     if (b.kind === "row") {
       append([isCompaction(b.item) ? { kind: "compact", id: b.item.id, item: b.item } : { kind: "recaps", id: b.item.id, items: [b.item] }], [b.item], false);
@@ -765,7 +987,9 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   // Working with nothing of this run yet (the last thing is a recap): retain the supervision round's visibility.
   if (opts.live && !liveId) append([{ kind: "segment", id: "live", seg: { id: "live", steps: [], tools: 0, thoughts: 0, replies: 0, folds: [] }, live: true }], [], true);
   flush();
-  const lines = foldRecaps(foldAPIErrors(out));
+  lineUsage(out, items);
+  const lines = markModelChanges(foldRecaps(foldAPIErrors(out)));
+  if (background) hideScheduledPrompts(lines);
   let previous: string | undefined;
   for (const line of lines) {
     if (line.kind === "supervision") {
@@ -779,6 +1003,59 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   return lines;
 }
 
+const KINDS = ["in", "out", "cache_read", "cache_write", "cache_write_1h"] as const;
+
+/** What the exchanges' subagents used, across the chat (lib/turn-usage.ts): each subagent (an entry's `id`, its model and
+ *  speed) once, at the largest count of each kind any of its reports gives (a later report includes the work it did
+ *  after being resumed), in the earliest exchange that launched an item carrying it (the item's call, its task's, or
+ *  the call taskCalls finds); with none of those on the page, where its first report is. Then only the chat's first
+ *  exchange that used tokens is its first round. */
+function lineUsage(lines: ChatLine[], items: Item[]) {
+  const segs = lines.flatMap((l) => (l.kind === "segment" ? [l.seg] : l.kind === "supervision" ? l.lines.flatMap((c) => (c.kind === "segment" ? [c.seg] : [])) : []));
+  if (items.some((it) => itemUsage(it, true).length)) {
+    // each item's exchange, and each call's: the first exchange that has it
+    const at = new Map<string, number>();
+    const own = (id: string | undefined, k: number) => id && !at.has(id) && at.set(id, k);
+    segs.forEach((s, k) => {
+      for (const i of s.user?.rawInput ?? []) own(i.id, k);
+      for (const st of s.steps) {
+        own(st.kind === "tool" ? st.use.id : st.item.id, k);
+        if (st.kind === "tool") {
+          own(`call:${st.use.tool_use_id}`, k);
+          own(st.result?.id, k);
+        }
+      }
+      own(s.answer?.id, k);
+    });
+    const calls = taskCalls(items);
+    const reports = new Map<string, { u: TokenUsage; k: number; launched?: boolean }>();
+    let here = 0; // the exchange the walk is in: an item none draws (a result, a notice on a card) lands in the one before
+    for (const it of items) {
+      here = at.get(it.id) ?? here;
+      const list = itemUsage(it, true);
+      if (!list.length) continue;
+      const launch = [it.tool_use_id, it.task?.tool_use_id, calls.get(it.id)].map((c) => at.get(`call:${c}`)).find((k) => k !== undefined);
+      for (const u of list) {
+        const key = `${u.id}\n${u.model ?? ""}\n${u.fast ? 1 : 0}`;
+        const r = reports.get(key) ?? reports.set(key, { u: { id: u.id, ...(u.model ? { model: u.model } : {}), ...(u.fast ? { fast: true } : {}) }, k: here }).get(key)!;
+        for (const kind of KINDS) if ((u[kind] ?? 0) > (r.u[kind] ?? 0)) r.u[kind] = u[kind];
+        if (launch !== undefined && (!r.launched || launch < r.k)) Object.assign(r, { k: launch, launched: true });
+      }
+    }
+    for (const { u, k } of reports.values()) if (segs[k]) addUsage(segs[k], [u]);
+  }
+  markFirstUsage(segs);
+}
+
+/** A scheduled task's or follow-up's input shows its one line, never its prompt, folded or not. */
+function hideScheduledPrompts(lines: ChatLine[]) {
+  for (const line of lines) {
+    if (line.kind === "supervision") hideScheduledPrompts(line.lines);
+    const user = line.kind === "segment" ? line.seg.user : undefined;
+    if (user && (user.source?.kind === "patrol" || user.source?.kind === "followup")) user.promptHidden = true;
+  }
+}
+
 /** The API error a line ends in: an answer, or a notice of its own line. `rest`: the line without it (null: nothing). */
 function lineError(l: ChatLine): { item: Item; info: APIErrorInfo; rest: ChatLine | null } | null {
   if (l.kind === "notice") {
@@ -788,7 +1065,9 @@ function lineError(l: ChatLine): { item: Item; info: APIErrorInfo; rest: ChatLin
   if (l.kind !== "segment" || !l.seg.answer) return null;
   const info = parseAPIError(l.seg.answer.text);
   if (!info) return null;
-  const seg = { ...l.seg, answer: undefined };
+  const seg: Segment = { ...l.seg, answer: undefined };
+  // the error came after everything else the exchange did: the words before it are cut short (Segment.cut)
+  if (!l.live && exchangeSteps(l.seg).at(-1)?.id === l.seg.answer.id) seg.cut = true;
   const empty = !seg.user && !seg.steps.length && !l.live;
   return { item: l.seg.answer, info, rest: empty ? null : { ...l, seg } };
 }

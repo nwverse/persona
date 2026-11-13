@@ -136,6 +136,12 @@ func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.
 	if closed {
 		return c, "task done"
 	}
+	if !ownCard && s.followUpsHeld(e.MachineID, e.SessionID) {
+		return c, "held: the owner said this task is not what they asked" // until its supervisor looks (decision.go)
+	}
+	if !ownCard && s.parkedSession(e.MachineID, e.SessionID) {
+		return c, "held: its task is parked" // a turn of its agent would end the parking (parked.go)
+	}
 	switch {
 	case !ok:
 		return c, "gone"
@@ -436,7 +442,7 @@ func (s *Service) backfillWork(ctx context.Context, v *workView, now time.Time) 
 		if !d.Reachable {
 			continue
 		}
-		for _, c := range v.sessions(d.ID) {
+		for _, c := range v.listedSessions(d.ID) { // an archive row is offline: never unread
 			if n >= 3 {
 				return
 			}
@@ -461,7 +467,7 @@ func (s *Service) backfillWork(ctx context.Context, v *workView, now time.Time) 
 func (s *Service) sampleWork(v *workView) {
 	counts := map[string]any{}
 	for _, d := range v.machines() {
-		for _, c := range v.sessions(d.ID) {
+		for _, c := range v.listedSessions(d.ID) { // an archive row is offline: never counted
 			if c.Assistant || c.State == proto.StateOffline {
 				continue
 			}

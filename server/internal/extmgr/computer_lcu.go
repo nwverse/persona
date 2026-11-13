@@ -1,6 +1,7 @@
 package extmgr
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"strings"
@@ -31,6 +32,11 @@ func (h *Manager) answerComputerElicit(ctx context.Context, m *Machine, params j
 	if err := json.Unmarshal(params, &p); err != nil {
 		return map[string]any{"action": "cancel"}, nil
 	}
+	if name, id, ok := lcuconfirm.NativeApp(p.Params); ok && protectedApp(approvedApp{BundleID: id, Name: name}) {
+		// Never System Settings or a permission prompt (#4336): refused, with no card to allow it on.
+		h.logf("[%s] computer elicitation refused: protected app %s", m.cfg.ID, cmp.Or(id, name))
+		return lcuconfirm.Decline(), nil
+	}
 	l := h.userLang()
 	original := lcuconfirm.Card(p.Params)
 	ix, choices := computerElicitPresentation(l, p.Params, original)
@@ -44,7 +50,7 @@ func (h *Manager) answerComputerElicit(ctx context.Context, m *Machine, params j
 		ix.MachineID, ix.SessionID = home, p.Conversation
 	}
 	if ix.Summary != "" {
-		ix.Summary = i18n.T(l, "hub-computer.lcu_machine", i18n.Args{"machine": m.cfg.Name, "summary": ix.Summary})
+		ix.Summary = i18n.T(l, "hub-computer.lcu_machine", i18n.Args{"machine": m.name(), "summary": ix.Summary})
 	}
 	if ix.Kind == proto.IxQuestion && len(ix.Questions) > 0 {
 		ix.Questions[0].Question = ix.Summary
@@ -180,18 +186,8 @@ func (h *Manager) sessionHome(id string) string {
 		return ""
 	}
 	for _, m := range h.machinesNow() {
-		m.mu.Lock()
-		found := false
-		for _, s := range m.sessions {
-			if s.SessionID == id {
-				found = true
-				break
-			}
-		}
-		mid := m.cfg.ID
-		m.mu.Unlock()
-		if found {
-			return mid
+		if h.findSession(m, func(s *proto.Session) bool { return s.SessionID == id }) {
+			return m.cfg.ID
 		}
 	}
 	return ""

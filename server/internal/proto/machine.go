@@ -68,6 +68,8 @@ type Machine struct {
 	Computer *Computer `json:"computer,omitempty"`
 	// Browser: its ego lite, while the plugin ego is on and it is a Mac (Browser).
 	Browser *Browser `json:"browser,omitempty"`
+	// IPhone: the iPhones paired with it the assistant may operate, while the extension iphone is on (Mac and Linux).
+	IPhone *IPhone `json:"iphone,omitempty"`
 	// Clipboard: sharing its clipboard with the phone (#3064, docs/operations/clipboard.md). Always set by a manager that
 	// knows the feature; nil from an older one.
 	Clipboard *MachineClipboard `json:"clipboard,omitempty"`

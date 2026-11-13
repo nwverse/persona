@@ -1,6 +1,6 @@
 // What the sidebar's files share: the row and menu types, a row's key, the section heading and count, the badge and
 // dot colors, the pages hook and navigation. It imports none of them (Sidebar, SidebarRows, SidebarTree, SidebarRail).
-import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { t } from "../i18n";
 import { resolveTab } from "../lib/herdr-tree";
 import { useInboxBadge } from "../lib/inbox";
@@ -11,7 +11,7 @@ import { arrangePages, useSidebarPrefs } from "../lib/sidebar-pages";
 import { useExtensionSlot } from "../lib/extension-slots";
 import { toneOf } from "../lib/extension-ui";
 import { BADGE_TONE, navIcon, pageRoute } from "./extensions/ExtensionSlots";
-import { href, navigate, type Route } from "../lib/router";
+import { href, inWorkView, navigate, type Route } from "../lib/router";
 import { useAgentSessions } from "../lib/sessions";
 import { scoped, useScope, useScopedCounts, useScopedTodos } from "../lib/current-assistant";
 import { triageTodos } from "../lib/todo-triage";
@@ -22,6 +22,8 @@ import { connPhase } from "../lib/connection";
 import { useWorkspaceBoardSetting } from "../lib/workspace-board-setting";
 import type { Session } from "../lib/types";
 import { Collapse, cx, sidebarFoldMotion, type MenuItem } from "../ui/atoms";
+import { AGENTS_FOLD, onFoldAll, setAgentsFolded } from "../lib/sidebar-api";
+import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { Icon, type IconName } from "../ui/icons";
 import type { MenuNode } from "../lib/node-actions";
 import { contextMenuProps } from "../ui/context-menu";
@@ -39,7 +41,7 @@ export function useActiveKey(route: Route): string {
   const tabPath = route.name === "tab" ? href(route) : "";
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `route` is parsed anew each render; its path says it all
   const tabPane = useMemo(() => (route.name === "tab" ? resolveTab(all, route) : undefined), [all, tabPath]);
-  return route.name === "tab" ? (tabPane ? rowKey(tabPane) : "") : sidebarActiveKey(route, assistant?.main);
+  return inWorkView(route) ? "terminal" : route.name === "tab" ? (tabPane ? rowKey(tabPane) : "") : sidebarActiveKey(route, assistant?.main);
 }
 
 // One function for the component's life, so the rows given it skip a re-render (memo); a click still calls the
@@ -72,8 +74,6 @@ export function useNavPages() {
   const scope = useScope();
   const online = useStore((s) => scoped(s.machines, scope).filter((m) => m.online).length);
   const total = useStore((s) => scoped(s.machines, scope).length);
-  // "Terminal" (docs/integrations/terminal.md "Standalone terminal") is there where the hub can list panes
-  const terminalPanes = useStore((s) => s.features.includes("terminal_panes"));
   const assistant = useStore((s) => s.assistant);
   const todos = useScopedTodos();
   const todosSupported = useStore((s) => s.todosSupported);
@@ -103,7 +103,7 @@ export function useNavPages() {
     routines: { k: "routines", to: { name: "routines" }, icon: "clock", label: t("sidebar.nav_routines"), short: t("sidebar.nav_routines_short") },
     kb: { k: "kb", to: { name: "kb" }, icon: "book", label: t("sidebar.nav_kb"), short: t("sidebar.nav_kb_short") },
     machines: { k: "machines", to: { name: "machines" }, icon: "machine", label: t("sidebar.nav_machines"), short: t("sidebar.nav_machines_short"), hint: total ? `${online}/${total}` : undefined },
-    terminal: terminalPanes && { k: "terminal", to: { name: "terminal" }, icon: "terminal", label: t("sidebar.nav_terminal") },
+    terminal: { k: "terminal", to: { name: "terminal" }, icon: "terminal", label: t("work-entry.title"), short: t("work-entry.short") },
     settings: { k: "settings", to: { name: "settings" }, icon: "gear", label: t("sidebar.nav_settings") },
   };
   const all = NAV_PAGES.flatMap((k): NavPage[] => [
@@ -136,22 +136,71 @@ export function morePagesMenu(more: NavPage[], activeKey: string, onNavigate?: (
   ];
 }
 
+const GroupHeadingOffset = createContext({ offset: 0, depth: 0 });
+
+/** Real headings stay interactive while pinned; each nested group reserves its parent's measured height. */
+export function SidebarGroup({ heading, children, className }: { heading: React.ReactNode; children: React.ReactNode; className?: string }) {
+  const { offset: above, depth } = useContext(GroupHeadingOffset);
+  const ref = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const scroller = el.closest<HTMLElement>("[data-sidebar-rows]");
+    const controls = el.querySelector("[data-sidebar-agents-controls]");
+    const measure = () => {
+      const height = el.getBoundingClientRect().height;
+      setHeight(height);
+      if (controls) scroller?.style.setProperty("--sidebar-controls-height", `${height}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => { observer.disconnect(); if (controls) scroller?.style.removeProperty("--sidebar-controls-height"); };
+  }, []);
+  return <div className={className} data-sidebar-group>
+    <div ref={ref} data-sidebar-group-heading className="sidebar-group-heading" style={{ top: `calc(var(--sidebar-sticky-top, 0px) + ${above}px)`, zIndex: 24 - depth }}>{heading}</div>
+    <GroupHeadingOffset.Provider value={{ offset: above + height, depth: depth + 1 }}>{children}</GroupHeadingOffset.Provider>
+  </div>;
+}
+
+/** One action reflects the visible groups, including manual folds and keyboard/menu actions. */
+export function GroupFoldButton({ groups, onAction }: { groups: React.RefObject<HTMLElement | null>; onAction: () => void }) {
+  const [collapse, setCollapse] = useState(true);
+  useEffect(() => {
+    const root = groups.current;
+    if (!root) return;
+    const read = () => setCollapse([...root.querySelectorAll<HTMLButtonElement>("[data-sidebar-group-heading] button[aria-expanded]")]
+      .some((button) => !button.closest("[data-sidebar-agents-controls], [inert]") && button.getAttribute("aria-expanded") === "true"));
+    read();
+    const observer = new MutationObserver(read);
+    observer.observe(root, { attributes: true, attributeFilter: ["aria-expanded", "inert"], childList: true, subtree: true });
+    const off = onFoldAll((folded) => setCollapse(!folded), AGENTS_FOLD);
+    return () => { observer.disconnect(); off(); };
+  }, [groups]);
+  const label = t(collapse ? "sidebar.fold_all" : "sidebar.open_all");
+  return <button type="button" title={label} aria-label={label} onClick={() => { setAgentsFolded(collapse); onAction(); }} className={SESSION_LIST_STYLE.foldButton}>
+    <Icon name="foldToggle" size={12} stroke={2}  />
+  </button>;
+}
+
 export function Section({ title, children, folded, onToggle, right, onMenu, first, hint }: { title: React.ReactNode; children: React.ReactNode; folded: boolean; onToggle: () => void; right?: React.ReactNode; onMenu?: (at: MenuAt, el: HTMLElement) => void; first?: boolean; hint?: string }) {
   return (
-    <div className={first ? "mt-1" : "mt-3"}>
+    <SidebarGroup className={first ? "mt-1" : "mt-3"} heading={
       <div className="group/sec relative flex items-center gap-1 px-2 pb-1" {...(onMenu ? contextMenuProps(onMenu) : {})}>
         <button type="button" aria-expanded={!folded} onClick={onToggle} title={hint} className="touch-hit relative z-10 flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap text-left text-[11px] font-semibold text-ink-3 hover:text-ink-2">
           <span className="min-w-0 truncate">{title}</span>
-          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-0 transition-[opacity,transform] group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
+          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
         {right}
       </div>
+    }>
       {/* a group whose name does not say why its agents are here ("Not on a to-do", "Opened in the terminal") says it in one line, folded too */}
       {hint && <p className="px-2 pb-1 text-[11px] leading-[1.45] text-ink-3">{hint}</p>}
-      <Collapse open={!folded} sidebarFold>
+      <Collapse open={!folded} sidebarFold unclipped>
         <div className="flex flex-col gap-px" inert={folded || undefined}>{children}</div>
       </Collapse>
-    </div>
+    </SidebarGroup>
   );
 }
 

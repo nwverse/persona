@@ -46,6 +46,7 @@ GENERATED = {
     "apple/Persona.xcodeproj",
     "android/app/build/outputs/apk/debug/app-debug.apk",
     "web/dist",
+    "web/public/pake/THIRD_PARTY_NOTICES.txt",  # written by web/scripts/build-pake.mjs (THIRD_PARTY_NOTICES.md)
     "apple/Persona.xcodeproj",  # the kept compatibility symlink to the generated Persona.xcodeproj
 }
 
@@ -61,6 +62,12 @@ GENERATED_SCREENSHOTS = {
         "android/feature/settings/src/test/kotlin/persona/feature/settings/TranslationSettingsShotsTest.kt",
     "android/feature/inbox/build/translation-shots":
         "android/feature/inbox/src/test/kotlin/persona/feature/inbox/InboxTranslationShotsTest.kt",
+    "android/feature/settings/build/settings-groups-shots":
+        "android/feature/settings/src/test/kotlin/persona/feature/settings/SettingsGroupsShotsTest.kt",
+    "android/feature/settings/build/model-configuration-shots":
+        "android/feature/settings/src/test/kotlin/persona/feature/settings/ModelConfigurationScreenTest.kt",
+    "android/feature/settings/build/settings-reorganized-shots":
+        "android/feature/settings/src/test/kotlin/persona/feature/settings/ReorganizedSettingsPagesTest.kt",
 }
 
 # Quoted on purpose though not at the repository root: paths in another project or in the mock hub's fake file tree.

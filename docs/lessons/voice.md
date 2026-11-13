@@ -494,3 +494,36 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
 
 - **Opaque CONNECT tunnels** (#2745): the egress proxy can replay a bounded, complete ClientHello while no server byte has arrived; TCP success alone is insufficient. Preserve record/TCP fragments and stop before early application data. Observe both directions so server-first protocols are not delayed, and resume ordinary relay when the client sniff window expires.
   After HTTP Hijack, detach already-buffered bytes from the returned reader before applying probe deadlines: that reader still uses `net/http`'s connection reader, which cancels the request on a read timeout even after hijacking. Probe the raw connection and preserve the detached bytes instead; otherwise a banner or an idle client closes the entire tunnel. Real CONNECT banner tests catch this even when direct connection-helper tests pass.
+
+## The realtime dialect against a Realtime endpoint (#4011, 2026-11-10)
+
+Measured against a gateway's `/v1/realtime` (`gpt-realtime-1.5`, the GA Realtime wire):
+
+- `session.update` needs `session.type: "realtime"`. Formats go under `audio.input.format` / `audio.output.format`, and the
+  voice only under `audio.output.voice`: `session.audio.format` and `session.voice` are refused as unknown parameters.
+  A refused `session.update` leaves the session on its defaults (no instructions, no tools, `transcription: null`), so
+  the model still talks but the user's lines never come and nothing is handed over. Input transcription has to be asked
+  for (`audio.input.transcription.model`).
+- A response's id is in `response.id` of `response.created` / `response.done`; `response_id` is only on the events
+  inside it.
+- A function call shows up twice, as `response.output_item.done` and as `response.function_call_arguments.done`: take
+  one.
+- `response.create` while a response is in progress (the server VAD starts one on its own) is refused with
+  `conversation_already_has_active_response`: hold it until `response.done`.
+- With server VAD, `input_audio_buffer.speech_started` cancels the response under way (`response.done` status
+  `cancelled`, reason `turn_detected`). The service streams audio faster than it plays, so the app still has some
+  buffered when the user cuts in: clear it then.
+- A gateway that falls back from a Codex `/v1/live` session onto the Realtime wire and forwards the `codex` dialect's
+  `session.update` as it is gets `Missing required parameter: 'session.type'` (and then `Unknown parameter:
+  'session.delegation'`). Point such an upstream at the gateway's `/v1/realtime` with the `realtime` dialect instead.
+
+## The app's player needs a jitter buffer (#4430, 2026-11-11)
+
+- The extension relays the upstream's audio deltas as they come, and the app used to schedule each one the moment it
+  arrived. A delta that reached the player after the one before it had finished left a gap, so the voice played a
+  couple of characters, stopped, and went on. The deltas are late more often than the upstream's speed suggests: they
+  cross the internet and the hub's extension tunnel, and iOS hands every frame to the main actor before reading the
+  next, so a busy main thread holds the audio back as well.
+- iOS holds the voice while nothing is playing until 200 ms has gathered, or the first piece has waited 300 ms, then
+  plays it all at once (`VoicePlayout`); a player that runs dry mid-reply gathers again. A service that sends faster
+  than it plays fills the lead almost at once, so this adds next to no latency there.

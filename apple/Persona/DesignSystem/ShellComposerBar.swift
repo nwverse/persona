@@ -32,11 +32,14 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// The main conversation cannot answer yet: send says what to do first and goes there, the draft stays.
     var gate: SendGate? = nil
     /// The iPhone's 「+」 opens the composer's panel (`AttachSheet`, Telegram's attachment menu) from where the button is,
-    /// in the window; nil: the menu of `attach`.
+    /// in the window, and touched and held, the menu of `attach` (#3225); nil: a tap opens the menu of `attach`.
     var openAttach: ((CGRect) -> Void)? = nil
     /// Glow While Replying (`ComposerGlow`): the band around the bar while the assistant's reply is being written. Drawn
     /// inside the bar's animations so it follows the surface when the line grows into the card.
     var glows = false
+    /// What tells dictation the language spoken besides the draft (`DictationLanguage`): the owner's recent messages in
+    /// this chat, read only when the mic starts.
+    var dictationHints: () -> [String] = { [] }
     var send: () -> Void
     @ViewBuilder var attach: () -> Attach
     @ViewBuilder var modes: () -> Modes
@@ -73,7 +76,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
 
     private var maximumLines: Int {
         #if os(iOS)
-        ComposerGrowth.maximumLines(viewportHeight: viewportHeight, lineHeight: lineHeight)
+        ComposerGrowth.maximumLines
         #else
         Theme.Shell.composerMaximumLines // Other platforms retain their existing composer height.
         #endif
@@ -153,7 +156,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                     // Grown taller, the field must not stay scrolled down a line (#909, TextViewScroll).
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { _ in
                         #if os(iOS)
-                        if focused.wrappedValue, !enlarged { TextViewScroll.settleFocused(revealCaret: true) }
+                        if focused.wrappedValue, !enlarged { TextViewScroll.settleFocused() }
                         #else
                         if focused.wrappedValue { TextViewScroll.settleFocused() }
                         #endif
@@ -256,11 +259,20 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         .animation(Theme.Motion.composerAccessory, value: quotes?.wrappedValue.isEmpty == false)
         // A line more or less in the draft: the box follows at once, briefly eased (Telegram's 0.1 s).
         .animation(reduceMotion ? nil : Theme.Motion.composerGrow, value: text)
-        .background {
-            ComposerViewportReader { viewportHeight = $0 }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+        .onChange(of: text) {
+            // Only a changed draft requests post-layout caret following; UIKit handles a moved cursor itself.
+            if focused.wrappedValue, !enlarged { TextViewScroll.settleFocused(revealCaret: true) }
         }
+        #if DEBUG
+        .background {
+            if ScreenProbe.enabled {
+                ComposerViewportReader { viewportHeight = $0 }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .background { if ScreenProbe.enabled { ComposerLinesProbe(maximumLines: maximumLines, viewport: viewportHeight, line: lineHeight) } }
+        #endif
         .animation(Theme.Motion.state, value: offersEnlarge)
         .onChange(of: focused.wrappedValue) { _, wants in
             // The box asked for while the page is up: the page takes it, the hidden box under the sheet does not.
@@ -279,7 +291,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                 .presentationSizing(.page) // the iPad's too: a page's height, not the small form
         }
         #endif
-        .onDisappear { if dictation.isListening { dictation.stop() } }
+        .onDisappear { dictation.stop() } // a start still asking for permission too (#3407)
     }
 
     #if os(iOS)
@@ -324,7 +336,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             // An unfocused field's selection is stale (a restored draft's, PathInsert.edit): the page starts at the end.
             selection = TextSelection(insertionPoint: text.endIndex)
         }
-        if dictation.isListening { dictation.stop() }
+        dictation.stop()
         enlarged = true
     }
 
@@ -362,7 +374,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     @ViewBuilder private var plus: some View {
         #if os(iOS)
         if let openAttach {
-            Button { openAttach(plusFrame) } label: { plusFace }
+            // A tap opens the panel; touch and hold opens the menu (Safari's tabs button, Mail's compose button).
+            Menu { attach() } label: { plusFace } primaryAction: { openAttach(plusFrame) }
+                .menuStyle(.button)
                 .buttonStyle(.plain)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { plusFrame = $0 }
                 .accessibilityLabel("Add photo or file")
@@ -460,9 +474,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// be held down (`ComposerHoldMic`).
     @ViewBuilder private var mic: some View {
         #if os(iOS)
-        ComposerHoldMic(dictation: dictation, text: $text, hold: hold, id: "shell-composer-mic")
+        ComposerHoldMic(dictation: dictation, text: $text, hold: hold, id: "shell-composer-mic", hints: dictationHints)
         #else
-        ComposerMicButton(dictation: dictation, text: $text, id: "shell-composer-mic")
+        ComposerMicButton(dictation: dictation, text: $text, id: "shell-composer-mic", hints: dictationHints)
         #endif
     }
 
@@ -489,8 +503,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         send()
     }
 
+    /// Ends dictation, and a start still asking for permission with it, so nothing writes into the emptied box (#3407).
     private func endDictation(then action: () -> Void) {
-        if dictation.isListening { dictation.stop() }
+        dictation.stop()
         action()
     }
 }
@@ -540,10 +555,48 @@ private struct ComposerPageEditor: View {
     @State private var cursor: TextSelection?
     /// The caller's cursor as the page took it: moved since, someone else put it somewhere.
     @State private var taken: TextSelection?
+    @Environment(\.buiTheme) private var theme
+
+    private var ink: Color { ComposerInk.icon(theme) }
+
+    private var controls: some View {
+        HStack(spacing: Theme.Space.xs) {
+            Spacer(minLength: Theme.Space.s)
+            if focused {
+                Button(action: dismissPageKeyboard) {
+                    ThemedIcon(Theme.Icon.dismissKeyboard)
+                        .font(Theme.Font.secondary)
+                        .foregroundStyle(ink)
+                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Hide Keyboard")
+                .accessibilityIdentifier("composer-page-dismiss-keyboard")
+            }
+            Button {
+                commitTyped()
+                collapse()
+            } label: {
+                ThemedIcon(Theme.Icon.collapseMessage)
+                    .font(Theme.Font.secondary)
+                    .foregroundStyle(ink)
+                    .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Collapse the message box")
+            .accessibilityIdentifier("composer-page-collapse")
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, Theme.Space.l)
+        .padding(.top, Theme.Space.s)
+    }
 
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
+                controls
                 if let quotes, !quotes.wrappedValue.isEmpty {
                     QuoteBar(refs: quotes)
                         .padding(.horizontal, Theme.Space.l)
@@ -586,26 +639,7 @@ private struct ComposerPageEditor: View {
             .frame(maxWidth: ChatView.readableWidth) // an iPad's page: the conversation's measure, not the window's
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .themedPage()
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    if focused {
-                        Button(action: dismissPageKeyboard) {
-                            ThemedIcon(Theme.Icon.dismissKeyboard)
-                        }
-                        .accessibilityLabel("Hide Keyboard")
-                        .accessibilityIdentifier("composer-page-dismiss-keyboard")
-                    }
-                    Button {
-                        commitTyped()
-                        collapse()
-                    } label: {
-                        ThemedIcon(Theme.Icon.collapseMessage)
-                    }
-                    .accessibilityLabel("Collapse the message box")
-                    .accessibilityIdentifier("composer-page-collapse")
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
         }
         .onAppear {
             cursor = selection ?? TextSelection(insertionPoint: text.endIndex)
@@ -649,3 +683,79 @@ private struct ComposerPageEditor: View {
     }
 }
 #endif
+
+#if DEBUG && os(iOS)
+/// `probe.composer-lines` (`-probes YES`): whether the focused text view cuts a line at its top or its foot, for a test
+/// that the composer shows whole lines while typing (#3703). Read from the text's line fragments (TextKit 2 only:
+/// asking a TextKit 2 view for its layout manager would turn it into a TextKit 1 one).
+private struct ComposerLinesProbe: View {
+    var maximumLines: Int
+    var viewport: CGFloat
+    var line: CGFloat
+    @State private var lines = ComposerLines()
+
+    var body: some View {
+        Color.clear
+            .scaledFrame(width: Theme.Size.nonvisualProbe, height: Theme.Size.nonvisualProbe)
+            .task {
+                while !Task.isCancelled {
+                    if let view = FirstResponder.current as? UITextView, let read = ComposerLines(view) { lines = read }
+                    try? await Task.sleep(for: .milliseconds(300))
+                }
+            }
+            .screenProbe("composer-lines", lines.sized(maximumLines: maximumLines, viewport: viewport, line: line))
+    }
+}
+
+struct ComposerLines: Encodable, Equatable {
+    /// Lines of text, and whether one is cut by the text view's top or foot edge (part of it shows, part does not).
+    var count = 0
+    var cutTop = false
+    var cutFoot = false
+    var visible = 0.0
+    var offset = 0.0
+    /// What the box was sized by: its line limit, the height it measured above the keyboard, a line's height.
+    var maximumLines = 0
+    var viewport = 0.0
+    var line = 0.0
+
+    init() {}
+
+    func sized(maximumLines: Int, viewport: CGFloat, line: CGFloat) -> ComposerLines {
+        var sized = self
+        sized.maximumLines = maximumLines
+        sized.viewport = viewport.rounded()
+        sized.line = line.rounded()
+        return sized
+    }
+
+    @MainActor init?(_ view: UITextView) {
+        guard let layout = view.textLayoutManager, let range = layout.textContentManager?.documentRange else { return nil }
+        layout.ensureLayout(for: range)
+        var lines: [CGRect] = []
+        layout.enumerateTextLayoutFragments(from: range.location, options: [.ensuresLayout]) { fragment in
+            let origin = fragment.layoutFragmentFrame.origin
+            for line in fragment.textLineFragments {
+                lines.append(line.typographicBounds.offsetBy(dx: origin.x, dy: origin.y))
+            }
+            return true
+        }
+        // What the view's bounds show (it clips to them), in the text container's coordinates.
+        let container = view.textContainerInset
+        let top = view.contentOffset.y - container.top
+        let foot = view.contentOffset.y + view.bounds.height - container.top
+        count = lines.count
+        // Cut: more than a quarter of the line on each side of the edge. A sliver of a line's leading past the edge (a
+        // scroll to the caret leaves a few points) shows no glyph.
+        func cut(_ line: CGRect, at edge: CGFloat) -> Bool {
+            let quarter = line.height / 4
+            return edge - line.minY > quarter && line.maxY - edge > quarter
+        }
+        cutTop = lines.contains { cut($0, at: top) }
+        cutFoot = lines.contains { cut($0, at: foot) }
+        visible = (foot - top).rounded()
+        offset = top.rounded()
+    }
+}
+#endif
+

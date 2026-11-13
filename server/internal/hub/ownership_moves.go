@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // ---- moving a machine or a source to another manager ----
@@ -121,6 +124,12 @@ func (h *Hub) moveMachineMoving(ctx context.Context, mid, to string) (from strin
 	if from == to {
 		return from, nil
 	}
+	if err := h.carryEngine(ctx, mid, from, to); err != nil {
+		return from, err
+	}
+	if err := h.retireShareMachine(ctx, mid); err != nil {
+		return from, err
+	}
 	if h.keptBy(mid) != "" && h.cfgEntry(mid) == nil { // its manager keeps it (machines_kept.go)
 		if err := h.moveKept(ctx, mid, from, to); err != nil {
 			return from, err
@@ -165,6 +174,32 @@ func (h *Hub) moveMachineMoving(ctx context.Context, mid, to string) (from strin
 		go h.settleOwnList(to)
 	}
 	return from, nil
+}
+
+// carryEngine puts machine mid's engine choice, as from keeps it, in to before the move (#3611): each manager keeps its
+// machines' choices in its own settings, and a machine its new manager has none for would go back to herdr. A from that
+// can't say (offline, removed, older) leaves to as it is, logged: a move away from a broken manager still goes; so does
+// a to too old to keep one. A choice to fails to take stops the move, so a change of owner never changes the engine.
+func (h *Hub) carryEngine(ctx context.Context, mid, from, to string) error {
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var got devicewire.MachineEngine
+	if err := h.callBus(cctx, from, devicewire.MethodEngineGet, devicewire.MachineRef{MachineID: mid}, &got); err != nil {
+		h.logf("managers: [%s] engine choice not carried from %s: %v", mid, from, err)
+		return nil
+	}
+	if got.Choice == nil {
+		return nil
+	}
+	err := h.callBus(cctx, to, devicewire.MethodEnginePut, devicewire.MachineEngine{MachineID: mid, Choice: got.Choice}, nil)
+	if re := (*rpc.Error)(nil); errors.As(err, &re) && re.Code == bus.CodeUnknownMethod {
+		h.logf("managers: [%s] %s is too old to keep its engine choice: moved without it", mid, to)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%s could not take machine %s's engine choice: %w", to, mid, err)
+	}
+	return nil
 }
 
 // readOwnersMoving reads the owners if the hub could not when it started, and hands the machines another manager
@@ -300,6 +335,7 @@ func (h *Hub) withdrawCardsOn(mid, to string) {
 // forgetMachineOwner drops who carries machine mid, a hub.json entry removed (removeMachineLive): an entry added
 // again later starts at the carrier.
 func (h *Hub) forgetMachineOwner(ctx context.Context, mid string) {
+	_ = h.retireShareMachine(ctx, mid)
 	d := &h.devices
 	d.moving.Lock()
 	defer d.moving.Unlock()

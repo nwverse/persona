@@ -1,10 +1,20 @@
 import SwiftUI
 
-/// A quiet round keeps its full transcript, but occupies only one muted line until requested.
+/// A quiet round keeps its full transcript, but occupies only one muted line until requested. With a `source` it is a
+/// background round of the main conversation (docs/apple/ios.md "Background rounds"): "@<source> · Background round".
 struct SupervisionRecordLine: View {
     var live: Bool
     var open: Bool
+    var source: MessageSource? = nil
     var toggle: () -> Void
+
+    private var title: String {
+        guard let source else {
+            return live ? String(localized: "Supervision record · running") : String(localized: "Supervision record")
+        }
+        let state = live ? String(localized: "Running in the background") : String(localized: "Background round")
+        return source.mention + " · " + state
+    }
 
     var body: some View {
         Button(action: toggle) {
@@ -12,7 +22,7 @@ struct SupervisionRecordLine: View {
                 ThemedIcon(Theme.Icon.disclosure)
                     .rotationEffect(.degrees(open ? 90 : 0))
                     .accessibilityHidden(true)
-                Text(live ? String(localized: "Supervision record · running") : String(localized: "Supervision record"))
+                Text(verbatim: title)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -23,7 +33,7 @@ struct SupervisionRecordLine: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("supervision-record")
+        .accessibilityIdentifier(source == nil ? "supervision-record" : "background-round")
         .accessibilityValue(open ? String(localized: "Expanded") : String(localized: "Collapsed"))
     }
 }

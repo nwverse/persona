@@ -82,7 +82,7 @@ The image contains:
 - `personad` for the image's own platform (`linux/<arch>`, in `/opt/persona/nodes`, `PERSONA_NODE_BUNDLED`): the hub runs it, and **Redeploy** sends it to computers of that platform.
   An image built with a release to fetch from (the build argument `UPDATE_URL`) carries no node builds for the other platforms (macOS, the other Linux architecture) and no persona-node: they come from the release, see "Node builds" below. One built without it carries personad for all four platforms, as before;
 - the web app embedded in the binary (`docs/web/web.md`): just open the hub's address;
-- the built-in extensions' programs (the WeChat bot, `docs/extensions/wechat.md`), the same version as personad;
+- `persona-hub` and `persona-manager`, the same version as personad; WeChat is installed independently from the extension marketplace (`docs/extensions/wechat.md`);
 - `openssh-client`, certificates, time zone data.
 
 The personad in the image ships no skills (like every binary): the assistant's skills live in `~/.persona/skills/` on the machine that runs the assistant (`docs/operations/hub-update.md` ("Taking skills out of the binary")).
@@ -251,6 +251,7 @@ Upgrading from 0.1.1 or earlier, the App won't prompt; switch manually: back the
 `ghcr.io/<owner>/persona`, and the old name won't get new versions. Change `PERSONA_IMAGE` in `.env` to the new name and version, replace `compose.yaml` with the new one
 (it passes `PERSONA_IMAGE` and `PERSONA_REGISTRY_TOKEN` to the hub, which is what lets later versions be announced), then run the command above.
 To set where node builds are fetched from with `PERSONA_NODE_PACKAGES` in `.env` (see "Node builds"), take the new `compose.yaml` as well: an older one does not pass it to the hub (`node_packages` in hub.json works either way).
+The image looks for no releases, so the hub offers the phones no Android update until `hub.json`'s `update.url` names a release source (`https://github.com/<owner>/<repo>/releases/latest/download`); with one, it keeps the newest release's Android app for them (`docs/operations/hub-update.md` ("The Android app")), and that source also serves the rest of "Update source" there.
 A new image doesn't change how the built-in manager runs on an existing install. Its `hub.json` keeps the hub's child until you switch (see "The hub and the built-in manager in one container"). An older `compose.yaml` works unchanged with either mode.
 
 ## Network
