@@ -10,10 +10,11 @@ import { realpathSync, statSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { createRuntime, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import {
-  CHECK_LABEL, EFFORTS, RUNTIME, SESSION_LABEL, agentRoot, agentRow, appAgent, archivedUnderOwnId, claudeId, codexThreadOf, defaultProvider,
-  formModel, interactionOf, launchersOf, linkedWorktree, parentAgentId, paseoMode, projectSpaces, promptKey, providerRoots, responseOf,
-  rewindOf, sessionIdOf, slotNameOf, spaceIdOf, strayRecord, timelineItems, transcriptOf,
+  CHECK_LABEL, EFFORTS, KEPT, KEPT_LABEL, RUNTIME, SESSION_LABEL, agentRoot, agentRow, appAgent, archivedUnderOwnId, claudeId, codexThreadOf,
+  defaultProvider, formModel, interactionOf, launchersOf, linkedWorktree, parentAgentId, paseoMode, projectSpaces, promptKey, providerRoots,
+  responseOf, rewindOf, sessionIdOf, slotNameOf, spaceIdOf, strayRecord, timelineItems, transcriptOf,
 } from './map.js'
+import { createLineage } from './lineage.js'
 import { personaMcpServers } from './mcp.js'
 import { PaseoClient } from './paseo.js'
 
@@ -56,9 +57,11 @@ const CHECK_WAIT = 70_000 // ms
  *   paseo: a PaseoClient (default: one for options.home).
  * @param {{ home?: string, socketPath?: string, mcpConfig?: string, allowTools?: string[], retryMs?: number, pushDelayMs?: number,
  *   refreshMs?: number, awayGrace?: number, callWait?: number, listMax?: number, pageSize?: number, closedChecks?: number[],
- *   sweepMs?: number }} [options]
+ *   sweepMs?: number, claudeHome?: string, claudeEnv?: object }} [options]
  *   allowTools: the Persona tools (full MCP names) an Agent Persona created calls without a card (the node's, #4966).
  *   sweepMs: 0 never reads the directory again.
+ *   claudeHome, claudeEnv: where Claude Code's transcripts are looked for (lineage.js): home's .claude and env's
+ *   $CLAUDE_CONFIG_DIR (default: this process's).
  */
 export function createPaseoBridge(deps = {}, options = {}) {
   const log = deps.log ?? (() => {})
@@ -93,6 +96,13 @@ export function createPaseoBridge(deps = {}, options = {}) {
   let sweeping = false
   const lastTextTimers = new Map()
   const rewinding = new Set() // agent ids a rewind is under way for
+  // agent id → the session id it keeps (withKept) until Paseo's record has the label; pinning: those whose label is on
+  // its way to Paseo (pin). loading: the directory is being read, the lines of the agents it lists are read after it.
+  const keptIds = new Map()
+  const pinning = new Set()
+  let loading = false
+  const lineage = createLineage({ dirs: () => Object.values(configProviders).map((p) => p.configDir).filter(Boolean),
+    home: options.claudeHome, env: options.claudeEnv })
   const timelines = new Map() // agent id → { key, at, tl, history } (the last whole read), the least recently read first
   const canonical = new Map() // path → the path with symbolic links resolved (canon)
   let runtimeOn = false
@@ -130,8 +140,11 @@ export function createPaseoBridge(deps = {}, options = {}) {
   function keepProviders(providers) {
     const out = {}
     for (const [id, p] of Object.entries(providers ?? {})) {
-      // Only what says which provider is which: a provider's env and command (keys, gateways) are not kept.
-      out[id] = { extends: typeof p?.extends === 'string' ? p.extends : undefined, label: typeof p?.label === 'string' ? p.label : undefined }
+      // Only what says which provider is which, and where its Claude Code keeps its sessions (a directory, for the
+      // lines of forks, withKept): a provider's other env and its command (keys, gateways) are not kept.
+      const dir = p?.env?.CLAUDE_CONFIG_DIR
+      out[id] = { extends: typeof p?.extends === 'string' ? p.extends : undefined, label: typeof p?.label === 'string' ? p.label : undefined,
+        configDir: typeof dir === 'string' && dir ? dir : undefined }
     }
     return out
   }
@@ -178,6 +191,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const prev = agents.get(agent.id)
     if (prev && (Date.parse(prev.agent.updatedAt) || 0) > (Date.parse(agent.updatedAt) || 0) && prev.agent.status === agent.status) return
     if (agent.archivedAt) return remove(agent.id, agent, project)
+    agent = withKept(agent, prev ?? archived.get(agent.id), !loading)
     archived.delete(agent.id) // back from the archive: listed again
     const oldSession = prev ? sessionIdOf(prev.agent, roots) : undefined
     agents.set(agent.id, { agent, project: project ?? prev?.project })
@@ -193,6 +207,69 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (agent.status === 'closed' && prev && prev.agent.status !== 'closed') closedSoon(agent.id)
     if (!transcriptOf(agent, roots) && agent.status !== 'closed' && prev?.agent.updatedAt !== agent.updatedAt) lastTextSoon(agent.id)
     for (const [sid, w] of watches) if (w.agentId === agent.id) scheduleRefresh(sid)
+  }
+
+  /**
+   * An agent of Claude Code without Persona's label keeps the session id it was listed under when Paseo moves it to
+   * another Claude session (docs/integrations/paseo.md "Session IDs"): Paseo forks the session to rewind it, and so when
+   * the user goes on after an API error in its app. Seen here (prev: the copy listed before), the id it had; not seen
+   * (the bridge was not running), the first session of the line its transcript was forked from, when the agent began
+   * that conversation itself (lineage.js; lines: whether that may be read now). The id rides on the bridge's copy (KEPT)
+   * until Paseo's record has the label (pin).
+   */
+  function withKept(agent, prev, lines) {
+    if (agentRoot(agent, roots) !== 'claude' || agent.labels?.[SESSION_LABEL]) {
+      keptIds.delete(agent.id)
+      return agent
+    }
+    const now = claudeId(agent)
+    if (!now) return agent
+    let id = keptIds.get(agent.id)
+    if (!id) {
+      const was = prev && !prev.agent.labels?.[SESSION_LABEL] ? sessionIdOf(prev.agent, roots) : undefined
+      id = was && was !== now ? was
+        : lines ? lineage.rootOf(now, { cwd: agent.cwd, createdAt: agent.createdAt, taken: (s) => takenBy(s, agent.id) }) : undefined
+    }
+    if (!id || id === now) return agent
+    keptIds.set(agent.id, id)
+    return { ...agent, [KEPT]: id }
+  }
+
+  /** Whether an agent other than self (listed or archived) has session id: as its Claude session, its label or kept. */
+  function takenBy(id, self) {
+    for (const m of [agents, archived]) {
+      for (const [aid, { agent }] of m) {
+        if (aid !== self && (claudeId(agent) === id || agent.labels?.[SESSION_LABEL] === id || agent[KEPT] === id)) return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * The id an agent keeps (withKept) onto Paseo's record, once, when Paseo tells of a change to it (the agent runs or
+   * was just moved, so its record changes anyway): its label, beside KEPT_LABEL (not one Persona started). From then on
+   * it is the agent's whatever the bridge sees, and keeps it archived. A refusal is tried again at its next change.
+   */
+  function pin(agent) {
+    const id = agent?.[KEPT]
+    if (!id || agent.archivedAt || agent.labels?.[SESSION_LABEL] || pinning.has(agent.id) || !paseo.connected) return
+    pinning.add(agent.id)
+    paseo.request('update_agent_request', { agentId: agent.id, labels: { [SESSION_LABEL]: id, [KEPT_LABEL]: '1' } }).then((res) => {
+      if (res?.accepted === false) throw new Error(res.error ?? 'refused')
+      log(`paseo: agent ${agent.id} keeps session ${id} (its Claude session moved to ${claudeId(agent)})`)
+    }).catch((err) => {
+      pinning.delete(agent.id)
+      log(`paseo: keeping session ${id} on agent ${agent.id}: ${err.message}`)
+    })
+  }
+
+  /** The directory was read: the agents it lists that moved while the bridge did not see it keep their line's first id. */
+  function keepLines() {
+    for (const [id, e] of agents) {
+      const agent = withKept(e.agent, undefined, true)
+      if (agent !== e.agent) agents.set(id, { ...e, agent })
+    }
+    reindex()
   }
 
   /**
@@ -221,6 +298,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
    */
   function noteArchived(agent, project) {
     if (!agent?.id || parentAgentId(agent)) return
+    agent = withKept(agent, archived.get(agent.id) ?? agents.get(agent.id), true)
     const transcript = transcriptOf(agent, roots)
     if (!transcript && !archivedUnderOwnId(agent, roots)) return
     const known = archived.get(agent.id)?.project
@@ -262,6 +340,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (!p.agent) {
       deleted.add(agentId)
       if (deleted.size > 1000) deleted.delete(deleted.values().next().value)
+      keptIds.delete(agentId)
       const named = archived.delete(agentId)
       if (!agents.has(agentId) && !named) return
       remove(agentId)
@@ -319,7 +398,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
           there.add(e.agent.id)
           const u = archived.get(e.agent.id)
           if (u && u.agent.updatedAt !== e.agent.updatedAt) {
-            archived.set(e.agent.id, { ...u, agent: e.agent, project: e.project ?? u.project })
+            archived.set(e.agent.id, { ...u, agent: withKept(e.agent, u, true), project: e.project ?? u.project })
             changed = true
           }
         }
@@ -480,16 +559,23 @@ export function createPaseoBridge(deps = {}, options = {}) {
         upsert(e.agent, e.project)
       }
     }
-    const first = await paseo.subscribe('fetch_agents_request', { subscribe: {}, page: { limit: pageSize } }, onAgentUpdate, { timeoutMs: 60_000 })
-    take(first?.entries)
-    let info = first?.pageInfo
-    for (let i = 1; info?.hasMore && info.nextCursor && i < PAGES_MAX; i++) {
-      const p = await paseo.request('fetch_agents_request', { page: { limit: pageSize, cursor: info.nextCursor } }, { timeoutMs: 60_000 })
-      take(p?.entries)
-      info = p?.pageInfo
+    // The lines of forks are read once every agent is known (keepLines): none is followed into another's session.
+    loading = true
+    try {
+      const first = await paseo.subscribe('fetch_agents_request', { subscribe: {}, page: { limit: pageSize } }, onAgentUpdate, { timeoutMs: 60_000 })
+      take(first?.entries)
+      let info = first?.pageInfo
+      for (let i = 1; info?.hasMore && info.nextCursor && i < PAGES_MAX; i++) {
+        const p = await paseo.request('fetch_agents_request', { page: { limit: pageSize, cursor: info.nextCursor } }, { timeoutMs: 60_000 })
+        take(p?.entries)
+        info = p?.pageInfo
+      }
+      // Gone while Paseo was away.
+      if (!info?.hasMore) for (const id of [...agents.keys()]) if (!seen.has(id)) remove(id)
+    } finally {
+      loading = false
     }
-    // Gone while Paseo was away.
-    if (!info?.hasMore) for (const id of [...agents.keys()]) if (!seen.has(id)) remove(id)
+    keepLines()
   }
 
   /**
@@ -524,8 +610,10 @@ export function createPaseoBridge(deps = {}, options = {}) {
   function onAgentUpdate(inner) {
     const p = inner.payload
     if (inner.type !== 'agent_update' || !p) return
-    if (p.kind === 'upsert' && p.agent) upsert(p.agent, p.project ?? undefined)
-    else if (p.kind === 'remove' && p.agentId) {
+    if (p.kind === 'upsert' && p.agent) {
+      upsert(p.agent, p.project ?? undefined)
+      pin(agents.get(p.agent.id)?.agent)
+    } else if (p.kind === 'remove' && p.agentId) {
       // Paseo also sends a removal for every change of an agent it never listed (its own internal ones, which name
       // the others): only one that was listed is asked about.
       if (!agents.has(p.agentId)) return
@@ -615,12 +703,14 @@ export function createPaseoBridge(deps = {}, options = {}) {
    * Whether request is Claude Code asking for one of the Agent's own Persona tools (allowTools) in an Agent Persona
    * started (it carries SESSION_LABEL): those run without a card, as the node allows them in the Claude Agents it starts
    * (docs/integrations/claude-integration.md "Persona tools Agents call without a card"). An agent made in Paseo's own
-   * app, every other tool and every other provider's request still go to the phone.
+   * app (one whose id the bridge kept, KEPT_LABEL, too), every other tool and every other provider's request still go
+   * to the phone.
    */
   function ownTool(agentId, request) {
     if (!allowTools.has(request.name) || request.provider !== 'claude' || request.kind === 'question' || request.kind === 'plan') return false
-    const label = agents.get(agentId)?.agent?.labels?.[SESSION_LABEL]
-    return typeof label === 'string' && label !== ''
+    const labels = agents.get(agentId)?.agent?.labels
+    const label = labels?.[SESSION_LABEL]
+    return typeof label === 'string' && label !== '' && !labels[KEPT_LABEL]
   }
 
   /**
@@ -1074,18 +1164,20 @@ export function createPaseoBridge(deps = {}, options = {}) {
   }
 
   /**
-   * Before a rewind, which forks Claude Code's session: an agent listed under its Claude session id (no label of
-   * Persona's) keeps that id on the persona.session label, as one Persona started or took over does, so Persona's
-   * session is the same once Paseo moved the agent to the fork. Paseo merges labels; a stored agent's record is
-   * rewritten without telling any list, so the snapshot here takes it too.
+   * Before a rewind, which forks Claude Code's session: an agent listed under its Claude session id, or under one the
+   * bridge keeps for it (no label of Persona's), keeps that id on the persona.session label, as one Persona started or
+   * took over does, so Persona's session is the same once Paseo moved the agent to the fork; KEPT_LABEL says the bridge
+   * kept it (pin). Paseo merges labels; a stored agent's record is rewritten without telling any list, so the snapshot
+   * here takes it too.
    */
   async function keepSessionId(agent) {
     if (agentRoot(agent, roots) !== 'claude' || agent.labels?.[SESSION_LABEL]) return
     const id = sessionIdOf(agent, roots)
     if (!id) return
-    const res = await paseo.request('update_agent_request', { agentId: agent.id, labels: { [SESSION_LABEL]: id } })
+    const labels = { [SESSION_LABEL]: id, [KEPT_LABEL]: '1' }
+    const res = await paseo.request('update_agent_request', { agentId: agent.id, labels })
     if (res?.accepted === false) throw new RpcError(`Paseo did not keep the session's id: ${res.error ?? 'no reason given'}`, 'rewind_failed')
-    agent.labels = { ...(agent.labels ?? {}), [SESSION_LABEL]: id }
+    agent.labels = { ...(agent.labels ?? {}), ...labels }
   }
 
   /**

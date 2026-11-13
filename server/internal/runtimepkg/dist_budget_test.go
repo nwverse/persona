@@ -7,9 +7,10 @@ import (
 
 // TestDistBudget bounds what personad, persona-node and persona-manager embed of the runtime packages: every file
 // Generate writes from integrations/. Measured 424,588 B on 2026-11-10 (the same files raw were 1,627,267 B); the
-// budget is that +3%. Raise it only for code a runtime needs, never to embed the packages raw again.
+// budget is that +3%, and 4,000 B more since 2026-11-13 for the Paseo bridge reading the lines of forked Claude sessions
+// (#6709). Raise it only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 437_300
+	const budget = 441_300
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

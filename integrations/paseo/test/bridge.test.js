@@ -341,7 +341,8 @@ test('a rewind goes to the message the app saw, keeps the session id through Cla
   assert.deepEqual(res, { prompt: 'again', restore: 'code_and_conversation', code_restored: true, input_cleared: true })
   assert.deepEqual(fake.requestsOf('agent.rewind.request').map((r) => [r.agentId, r.messageId, r.mode]), [[a.claude.id, 'u2', 'both']],
     "the last 'again', its context block aside; an interruption is no message of the user's")
-  assert.deepEqual(fake.requestsOf('update_agent_request').map((r) => r.labels), [{ 'persona.session': SID }], 'its id kept on the label first')
+  assert.deepEqual(fake.requestsOf('update_agent_request').map((r) => r.labels), [{ 'persona.session': SID, 'persona.kept': '1' }],
+    'its id kept on the label first, marked as kept by the bridge (not an Agent Persona started)')
   await until('the fork listed', () => rows().find((r) => r.session_id === SID)?.transcript === SID2)
   assert.equal(rows().filter((r) => r.session_id === SID).length, 1, 'the same session, now in the fork')
   // The first 'again' (two after it), restoring only the conversation.
