@@ -112,7 +112,7 @@ try {
       const section = sections().filter({ has: page.locator("button[aria-expanded]", { hasText: new RegExp(`^${shared.name}$`) }) }).first();
       if ((await section.locator("button[aria-expanded]").getAttribute("aria-expanded")) !== "true") await section.locator("button[aria-expanded]").click();
       await section.locator("[data-session-row]").first().waitFor({ timeout: 10_000 });
-      const where = await section.locator("ul li span[title]").evaluateAll((els) => els.map((el) => el.getAttribute("title")));
+      const where = await section.locator("ul li span.truncate").evaluateAll((els) => els.map((el) => el.getAttribute("title")));
       const want = [shared.origin, ...shared.places.map((x) => `${machineName(x.machine_id)} · ${x.path}`)];
       check(JSON.stringify(where) === JSON.stringify(want), `${name}: ${shared.name} lists its remote and each directory with its computer`, JSON.stringify(where));
       check((await section.locator("[data-session-row]").count()) === Math.min(6, shared.total), `${name}: ${shared.name} lists the sessions of all its directories together`);
@@ -181,8 +181,8 @@ try {
       const web = reads.reads?.web ?? {};
       const kinds = Object.fromEntries(Object.entries(web).map(([kind, row]) => [kind, row.count]));
       console.log(`reads in ${reads.seconds} s of churn by project: ${reads.hints} hints, ${JSON.stringify(kinds)}`);
-      // one read of the groups and one of their needs-you counts per refresh gap, however many hints came
-      const ceiling = 2 * (Math.ceil(reads.seconds / 1.5) + 1);
+      // one read of the groups (with their needs-you counts) per refresh gap, however many hints came
+      const ceiling = Math.ceil(reads.seconds / 1.5) + 1;
       check((kinds.catalog ?? 0) <= ceiling, `the groups are read at most once per 1.5 s under ${reads.hints} hints`, `${kinds.catalog ?? 0} catalog reads, ceiling ${ceiling}`);
       check((kinds.full ?? 0) === 0 && (kinds.baseline ?? 0) <= 4, "a churn of hints reads no complete list and no new first pages", JSON.stringify(kinds));
       await tab("Recently updated").click();

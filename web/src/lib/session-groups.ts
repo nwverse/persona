@@ -10,9 +10,10 @@ export const SESSIONS_CATALOG_FEATURE = "sessions_catalog";
 
 export type GroupDimension = "machine" | "project" | "group";
 
-export interface CatalogPlace { machine_id: string; path: string; total: number }
-export interface CatalogProject { id: string; name: string; origin?: string; total: number; places: CatalogPlace[] }
-export interface CatalogSpace { machine_id: string; id: string; name: string; total: number }
+// needs_you: how many of them need the user, left out when none do
+export interface CatalogPlace { machine_id: string; path: string; total: number; needs_you?: number }
+export interface CatalogProject { id: string; name: string; origin?: string; total: number; needs_you?: number; places: CatalogPlace[] }
+export interface CatalogSpace { machine_id: string; id: string; name: string; total: number; needs_you?: number }
 export interface SessionCatalog {
   revision: string;
   total: number;
@@ -24,15 +25,16 @@ export interface SessionCatalog {
 
 const record = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 const count = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+const optionalCount = (v: unknown) => v === undefined || count(v);
 
 /** A hub that ignores `catalog=1` (an older one) answers with a page: never taken for a catalog. */
 export function validCatalog(v: unknown): v is SessionCatalog {
   if (!record(v) || typeof v.revision !== "string" || !count(v.total) || !Array.isArray(v.projects) || !Array.isArray(v.spaces)) return false;
-  return v.projects.every((p: unknown) => record(p) && typeof p.id === "string" && typeof p.name === "string" && count(p.total) &&
+  return v.projects.every((p: unknown) => record(p) && typeof p.id === "string" && typeof p.name === "string" && count(p.total) && optionalCount(p.needs_you) &&
       (p.origin === undefined || typeof p.origin === "string") && Array.isArray(p.places) && p.places.length > 0 &&
       p.places.every((x: unknown) => record(x) && typeof x.machine_id === "string" && x.machine_id !== "" && typeof x.path === "string" && count(x.total))) &&
     v.spaces.every((s: unknown) => record(s) && typeof s.machine_id === "string" && s.machine_id !== "" && typeof s.id === "string" &&
-      typeof s.name === "string" && count(s.total));
+      typeof s.name === "string" && count(s.total) && optionalCount(s.needs_you));
 }
 
 /** One directory of a project, or the computer of a space (no path). */
@@ -60,21 +62,19 @@ export interface SessionGroup {
 // A key no id, path or pair can be: the group of the rows without the attribute.
 const REST_KEY = "\u0000rest";
 
-/** The projects or spaces of a hub's catalog. `needs` is the same catalog read for the sessions that need the user. */
-export function catalogGroups(catalog: SessionCatalog, dimension: "project" | "group", needs?: SessionCatalog | null): SessionGroup[] {
+/** The projects or spaces of a hub's catalog, each with how many of its sessions need the user, as the hub counted. */
+export function catalogGroups(catalog: SessionCatalog, dimension: "project" | "group"): SessionGroup[] {
   if (dimension === "project") {
-    const waiting = new Map(needs?.projects.map((p) => [p.id, p.total]));
     return catalog.projects.filter((p) => p.total > 0).map((p): SessionGroup => {
       const members = p.places.map((x) => listPair(x.machine_id, x.path));
       return {
-        key: p.id || REST_KEY, name: p.id ? p.name : t("paged-agents.no_folder"), count: p.total, needs: waiting.get(p.id) ?? 0,
+        key: p.id || REST_KEY, name: p.id ? p.name : t("paged-agents.no_folder"), count: p.total, needs: p.needs_you ?? 0,
         // the hub takes a bounded number of places: the busiest ones of a folder name with more
         origin: p.origin || undefined, rest: !p.id || undefined, members, filters: { place: members.slice(0, LIST_PAIRS_MAX) },
         places: p.id ? p.places.map((x) => ({ machine: x.machine_id, path: x.path, count: x.total })) : [],
       };
     });
   }
-  const waiting = new Map(needs?.spaces.map((s) => [listPair(s.machine_id, s.id), s.total]));
   const groups: SessionGroup[] = [];
   // the computers' sessions in no space are one group: nobody looks for them by computer
   const rest: SessionGroup = { key: REST_KEY, name: t("paged-agents.no_space"), count: 0, needs: 0, places: [], rest: true, members: [], filters: {} };
@@ -82,11 +82,11 @@ export function catalogGroups(catalog: SessionCatalog, dimension: "project" | "g
     if (s.total <= 0) continue;
     const pair = listPair(s.machine_id, s.id);
     if (s.id) {
-      groups.push({ key: pair, name: s.name || s.id, count: s.total, needs: waiting.get(pair) ?? 0, members: [pair], filters: { space: [pair] },
+      groups.push({ key: pair, name: s.name || s.id, count: s.total, needs: s.needs_you ?? 0, members: [pair], filters: { space: [pair] },
         places: [{ machine: s.machine_id, path: "", count: s.total }] });
     } else {
       rest.count += s.total;
-      rest.needs += waiting.get(pair) ?? 0;
+      rest.needs += s.needs_you ?? 0;
       rest.members!.push(pair);
     }
   }

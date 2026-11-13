@@ -50,16 +50,15 @@ describe("groups from the hub's catalog", () => {
     expect(groupMachines(groups)).toBe(2);
   });
 
-  it("counts on each group its sessions that need the user, from the same read narrowed to them", () => {
+  it("counts on each group its sessions that need the user, as the hub's catalog says them", () => {
+    const base = catalog();
     const waiting = catalog({
-      total: 3,
-      projects: [{ id: "git:git.example.com/team/app", name: "app", total: 2, places: [{ machine_id: "mac", path: "/Users/me/code/app", total: 2 }] },
-        { id: "", name: "", total: 1, places: [{ machine_id: "nas", path: "", total: 1 }] }],
-      spaces: [{ machine_id: "pc", id: "w1", name: "Release", total: 1 }, { machine_id: "nas", id: "", name: "", total: 2 }],
+      projects: base.projects.map((p) => p.id === "" ? { ...p, needs_you: 1 } : p.id.startsWith("git:") ? { ...p, needs_you: 2 } : p),
+      spaces: base.spaces.map((s) => s.machine_id === "pc" && s.id === "w1" ? { ...s, needs_you: 1 } : s.id === "" ? { ...s, needs_you: s.machine_id === "nas" ? 2 : 1 } : s),
     });
-    expect(catalogGroups(catalog(), "project", waiting).map((g) => g.needs)).toEqual([2, 0, 1]);
-    expect(catalogGroups(catalog(), "group", waiting).map((g) => g.needs)).toEqual([0, 1, 0, 2]);
-    expect(catalogGroups(catalog(), "group", null).map((g) => g.needs)).toEqual([0, 0, 0, 0]);
+    expect(catalogGroups(waiting, "project").map((g) => g.needs)).toEqual([2, 0, 1]);
+    expect(catalogGroups(waiting, "group").map((g) => g.needs)).toEqual([0, 1, 0, 3]); // every computer's sessions in no space together
+    expect(catalogGroups(base, "group").map((g) => g.needs)).toEqual([0, 0, 0, 0]);
   });
 
   it("asks for no more places than the hub takes", () => {
@@ -86,7 +85,8 @@ describe("groups from the hub's catalog", () => {
     for (const other of [null, { sessions: [], remove: [], has_more: false, revision: "r", total: 0 }, { ...catalog(), projects: null },
       { ...catalog(), total: -1 }, { ...catalog(), projects: [{ id: "dir:x", name: "x", total: 1, places: [] }] },
       { ...catalog(), projects: [{ id: "dir:x", name: "x", total: 1, places: [{ machine_id: "", path: "/x", total: 1 }] }] },
-      { ...catalog(), spaces: [{ machine_id: "mac", id: 1, name: "x", total: 1 }] }]) {
+      { ...catalog(), spaces: [{ machine_id: "mac", id: 1, name: "x", total: 1 }] },
+      { ...catalog(), spaces: [{ machine_id: "mac", id: "w1", name: "x", total: 1, needs_you: "1" }] }]) {
       expect(validCatalog(other)).toBe(false);
     }
   });

@@ -56,13 +56,16 @@ function catalogOf(rows: Row[]): SessionCatalog {
   for (const r of rows) {
     const pair = listPair(r.machine, r.project);
     const id = !r.project ? "" : ORIGIN[pair] ? `git:${ORIGIN[pair]}` : `dir:${folder(r.project).toLowerCase()}`;
-    const p = projects.get(id) ?? { id, name: id ? folder(r.project).toLowerCase() : "", origin: ORIGIN[pair], total: 0, places: [] };
+    const needs = r.state === "needs_you" ? 1 : 0;
+    const p = projects.get(id) ?? { id, name: id ? folder(r.project).toLowerCase() : "", origin: ORIGIN[pair], total: 0, needs_you: 0, places: [] };
     p.total++;
+    p.needs_you! += needs;
     const place = p.places.find((x) => x.machine_id === r.machine && x.path === r.project);
     if (place) place.total++; else p.places.push({ machine_id: r.machine, path: r.project, total: 1 });
     projects.set(id, p);
-    const s = spaces.get(listPair(r.machine, r.group)) ?? { machine_id: r.machine, id: r.group, name: r.group ? `Space ${r.group}` : "", total: 0 };
+    const s = spaces.get(listPair(r.machine, r.group)) ?? { machine_id: r.machine, id: r.group, name: r.group ? `Space ${r.group}` : "", total: 0, needs_you: 0 };
     s.total++;
+    s.needs_you! += needs;
     spaces.set(listPair(r.machine, r.group), s);
   }
   const last = (id: string) => (id ? 0 : 1);
@@ -228,9 +231,12 @@ describe("the list by computer", () => {
 describe("the list by project, on a hub with the catalog", () => {
   it("makes a repository on two computers one project that lists both directories and their sessions together", async () => {
     await show();
+    vi.mocked(api).mockClear();
     await browseBy("project");
-    expect(sections().map((s) => heading(s).textContent)).toEqual(["app", "notes", "tool", t("paged-agents.no_folder")]);
-    expect(reads("catalog").map((path) => Object.fromEntries(params(path)))).toContainEqual({ catalog: "1" });
+    // name, how many need the user, count
+    expect(sections().map(summary)).toEqual(["app 1 3", "notes 2", "tool 1", `${t("paged-agents.no_folder")} 1`]);
+    // one read names the projects and counts the ones that need the user
+    expect(reads("catalog").map((path) => Object.fromEntries(params(path)))).toEqual([{ catalog: "1" }]);
 
     const app = sections()[0];
     expect(rowsIn(app)).toEqual(["a1", "a2", "b1"]);
@@ -280,7 +286,7 @@ describe("the list by project, on a hub with the catalog", () => {
   it("reads the groups once for a burst of hints, while the open sections follow every one", async () => {
     await show();
     await browseBy("project");
-    const groupReads = () => reads("catalog").filter((path) => !params(path).has("state")).length;
+    const groupReads = () => reads("catalog").length;
     const rowReads = () => reads("page").filter((path) => params(path).getAll("place").includes(listPair("pc", "C:\\code\\App"))).length;
     vi.mocked(api).mockClear();
     for (let i = 0; i < 5; i++) await hint();
@@ -299,11 +305,11 @@ describe("the list by project, on a hub with the catalog", () => {
     await show();
     vi.mocked(api).mockClear();
     await browseBy("project");
-    const first = reads("catalog").filter((path) => !params(path).has("state")).length;
+    expect(reads("catalog")).toHaveLength(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1100); });
-    expect(reads("catalog").filter((path) => !params(path).has("state")).length).toBe(first + 1);
+    expect(reads("catalog")).toHaveLength(2);
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-    expect(reads("catalog").filter((path) => !params(path).has("state")).length).toBe(first + 1); // settled: no more
+    expect(reads("catalog")).toHaveLength(2); // settled: no more
   });
 });
 

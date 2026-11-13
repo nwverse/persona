@@ -15378,27 +15378,33 @@ def folder_name(path):
     return trimmed[cut + 1:] or path
 
 
-def session_catalog(rows, revision):
+def session_catalog(rows, revision, state_of):
     """catalog=1 (sessions_catalog): the filtered rows' projects and spaces, as the hub's sessionCatalogOf builds them.
     A directory whose computer names a network remote (CATALOG_ORIGINS) is that repository's project wherever it is
-    checked out; any other goes by its folder's name."""
+    checked out; any other goes by its folder's name. needs_you (left out when 0) is by the state the list filters by."""
     places, groups, names = {}, {}, {}
+    waiting = lambda n: {"needs_you": n} if n else {}
     for s in rows:
+        needs = 1 if state_of(s) == "needs_you" else 0
         path = s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")
-        places[(s["machine_id"], path)] = places.get((s["machine_id"], path), 0) + 1
+        at = places.setdefault((s["machine_id"], path), [0, 0])
+        at[0] += 1; at[1] += needs
         group = s.get("space_id") or s.get("workspace_id", "")
-        groups[(s["machine_id"], group)] = groups.get((s["machine_id"], group), 0) + 1
+        at = groups.setdefault((s["machine_id"], group), [0, 0])
+        at[0] += 1; at[1] += needs
         if group and s.get("space_name"):
             names.setdefault((s["machine_id"], group), s["space_name"])
     projects = {}
-    for (mid, path), n in places.items():
+    for (mid, path), (n, needs) in places.items():
         origin = CATALOG_ORIGINS.get((mid, path), "")
         # the rows in no directory are the project with the empty id
         pid = "" if not path else "git:" + origin.lower() if origin else "dir:" + folder_name(path).lower()
-        project = projects.setdefault(pid, {"id": pid, "name": "", "total": 0, "places": []})
+        project = projects.setdefault(pid, {"id": pid, "name": "", "total": 0, "needs": 0, "places": []})
         project["total"] += n
-        project["places"].append({"machine_id": mid, "path": path, "total": n})
+        project["needs"] += needs
+        project["places"].append({"machine_id": mid, "path": path, "total": n, **waiting(needs)})
     for project in projects.values():
+        project.update(waiting(project.pop("needs")))
         project["places"].sort(key=lambda p: (-p["total"], p["machine_id"], p["path"]))
         first = project["places"][0]
         origin = CATALOG_ORIGINS.get((first["machine_id"], first["path"]), "")
@@ -15406,7 +15412,7 @@ def session_catalog(rows, revision):
             project["name"] = origin.rsplit("/", 1)[-1] if origin else folder_name(first["path"])
         if origin:
             project["origin"] = origin
-    spaces = [{"machine_id": mid, "id": group, "name": names.get((mid, group), group), "total": n} for (mid, group), n in groups.items()]
+    spaces = [{"machine_id": mid, "id": group, "name": names.get((mid, group), group), "total": n, **waiting(needs)} for (mid, group), (n, needs) in groups.items()]
     return {"revision": revision, "total": len(rows),
             "projects": sorted(projects.values(), key=lambda p: (not p["id"], -p["total"], p["name"].lower(), p["id"])),
             "spaces": sorted(spaces, key=lambda p: (not p["id"], -p["total"], p["name"].lower(), p["machine_id"], p["id"]))}
@@ -15531,7 +15537,7 @@ def paged_sessions(query):
         return rows
     rows = matching(rows)
     if CATALOG and query.get("catalog", [""])[0] in ("1", "true"):
-        return session_catalog(rows, revision), 200
+        return session_catalog(rows, revision, state_of), 200
     if query.get("counts", [""])[0] == "1":
         counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}}
         for s in rows:
