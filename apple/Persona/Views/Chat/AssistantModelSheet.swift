@@ -74,7 +74,7 @@ nonisolated enum AssistantModelChoice {
     }
 }
 
-private extension String {
+nonisolated private extension String {
     var emptyAsNil: String? { isEmpty ? nil : self }
 }
 
