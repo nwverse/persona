@@ -724,6 +724,9 @@ export interface MetricPoint {
   cpu?: number;
   load?: number;
   mem?: number;
+  /** Network history, bytes per second. */
+  rx?: number;
+  tx?: number;
   gap?: boolean;
 }
 
