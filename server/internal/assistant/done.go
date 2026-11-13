@@ -543,7 +543,11 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 // stretch of work. Every task waits for the main conversation's review or explicit user completion; none is closed
 // here. autoFinishTask and Re-check with apply (doneCheckRoute) end here.
 func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, worked bool, c taskDoneCheck, err error) {
-	if err == nil {
+	if ai.IsNotConfigured(err) {
+		// A missing provider is not a transient judge failure: keep the same localized explanation the settings row shows.
+		c = taskDoneCheck{Verdict: verdictWaiting, Reason: mc(s.lang(ctx), s.noAPIStatus(ctx))}
+	}
+	if err == nil || ai.IsNotConfigured(err) {
 		s.keepTaskCheck(ctx, t, work, c) // why it is (not) done, on the todo (task_check.go)
 	}
 	if err == nil && c.Delivery != nil && c.Verdict != verdictNotDone {
