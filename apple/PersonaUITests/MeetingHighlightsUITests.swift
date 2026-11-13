@@ -234,6 +234,7 @@ final class MeetingHighlightsUITests: XCTestCase {
     @MainActor func testLargestTextSizeStacksTheTime() throws {
         let hub = try mockHub()
         for look in ["large", "large-dark"] {
+            if look != "large" { try fresh(hub) }
             let app = try highlightsPage(hub, look: look)
             let first = rows(app).firstMatch
             let time = first.buttons["meeting-highlight-time"]
