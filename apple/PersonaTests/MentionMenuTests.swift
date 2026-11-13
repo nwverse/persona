@@ -25,6 +25,19 @@ struct MentionMenuTests {
 
     private func entry(_ name: String, dir: Bool = false) -> FileEntry { FileEntry(name: name, dir: dir, size: 0) }
 
+    private func workspace(_ id: String, machine: String = "macbook", title: String, cwd: String, branch: String = "",
+                           online: Bool = true, available: Bool = true, group: String = "") -> HostWorkspace {
+        var w = HostWorkspace(machineID: machine, source: "herdr", sourceID: id, title: title, cwd: cwd,
+                              branch: branch, online: online, available: available)
+        w.group = group
+        return w
+    }
+
+    private func workspaceValue(_ row: MentionRow) -> HostWorkspace? {
+        if case .workspace(let w) = row.kind { return w }
+        return nil
+    }
+
     // MARK: - The token
 
     @Test func aTokenStartsAtTheStartOrAfterWhitespace() {
@@ -192,6 +205,121 @@ struct MentionMenuTests {
         #expect(rows.first?.name == "Task 12")
         let big = (1...60).map { entry("f\($0)") }
         #expect(MentionRows.rows(query: "f/", cwd: "/a", used: [], listing: big, sessions: [], except: nil).count == 40)
+    }
+
+    // MARK: - Workspaces
+
+    @Test func workspacesMatchEveryFieldAndShortenOnlyTheDetail() {
+        let w = workspace("1", title: "  ", cwd: "/data2/home/me/code/weather-app/", branch: "Feature/One")
+        let rows = MentionRows.workspaceRows([w], query: "macbook") { $0.id == "macbook" ? "MacBook" : $0.id }
+        #expect(rows.map(\.name) == ["weather-app"])
+        #expect(rows.first?.detail == "MacBook · ~/code/weather-app/ · Feature/One")
+        #expect(rows.first?.id == "workspace:macbook/herdr:1:/data2/home/me/code/weather-app")
+        for query in ["WEATHER", "/DATA2/HOME", "macbook", "feature/one"] {
+            #expect(MentionRows.workspaceRows([w], query: query, machineName: { _ in "MacBook" }).count == 1, "\(query)")
+        }
+        #expect(MentionRows.workspaceRows([w], query: "herdr:1", machineName: { _ in "MacBook" }).isEmpty)
+        #expect(MentionRows.shortPath("/Users/me/code/app") == "~/code/app")
+        #expect(MentionRows.shortPath("/home/me/code/app") == "~/code/app")
+        #expect(MentionRows.shortPath("/data/home/me/code/app") == "~/code/app")
+        #expect(MentionRows.shortPath("/data2/home/me/code/app") == "~/code/app")
+        #expect(MentionRows.shortPath("/private/tmp/app") == "/private/tmp/app")
+        let ref = MentionRows.workspaceContext(w) { _ in "MacBook" }
+        #expect(ref.extra?["cwd"] == w.cwd)
+        #expect(ref.text.contains(w.cwd))
+    }
+
+    @Test func workspaceRankingIsStableAndTheFirstFolderWinsBeforeMatching() {
+        let all = [
+            workspace("a", title: "Alpha local", cwd: "/work/a", available: false),
+            workspace("b", title: "Beta", cwd: "/work/b", branch: "alpha"),
+            workspace("c", title: "Zed", cwd: "/work/alpha-logs"),
+            workspace("d", machine: "server", title: "Alpha remote", cwd: "/work/a", available: false),
+            workspace("e", title: "Alpha duplicate", cwd: "/work/a/"),
+            workspace("f", machine: "studio", title: "Alpha available", cwd: "/work/c"),
+            workspace("empty", title: "Alpha folderless", cwd: ""),
+        ]
+        let rows = MentionRows.workspaceRows(all, query: "alpha") { $0.id }
+        #expect(rows.map(\.name) == ["Alpha available", "Beta", "Zed", "Alpha local", "Alpha remote"])
+        let unrelated = workspace("first", title: "Unrelated", cwd: "/same")
+        let matchingDuplicate = workspace("second", title: "Alpha", cwd: "/same/")
+        #expect(MentionRows.workspaceRows([unrelated, matchingDuplicate], query: "alpha") { $0.id }.isEmpty)
+        let many = (0..<12).map { workspace("\($0)", title: "Workspace \($0)", cwd: "/work/\($0)") }
+        #expect(MentionRows.workspaceRows(many, query: "") { $0.id }.count == 8)
+        let collidingIDs = [workspace("same", title: "One", cwd: "/one"), workspace("same", title: "Two", cwd: "/two")]
+        let identities = MentionRows.workspaceRows(collidingIDs, query: "") { $0.id }.map(\.id)
+        #expect(Set(identities).count == 2)
+    }
+
+    @Test func workspacesSitBetweenTheFolderAndSessions() {
+        let w = workspace("1", title: "weather-app", cwd: "/Users/me/code/weather-app", branch: "main")
+        let workspaceRows = MentionRows.workspaceRows([w], query: "") { _ in "MacBook" }
+        let s = session("s1", title: "Blog", updated: 5)
+        let rows = MentionRows.rows(query: "", cwd: "/Users/me/code/app", used: ["/Users/me/code/app/README.md"],
+                                    listing: [entry("Sources", dir: true)], sessions: [s], except: nil,
+                                    workspaces: workspaceRows)
+        #expect(rows.map(\.name) == ["README.md", "Sources/", "weather-app", "Blog"])
+        #expect(rows.map(\.group) == [0, 0, 1, 2])
+        #expect(rows[2].isContext && !rows[2].isSession)
+        #expect(workspaceValue(rows[2]) == w)
+        // A slash browses that folder alone, even with a matching workspace loaded.
+        let browsing = MentionRows.rows(query: "Sources/", cwd: "/Users/me/code/app", used: [],
+                                        listing: [entry("main.swift")], sessions: [s], except: nil,
+                                        workspaces: workspaceRows)
+        #expect(browsing.map(\.name) == ["main.swift"])
+    }
+
+    @Test func workspaceAttributesRoundTripAndOldDraftsDecode() throws {
+        let w = workspace("1", title: " A & <B> ", cwd: "/Users/me/\"quoted\"&", branch: "feature/<x>")
+        let ref = MentionRows.workspaceContext(w) { _ in "Mac & Co" }
+        #expect(ref.kind == "workspace" && ref.url.isEmpty)
+        #expect(ref.extra == ["machine": "macbook", "cwd": w.cwd, "branch": w.branch])
+        #expect(ref.xml.hasPrefix("<persona-context kind=\"workspace\" title=\"A &amp; &lt;B&gt;\" url=\"\" machine=\"macbook\" cwd=\"/Users/me/&quot;quoted&quot;&amp;\" branch=\"feature/&lt;x&gt;\">"))
+        let parsed = ContextRef.parse(ref.xml)
+        #expect(parsed.refs.count == 1)
+        #expect(parsed.refs.first?.extra == ref.extra)
+        #expect(parsed.refs.first?.text == ref.text)
+        #expect(parsed.refs.first?.xml == ref.xml)
+        #expect(ContextRef.message([ref], body: "Continue").hasSuffix("</persona-context>\n\nContinue"))
+        let noBranch = MentionRows.workspaceContext(workspace("2", title: "No branch", cwd: "/tmp/no-branch")) { $0.id }
+        #expect(!noBranch.xml.contains(" branch="))
+        let decoded = try JSONDecoder().decode(ContextRef.self, from: JSONEncoder().encode(ref))
+        #expect(decoded.extra == ref.extra)
+        let legacy = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","kind":"workspace","title":"Old","url":"","text":"Old draft","msg":""}"#
+        #expect(try JSONDecoder().decode(ContextRef.self, from: Data(legacy.utf8)).extra == nil)
+    }
+
+    @MainActor @Test func workspacesLoadOncePerOpeningAndFailuresLeaveNoRows() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/workspaces", json: #"{"workspaces":[{"machine_id":"m","source":"herdr","source_id":"1","title":"One","cwd":"/one"}]}"#)
+        let store = MentionWorkspaces()
+        store.update(query: "", machines: [])
+        await store.load(api: hub.client, group: "group-a")
+        await store.load(api: hub.client, group: "group-a")
+        #expect(hub.sent("GET", "/api/v1/workspaces").count == 1)
+        #expect(store.rows.count == 1)
+        #expect(store.rows.first.flatMap(workspaceValue)?.group == "group-a")
+        store.update(query: "not-a-workspace", machines: [])
+        #expect(store.rows.isEmpty)
+        #expect(hub.sent("GET", "/api/v1/workspaces").count == 1)
+        let reopened = MentionWorkspaces()
+        reopened.update(query: "", machines: [])
+        await reopened.load(api: hub.client, group: "group-a")
+        #expect(hub.sent("GET", "/api/v1/workspaces").count == 2)
+
+        for status in [404, 503] {
+            let failing = FakeHub()
+            if status == 503 {
+                failing.on("GET", "/api/v1/workspaces") { _ in throw APIError(status: 503, message: "manager away") }
+            }
+            let fallback = MentionWorkspaces()
+            await fallback.load(api: failing.client, group: "")
+            #expect(fallback.rows.isEmpty)
+            #expect(failing.sent("GET", "/api/v1/workspaces").count == 1)
+        }
+        let noAPI = MentionWorkspaces()
+        await noAPI.load(api: nil, group: "")
+        #expect(noAPI.rows.isEmpty)
     }
 
     @Test func aPickedSessionIsQuoted() {
