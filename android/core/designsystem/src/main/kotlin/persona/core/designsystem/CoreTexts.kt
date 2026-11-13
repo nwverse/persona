@@ -94,6 +94,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.CloseAgentTitle -> R.string.designsystem_core_close_agent_title
     CoreText.Key.CloseAgentMessageTab -> R.string.designsystem_core_close_agent_message_tab
     CoreText.Key.CloseAgentMessagePane -> R.string.designsystem_core_close_agent_message_pane
+    CoreText.Key.CloseAgentMessageRuntime -> R.string.designsystem_core_close_agent_message_runtime
     CoreText.Key.DeleteSessionTitle -> R.string.designsystem_core_delete_session_title
     CoreText.Key.DeleteSessionOnMachineCommand -> R.string.designsystem_core_delete_session_on_machine_command
     CoreText.Key.DeleteSessionOnMachine -> R.string.designsystem_core_delete_session_on_machine
@@ -148,7 +149,6 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.DirectionPlanned -> R.string.designsystem_core_direction_planned
     CoreText.Key.DirectionSecretary -> R.string.designsystem_core_direction_secretary
     CoreText.Key.DirectionUntitled -> R.string.designsystem_core_direction_untitled
-    CoreText.Key.DirectionCountWorking -> R.string.designsystem_core_direction_count_working
     CoreText.Key.DirectionCountNeedsYou -> R.string.designsystem_core_direction_count_needs_you
     CoreText.Key.InboxAction -> R.string.designsystem_core_inbox_action
     CoreText.Key.InboxFyi -> R.string.designsystem_core_inbox_fyi

@@ -30,7 +30,8 @@ const (
 	OriginExtension = "extension"
 	OriginModel     = "model"
 	OriginUser      = "user"
-	OriginPush      = "push" // a push source (#3848): no recipe, its device sends its items
+	OriginPush      = "push"    // a push source (#3848): no recipe, its device sends its items
+	OriginPersona   = "persona" // a built-in's default subscription (#6345): the manager's own recipe
 )
 
 // Error codes: in API errors, Subscription.Error, a dry run's error and its checks.

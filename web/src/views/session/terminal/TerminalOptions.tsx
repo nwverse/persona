@@ -13,6 +13,9 @@ import { FONT_SIZES, type FeedView, type TerminalFeed } from "./feed";
 import { t } from "../../../i18n";
 
 const ROW = "flex min-h-10 items-center gap-2.5 px-3";
+// An option row's label and its hint under it, as every row writes them.
+const LABEL = "truncate text-[12.5px] text-ink";
+const HINT = "truncate text-[11px] text-ink-3";
 
 /** A gear's menu: a card under `anchor`, closed by a press outside it or Esc (Single pane's options, Full view's Appearance). */
 export function OptionsPopover({ anchor, label, onClose, children }: { anchor: HTMLElement; label: string; onClose: () => void; children: React.ReactNode }) {
@@ -78,8 +81,8 @@ export function TerminalOptions({
       <div className={ROW}>
         <Icon name="wrap" size={15} className="shrink-0 text-ink-3" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[12.5px] text-ink">{t("session-terminal-terminaloptions.wrap")}</div>
-          <div className="truncate text-[11px] text-ink-3" title={t("session-terminal-terminaloptions.wrap_hint")}>
+          <div className={LABEL}>{t("session-terminal-terminaloptions.wrap")}</div>
+          <div className={HINT} title={t("session-terminal-terminaloptions.wrap_hint")}>
             {driving ? t("session-terminal-terminaloptions.wrap_driving") : v.wrap ? t("session-terminal-terminaloptions.wrap_on") : t("session-terminal-terminaloptions.wrap_off")}
           </div>
         </div>
@@ -88,8 +91,8 @@ export function TerminalOptions({
       <div className={ROW}>
         <Icon name="keyboard" size={15} className="shrink-0 text-ink-3" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[12.5px] text-ink">{t("session-terminal-terminaloptions.key_bar")}</div>
-          <div className="truncate text-[11px] text-ink-3">{t("session-terminal-terminaloptions.key_bar_hint")}</div>
+          <div className={LABEL}>{t("session-terminal-terminaloptions.key_bar")}</div>
+          <div className={HINT}>{t("session-terminal-terminaloptions.key_bar_hint")}</div>
         </div>
         <Switch checked={keyBar} onChange={onKeyBar} label={t("session-terminal-terminaloptions.key_bar")} />
       </div>
@@ -117,9 +120,9 @@ export function TerminalOptions({
       <div className={ROW}>
         <Icon name="hand" size={15} className="shrink-0 text-ink-3" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[12.5px] text-ink">{t("terminal-mouse.label")}</div>
+          <div className={LABEL}>{t("terminal-mouse.label")}</div>
           <div
-            className="truncate text-[11px] text-ink-3"
+            className={HINT}
             title={t("terminal-mouse.tooltip")}
           >
             {v.mouse === "program" ? t("terminal-mouse.hint_program") : t("terminal-mouse.hint_local")}
@@ -167,16 +170,16 @@ export function TerminalOptions({
       <div className={ROW}>
         <Icon name="spark" size={15} className="shrink-0 text-ink-3" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[12.5px] text-ink">{t("session-terminal-terminaloptions.cursor_blink")}</div>
-          <div className="truncate text-[11px] text-ink-3">{t("session-terminal-terminaloptions.cursor_blink_hint")}</div>
+          <div className={LABEL}>{t("session-terminal-terminaloptions.cursor_blink")}</div>
+          <div className={HINT}>{t("session-terminal-terminaloptions.cursor_blink_hint")}</div>
         </div>
         <Switch checked={v.cursorBlink} onChange={(on) => feed.setCursorBlink(on)} label={t("session-terminal-terminaloptions.cursor_blink")} />
       </div>
       <div className={ROW}>
         <Icon name="gauge" size={15} className="shrink-0 text-ink-3" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[12.5px] text-ink">{t("session-terminal-terminaloptions.webgl")}</div>
-          <div className="truncate text-[11px] text-ink-3" title={t("session-terminal-terminaloptions.webgl_hint_long")}>
+          <div className={LABEL}>{t("session-terminal-terminaloptions.webgl")}</div>
+          <div className={HINT} title={t("session-terminal-terminaloptions.webgl_hint_long")}>
             {t("session-terminal-terminaloptions.webgl_hint")}
           </div>
         </div>
@@ -215,8 +218,8 @@ export function AppearanceRow() {
     <div className={ROW}>
       <Icon name="sun" size={15} className="shrink-0 text-ink-3" />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[12.5px] text-ink">{t("session-terminal-terminaloptions.appearance")}</div>
-        <div className="truncate text-[11px] text-ink-3" title={t("session-terminal-terminaloptions.appearance_tooltip")}>
+        <div className={LABEL}>{t("session-terminal-terminaloptions.appearance")}</div>
+        <div className={HINT} title={t("session-terminal-terminaloptions.appearance_tooltip")}>
           {APPEARANCE[appearance].hint}
         </div>
       </div>
