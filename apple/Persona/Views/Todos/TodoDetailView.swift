@@ -9,6 +9,7 @@ struct TodoDetailView: View {
     /// In an existing value-based stack, lineage buttons append here. Sheet presentations leave it nil and use their
     /// own NavigationLink destination below.
     var openDetail: ((TodoDetailRoute) -> Void)? = nil
+    var openAgent: ((SessionKey) -> Void)? = nil
 
     @State private var store = TodoStore.shared
     @State private var text = TodoEditorText()
@@ -59,7 +60,9 @@ struct TodoDetailView: View {
         }
         .detailTitle(currentTodo?.title ?? String(localized: "To-Do Details"))
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(for: TodoDetailRoute.self) { route in TodoDetailView(todoID: route.id, openDetail: openDetail) }
+        .navigationDestination(for: TodoDetailRoute.self) { route in
+            TodoDetailView(todoID: route.id, openDetail: openDetail, openAgent: openAgent)
+        }
         .pageToolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -432,8 +435,12 @@ struct TodoDetailView: View {
         }()
 
         return Button {
-            dismiss()
-            openTodoAgentChat(key, in: model)
+            if let openAgent {
+                openAgent(key)
+            } else {
+                dismiss()
+                openTodoAgentChat(key, in: model)
+            }
         } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 if isFailed {

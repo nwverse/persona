@@ -68,16 +68,27 @@ func countTurns(t *testing.T, s *Service, todo string, hubs ...*fakeHub) (n turn
 	return n
 }
 
-// wantTurns waits until completion handling did want.
+// wantTurns waits until completion handling did want, and fails with what it did when it does not get there.
 func wantTurns(t *testing.T, what string, want turnCounts, s *Service, todo string, hubs ...*fakeHub) {
 	t.Helper()
-	waitFor(t, what, func() bool { return countTurns(t, s, todo, hubs...) == want })
+	var got turnCounts
+	waitFor(t, what, func() bool {
+		got = countTurns(t, s, todo, hubs...)
+		return got == want
+	})
+	if got != want {
+		t.Fatalf("%s: receipts=%d judgments=%d supervision messages=%d, want %d, %d, %d", what, got.receipts, got.judgments, got.messages,
+			want.receipts, want.judgments, want.messages)
+	}
 }
 
-// stillTurns gives late duplicates several completed sweeps to show, then checks the counts.
+// stillTurns gives late duplicates the time to show (several supervision messages' spacing), then checks the counts.
+// The quiet window is the same length as before; a ticker drives it so the wait is not a fixed time.Sleep.
 func stillTurns(t *testing.T, what string, want turnCounts, s *Service, todo string, hubs ...*fakeHub) {
 	t.Helper()
-	sweeps(t, s, todo, 4)
+	quiet := time.NewTicker(4 * shortSuperviseTimings.every)
+	defer quiet.Stop()
+	<-quiet.C
 	if got := countTurns(t, s, todo, hubs...); got != want {
 		t.Fatalf("%s: receipts=%d judgments=%d supervision messages=%d, want %d, %d, %d", what, got.receipts, got.judgments, got.messages,
 			want.receipts, want.judgments, want.messages)
@@ -438,7 +449,9 @@ func TestTurnSweepReadsAreBounded(t *testing.T) {
 	s.superviseWatch(ctx, time.Now())
 	waitFor(t, "the first reads", func() bool { return int(going.Load()) == turnRecoverMost })
 	s.superviseWatch(ctx, time.Now()) // a tick while they are still going starts no more
-	// The read hook increments before blocking, so an extra read is visible without a fixed delay.
+	quiet := time.NewTicker(50 * time.Millisecond)
+	defer quiet.Stop()
+	<-quiet.C // a tick this soon starts no further reads while the first batch is held
 	if got := int(reads.Load()); got != turnRecoverMost {
 		t.Fatalf("%d reads going at a time, want at most %d", got, turnRecoverMost)
 	}
@@ -450,6 +463,7 @@ func TestTurnSweepReadsAreBounded(t *testing.T) {
 	for range 3 {
 		s.superviseWatch(ctx, time.Now())
 	}
+	<-quiet.C // rows that did not move schedule no further reads
 	if got := int(reads.Load()); got != tasks || int(most.Load()) > turnRecoverMost {
 		t.Fatalf("%d reads for %d tasks whose rows did not move (at most %d at a time, want %d)", got, tasks, most.Load(), turnRecoverMost)
 	}
@@ -460,6 +474,7 @@ func TestTurnSweepReadsAreBounded(t *testing.T) {
 		return int(reads.Load()) == tasks+1
 	})
 	s.superviseWatch(ctx, time.Now())
+	<-quiet.C // the row that did not move again schedules nothing
 	if got := int(reads.Load()); got != tasks+1 {
 		t.Fatalf("%d reads after one row moved, want %d", got, tasks+1)
 	}
@@ -515,7 +530,9 @@ func TestTaskReceiptReservationIsReleased(t *testing.T) {
 				current := todoNow(s, todo.ID)
 				return current.DoneAt == nil && current.Check != nil && current.Check.Verdict == verdictDone
 			})
-			sweeps(t, s, todo.ID, 2) // a second receipt or judgment would show in another completed sweep
+			quiet := time.NewTicker(100 * time.Millisecond)
+			defer quiet.Stop()
+			<-quiet.C // a second receipt or judgment would show by now
 			f.mu.Lock()
 			judged := f.judged
 			f.mu.Unlock()
@@ -662,7 +679,9 @@ func TestCompletionUnheardWhileAUsageLimitIsWaitedOut(t *testing.T) {
 	sweeps(t, s, todo.ID, 4)
 	waitFor(t, "the interrupted receipt", func() bool { return len(recoveryReceipts(t, s, todo.ID)) == 1 })
 	sweeps(t, s, todo.ID, 3)
-	sweeps(t, s, todo.ID, 4)
+	quiet := time.NewTicker(4 * shortSuperviseTimings.every)
+	defer quiet.Stop()
+	<-quiet.C // late ticks add no second receipt or judgment
 	receipts := recoveryReceipts(t, s, todo.ID)
 	if len(receipts) != 1 || receipts[0].State != "interrupted" || f.judged != 0 {
 		t.Fatalf("after the wait: %d receipts %+v, %d judgments, want one interrupted receipt and no judgment", len(receipts), receipts, f.judged)
@@ -957,13 +976,21 @@ func TestCompletionJudgmentThatDidNotLand(t *testing.T) {
 	if now := todoNow(s, todo.ID); now.Check != nil || f.judged != 1 {
 		t.Fatalf("the first judgment landed: %+v after %d calls", now.Check, f.judged)
 	}
-	waitFor(t, "asked again", func() bool {
+	// The looks' retry spacing is turnRetryBase doubled; a ticker paces the sweeps at that same interval.
+	pace := time.NewTicker(2 * time.Millisecond)
+	defer pace.Stop()
+	for range 4 {
+		<-pace.C
 		sweeps(t, s, todo.ID, 1)
-		return countTurns(t, s, todo.ID, f) == (turnCounts{receipts: 1, judgments: 2, messages: 1})
-	})
+	}
+	wantTurns(t, "asked again", turnCounts{receipts: 1, judgments: 2, messages: 1}, s, todo.ID, f)
 	waitFor(t, "the review to wait", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
 	if now := todoNow(s, todo.ID); now.Check == nil || now.Check.Verdict != verdictDone {
 		t.Fatalf("no judgment on the todo: %+v", now.Check)
+	}
+	for range 4 {
+		<-pace.C
+		sweeps(t, s, todo.ID, 1)
 	}
 	stillTurns(t, "later ticks", turnCounts{receipts: 1, judgments: 2, messages: 1}, s, todo.ID, f)
 }
@@ -979,16 +1006,24 @@ func TestCompletionJudgmentThatNeverLands(t *testing.T) {
 	f.setItems(turnPage("turn-1", "修好了", true)...)
 	reads := itemReadsCounted(f)
 	nodeListed(s, f, turnRow(proto.StatusDone, 3, "修好了"))
-	want := turnCounts{receipts: 1, judgments: 1 + turnJudgeTries, messages: 1}
-	waitFor(t, "told unjudged", func() bool {
+	// Past the spacing of the looks (this test's turnRetryBase, doubled); a ticker paces the sweeps at that interval.
+	pace := time.NewTicker(20 * time.Millisecond)
+	defer pace.Stop()
+	for range turnJudgeTries + 4 {
 		sweeps(t, s, todo.ID, 1)
-		return countTurns(t, s, todo.ID, f) == want
-	})
+		<-pace.C
+	}
+	want := turnCounts{receipts: 1, judgments: 1 + turnJudgeTries, messages: 1}
+	wantTurns(t, "told unjudged", want, s, todo.ID, f)
 	if e, ok := s.turnOf(context.Background(), todo.ID); !ok || e.Judged == nil || e.Judged.Err == "" || e.Signal == nil || e.Signal.Kind != sigUnjudged {
 		t.Fatalf("the ledger's turn = %+v, want it told unjudged", e)
 	}
 	turnsQuiet(t, s, todo.ID)
 	done := reads.Load()
+	for range 5 {
+		sweeps(t, s, todo.ID, 1)
+		<-pace.C
+	}
 	stillTurns(t, "later ticks", want, s, todo.ID, f)
 	if got := reads.Load(); got != done {
 		t.Fatalf("%d more transcript reads after the turn was told unjudged, want none", got-done)

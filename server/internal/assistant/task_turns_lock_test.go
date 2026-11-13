@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -147,11 +146,16 @@ func TestTurnEndReservesWhileTheLedgerIsHeld(t *testing.T) {
 	// after the ledger answers and the end was handled, so that nothing of this test is left running.
 	stuck := ""
 	deadline := time.Now().Add(3 * time.Second)
-	for settling := false; !settling && stuck == ""; runtime.Gosched() {
+	pace := time.NewTicker(time.Millisecond)
+	defer pace.Stop()
+	for settling := false; !settling && stuck == ""; {
 		if !comesBack(time.Second, func() { _, settling = s.turnStartHeard(todo.ID) }) {
 			stuck = "the task lock waits for the ledger: a look at the task did not come back while the ledger was held"
 		} else if !settling && time.Now().After(deadline) {
 			stuck = "the end did not reach its reservation while the ledger was held"
+		}
+		if !settling && stuck == "" {
+			<-pace.C
 		}
 	}
 	if stuck == "" && !comesBack(time.Second, func() { s.taskWorkCurrent(todo.ID, time.Now()) }) {

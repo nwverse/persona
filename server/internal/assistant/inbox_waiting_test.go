@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -373,22 +374,28 @@ func TestInboxReplyWithAConversationWaits(t *testing.T) {
 		t.Fatalf("the conversation was told new messages: %s", told)
 	}
 	// Delivery empties Pending after the send (keepToldSince), so wait for that rather than read it at once.
-	waitFor(t, "the notice delivery", func() bool {
+	deadline := time.Now().Add(5 * time.Second)
+	poll := time.NewTicker(5 * time.Millisecond)
+	defer poll.Stop()
+	for {
 		h.inbox.mu.Lock()
 		pending, startedNow := len(it.Agent.Pending), it.Agent.StartedAt
 		handling := it.Handling.State
 		h.inbox.mu.Unlock()
-		if pending != 0 {
-			return false
+		if pending == 0 {
+			if handling != HandlingWaiting {
+				t.Fatalf("after delivery: handling %q", handling)
+			}
+			if (started == nil) != (startedNow == nil) || started != nil && !started.Equal(*startedNow) {
+				t.Fatalf("the notice started a turn: started_at %v → %v", started, startedNow)
+			}
+			break
 		}
-		if handling != HandlingWaiting {
-			t.Fatalf("after delivery: handling %q", handling)
+		if time.Now().After(deadline) {
+			t.Fatalf("the notice was not delivered: %d notes pending", pending)
 		}
-		if (started == nil) != (startedNow == nil) || started != nil && !started.Equal(*startedNow) {
-			t.Fatalf("the notice started a turn: started_at %v → %v", started, startedNow)
-		}
-		return true
-	})
+		<-poll.C
+	}
 	// Listed, it is in progress waiting, not filed.
 	h.inbox.mu.Lock()
 	l := it.listed()
@@ -402,6 +409,11 @@ func TestInboxReplyWithAConversationWaits(t *testing.T) {
 // item returns to waiting and keeps what it waits on.
 func TestInboxHandbackRecapOnlyKeepsWaiting(t *testing.T) {
 	h, _, it := handledHub(t)
+	// Hold the item's delivery off: tellSoon sends its pending notes (and clears the wake) on a goroutine once a request
+	// has answered, which the test would race with.
+	delivery, _ := h.inbox.telling.LoadOrStore(it.ID, &sync.Mutex{})
+	delivery.(*sync.Mutex).Lock()
+	t.Cleanup(delivery.(*sync.Mutex).Unlock)
 	if _, err := suggestTool(t, h, `{"recap":"先问张三","follow":{"who":"张三","next":"等他给口径","check_in":"4h"}}`); err != nil {
 		t.Fatal(err)
 	}
