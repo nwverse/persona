@@ -232,9 +232,13 @@ Components live in `Agents.kt` in `core:designsystem` (`MachineChip`, `AgentTree
 - Status light motion (requested 2026-11-03, #959): the single active state-color light slowly drifts near its resting position (12% of the short edge), with slight changes in size and brightness,
   and its color leaning a little toward a neighboring state color (blue ↔ mint; routine amber never blends toward error red). Roughly every two minutes a small blob splits off, swims toward the screen center, and later swims back to merge with the main light;
   the backdrop uses only one active state-color family, keeping the whole page subdued. Periods range from tens of seconds to minutes and are not multiples of each other, so no loop is apparent. Unit tests (`AmbientLightTest`) bound the speed
-  (no more than 5% of the short edge per second) and the small blobs' fades. The implementation is a pure function of absolute frame time (`Pool.blobs`), so adjacent panes, scroll edges and nested pages stay aligned even when each draws a copy;
+  (no more than 5% of the short edge per second) and the small blobs' fades. The implementation is a pure function of the light's time (`Pool.blobs`), and every copy reads one shared clock (`AmbientClock`), so adjacent panes, scroll edges and nested pages stay aligned even when each draws a copy;
   it redraws only 12 times per second (the light is too slow for visible steps, and each background change requires the glass above to blur again). With system animations disabled (reduced motion) or battery saver on, the light stays at its resting position,
   matching the pre-change behavior; `android.sh shots` sets animation scale to 0, so batch screenshots remain static.
+- The light holds still when nobody is using the app (like the iPhone, whose background does not move): five seconds after the last input it stops where it is, not at its resting position, and stops asking for frames, so an untouched page draws nothing for it;
+  the next input carries on from that position without a jump (the clock counts only the time the light was moving). Input is what reaches `MainActivity`: touches, keys, mouse wheels and touchpads (`dispatchGenericMotionEvent`), and the app coming to the front or opening a link (`onResume`, `onNewIntent`).
+  Dialogs and bottom sheets are windows of their own, so the light behind their scrim stops five seconds after the input that opened them; a reply that is still streaming and typing on the on-screen keyboard do not count as input either (a fling ends well within the five seconds after the finger lifts).
+  While someone is using the app the light moves exactly as before (same steps, same path). `AmbientClockTest` covers the clock and the loop: still for good after five seconds, no jump on resuming, no frames requested while still, every copy at the same time.
 
 ## 3.1 Tablets and foldables
 
