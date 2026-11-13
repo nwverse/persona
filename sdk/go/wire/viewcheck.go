@@ -69,6 +69,22 @@ func checkViewJSON(raw []byte, hubNames bool) error {
 // from raw and checked, for a caller that would decode raw again.
 func DecodeCheckedViewJSON(raw []byte) (View, error) { return decodeCheckedView(raw, false) }
 
+// DecodeCheckedStreamViewJSON validates raw as a UI stream's view
+// (UIStreamView), then decodes and checks it as DecodeCheckedViewJSON does.
+// UIStreamView is View ($ref) narrowed by sibling keywords, and check holds a
+// value to a $ref's target before its siblings, so a view that holds to
+// UIStreamView holds to View: View is not validated a second time.
+func DecodeCheckedStreamViewJSON(raw []byte) (View, error) {
+	if err := ValidateJSON("UIStreamView", raw); err != nil {
+		return View{}, err
+	}
+	var v View
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return View{}, err
+	}
+	return v, checkViewSemantics(&v, false)
+}
+
 func decodeCheckedView(raw []byte, hubNames bool) (View, error) {
 	if err := ValidateJSON("View", raw); err != nil {
 		return View{}, err
