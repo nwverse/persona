@@ -48,6 +48,39 @@ func TestPlacesSelectMachineAndProjectPairs(t *testing.T) {
 	}
 }
 
+// Spaces select by machine and group the same way; with places, both must hold.
+func TestSpacesSelectMachineAndGroupPairs(t *testing.T) {
+	var index Index
+	index.Replace("mac", []Item{placed("mac-1", "mac", "/code/app", "w1", 1), placed("mac-2", "mac", "/code/app", "w2", 2), placed("mac-3", "mac", "/code/other", "", 3)})
+	index.Replace("pc", []Item{placed("pc-1", "pc", "/code/app", "w1", 4), placed("pc-2", "pc", "/code/app", "", 5)})
+	for name, test := range map[string]struct {
+		options Options
+		want    []string
+	}{
+		"one space":               {Options{Spaces: []Place{{"mac", "w1"}}}, []string{"mac-1"}},
+		"the same id on two":      {Options{Spaces: []Place{{"mac", "w1"}, {"pc", "w1"}}}, []string{"pc-1", "mac-1"}},
+		"in no space":             {Options{Spaces: []Place{{"mac", ""}, {"pc", ""}}}, []string{"pc-2", "mac-3"}},
+		"a space and a place":     {Options{Spaces: []Place{{"mac", "w2"}, {"mac", ""}}, Places: []Place{{"mac", "/code/app"}}}, []string{"mac-2"}},
+		"a space nothing is in":   {Options{Spaces: []Place{{"pc", "w2"}}}, nil},
+		"with a group that isn't": {Options{Spaces: []Place{{"mac", "w1"}}, Group: "w2"}, nil},
+	} {
+		page := mustQuery(t, &index, test.options)
+		if got := sessionIDs(page); len(got) != len(test.want) || (len(got) > 0 && !reflect.DeepEqual(got, test.want)) || page.Total != len(test.want) {
+			t.Errorf("%s: %v (total %d), want %v", name, got, page.Total, test.want)
+		}
+		if counts, err := index.PlaceCounts(test.options); err != nil || counts.Total != len(test.want) {
+			t.Errorf("%s: place counts %+v %v", name, counts, err)
+		}
+	}
+	first := mustQuery(t, &index, Options{Spaces: []Place{{"mac", "w1"}, {"pc", "w1"}}, Limit: 1})
+	if next := mustQuery(t, &index, Options{Spaces: []Place{{"pc", "w1"}, {"mac", "w1"}}, Limit: 1, Cursor: first.NextCursor}); !reflect.DeepEqual(sessionIDs(next), []string{"mac-1"}) {
+		t.Fatalf("the same spaces in another order: %+v", next)
+	}
+	// The same pairs as places are another list.
+	_, err := index.Query(Options{Places: []Place{{"mac", "w1"}, {"pc", "w1"}}, Limit: 1, Cursor: first.NextCursor})
+	requireCode(t, err, "invalid_query")
+}
+
 // A cursor is bound to its places as a set: the same places in another order continue it, other places do not.
 func TestPlacesBindCursorsAndDeltas(t *testing.T) {
 	var index Index
@@ -159,7 +192,7 @@ func TestPlaceCountsFollowTheFilters(t *testing.T) {
 }
 
 func TestParsePlaces(t *testing.T) {
-	for _, key := range []string{"place", "catalog"} {
+	for _, key := range []string{"place", "space", "catalog"} {
 		if !Enabled(url.Values{key: {""}}) {
 			t.Errorf("%s did not enable indexed behavior", key)
 		}
@@ -169,8 +202,12 @@ func TestParsePlaces(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(o.Places, want) {
 		t.Fatalf("parsed %+v, %v", o.Places, err)
 	}
-	if o, err := Parse(url.Values{"catalog": {"false"}}); err != nil || o.Places != nil {
+	if o, err := Parse(url.Values{"catalog": {"false"}}); err != nil || o.Places != nil || o.Spaces != nil {
 		t.Fatalf("no place: %+v %v", o, err)
+	}
+	o, err = Parse(url.Values{"space": {`["mac","w1"]`, `["pc",""]`}})
+	if err != nil || !reflect.DeepEqual(o.Spaces, []Place{{"mac", "w1"}, {"pc", ""}}) || o.Places != nil {
+		t.Fatalf("parsed spaces %+v, %v", o, err)
 	}
 	many := make([]string, maxPlaces+1)
 	for n := range many {
@@ -191,6 +228,10 @@ func TestParsePlaces(t *testing.T) {
 		"null":              {"place": {"null"}},
 		"no machine":        {"place": {`["","/code/app"]`}},
 		"one bad of two":    {"place": {`["mac","/code/app"]`, "junk"}},
+		"too many spaces":   {"space": many},
+		"space not JSON":    {"space": {"mac/w1"}},
+		"space no machine":  {"space": {`["","w1"]`}},
+		"space no value":    {"space": nil},
 		"catalog twice":     {"catalog": {"1", "1"}},
 		"catalog malformed": {"catalog": {"yes"}},
 		"catalog empty":     {"catalog": {""}},
@@ -208,6 +249,11 @@ func TestParsePlaces(t *testing.T) {
 	_, err = index.Counts(Options{Places: make([]Place, maxPlaces+1)})
 	requireCode(t, err, "invalid_query")
 	if !strings.Contains(err.Error(), "place") {
+		t.Fatalf("the error does not name the key: %v", err)
+	}
+	_, err = index.Query(Options{Spaces: []Place{{"", "w1"}}})
+	requireCode(t, err, "invalid_query")
+	if !strings.Contains(err.Error(), "space") {
 		t.Fatalf("the error does not name the key: %v", err)
 	}
 }

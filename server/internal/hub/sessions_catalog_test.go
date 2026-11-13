@@ -111,7 +111,7 @@ func project(c sessionCatalog, id string) *catalogProject {
 }
 
 // threeComputers: one repository checked out on a Mac and a Windows PC (and a fork of it on the Mac), notes that are
-// no repository on both, and a computer that is offline.
+// no repository on both, and a computer that is offline, with a session in no directory.
 func threeComputers(t *testing.T) (h *Hub, mac, pc *catalogNode) {
 	h = newTestHub(t)
 	mac = &catalogNode{origins: map[string]string{"/Users/me/code/app": "git.example.com/team/app", "/Users/me/forks/app": "git.example.com/me/app"}}
@@ -127,7 +127,9 @@ func threeComputers(t *testing.T) (h *Hub, mac, pc *catalogNode) {
 		proto.Session{SessionID: "b2", Cwd: `D:\work\Notes`, WorkspaceID: "ws-9"},
 		proto.Session{SessionID: "b3", Cwd: `D:\work\Notes\`, WorkspaceID: "ws-9"},
 	)
-	catalogMachine(h, "nas", nil, proto.Session{SessionID: "c1", Cwd: "/volume1/code/app", RepoRoot: "/volume1/code/app"})
+	catalogMachine(h, "nas", nil,
+		proto.Session{SessionID: "c1", Cwd: "/volume1/code/app", RepoRoot: "/volume1/code/app"},
+		proto.Session{SessionID: "c2"}) // in no directory
 	return h, mac, pc
 }
 
@@ -136,7 +138,7 @@ func threeComputers(t *testing.T) (h *Hub, mac, pc *catalogNode) {
 func TestSessionCatalogGroupsARepositoryAcrossComputers(t *testing.T) {
 	h, mac, pc := threeComputers(t)
 	got := readCatalog(t, h, "")
-	if got.Total != 8 || got.Pending || got.Revision == "" {
+	if got.Total != 9 || got.Pending || got.Revision == "" {
 		t.Fatalf("catalog: %+v", got)
 	}
 	// Projects by count, then name, then id; a project's places by count, then computer, then path. A project is
@@ -149,6 +151,8 @@ func TestSessionCatalogGroupsARepositoryAcrossComputers(t *testing.T) {
 		{ID: "dir:app", Name: "app", Total: 1, Places: []catalogPlace{{MachineID: "nas", Path: "/volume1/code/app", Total: 1}}},
 		{ID: "git:git.example.com/me/app", Name: "app", Origin: "git.example.com/me/app", Total: 1, Places: []catalogPlace{
 			{MachineID: "mac", Path: "/Users/me/forks/app", Total: 1}}},
+		// the rows in no directory come last, whatever their number
+		{Total: 1, Places: []catalogPlace{{MachineID: "nas", Total: 1}}},
 	}
 	if !reflect.DeepEqual(got.Projects, want) {
 		t.Fatalf("projects:\n got %+v\nwant %+v", got.Projects, want)
@@ -156,6 +160,8 @@ func TestSessionCatalogGroupsARepositoryAcrossComputers(t *testing.T) {
 	wantSpaces := []catalogSpace{
 		{MachineID: "mac", ID: "w1", Name: "Release", Total: 2}, {MachineID: "pc", ID: "ws-9", Name: "ws-9", Total: 2},
 		{MachineID: "pc", ID: "w1", Name: "Desk", Total: 1}, {MachineID: "mac", ID: "w2", Name: "Writing", Total: 1},
+		// each computer's rows in no space, last
+		{MachineID: "nas", Total: 2}, {MachineID: "mac", Total: 1},
 	}
 	if !reflect.DeepEqual(got.Spaces, wantSpaces) {
 		t.Fatalf("spaces:\n got %+v\nwant %+v", got.Spaces, wantSpaces)
@@ -170,6 +176,24 @@ func TestSessionCatalogGroupsARepositoryAcrossComputers(t *testing.T) {
 	// A second read asks nothing again.
 	if again := readCatalog(t, h, ""); !reflect.DeepEqual(again.Projects, want) || len(mac.calls()) != 3 || len(pc.calls()) != 3 {
 		t.Fatalf("second read: %+v, mac %v, pc %v", again.Projects, mac.calls(), pc.calls())
+	}
+	// Every row is in exactly one project and one space entry.
+	projects, spaces := 0, 0
+	for _, p := range got.Projects {
+		places := 0
+		for _, place := range p.Places {
+			places += place.Total
+		}
+		if places != p.Total {
+			t.Errorf("%q: places hold %d of %d", p.ID, places, p.Total)
+		}
+		projects += p.Total
+	}
+	for _, sp := range got.Spaces {
+		spaces += sp.Total
+	}
+	if projects != got.Total || spaces != got.Total {
+		t.Fatalf("projects hold %d, spaces %d of %d", projects, spaces, got.Total)
 	}
 }
 
@@ -199,13 +223,14 @@ func TestSessionCatalogFollowsTheFiltersAndPlaces(t *testing.T) {
 		query += "&place=" + neturl.QueryEscape(string(pair))
 	}
 	page := runtimePage(t, h, query)
-	var ids []string
+	var ids func(string) []string
+	var listed []string
 	for _, s := range page.Sessions {
-		ids = append(ids, s.MachineID+"/"+s.SessionID)
+		listed = append(listed, s.MachineID+"/"+s.SessionID)
 	}
-	slices.Sort(ids)
-	if page.Total != app.Total || !reflect.DeepEqual(ids, []string{"mac/a1", "mac/a2", "pc/b1"}) {
-		t.Fatalf("the project's sessions: total %d, %v", page.Total, ids)
+	slices.Sort(listed)
+	if page.Total != app.Total || !reflect.DeepEqual(listed, []string{"mac/a1", "mac/a2", "pc/b1"}) {
+		t.Fatalf("the project's sessions: total %d, %v", page.Total, listed)
 	}
 	// Its counts are the project's too, by state and by computer.
 	w := httptest.NewRecorder()
@@ -215,7 +240,35 @@ func TestSessionCatalogFollowsTheFiltersAndPlaces(t *testing.T) {
 		t.Fatalf("the project's counts: %s %v", w.Body, err)
 	}
 
-	for _, bad := range []string{"catalog=yes", "catalog=1&catalog=1", "catalog=1&place=junk", "catalog=1&limit=0", "place=%5B%22%22%2C%22%2Fx%22%5D"} {
+	// A space is selected by its computer and id; an empty id or path selects the rows without one.
+	ids = func(query string) []string {
+		t.Helper()
+		var out []string
+		for _, s := range runtimePage(t, h, "summary=1&"+query).Sessions {
+			out = append(out, s.MachineID+"/"+s.SessionID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	pair := func(key, machine, value string) string {
+		b, _ := json.Marshal([]string{machine, value})
+		return key + "=" + neturl.QueryEscape(string(b))
+	}
+	for query, want := range map[string][]string{
+		pair("space", "mac", "w1") + "&" + pair("space", "pc", "w1"):          {"mac/a1", "mac/a2", "pc/b1"},
+		pair("space", "pc", "ws-9"):                                           {"pc/b2", "pc/b3"},
+		pair("space", "mac", "") + "&" + pair("space", "nas", ""):             {"mac/a4", "nas/c1", "nas/c2"},
+		pair("place", "nas", ""):                                              {"nas/c2"},
+		pair("space", "mac", "w1") + "&state=needs_you":                       {"mac/a2"},
+		pair("space", "mac", "w1") + "&" + pair("place", "pc", `C:\code\App`): nil,
+	} {
+		if got := ids(query); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %v, want %v", query, got, want)
+		}
+	}
+
+	for _, bad := range []string{"catalog=yes", "catalog=1&catalog=1", "catalog=1&place=junk", "catalog=1&limit=0", "place=%5B%22%22%2C%22%2Fx%22%5D",
+		"space=junk", "space=%5B%22%22%2C%22w1%22%5D", "space=%5B%22mac%22%5D"} {
 		w := httptest.NewRecorder()
 		h.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions?"+bad, nil))
 		if w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_query") {
@@ -233,6 +286,11 @@ func TestSessionCatalogOfOwnMachinesOnly(t *testing.T) {
 	got, err := h.sessionCatalogOf(context.Background(), h.sessionListIndex(), sessionlist.Options{}, []string{"pc"}, true)
 	if err != nil || got.Total != 3 || len(got.Projects) != 2 || len(got.Spaces) != 2 {
 		t.Fatalf("own: %+v %v", got, err)
+	}
+	for _, sp := range got.Spaces {
+		if sp.MachineID != "pc" {
+			t.Fatalf("another manager's space: %+v", sp)
+		}
 	}
 	for _, p := range got.Projects {
 		for _, place := range p.Places {

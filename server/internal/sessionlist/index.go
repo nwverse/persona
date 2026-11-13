@@ -90,9 +90,12 @@ type Options struct {
 	// to set (who asks), not a key Parse reads, and it binds a cursor as the other filters do.
 	NoPrivate bool
 	// Places (place=["<machine>","<project>"], repeatable) selects the items at any of these machine and project
-	// pairs: one project's directories across computers. It combines with the other filters and binds a cursor as
-	// they do, whatever order the places come in. At most maxPlaces, each with a machine.
+	// pairs: one project's directories across computers. Spaces (space=["<machine>","<group>"]) does the same by
+	// machine and group. An empty key selects the items of that machine without the attribute. Each combines with
+	// the other filters and binds a cursor as they do, whatever order its pairs come in. At most maxPlaces each,
+	// every pair with a machine.
 	Places []Place
+	Spaces []Place
 }
 
 // Page contains transport values rather than adapter-specific session types.
@@ -150,8 +153,8 @@ type journalEntry struct {
 
 type filters struct {
 	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under string
-	// Places is Options.Places as placesKey spells them: filters stay comparable.
-	Places           string
+	// Places and Spaces are Options' as placesKey spells them: filters stay comparable.
+	Places, Spaces   string
 	Roots, NoPrivate bool
 }
 

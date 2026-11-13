@@ -33,9 +33,10 @@ const (
 	// An older hub reads neither key, so an app sends them only to a hub that says this.
 	featureSessionsHierarchy = "sessions_hierarchy"
 	// featureSessionsCatalog: a paged GET /api/v1/sessions takes catalog=1 (the projects and spaces of the filtered
-	// list, a repository's directories on every computer as one project: sessions_catalog.go) and
-	// place=["<machine>","<project>"], repeatable (the sessions at those directories), docs/protocol/protocol.md
-	// "Projects and spaces". An older hub reads neither key, so an app sends them only to a hub that says this.
+	// list, a repository's directories on every computer as one project: sessions_catalog.go), and
+	// place=["<machine>","<project>"] and space=["<machine>","<group>"], both repeatable (the sessions at those
+	// directories, in those spaces), docs/protocol/protocol.md "Projects and spaces". An older hub reads none of the
+	// keys, so an app sends them only to a hub that says this.
 	featureSessionsCatalog = "sessions_catalog"
 )
 
@@ -610,7 +611,7 @@ func ownPage(index *sessionlist.Index, opts sessionlist.Options, own []string, p
 		return json.Unmarshal([]byte(id), &k) != nil || !keep(k[0])
 	})
 	counts, err := ownCounts(index, sessionlist.Options{Since: opts.Since, State: opts.State, Project: opts.Project, Group: opts.Group,
-		Source: opts.Source, Provider: opts.Provider, Q: opts.Q, Manager: opts.Manager, Roots: opts.Roots, Places: opts.Places}, own)
+		Source: opts.Source, Provider: opts.Provider, Q: opts.Q, Manager: opts.Manager, Roots: opts.Roots, Places: opts.Places, Spaces: opts.Spaces}, own)
 	if err != nil {
 		return sessionlist.Page{}, err
 	}

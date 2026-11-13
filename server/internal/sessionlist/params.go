@@ -15,7 +15,7 @@ import (
 // machine_id filtering. Presence matters: malformed new parameters must be
 // parsed and rejected rather than silently falling back to the legacy API.
 func Enabled(v url.Values) bool {
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id", "place", "catalog"} {
+	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id", "place", "space", "catalog"} {
 		if _, exists := v[key]; exists {
 			return true
 		}
@@ -83,21 +83,49 @@ func Parse(v url.Values) (Options, error) {
 		}
 		o.PaneSource = values[0]
 	}
-	if values, exists := v["place"]; exists {
-		// Repeatable, unlike the other keys: each value is one machine and project pair, spelled as the JSON array a
-		// row's composite identity is, so neither part needs a separator it could not contain.
-		if len(values) == 0 || len(values) > maxPlaces {
-			return Options{}, failure("invalid_query", "place takes between 1 and 64 values")
-		}
-		for _, value := range values {
-			var pair []string
-			if err := json.Unmarshal([]byte(value), &pair); err != nil || len(pair) != 2 {
-				return Options{}, failure("invalid_query", "place must be a JSON array of a machine id and a project")
-			}
-			o.Places = append(o.Places, Place{Machine: pair[0], Key: pair[1]})
-		}
+	var err error
+	if o.Places, err = parsePlaces(v, "place"); err != nil {
+		return Options{}, err
+	}
+	if o.Spaces, err = parsePlaces(v, "space"); err != nil {
+		return Options{}, err
 	}
 	return validate(o)
+}
+
+// validPlaces: at most maxPlaces pairs, each naming a machine.
+func validPlaces(key string, places []Place) error {
+	if len(places) > maxPlaces {
+		return failure("invalid_query", key+" takes between 1 and 64 values")
+	}
+	for _, p := range places {
+		if p.Machine == "" {
+			return failure("invalid_query", key+" must name a machine")
+		}
+	}
+	return nil
+}
+
+// parsePlaces reads a repeatable key of machine and attribute pairs. Unlike the other keys it takes several values:
+// each is one pair, spelled as the JSON array a row's composite identity is, so neither part needs a separator it
+// could not contain.
+func parsePlaces(v url.Values, key string) ([]Place, error) {
+	values, exists := v[key]
+	if !exists {
+		return nil, nil
+	}
+	if len(values) == 0 || len(values) > maxPlaces {
+		return nil, failure("invalid_query", key+" takes between 1 and 64 values")
+	}
+	places := make([]Place, 0, len(values))
+	for _, value := range values {
+		var pair []string
+		if err := json.Unmarshal([]byte(value), &pair); err != nil || len(pair) != 2 {
+			return nil, failure("invalid_query", key+" must be a JSON array of a machine id and a value")
+		}
+		places = append(places, Place{Machine: pair[0], Key: pair[1]})
+	}
+	return places, nil
 }
 
 func boolean(s string) (bool, error) {
@@ -136,13 +164,11 @@ func validate(o Options) (Options, error) {
 		// The rows folded under a session are never roots: together they would always select nothing.
 		return Options{}, failure("invalid_query", "roots cannot be combined with parent_session_id")
 	}
-	if len(o.Places) > maxPlaces {
-		return Options{}, failure("invalid_query", "place takes between 1 and 64 values")
+	if err := validPlaces("place", o.Places); err != nil {
+		return Options{}, err
 	}
-	for _, p := range o.Places {
-		if p.Machine == "" {
-			return Options{}, failure("invalid_query", "place must name a machine")
-		}
+	if err := validPlaces("space", o.Spaces); err != nil {
+		return Options{}, err
 	}
 	switch o.PaneSource {
 	case "", "terminal", "feishu", "desktop", "unknown":
@@ -175,7 +201,7 @@ func normalizeQ(s string) string { return strings.ToLower(s) }
 
 func (o Options) filters() filters {
 	return filters{ID: o.ID, State: o.State, Machine: o.Machine, Project: o.Project, Group: o.Group, Source: o.Source, Provider: o.Provider, Q: o.Q, PaneSource: o.PaneSource, Manager: o.Manager,
-		Roots: o.Roots, Under: o.Under, NoPrivate: o.NoPrivate, Places: placesKey(o.Places)}
+		Roots: o.Roots, Under: o.Under, NoPrivate: o.NoPrivate, Places: placesKey(o.Places), Spaces: placesKey(o.Spaces)}
 }
 
 func (o Options) binding() binding {

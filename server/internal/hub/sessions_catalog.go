@@ -33,7 +33,8 @@ type sessionCatalog struct {
 
 // catalogProject is one project. ID is "git:<origin>" for a repository with a network remote, its origin lowercased
 // (hosts and most forges ignore case), and "dir:<folder name>" lowercased otherwise; Origin is the remote as the
-// computer spelled it, without credentials. Places are its directories, the ones a place= filter takes.
+// computer spelled it, without credentials. Places are its directories, the ones a place= filter takes. The rows in
+// no directory are the last project, with an empty ID and name, a place with an empty path for each of their computers.
 type catalogProject struct {
 	ID     string         `json:"id"`
 	Name   string         `json:"name"`
@@ -50,7 +51,8 @@ type catalogPlace struct {
 	Total     int    `json:"total"`
 }
 
-// catalogSpace is one computer's space: ID is the rows' group attribute there (space_id, else workspace_id).
+// catalogSpace is one computer's space: ID is the rows' group attribute there (space_id, else workspace_id), which
+// with MachineID is what space= selects by. A computer's rows in no space come last, with an empty ID and name.
 type catalogSpace struct {
 	MachineID string `json:"machine_id"`
 	ID        string `json:"id"`
@@ -301,7 +303,7 @@ func (h *Hub) sessionCatalogOf(ctx context.Context, index *sessionlist.Index, op
 	seen := func(mid string) bool { return !limited || slices.Contains(own, mid) }
 	out := sessionCatalog{Revision: counts.Revision, Projects: []catalogProject{}, Spaces: []catalogSpace{}}
 	machines := map[string]bool{}
-	var places []sessionlist.Place
+	var places []sessionlist.Place // the directories: the places with a path
 	for p, n := range counts.Project {
 		if !seen(p.Machine) {
 			continue
@@ -319,44 +321,69 @@ func (h *Hub) sessionCatalogOf(ctx context.Context, index *sessionlist.Index, op
 	origins, pending := h.originsOf(ctx, places)
 	out.Pending = pending
 
+	// The rows in no directory are a project of their own, under the empty id.
 	projects := map[string]*catalogProject{}
-	for _, p := range places {
-		id, _ := projectOf(p.Key, origins[p])
+	for p, n := range counts.Project {
+		if !seen(p.Machine) {
+			continue
+		}
+		id := ""
+		if p.Key != "" {
+			id, _ = projectOf(p.Key, origins[p])
+		}
 		project := projects[id]
 		if project == nil {
 			project = &catalogProject{ID: id}
 			projects[id] = project
 		}
-		project.Total += counts.Project[p]
-		project.Places = append(project.Places, catalogPlace{MachineID: p.Machine, Path: p.Key, Total: counts.Project[p]})
+		project.Total += n
+		project.Places = append(project.Places, catalogPlace{MachineID: p.Machine, Path: p.Key, Total: n})
 	}
 	for _, project := range projects {
 		slices.SortFunc(project.Places, func(a, b catalogPlace) int {
 			return cmp.Or(cmp.Compare(b.Total, a.Total), cmp.Compare(a.MachineID, b.MachineID), cmp.Compare(a.Path, b.Path))
 		})
-		// Its directories can spell the remote or the folder in different cases (Notes and notes are one project):
-		// the name and the origin are as its busiest directory has them.
-		first := sessionlist.Place{Machine: project.Places[0].MachineID, Key: project.Places[0].Path}
-		project.Origin = origins[first]
-		_, project.Name = projectOf(first.Key, project.Origin)
+		if project.ID != "" {
+			// Its directories can spell the remote or the folder in different cases (Notes and notes are one
+			// project): the name and the origin are as its busiest directory has them.
+			first := sessionlist.Place{Machine: project.Places[0].MachineID, Key: project.Places[0].Path}
+			project.Origin = origins[first]
+			_, project.Name = projectOf(first.Key, project.Origin)
+		}
 		out.Projects = append(out.Projects, *project)
 	}
 	slices.SortFunc(out.Projects, func(a, b catalogProject) int {
-		return cmp.Or(cmp.Compare(b.Total, a.Total), cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)), cmp.Compare(a.ID, b.ID))
+		return cmp.Or(lastIfEmpty(a.ID, b.ID), cmp.Compare(b.Total, a.Total),
+			cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)), cmp.Compare(a.ID, b.ID))
 	})
 
 	names := h.spaceNames(machines, counts.Group)
 	for p, n := range counts.Group {
-		if !seen(p.Machine) || p.Key == "" {
+		if !seen(p.Machine) {
 			continue
 		}
-		out.Spaces = append(out.Spaces, catalogSpace{MachineID: p.Machine, ID: p.Key, Name: cmp.Or(names[p], p.Key), Total: n})
+		space := catalogSpace{MachineID: p.Machine, ID: p.Key, Total: n}
+		if p.Key != "" {
+			space.Name = cmp.Or(names[p], p.Key)
+		}
+		out.Spaces = append(out.Spaces, space)
 	}
 	slices.SortFunc(out.Spaces, func(a, b catalogSpace) int {
-		return cmp.Or(cmp.Compare(b.Total, a.Total), cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)),
-			cmp.Compare(a.MachineID, b.MachineID), cmp.Compare(a.ID, b.ID))
+		return cmp.Or(lastIfEmpty(a.ID, b.ID), cmp.Compare(b.Total, a.Total),
+			cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)), cmp.Compare(a.MachineID, b.MachineID), cmp.Compare(a.ID, b.ID))
 	})
 	return out, nil
+}
+
+// lastIfEmpty orders an entry with an empty id (the rows without the attribute) after every other.
+func lastIfEmpty(a, b string) int {
+	switch {
+	case a == "" && b != "":
+		return 1
+	case a != "" && b == "":
+		return -1
+	}
+	return 0
 }
 
 // spaceNames is what the kept rows of machines call each counted space: the first named row of a space, in its
