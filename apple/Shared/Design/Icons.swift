@@ -265,6 +265,8 @@ extension Theme {
         /// A list filter menu: off, and on (something filtered).
         static let filter = "line.3.horizontal.decrease.circle"
         static let filterActive = "line.3.horizontal.decrease.circle.fill"
+        /// Grouping at the fixed end of the Agents filter capsule, without a second circle.
+        static let capsuleGrouping = "line.3.horizontal.decrease"
         /// A plain list layout.
         static let listView = "list.bullet"
         /// A calendar layout (the to-dos' Calendar, beside `listView`, #2029).
@@ -635,6 +637,11 @@ extension Theme {
         static let forwardMessage = routeToTask
         /// A pull request a task opened.
         static let pullRequest = "arrow.triangle.pull"
+        /// An agent's closeout (#3612): the record it ends a turn with, and the switch that asks for one.
+        static let closeout = "list.bullet.rectangle.portrait"
+        /// What a closeout names besides a pull request, a branch, a document or a link (#3612): a commit, a build.
+        static let commit = "dot.circle"
+        static let build = "hammer"
         /// GitHub's thread page: a merged pull request, an open issue, a review asking for changes, a check skipped
         /// or cancelled, a label.
         static let merged = "arrow.triangle.merge"

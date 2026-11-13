@@ -41,5 +41,6 @@
   "more_actions": "更多操作",
   "add_more": "添加文件、图片等",
   "queue": "排队发送",
-  "queue_hint": "排队发送：等 Agent 做完再发（Enter）"
+  "queue_hint": "排队发送：等 Agent 做完再发（Enter）",
+  "cmd_permissions_desc": "切换权限模式"
 }

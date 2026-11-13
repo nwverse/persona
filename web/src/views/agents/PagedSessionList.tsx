@@ -6,7 +6,7 @@ import { api, errorText } from "../../lib/api";
 import { onHubEvent } from "../../lib/store";
 import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
 import { groupMachines, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
-import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
+import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
 import { SearchField } from "../../ui/SearchField";
 import { STATE_LABEL } from "../../lib/state-labels";
 import type { AgentState } from "../../lib/types";
@@ -18,6 +18,7 @@ import { shortPath } from "../../lib/format";
 import { removeStoredValue, storedValue, storeValue } from "../../lib/compatibility";
 import { ACTIVE_WINDOWS, activeWindow, splitByActivity, windowStart, type ActiveWindow } from "../../lib/session-activity";
 import { useFolded } from "../../lib/use-folded";
+import { nestUnderParents } from "../../lib/side-sessions";
 import { sameValue } from "../../lib/stable-lines";
 import { lazyPage } from "../../lib/lazy-page";
 import { NeedsCount } from "../SidebarSection";
@@ -54,6 +55,10 @@ export interface PagedSessionListProps<T> {
   needsYou?: (row: T) => boolean;
   /** The open row: the Earlier group opens by itself while it holds that row. */
   isOpen?: (row: T) => boolean;
+  /** The identity of the row a row is drawn under (#5935, `parent_agent_id`): given, a row whose parent is loaded comes
+   *  under it a level in, each group where its most recent member was (lib/side-sessions.ts). Rows and counts stay the
+   *  server's; only the order of the loaded rows changes. */
+  parentOf?: (row: T) => string | undefined;
 }
 
 // The chosen "Active within" window, kept per list on this browser.
@@ -76,7 +81,7 @@ export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, catalog = false, placeOf, onRepo, activeAt, needsYou, isOpen }: PagedSessionListProps<T>) {
+export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, catalog = false, placeOf, onRepo, activeAt, needsYou, isOpen, parentOf }: PagedSessionListProps<T>) {
   const [query, setQuery] = useState("");
   const [q, setQ] = useState("");
   const [state, setState] = useState("");
@@ -207,6 +212,13 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     if (now && !sameValue(now, picked)) setPicked(now);
   }, [allGroups, picked]);
 
+  // A session started from another one comes under it (#5935): the loaded rows in that order, each group where its most
+  // recent member was. Only the order changes: the rows, the total and every count stay the server's.
+  const nesting = useMemo(() => parentOf ? nestUnderParents(page.rows, identity, parentOf) : null, [page.rows, identity, parentOf]);
+  const rows = nesting?.rows ?? page.rows;
+  // a group is as recent as its most recent member, so Earlier never splits one
+  const groupActiveAt = useMemo(() => activeAt && nesting ? (row: T) => activeAt(nesting.lead.get(row) ?? row) : activeAt, [activeAt, nesting]);
+
   // "Active within" (#4236): the rows active before the window fold into Earlier, after the recent ones. The split
   // moves with the clock; the list itself, its total and its filters stay the server's.
   const [win, setWin] = useState<ActiveWindow>(() => activeAt ? activeWindow(storedValue(windowKey(personal))) : "");
@@ -219,19 +231,19 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const start = activeAt ? windowStart(win, clock) : null;
   // the Needs you chip's number for this scope: the server's, by the same rule as the chip
   const needsYouTotal = state ? (state === "needs_you" ? page.total : 0) : scopeCounts?.state?.needs_you;
-  const split = activeAt && start !== null
-    ? splitByActivity(page.rows, activeAt, start, { total: page.total, hasMore: page.hasMore, needsYou: needsYou ?? (() => false), needsYouTotal })
+  const split = groupActiveAt && start !== null
+    ? splitByActivity(rows, groupActiveAt, start, { total: page.total, hasMore: page.hasMore, needsYou: needsYou ?? (() => false), needsYouTotal })
     : null;
   const earlier = split?.reached && split.earlier > 0 ? split : null;
   const [folded, toggleEarlier] = useFolded(personal ? "personal-sessions-earlier" : "sessions-earlier", true, {
-    holds: Boolean(earlier && isOpen && page.rows.slice(earlier.recent).some(isOpen)),
+    holds: Boolean(earlier && isOpen && rows.slice(earlier.recent).some(isOpen)),
   });
   // folded, the list stops at its header: no further pages are read until it opens
   const foldedAway = Boolean(earlier && folded);
   const hasMore = page.hasMore && !foldedAway;
-  const itemCount = sections ? 0 : (foldedAway ? earlier!.recent : page.rows.length) + (earlier ? 1 : 0);
+  const itemCount = sections ? 0 : (foldedAway ? earlier!.recent : rows.length) + (earlier ? 1 : 0);
   // the Earlier header sits between the recent rows and the earlier ones; null is the header
-  const rowAt = (i: number): T | null => !earlier ? page.rows[i] : i === earlier.recent ? null : page.rows[i > earlier.recent ? i - 1 : i];
+  const rowAt = (i: number): T | null => !earlier ? rows[i] : i === earlier.recent ? null : rows[i > earlier.recent ? i - 1 : i];
 
   const container = useRef<HTMLDivElement>(null);
   const [margin, setMargin] = useState(0);
@@ -309,8 +321,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   };
   const chooseGroup = (key: string) => setPicked(key ? groups.find((g) => g.key === key) ?? null : null);
   // an open section reads the collection as the list above it does
-  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode }),
-    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode]);
+  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode, parentOf }),
+    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode, parentOf]);
   const openRow = sections && isOpen && placeOf ? rootPage.rows.find(isOpen) : undefined;
   const openPlace = useMemo(() => openRow && placeOf ? placeOf(openRow) : undefined, [openRow, placeOf]);
   const shownTotal = sections ? grouped.total : page.total;
@@ -376,7 +388,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
           const row = rowAt(item.index);
           return (
             <div key={item.key} ref={virtual.measureElement} data-index={item.index} {...(row === null ? { "data-earlier": "" } : { "data-session-row": "" })} className="absolute top-0 left-0 w-full" style={{ transform: `translateY(${item.start - margin}px)` }}>
-              {row === null ? <EarlierHeader count={earlier!.earlier} needs={earlier!.earlierNeedsYou} window={win} folded={folded} onToggle={toggleEarlier} /> : renderRow(row)}
+              {row === null ? <EarlierHeader count={earlier!.earlier} needs={earlier!.earlierNeedsYou} window={win} folded={folded} onToggle={toggleEarlier} />
+                : nesting?.nested.has(row) ? <div data-nested-session className={SESSION_LIST_STYLE.nestedRow}>{renderRow(row)}</div> : renderRow(row)}
             </div>
           );
         })}

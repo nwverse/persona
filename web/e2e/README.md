@@ -140,3 +140,18 @@ node web/e2e/worktree-migration.mjs <loopback-web-origin> <loopback-fixture-orig
 The runner verifies the fixture marker before writes and resets only its synthetic in-memory state for each browser context. External browser requests are blocked; no existing browser profile or account is used. Desktop and 390px touch contexts run in light and dark. Checks cover empty catalog ancestors, title/disclosure separation, exact existing-workspace Agent launch, independent Git source/project/parent/base creation, explicit branch/note/sparse fields, no automatic Agent, acknowledged rename, dirty deletion confirmation and default branch retention. A lost create response is recovered across dialog close/reopen with the same receipt; an uncertain deletion permits only read-only reconciliation. `WORKTREE_ACCEPTANCE_PHASE=catalog` runs just the initial catalog scenarios while dependencies are being integrated.
 
 Artifacts include `results.json` and screenshots of the tree, exact destination, composer, acknowledgment, rename, dirty deletion and uncertain outcomes. The runner exits nonzero on assertions or its four-minute watchdog. Inspect the resulting images on the combined revision. This is full Web application acceptance against invented runtime data; it does not replace node semantic tests or the separately bounded installed-Orca verification on disposable projects.
+
+## `/permissions` and Full access by a restart (#6476)
+
+```sh
+MOCK_BYPASS_RESTART_SECONDS=4 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/permissions-command.mjs <loopback-web-origin> --hub http://127.0.0.1:<port> --theme light|dark [--shots <dir>] [--chromium <executable>]
+```
+
+Run once per theme against a fresh mock (the restart changes the session). On a resting Claude Code Agent started
+without a bypass flag, it checks that "/" lists `/permissions`, that Enter opens all five modes with the current one
+checked and sends nothing, that Auto is posted and shown at once, and that Full access says the session restarts and
+asks first. It then checks that the session waits (`bypass_pending`, the chip still on the mode it runs in) until the
+mock's restart comes up in Full access. It prints one line per check and a verdict, and exits nonzero on a failure or
+its five-minute timeout.

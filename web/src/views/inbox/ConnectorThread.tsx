@@ -206,8 +206,8 @@ function ConnectorText({ item, problem, onRetry }: { item: InboxItem; problem?: 
           </div>
         )}
         {problem && <ConnectorReadNotice failure={problem} onRetry={onRetry} />}
-        <p className="text-[12px] font-medium text-ink-3">{t("inbox-connectorthread.content")}</p>
-        {context === null && !failure ? <Loading /> : failure ? (
+        {!onlyTitleAndSummary(item, context) && <p className="text-[12px] font-medium text-ink-3">{t("inbox-connectorthread.content")}</p>}
+        {onlyTitleAndSummary(item, context) ? null : context === null && !failure ? <Loading /> : failure ? (
           <p className="text-[12.5px] text-red">{t("inbox-connectorthread.content_failed", { error: failure })}</p>
         ) : (
           <div className="text-[13px] leading-relaxed break-words whitespace-pre-wrap text-ink select-text">{context || item.preview || t("inbox-connectorthread.no_collected_content")}</div>
@@ -215,6 +215,14 @@ function ConnectorText({ item, problem, onRetry }: { item: InboxItem; problem?: 
       </div>
     </div>
   );
+}
+
+/** The assistant's own row whose text is only its title and summary, already shown above: no Content section. */
+function onlyTitleAndSummary(item: InboxItem, context: string | null): boolean {
+  if (item.source !== "assistant" || !item.summary) return false;
+  const text = (context ?? item.preview ?? "").replace(/\s+/g, " ").trim();
+  const known = `${item.title} ${item.summary}`.replace(/\s+/g, " ").trim();
+  return text === "" || text === known || text === item.summary.replace(/\s+/g, " ").trim();
 }
 
 // ── the answer box ───────────────────────────────────────

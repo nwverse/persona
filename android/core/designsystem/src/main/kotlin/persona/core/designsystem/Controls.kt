@@ -497,7 +497,8 @@ object JChipTokens {
  * A filter or a fact. With [onClick] it toggles; without, it is a quiet label. [onLongClick] (with [onClick]) is a long
  * press for more (a menu of other ways to use it); the chip looks the same. [dot] is a plain colored mark in the place
  * of a [status] dot, for a category rather than a state. Pass [Role.Button] as [role] for an action instead of a toggle.
- * [trailingIcon] adds a compact affordance such as an expansion chevron.
+ * [trailingIcon] adds a compact affordance such as an expansion chevron. [breathes]: false keeps a Needs You [status] dot
+ * still, as iOS's quick filters draw it ([JStatusDot]).
  */
 @Composable
 fun JChip(
@@ -523,6 +524,7 @@ fun JChip(
     removeLabel: String? = null,
     /** Bounds the label inside a weighted chip while keeping its icons and count visible. */
     boundedLabel: Boolean = false,
+    breathes: Boolean = true,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
@@ -551,7 +553,7 @@ fun JChip(
             .padding(start = JChipTokens.horizontalPadding, end = if (onRemove != null) Tokens.Space.xs else JChipTokens.horizontalPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        status?.let { JStatusDot(it, size = JChipTokens.dotSize); Spacer(Modifier.width(JChipTokens.dotGap)) }
+        status?.let { JStatusDot(it, size = JChipTokens.dotSize, breathes = breathes); Spacer(Modifier.width(JChipTokens.dotGap)) }
         if (status == null) dot?.let { Box(Modifier.size(JChipTokens.dotSize).clip(CircleShape).background(it)); Spacer(Modifier.width(JChipTokens.dotGap)) }
         icon?.let { JIcon(it, null, size = JChipTokens.iconSize, tint = ink); Spacer(Modifier.width(JChipTokens.iconGap)) }
         // With a × or a bounded label, long text gives way instead of pushing out the rest of the chip.
@@ -641,18 +643,27 @@ private val TagPadding = PaddingValues(horizontal = 6.dp.dense, vertical = 2.dp.
 
 // ------------------------------------------------------------------ progress
 
-/** The style's spinner: an ink arc in brief, an accent arc elsewhere. Static when motion is reduced. */
+/** Fixed stroke widths for [JSpinner], independent of the page's spacing density. */
+object SpinnerTokens {
+    val compactStroke = Tokens.Android.Size.spinnerStroke
+}
+
+/**
+ * The style's spinner: an ink arc in brief, an accent arc elsewhere. Static when motion is reduced. It reads its angle only while
+ * drawing, so a turn draws the arc again and recomposes nothing (iOS's spinners turn off the main thread).
+ */
 @Composable
 fun JSpinner(modifier: Modifier = Modifier, color: Color = if (PersonaTheme.style == AppStyle.Brief) PersonaTheme.palette.ink else PersonaTheme.palette.accent, stroke: Dp = 2.2.dp) {
     val turning = !PersonaTheme.reduceMotion
     val loading = stringResource(R.string.designsystem_loading)
-    val angle = if (turning) rememberInfiniteTransition(label = "spin").animateFloat(0f, 360f, infiniteRepeatable(tween(1100, easing = LinearEasing)), label = "angle").value else 0f
+    // Read while drawing only, never while composing: each frame draws the arc again and composes nothing.
+    val angle = if (turning) rememberInfiniteTransition(label = "spin").animateFloat(0f, 360f, infiniteRepeatable(tween(1100, easing = LinearEasing)), label = "angle") else null
     Canvas(modifier.size(20.dp).clearAndSetSemantics { contentDescription = loading }) {
         val width = stroke.toPx()
         val inset = width / 2
         val arcSize = Size(size.width - width, size.height - width)
         drawArc(color.copy(alpha = 0.2f), 0f, 360f, false, Offset(inset, inset), arcSize, style = Stroke(width))
-        drawArc(color, angle - 90f, 100f, false, Offset(inset, inset), arcSize, style = Stroke(width, cap = StrokeCap.Round))
+        drawArc(color, (angle?.value ?: 0f) - 90f, 100f, false, Offset(inset, inset), arcSize, style = Stroke(width, cap = StrokeCap.Round))
     }
 }
 
