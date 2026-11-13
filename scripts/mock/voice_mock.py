@@ -23,7 +23,9 @@ What it adds, under /api/v1/extensions and the old /api/v1/plugins alike:
                                                many, their bytes and sizes, how many were all zero, how many times it
                                                asked for the voices, the texts it had read aloud: speaks, newest last),
                                                the script's steps, how many protocol 2 sockets closed, the script's
-                                               pace, and the speak mode and length
+                                               pace, and the speak mode and length; ?unprompted=1 has every call going
+                                               on hand over something nobody was heard asking for (#5904: run refused,
+                                               unprompted; resend, the app's Send Anyway, sends it)
 The model configuration's use plugin.voice comes from mock_hub.py's own MOCK_VOICE code.
 
 The script (seconds after ready): the user's words come in as captions (partial, then final) and the voice hands them
@@ -47,7 +49,8 @@ from datetime import datetime, timedelta, timezone
 EXTENSION = "voice"
 # MOCK_VOICE_PACE=0.1: the script ten times as fast (test_voice_mock.py); 1 for the app, at a pace a screen can follow.
 PACE = float(os.environ.get("MOCK_VOICE_PACE") or "1")
-FEATURES = ["target", "runs", "asks", "resume", "suspend"]
+# speech_gate (#5904): a run refused unprompted can be sent again (resend), and start takes speech_gate.
+FEATURES = ["target", "runs", "asks", "resume", "suspend", "speech_gate"]
 LOG = {"starts": [], "texts": [], "interrupts": 0, "resends": [], "audio": 0, "audio_bytes": 0, "audio_sizes": {}, "audio_silent": 0, "steps": [], "closes": 0, "voices": 0,
        "speaks": []}
 # How POST …/speak answers (#5004): ok the tone, fail a 502 upstream_failed, slow the tone after SPEAK_SLOW seconds,
@@ -58,6 +61,8 @@ SPEAK_MODES = ("ok", "fail", "slow", "off")
 SPEAK_SLOW = float(os.environ.get("MOCK_VOICE_SPEAK_SLOW") or "12")  # test_voice_mock.py shortens it
 SPEAK_RATE = 24000
 HUB_MODE = {"mode": lambda: "1"}  # MOCK_VOICE as install sees it (the extension's state)
+CALLS = []  # the protocol 2 calls going on (GET /mock/voice2?unprompted=1 reaches them)
+CALLS_LOCK = threading.Lock()
 
 
 def features():
@@ -150,6 +155,11 @@ def install(hub):
                 SPEAK["seconds"] = max(0.0, min(60.0, float((q.get("speak_seconds") or [SPEAK["seconds"]])[0])))
             except ValueError:
                 pass
+            if (q.get("unprompted") or [None])[0] == "1":
+                with CALLS_LOCK:
+                    calls = list(CALLS)
+                for call in calls:
+                    call.unprompted()
             handler.send_json(dict(LOG, pace=PACE, voices_mode=VOICES["mode"] or "ok", speak_mode=SPEAK["mode"],
                                    speak_seconds=SPEAK["seconds"]))
             return True
@@ -375,7 +385,8 @@ class Call:
         self.ask = None
         # this call made the conversation work and its script has not reached done yet
         self.left_working = False
-        LOG["starts"].append({k: start.get(k) for k in ("model", "voice", "protocol", "target", "recent", "history", "resume")})
+        LOG["starts"].append({k: start.get(k) for k in ("model", "voice", "protocol", "target", "recent", "history", "resume",
+                                                        "echo_cancellation", "speech_gate")})
 
     # frames out
 
@@ -545,12 +556,21 @@ class Call:
             except OSError:
                 return
 
+    def unprompted(self):
+        """The voice hands over something nobody was heard asking for: the user-speech gate holds it back (#5904)."""
+        LOG["steps"].append("unprompted")
+        try:
+            self.run_frame("voice-9a4c2e7b1d3f5086", "refused", task="顺便发布新版本", code="unprompted", resendable=True)
+            self.caption("a6", "assistant", "刚才没听到你新的请求，为了安全先没发；要做的话再说一遍，或者点屏幕上的「仍然发送」。")
+        except OSError:
+            pass
+
     def resend(self, msg):
         rid = msg.get("id", "")
         LOG["resends"].append({"id": rid, "clear_draft": msg.get("clear_draft")})
         if rid not in self.runs:
             return
-        self.run_frame(rid, "sending")
+        self.run_frame(rid, "sending", resendable=None)
         self._send_instruction(rid, self.runs[rid].get("task", ""))
         self.run_frame(rid, "working", code=None, draft=None, clearable=None, message=None)
 
@@ -563,6 +583,8 @@ class Call:
                              "title": (self.session or {}).get("title", ""),
                              "agent_label": "" if self.label == "Persona" else "Claude Code", "machine_name": self.mid}})
         threading.Thread(target=self.script, args=(time.monotonic(),), daemon=True).start()
+        with CALLS_LOCK:
+            CALLS.append(self)
         r = self.h.rfile
         try:
             while True:
@@ -603,6 +625,9 @@ class Call:
             pass
         finally:
             self.open = False
+            with CALLS_LOCK:
+                if self in CALLS:
+                    CALLS.remove(self)
             self.cut.set()
             self.h.close_connection = True
             # A call that closed before its script's done (Continue's, or the one a new voice replaced) leaves the

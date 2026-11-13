@@ -98,6 +98,9 @@ const (
 	// nothing typed and the switch dropped. A node without it would take the message as apply_switch alone: typed on the
 	// launcher the agent runs on while it is busy, with the switch left waiting for the user's next message.
 	LauncherSwitchNow = "launcher_switch_now"
+	// PaneCwd: panes.new takes cwd, a folder to start the new terminal in (the file page's Open Terminal Here, #5832);
+	// without it the hub answers node_outdated rather than open the terminal somewhere else.
+	PaneCwd = "pane_cwd"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -122,7 +125,7 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow}
+var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, PaneCwd}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

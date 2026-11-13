@@ -6671,7 +6671,10 @@ if MOCK_TASKS:
             ]}),
         _feed("feed_m7", 20, "receipt", "todo_task_release",
               {"title": "整理发布说明", "state": "done", "machine": "MacBook",
-               "summary": "整理好了：这周合并了 7 个 PR，分成新功能、修复和其他三组，写在 docs/release-notes.md 里，等你过目。",
+               "summary": "整理好了：这周合并了 7 个 PR，分成新功能、修复和其他三组，写在 docs/release-notes.md 里，等你过目。"
+                          + ("\n\n新功能：小组件支持横屏、设置页的按钮对齐、周报导出。\n修复：登录页验证码重复发送、订单列表的 N+1 查询、"
+                             "缓存过期时间算错一小时、深色模式下的图标发白。\n其他：升级了两个依赖，删掉了一个没人用的脚本，补了网络层的单元测试，"
+                             "发布说明里没有写内部编号。\n\n还有三个 PR 在等审核，下周一再看。" if os.environ.get("MOCK_LONG_RECEIPT") == "1" else ""),
                "pr": "https://github.com/example/weather/pull/43"}),
         _feed("feed_m7b", 12, "message", "lark:mock-task-msg", {
             "todo_id": "todo_task_widget", "source": "lark", "account": "飞书", "chat": "客户端发版群", "sender": "韩梅梅",
@@ -17119,6 +17122,7 @@ def mock_files(p, q):
     if what == "fs/find":  # #2438: every file under cwd, shallow first (the node's walk / git ls-files)
         home, path = mock_abs(mid, "", arg("cwd"))
         rel = mock_rel(home, path)
+        rel = rel if rel is None else link_real(rel)
         if rel is None or not (rel == "" or rel.endswith("/")): return {"error": "not a directory: %s" % path}, 502
         files = sorted((k[len(rel):] for k, v in MOCK_TREE.items() if k.startswith(rel) and not k.endswith("/")),
                        key=lambda f: (f.count("/"), f))
@@ -17127,11 +17131,17 @@ def mock_files(p, q):
         home, path = mock_abs(mid, arg("path"), arg("cwd"))
         rel = mock_rel(home, path)
         if rel is None: return {"error": "open %s: no such file or directory" % path}, 502
+        if MOCK_LINKS.get(rel, ("", ""))[1] is None: return {"error": "open %s: no such file or directory" % path}, 502
+        rel = link_real(rel)
         is_dir = rel == "" or rel.endswith("/")
         if what == "fs":
             if not is_dir: return {"error": "readdir %s: not a directory" % path}, 502
             ents = [{"name": k[len(rel):].rstrip("/"), "dir": k.endswith("/"), "size": mock_size(MOCK_TREE[k]),
                      "mtime": ago(hours=i + 1)} for i, k in enumerate(mock_children(rel))]
+            for e, k in zip(ents, mock_children(rel)):
+                if k in MOCK_LINKS:
+                    e.update(symlink=True, link_target=MOCK_LINKS[k][0])
+                    if MOCK_LINKS[k][1] is None: e.update(link_broken=True, dir=False, size=0)
             if FS_LIVE:
                 for e in ents:
                     if rel.startswith(MOCK_REPO) and e["name"] in FS_IGNORED: e["ignored"] = True
@@ -17144,7 +17154,8 @@ def mock_files(p, q):
         if isinstance(v, tuple):
             return {"path": path, "name": name, "size": mock_size(v), "mime": v[0], "data": v[1], "is_dir": False, "truncated": False}, 200
         mime = "text/markdown" if name.endswith(".md") else "text/plain"
-        return {"path": path, "name": name, "size": mock_size(v), "mime": mime, "text": v, "is_dir": False, "truncated": False}, 200
+        return {"path": path, "name": name, "size": mock_size(v), "mime": mime, "text": v, "is_dir": False, "truncated": False,
+                "revision": mock_text_revision(v)}, 200
     home, cwd = mock_abs(mid, arg("cwd"), "")
     root = home + "/" + MOCK_REPO
     if not (cwd == root or cwd.startswith(root + "/")):
@@ -17233,6 +17244,59 @@ def mock_pdf():
 
 
 MOCK_TREE[MOCK_REPO + "/docs/guide.pdf"] = ("application/pdf", mock_pdf())
+# MOCK_FILE_LINKS=1 (#5827): symlinks in the weather checkout for the file page: `shared` → ../shared (a folder beside the
+# checkout), `old-settings.json` → ../legacy/settings.json (broken), and a script; GET …/stat?detail=1 answers the Info
+# sheet's fields (mode, owner, group, times, items, a link's target).
+MOCK_LINKS = {}
+MOCK_MODES = {}  # tree key (no trailing /) -> permission bits changed through …/files/chmod (#5831)
+if os.environ.get("MOCK_FILE_LINKS"):
+    MOCK_TREE["code/shared/"] = None
+    MOCK_TREE["code/shared/colors.json"] = '{"sky": "#4a90d9", "rain": "#5b6b7d"}\n'
+    MOCK_TREE["code/shared/README.md"] = "# Shared\n\nCode the apps share.\n"
+    MOCK_TREE[MOCK_REPO + "/shared/"] = None
+    MOCK_TREE[MOCK_REPO + "/old-settings.json"] = ""
+    MOCK_TREE[MOCK_REPO + "/deploy.sh"] = "#!/bin/sh\nswift build -c release\n"
+    MOCK_LINKS[MOCK_REPO + "/shared/"] = ("../shared", "code/shared/")
+    MOCK_LINKS[MOCK_REPO + "/old-settings.json"] = ("../legacy/settings.json", None)
+
+
+def link_real(rel):
+    """The tree key a path through a mock symlink folder stands for (MOCK_FILE_LINKS)."""
+    for k, (_, real) in MOCK_LINKS.items():
+        if real and k.endswith("/") and (rel == k or rel.startswith(k)):
+            return real + rel[len(k):]
+    return rel
+
+
+def mock_text_revision(text):
+    """A text file's revision as file?stream=1 gives it and files/write checks it (#5829): its content's hash here."""
+    return "r" + hashlib.sha1(text.encode()).hexdigest()[:12]
+
+
+def mock_stat_detail(mid, asked, cwd):
+    """GET …/stat?detail=1 for one path (docs/protocol/protocol.md "File details and links")."""
+    home, path = mock_abs(mid, asked, cwd)
+    rel = mock_rel(home, path)
+    if rel is None: return {"path": asked, "kind": "missing"}
+    link = MOCK_LINKS.get(rel)
+    real = link_real(rel)
+    is_dir = real == "" or real.endswith("/")
+    d = {"path": asked, "kind": "dir" if is_dir else "file", "mode": MOCK_MODES.get(real.rstrip("/"), 0o755 if is_dir or rel.endswith(".sh") else 0o644),
+         "owner": "me", "group": "staff", "mtime": ago(hours=5), "ctime": ago(hours=5), "birthtime": ago(days=9)}
+    if is_dir:
+        d["items"] = len(mock_children(real))
+    else:
+        d["size"] = mock_size(MOCK_TREE.get(real))
+    if link:
+        d.update(symlink=True, link_target=link[0])
+        if link[1] is None:
+            d.update(kind="link", link_broken=True, mode=0o755)
+            d.pop("size", None)
+        else:
+            d["link_real"] = home + "/" + link[1].rstrip("/")
+    return d
+
+
 if os.environ.get("MOCK_SHEETS"):  # the table viewer's files (#1310), in the browser's tree too
     MOCK_TREE.setdefault(MOCK_REPO + "/data/", None)
     MOCK_TREE[MOCK_REPO + "/data/stations.csv"] = stations_csv()
@@ -20506,7 +20570,9 @@ _features_without_file_ops = features
 
 
 def features():
-    return _features_without_file_ops() + (["upload_dir", "file_edit"] if FILE_OPS else [])
+    return (_features_without_file_ops() + (["upload_dir", "file_edit"] if FILE_OPS else [])
+            + (["file_info"] if os.environ.get("MOCK_FILE_LINKS") else [])
+            + (["file_mkdir", "file_write", "file_zip", "file_copy", "file_chmod", "pane_cwd"] if FILE_OPS else []))
 
 
 def file_ops_key(mid, path, cwd):
@@ -20643,6 +20709,89 @@ def file_ops_route(h, p, body):
         restored.append({"path": path})
     fs_changed(mid, sorted(changed), True)
     return h.send_json({"restored": restored}) or True
+
+
+def file_make_route(h, p, body):
+    """POST /api/v1/machines/{mid}/files/{mkdir,write,zip} under MOCK_FILE_OPS (#5828): a folder in the tree, a text file
+    made or replaced, a real zip of tree entries kept in FILES at a temporary path for …/file/download."""
+    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/(mkdir|write|zip|copy|chmod)", p)
+    if not (FILE_OPS and m): return False
+    mid, op = m.groups()
+    req = json.loads(body or b"{}")
+    FILE_OPS_LOG.append({"op": op, **{k: v for k, v in req.items() if k != "text"}})
+    cwd = req.get("cwd", "")
+    taken = lambda key: key in MOCK_TREE or key + "/" in MOCK_TREE
+    if op == "mkdir":
+        home, drel, err = file_ops_dir(mid, req.get("dir", ""), cwd)
+        if err: return h.send_json(*err) or True
+        name = req.get("name", "")
+        if taken(drel + name): return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
+        MOCK_TREE[drel + name + "/"] = None
+        fs_changed(mid, [(home + "/" + drel).rstrip("/")], True)
+        return h.send_json({"path": (home + "/" + drel + name)}) or True
+    if op == "write":
+        home, rel, err = file_ops_key(mid, req.get("path", ""), cwd)
+        if err: return h.send_json(*err) or True
+        text = req.get("text", "")
+        if req.get("create"):
+            if taken(rel): return h.send_json({"error": "已经有了", "code": "exists", "name": rel.rpartition("/")[2]}, 409) or True
+        elif rel not in MOCK_TREE:
+            return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+        elif not req.get("force") and isinstance(MOCK_TREE[rel], str) and req.get("revision") != mock_text_revision(MOCK_TREE[rel]):
+            # changed since it was opened (GET /mock/touch?path=): nothing written, as the node answers
+            return h.send_json({"error": "the file changed on the computer since it was opened", "code": "file_changed",
+                                "revision": mock_text_revision(MOCK_TREE[rel]), "mtime": ago()}, 409) or True
+        MOCK_TREE[rel] = text
+        fs_changed(mid, [(home + "/" + rel.rpartition("/")[0]).rstrip("/")], True)
+        return h.send_json({"path": home + "/" + rel, "size": len(text.encode()), "revision": mock_text_revision(text), "mtime": ago()}) or True
+    if op == "chmod":  # #5831: the bits kept for the Info sheet's answer
+        home, rel, err = file_ops_key(mid, req.get("path", ""), cwd)
+        if err: return h.send_json(*err) or True
+        if not taken(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+        MOCK_MODES[rel.rstrip("/")] = int(req.get("mode", 0o644)) & 0o777
+        return h.send_json({"path": req["path"], "mode": MOCK_MODES[rel.rstrip("/")]}) or True
+    if op == "copy":  # #5830: the tree entries copied into dir, named as a move names them
+        home, drel, err = file_ops_dir(mid, req.get("dir", ""), cwd)
+        if err: return h.send_json(*err) or True
+        copied = []
+        for path in req.get("paths", []):
+            _, rel, err = file_ops_key(mid, path, cwd)
+            if err: return h.send_json(*err) or True
+            if not taken(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+            name = rel.rpartition("/")[2]
+            final = file_ops_free(drel, name, req.get("conflict"))
+            if final is None: return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
+            for k, v in list(MOCK_TREE.items()):
+                if k == rel or k == rel + "/" or k.startswith(rel + "/"): MOCK_TREE[drel + final + k[len(rel):]] = v
+            copied.append({"from": path, "to": req["dir"].rstrip("/") + "/" + final})
+        fs_changed(mid, [(home + "/" + drel).rstrip("/")], True)
+        return h.send_json({"copied": copied}) or True
+    import io, zipfile
+    out, n = io.BytesIO(), 0
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for path in req.get("paths", []):
+            home, ab = mock_abs(mid, path, cwd)
+            rel = mock_rel(home, ab)
+            if rel is None: return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+            base = rel.rstrip("/").rpartition("/")[0]
+            for k, v in MOCK_TREE.items():
+                if k == rel or k.startswith(rel if rel.endswith("/") else rel + "/"):
+                    name = k[len(base) + 1:] if base else k
+                    data = b"" if v is None else base64.b64decode(v[1]) if isinstance(v, tuple) else v.encode()
+                    z.writestr(name, data)
+                    n += 1
+    name = req.get("name") or "Archive.zip"
+    if not name.lower().endswith(".zip"): name += ".zip"
+    if req.get("dir"):
+        home, drel, err = file_ops_dir(mid, req["dir"], cwd)
+        if err: return h.send_json(*err) or True
+        final = file_ops_free(drel, name, "keep")
+        MOCK_TREE[drel + final] = ("application/zip", base64.b64encode(out.getvalue()).decode())
+        fs_changed(mid, [(home + "/" + drel).rstrip("/")], True)
+        return h.send_json({"path": home + "/" + drel + final, "name": final, "size": len(out.getvalue()), "files": n}) or True
+    temp = "/tmp/persona-zips/z-%d/%s" % (len(FILE_OPS_LOG), name)
+    FILES[temp] = out.getvalue()
+    return h.send_json({"path": temp, "name": name, "size": len(out.getvalue()), "files": n}) or True
 
 
 _features_without_plugins = features
@@ -21650,6 +21799,8 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/machines/") and p.endswith("/stat"):
             cwd = q.get("cwd", [""])[0]
             paths = q.get("path", []) + [x for x in q.get("paths", [""])[0].split("\n") if x]
+            if q.get("detail", [""])[0] == "1":  # the file page's Info (#5827)
+                return self.send_json({"stats": [mock_stat_detail(p.split("/")[4], x, cwd) for x in paths]})
             return self.send_json({"stats": [{"path": x, "kind": file_kind(file_path(x, cwd)) if file_path(x, cwd) else "missing"} for x in paths]})
         if p.startswith("/api/v1/machines/") and p.endswith("/file/convert"):  # node file.convert (LibreOffice → PDF)
             src = q.get("path", [""])[0]
@@ -21669,6 +21820,12 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if p == "/mock/touch":  # #5829: a file changed on the computer behind an open editor (path relative to the home)
+            rel = q.get("path", [""])[0].lstrip("~/")
+            if isinstance(MOCK_TREE.get(rel), str):
+                MOCK_TREE[rel] += "\n// changed on the computer\n"
+                return self.send_json({"touched": rel})
+            return self.send_json({"error": "no such text file"}, 404)
         if p == "/mock/video-reads":
             with VIDEO_READ_LOCK:
                 if "reset" in q: VIDEO_READS.clear()
@@ -22265,6 +22422,7 @@ class H(BaseHTTPRequestHandler):
                 lark_messaging.route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if pins_route(self, p): return
         if file_ops_route(self, p, self.last_body): return
+        if file_make_route(self, p, self.last_body): return
         if look_uploads_route(self, self.command, p, self.last_body): return
         if looks_route(self, self.command, p, self.last_body): return
         if recordings_route(self, self.command, p): return
@@ -24417,6 +24575,7 @@ MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例�
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
+MOCK_HELP.append("MOCK_LONG_RECEIPT=1  整理发布说明的回执摘要超过四行（#5569）：应显示 Show All / Show Less")
 MOCK_HELP.append("MOCK_TASKS_STARTING=1  再加一个 Agent 还没起来的任务「检查启动状态」（Starting）和一张 wake=resumed 的交接卡（#5569）；MOCK_TASK_DECISION=1 的拍板任务带 decision_review，可点 Later / Don't handle（POST /todos/{id}/decision-dismiss、decision-undo-dismiss）")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏「最近」和用户自己的一起列、带来源标记，「全部对话」按来源筛（#3264、#5195）")

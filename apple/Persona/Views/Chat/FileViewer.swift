@@ -140,12 +140,20 @@ extension View {
 struct FileViewer: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.showInFiles) private var showInFiles
     @State var ref: FileRef
     var key: SessionKey? = nil
     @State private var page: FileViewerModel?
     @State private var history: [FileRef] = []
     @State private var link: LinkTarget?
     #if os(iOS)
+    /// The file open in the editor (#5829).
+    @State private var editing: EditTarget?
+
+    private struct EditTarget: Identifiable {
+        let id = UUID()
+        let model: FileEditModel
+    }
     @State private var saver = FileSaveModel()
     #endif
 
@@ -173,6 +181,9 @@ struct FileViewer: View {
                     ToolbarItem(placement: .primaryAction) { menu }
                 }
                 #if os(iOS)
+                .fullScreenCover(item: $editing) { target in
+                    FileEditSheet(edit: target.model) { Task { await open() } }
+                }
                 .safeAreaInset(edge: .bottom) {
                     if let p = saver.progress {
                         AttachmentRow(symbol: Theme.Icon.save, name: p.name, status: "\(p.done.storageText) / \(p.total.storageText)",
@@ -310,6 +321,30 @@ struct FileViewer: View {
     }
 
     #if os(iOS)
+    /// Edit (#5829): text files up to 1 MB, read whole; the reason in the menu otherwise. Only where the hub writes files.
+    @ViewBuilder private var editItem: some View {
+        let features = model.features(ref.group)
+        if let page, let file = page.file, page.kind != .directory, features.isEmpty || features.contains("file_write") {
+            let limit = FileEditLimit.check(text: page.text, size: file.size, truncated: file.truncated, next: page.next)
+            Section {
+                Button {
+                    let lang = SyntaxLanguage.detect(name: file.name, firstLine: page.text?.prefix(200).split(separator: "\n", maxSplits: 1).first.map(String.init))
+                    var whole = file
+                    whole.text = page.text // every page read (Edit is on only when that is the whole file)
+                    editing = EditTarget(model: FileEditModel(ref: ref, file: whole, language: lang, api: model.api(ref.group)))
+                } label: {
+                    if let reason = limit.reason {
+                        Label { Text("Edit [File Viewer]"); Text(reason) } icon: { ThemedIcon(Theme.Icon.edit) }
+                    } else {
+                        Label("Edit [File Viewer]", systemImage: Theme.Icon.edit)
+                    }
+                }
+                .disabled(limit != .editable)
+                .accessibilityIdentifier("file-edit")
+            }
+        }
+    }
+
     /// Download (#5826): a tap saves a picture or a video to Photos and anything else through Save to Files; a long
     /// press offers the other ways. The bytes the viewer already holds are used when it has them.
     private var download: some View {
@@ -344,6 +379,9 @@ struct FileViewer: View {
 
     private var menu: some View {
         Menu {
+            #if os(iOS)
+            editItem
+            #endif
             if let page {
                 switch page.kind {
                 case .markdown:
@@ -383,6 +421,17 @@ struct FileViewer: View {
                     }
                 default:
                     EmptyView()
+                }
+            }
+            if let showInFiles, page?.kind != .directory {
+                Section {
+                    Button {
+                        let shown = page?.file?.path ?? ref.path
+                        let full = shown.hasPrefix("/") || shown.hasPrefix("~") ? shown : ((ref.cwd ?? "") as NSString).appendingPathComponent(shown)
+                        dismiss()
+                        showInFiles(full)
+                    } label: { Label("Show in Files Page", systemImage: Theme.Icon.folder) }
+                    .accessibilityIdentifier("file-show-in-files")
                 }
             }
             Button { UIPasteboard.general.string = ref.path } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
