@@ -89,7 +89,8 @@ class AutoreleaseTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="autorelease-tests-")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Resolved: on macOS /var is a link to /private/var, and the worker's children report the resolved directory.
+        self.root = Path(self.temporary.name).resolve()
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         self.env.update(HOME=str(self.root), GIT_CONFIG_NOSYSTEM="1", LC_ALL="C")
         self.origin = self.root / "origin.git"

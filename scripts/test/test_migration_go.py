@@ -13,7 +13,7 @@ from migration_go import fixture_toolchain
 class MigrationGoTests(unittest.TestCase):
     def test_old_system_go_selects_new_module_compiler_with_isolated_home(self):
         with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
+            base = Path(directory).resolve()  # on macOS /var links to /private/var, which the fake Go's cwd reports
             home, cache, server, selected = [base / name for name in ('home', 'cache', 'server', 'selected')]
             for path in (home, cache, server, selected / 'bin'):
                 path.mkdir(parents=True)
