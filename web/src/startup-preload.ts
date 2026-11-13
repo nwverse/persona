@@ -274,11 +274,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // sections) adds 318 B to ja, measured in one environment against main at eeac9a579 (ja 479,359 B to 479,677 B; en
 // 475,650 B to 475,958 B, zh-Hans 476,635 B to 476,959 B). The budget moves by these 318 B on top of #6563's.
 // #6589: the Agents list's Filter on its title row with its count, the chips with the query ⌘K put on the list (its text
-// reopens ⌘K) and the small store the palette sets it through, the phone page's search button: ja 479,826 B against
-// 479,677 B on main at 86d1bcde9, +149 B (en 476,127 B, zh-Hans 477,120 B; the list's field and its strings went; ⌘K's
-// matcher, lib/agent-search.ts, loads with the first query typed, not here; the idle tier, 41,184 B with it, stays under
-// its ceiling). main's 132 B of room stay.
-export const FIRST_SCREEN_BUDGET = 479_958;
+// reopens ⌘K) and the small store the palette sets it through, the paged list's search taken from it in place of its
+// own field, the phone page's search button: ja 479,938 B against 479,646 B on main at a68806576, +292 B (en 476,234 B
+// against 475,953 B, zh-Hans 477,216 B against 476,931 B; the lists' fields and their strings went; ⌘K's matcher,
+// lib/agent-search.ts, and its Filter's menu load on intent, not here; the idle tier, 43,115 B with ⌘K's Filter button
+// against 41,956 B, stays under its ceiling). main's 163 B of room stay.
+export const FIRST_SCREEN_BUDGET = 480_101;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
