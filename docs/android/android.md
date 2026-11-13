@@ -984,15 +984,15 @@ python3 scripts/app/test_android_baseline_profile.py
 seconds so ART's profile saver writes, then runs `cmd package dump-profiles` and pulls the text. `rules` rewrites
 `baseline-prof.txt`. The phone reports the names of the shrunk app: the project keeps names (`-dontobfuscate`), but R8
 still merges classes, inlines methods, narrows signatures and turns lambdas into synthetic classes, so the script maps
-every name back through the same build's `android/app/build/outputs/mapping/release/mapping.txt` and drops what the
-mapping cannot explain (it prints the count; `--report` lists them). Build and capture from the same commit, or the
+every name back through the R8 mapping file that the same build writes under the app's build directory, and drops what
+the mapping cannot explain (it prints the count; `--report` lists them). Build and capture from the same commit, or the
 mapping does not match the phone.
 
 Regenerate it when a page's code moves to other classes (a large refactor of the chat, the Agents list or the app
 shell), when a page is added to the walk, or when an R8 or AGP upgrade changes how classes are merged. Rules that no
 longer name anything are ignored by R8, so a stale file costs nothing at build time; it only covers less of the app.
-To see how much still applies, compare the rules with what R8 kept in
-`android/app/build/intermediates/r8_art_profile/release/minifyReleaseWithR8/baseline-prof.txt`.
+To see how much still applies, compare the rules with the rewritten profile that the R8 step writes under the app's
+build directory.
 
 The standard way to produce this file is a Macrobenchmark module with `BaselineProfileRule` and the
 `androidx.baselineprofile` Gradle plugin, which drives the pages from a test and handles R8's names itself. It needs a
