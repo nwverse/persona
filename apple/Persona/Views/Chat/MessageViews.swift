@@ -1097,6 +1097,9 @@ struct StreamingText: View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("StreamingText")
         #endif
+        #if DEBUG
+        let _ = StreamCadence.shown = text.utf16.count
+        #endif
         let parts = StreamChunks.split(AssistantCardText.replacingCards(text))
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(parts.done.enumerated()), id: \.offset) { i, chunk in
