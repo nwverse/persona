@@ -281,30 +281,15 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
         }.distinctUntilChanged()
         override fun lists(machineId: String) =
             stacks.of(machineId)?.connection?.serverFeatures?.value?.contains(HttpTerminalPanes.TERMINAL_PANES) == true
+        override fun opensNewSpaces(machineId: String) =
+            HttpTerminalPanes.offersNewSpace(stacks.of(machineId)?.connection?.serverFeatures?.value.orEmpty())
         override suspend fun panes(machineId: String) =
             stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).panes(GroupKeys.raw(machineId)) }
-        override suspend fun newTab(machineId: String, workspaceId: String, kind: String?) =
-            stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).newTab(GroupKeys.raw(machineId), workspaceId, kind) }
+        override suspend fun newTab(machineId: String, workspaceId: String, kind: String?, cwd: String?) =
+            stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).newTab(GroupKeys.raw(machineId), workspaceId, kind, cwd) }
     }
 
-    val files: SessionFiles = object : SessionFiles {
-        private fun of(machineId: String) = stacks.of(machineId)?.files ?: throw HubFailure(HubError.NoNetwork)
-        override suspend fun directory(machineId: String, cwd: String, path: String) = of(machineId).directory(machineId, cwd, path)
-        override suspend fun file(machineId: String, cwd: String, path: String) = of(machineId).file(machineId, cwd, path)
-        override suspend fun filePreview(machineId: String, cwd: String, path: String) = of(machineId).filePreview(machineId, cwd, path)
-        override suspend fun status(machineId: String, cwd: String) = of(machineId).status(machineId, cwd)
-        override suspend fun diff(machineId: String, cwd: String, path: String, staged: Boolean) = of(machineId).diff(machineId, cwd, path, staged)
-        override suspend fun log(machineId: String, cwd: String, skip: Int, limit: Int) = of(machineId).log(machineId, cwd, skip, limit)
-        override suspend fun show(machineId: String, cwd: String, hash: String) = of(machineId).show(machineId, cwd, hash)
-        override suspend fun pull(machineId: String, cwd: String) = of(machineId).pull(machineId, cwd)
-        override suspend fun stat(machineId: String, cwd: String, paths: List<String>) = of(machineId).stat(machineId, cwd, paths)
-        override suspend fun download(machineId: String, cwd: String, path: String, into: java.io.File) =
-            of(machineId).download(machineId, cwd, path, into)
-        override fun comparesVersions(machineId: String) = stacks.of(machineId)?.files?.comparesVersions(machineId) == true
-        override suspend fun blob(machineId: String, cwd: String, path: String, rev: String) = of(machineId).blob(machineId, cwd, path, rev)
-        override suspend fun thumbnail(machineId: String, cwd: String, path: String, size: Int) = of(machineId).thumbnail(machineId, cwd, path, size)
-        override suspend fun convertToPdf(machineId: String, cwd: String, path: String) = of(machineId).convertToPdf(machineId, cwd, path)
-    }
+    val files: SessionFiles = routedFiles { stacks.of(it)?.files }
 
     val actions: ChatActions = object : ChatActions {
         private fun of(session: Session) = stacks.of(session.machineId)?.actions ?: throw HubFailure(HubError.NoNetwork)
@@ -342,6 +327,34 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
             return history.copy(metrics = stack.names.metrics(history.metrics))
         }
     }
+}
+
+/**
+ * [MergedShellServices.files]: each call goes to the files of the group [lookup] finds for its machine, in merged ids;
+ * no open group fails as offline. Every method is forwarded, the ones with a default implementation too, or the app
+ * would get the default ("not supported") for them.
+ */
+internal fun routedFiles(lookup: (machineId: String) -> SessionFiles?): SessionFiles = object : SessionFiles {
+    private fun of(machineId: String) = lookup(machineId) ?: throw HubFailure(HubError.NoNetwork)
+    override suspend fun directory(machineId: String, cwd: String, path: String) = of(machineId).directory(machineId, cwd, path)
+    override suspend fun file(machineId: String, cwd: String, path: String) = of(machineId).file(machineId, cwd, path)
+    override suspend fun filePreview(machineId: String, cwd: String, path: String) = of(machineId).filePreview(machineId, cwd, path)
+    override suspend fun status(machineId: String, cwd: String) = of(machineId).status(machineId, cwd)
+    override suspend fun diff(machineId: String, cwd: String, path: String, staged: Boolean) = of(machineId).diff(machineId, cwd, path, staged)
+    override suspend fun log(machineId: String, cwd: String, skip: Int, limit: Int) = of(machineId).log(machineId, cwd, skip, limit)
+    override suspend fun show(machineId: String, cwd: String, hash: String) = of(machineId).show(machineId, cwd, hash)
+    override suspend fun pull(machineId: String, cwd: String) = of(machineId).pull(machineId, cwd)
+    override suspend fun stat(machineId: String, cwd: String, paths: List<String>) = of(machineId).stat(machineId, cwd, paths)
+    override suspend fun download(machineId: String, cwd: String, path: String, into: java.io.File) =
+        of(machineId).download(machineId, cwd, path, into)
+    override fun comparesVersions(machineId: String) = lookup(machineId)?.comparesVersions(machineId) == true
+    override suspend fun blob(machineId: String, cwd: String, path: String, rev: String) = of(machineId).blob(machineId, cwd, path, rev)
+    override suspend fun thumbnail(machineId: String, cwd: String, path: String, size: Int) = of(machineId).thumbnail(machineId, cwd, path, size)
+    override suspend fun convertToPdf(machineId: String, cwd: String, path: String) = of(machineId).convertToPdf(machineId, cwd, path)
+    override fun editsFiles(machineId: String) = lookup(machineId)?.editsFiles(machineId) == true
+    override suspend fun rename(machineId: String, cwd: String, path: String, name: String) = of(machineId).rename(machineId, cwd, path, name)
+    override suspend fun trash(machineId: String, cwd: String, paths: List<String>) = of(machineId).trash(machineId, cwd, paths)
+    override suspend fun restore(machineId: String, trashIds: List<String>) = of(machineId).restore(machineId, trashIds)
 }
 
 /**
@@ -420,11 +433,11 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         override suspend fun newAgentModel() = creations.getOrNull(chosen)?.newAgentModel()
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             creation(of(machineId)).launcherModels(machineId, launcher, refresh)
-        override suspend fun worktreeStatus(machineId: String, cwd: String) = creation(of(machineId)).worktreeStatus(machineId, cwd)
-        override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String) =
-            creation(of(machineId)).addWorktree(machineId, cwd, nameHint, branch)
-        override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean) =
-            creation(of(machineId)).removeWorktree(machineId, path, deleteBranch, force)
+        override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?) = creation(of(machineId)).worktreeStatus(machineId, cwd, kind)
+        override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?) =
+            creation(of(machineId)).addWorktree(machineId, cwd, nameHint, branch, kind)
+        override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean, kind: String?) =
+            creation(of(machineId)).removeWorktree(machineId, path, deleteBranch, force, kind)
     }
     return AgentsWiringState(
         scope = scope,

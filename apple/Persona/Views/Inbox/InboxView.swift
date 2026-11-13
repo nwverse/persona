@@ -55,10 +55,23 @@ extension InboxView {
     static func short(_ email: String) -> String { InboxPage.short(email) }
 }
 
+/// A waiting session pushes only on its own hub's Assistant stack. Another group's card keeps the old open, which
+/// selects that group's Persona for an assistant conversation instead of leaving a foreign route on this hub's stack.
+@MainActor enum InboxWaitingOpen {
+    static func session(_ key: SessionKey, currentHub: String?, push: ((InboxChatRoute) -> Void)?, open: () -> Void) {
+        if let push, key.group == currentHub {
+            push(InboxChatRoute(key: key, manager: nil))
+        } else {
+            open()
+        }
+    }
+}
+
 /// The inbox's page itself, in whatever stack shows it: Inbox's own (InboxView), or the shell's Assistant page (pushed from
 /// the drawer, docs/apple/ios.md「New shell」), which passes `embedded` so the page brings its destinations and link handling.
 struct InboxPage: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.pushInboxChat) private var pushChat
     @Binding var path: NavigationPath
     @ObservedObject var accountState: InboxAccountState
     var embedded = false
@@ -416,9 +429,14 @@ struct InboxPage: View {
                     ThemedIcon(n == 0 ? Theme.Icon.unchecked : n == g.items.count ? Theme.Icon.successFilled : Theme.Icon.partlyChecked)
                         .font(Theme.Font.heading)
                         .foregroundStyle(n == 0 ? Color.secondary : Theme.accent)
+                        .tapTargetHeight()
+                        // A finger wide too, the title where it was: hit over the header's inset and the gap before the
+                        // title, whose own button, drawn after it, keeps its taps (#6658).
+                        .tapTargetOutset(.horizontal)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(String(localized: "Select All in \(g.title)"))
+                .accessibilityIdentifier("inbox.pickGroup")
             }
             Button {
                 withAnimation(Theme.Motion.standard) { setGroupOpen(section, g.key, !open) }
@@ -432,13 +450,15 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.groupTitle")
             if n > 0 { Text("\(n) Picked").font(Theme.Font.caption).foregroundStyle(Theme.accent).lineLimit(1) }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush) // its buttons are the room above and below (#6576)
         .id(Self.groupID(section, g.key))
     }
 
@@ -650,7 +670,6 @@ struct InboxPage: View {
                     // iPhone the scroll edge reached from the top down to it, over every row between (#4218).
                     Section {
                         doneHeader(count: count, groups: dg, proxy: proxy)
-                            .listRowInsets(.vertical, Theme.Space.s)
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
                             .accessibilityAddTraits(.isHeader)
@@ -713,9 +732,11 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.doneTitle")
             if groups.count > 1 {
                 Menu {
                     ForEach(groups) { g in
@@ -725,13 +746,18 @@ struct InboxPage: View {
                     Button("Collapse All") { for g in groups { setGroupOpen("done", g.id, false) } }
                     Button("Expand All") { for g in groups { setGroupOpen("done", g.id, true) } }
                 } label: {
+                    // a finger wide too: the two-character zh-Hans label is about 30 pt
                     Text("Jump To").font(Theme.Font.secondary).lineLimit(1)
+                        .tapTargetHeight()
+                        .scaledFrame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
+                        .frame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
+                        .contentShape(.rect)
                 }
                 .accessibilityIdentifier("inbox.jumpTo")
             }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush)
         .id("|done")
     }
 
@@ -767,7 +793,9 @@ struct InboxPage: View {
         HStack(spacing: Theme.Space.sm) {
             if InboxItem.Tier(rawValue: key)?.folds == false {
                 // In Progress: always open, a plain title (inbox phase 1).
+                // as tall as the other sections' titles, which are buttons
                 Text("\(title) · \(count)").font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
+                    .tapTargetHeight()
                 Spacer(minLength: 0)
             } else {
             Button {
@@ -780,19 +808,24 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.sectionTitle")
             }
             if let clear {
-                Button(clear.0) { withAnimation(Theme.Motion.standard) { clear.1() } }
-                    .font(Theme.Font.secondary)
-                    .lineLimit(1)
-                    .buttonStyle(.borderless)
+                Button { withAnimation(Theme.Motion.standard) { clear.1() } } label: {
+                    Text(clear.0).tapTargetHeight().contentShape(.rect)
+                }
+                .font(Theme.Font.secondary)
+                .lineLimit(1)
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("inbox.clear")
             }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush)
     }
 
     private func agentRow(_ ix: Interaction) -> some View {
@@ -810,7 +843,7 @@ struct InboxPage: View {
     private func open(_ ix: Interaction) {
         // A card on no session has no chat: it opens by itself (#4059).
         if ix.isSessionless { answering = ix; return }
-        model.open(ix.sessionKey) // in its own group (another group's Persona: that group's)
+        InboxWaitingOpen.session(ix.sessionKey, currentHub: model.hub?.group, push: pushChat, open: { model.open(ix.sessionKey) })
     }
 
     @ViewBuilder private func row(_ it: InboxItem) -> some View {
@@ -985,6 +1018,7 @@ struct InboxRow: View {
     static let textColumn: CGFloat = 52
 
     var body: some View {
+        let now = self.now
         HStack(alignment: .top, spacing: Theme.Space.m) {
             avatar
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -1008,7 +1042,7 @@ struct InboxRow: View {
                                 // white, where the row sets the words' color for these (MacHoverRow).
                                 .font(Theme.Font.secondary)
                                 .foregroundStyle(item.isDone ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary.opacity(0.9))).lineLimit(2)
-                            Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                            if !item.repeatsSummary { Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1) }
                         }
                     } else {
                         Text(from).font(Theme.Font.secondary).lineHeight(.secondary).foregroundStyle(.secondary).lineLimit(2)
@@ -1025,7 +1059,9 @@ struct InboxRow: View {
                 if showAccount && !item.isLark {
                     Text(item.accountName).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                if let mark = InboxEventText.mark(item) {
+                if let now, !item.isDone {
+                    nowLine(now)
+                } else if let mark = InboxEventText.mark(item) {
                     // Inbox phase 1: the suggestion (it replaces the AI agent's draft card, which a hub mirrors it
                     // into), In Progress's state, the 'preparing a suggestion' line; its buttons are in the detail.
                     InboxEventMarkLine(mark: mark).padding(.top, Theme.Space.xxs)
@@ -1049,8 +1085,47 @@ struct InboxRow: View {
         .contentShape(.rect)
     }
 
+    /// The shared state key wins over the old mark. The frozen Mac list keeps its existing row and mark.
+    private var now: String? {
+        #if os(macOS)
+        nil
+        #else
+        InboxNow.text(for: item)
+        #endif
+    }
+
+    /// The same state line as the other clients: waiting has a still clock, only AI work spins, and anything that
+    /// needs the owner carries the existing Needs you mark. FYI and folded states do not spin.
+    private func nowLine(_ words: String) -> some View {
+        HStack(spacing: Theme.Space.sm) {
+            nowSymbol
+            Text(words).font(Theme.Font.label)
+                .foregroundStyle(item.now == "failed" ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
+                .lineLimit(1)
+        }
+        .padding(.top, Theme.Space.xxs)
+    }
+
+    @ViewBuilder private var nowSymbol: some View {
+        switch item.now {
+        case "waiting":
+            ThemedIcon(Theme.Icon.time).font(Theme.Font.label).foregroundStyle(.secondary)
+        case "queued", "looking", "agent_working":
+            InboxSpinner()
+        case "confirm_reply", "confirm_agent", "decide", "follow_up_ask", "check_due", "needs_you", "failed":
+            ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.label)
+                .foregroundStyle(item.now == "failed" ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(StatusPalette.needsYou.text))
+        default:
+            EmptyView()
+        }
+    }
+
     /// Who wrote what (under the AI's summary once it has one).
     private var from: String {
+        if item.isAssistantRow { return item.preview } // the tag says who: no "Assistant:" in front
+        #if !os(macOS)
+        if let meta = InboxNow.meta(item, lang: interfaceTextLocale.identifier) { return meta }
+        #endif
         if let doc = item.doc { return doc.typeName + " · " + item.preview } // the preview names who: Li Lei mentioned you
         if item.moment != nil { return String(localized: "\(item.sender ?? ""): \(item.preview)", comment: "Who wrote it: what they wrote") } // who commented, on the post in the title
         if let c = item.connector { // example-org/example-repo#12 · bob: please take a look
@@ -1063,6 +1138,17 @@ struct InboxRow: View {
     }
 
     private var avatar: some View {
+        Group {
+            if item.isAssistantRow {
+                // The assistant's own row wears the assistant's avatar, with no source badge.
+                PersonaAvatar(size: Theme.Size.avatar).opacity(item.isDone ? 0.6 : 1)
+            } else {
+                sourceAvatar
+            }
+        }
+    }
+
+    private var sourceAvatar: some View {
         ZStack(alignment: .bottomTrailing) {
             Group {
             if let doc = item.doc {
@@ -1324,11 +1410,27 @@ struct InboxDetailView: View {
     }
 }
 
+/// Values a destination needs directly: an outer NavigationStack / NavigationSplitView does not reliably forward them
+/// to pushed pages on iPad. Both are optional on Mac, Vision and the classic layouts, preserving their fallbacks.
+struct InboxDestinationEnvironment: ViewModifier {
+    var chat: ((InboxChatRoute) -> Void)? = nil
+    var openFeishu: ((FeishuRoute) -> Void)? = nil
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.pushInboxChat, chat)
+            .environment(\.feishuOpen, openFeishu)
+    }
+}
+
 /// The pages the inbox opens, in either layout (`SplitNavigation`).
 struct InboxDestinations: ViewModifier {
     var accounts: [MailAccount]
+    var inboxChat: ((InboxChatRoute) -> Void)? = nil
+    var openFeishu: ((FeishuRoute) -> Void)? = nil
     @Environment(AppModel.self) private var model
-    @Environment(\.feishuOpen) private var feishuOpen
+    @Environment(\.feishuOpen) private var inheritedFeishuOpen
+    private var routeOpen: ((FeishuRoute) -> Void)? { openFeishu ?? inheritedFeishuOpen }
 
     // Links on these pages open in the app (feishuHandlesLinks) wherever the stack is: the shell pushes them onto its
     // own stack, where the inbox page's handler does not reach. Those on an item's pages, and on a document or post
@@ -1340,15 +1442,18 @@ struct InboxDestinations: ViewModifier {
             // and draft under the new chat's title (#885).
             .navigationDestination(for: InboxItem.self) {
                 InboxDetailView(item: $0, accounts: accounts).id($0.id).splitDetailPage()
-                    .feishuHandlesLinks(feishuOpen, manager: model.linkManager($0.manager))
+                    .feishuHandlesLinks(routeOpen, manager: model.linkManager($0.manager))
+                    .modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: routeOpen))
             }
             .navigationDestination(for: FeishuRoute.self) {
-                FeishuRouteView(route: $0).splitDetailPage().feishuHandlesLinks(feishuOpen, manager: $0.manager)
+                FeishuRouteView(route: $0).splitDetailPage().feishuHandlesLinks(routeOpen, manager: $0.manager)
+                    .modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: routeOpen))
             }
             // view original and the chain's links of an event (inbox phase 1).
             .navigationDestination(for: InboxSourceRoute.self) {
                 InboxSourcePage(route: $0, accounts: accounts).splitDetailPage()
-                    .feishuHandlesLinks(feishuOpen, manager: model.linkManager($0.item.manager))
+                    .feishuHandlesLinks(routeOpen, manager: model.linkManager($0.item.manager))
+                    .modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: routeOpen))
             }
             .extensionPushDestination()
     }

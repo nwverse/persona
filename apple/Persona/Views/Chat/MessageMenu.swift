@@ -19,12 +19,6 @@ final class MessageMenu {
     /// The lifted message's words selected where they are (#603, `LiftSelection.swift`): a second long press on it, or
     /// Select Text. nil: lifted with its bar.
     var inPlace: InPlaceSelect?
-    /// The lifted copy of a message drawn in parts lays out all of its parts (#5221): asked for when its words are to
-    /// be selected (the text view over them follows every line). Until then it lays out only the parts near the screen.
-    var liftWhole = false
-    /// Selecting asked for while that copy lays out all of its parts: `LiftedMessage` starts it once they are there,
-    /// with what showed kept where it was.
-    @ObservationIgnored var pendingSelect: InPlaceSelect?
     /// The message being shared as a card.
     var sharing: ShareMessage?
     /// Forward (#3807): the chat makes the pressed message a forward and opens its picker (`forwarding`). nil: the bar
@@ -99,27 +93,21 @@ final class MessageMenu {
     }
 
     func close() {
-        pendingSelect = nil
-        if selected != nil || lift != nil || inPlace != nil || liftWhole {
+        if selected != nil || lift != nil || inPlace != nil {
             withAnimation(Theme.Motion.conceal) {
                 selected = nil
                 lift = nil
                 inPlace = nil
-                liftWhole = false
             }
         }
     }
 
     /// Selects the lifted message's words where they are: the word at `point` (in the window), or all of them. A
-    /// message drawn in parts first lays out all of them (`liftWhole`); the selecting starts once they are there.
+    /// message drawn in parts stays as it is, its parts near the screen laid out (#5291): the text view over them holds
+    /// all of its words.
     func selectInPlace(at point: CGPoint?) {
-        guard let lift else { return }
+        guard lift != nil else { return }
         Haptics.tap()
-        if lift.part != nil, !liftWhole {
-            pendingSelect = InPlaceSelect(at: point)
-            liftWhole = true
-            return
-        }
         withAnimation(Theme.Motion.state) { inPlace = InPlaceSelect(at: point) }
     }
 
@@ -496,7 +484,6 @@ struct MessageActionBar: View {
     /// Only on this phone (`messageActionBar(delete:)`): Delete last, in the danger color.
     var delete: MessageBarDelete?
     var itemWidth: CGFloat = Self.item
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     static let height: CGFloat = 62
     static let item: CGFloat = 58
@@ -504,11 +491,6 @@ struct MessageActionBar: View {
     /// there fits at every size up to the accessibility ones; a long press shows an item's name large (Large Content
     /// Viewer, #5019).
     static let barTypeSize: DynamicTypeSize = .large
-    /// At the accessibility sizes the actions are a list instead, one a row with its icon and whole name
-    /// (DESIGN_SYSTEM.md 1.2 rule 3), whose words grow up to this.
-    static let listTypeSize: DynamicTypeSize = .xxxLarge
-    /// The actions as a list (`listTypeSize`) rather than a bar; the page places it by its measured size.
-    static func stacks(_ size: DynamicTypeSize) -> Bool { size.isAccessibilitySize }
     static func width(isUser: Bool, more: Bool = false) -> CGFloat { width(count: (isUser ? 5 : 4) + (more ? 1 : 0)) }
     static func width(count: Int) -> CGFloat { item * CGFloat(count) + 12 }
     /// Each action's width when the bar is `width` wide.
@@ -596,24 +578,10 @@ struct MessageActionBar: View {
     }
 
     var body: some View {
-        Group {
-            if Self.stacks(typeSize) {
-                // As wide as its longest row, every row that wide.
-                VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                        if i > 0 { Divider() }
-                        action(item)
-                    }
-                }
-                .fixedSize()
-                .dynamicTypeSize(...Self.listTypeSize)
-            } else {
-                HStack(spacing: 0) { ForEach(items) { action($0) } }
-                    .padding(.horizontal, Theme.Space.sm)
-                    .frame(height: Self.height)
-                    .dynamicTypeSize(...Self.barTypeSize)
-            }
-        }
+        HStack(spacing: 0) { ForEach(items) { action($0) } }
+            .padding(.horizontal, Theme.Space.sm)
+            .frame(height: Self.height)
+            .dynamicTypeSize(...Self.barTypeSize)
         .background(Theme.Lift.bar, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         // Its edge over the dimmed chat.
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).stroke(Theme.cardStroke, lineWidth: 0.5))
@@ -631,25 +599,12 @@ struct MessageActionBar: View {
     }
 
     @ViewBuilder private func label(_ item: Item) -> some View {
-        Group {
-            if Self.stacks(typeSize) {
-                // A row: the icon in a fixed box, so the names line up, then the whole name.
-                HStack(spacing: Theme.Space.m) {
-                    ThemedIcon(item.symbol).font(Theme.Font.heading).scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
-                    Text(item.title).font(Theme.Font.body).lineLimit(1)
-                }
-                .padding(.horizontal, Theme.Space.l)
-                .scaledFrame(minHeight: Theme.Size.tapTarget)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                VStack(spacing: Theme.Space.xs) {
-                    // Symbols differ in height: a fixed box keeps every label on one line.
-                    ThemedIcon(item.symbol).font(Theme.Font.heading).scaledFrame(height: Theme.Size.iconS)
-                    Text(item.title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
-                }
-                .frame(width: itemWidth, height: Self.height)
-            }
+        VStack(spacing: Theme.Space.xs) {
+            // Symbols differ in height: a fixed box keeps every label on one line.
+            ThemedIcon(item.symbol).font(Theme.Font.heading).scaledFrame(height: Theme.Size.iconS)
+            Text(item.title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
         }
+        .frame(width: itemWidth, height: Self.height)
         .foregroundStyle(item.tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(HierarchicalShapeStyle.primary))
         .contentShape(.rect)
     }

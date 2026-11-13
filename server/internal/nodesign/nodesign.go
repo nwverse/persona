@@ -14,11 +14,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -39,8 +39,8 @@ type Config struct {
 }
 
 var (
-	identifierShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$`)
-	sha1Shape       = regexp.MustCompile(`^[0-9A-Fa-f]{40}$`)
+	identifierShape = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$`)
+	sha1Shape       = lazyre.New(`^[0-9A-Fa-f]{40}$`)
 )
 
 // DefaultIdentifier is the identifier a program is signed under when the setting names none: com.nwverse.personad,

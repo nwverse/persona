@@ -19,7 +19,11 @@ nonisolated enum StateName: String, CaseIterable, Sendable {
     /// A to-do or task whose agent ended its turn but waits to be brought back: its background work, or the hub's wake-up (#3274).
     case taskWaiting
 
-    var text: String {
+    /// Resolved once per interface locale: these words are drawn on every redraw of the Agents list, its filter chips and
+    /// row badges, and each `interfaceText` lookup reads the localization tables (#5438).
+    var text: String { Self.kept("state." + rawValue) { resolve() } }
+
+    private func resolve() -> String {
         switch self {
         case .needsYou: interfaceText("Needs You [State Names]")
         case .working: interfaceText("Working [State Names]")
@@ -33,6 +37,14 @@ nonisolated enum StateName: String, CaseIterable, Sendable {
         case .followUp: interfaceText("Follow-Up [State Names]")
         case .taskWaiting: interfaceText("Task Waiting [State Names]")
         }
+    }
+
+    /// The sentence-form Needs you used by the shared inbox state table. The title-form `needsYou.text` is unchanged.
+    /// InboxNow resolves this once per language; an explicit locale also lets the shared fixtures check all three.
+    static func needsYouSentence(for locale: Locale) -> String {
+        var resource: LocalizedStringResource = "Needs you [State Names]"
+        resource.locale = locale
+        return String(localized: resource)
     }
 
     /// The states a list counts in its headers and summaries: "3 need you".

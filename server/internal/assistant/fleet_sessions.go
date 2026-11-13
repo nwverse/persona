@@ -90,7 +90,8 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	}
 	s.availSweep(machine, list, now) // the waits of conversations no longer listed (availability.go)
 	s.fleetKeepPrevious(machine, list)
-	s.roundsSeen(list) // whose round each conversation is on (owner_preempt.go)
+	s.roundsSeen(list)      // whose round each conversation is on (owner_preempt.go)
+	s.ownerRoundsSeen(list) // the owner-turn gates end with their rounds (relay_presence.go, #6394)
 	s.sessionsChanged(machine)
 	s.searchWake() // the chat search index reads what changed (search_index.go)
 	// Messages from other conversations, for those no longer running; the todos' links and herdr marks.
@@ -396,15 +397,19 @@ func (s *Service) listedSessions(ctx context.Context, machine string) ([]proto.S
 	return list, nil
 }
 
-// decorateTodos puts on machine mid's sessions the todo each works for and whether it is quiet.
+// decorateTodos keeps active work and completed ownership separate, with quiet still decided by its own report.
 func (s *Service) decorateTodos(mid string, list []proto.Session) {
 	r := &s.fleet.rep
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for i := range list {
 		key := [2]string{mid, list[i].SessionID}
+		list[i].Todo = nil
+		list[i].SetCompletedTodo(nil)
 		if l, ok := r.links[key]; ok {
 			list[i].Todo = &proto.TodoRef{ID: l.TodoID, Title: l.Title}
+		} else if l, ok := r.completed[key]; ok {
+			list[i].SetCompletedTodo(&proto.TodoRef{ID: l.TodoID, Title: l.Title})
 		}
 		list[i].Quiet = r.quiet[key]
 	}

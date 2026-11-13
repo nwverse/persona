@@ -23,8 +23,13 @@ import { autoConversations, autoOrigin, matchesOrigin, originLabel, parseOriginF
 import { backgroundSupervisorTitle, isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { t } from "../../i18n";
 import { ASSISTANT_SEARCH_FEATURE, markParts, mergeSearch, useAssistantSearch, type AssistantSearchHit } from "../../lib/assistant-search";
+import { PHONE, useMedia } from "../../lib/viewport";
 
 const NONE: Session[] = [];
+// A row's line under its title: the matching words of a search, or else its last message.
+const ROW_LINE = "mt-0.5 block truncate text-[12px] text-ink-3";
+// The pill beside a row's title ("Main chat", "Built in"): one shape, each in its own colors.
+const pill = (bg: string, ink: string) => `inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full ${bg} px-2 text-[11px] font-medium ${ink}`;
 
 export function History({ origin, onToggleSidebar }: { origin?: string; onToggleSidebar: () => void }) {
   const filter = parseOriginFilter(origin);
@@ -82,6 +87,8 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   // the filter chips narrow them; a chat found by a message shows it and opens at it
   const searchOn = useStore((s) => s.features.includes(ASSISTANT_SEARCH_FEATURE));
   const said = useAssistantSearch(query, searchOn);
+  // a found chat's line starts just before its match, as much of a lead-in as the row's width holds (#7045)
+  const fit = useMedia(PHONE) ? "phone" : "wide";
   const { hits, saidBy } = useMemo(() => {
     const shown = all.filter((s) => matchesOrigin(s, filter, background));
     const merged = mergeSearch(filterConversations(shown, query), said.answer, all, (r): Conversation => ({
@@ -179,7 +186,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
           {main && (
             <section className="mb-5">
               <div className="overflow-hidden rounded-card bg-surface shadow-card">
-                <ConvRow s={main} main now={nowMs} said={searching ? saidBy.get(main.session_id) : undefined} onRename={setRenaming} onArchive={archive} />
+                <ConvRow s={main} main now={nowMs} said={searching ? saidBy.get(main.session_id) : undefined} fit={fit} onRename={setRenaming} onArchive={archive} />
               </div>
             </section>
           )}
@@ -189,7 +196,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
               <SectionTitle>{d.title}</SectionTitle>
               <div className="divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
                 {d.items.map((s) => (
-                  <ConvRow key={s.session_id} s={s} now={nowMs} said={searching ? saidBy.get(s.session_id) : undefined} onRename={setRenaming} onArchive={archive} />
+                  <ConvRow key={s.session_id} s={s} now={nowMs} said={searching ? saidBy.get(s.session_id) : undefined} fit={fit} onRename={setRenaming} onArchive={archive} />
                 ))}
               </div>
             </section>
@@ -212,7 +219,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
                 <div inert={!(showArchived || searching)}>
                 <div className="divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
                   {archived.map((s) => (
-                    <ConvRow key={s.session_id} s={s} now={nowMs} said={searching ? saidBy.get(s.session_id) : undefined} onRename={setRenaming} onArchive={archive} />
+                    <ConvRow key={s.session_id} s={s} now={nowMs} said={searching ? saidBy.get(s.session_id) : undefined} fit={fit} onRename={setRenaming} onArchive={archive} />
                   ))}
                 </div>
                 <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("assistant-history.archived_footer")}</p>
@@ -259,7 +266,7 @@ function ConvChannel({ ids }: { ids?: string[] }) {
   );
 }
 
-function ConvRow({ s, main, now, said, onRename, onArchive }: { s: Conversation; main?: boolean; now: number; said?: AssistantSearchHit; onRename: (s: Conversation) => void; onArchive: (s: Conversation, on: boolean) => void }) {
+function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversation; main?: boolean; now: number; said?: AssistantSearchHit; fit?: "phone" | "wide"; onRename: (s: Conversation) => void; onArchive: (s: Conversation, on: boolean) => void }) {
   const menu = useMenu();
   // found by what was said in it: opens at that message (#6283)
   const route: Route = conversationPage(s.session_id, s.machine_id, s.manager, said?.item_id);
@@ -309,16 +316,16 @@ function ConvRow({ s, main, now, said, onRename, onArchive }: { s: Conversation;
                 title
               )}
             </span>
-            {main && <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-accent-tint px-2 text-[11px] font-medium text-accent-ink">{t("assistant-history.main_chat")}</span>}
-            {builtIn && <span data-testid="built-in" className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-field px-2 text-[11px] font-medium text-ink-2">{t("assistant-conversations.built_in")}</span>}
+            {main && <span className={pill("bg-accent-tint", "text-accent-ink")}>{t("assistant-history.main_chat")}</span>}
+            {builtIn && <span data-testid="built-in" className={pill("bg-field", "text-ink-2")}>{t("assistant-conversations.built_in")}</span>}
             {origin ? <OriginMark origin={origin} size={16} /> : <ConvChannel ids={s.channels} />}
           </span>
           {said ? (
-            <span className="mt-0.5 block truncate text-[12px] text-ink-3" data-said>
-              {markParts(said.snippet, said.ranges).map(([words, match], k) => (match ? <mark key={k} className="rounded-[3px] bg-accent-tint text-ink">{words}</mark> : <span key={k}>{words}</span>))}
+            <span className={ROW_LINE} data-said>
+              {markParts(said.snippet, said.ranges, fit).map(([words, match], k) => (match ? <mark key={k} className="rounded-[3px] bg-accent-tint text-ink">{words}</mark> : <span key={k}>{words}</span>))}
             </span>
           ) : (
-            last && <span className="mt-0.5 block truncate text-[12px] text-ink-3">{last}</span>
+            last && <span className={ROW_LINE}>{last}</span>
           )}
         </span>
         <span className="flex shrink-0 flex-col items-end gap-1">
