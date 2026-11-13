@@ -219,7 +219,7 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
   const chosenAgent = (launcherList.provider === listProvider && launcherList.list?.agent) || providerAgent(chosen, draft.provider || p?.effective?.provider);
   const mainDefaultProvider = draft.provider || p?.effective?.provider;
   const mainInfo: AssistantLaunchers = {
-    launchers: (data?.providers ?? []).map((v) => ({ name: v.id, display_name: v.name, agent: v.agent })),
+    launchers: (data?.providers ?? []).map((v) => ({ name: v.id, display_name: v.name, agent: providerAgent(v) })),
     def: mainDefaultProvider ? { provider: mainDefaultProvider } : undefined,
     unavailable: [],
   };

@@ -27,7 +27,7 @@ const providers: ModelProvider[] = [
   { id: "launcher.default", name: "Default launcher", kind: "launcher" },
   { id: "launcher.custom", name: "Custom launcher", kind: "launcher" },
   { id: "api.messages", name: "Messages provider", kind: "api", api: "messages", model: "api-default" },
-  { id: "launcher.codex", name: "Codex", kind: "launcher", agent: "codex" },
+  { id: "launcher.codex", name: "Codex", kind: "launcher" },
   { id: "api.responses", name: "Responses provider", kind: "api", api: "responses" },
 ];
 const main: ModelPurpose = {

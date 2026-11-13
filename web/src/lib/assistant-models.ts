@@ -67,14 +67,18 @@ export interface MainChatAgentMismatch {
   actualAgent: string;
 }
 
+// Model configuration prefixes launcher providers; a session names the same launcher without that prefix.
+const canonicalLauncher = (name: string) => name.startsWith("launcher.") ? name.slice("launcher.".length) : name;
+
 /** A confirmed Main-chat-setting mismatch: both launchers are known and their agent kinds differ. An unloaded list,
  *  an unknown default, another launcher of the same kind, or a conversation's own pick changes nothing. */
 export function mainChatAgentMismatch(c: AssistantChat, info: AssistantLaunchers | undefined): MainChatAgentMismatch | undefined {
   const s = c.session;
   if (!s || !c.isMain || !s.launcher || !info || assistantPick(c)) return undefined;
   const configuredLauncher = info.def?.provider || c.config;
-  if (!configuredLauncher || configuredLauncher === s.launcher) return undefined;
-  const configured = info.launchers.find((l) => l.name === configuredLauncher);
+  if (!configuredLauncher || canonicalLauncher(configuredLauncher) === canonicalLauncher(s.launcher)) return undefined;
+  const configured = info.launchers.find((l) => l.name === configuredLauncher)
+    ?? info.launchers.find((l) => canonicalLauncher(l.name) === canonicalLauncher(configuredLauncher));
   if (!configured) return undefined;
   const configuredAgent = agentId(configured.agent_type || configured.agent);
   const actualAgent = agentId(sessionAgent(s).agent);
