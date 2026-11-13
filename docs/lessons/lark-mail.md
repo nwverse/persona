@@ -29,6 +29,11 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 
 ## Messages and documents
 
+- Lark CLI message-search results can mention an application by its `cli_` app ID, while `--at-chatter-ids` accepts
+  only `ou_` user IDs. Compare the bound app ID in unfiltered results; neither its name nor group membership proves
+  it was addressed. Responsibility cards may contain only labeled names, even in a raw message read, so structured
+  `at`/`person` checks alone do not cover them.
+
 - An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
 
 - Lark message rendering copies the Lark gateway's web client (`docs/apple/ios.md` ("Lark message rendering")): the hub forwards `parts` unchanged and only rewrites media URLs to `/api/v1/lark/media/`;

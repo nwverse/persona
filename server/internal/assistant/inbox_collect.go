@@ -109,6 +109,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	b.batch = nil
 	b.mu.Unlock()
 	s.saveInboxUndo(ctx, changed, s.undoWrites(ws, "what the round changed"))
+	s.handoffLarkMentions(ctx)
 	if st := s.inboxDB(); st != nil {
 		s.purgeInboxHistory(ctx, st, now)
 	}

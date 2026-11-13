@@ -16,6 +16,8 @@
   "larkcli_message": "Lark メッセージ",
   "larkcli_direct_message": "Lark ダイレクトメッセージ",
   "larkcli_mention": "Lark メンション",
+  "larkcli_addressed_rule": "ルール：あなた、または接続したボットを明示的に宛先とするメッセージです。",
+  "larkcli_handoff_rule": "このメッセージをメインの会話で処理するよう Persona に依頼しました。",
   "larkcli_reply_to": "あなたとして「{chat}」に送信（チャットの全員に表示）",
   "larkcli_reply_to_topic": "あなたとして「{chat}」のこのトピックに送信（チャットの全員に表示）",
   "larkcli_reply_to_unnamed": "あなたとしてこのチャットに送信（チャットの全員に表示）",

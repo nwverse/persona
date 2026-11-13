@@ -146,6 +146,9 @@ func (b *inboxBook) escalate(since, now time.Time) []*inboxWrite {
 	var changed []*inboxWrite
 	for _, it := range b.items {
 		a := it.Agent
+		if it.Source == "larkcli" && it.Kind == "bot_handoff" {
+			continue // the owner's request belongs to the main conversation, never a second processing agent
+		}
 		if !it.open() || it.Context == "" || a != nil && a.Of == it.Last {
 			continue
 		}

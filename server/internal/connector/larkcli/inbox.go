@@ -61,6 +61,8 @@ type inboxGroup struct {
 	threadID  string
 	chatName  string
 	mentioned bool
+	addressed bool
+	handoff   bool
 	messages  []adapter.Message
 	latest    adapter.Message
 	replied   bool
@@ -233,7 +235,7 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 	})
 
 	newMessages := c.dedupMessages(found)
-	groups := c.groupMessages(newMessages, auth.OpenID, topicsBefore)
+	groups := c.groupMessages(newMessages, auth, topicsBefore)
 	changed := false
 	for _, group := range groups {
 		thing := c.thingForGroup(ctx, group, auth.OpenID)
@@ -609,7 +611,8 @@ func (c *Connector) markSeen(messageID string) {
 	}
 }
 
-func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTopics map[string]struct{}) []*inboxGroup {
+func (c *Connector) groupMessages(messages []adapter.Message, auth adapter.AuthStatus, knownTopics map[string]struct{}) []*inboxGroup {
+	me := auth.OpenID
 	if len(messages) == 0 {
 		return nil
 	}
@@ -627,11 +630,20 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 	var current *inboxGroup
 	byKey := map[string]*inboxGroup{}
 	for _, message := range messages {
+		if message.Deleted {
+			continue
+		}
 		key := messageKey(message)
 		if key == "" {
 			continue
 		}
 		if message.Sender.ID == me {
+			if mentionsIdentity(message, auth.AppID) {
+				out = append(out, &inboxGroup{key: key, chatID: message.ChatID, threadID: topicID(message),
+					chatName: message.ChatName, messages: []adapter.Message{message}, latest: message, handoff: true})
+				current = nil
+				continue
+			}
 			if prior := byKey[key]; prior != nil {
 				prior.replied = after(message, prior.latest)
 			}
@@ -641,7 +653,8 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 			continue
 		}
 		keep := false
-		mentioned := messageMentions(message, me)
+		addressed := mentionsIdentity(message, auth.AppID) || cardAddressesOwner(message, auth)
+		mentioned := messageMentions(message, me) || addressed
 		if mentioned {
 			if topic := topicID(message); topic != "" {
 				topics[topic] = struct{}{}
@@ -672,6 +685,7 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 		current.latest = message
 		current.replied = false
 		current.mentioned = current.mentioned || mentioned
+		current.addressed = current.addressed || addressed
 	}
 	return out
 }
@@ -691,6 +705,9 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	_, allChat := c.inboxAllChats[group.chatID]
 	c.inboxMu.Unlock()
 	for _, message := range contextMessages {
+		if group.handoff {
+			break // the owner's explicit request, not a later peer message, is the handoff
+		}
 		if message.Deleted || messageKey(message) != group.key || message.Sender.ID == me || !after(message, latest) {
 			continue
 		}
@@ -706,6 +723,9 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		group.mentioned = group.mentioned || messageMentions(message, me)
 	}
 	for _, message := range contextMessages {
+		if group.handoff {
+			break
+		}
 		if !message.Deleted && messageKey(message) == group.key && message.Sender.ID == me && after(message, latest) {
 			group.replied = true
 		}
@@ -714,6 +734,9 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	thread := "larkcli:chat:" + group.chatID
 	if group.threadID != "" {
 		thread += ":thread:" + group.threadID
+	}
+	if group.handoff {
+		thread += ":handoff:" + latest.MessageID
 	}
 	kind := "group"
 	lang := i18n.From(ctx).Or(i18n.Default)
@@ -759,6 +782,15 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		CanReply: latest.MessageID != "",
 		Rules:    c.rules(),
 		Tags:     tags,
+	}
+	if group.addressed {
+		thing.Tier = connector.TierAction
+		thing.Why = i18n.T(lang, "hub-connectors.larkcli_addressed_rule")
+	}
+	if group.handoff {
+		thing.Kind = "bot_handoff"
+		thing.Tier = connector.TierFYI
+		thing.Why = i18n.T(lang, "hub-connectors.larkcli_handoff_rule")
 	}
 	// Keep the CLI's link opaque: it includes the message position and, for a
 	// topic, the source thread. Do not guess a link from a sender or a thread id.
@@ -961,6 +993,7 @@ func chatIDFromThread(thread string) (string, bool) {
 	if !ok || rest == "" {
 		return "", false
 	}
+	rest, _, _ = strings.Cut(rest, ":handoff:")
 	if i := strings.Index(rest, ":thread:"); i >= 0 {
 		rest = rest[:i]
 	}

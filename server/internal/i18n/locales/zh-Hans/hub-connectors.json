@@ -16,6 +16,8 @@
   "larkcli_message": "飞书消息",
   "larkcli_direct_message": "飞书私聊消息",
   "larkcli_mention": "飞书提及",
+  "larkcli_addressed_rule": "规则：这条消息明确提及你或你连接的机器人。",
+  "larkcli_handoff_rule": "你已请 Persona 在主对话中处理这条消息。",
   "larkcli_reply_to": "以你的身份发到「{chat}」，会话里的人都能看到",
   "larkcli_reply_to_topic": "以你的身份发到「{chat}」的这个话题里，群里的人都能看到",
   "larkcli_reply_to_unnamed": "以你的身份发到这个会话，会话里的人都能看到",

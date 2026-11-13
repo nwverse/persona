@@ -16,6 +16,8 @@
   "larkcli_message": "Lark message",
   "larkcli_direct_message": "Direct Lark message",
   "larkcli_mention": "Lark mention",
+  "larkcli_addressed_rule": "Rule: this message explicitly addresses you or your connected bot.",
+  "larkcli_handoff_rule": "You asked Persona to handle this message in the main conversation.",
   "larkcli_reply_to": "sent as you to “{chat}” (everyone in the chat sees it)",
   "larkcli_reply_to_topic": "sent as you into this topic of “{chat}” (everyone in the chat sees it)",
   "larkcli_reply_to_unnamed": "sent as you to this chat (everyone in it sees it)",
