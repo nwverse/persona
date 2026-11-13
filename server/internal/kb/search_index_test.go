@@ -1684,19 +1684,107 @@ func TestSearchIndexBuiltAgainUnderAReader(t *testing.T) {
 // Searches while the index is updated, and removed under both (rm -r .search is always safe): every search gives
 // what the files say, and the next update that is left alone leaves a whole index. The package's -race run checks
 // here that a search's reading of the index and an update's writing of it share nothing unguarded.
+//
+// The directory is removed by turns, and after each removal a search is run that began after it: that one, or one
+// of those running beside it, finds the index it was using gone and reads what is there instead (or the update
+// comes to its failure first and marks the index, and searches go without one). The turns:
+//
+//   - an update has finished: updates and searches go on as they come;
+//   - an update with a whole index and nothing to do has looked at the files and read none (the index's hook): it
+//     stands there until the directory is gone, then goes on from what it holds, and the next update does not
+//     start until the search has run;
+//   - an update that builds the index again and has published a part of it has opened a file: it stands there
+//     until the directory is gone and the search has run, then finds that it cannot write;
+//   - the same when it has read a file;
+//   - it has read a file, and goes on while the directory is emptied: it writes into it or fails, as it happens.
+//
+// The race detector cannot see two steps that the test itself puts in order. So the turns in which an update waits
+// for the search check what searches give, and the first two are the detector's: after the look, the update's
+// reading of what it holds and the search's reading of the index again wait for nothing of each other (an update
+// that read the store's state there instead of its own is reported), and after a finished update nothing waits at
+// all. Nothing here waits for a time to pass.
 func TestSearchesWhileTheIndexIsUpdatedAndRemoved(t *testing.T) {
 	smallSegments(t)
 	e := indexArchive(t)
+	ix, dir := &e.Store.search, e.Store.searchDir()
+	// Every wait below ends with the test's deadline at the latest.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	wait := func(c <-chan struct{}) bool {
+		select {
+		case <-c:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	give := func(c chan<- struct{}) bool {
+		select {
+		case c <- struct{}{}:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	// How long an update stands at its moment.
+	const (
+		goesOn        = iota // not at all
+		untilGone            // until the directory is gone; no other update starts until the search has run
+		untilSearched        // until the directory is gone and the search has run
+	)
+	type turn struct {
+		moment string // of an update; none: right after one has finished
+		stands int
+	}
+	turns := []turn{{}, {hookLooked, untilGone}, {hookOpened, untilSearched}, {hookRead, untilSearched}, {hookRead, goesOn}}
+	const cycles = 6
+	var due atomic.Pointer[turn]   // the turn that the next update to come to its moment takes
+	reached := make(chan struct{}) // an update is at the moment that was due
+	release := make(chan struct{}) // and may go on
+	var parked atomic.Bool         // the update under way is the last one before resume
+	resume := make(chan struct{})  // the next update may start
+	// The update's goroutine calls it, and so do those that read its files: what it decides by is atomic. A moment
+	// is taken when searches have a part of the index to lose there.
+	ix.hook = func(moment, _ string) {
+		d := due.Load()
+		if d == nil || d.moment != moment {
+			return
+		}
+		if snap := ix.current(); snap == nil || len(snap.segs) == 0 || !due.CompareAndSwap(d, nil) {
+			return
+		}
+		if give(reached) && d.stands != goesOn {
+			wait(release)
+		}
+	}
 	queries := []string{"周报", "build", "nowhere", "draft", "进度 ok", "的", "同事1", "backend"}
 	wantFind, wantSearch := map[string][]Result{}, map[string][]Hit{}
 	for _, q := range queries {
 		wantFind[q], wantSearch[q] = findReference(e, q, 1<<20), searchByWalk(e, q, true, 1<<20)
 	}
+	// What a search of q gives that the files do not say; nothing when it is right.
+	search := func(q string) string {
+		if got := e.Find(q, 1<<20); !reflect.DeepEqual(got, wantFind[q]) && (len(got) > 0 || len(wantFind[q]) > 0) {
+			return fmt.Sprintf("Find(%q):\n got %+v\nwant %+v", q, got, wantFind[q])
+		}
+		if got := e.Search(q, true, 1<<20); !reflect.DeepEqual(got, wantSearch[q]) && (len(got) > 0 || len(wantSearch[q]) > 0) {
+			return fmt.Sprintf("Search(%q):\n got %+v\nwant %+v", q, got, wantSearch[q])
+		}
+		return ""
+	}
+	const searchers = 4
 	var stop atomic.Bool
 	var searches, asked, updates atomic.Int64
-	wrong := make(chan string, 8)
+	wrong := make(chan string, searchers)
+	finished := make(chan struct{}) // an update has finished and the store has an index: told to whoever waits for it
 	var wg sync.WaitGroup
-	for g := range 4 {
+	halt := func() {
+		stop.Store(true)
+		cancel()
+		wg.Wait()
+	}
+	defer halt()
+	for g := range searchers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -1705,12 +1793,9 @@ func TestSearchesWhileTheIndexIsUpdatedAndRemoved(t *testing.T) {
 				if e.searchFilter(words(q)) != nil {
 					asked.Add(1)
 				}
-				if got := e.Find(q, 1<<20); !reflect.DeepEqual(got, wantFind[q]) && (len(got) > 0 || len(wantFind[q]) > 0) {
-					wrong <- fmt.Sprintf("Find(%q):\n got %+v\nwant %+v", q, got, wantFind[q])
-					return
-				}
-				if got := e.Search(q, true, 1<<20); !reflect.DeepEqual(got, wantSearch[q]) && (len(got) > 0 || len(wantSearch[q]) > 0) {
-					wrong <- fmt.Sprintf("Search(%q):\n got %+v\nwant %+v", q, got, wantSearch[q])
+				if msg := search(q); msg != "" {
+					wrong <- msg
+					cancel()
 					return
 				}
 				searches.Add(1)
@@ -1724,34 +1809,80 @@ func TestSearchesWhileTheIndexIsUpdatedAndRemoved(t *testing.T) {
 			// An update whose files are removed under it fails; the one after starts again.
 			if _, err := e.UpdateSearchIndex(context.Background()); err == nil {
 				updates.Add(1)
+				if e.Store.SearchIndexReady() {
+					select {
+					case finished <- struct{}{}:
+					default:
+					}
+				}
+			}
+			if parked.CompareAndSwap(true, false) {
+				wait(resume)
 			}
 		}
 	}()
-	rng := rand.New(rand.NewPCG(1273, 6))
-	deadline := time.Now().Add(20 * time.Second)
-	for removed := 0; removed < 40 && time.Now().Before(deadline); removed++ {
-		// Sometimes right after an update finished, sometimes in the middle of one.
-		if removed%2 == 0 {
-			for n := updates.Load(); updates.Load() == n && time.Now().Before(deadline); {
-				time.Sleep(200 * time.Microsecond)
+	removed := make([]int, len(turns)) // how often each turn removed an index that was there
+	rounds := 0
+	for ; rounds < cycles*len(turns) && ctx.Err() == nil; rounds++ {
+		n := rounds % len(turns)
+		stands := turns[n].stands
+		if turns[n].moment == "" {
+			if !wait(finished) {
+				break
 			}
-		} else {
-			time.Sleep(time.Duration(rng.IntN(3000)) * time.Microsecond)
+		} else if due.Store(&turns[n]); !wait(reached) {
+			break
 		}
+		was, there := ix.current(), statFile(filepath.Join(dir, indexManifest)).ok
 		// The update may write a file while the directory is emptied: what was there is gone, the directory stays.
-		if err := os.RemoveAll(e.Store.searchDir()); err != nil && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+		if err := os.RemoveAll(dir); err != nil && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
 			t.Fatal(err)
 		}
+		if stands == untilGone {
+			parked.Store(true)
+			if !give(release) {
+				break
+			}
+		}
+		if msg := search(queries[rounds%len(queries)]); msg != "" {
+			t.Fatalf("round %d, after the directory was removed: %s", rounds, msg)
+		}
+		if there && was != nil && len(was.segs) > 0 {
+			// Gone for the store too: a search read the index again, or the update failed first and marked it
+			// (searches then go without one until the next update reads what is there).
+			ix.mu.Lock()
+			still := ix.current() == was && !ix.broken.Load()
+			ix.mu.Unlock()
+			if still {
+				t.Errorf("round %d: searches still use the index that was removed: the test no longer has one find it gone", rounds)
+			}
+			removed[n]++
+		}
+		switch stands {
+		case untilGone:
+			give(resume)
+		case untilSearched:
+			give(release)
+		}
 	}
-	stop.Store(true)
-	wg.Wait()
+	late := rounds < cycles*len(turns) && errors.Is(ctx.Err(), context.DeadlineExceeded)
+	due.Store(nil)
+	halt()
 	select {
 	case msg := <-wrong:
 		t.Fatal(msg)
 	default:
 	}
+	if late {
+		t.Fatalf("the test's deadline came in round %d of %d (turn %d): the update that was waited for did not come", rounds, cycles*len(turns), rounds%len(turns))
+	}
 	if searches.Load() == 0 || asked.Load() == 0 || updates.Load() == 0 {
 		t.Fatalf("%d searches (%d with an index to ask), %d updates finished: the test no longer runs them together", searches.Load(), asked.Load(), updates.Load())
+	}
+	for n, tn := range turns {
+		if removed[n] == 0 {
+			t.Errorf("in %d rounds no index was removed in turn %d (%q): the test no longer comes to that moment", rounds, n, tn.moment)
+		}
 	}
 	// Left alone, the index is whole again after at most two updates (the first may find what the removal left).
 	if _, err := e.UpdateSearchIndex(context.Background()); err != nil {
