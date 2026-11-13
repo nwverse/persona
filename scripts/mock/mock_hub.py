@@ -12281,6 +12281,17 @@ if MOCK_INBOX_EVENTS:
 # side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
 # fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
 # now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
+# MOCK_INBOX_TODO=1: a to-do suggestion (#6480) on the mail "Can we move the design review?": title, and a due day two days on
+# (MOCK_INBOX_TODO=time: with a time, so All Day is off).
+if os.environ.get("MOCK_INBOX_TODO"):
+    _td = next((x for x in INBOX if x["id"] == "mail:acc1:t4:504"), None)
+    if _td is not None:
+        _due = (NOW + timedelta(days=2)).astimezone()
+        _td["suggestion"] = {"version": 1, "kind": "todo", "text": "确认设计评审改到周二下午", "at": ago(minutes=2),
+                             "due": _due.replace(hour=15, minute=0, second=0, microsecond=0).isoformat() if os.environ["MOCK_INBOX_TODO"] == "time" else _due.strftime("%Y-%m-%d")}
+        _td["status"] = "action"
+
+
 MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
 if MOCK_INBOX_SHOWCASE:
     _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
@@ -12321,6 +12332,68 @@ if MOCK_HANDOFF_CARD:
     if MOCK_TASKS:
         TASK_FEED.setdefault(ASK1, []).append({"id": "feed_handoff", "conversation": ASK1, "at": ago(minutes=0.4), "kind": "inbox_suggestion",
                                                "ref": _hid, "body": _hcard})
+
+
+# Merge and Add to to-dos (#6480): POST /api/v1/inbox/merge, /merge/undo, /todo, /todo/undo as the hub answers them. A merge takes the
+# newest row as the survivor and hides the others (kept in MERGED for Undo); a to-do files its row as done_by=todo with a todo link.
+# What each asked for is kept at /mock/inbox_actions.
+INBOX_ACTIONS = []
+MERGED = {}
+
+
+def inbox_merge(body):
+    INBOX_ACTIONS.append(dict(body, route="merge"))
+    ids = [t.get("id") for t in body.get("items") or []]
+    rows = [x for x in INBOX if x["id"] in ids and not x.get("done_at")]
+    if len(ids) < 2: return {"error": "请至少选两行再合并", "code": "bad_request"}, 400
+    if len(rows) < 2: return {"error": "没有可合并的内容", "code": "merge_none"}, 409
+    rows.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+    top, rest = rows[0], rows[1:]
+    top["merged_from"] = [{"id": x["id"], "source": x["source"], "account_name": x.get("account_name"), "title": x.get("title")} for x in rest]
+    top["count"] = sum(x.get("count", 1) for x in rows)
+    MERGED[top["id"]] = rest
+    for x in rest: INBOX.remove(x)
+    _chain_add(top, "merged", "由 %d 行合并" % len(rows))
+    return {"item": dict({k: v for k, v in top.items() if k != "context"}, version=inbox_version(top)), "members": [x["id"] for x in rest], "undo": {"id": top["id"]}}, 200
+
+
+def inbox_unmerge(body):
+    INBOX_ACTIONS.append(dict(body, route="merge/undo"))
+    top = next((x for x in INBOX if x["id"] == body.get("id")), None)
+    if top is None or top["id"] not in MERGED: return {"error": "没有可拆开的合并", "code": "bad_request"}, 400
+    rest = MERGED.pop(top["id"])
+    INBOX.extend(rest)
+    top.pop("merged_from", None)
+    top["count"] = max(1, top.get("count", 1) - sum(x.get("count", 1) for x in rest))
+    return {"changed": [top] + rest}, 200
+
+
+def inbox_todo(body):
+    INBOX_ACTIONS.append(dict(body, route="todo"))
+    out = {"changed": [], "unchanged": [], "skipped": [], "failed": [], "todos": [], "undo": {"items": []}}
+    for t in body.get("items") or []:
+        x = next((x for x in INBOX if x["id"] == t.get("id")), None)
+        if x is None: out["skipped"].append({"id": t.get("id"), "reason": "missing"}); continue
+        if x.get("done_at"): out["unchanged"].append(x["id"]); continue
+        if t.get("version") and t["version"] != inbox_version(x): out["skipped"].append({"id": x["id"], "reason": "changed"}); continue
+        todo_id = "todo-%s-%d" % (x["id"], len(INBOX_ACTIONS))
+        x["done_at"], x["done_by"] = ago(minutes=0), "todo"
+        _chain_add(x, "done", "已转成待办", link={"type": "todo", "id": todo_id})
+        out["changed"].append(dict({k: v for k, v in x.items() if k != "context"}, version=inbox_version(x)))
+        out["todos"].append({"item": {"id": x["id"]}, "todo": {"id": todo_id, "title": t.get("title") or x.get("title")}})
+        out["undo"]["items"].append({"id": x["id"], "todo_id": todo_id})
+    return out, 200
+
+
+def inbox_todo_undo(body):
+    INBOX_ACTIONS.append(dict(body, route="todo/undo"))
+    changed = []
+    for t in body.get("items") or []:
+        x = next((x for x in INBOX if x["id"] == t.get("id")), None)
+        if x is not None and x.get("done_by") == "todo":
+            x.pop("done_at", None), x.pop("done_by", None)
+            changed.append(x)
+    return {"changed": changed}, 200
 
 
 def _chain_add(x, kind, text, **more):
@@ -12366,6 +12439,10 @@ def inbox_suggestion(iid, body):
         elif s["kind"] == "agent":
             _chain_add(x, "agent", "开了子会话：" + text[:40], link={"type": "session", "machine_id": "m1", "session_id": "s-mock-agent"})
             h.update(state="agent", since=ago()); x["status"] = "working"
+        elif s["kind"] == "todo":  # Add to to-dos (#6480): the row is filed with a link to the to-do
+            INBOX_ACTIONS.append({"route": "suggestion", "text": body.get("text"), "due": body.get("due")})
+            _chain_add(x, "done", "已转成待办", link={"type": "todo", "id": "todo-" + x["id"]})
+            x["done_at"], x["done_by"] = ago(), "todo"
         else:  # a conclusion: Got it files it (the chain says so)
             _chain_add(x, "done", "你标了已处理")
             x["done_at"], x["done_by"] = ago(), "user"
@@ -24236,6 +24313,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/kb_updates": return self.send_json({"updates": KB_UPDATES})
         if p == "/mock/inbox_drafts": return self.send_json({"drafts": INBOX_DRAFTS})
         if p == "/mock/inbox_bulk": return self.send_json({"requests": INBOX_BULK})
+        if p == "/mock/inbox_actions": return self.send_json({"requests": INBOX_ACTIONS})
         if p == "/mock/prefs_fail":  # MOCK_PREFS_FAIL at run time: ?on=1 fails Settings › Notifications' read, ?on=0 lets Retry through
             PREFS_FAIL[0] = q.get("on", ["1"])[0] == "1"
             return self.send_json({"fail": PREFS_FAIL[0]})
@@ -25790,6 +25868,14 @@ class H(BaseHTTPRequestHandler):
                 try: send({"type": "inbox"})
                 except Exception: pass
             return self.send_json(res)
+        if p in ("/api/v1/inbox/merge", "/api/v1/inbox/merge/undo", "/api/v1/inbox/todo", "/api/v1/inbox/todo/undo") and self.command == "POST":
+            body = json.loads(self.last_body or b"{}")
+            res, code = {"/api/v1/inbox/merge": inbox_merge, "/api/v1/inbox/merge/undo": inbox_unmerge, "/api/v1/inbox/todo": inbox_todo,
+                         "/api/v1/inbox/todo/undo": inbox_todo_undo}[p](body)
+            for send, _ in list(LIVE):
+                try: send({"type": "inbox"})
+                except Exception: pass
+            return self.send_json(res, code)
         if p == "/api/v1/inbox/mutes" and self.command == "POST":
             body = json.loads(self.last_body or b"{}")
             other = other_manager(self)

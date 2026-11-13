@@ -91,6 +91,11 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
   const time = shortTime(item.updated_at);
   const detailMeta = item.where ? rowMeta(item) : sourceLine(item);
   const canPin = Boolean(item.lark) && (embed || !place || ownShown) && (!showEvent || embed);
+  const sourceToggle = event && !embed ? (
+    <Button tone="quiet" size="sm" className="-my-1 shrink-0" icon={showEvent ? (item.mail ? "mail" : "chat") : "list"} onClick={() => setSource(showEvent ? {} : null)}>
+      {showEvent ? t("inbox-inboxdetail.view_source") : t("inbox-inboxdetail.view_event")}
+    </Button>
+  ) : null;
   const muteRows: MenuItem[] = [
     ...(item.mutes ?? []).map((m): MenuItem => ({ key: `${m.tag}:${m.value}`, label: muteTitle(m), detail: muteShortName(m), icon: "bellOff", onSelect: () => void muteItem(item, m) })),
     // and a rule for each (docs/assistant/inbox.md "Policies"), under a divider
@@ -120,10 +125,11 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                   <span className={item.source === "larkcli" ? "min-w-0 max-w-full break-words sm:truncate" : "truncate"} title={translated?.subject ? item.title : undefined}>{translated?.subject || item.title}</span>
                   {label && <Tag urgent={labelIsUrgent(item)}>{label}</Tag>}
                 </h2>
-                {/* the source line gives way first, so the time stays whole */}
-                <p className="mt-0.5 flex min-w-0 text-[12px] text-ink-3" data-detail-meta>
-                  <span className="truncate">{detailMeta}</span>
-                  {time && <span className="shrink-0 whitespace-pre">{detailMeta ? ` · ${time}` : time}</span>}
+                {/* with a place, the small line gives way to Original / Handling; an older item keeps its time */}
+                <p className="mt-0.5 flex min-w-0 items-center text-[12px] text-ink-3" data-detail-meta>
+                  <span className="min-w-0 flex-1 truncate">{detailMeta}</span>
+                  {!item.where && time && <span className="shrink-0 whitespace-pre">{detailMeta ? ` · ${time}` : time}</span>}
+                  {sourceToggle}
                 </p>
               </div>
               {phone ? (
@@ -185,11 +191,6 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                 </Button>
               )}
               {item.source !== "assistant" && <Button tone="secondary" icon="spark" onClick={() => setDialog("handoff")}>{t("inbox-inboxdetail.hand_to_ai")}</Button>}
-              {event && !embed && (showEvent ? (
-                <Button tone="quiet" icon={item.mail ? "mail" : "chat"} onClick={() => setSource({})}>{t("inbox-inboxdetail.view_source")}</Button>
-              ) : (
-                <Button tone="quiet" icon="list" onClick={() => setSource(null)}>{t("inbox-inboxdetail.view_event")}</Button>
-              ))}
             </div>
           </div>
         </div>
