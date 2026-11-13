@@ -21,13 +21,17 @@ vi.mock("../../lib/store", async (orig) => {
   const m = await orig<typeof import("../../lib/store")>();
   return { ...m, useStore: <T,>(sel: (s: ReturnType<typeof m.getState>) => T) => m.useStore((s) => sel({ ...s, loaded: true })) };
 });
-vi.mock("../../lib/extension-slots", () => ({ useInboxItemPlace: () => undefined }));
+vi.mock("../../lib/extension-slots", () => ({
+  useInboxItemPlace: (source?: string) => source === "docs" ? { extension: "document-extension", extension_name: "Document extension", id: "event", title: "Event", placement: "inbox_item", size: "full", connector: "docs" } : undefined,
+}));
 vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined }));
 vi.mock("./LarkThread", () => ({ LarkThread: () => null, chatOfItem: () => ({}) }));
 
 import { resetInboxForTests, type InboxItem } from "../../lib/inbox";
+import { onOverlayEntry } from "../../lib/back-close";
 import { stepsToInbox } from "../../lib/inbox-nav";
 import { settleRosterDefault } from "../../lib/manager-choice";
+import { t } from "../../i18n";
 import { Inbox } from "./Inbox";
 
 settleRosterDefault();
@@ -36,6 +40,13 @@ settleRosterDefault();
 const item = (id: string): InboxItem => ({
   id, source: "lark", kind: "group", account: "feishu", account_name: "Lark", title: `chat ${id}`, preview: "text", count: 1,
   updated_at: "2026-11-09T04:00:00Z", tier: "action", version: `v-${id}`, lark: { feed_id: id, is_group: true },
+});
+
+const documentItem = (id: string): InboxItem => ({
+  id, source: "docs", kind: "doc", account: "docs", account_name: "Documents", title: "Release plan", preview: "Document preview", count: 1,
+  updated_at: "2026-11-09T04:00:00Z", tier: "action", version: `v-${id}`,
+  doc: { url: "https://example.com/document", type: "doc", notice: "mention", rows: [{ ref: "row-1", title: "Original document row" }] },
+  chain: [{ id: "chain-1", kind: "received", text: "Open the document", link: { type: "source" } }],
 });
 
 let host: HTMLDivElement;
@@ -56,9 +67,15 @@ const openItem = async (id: string) => {
   await flush();
 };
 const rowLink = (id: string) => host.querySelector<HTMLAnchorElement>(`[data-item="${id}"] a`)!;
+const buttonNamed = (label: string) => [...host.querySelectorAll("button")].filter((b) => b.textContent?.trim() === label).at(-1)!;
+const openDocument = async () => {
+  act(() => rowLink("d1").click());
+  await openItem("d1");
+  expect(host.querySelector("[data-event-body]")).not.toBeNull();
+};
 
 beforeEach(async () => {
-  calls.items = [item("a1"), item("a2")];
+  calls.items = [item("a1"), item("a2"), documentItem("d1")];
   resetInboxForTests();
   vi.stubGlobal("CSS", { escape: (v: string) => v });
   Element.prototype.scrollIntoView = vi.fn();
@@ -111,5 +128,90 @@ describe("Back from an Inbox item (#3329)", () => {
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="返回收件箱"]')!.click());
     expect(location.pathname).toBe("/inbox");
     expect(history.length).toBe(start);
+  });
+
+  it("Original pushes one same-address entry and Back returns to the event", async () => {
+    await openDocument();
+    const entries = history.length;
+    act(() => buttonNamed(t("inbox-inboxdetail.view_source")).click());
+    expect(location.pathname).toBe("/inbox/d1");
+    expect(history.length).toBe(entries + 1);
+    expect(onOverlayEntry()).toBe(true);
+    expect(host.querySelector("[data-event-body]")).toBeNull();
+    expect(host.textContent).toContain("Original document row");
+    expect(host.querySelector("[data-extension-inbox]")).toBeNull(); // an event goes straight to its own original
+
+    await act(() => popped(() => history.back()));
+    await flush();
+    expect(location.pathname).toBe("/inbox/d1");
+    expect(onOverlayEntry()).toBe(false);
+    expect(host.querySelector("[data-event-body]")).not.toBeNull();
+    expect(host.textContent).not.toContain("Original document row");
+  });
+
+  it("a chain's source entry uses the same history step back to the event", async () => {
+    await openDocument();
+    const entries = history.length;
+    act(() => buttonNamed("Open the document").click());
+    expect(history.length).toBe(entries + 1);
+    expect(onOverlayEntry()).toBe(true);
+    expect(host.textContent).toContain("Original document row");
+
+    await act(() => popped(() => history.back()));
+    await flush();
+    expect(host.querySelector("[data-event-body]")).not.toBeNull();
+    expect(onOverlayEntry()).toBe(false);
+  });
+
+  it("Handling closes Original and takes its history entry back off", async () => {
+    await openDocument();
+    act(() => buttonNamed(t("inbox-inboxdetail.view_source")).click());
+    expect(onOverlayEntry()).toBe(true);
+
+    await act(() => popped(() => buttonNamed(t("inbox-inboxdetail.view_event")).click()));
+    await flush();
+    expect(location.pathname).toBe("/inbox/d1");
+    expect(host.querySelector("[data-event-body]")).not.toBeNull();
+    expect(onOverlayEntry()).toBe(false);
+    expect(stepsToInbox(history.state)).toBe(1);
+  });
+
+  it("‹ with Original open still goes back to the list", async () => {
+    await openDocument();
+    act(() => buttonNamed(t("inbox-inboxdetail.view_source")).click());
+    expect(onOverlayEntry()).toBe(true);
+
+    await act(() => popped(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("inbox-inbox.back_to_inbox")}"]`)!.click()));
+    await flush();
+    expect(location.pathname).toBe("/inbox");
+    expect(onOverlayEntry()).toBe(false);
+  });
+
+  it("Done with Original open still goes back to the list", async () => {
+    await openDocument();
+    act(() => buttonNamed(t("inbox-inboxdetail.view_source")).click());
+    expect(onOverlayEntry()).toBe(true);
+
+    await act(() => popped(() => buttonNamed(t("inbox-inboxdetail.done")).click()));
+    await flush();
+    expect(location.pathname).toBe("/inbox");
+    expect(onOverlayEntry()).toBe(false);
+  });
+
+  it("opening another item takes Original's entry without an extra Back", async () => {
+    await openDocument();
+    act(() => buttonNamed(t("inbox-inboxdetail.view_source")).click());
+    const entries = history.length;
+
+    act(() => rowLink("a1").click());
+    await openItem("a1");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(location.pathname).toBe("/inbox/a1");
+    expect(history.length).toBe(entries);
+    expect(stepsToInbox(history.state)).toBe(2);
+    expect(onOverlayEntry()).toBe(false);
+
+    await act(() => popped(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("inbox-inbox.back_to_inbox")}"]`)!.click()));
+    expect(location.pathname).toBe("/inbox");
   });
 });
