@@ -45,7 +45,7 @@ final class KnowledgeCorrectionsUITests: XCTestCase {
 
     @MainActor func testRemovingALinkAsksFirst() throws {
         let app = open("people/lilei")
-        // 李雷's project: held in his own list, so it can be removed (a list row only exists once it is on screen).
+        // The person's project is held in their own list, so it can be removed; a list row exists only once it is on screen.
         let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "天气 App")).firstMatch // i18n-ignore
         let list = app.collectionViews.firstMatch
         XCTAssertTrue(list.waitForExistence(timeout: 15), "the entry did not open:\n\(app.debugDescription)")
