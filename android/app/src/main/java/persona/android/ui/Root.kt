@@ -916,7 +916,7 @@ private fun InboxLink(route: NavKey, inbox: InboxRepository, navigator: Navigato
         try { inbox.refresh() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { /* Cached records and the single-item lookup still resolve what they can. */ }
-        destination = inboxDestinationWithLookup(route, snapshot.records, loaded = true, pages, inbox)
+        destination = inboxDestinationWithLookup(route, snapshot.records, true, pages, inbox)
     }
     LaunchedEffect(destination) {
         (destination as? InboxDestination.Open)?.let {
