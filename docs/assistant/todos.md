@@ -244,6 +244,13 @@ For renames through hub (shared with pin/mute's rename API), hub tells assistant
 
 ## Following spawned Agents
 
+For a supervised Agent's explicit handoff to a separate session, prefer `task_spawn` (or
+`personad tool task_spawn` from its terminal). The manager records the child on the caller's existing to-do with the
+same supervisor before returning; the Agent never reads a hub credential or chooses a to-do ID. See
+[Separate sessions within a supervised task](unified-entry.md#separate-sessions-within-a-supervised-task-5751).
+Native Codex sidecar ancestry and UI folding alone do not create a to-do link. A standalone runtime
+`create_thread` without parent metadata is not a supported supervised handoff.
+
 Child Agents spawned by a linked Agent automatically join the same to-do, tracking their parent hierarchy:
 1. **Parent marker**: an active Agent on an unfinished to-do has a `persona_todo_ref` marker on its herdr pane, value `<todo_id>@<machine_id>/<session_id>`.
 2. **Dispatcher passes the marker**: after launching a child, the dispatcher reads its own pane marker and writes the value to the child's pane as `persona_from`.
@@ -508,6 +515,7 @@ The costliest long-task mistake is an Agent forgetting a decision already made: 
 - **Hand to Agent**: when `POST /api/v1/sessions` `prompt` or `POST …/messages` `text` carries `todo_id` (all clients' handoff does), hub asks assistant (`assistant.todo_handoff`); assistant prepends effective decisions as `<persona-context kind="context" title="待办 · <title> · 已定的决策">` ("To-do · <title> · Established decisions", prompt `server/internal/prompts/todo/decisions.md`), no client change needed; send unchanged without decisions. On read failure (database error), still send and only log.
 - Recording/superseding updates to-do `updated_at` and broadcasts `{"type":"todos"}` so clients refetch decisions.
 - iOS / Mac (`apple/Persona/Views/Todos/TodoDecisionsSection.swift`, model `TodoDecisionsModel`, wire `apple/Shared/TodoDecisions.swift`): the same Decisions section in to-do details, under the notes: **Add** records one, **Revise** records one that replaces it, the row's ⋯ marks it as replacing an earlier one or undoes that, **Full History** shows the replaced ones struck through. Read again whenever the to-do's `updated_at` changes; hidden on a hub without the route (route-level 404).
+- **How many show** (#6447, web `DecisionsSection` with `shownDecisions` in `web/src/lib/todos.ts`; iOS `TodoDecisionsLogic.shown`): the first five, oldest first, with **Show all N** under them and **Show the first 5** to go back; the header's fold-all button (the Agents title row's) folds the list away and **Expand all** shows it whole. The header's count is the decisions in effect, whatever is shown, and folding asks nothing of the hub. Nothing is stored: each to-do opens at the first five, and recording or revising one shows the whole list so it is in view.
 
 - Android (`android/feature/agents/src/main/kotlin/persona/feature/agents/TodoDecisions.kt`, wire `TasksApi.todoDecisions` / `addTodoDecision`, source `TodoDecisionsSource` that `TasksStore` implements; #1853): the same Decisions section in to-do details, under the notes: **Add** records one, **Revise** records one that replaces it (its question filled in, the earlier choice kept struck through), **Full history** shows the replaced ones struck through, and each row says when and where it came from. Typed words are asked about before the form is dropped. Read again whenever the to-do's `updated_at` changes; hidden on a hub without the route (route-level 404). So a question nobody answered can be answered on Android too ("Questions nobody answered"). Not on Android yet: marking an existing decision as replacing an earlier one, or undoing that (the iOS row's ⋯, `PATCH …/decisions/{did}`).
 

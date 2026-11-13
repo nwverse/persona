@@ -863,6 +863,9 @@ export interface Launcher {
   /** A Codex launcher the computer starts in a shell pane the user picked (Run agent here), keeping that pane when the
    *  start fails (#5504); absent from an older computer, where Run agent here offers Claude Code only. */
   run_here?: boolean;
+  /** Where it starts the session when not in a terminal: "claude_desktop" (the launcher `claude-desktop`, Claude's desktop
+   *  app, #5480) or "codex_app" (`codex-app`, the Codex App, #5726); lib/desktop-start.ts. Absent for every other one. */
+  source?: string;
   /** How its last check or start went on the computer the list is for (GET /machines/{mid}/launchers,
    *  docs/server/launcher-health.md); absent: never checked, a failure too old to count, or an older hub. */
   health?: LauncherHealth;

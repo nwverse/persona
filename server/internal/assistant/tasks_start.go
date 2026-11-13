@@ -372,8 +372,12 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	if err != nil && ctx.Err() == nil && !startStalled(err) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
 		// launcher failure may move a flexible task, after verifying its directory on the destination.
-		shouldRetry := transientStartErr(err)
-		if !shouldRetry && t.MachinePolicy == machineFlexible {
+		// An unknown result (the wait ran out or the link dropped while the answer was out) already went through
+		// adoption inside startTaskAgent: neither a blind retry nor a reroute may run, since the node can still be
+		// creating that first session and either one would open a second agent (#6540).
+		unknown := startResultUnknown(err)
+		shouldRetry := transientStartErr(err) && !unknown
+		if !shouldRetry && t.MachinePolicy == machineFlexible && !unknown {
 			shouldRetry = s.healthyPlace(ctx, &t)
 		}
 		if shouldRetry {
@@ -389,11 +393,18 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		s.updatePlanTask(ctx, planID, i, t)
 	}
 	if err == nil {
-		err = s.linkPlanAgent(ctx, t, mid, sid, false)
+		// The start's own context can be spent already: an unanswered start whose session was just reconciled
+		// (#6540) reaches here after taskStartTimeout, and a database write on that context fails at once, which
+		// would fail the task although its agent is running. The link gets its own time, like the bookkeeping below.
+		linkCtx, linkCancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+		err = s.linkPlanAgent(linkCtx, t, mid, sid, false)
+		linkCancel()
 		if errors.Is(err, db.ErrTodoCompleted) {
 			// The user tapped "Done" while the agent was starting (a busy machine takes minutes, #1396). The task stays
 			// done and its agent stays in it: nothing reads failed, and the close loop still finds the agent to retire.
-			err = s.linkPlanAgent(ctx, t, mid, sid, true)
+			retryCtx, retryCancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+			err = s.linkPlanAgent(retryCtx, t, mid, sid, true)
+			retryCancel()
 			if err != nil {
 				s.logf("task %s: link to the finished task: %v", t.TodoID, err)
 			}

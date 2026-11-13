@@ -22,10 +22,13 @@ import {
   addTodoDecision,
   createTodo,
   decisionSourceLabel,
+  DECISIONS_FIRST,
+  type DecisionsView,
   deleteTodo,
   fetchTodoDecisions,
   setDecisionSupersedes,
   supersedeCandidates,
+  shownDecisions,
   formatAgentSource,
   formatTodoContext,
   isLegacySpacesRouteError,
@@ -61,6 +64,8 @@ import type { MenuAt } from "../ui/menu-model";
 import { SearchField } from "../ui/SearchField";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
+import { FoldAllButton } from "../ui/FoldAllButton";
+import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
@@ -2298,12 +2303,16 @@ function ThreadSection({ todo }: { todo: Todo }) {
  * Decisions: the calls made on this todo, in effect first-to-last; "Revise" writes a new one that replaces it, "full history" shows
  * the replaced ones struck through. Refetched whenever the todo changes (the hub bumps it when a decision is written,
  * also from an answered card). Hidden on a hub without decisions (404 on the route).
+ * Only the first five show at first, with Show all under them; the header's fold-all button folds the list away and
+ * opens it whole (#6447, `shownDecisions`). Nothing is stored: each to-do opens with the first five, and one just
+ * recorded or revised shows the whole list so it is in view.
  */
 function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typeof makeSessionLookup> }) {
   const [all, setAll] = useState<TodoDecision[] | null>(null);
   const [failed, setFailed] = useState("");
   const [unsupported, setUnsupported] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [view, setView] = useState<DecisionsView>("first");
   const [form, setForm] = useState<{ supersedes?: TodoDecision } | null>(null);
   const [linking, setLinking] = useState<TodoDecision | null>(null);
   const menu = useMenu();
@@ -2333,13 +2342,16 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
     setAll(null);
     setFailed("");
     setShowAll(false);
+    setView("first");
     setForm(null);
   }, [todo.id]);
 
   if (unsupported) return null;
   const effective = (all ?? []).filter((d) => !d.superseded_by);
   const replaced = (all ?? []).length - effective.length;
-  const shown = showAll ? (all ?? []) : effective;
+  const listed = showAll ? (all ?? []) : effective;
+  const shown = shownDecisions(listed, view);
+  const folded = view === "folded" && listed.length > 0;
   const byId = new Map((all ?? []).map((d) => [d.id, d]));
 
   const markSupersedes = async (d: TodoDecision, old: string) => {
@@ -2353,11 +2365,11 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
   };
 
   return (
-    <div className="mt-6">
-      <div className="mb-2 flex items-center justify-between gap-3">
+    <div className="mt-6" data-testid="todo-decisions">
+      <div className="relative mb-2 flex items-center justify-between gap-3">
         <span className="text-[11.5px] font-medium tracking-[0.04em] text-ink-3 uppercase">{t("todos.decisions_section", { count: effective.length })}</span>
         <div className="flex shrink-0 items-center gap-1">
-          {replaced > 0 && (
+          {replaced > 0 && !folded && (
             <Button tone="quiet" className="whitespace-nowrap px-2 py-1 text-[12px]" onClick={() => setShowAll((v) => !v)}>
               {showAll ? t("todos.show_effective") : t("todos.show_history", { count: replaced })}
             </Button>
@@ -2365,6 +2377,16 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
           <Button tone="quiet" icon="plus" className="whitespace-nowrap px-2 py-1 text-[12px]" onClick={() => setForm({})}>
             {t("todos.add_decision")}
           </Button>
+          {/* the Agents title row's fold-all button and meaning: Collapse all while any is shown, Expand all once folded */}
+          {all !== null && listed.length > 0 && (
+            <FoldAllButton
+              label={folded ? t("todos.decisions_expand") : t("todos.decisions_fold")}
+              expand={folded}
+              onClick={() => setView(folded ? "all" : "folded")}
+              className={SESSION_LIST_STYLE.foldButton}
+              testId="todo-decisions-fold"
+            />
+          )}
         </div>
       </div>
 
@@ -2375,7 +2397,7 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
             {t("todos.retry")}
           </Button>
         </div>
-      ) : all === null ? null : shown.length === 0 ? (
+      ) : all === null || folded ? null : shown.length === 0 ? (
         <div className="rounded-control border border-dashed border-line p-4 text-[12.5px] leading-[1.6] text-ink-3">
           {t("todos.decisions_empty")}
         </div>
@@ -2446,6 +2468,11 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
           })}
         </ol>
       )}
+      {!folded && listed.length > DECISIONS_FIRST && (
+        <Button tone="quiet" testId="todo-decisions-more" expanded={view === "all"} className="mt-1.5 whitespace-nowrap px-2 py-1 text-xs" onClick={() => setView(view === "first" ? "all" : "first")}>
+          {view === "first" ? t("todos.decisions_show_all", { count: listed.length }) : t("todos.decisions_show_first", { count: DECISIONS_FIRST })}
+        </Button>
+      )}
 
       {menu.anchor && linking && (
         <Menu
@@ -2471,7 +2498,11 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
         todoId={todo.id}
         supersedes={form?.supersedes}
         onClose={() => setForm(null)}
-        onSaved={load}
+        onSaved={async () => {
+          // the one just recorded or revised is last: show them all so it is in view
+          setView("all");
+          await load();
+        }}
       />
     </div>
   );
