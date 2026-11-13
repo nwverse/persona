@@ -25,9 +25,11 @@ const (
 )
 
 type suggestionReq struct {
-	Version  int     `json:"version"`
-	Action   string  `json:"action"`
-	Text     *string `json:"text"`
+	Version int     `json:"version"`
+	Action  string  `json:"action"`
+	Text    *string `json:"text"`
+	// Due is a to-do suggestion's due time as the user left it (a day or a moment, "" none); absent keeps the suggestion's.
+	Due      *string `json:"due"`
 	ClientID string  `json:"client_id"`
 }
 
@@ -115,7 +117,7 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	if in.Text != nil && strings.TrimSpace(*in.Text) != "" {
 		text = strings.TrimSpace(*in.Text)
 	}
-	if !full && (g == nil || in.Action != suggestConfirm || g.Kind == SuggestAgent || g.Handback || len(g.Changes) > 0 || assistantwire.AsksAgent(text)) {
+	if !full && (g == nil || in.Action != suggestConfirm || g.Kind == SuggestAgent || g.Kind == SuggestTodo || g.Handback || len(g.Changes) > 0 || assistantwire.AsksAgent(text)) {
 		b.mu.Unlock()
 		return InboxItem{}, errAnswerOnly
 	}
@@ -180,6 +182,13 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	}
 	if g.Kind == SuggestAgent {
 		return s.confirmAgent(ctx, it, g, text, edited)
+	}
+	if g.Kind == SuggestTodo {
+		due := g.Due
+		if in.Due != nil {
+			due = strings.TrimSpace(*in.Due)
+		}
+		return s.confirmTodo(ctx, it, text, due)
 	}
 	return s.confirmReply(ctx, it, g, text, edited, last, in.ClientID)
 }
