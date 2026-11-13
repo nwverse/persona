@@ -123,19 +123,21 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
                 }
             }
         }
-        if (nowText != null) item("event-state") {
-            EventStateLine(EventMark.Now(nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
-                accent = oldMark is EventMark.Suggests), Modifier.padding(bottom = Tokens.Space.s))
-        } else if (oldMark != null) item("event-state") {
-            EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s))
-        } else item("event-state") {
-            EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s))
+        val suggestion = record.event.suggestion
+        if (suggestion == null || record.item.isDone) {
+            if (nowText != null) item("event-state") {
+                EventStateLine(EventMark.Now(nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
+                    accent = oldMark is EventMark.Suggests), Modifier.padding(bottom = Tokens.Space.s))
+            } else if (oldMark != null) item("event-state") {
+                EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s))
+            } else item("event-state") {
+                EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s))
+            }
         }
         // "Suggestion updated" stays over the new suggestion until the user answers again (the card is drawn anew for it).
         if (stale && !record.item.isDone) item("event-stale") {
             JNotice(stringResource(R.string.inbox_suggestion_stale), Modifier.padding(bottom = Tokens.Space.s), icon = PhIcons.ArrowsClockwise)
         }
-        val suggestion = record.event.suggestion
         if (suggestion != null && !record.item.isDone) item("event-suggestion:${suggestion.version}") {
             SuggestionCard(repository, record.item.id, suggestion, Modifier.padding(bottom = Tokens.Space.s),
                 needsYou = record.item.needsYou, onStale = { stale = it })

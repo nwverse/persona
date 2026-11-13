@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
@@ -133,8 +134,11 @@ class InboxShowcaseShotsTest {
         var locale by mutableStateOf(Locale.SIMPLIFIED_CHINESE)
         var run by mutableIntStateOf(0)
         rule.setContent {
+            val configuration = localizedConfiguration(LocalConfiguration.current, locale, dark)
+            val localizedContext = LocalContext.current.createConfigurationContext(configuration)
             CompositionLocalProvider(
-                LocalConfiguration provides localizedConfiguration(LocalConfiguration.current, locale, dark),
+                LocalContext provides localizedContext,
+                LocalConfiguration provides configuration,
                 LocalInboxClock provides { clock }, LocalInboxZone provides ZoneOffset.UTC,
             ) {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
@@ -176,8 +180,11 @@ class InboxShowcaseShotsTest {
         var locale by mutableStateOf(Locale.SIMPLIFIED_CHINESE)
         var run by mutableIntStateOf(0)
         rule.setContent {
+            val configuration = localizedConfiguration(LocalConfiguration.current, locale, dark)
+            val localizedContext = LocalContext.current.createConfigurationContext(configuration)
             CompositionLocalProvider(
-                LocalConfiguration provides localizedConfiguration(LocalConfiguration.current, locale, dark),
+                LocalContext provides localizedContext,
+                LocalConfiguration provides configuration,
                 LocalInboxClock provides { clock }, LocalInboxZone provides ZoneOffset.UTC,
             ) {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {

@@ -43,7 +43,7 @@ class InboxEventDetailTest {
     private fun record(now: String? = "confirm_reply", where: String? = "Launch group"): InboxRecord {
         val event = InboxEventFields(
             status = "action", where = where, now = now, handling = InboxHandling(state = "done"),
-            suggestion = InboxSuggestion(version = 1, kind = "reply", text = "Friday works"), recap = "Recap",
+            suggestion = InboxSuggestion(version = 1, kind = "reply", text = "Friday works"), recap = "Processed it",
             chain = listOf(
                 InboxChainEntry("c1", at = "2026-01-01T11:02:00Z", kind = "received", text = "Received", via = "chat"),
                 InboxChainEntry("c2", at = "2026-01-01T11:03:00Z", kind = "handling", text = "Handling", via = "assistant"),
@@ -70,14 +70,14 @@ class InboxEventDetailTest {
 
     @Test fun headerStateAndTimelineFollowTheSharedOrderAndSources() {
         val working = AgentSession(Session(machineId = "m1", sessionId = "s-agent", status = "working", state = "working"))
-        show(record(), listOf(working))
+        val withoutSuggestion = record(now = "waiting").let { it.copy(event = it.event.copy(suggestion = null)) }
+        show(withoutSuggestion, listOf(working))
         val meta = rule.onNodeWithText("Launch group · Alex: Can we?", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        val now = rule.onNodeWithText("Waiting for you to confirm a reply", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        val suggestion = rule.onNodeWithText("Friday works", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val now = rule.onNodeWithText("Waiting for a reply", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val summary = rule.onNodeWithText("Summary", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        val recap = rule.onNodeWithText("Recap", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val recap = rule.onNodeWithText("Processed it", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val chain = rule.onNodeWithText("What happened", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        assertTrue(meta.top < now.top && now.top < suggestion.top && suggestion.top < summary.top && summary.top < recap.top && recap.top < chain.top)
+        assertTrue(meta.top < now.top && now.top < summary.top && summary.top < recap.top && recap.top < chain.top)
         rule.onNodeWithText("Received", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithText("Reported", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Assistant says", useUnmergedTree = true).assertExists()
@@ -96,11 +96,14 @@ class InboxEventDetailTest {
         rule.onNodeWithText("Alex: Can we?", useUnmergedTree = true).assertExists()
         // The suggestion card itself carries the old hub's suggestion; the separate state line does not repeat it.
         rule.onNodeWithText("Friday works", useUnmergedTree = true).assertExists()
+        repository.snapshot.value = InboxSnapshot(records = listOf(record()))
+        rule.onNodeWithText("Waiting for you to confirm a reply", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithText("Friday works", useUnmergedTree = true).assertExists()
 
         val tierOnly = suggested.copy(event = suggested.event.copy(suggestion = null, handling = null, status = "fyi"),
             item = suggested.item.copy(status = "fyi", tier = "fyi"))
         repository.snapshot.value = InboxSnapshot(records = listOf(tierOnly))
-        rule.onNodeWithText("FYI", useUnmergedTree = true).assertExists()
+        rule.onAllNodesWithText("FYI", useUnmergedTree = true).assertCountEquals(2)
 
         val done = tierOnly.copy(item = tierOnly.item.copy(doneAt = "2026-01-01T12:00:00Z", status = null),
             event = tierOnly.event.copy(status = null, doneBy = "user"))
