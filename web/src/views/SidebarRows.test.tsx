@@ -173,6 +173,8 @@ describe("a 常驻 lead row (#6214 keepTrailing)", () => {
   const props = { s: lead, k: "j:lead-a", reg: () => () => {}, hover: () => {}, to: { name: "session", mid: "hub", sid: "lead-a" } as const, go: () => () => {}, onMenu: () => {}, hint: "在做 1 · 等你 1", hintFull: true, showState: false, keepTrailing: true };
   it("keeps its counts visible on hover and gives the ⋯ an in-flow slot instead of an overlay", () => {
     const html = renderToStaticMarkup(<SessionRow {...props} active={false} />);
+    // the direction's name stays in the row even with no second line; the menu never replaces it
+    expect(html).toContain("增长");
     // the counts never carry the hover-hiding class
     const counts = html.match(/<span[^>]*>在做 1 · 等你 1<\/span>/)![0];
     expect(counts).not.toContain("group-hover/row:invisible");
