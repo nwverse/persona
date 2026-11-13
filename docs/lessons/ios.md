@@ -31,6 +31,28 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
+## A Debug build on an iPhone has a 1 MB main-thread stack (#6735)
+
+A Debug build installed on an iPhone crashed every time it opened on Agents: `EXC_BAD_ACCESS` in the main thread's stack
+guard, with Swift runtime metadata frames on top (`swift_getTypeByMangledName`, `_swift_getKeyPath`) under
+`View.listSectionSpacing` in `AgentsList.styledAgentList`. Those were only the last ~26 frames; the stack had gone to the
+page's own frames. Unoptimized, a function reserves a stack slot on entry for every opaque (`some View`) intermediate of a
+modifier chain, and each intermediate holds everything before it, so the slots add up like a triangle: `observedAgentList`
+reserved 422 KB on entry for its ~45 modifiers. The device's main thread has 1008 KB (the crash report's
+`vmRegionInfo`); the simulator's has 8 MB, and Release specializes and reuses the storage, so neither the simulator, CI
+nor TestFlight showed it. Measured with `AgentsListStackTests` in the simulator: the page's first render reached 941 KB
+before the fix and 448 KB after.
+
+- Erase a long chain in a few places (`AnyView(...)` at the stage boundaries): each segment then starts small. An erased
+  type is the same on every update, so identity and state stay. The same tool as the Mac's cold-start split
+  (`docs/lessons/macos.md`). Erasing only the big view at the bottom of the chain helped little (941 → 747 KB): the
+  modifiers' own storage (bindings, closures, ids) made most of the triangle.
+- A crash in the stack guard with runtime frames on top: count the frames before reading it as recursion. Few frames
+  mean big frames; look for the app's functions underneath, and measure where the stack goes (record the stack address
+  at a few points) rather than guessing.
+- `StackPeak.measure` (in `AgentsListStackTests`) paints the unused stack, runs the render, and finds the lowest word
+  overwritten. Keep a page under half the device's stack (512 KB).
+
 ## An edit menu needs the selection's rect, not just a point (#6005)
 
 - If `UIEditMenuInteraction.presentEditMenu(with:)` gets only a `sourcePoint` and its delegate has no
