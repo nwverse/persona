@@ -71,6 +71,9 @@ Multiple existing app-server instances on one computer (desktop App, separate `C
 
 ## Sessions on the daemon (app-server route)
 
+Rewind metadata preserves native terminal sessions' read, send, interrupt, approval and terminal capabilities.
+An existing explicit capability object retains its operation restrictions when the node adds rewind flags.
+
 Since 2026-11-02, for Codex panes running on a shared app-server daemon, Persona joins their threads as a second client. Questions, approvals, and messaging use the protocol,
 not screen reading or typing into the terminal. Panes it cannot join retain the terminal route under "Questions and approvals" below (#214).
 
@@ -252,7 +255,18 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   Launchers with `-c` / `--profile` / `--enable` / `--disable` / `--oss` / `--strict-config` / `--no-daemon` run in their own process using the terminal route (#214).
   "Connection" explains "Started with launcher 'X': it includes -c, so Codex runs in its own process, not the shared app-server". Version 0.153 has no daemon and also uses the terminal route.
 - **Read-only tasks**: a terminal start with `permission_mode: plan` adds `--sandbox read-only --ask-for-approval never`. Conflicting launcher permission flags are refused before creating a tab; other modes preserve launcher arguments. See [To-dos](../assistant/todos.md#read-only-planned-tasks).
-- **Creation defaults**: Codex uses launcher arguments and `~/.codex/config.toml`. A model purpose's explicitly configured thinking effort is forwarded as `-c model_reasoning_effort=...` after launcher defaults; an inherited/empty effort leaves those arguments unchanged. The creation UI still offers no permission mode / thinking effort selector; effort can be changed in-chat after joining app-server (see "Thinking effort"). Resuming an existing session: see "Resuming from the phone" below.
+- **Creation defaults**: Codex uses launcher arguments and `~/.codex/config.toml`. A model purpose's explicitly configured thinking effort is forwarded as `-c model_reasoning_effort=...` after launcher defaults; an inherited/empty effort leaves those arguments unchanged.
+  Any `-c` takes the start off the shared daemon (see "Route"), and Codex then starts up with the pane's environment instead of the daemon's.
+  So the node leaves the flag out when the Codex already runs at that effort. It does so only when all of these hold:
+- the launcher runs `codex` itself, would join the shared app-server, and changes none of `CODEX_HOME`, `HOME`,
+  `ZDOTDIR`, `SHELL`, `PATH` or `PWD`;
+  - `config.toml` sets that effort at the top level, selects no profile and changes no project markers;
+  - no project `.codex/config.toml` from the start's directory up to its `.git` names an effort or a profile.
+- for a bare `codex` on non-Windows, the login shell defines no `codex` function. Native starts preserve that
+  function (#4876), whose own profile or overrides may change the effort before Persona's arguments. A bounded
+  shell-resolution check does not call the function; an error or timeout keeps the explicit effort flag.
+
+  Otherwise the flag stays (`node/codex_start_effort.go`, #4860). The creation UI still offers no permission mode / thinking effort selector; effort can be changed in-chat after joining app-server (see "Thinking effort"). Resuming an existing session: see "Resuming from the phone" below.
 - **In the conversation's folder**: the file also names the directory (`dir`), and `codex-start` changes to it (and sets `PWD` to it when the shell had one) before it runs the words, for a resume too.
   Codex records that directory as the thread's, and finds the thread's files from there; nothing but `codex-start` and its file is typed, so no `cd` goes to the shell either.
 - **In an Agent's own terminal** (a switch from Claude Code, #5054; [claude-integration.md](claude-integration.md) "Switching a running Agent to another engine"): the start runs in the pane the claude left, once its shell is at rest, instead of a new tab.
@@ -553,3 +567,17 @@ connections return errors without retaining a next-turn speed override. `thread/
 provide the current speed. A native null means Standard. Missing speed stays unknown because `thread/read` does not
 currently report it. Refreshes preserve acknowledged state, and reconnects start with unknown state until native
 settings arrive. Terminal-only panes, subagents and models without advertised tiers have no speed control.
+
+A new Persona conversation can carry the same native tier in `POST /api/v1/assistant/conversations` while the default
+manager names `assistant_start_service_tier` in `manager.hello` and the hub lists that feature. Launcher model discovery
+preserves `serviceTiers` as `service_tiers`; the web offers Fast only for a row that advertises `priority`, never from a
+model name, and only while using the default manager. The node uses the same acknowledged `thread/settings/update`
+after `thread/start` (or warm-thread adoption) and before the first `turn/start`, so effort and speed stay independent.
+Omission sends no override and keeps the configured native default. A native refusal prevents the first turn, stops the
+cold or adopted process, and saves no conversation, mode or recovery state. Validation and native failures use coded,
+localized refusals (`assistant_service_tier_start_only`, `assistant_service_tier_unsupported` and
+`assistant_service_tier_refused`) without exposing the native diagnostic as person-facing detail. A manager without the
+capability gets 501 `assistant_service_tier_manager_outdated` before relaying; a node without `assistant_service_tier`
+returns 409 `node_outdated`. An older hub ignores the unknown field, so the web neither offers nor sends it there. The
+start choice is one-shot, not execution-fingerprint or recovery state; later changes still use `session.speed`.
+New Agent starts have no speed setting.

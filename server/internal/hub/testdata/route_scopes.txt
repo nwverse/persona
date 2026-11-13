@@ -263,6 +263,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/ports/{port}/connect
 -                    GET /api/v1/machines/{mid}/preview/connect
 -                    GET /api/v1/machines/{mid}/preview/servers
+-                    GET /api/v1/machines/{mid}/screen/video/connect
 machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/managers
 -                    GET /api/v1/messaging
@@ -291,6 +292,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/image
 agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/sessions/{mid}/{sid}/share-catalog
 -                    GET /api/v1/sessions/{mid}/{sid}/share-preview/{preview_id}
+-                    GET /api/v1/sessions/{mid}/{sid}/skills
 -                    GET /api/v1/skills
 -                    GET /api/v1/subscriptions
 -                    GET /api/v1/subscriptions/-/graph
@@ -429,15 +431,20 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/hub/update/check
 inbox.write          POST /api/v1/inbox/bulk
 inbox.write          POST /api/v1/inbox/done
+inbox.write          POST /api/v1/inbox/merge
+inbox.write          POST /api/v1/inbox/merge/undo
 inbox.write          POST /api/v1/inbox/mutes
 inbox.write          POST /api/v1/inbox/policies
 inbox.write          POST /api/v1/inbox/refresh
+inbox.write          POST /api/v1/inbox/todo
+inbox.write          POST /api/v1/inbox/todo/undo
 inbox.write          POST /api/v1/inbox/{id}/doc/status
 inbox.write          POST /api/v1/inbox/{id}/done
 inbox.write          POST /api/v1/inbox/{id}/draft
 inbox.write          POST /api/v1/inbox/{id}/handoff
 inbox.write          POST /api/v1/inbox/{id}/reply
 inbox.write          POST /api/v1/inbox/{id}/suggestion
+inbox.write          POST /api/v1/inbox/{id}/task-link/recheck
 agents.control       POST /api/v1/interactions/{id}/choose
 agents.control       POST /api/v1/interactions/{id}/reanswer
 agents.control       POST /api/v1/interactions/{id}/resolve

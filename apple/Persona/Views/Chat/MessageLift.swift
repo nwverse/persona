@@ -149,7 +149,9 @@ nonisolated final class LiftScrolled {
         skip = 1
         #if os(macOS)
         let t = Tick(self)
-        let l = Timer(timeInterval: 1.0 / 60, repeats: true) { timer in MainActor.assumeIsolated { t.fire(timer) } }
+        // The timer is not handed into the main-actor closure (Swift 6 reads that as a race): the tick keeps it weakly.
+        let l = Timer(timeInterval: 1.0 / 60, repeats: true) { _ in MainActor.assumeIsolated { t.fire() } }
+        t.timer = l
         RunLoop.main.add(l, forMode: .common)
         #else
         let l = CADisplayLink(target: Tick(self), selector: #selector(Tick.tick))
@@ -180,8 +182,11 @@ nonisolated final class LiftScrolled {
         init(_ frames: LiftFrames) { self.frames = frames }
 
         #if os(macOS)
-        func fire(_ timer: Timer) {
-            guard let frames else { return timer.invalidate() }
+        /// The timer firing it, which the run loop keeps.
+        weak var timer: Timer?
+
+        func fire() {
+            guard let frames else { timer?.invalidate(); return }
             MainActor.assumeIsolated { frames.tick() }
         }
         #else
@@ -660,6 +665,8 @@ extension EnvironmentValues {
     var chat: [String: String] = [:]
     var lift = ""
     var select = ""
+    /// What is selected in the text view (`LiftUITextView.publishPicked`): its lines and its handles, in the window.
+    var picked = ""
     /// The text view's right edge, in the window.
     var edge: CGFloat = 0
 
@@ -725,9 +732,6 @@ private struct LiftedMessage: View {
     @State private var fade = Fade()
     /// The drawn copy's height (the same as the message's where it was, unless something it reads differs).
     @State private var height: CGFloat = 0
-    /// The actions' size as a list (`MessageActionBar.stacks`, the accessibility text sizes), measured: it follows its
-    /// words. Until then the list is placed by a guess and not shown.
-    @State private var list: CGSize?
     /// Where the pressed part starts in the copy of a message drawn in parts (`MessageLift.part`), once it is laid out.
     @State private var partTop: CGFloat?
     /// The copy of a message drawn in parts opens at its pressed part (its scroll target), the only one of its parts
@@ -745,7 +749,6 @@ private struct LiftedMessage: View {
         _scroll = State(initialValue: lift.part.map { ScrollPosition(id: $0, anchor: .top) } ?? ScrollPosition())
     }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     private struct Fade: Equatable {
         var top = false
@@ -782,9 +785,7 @@ private struct LiftedMessage: View {
         let count = MessageActionBar.count(id: lift.bar.id, isUser: lift.bar.isUser, menu: menu, pending: lift.bar.pending,
                                            deletes: lift.bar.delete != nil)
         let barWidth = min(MessageActionBar.width(count: count), bounds.width - 2 * Theme.Space.s)
-        let stacked = MessageActionBar.stacks(typeSize)
-        let bar = stacked ? list ?? CGSize(width: barWidth, height: MessageActionBar.height * CGFloat(count))
-            : CGSize(width: barWidth, height: MessageActionBar.height)
+        let bar = CGSize(width: barWidth, height: MessageActionBar.height)
         let p = LiftLayout.place(message: message, press: lift.press.y + pad.top + above, bar: bar, bounds: bounds,
                                  margin: Theme.Space.s, gap: Theme.Space.s, trailing: lift.bar.isUser,
                                  part: lift.part != nil ? above : nil, pressInSight: Theme.Size.tapTarget)
@@ -793,7 +794,7 @@ private struct LiftedMessage: View {
             if LiftLines.on {
                 let l = LiftLines.shared
                 Color.clear.allowsHitTesting(false).accessibilityElement().accessibilityIdentifier("lift-lines")
-                    .accessibilityValue("chat=\(l.chat[lift.bar.id] ?? "")|lift=\(l.lift)|edge=\(String(format: "%.1f", l.edge))|select=\(selecting ? l.select : "")")
+                    .accessibilityValue("chat=\(l.chat[lift.bar.id] ?? "")|lift=\(l.lift)|edge=\(String(format: "%.1f", l.edge))|select=\(selecting ? l.select : "")|picked=\(selecting ? l.picked : "")")
             }
             #endif
             backdrop
@@ -805,11 +806,6 @@ private struct LiftedMessage: View {
                 MessageActionBar(id: lift.bar.id, text: lift.bar.text, isUser: lift.bar.isUser, date: lift.bar.date, menu: menu,
                                  pending: lift.bar.pending, from: lift.bar.from, delete: lift.bar.delete,
                                  itemWidth: MessageActionBar.itemWidth(barWidth, count: count))
-                    .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-                        guard stacked, size != list else { return }
-                        withAnimation(Theme.Motion.state) { list = size }
-                    }
-                    .opacity(stacked && list == nil ? 0 : 1)
                     .position(x: p.bar.midX, y: p.bar.midY)
                     .transition(.scale(scale: 0.85, anchor: p.below ? .top : .bottom).combined(with: .opacity))
             }

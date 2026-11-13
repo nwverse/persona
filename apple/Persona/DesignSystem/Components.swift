@@ -227,6 +227,10 @@ struct Chip: View {
     static let compactInset = Theme.Space.xxs / 2
 
     var body: some View {
+        chipBody.accessibilityShowsLargeContentViewer()
+    }
+
+    @ViewBuilder private var chipBody: some View {
         if compact {
             Group {
                 if let symbol {
@@ -401,6 +405,7 @@ struct CountBadge: View {
                 .background(fill, in: .capsule)
                 .fixedSize()
                 .accessibilityLabel(label ?? String(count))
+                .accessibilityShowsLargeContentViewer()
         }
     }
 
@@ -628,7 +633,9 @@ struct CloseAgentSheet: View {
                             onClosed(session.key)
                             dismiss()
                             // Once it is gone: the node refuses a worktree an agent still works in.
-                            if let worktree { await model.cleanUpWorktree(session.machineRef, worktree, cleanup) }
+                            if let worktree {
+                                await model.cleanUpWorktree(session.machineRef, worktree, cleanup, kind: AgentWorktree.engine(of: session))
+                            }
                         } else {
                             failure = model.toast?.message ?? String(localized: "Couldn't stop. The agent and its tab were kept; try again.")
                             closing = false
@@ -747,7 +754,7 @@ struct DeleteAgentSheet: View {
                         if await model.deleteSession(session.key) {
                             onDeleted(session.key)
                             dismiss()
-                            await model.cleanUpWorktree(session.machineRef, worktree, cleanup)
+                            await model.cleanUpWorktree(session.machineRef, worktree, cleanup, kind: AgentWorktree.engine(of: session))
                         } else {
                             deleting = false
                         }
