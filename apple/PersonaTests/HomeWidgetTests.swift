@@ -208,6 +208,50 @@ struct HomeWidgetTests {
         let u = try #require(HomeUsage.build([account], tokens: 1200, tpm: 30, hourly: [1, 2]))
         #expect(u.accounts.first?.windows.first?.percent == 86 && u.accounts.first?.windows.first?.minutes == 300)
         #expect(u.tokensToday == 1200 && u.hourly == [1, 2])
+        // Money only where a gateway reports it: the subscription windows carry none.
+        #expect(u.costToday == nil)
+    }
+
+    // MARK: Part three (Edit Widget, the Smart Stack)
+
+    /// Edit Widget lists the snapshot's computers and accounts in its order; an empty choice is no filter.
+    @Test func editWidgetListsTheSnapshot() {
+        let s = HomeSamples.busy()
+        #expect(HomeChoices.computers(s).map(\.id) == ["studio", "air", "hub", "mini"])
+        #expect(HomeChoices.computers(s).first?.name == "Studio")
+        #expect(HomeChoices.accounts(s).map(\.name) == ["Claude Max", "Codex Pro"])
+        #expect(HomeChoices.computers(nil).isEmpty && HomeChoices.accounts(HomeSnapshot()).isEmpty)
+        #expect(HomeChoices.filter("") == nil && HomeChoices.filter(nil) == nil && HomeChoices.filter("air") == "air")
+    }
+
+    /// Show and Computer narrow the Agents widget to their rows, and the counts to those rows.
+    @Test func editWidgetNarrowsTheAgents() {
+        let s = HomeSamples.busy()
+        #expect(HomeAgentsShow.all.kind == nil && HomeAgentsShow.computers.kind == .coding)
+        let persona = HomeContext(snapshot: s, date: HomeSamples.now, agentKind: HomeAgentsShow.persona.kind)
+        #expect(persona.agentRows.map(\.id) == ["hub/s2", "hub/s4"])
+        #expect(persona.agentCounts.needsYou == 1 && persona.agentCounts.working == 1 && persona.agentCounts.done == 0)
+        let studio = HomeContext(snapshot: s, date: HomeSamples.now, machine: "studio")
+        #expect(studio.agentCounts.needsYou == 1 && studio.agentCounts.working == 1 && studio.agentCounts.done == 1)
+        #expect(HomeContext(snapshot: s, date: HomeSamples.now, machine: "air").machines.map(\.id) == ["air"])
+        #expect(HomeContext(snapshot: s, date: HomeSamples.now, account: "a2").accounts.map(\.name) == ["Codex Pro"])
+    }
+
+    /// The Smart Stack: first when something needs you, then a running recording, then a meeting within 15 minutes;
+    /// nothing while the numbers are old or Persona is not set up.
+    @Test func smartStackRanksWhatNeedsYou() {
+        let s = HomeSamples.busy()
+        let now = HomeSamples.now
+        func score(_ kind: HomeKind, _ snapshot: HomeSnapshot = s, at date: Date = now) -> Float {
+            HomeRelevance.score(kind, HomeContext(snapshot: snapshot, date: date))
+        }
+        #expect(score(.agents) == 100 && score(.computers) == 100 && score(.inbox) == 100)
+        #expect(score(.record, HomeSamples.recording()) == 90)
+        #expect(score(.today) == 10) // the review starts in 40 minutes
+        #expect(score(.today, at: now.addingTimeInterval(30 * 60)) == 70) // and now in 10
+        #expect(score(.usage) == 30) // 86 % full: getting close
+        #expect(score(.health) == 10)
+        #expect(score(.agents, HomeSamples.stale()) == 0 && score(.agents, HomeSamples.unpaired) == 0)
     }
 }
 

@@ -463,3 +463,47 @@ func TestRuntimeTranscriptShowsThePlan(t *testing.T) {
 		return ok && s.Plan != nil && s.Plan.Done == 1 && s.Plan.Total == 3 && s.Plan.Current == "Reproducing the crash"
 	})
 }
+
+// A runtime's session whose conversation is a Claude transcript here can be branched (#6298): the copy is of that
+// transcript, under a new Claude id written into every line, named after the session, listed offline at once (the node
+// keeps state for it, so the copy is not taken for a script's run); not while its turn is being written, nor a session
+// without a transcript here.
+func TestRuntimeSessionForksFromItsTranscript(t *testing.T) {
+	n, _ := runtimeNode(t)
+	path := sdkTranscript(t, n, sdkSession, "the build is fixed")
+	host := dialRuntime(t, n, paseoHello())
+	row := func(status string) map[string]any {
+		return map[string]any{"session_id": "paseo-a1", "transcript": sdkSession, "agent": "claude", "title": "Fix the build", "cwd": "/w/app",
+			"status": status, "model": "claude-opus-5-5"}
+	}
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{row("idle"),
+		{"session_id": "paseo-g1", "agent": "paseo", "title": "Grok", "cwd": "/w/app", "status": "idle"}}})
+	waitFor(t, "listed", func() bool { _, ok := listed(t, n)["paseo-g1"]; return ok })
+	got := listed(t, n)
+	if !got["paseo-a1"].CanFork || got["paseo-g1"].CanFork {
+		t.Fatalf("can_fork: transcript %v, none %v", got["paseo-a1"].CanFork, got["paseo-g1"].CanFork)
+	}
+	id, err := n.fork(context.Background(), "paseo-a1", "")
+	if err != nil || !validID(id) || id == sdkSession {
+		t.Fatalf("fork: %q %v", id, err)
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(path), id+".jsonl"))
+	if err != nil || strings.Contains(string(b), sdkSession) || !strings.Contains(string(b), "the build is fixed") {
+		t.Fatalf("the copy: %v\n%s", err, b)
+	}
+	if !strings.Contains(string(b), "分支 · Fix the build") {
+		t.Fatalf("named after the session:\n%s", b)
+	}
+	if st, ok := n.state.get(id); !ok || st.Cwd != "/w/app" || st.Model != "claude-opus-5-5" {
+		t.Fatalf("its state: %+v %v", st, ok)
+	}
+	waitFor(t, "the branch listed", func() bool { s, ok := listed(t, n)[id]; return ok && s.Status == proto.StatusOffline })
+	if _, err := n.fork(context.Background(), "paseo-g1", ""); rpcCode(err) != "fork_unsupported" {
+		t.Fatalf("a session without a transcript: %v", err)
+	}
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{row("working")}})
+	waitFor(t, "working", func() bool { return listed(t, n)["paseo-a1"].Status == proto.StatusWorking })
+	if _, err := n.fork(context.Background(), "paseo-a1", ""); rpcCode(err) != "fork_turn_running" {
+		t.Fatalf("its turn still being written: %v", err)
+	}
+}
