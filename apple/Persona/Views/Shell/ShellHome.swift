@@ -422,6 +422,8 @@ struct ShellNeedsYou: View {
 struct ShellDestinations: ViewModifier {
     @Binding var path: NavigationPath
     var enabled: Bool
+    /// Injected here as well as on Assistant's stack so destination pages in a wide split receive it.
+    var inboxChat: ((InboxChatRoute) -> Void)? = nil
     @StateObject private var accounts = InboxAccountState()
 
     func body(content: Content) -> some View {
@@ -437,6 +439,10 @@ struct ShellDestinations: ViewModifier {
                 .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key) }
                 .navigationDestination(for: InboxChatRoute.self) { r in ChatView(key: r.key, itemManager: r.manager).id(r.key) }
                 .environment(\.feishuOpen) { path.append($0) }
+                .environment(\.pushInboxChat, inboxChat)
+                #if DEBUG
+                .onAppear { ShellTrace.shared.note("inbox chat closure available=\(inboxChat != nil)") }
+                #endif
         } else {
             content
         }

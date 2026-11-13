@@ -277,7 +277,7 @@ struct AssistantView: View {
                 Task { await start(text, images, space: Session.healthSpace) }
             }
         }
-        .modifier(ShellDestinations(path: $path, enabled: shell != nil || padPlaces))
+        .modifier(ShellDestinations(path: $path, enabled: placesByValue, inboxChat: inboxChatPush))
         .modifier(ClassicDestinations(enabled: shell == nil && !padPlaces))
     }
 
@@ -396,7 +396,7 @@ struct AssistantView: View {
             }
             #endif
         }
-        .environment(\.pushInboxChat, (shell != nil || padPlaces) ? { path.append($0) } : nil)
+        .environment(\.pushInboxChat, inboxChatPush)
         #if os(macOS)
         // Its pushed pages (Knowledge, Scheduled Tasks, To-dos…) go back from the title row, not the system's button (#2318).
         .environment(\.macSectionStack, true)
@@ -405,6 +405,18 @@ struct AssistantView: View {
 
     /// The sidebar's places push by value (`ShellRoute`, `ShellDestinations`): the iPhone shell and the iPad's column.
     private var placesByValue: Bool { shell != nil || padPlaces }
+
+    /// Offered at the stack and registered with its destinations, so a wide split does not depend on the outer stack
+    /// forwarding this environment value to its destination pages.
+    private var inboxChatPush: ((InboxChatRoute) -> Void)? {
+        guard placesByValue else { return nil }
+        return { route in
+            #if DEBUG
+            ShellTrace.shared.note("inbox chat push place=\(String(describing: places.current))")
+            #endif
+            path.append(route)
+        }
+    }
 
     /// A page the shell asked for (the drawer, the home page): from the conversation's root, so back comes to it. A place
     /// comes back as it was left, the place in front is kept for coming back to it, and the place already in front goes
