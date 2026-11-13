@@ -35,6 +35,7 @@ func listKeySized(list []proto.Session, size int) string {
 		w.b.WriteString("hierarchy:")
 		w.quote(s.ParentThreadID, '/')
 		w.quote(s.ParentSessionID, '/')
+		w.quote(s.ParentAgentID(), '/')
 		w.quote(s.RootSessionID, '/')
 		w.str(strconv.FormatBool(s.IsSubagent), '/')
 		w.quote(s.RepoRoot, '/')

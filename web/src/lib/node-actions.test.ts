@@ -112,6 +112,18 @@ describe("splitting and running an agent", () => {
     expect(d.openSession).toHaveBeenCalledWith("m1", "c0de0000-0000-4000-8000-000000000009");
   });
 
+  it("never offers a launcher that starts the session in a desktop app (#5480): a shell would run nothing", async () => {
+    const d = deps({
+      launchers: vi.fn(async () => [
+        { name: "claude" },
+        { name: "claude-desktop", agent: "claude", source: "claude_desktop" },
+        { name: "codex-app", agent: "codex", source: "codex_app", run_here: true },
+      ]),
+    });
+    const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
+    expect(list.map((i) => i.label)).toEqual(["claude"]);
+  });
+
   it("names a provider by its display name, its ID before the model at the row's end; an rc alias by its ID (#5029)", async () => {
     const d = deps({ launchers: vi.fn(async () => [{ name: "relay-example-com", display_name: "我的中转 站", model: "glm-5" }, { name: "cc_glm" }]) });
     const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
