@@ -47,7 +47,8 @@ vi.mock("../../lib/extension-slots", () => ({ useInboxItemPlace: () => undefined
 vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined, translatesChat: () => false, translatesMail: () => false, languageName: () => "" }));
 
 import type { InboxItem } from "../../lib/inbox";
-import { resetInboxForTests, sourceLine } from "../../lib/inbox";
+import { resetInboxForTests, shortTime, sourceLine } from "../../lib/inbox";
+import { rowMeta } from "../../lib/inbox-now";
 import { chainRows, type ChainEntry } from "../../lib/inbox-events";
 import { ApiError } from "../../lib/api";
 import { resetMailForTests } from "../../lib/mail";
@@ -130,6 +131,8 @@ describe("收件箱事件：详情", () => {
         expect(entry.kind === "reported", `${c.name}/${step.id}`).toBe(step.reported);
       }
     }
+    expect(chainIconMeaning({ kind: "agent" })).toBe("agents");
+    expect(chainIconMeaning({ kind: "agent_stopped" })).toBe("agents");
   });
   it("draws the reply suggestion, then 摘要 and 总结, then all three chain entries without a toggle", async () => {
     act(() => root.render(<EventBody item={reply} onSource={() => {}} />));
@@ -155,14 +158,29 @@ describe("收件箱事件：详情", () => {
     expect(text.indexOf("建议回复")).toBeLessThan(text.indexOf(item.summary!));
     expect(text.indexOf(item.summary!)).toBeLessThan(text.indexOf("处理链条"));
   });
-  it("uses rowMeta and nowText for showcase sc-1, and keeps sourceLine without where", () => {
-    act(() => root.render(<InboxDetail item={showcase.items[0]} loaded />));
-    expect(host.querySelector("[data-detail-meta]")?.textContent).toContain("订单群 · 张三：好的，我看一下新的");
+  it("uses rowMeta without a time and moves Original into the small line; an older item keeps sourceLine and its time", () => {
+    const embedded = { ...showcase.items[0], lark: reply.lark };
+    act(() => root.render(<InboxDetail item={embedded} loaded />));
+    expect(host.querySelector("[data-detail-meta] span")?.textContent).toBe("订单群 · 张三：好的，我看一下新的");
+    expect(host.querySelector("[data-detail-meta] button")).toBeNull(); // an embedded chat has no separate Original page
     expect(host.querySelector("[data-event-now]")?.textContent).toContain("等张三确认新报价");
     expect(host.querySelector("[data-event-now]")?.textContent).toContain("问更正后的报价行不行");
-    const old = plain(reply);
+
+    const withWhere = { ...plain(reply), id: "where-source", where: "订单群" } as InboxItem;
+    act(() => root.render(<InboxDetail item={withWhere} loaded />));
+    const current = host.querySelector("[data-detail-meta]")!;
+    expect(current.querySelector("span")?.textContent).toBe(rowMeta(withWhere));
+    expect(current.textContent).not.toContain(shortTime(withWhere.updated_at));
+    expect(current.querySelector("button")?.textContent).toBe("看原文");
+    expect([...host.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "看原文")).toHaveLength(1);
+
+    const old = { ...plain(reply), id: "old-source" };
     act(() => root.render(<InboxDetail item={old} loaded />));
-    expect(host.querySelector("[data-detail-meta]")?.textContent).toContain(sourceLine(old));
+    const legacy = host.querySelector("[data-detail-meta]")!;
+    expect(legacy.querySelector("span")?.textContent).toBe(sourceLine(old));
+    const time = shortTime(old.updated_at);
+    expect(legacy.textContent).toBe(`${sourceLine(old)}${sourceLine(old) && time ? ` · ${time}` : time}看原文`);
+    expect(legacy.querySelector("button")?.textContent).toBe("看原文");
   });
   it("renders showcase sc-1 folded and expanded, with reported apart and the Agent's live state", async () => {
     Object.assign(getState(), {
@@ -175,12 +193,42 @@ describe("收件箱事件：详情", () => {
     expect(reported.getAttribute("data-chain-reported")).toBe("");
     expect(reported.textContent).toContain("助手说");
     expect(reported.querySelector('[data-chain-icon="reported"]')).not.toBeNull();
+    expect(reported.querySelector('[data-chain-glyph="chat"]')).not.toBeNull();
     await press("展开全部（7）");
     expect(ids()).toEqual(["c1", "c2", "c3", "c4", "c5", "c6", "c7"]);
+    expect(host.querySelector('[data-chain-id="c1"] [data-chain-glyph="link"]')).not.toBeNull();
+    expect(host.querySelector('[data-chain-id="c3"] [data-chain-glyph="code"]')).not.toBeNull();
+    expect(host.querySelector('[data-chain-id="c4"] [data-chain-glyph="code"]')).not.toBeNull();
     expect(host.querySelector('[data-chain-id="c3"] [data-chain-agent-state]')?.textContent).toBe("需要你");
     expect(host.querySelector('[data-chain-id="c4"] [data-chain-agent-state]')?.textContent).toBe("需要你");
     await press("收起");
     expect(ids()).toEqual(["c5", "c6", "c7"]);
+  });
+  it("uses trimmed reported detail with full expansion, falls back to legacy text, and keeps other details expandable", async () => {
+    const item: InboxItem = {
+      ...plain(reply),
+      chain: [
+        { id: "reported-detail", kind: "reported", text: "Assistant says: duplicated legacy words", detail: "  First line\nSecond line  " },
+        { id: "reported-legacy", kind: "reported", text: "Assistant says: legacy words" },
+        { id: "other-detail", kind: "triaged", text: "Sorted", detail: "The basis" },
+      ],
+    };
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    const row = (id: string) => host.querySelector(`[data-chain-id="${id}"]`)!;
+    expect(row("reported-detail").querySelector("button span.truncate")?.textContent).toBe("First line\nSecond line");
+    expect(row("reported-detail").textContent).not.toContain("Assistant says: duplicated legacy words");
+    expect(row("reported-detail").querySelector("button")!.disabled).toBe(false);
+    expect(row("reported-detail").querySelector("button")!.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => row("reported-detail").querySelector("button")!.click());
+    expect(row("reported-detail").querySelector("[data-chain-detail]")?.textContent).toBe("  First line\nSecond line  ");
+    expect(row("reported-legacy").querySelector("button span.truncate")?.textContent).toBe("Assistant says: legacy words");
+    expect(row("reported-legacy").querySelector("button")!.disabled).toBe(true);
+    const other = row("other-detail");
+    expect(other.querySelector("button")!.disabled).toBe(false);
+    await act(async () => other.querySelector("button")!.click());
+    expect(other.querySelector("[data-chain-detail]")?.textContent).toBe("The basis");
+    act(() => root.render(<EventBody item={{ ...item, chain: [{ id: "reported-legacy", kind: "reported", text: "Assistant says: legacy words", detail: " \n " }] }} onSource={() => {}} />));
+    expect(row("reported-legacy").querySelector("button span.truncate")?.textContent).toBe("Assistant says: legacy words");
   });
   it("labels each kind's buttons", () => {
     act(() => root.render(<EventBody item={agentSuggestion} onSource={() => {}} />));
@@ -382,6 +430,23 @@ describe("收件箱事件：列表", () => {
     expect(working.querySelector("[aria-expanded]")).toBeNull();
     expect(working.querySelector(`[data-item="${waiting.id}"]`)).not.toBeNull();
     expect(host.querySelector('[data-section="action"] [aria-expanded]')).not.toBeNull();
+  });
+  it("draws the five shared showcase rows with their state words and icons", async () => {
+    calls.items = showcase.items;
+    act(() => root.render(<InboxList />));
+    await flush();
+    const mark = (id: string) => host.querySelector(`[data-item="${id}"] [data-event-mark="now"]`)!;
+    expect(mark("sc-1").getAttribute("data-event-icon")).toBe("clock");
+    expect(mark("sc-1").textContent).toContain("等张三确认新报价");
+    expect(mark("sc-2").getAttribute("data-event-icon")).toBe("needs-you");
+    expect(mark("sc-2").textContent).toBe("等你确认回复");
+    expect(host.querySelector('[data-item="sc-2"]')?.textContent).not.toContain("约，中午见。");
+    expect(mark("sc-3").getAttribute("data-event-icon")).toBe("none");
+    expect(mark("sc-3").textContent).toBe("知悉即可");
+    expect(mark("sc-4").getAttribute("data-event-icon")).toBe("needs-you");
+    expect(mark("sc-4").textContent).toBe("看过 3 次还没动静，还要跟吗？");
+    expect(mark("sc-5").getAttribute("data-event-icon")).toBe("check");
+    expect(mark("sc-5").textContent).toBe("你回过了");
   });
   it("an older hub's list: the four sections and the draft card as before", async () => {
     calls.items = fixture.items.map(legacy);

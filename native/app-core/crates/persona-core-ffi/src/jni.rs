@@ -10,6 +10,8 @@ use jni::JNIEnv;
 use jni::JavaVM;
 use jni::objects::{GlobalRef, JByteArray, JClass, JMethodID, JObject, JString};
 use jni::signature::{Primitive, ReturnType};
+#[cfg(target_os = "android")]
+use jni::sys::jlongArray;
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong, jvalue};
 use persona_core_runtime::Host;
 
@@ -148,4 +150,50 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_destroy(_env: JNI
         let core = unsafe { Box::from_raw(handle as *mut PersonaCore) };
         let _ = catch_unwind(AssertUnwindSafe(move || drop(core)));
     }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_enableDiagnostics(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if let Some(core) = core(handle) {
+            core.runtime.enable_diagnostics();
+        }
+    }));
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_flushDiagnostic(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    timeout_ms: jint,
+) -> jboolean {
+    let Some(core) = core(handle) else { return JNI_FALSE };
+    let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
+    catch_unwind(AssertUnwindSafe(|| core.runtime.flush_diagnostic(timeout))).map_or(JNI_FALSE, boolean)
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_diagnostics(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jlongArray {
+    let Some(core) = core(handle) else {
+        return std::ptr::null_mut();
+    };
+    let counters = catch_unwind(AssertUnwindSafe(|| core.runtime.diagnostics())).unwrap_or_default();
+    env.new_long_array(counters.len() as i32)
+        .and_then(|array| {
+            env.set_long_array_region(&array, 0, &counters)?;
+            Ok(array.into_raw())
+        })
+        .unwrap_or(std::ptr::null_mut())
 }
