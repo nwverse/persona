@@ -123,6 +123,9 @@ describe("exact worktree action admission", () => {
     catalog.workspaces[0] = { ...catalog.workspaces[0], source: "paseo", workspace_kind: "git", is_main: true };
     expect(resolve()).toMatchObject({ writable: true, canCreate: true, canRename: true, canClose: false, canDelete: false });
     catalog.workspaces[0].is_main = false;
+    // a worktree Paseo did not make: it would only archive it, so no Delete
+    expect(resolve()).toMatchObject({ canCreate: true, canRename: true, canClose: false, canDelete: false });
+    catalog.workspaces[0].owned = true;
     expect(resolve()).toMatchObject({ canCreate: true, canRename: true, canClose: false, canDelete: true });
     catalog.workspaces[0].workspace_kind = "folder"; catalog.workspaces[0].is_main = undefined;
     expect(resolve()).toMatchObject({ writable: true, canCreate: false, canRename: true, canDelete: false });

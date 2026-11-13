@@ -715,8 +715,8 @@ A new agent can start in a Git worktree of its own, so agents on the same reposi
   folder; a name whose folder exists, an empty one too, is taken) as a workspace of its own, which the agent's start then uses; `worktree/add` answers its
   `workspace_id`. `worktree/status` gives Paseo's folder as `checkouts`, and calls a worktree Persona's (`ours`) only when it is the folder of a
   worktree workspace Paseo made (#6297); `worktree/remove` then archives that workspace through Paseo, which removes the folder, with Delete
-  worktree's guards (below): refused while another session is in the workspace or an agent still runs in the folder, and for uncommitted changes or
-  an unmerged branch unless `force`; the branch goes after the folder only with `delete_branch`.
+  worktree's guards (below): refused while a session in the workspace still runs (the closed agent has stopped by then; the clients try again for
+  a few seconds) or an agent of another engine runs in the folder, and for uncommitted changes or an unmerged branch unless `force`; the branch goes after the folder only with `delete_branch`.
 - All three are full-device routes like section 23's, and extension tokens never reach them. The body is read field by field, plus the two switches (`flags`, booleans only).
 
 ## 24. Full herdr UI: a PTY client, switchable beside Single pane (#2357)

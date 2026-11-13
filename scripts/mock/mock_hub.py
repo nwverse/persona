@@ -339,9 +339,11 @@ def mock_workspaces():
     if os.environ.get("MOCK_PASEO"):
         for wid, title, path, branch in [(w, t, PASEO_ROOT if tree is None else PASEO_TREES + tree, b)
                                          for w, t, tree, b in PASEO_WORKSPACES] + PASEO_MADE:
+            # every worktree here is one Paseo made (owned): the ones Delete worktree is offered for (#6297)
             result.append({"id": "catalog-" + wid, "machine_id": "server", "source": "paseo", "source_id": wid, "title": title,
                            "cwd": path, "branch": branch, "workspace_kind": "git", "is_main": path == PASEO_ROOT,
-                           "project_id": "prj_app", "project_name": "app", "project_path": PASEO_ROOT,
+                           **({} if path == PASEO_ROOT else {"owned": True}),
+                           "project_id": PASEO_PROJECT["id"], "project_name": PASEO_PROJECT["name"], "project_path": PASEO_ROOT,
                            "online": True, "available": True, "last_seen": ago()})
     return list({(w["machine_id"], w["source"], w["source_id"]): w for w in result}.values())
 
@@ -9533,6 +9535,80 @@ def worktree_route(h, p, body):
     parent = body.get("parent_workspace_id") or body.get("workspace_id", "")
     if body.get("kind") == "orca": WORKSPACE_LINEAGE[mid, wid] = parent
     return h.send_json({"workspace_id": wid, "parent_workspace_id": parent, "tab_id": wid + ":t1", "pane": wid + ":p1", "terminal": "pane:" + wid + ":p1", "path": path, "branch": branch})
+
+
+# MOCK_PASEO=1 (#6297): Rename and Delete worktree on Paseo's rows, and Rename space on its project, answered as the node
+# answers them (node/runtimeworkspaces_manage.go): a title, the project's name (its agents' space_name, the catalog's
+# project_name), and a deletion previewed, then confirmed with the preview's token, only of a worktree Paseo made (the
+# main checkout is refused); the login flow's worktree has two uncommitted changes, which the dialog asks to confirm.
+# Recorded at GET /mock/node_actions.
+PASEO_PROJECT = {"id": "prj_app", "name": "app"}
+PASEO_PREVIEWS, PASEO_DIRTY = {}, {"wks_5a1e000000000002": 2}
+
+
+def _paseo_path(row):
+    """A Paseo workspace row's folder: PASEO_WORKSPACES name a folder under its worktrees root (None: the main checkout),
+    PASEO_MADE the whole path."""
+    return row[2] if row in PASEO_MADE else PASEO_ROOT if row[2] is None else PASEO_TREES + row[2]
+
+
+def _paseo_failed(h, detail):
+    """A node's refusal as the hub writes it (docs/protocol/protocol.md "Error body"): the node's words in detail."""
+    return h.send_json({"error": "The request could not be completed. Open details for the diagnostic.", "code": "internal", "detail": detail}, 502)
+
+
+def paseo_worktree_route(h, p, body):
+    """POST /api/v1/machines/{mid}/worktree/{rename,delete} of a Paseo row (#6297)."""
+    mid, verb = p.split("/")[4], p.split("/")[6]
+    NODE_ACTIONS.append({"machine": mid, "route": "worktree/" + verb, **body})
+    wid = str(body.get("workspace_id", ""))
+    found = next(((rows, i) for rows in (PASEO_WORKSPACES, PASEO_MADE) for i, row in enumerate(rows) if row[0] == wid), None)
+    if verb == "rename":
+        if not found:
+            return _paseo_failed(h, "Paseo no longer lists this workspace; refresh and try again")
+        rows, i = found
+        rows[i] = (wid, str(body.get("name", "")).strip()) + tuple(rows[i][2:])
+        return h.send_json({"ok": True})
+    token = str(body.get("preview_token", ""))
+    if body.get("preview"):
+        if not found:
+            return _paseo_failed(h, "The workspace or its changes differ from the preview; review a new preview")
+        rows, i = found
+        path = _paseo_path(rows[i])
+        if path == PASEO_ROOT:
+            return _paseo_failed(h, "The repository's main checkout cannot be deleted")
+        token = "paseo-preview-%d" % (len(PASEO_PREVIEWS) + 1)
+        PASEO_PREVIEWS[token] = wid
+        return h.send_json({"workspace_id": wid, "kind": "paseo", "host_id": "local", "instance_id": "paseo-mock", "path": path,
+                            "branch": rows[i][3], "dirty": PASEO_DIRTY.get(wid, 0), "folder": False, "preview_token": token})
+    if PASEO_PREVIEWS.get(token) != wid:
+        return _paseo_failed(h, "Preview this exact workspace again before deleting it")
+    if body.get("reconcile"):
+        return h.send_json({"workspace_id": wid, "removed": not found, "state": "present" if found else "removed"})
+    if not found:
+        return _paseo_failed(h, "Deletion was already sent; reconcile its status before any further action")
+    if PASEO_DIRTY.get(wid) and not body.get("force"):
+        return _paseo_failed(h, "The worktree has uncommitted changes")
+    rows, i = found
+    del rows[i]
+    SESSIONS[:] = [s for s in SESSIONS if not (s.get("space_kind") == "paseo" and s.get("workspace_id") == wid)]  # archived with it
+    return h.send_json({"workspace_id": wid, "removed": True, "state": "removed", **({"branch_deleted": True} if body.get("delete_branch") else {})})
+
+
+def paseo_space_route(h, p, body):
+    """POST /api/v1/machines/{mid}/spaces/{id}/rename of Paseo's project, by its id or one of its workspaces' (#6297): its
+    agents and the catalog show the new name; the hub answers it as pins.go does. False when the id is no Paseo one."""
+    sid = p.split("/")[6]
+    if sid != PASEO_PROJECT["id"] and not any(row[0] == sid for row in PASEO_WORKSPACES + PASEO_MADE):
+        return False
+    NODE_ACTIONS.append({"machine": p.split("/")[4], "route": "spaces/rename", "workspace_id": sid, **body})
+    name = str(body.get("name", "")).strip()
+    PASEO_PROJECT["name"] = name
+    for s in SESSIONS:
+        if s.get("space_kind") == "paseo" and s.get("space_id") == PASEO_PROJECT["id"]:
+            s["space_name"] = name
+    h.send_json({"ok": True, "name": name})
+    return True
 
 
 # MOCK_AGENT_WORKTREE=1 (#6115): a new agent in a worktree of its own. worktree/status says a folder under
@@ -22067,7 +22143,7 @@ MOCK_HELP = [
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
     "MOCK_CHILD_SESSIONS=1  The Paseo computer (MOCK_PASEO) with its agent's four created agents (one waiting for you, one working with a Codex subagent of its own, one done, one failed) and an agent whose creator is not listed: the hub folds them (folded_under / children) and the lead's chat draws a card for each (#5120)",
-    "MOCK_PASEO=1  A computer that enables Paseo beside herdr: a project with its main checkout, two titled worktree workspaces and one with no agent, all in the workspace catalog (New worktree… makes one in Paseo's folder, #6295), an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
+    "MOCK_PASEO=1  A computer that enables Paseo beside herdr: a project with its main checkout, two titled worktree workspaces and one with no agent, all in the workspace catalog (New worktree… makes one in Paseo's folder, #6295; Rename, Delete worktree and Rename space as the node answers them, the login flow's worktree with two uncommitted changes, #6297), an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_TOOL_OUTCOMES=1  A turn whose tool results carry outcomes: a failed test run (exit code, the cut output's end), a denied edit, a refused write, an interrupted and a timed-out command; only the failure is red (#4303)",
     "MOCK_PERMISSION_DIFF=1  Two chats wait on a Claude Code permission card for an Edit (longer than the card's preview) and a Write; the card shows the change (#4621)",
@@ -23572,6 +23648,12 @@ class H(BaseHTTPRequestHandler):
             return node_action(self, p, json.loads(self.last_body or b"{}"))
         if (os.environ.get("MOCK_TERMINAL_PANES") or os.environ.get("MOCK_PASEO")) and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(prepare|create)", p):
             return worktree_route(self, p, json.loads(self.last_body or b"{}"))
+        if os.environ.get("MOCK_PASEO") and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(rename|delete)", p) \
+                and json.loads(self.last_body or b"{}").get("kind") == "paseo":
+            return paseo_worktree_route(self, p, json.loads(self.last_body or b"{}"))
+        if os.environ.get("MOCK_PASEO") and re.fullmatch(r"/api/v1/machines/[^/]+/spaces/[^/]+/rename", p) \
+                and paseo_space_route(self, p, json.loads(self.last_body or b"{}")):
+            return
         if AGENT_WORKTREE and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(status|add|remove)", p):
             return agent_worktree_route(self, p, json.loads(self.last_body or b"{}"))
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/spaces/[^/]+/rename", p):

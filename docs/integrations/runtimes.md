@@ -267,6 +267,12 @@ and calls `rt.workspacesChanged(list)` with the whole list whenever it changes (
   150 s), the time `workspace.prepare` took included.
 - **Where** (`workspace.prepare {cwd, repo_root}` → `{checkouts}`): the folder the runtime puts that repository's worktrees
   in. The dialog's path must be in it; only the worktree's own folder name can be chosen.
+- **Deleting one** (`workspace.archive`, #6297): only a worktree the runtime made (`owned`, which the catalog row carries
+  too), and only when nothing could be lost that the user did not confirm: the node refuses while one of the workspace's
+  sessions is at work (starting, working, waiting for the user, a state it does not say) or an Agent of another engine
+  runs in the folder, and checks the changes the preview showed. Archive the workspace and its sessions, remove the
+  folder, keep the branch; answer once it is done. A closed Agent's own worktree (`worktree/remove`) goes the same way,
+  refused while a session in the workspace still runs.
 - **Renaming** (`workspace.rename`, #6297): "Rename" on a catalog row sends `{workspace_id, title}` (its title only), and
   "Rename space" `{space_id, title}`: the space its sessions are grouped in, also when the apps named it by one of its
   workspaces. Answer `{workspace}` / `{space_name}`, and list the new names (rows and workspaces) at once.

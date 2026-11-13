@@ -234,9 +234,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * 0821d1acca measured ja 474,717 B, 35 B over the old budget; this change takes it to 475,028 B, +311 B: the `?at=` of a
  * search hit's address and the chat's landing on it, which pages back for one further up, waiting while the chat still
  * fills the screen, and its one line when the message is not reached; the search itself stays in ⌘K's on-intent load
- * and All chats' page; 31 B of room so the next main does not tip it).
+ * and All chats' page; 31 B of room so the next main does not tip it). And 38 B for renaming a Paseo space from the
+ * sidebar (#6297, with #6295 merged: ja 475,067 B against 475,029 B on main at 8fc7117ef; #6295 alone is 475,000 B,
+ * so #6297's own cost is +67 B: the space menu's Rename for a Paseo project the catalog lists, and the rename dialog
+ * leaving out herdr's hint for it); the 30 B of room main had stay.
  */
-export const FIRST_SCREEN_BUDGET = 475_059;
+export const FIRST_SCREEN_BUDGET = 475_097;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

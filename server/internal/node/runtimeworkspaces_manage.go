@@ -10,7 +10,6 @@ package node
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,13 +20,14 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// workspaceArchiveTimeout bounds workspace.archive: Paseo removes the worktree (git, 2 minutes at most) before it
-// answers, within the 150 s the hub gives worktree/delete.
-var workspaceArchiveTimeout = 140 * time.Second
-
 // workspaceRenameTimeout bounds workspace.rename, within the 20 s the hub gives space.rename and the 30 s of
 // worktree/rename.
 var workspaceRenameTimeout = 15 * time.Second
+
+// runtimeRemoveDeadline bounds a closed Agent's worktree.remove on a runtime engine, the checks and the runtime's
+// archive together, inside the 90 s the hub gives worktree/remove. A confirmed worktree.delete has
+// runtimeWorktreeDeadline, inside its 150 s.
+var runtimeRemoveDeadline = 85 * time.Second
 
 // dropWorkspace takes a workspace the runtime archived off its list at once: its next push says the same.
 func (h *runtimeConn) dropWorkspace(id string) {
@@ -69,11 +69,44 @@ func (h *runtimeConn) workspaceSessions(id string) []string {
 	return out
 }
 
+// workspaceAtWork: one of h's sessions in workspace id may still be writing in it: starting, working, waiting for the
+// user, or in a state the runtime does not say. Idle, done and stopped ones are not (the archive ends them).
+func (h *runtimeConn) workspaceAtWork(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.ContainsFunc(h.sessions, func(s proto.Session) bool {
+		return s.WorkspaceID == id && (s.Starting || !slices.Contains([]string{proto.StatusIdle, proto.StatusDone, proto.StatusOffline}, s.Status))
+	})
+}
+
+// workspaceLive: one of h's sessions in workspace id is running (any state but stopped), which archiving the
+// workspace would end.
+func (h *runtimeConn) workspaceLive(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.ContainsFunc(h.sessions, func(s proto.Session) bool { return s.WorkspaceID == id && s.Status != proto.StatusOffline })
+}
+
+// ownedWorktreeAt is h's workspace whose folder is dir: a worktree h made (owned), which it removes with the
+// workspace. h may be nil (the runtime away): none.
+func (h *runtimeConn) ownedWorktreeAt(dir string) (runtimeWorkspace, bool) {
+	if h == nil || !h.makesWorkspaces() {
+		return runtimeWorkspace{}, false
+	}
+	d := realPath(filepath.Clean(dir))
+	for _, w := range h.workspacesCopy() {
+		if w.Kind == workspaceWorktree && w.Owned && realPath(w.Cwd) == d {
+			return w, true
+		}
+	}
+	return runtimeWorkspace{}, false
+}
+
 // runtimeRenameWorkspace is worktree.rename of runtime h's workspace: its title. Its branch, folder and sessions keep
 // their names.
 func (n *Node) runtimeRenameWorkspace(ctx context.Context, h *runtimeConn, id, name string) error {
 	if _, ok := h.workspaceByID(id); !ok {
-		return fmt.Errorf("the selected worktree is no longer available")
+		return composerError(ctx, "runtime_workspace_missing", i18n.Args{"engine": h.label()})
 	}
 	cctx, cancel := context.WithTimeout(ctx, workspaceRenameTimeout)
 	defer cancel()
@@ -144,7 +177,7 @@ type runtimeWorkspaceDeletion struct {
 
 // inspectRuntimeDeletion reads what deleting runtime h's workspace id would do: only a worktree the runtime made, as
 // its own checkout's top level (never a main checkout, a folder, or a worktree someone else made, which the runtime
-// would only archive and leave on the disk), with its changes counted.
+// would only archive and leave on the disk), with its changes counted, and nothing at work in it (runtimeAtWork).
 func (n *Node) inspectRuntimeDeletion(ctx context.Context, h *runtimeConn, kind, id string) (*composerDeletion, int, error) {
 	w, ok := h.workspaceByID(id)
 	if !ok {
@@ -160,9 +193,11 @@ func (n *Node) inspectRuntimeDeletion(ctx context.Context, h *runtimeConn, kind,
 		return nil, 0, composerError(ctx, "runtime_not_owned", engine)
 	}
 	path := w.Cwd
-	top, err := git(ctx, path, "rev-parse", "--show-toplevel")
-	if err != nil || realPath(strings.TrimSpace(top)) != realPath(path) {
-		return nil, 0, composerError(ctx, "main_checkout")
+	if err := runtimeWorktreeTop(ctx, h, path); err != nil {
+		return nil, 0, err
+	}
+	if err := n.runtimeAtWork(ctx, h, w); err != nil {
+		return nil, 0, err
 	}
 	entry, dirty, err := inspectWorktreeDeletion(ctx, path, false)
 	if err != nil {
@@ -185,13 +220,47 @@ func (n *Node) inspectRuntimeDeletion(ctx context.Context, h *runtimeConn, kind,
 	return entry, dirty, nil
 }
 
+// runtimeWorktreeTop says why path, the folder of a worktree runtime h lists, is not a worktree's top level to delete
+// (nil when it is): the folder is gone, git no longer knows it as a worktree (its record in the repository pruned), or
+// it is a folder inside one.
+func runtimeWorktreeTop(ctx context.Context, h *runtimeConn, path string) error {
+	args := i18n.Args{"engine": h.label(), "path": path}
+	if _, err := os.Stat(path); err != nil {
+		return composerError(ctx, "runtime_folder_gone", args)
+	}
+	top, err := git(ctx, path, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return composerError(ctx, "runtime_git_gone", args)
+	}
+	if realPath(strings.TrimSpace(top)) != realPath(path) {
+		return composerError(ctx, "runtime_not_toplevel", args)
+	}
+	return nil
+}
+
+// runtimeAtWork refuses deleting runtime workspace w while work in it could be lost: one of its sessions still at
+// work (workspaceAtWork), or an Agent of any engine running in its folder (a herdr one that went there).
+func (n *Node) runtimeAtWork(ctx context.Context, h *runtimeConn, w runtimeWorkspace) error {
+	if h.workspaceAtWork(w.ID) || n.agentRunsIn(w.Cwd) {
+		return composerError(ctx, "runtime_busy", i18n.Args{"engine": h.label()})
+	}
+	return nil
+}
+
 // sameRuntimeDeletion: nothing a preview showed has changed since: the same runtime process lists the same workspace
-// with the same sessions, and the checkout is the same one with the same changes.
+// (its identity: a new title or a moved branch name is still it) with the same sessions, and the checkout is the same
+// one, on the same branch, with the same changes.
 func sameRuntimeDeletion(a, b *composerDeletion) bool {
 	x, y := a.runtime, b.runtime
-	return x != nil && y != nil && x.kind == y.kind && x.instance == y.instance && x.workspace == y.workspace &&
+	return x != nil && y != nil && x.kind == y.kind && x.instance == y.instance && sameRuntimeWorkspace(x.workspace, y.workspace) &&
 		x.sessions == y.sessions && x.branch == y.branch && x.common == y.common &&
 		os.SameFile(a.pathInfo, b.pathInfo) && os.SameFile(a.gitInfo, b.gitInfo) && a.dirtyState == b.dirtyState
+}
+
+// sameRuntimeWorkspace: a and b are the same workspace of the runtime's: id, folder, kind, the runtime's ownership and
+// repository. Its title, its space's name and the branch the runtime last said are labels.
+func sameRuntimeWorkspace(a, b runtimeWorkspace) bool {
+	return a.ID == b.ID && a.Cwd == b.Cwd && a.Kind == b.Kind && a.Owned == b.Owned && a.RepoRoot == b.RepoRoot
 }
 
 // runtimeWorktreeDelete is worktree.delete of an engine runtime's worktree, the way a terminal host's is: a preview
@@ -223,6 +292,9 @@ func (n *Node) runtimeWorktreeDelete(ctx context.Context, kind, id string, in wo
 	if err != nil {
 		return nil, err
 	}
+	// One deadline for the checks and the runtime's archive together, inside the hub's 150 s.
+	ctx, cancel := context.WithTimeout(ctx, runtimeWorktreeDeadline)
+	defer cancel()
 	current, dirty, err := n.inspectRuntimeDeletion(ctx, h, kind, id)
 	if err != nil {
 		return nil, err
@@ -249,14 +321,12 @@ func (n *Node) runtimeWorktreeDelete(ctx context.Context, kind, id string, in wo
 	prior.dispatched = true
 	composerDeletions.Unlock()
 
-	cctx, cancel := context.WithTimeout(ctx, workspaceArchiveTimeout)
-	defer cancel()
-	err = h.peer.Call(cctx, "workspace.archive", map[string]any{"workspace_id": id}, nil)
+	err = h.peer.Call(ctx, "workspace.archive", map[string]any{"workspace_id": id}, nil)
 	if err != nil {
 		if result := n.reconcileRuntimeDeletion(prior); result.Removed {
 			return result, nil
 		}
-		if !isRPCError(err) || cctx.Err() != nil {
+		if !isRPCError(err) || ctx.Err() != nil {
 			// No answer: whether the runtime archived anything is not known; reconcile tells.
 			return proto.WorktreeDeleteResult{WorkspaceID: id, State: "unknown"}, nil
 		}
@@ -269,6 +339,46 @@ func (n *Node) runtimeWorktreeDelete(ctx context.Context, kind, id string, in wo
 		result.BranchDeleted = err == nil
 	}
 	return result, nil
+}
+
+// runtimeAgentWorktreeRemove is worktree.remove of a closed Agent's own worktree (#6115) on a runtime engine, after
+// worktreeRemove's checks (one of Persona's, no Agent in its folder, changes and an unmerged branch only with force):
+// the worktree workspace the runtime made at st.Path, archived through the runtime, which removes the folder. As Delete
+// worktree, never while a session in the workspace is running (the archive would end it; the closed Agent leaves the
+// runtime's list a moment after, and the clients try again meanwhile). Its branch goes after the folder, when asked.
+func (n *Node) runtimeAgentWorktreeRemove(ctx context.Context, h *runtimeConn, st proto.WorktreeStatus, deleteBranch, force bool) (proto.WorktreeRemoved, error) {
+	var res proto.WorktreeRemoved
+	w, ok := h.ownedWorktreeAt(st.Path)
+	if !ok {
+		return res, refusal("not_our_worktree", "this folder is not a worktree Persona made", nil)
+	}
+	if h.workspaceLive(w.ID) || n.agentRunsIn(st.Path) {
+		return res, refusal("worktree_in_use", "an agent still runs in this worktree", nil)
+	}
+	if err := h.peer.Call(ctx, "workspace.archive", map[string]any{"workspace_id": w.ID}, nil); err != nil {
+		if isRPCError(err) && ctx.Err() == nil {
+			return res, refusal("worktree_failed", runtimeErr(h, err).Error(), nil) // the runtime's own words
+		}
+		// No answer: whether the runtime archived it is not known.
+		return res, refusal("worktree_failed", composerError(ctx, "runtime_remove_unanswered", i18n.Args{"engine": h.label()}).Error(), nil)
+	}
+	h.dropWorkspace(w.ID)
+	if _, err := os.Lstat(st.Path); !os.IsNotExist(err) { // the runtime archived it but kept the folder
+		return res, refusal("worktree_failed", composerError(ctx, "runtime_folder_left",
+			i18n.Args{"engine": h.label(), "path": st.Path}).Error(), nil)
+	}
+	res.Removed = true
+	if deleteBranch && st.Branch != "" {
+		flag := "-d"
+		if force {
+			flag = "-D"
+		}
+		if _, err := git(ctx, st.Root, "branch", flag, st.Branch); err != nil {
+			return res, refusal("worktree_failed", gitFailure(err), map[string]any{"removed": true})
+		}
+		res.BranchDeleted = true
+	}
+	return res, nil
 }
 
 // reconcileRuntimeDeletion says what became of a runtime worktree a confirmed deletion was sent for: removed once the

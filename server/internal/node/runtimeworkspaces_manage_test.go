@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -50,6 +51,30 @@ func (r *runtimeRepo) manageAnswers(t *testing.T, archiveErr error) {
 	}
 }
 
+// tellSessions has the fake runtime say its sessions (runtime.sessions) and waits until the node has them as said.
+func (r *runtimeRepo) tellSessions(t *testing.T, sessions ...map[string]any) {
+	t.Helper()
+	list := make([]any, len(sessions))
+	for i, s := range sessions {
+		list[i] = s
+	}
+	_ = r.rt.peer.Notify("runtime.sessions", map[string]any{"sessions": list})
+	h, _, _ := r.n.runtimeEngine(proto.EnginePaseo)
+	waitFor(t, "the sessions", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if len(h.sessions) != len(sessions) {
+			return false
+		}
+		for i, s := range sessions {
+			if h.sessions[i].SessionID != s["session_id"] || h.sessions[i].Status != s["status"] || h.sessions[i].Starting != (s["starting"] == true) {
+				return false
+			}
+		}
+		return true
+	})
+}
+
 // runtimeWorkspaces is every workspace of the machine's engine runtimes (tests).
 func (n *Node) runtimeWorkspaces() []runtimeWorkspace {
 	runtimes, _ := n.catalogRuntimes()
@@ -89,11 +114,13 @@ func TestRuntimeWorkspaceRename(t *testing.T) {
 		}
 	}
 	calls := len(r.rt.got("workspace.rename"))
-	if _, err := request(t, r.n, "worktree.rename", map[string]any{"workspace_id": "wks_gone", "kind": "paseo", "name": "x"}); err == nil {
-		t.Fatal("renamed a workspace Paseo does not list")
+	if _, err := request(t, r.n, "worktree.rename", map[string]any{"workspace_id": "wks_gone", "kind": "paseo", "name": "x", "locale": "en"}); err == nil ||
+		!strings.Contains(err.Error(), "Paseo no longer lists this workspace") {
+		t.Fatalf("renamed a workspace Paseo does not list: %v", err)
 	}
-	if _, err := request(t, r.n, "space.rename", map[string]any{"workspace_id": "w1", "name": "x"}); err == nil {
-		t.Fatal("renamed a space no engine lists")
+	// coded, so the hub words it in the reader's language (rpc-errors.space_gone)
+	if _, err := request(t, r.n, "space.rename", map[string]any{"workspace_id": "w1", "name": "x"}); err == nil || rpcCode(err) != "space_gone" {
+		t.Fatalf("renamed a space no engine lists: %v (code %q)", err, rpcCode(err))
 	}
 	if len(r.rt.got("workspace.rename")) != calls {
 		t.Fatal("an unknown id reached the runtime")
@@ -180,6 +207,14 @@ func TestRuntimeWorktreeDelete(t *testing.T) {
 	}
 
 	prev, _ = del(map[string]any{"workspace_id": "wks_new1", "preview": true})
+	// Renamed in Paseo meanwhile (a new title, its project another name): still the worktree the preview showed.
+	_ = r.rt.peer.Notify("runtime.workspaces", map[string]any{"workspaces": []any{r.mainWorkspace,
+		map[string]any{"workspace_id": "wks_new1", "title": "Renamed", "cwd": tree, "kind": "worktree", "branch": "feat/x", "space_id": "prj_1",
+			"space_name": "app 2", "repo_root": r.repo, "owned": true},
+		map[string]any{"workspace_id": "wks_notes", "cwd": other, "kind": "folder", "space_id": "prj_2"},
+		map[string]any{"workspace_id": "wks_theirs", "cwd": other, "kind": "worktree", "branch": "x", "space_id": "prj_1"},
+	}})
+	waitFor(t, "the new title", func() bool { return catalog(t, r.n)["wks_new1"].Title == "Renamed" })
 	res, err := del(map[string]any{"workspace_id": "wks_new1", "preview_token": prev["preview_token"], "force": true})
 	if err != nil || res["removed"] != true || res["state"] != "removed" {
 		t.Fatalf("delete: %v %v", res, err)
@@ -216,6 +251,252 @@ func TestRuntimeWorktreeDelete(t *testing.T) {
 	if err != nil || res["removed"] != true || res["branch_deleted"] != true || runPullGit(t, r.repo, "branch", "--list", "feat/y") != "" {
 		t.Fatalf("delete with its branch: %v %v", res, err)
 	}
+}
+
+// A worktree an Agent may still be writing in is not deleted: one of its workspace's sessions at work (working,
+// waiting for the user, starting), or an Agent of another engine (herdr's) running in its folder; at the preview and
+// again at the confirmation. Idle and done sessions are what the archive ends, as the preview showed.
+func TestRuntimeWorktreeDeleteWhileAtWork(t *testing.T) {
+	r := runtimeRepoNode(t)
+	r.manageAnswers(t, nil)
+	tree := filepath.Join(r.trees, "feat-w")
+	if _, err := request(t, r.n, "worktree.create", map[string]any{"workspace_id": "wks_main", "kind": "paseo", "branch": "feat/w", "path": tree}); err != nil {
+		t.Fatal(err)
+	}
+	session := func(status string, starting bool) {
+		t.Helper()
+		r.tellSessions(t, map[string]any{"session_id": "paseo-w", "status": status, "starting": starting, "workspace_id": "wks_new1"})
+	}
+	del := func(p map[string]any) (map[string]any, error) {
+		p["workspace_id"], p["kind"], p["locale"] = "wks_new1", "paseo", "en"
+		return request(t, r.n, "worktree.delete", p)
+	}
+	const busy = "An Agent is still working in this worktree"
+	for _, s := range []struct {
+		status   string
+		starting bool
+	}{{"working", false}, {"blocked", false}, {"idle", true}} {
+		session(s.status, s.starting)
+		if _, err := del(map[string]any{"preview": true}); err == nil || !strings.Contains(err.Error(), busy) {
+			t.Fatalf("preview with a session %s (starting %v): %v", s.status, s.starting, err)
+		}
+	}
+	session("idle", false)
+	prev, err := del(map[string]any{"preview": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session("working", false) // back at work after the preview
+	if _, err := del(map[string]any{"preview_token": prev["preview_token"]}); err == nil || !strings.Contains(err.Error(), busy) {
+		t.Fatalf("confirmed while a session works: %v", err)
+	}
+	session("done", false)
+	r.n.mu.Lock()
+	r.n.agents = map[string]host.Agent{"herdr-1": {Agent: "claude", AgentStatus: proto.StatusIdle, Cwd: filepath.Join(tree, "web")}}
+	r.n.mu.Unlock()
+	if _, err := del(map[string]any{"preview_token": prev["preview_token"]}); err == nil || !strings.Contains(err.Error(), busy) {
+		t.Fatalf("confirmed with a herdr Agent in the folder: %v", err)
+	}
+	if _, err := del(map[string]any{"preview": true}); err == nil || !strings.Contains(err.Error(), busy) {
+		t.Fatalf("preview with a herdr Agent in the folder: %v", err)
+	}
+	if len(r.rt.got("workspace.archive")) != 0 {
+		t.Fatal("a worktree at work reached the archive")
+	}
+	r.n.mu.Lock()
+	r.n.agents = nil
+	r.n.mu.Unlock()
+	if res, err := del(map[string]any{"preview_token": prev["preview_token"]}); err != nil || res["removed"] != true {
+		t.Fatalf("delete once nothing works in it: %v %v", res, err)
+	}
+}
+
+// The preview says why a worktree Paseo lists is not one to delete: its folder gone, git no longer knowing it (its
+// record in the repository pruned), a folder inside a worktree; a main checkout is said apart from those.
+func TestRuntimeWorktreeDeleteSaysWhyNot(t *testing.T) {
+	r := runtimeRepoNode(t)
+	r.manageAnswers(t, nil)
+	pruned := filepath.Join(r.trees, "pruned")
+	if err := os.MkdirAll(r.trees, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runPullGit(t, r.repo, "worktree", "add", "-b", "pruned", pruned)
+	if err := os.RemoveAll(filepath.Join(r.repo, ".git", "worktrees", "pruned")); err != nil {
+		t.Fatal(err)
+	}
+	tree := filepath.Join(r.trees, "feat-v")
+	runPullGit(t, r.repo, "worktree", "add", "-b", "feat/v", tree)
+	inside := mkdir(t, filepath.Join(tree, "web"))
+	row := func(id, cwd string) map[string]any {
+		return map[string]any{"workspace_id": id, "cwd": cwd, "kind": "worktree", "branch": "x", "space_id": "prj_1", "repo_root": r.repo, "owned": true}
+	}
+	_ = r.rt.peer.Notify("runtime.workspaces", map[string]any{"workspaces": []any{r.mainWorkspace,
+		row("wks_gone", filepath.Join(r.trees, "missing")), row("wks_pruned", pruned), row("wks_inside", inside)}})
+	waitFor(t, "the list", func() bool { return r.n.isRuntimeWorkspace("wks_inside") })
+	for id, want := range map[string]string{
+		"wks_gone":   "The worktree’s folder " + filepath.Join(r.trees, "missing") + " is gone",
+		"wks_pruned": pruned + " is no longer a Git worktree",
+		"wks_inside": inside + " is a folder inside a worktree",
+		"wks_main":   "The repository's main checkout cannot be deleted",
+	} {
+		_, err := request(t, r.n, "worktree.delete", map[string]any{"workspace_id": id, "kind": "paseo", "preview": true, "locale": "en"})
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("preview of %s: %v", id, err)
+		}
+	}
+}
+
+// A confirmed deletion has one deadline for the node's checks and Paseo's archive: one that runs out says the outcome
+// is not known (reconcile tells), rather than the hub timing out while it goes on.
+func TestRuntimeWorktreeDeleteHasOneDeadline(t *testing.T) {
+	r := runtimeRepoNode(t)
+	r.manageAnswers(t, nil)
+	tree := filepath.Join(r.trees, "feat-s")
+	if _, err := request(t, r.n, "worktree.create", map[string]any{"workspace_id": "wks_main", "kind": "paseo", "branch": "feat/s", "path": tree}); err != nil {
+		t.Fatal(err)
+	}
+	prev, err := request(t, r.n, "worktree.delete", map[string]any{"workspace_id": "wks_new1", "kind": "paseo", "preview": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := runtimeWorktreeDeadline
+	runtimeWorktreeDeadline = 500 * time.Millisecond
+	t.Cleanup(func() { runtimeWorktreeDeadline = old })
+	r.rt.mu.Lock()
+	prevAnswer := r.rt.answer
+	r.rt.answer = func(method string, params json.RawMessage) (any, error) {
+		if method == "workspace.archive" {
+			time.Sleep(3 * time.Second)
+		}
+		return prevAnswer(method, params)
+	}
+	r.rt.mu.Unlock()
+	start := time.Now()
+	res, err := request(t, r.n, "worktree.delete", map[string]any{"workspace_id": "wks_new1", "kind": "paseo", "preview_token": prev["preview_token"]})
+	if err != nil || res["state"] != "unknown" || res["removed"] == true {
+		t.Fatalf("past the deadline: %v %v", res, err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("took %s", took)
+	}
+}
+
+// Closing an Agent whose own worktree (#6115) Paseo made offers to remove it, as for herdr: worktree.remove has Paseo
+// archive the workspace, which removes the folder, with Delete worktree's guards: never while a session in the
+// workspace is running or an Agent of another engine runs in the folder, changes and an unmerged branch only with
+// force; its branch goes after the folder when asked.
+func TestRuntimeAgentWorktreeRemove(t *testing.T) {
+	r := runtimeRepoNode(t)
+	r.manageAnswers(t, nil)
+	added, err := request(t, r.n, "worktree.add", map[string]any{"cwd": r.repo, "name_hint": "Fix it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, id := str(added["path"]), str(added["workspace_id"])
+	if st, err := request(t, r.n, "worktree.status", map[string]any{"cwd": tree, "kind": "paseo"}); err != nil || st["ours"] != true {
+		t.Fatalf("status: %v %v", st, err)
+	}
+	// herdr's own folder does not hold it: not herdr's to remove
+	if st, err := request(t, r.n, "worktree.status", map[string]any{"cwd": tree, "kind": "herdr"}); err != nil || st["ours"] == true {
+		t.Fatalf("status as herdr's: %v %v", st, err)
+	}
+	remove := func(p map[string]any) (map[string]any, error) {
+		p["path"], p["kind"] = tree, "paseo"
+		return request(t, r.n, "worktree.remove", p)
+	}
+	// Another session still in the workspace: the archive would end it.
+	r.tellSessions(t, map[string]any{"session_id": "paseo-other", "status": "idle", "workspace_id": id})
+	if _, err := remove(map[string]any{}); rpcCode(err) != "worktree_in_use" {
+		t.Fatalf("with another session in it: %v", err)
+	}
+	r.tellSessions(t, map[string]any{"session_id": "paseo-other", "status": "offline", "workspace_id": id})
+	r.n.mu.Lock()
+	r.n.agents = map[string]host.Agent{"herdr-1": {Agent: "claude", AgentStatus: proto.StatusIdle, Cwd: tree}}
+	r.n.mu.Unlock()
+	if _, err := remove(map[string]any{}); rpcCode(err) != "worktree_in_use" {
+		t.Fatalf("with a herdr Agent in the folder: %v", err)
+	}
+	r.n.mu.Lock()
+	r.n.agents = nil
+	r.n.mu.Unlock()
+	if err := os.WriteFile(filepath.Join(tree, "draft.txt"), []byte("draft\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remove(map[string]any{}); rpcCode(err) != "worktree_dirty" {
+		t.Fatalf("changes without force: %v", err)
+	}
+	if len(r.rt.got("workspace.archive")) != 0 {
+		t.Fatal("a refused removal reached Paseo")
+	}
+	res, err := remove(map[string]any{"force": true, "delete_branch": true})
+	if err != nil || res["removed"] != true || res["branch_deleted"] != true {
+		t.Fatalf("remove: %v %v", res, err)
+	}
+	var asked map[string]any
+	_ = json.Unmarshal(r.rt.got("workspace.archive")[0], &asked)
+	if asked["workspace_id"] != id {
+		t.Fatalf("workspace.archive %v", asked)
+	}
+	if _, err := os.Lstat(tree); !os.IsNotExist(err) {
+		t.Fatal("the folder is still there")
+	}
+	if runPullGit(t, r.repo, "branch", "--list", str(added["branch"])) != "" {
+		t.Fatal("the branch is still there")
+	}
+	if _, ok := catalog(t, r.n)[id]; ok {
+		t.Fatal("still in the catalog")
+	}
+}
+
+// A closed Agent's worktree Paseo does not remove is never called removed: Paseo's refusal in its own words, no answer
+// in time said in the user's language, and an archive that kept the folder said as such.
+func TestRuntimeAgentWorktreeRemoveFails(t *testing.T) {
+	r := runtimeRepoNode(t)
+	r.manageAnswers(t, nil)
+	added, err := request(t, r.n, "worktree.add", map[string]any{"cwd": r.repo, "name_hint": "Fix it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := str(added["path"])
+	archive := func(answer func() (any, error)) {
+		r.rt.mu.Lock()
+		defer r.rt.mu.Unlock()
+		prev := r.rt.answer
+		r.rt.answer = func(method string, params json.RawMessage) (any, error) {
+			if method == "workspace.archive" {
+				return answer()
+			}
+			return prev(method, params)
+		}
+	}
+	remove := func(what, want string) {
+		t.Helper()
+		res, err := request(t, r.n, "worktree.remove", map[string]any{"path": tree, "kind": "paseo", "locale": "en"})
+		if rpcCode(err) != "worktree_failed" || !strings.Contains(err.Error(), want) || res["removed"] == true {
+			t.Fatalf("%s: %v %v", what, res, err)
+		}
+		if _, err := os.Stat(tree); err != nil {
+			t.Fatalf("%s: the folder is gone", what)
+		}
+	}
+	archive(func() (any, error) {
+		return nil, &rpc.Error{Code: "archive_failed", Message: "Paseo could not archive it"}
+	})
+	remove("refused", "Paseo could not archive it")
+
+	old := runtimeRemoveDeadline
+	t.Cleanup(func() { runtimeRemoveDeadline = old })
+	runtimeRemoveDeadline = time.Second
+	archive(func() (any, error) { time.Sleep(4 * time.Second); return map[string]any{}, nil })
+	start := time.Now()
+	remove("no answer", "didn’t answer while removing the worktree")
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("no answer took %s", took)
+	}
+	runtimeRemoveDeadline = old
+
+	archive(func() (any, error) { return map[string]any{"archived_at": "2026-11-12T00:00:00.000Z"}, nil }) // the folder left
+	remove("folder kept", "archived the workspace but kept its folder")
 }
 
 // Paseo refusing the archive is an error, and the worktree is still there: present, not removed.

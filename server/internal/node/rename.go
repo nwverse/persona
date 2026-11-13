@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // renameWorktree targets a listed host container, including one with no Agents.
@@ -108,7 +109,8 @@ func (n *Node) spaceOrganizer(ctx context.Context, space string) (host.Organizer
 		}
 	}
 	if !terminal && def != "" {
-		return nil, fmt.Errorf("no engine on this machine lists the space %s any more; refresh and try again", space)
+		// in the request's language by its code (the hub words it: rpc-errors.space_gone)
+		return nil, refusal("space_gone", i18n.T(i18n.Default, "rpc-errors.space_gone"), nil)
 	}
 	return hostCap[host.Organizer](n)
 }

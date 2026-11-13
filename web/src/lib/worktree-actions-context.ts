@@ -54,9 +54,9 @@ export function resolveWorktreeAction(target: WorkspaceTarget, context: Worktree
       && !machine.engines?.some((e) => e.id === target.host && !e.available))
       && (matches.length === 0 || Boolean(workspace && workspace.online !== false && workspace.available !== false)),
     canClose: !reason && target.host === "herdr",
-    // Paseo deletes a worktree it made by archiving its workspace; the node refuses one it did not make at the preview.
+    // Paseo deletes a worktree it made (its row says owned) by archiving its workspace; it would only archive another.
     canDelete: !reason && (target.host === "orca" || target.host === "herdr" && context.linkedWorktree === true
-      || target.host === "paseo" && workspace?.workspace_kind === "git" && workspace.is_main === false)
+      || target.host === "paseo" && workspace?.workspace_kind === "git" && workspace.is_main === false && workspace.owned === true)
       && workspace?.is_main !== true && !hasChildren,
   };
 }
