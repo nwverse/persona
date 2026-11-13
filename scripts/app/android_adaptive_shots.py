@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PROBE_PATH = "no_backup/hub-data/adaptive-probe.json"
+STACK_PROBE_PATH = "no_backup/hub-data/assistant-stack-probe.json"
 UI_PATH = "/data/local/tmp/persona-adaptive-ui.xml"
 MODIFIER_KEYS = ("SHIFT_LEFT", "CTRL_LEFT")
 TRANSFORM_STEPS = {"rotate", "posture", "wm-size", "freeform-resize"}
@@ -27,6 +28,37 @@ MAX_PROBE_BYTES = 2_000_000
 
 class AdaptiveFailure(RuntimeError):
     pass
+
+
+def decode_stack_probe(raw, pid, now):
+    if len(raw) > MAX_PROBE_BYTES:
+        raise AdaptiveFailure("Assistant stack probe exceeds the size bound")
+    try:
+        probe = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise AdaptiveFailure("Assistant stack probe is corrupt") from error
+    if probe.get("fieldVersion") != 1 or probe.get("pid") != pid or not probe.get("session"):
+        raise AdaptiveFailure("Assistant stack probe belongs to a different field version, PID or session")
+    updated = probe.get("updatedAtNanos")
+    if not isinstance(updated, int) or updated - now > 2_000_000_000 or now - updated > MAX_PROBE_AGE_NANOS:
+        raise AdaptiveFailure("Assistant stack probe is stale")
+    if not isinstance(probe.get("route"), str) or not probe["route"] or not isinstance(probe.get("pages"), dict):
+        raise AdaptiveFailure("Assistant stack probe has no route or pages")
+    selected = probe.get("selectedKey")
+    if selected is not None and (not isinstance(selected, str) or not selected):
+        raise AdaptiveFailure("Assistant stack probe has an invalid selected key")
+    return probe
+
+
+def merge_stack_pages(probe, stack):
+    merged = copy.deepcopy(probe)
+    for name, page in stack["pages"].items():
+        if not isinstance(name, str) or not isinstance(page, dict) or not isinstance(page.get("composer"), dict):
+            raise AdaptiveFailure("Assistant stack probe has an invalid draft page")
+        if not isinstance(page.get("updatedAtNanos"), int):
+            raise AdaptiveFailure("Assistant stack probe draft page has no timestamp")
+        merged["pages"][name] = page
+    return merged
 
 
 @dataclass(frozen=True)
@@ -191,6 +223,8 @@ def validate_requirements(requires):
         raise AdaptiveFailure("scenario requires must contain a fields list")
     if any(not isinstance(field, str) or not field for field in requires.get("fields", [])):
         raise AdaptiveFailure("required evidence fields must be non-empty strings")
+    if "stackProbe" in requires and not isinstance(requires["stackProbe"], bool):
+        raise AdaptiveFailure("requires.stackProbe must be a boolean")
     page_requirements(requires)
 
 
@@ -324,6 +358,7 @@ class AdaptiveRunner:
     def __init__(self, adb, scenario, output, theme, reset=False):
         self.adb = adb
         self.scenario = scenario
+        self.use_stack_probe = scenario.get("requires", {}).get("stackProbe") is True
         self.output = Path(output)
         self.theme = theme
         self.reset = reset
@@ -521,7 +556,18 @@ class AdaptiveRunner:
         self.action_log.append({"type": "key", "keys": keys})
         self.reset_modifiers()
 
+    def read_stack_probe(self, pid):
+        raw = self.adb.shell("run-as", self.app_id, "cat", STACK_PROBE_PATH, timeout=5, check=False)
+        if not raw.strip() or "No such file" in raw:
+            return None
+        return decode_stack_probe(raw, pid, self.elapsed_nanos())
+
     def read_navigation(self):
+        stack = self.read_stack_probe(self.pid()) if self.use_stack_probe else None
+        if stack is not None:
+            self.route_override = None
+            self.selected_key_override = None
+            return stack["route"], stack.get("selectedKey")
         path = poll("navigation checkpoint", self.shell_ready, timeout=10)
         raw = self.adb.shell("run-as", self.app_id, "cat", path, timeout=5)
         try:
@@ -562,7 +608,8 @@ class AdaptiveRunner:
             raise AdaptiveFailure("adaptive probe is stale")
         if not isinstance(probe.get("pages"), dict):
             raise AdaptiveFailure("adaptive probe has no pages")
-        return probe
+        stack = self.read_stack_probe(pid) if self.use_stack_probe else None
+        return merge_stack_pages(probe, stack) if stack is not None else probe
 
     def page_evidence(self, probe, page_name, now, visible_texts=()):
         pages = probe["pages"]
@@ -998,6 +1045,7 @@ class AdaptiveRunner:
                 errors.append(str(error))
         attempt(lambda: self.adb.shell("rm", "-f", UI_PATH, timeout=5))
         attempt(lambda: self.adb.shell("run-as", self.app_id, "rm", "-f", PROBE_PATH, timeout=5))
+        attempt(lambda: self.adb.shell("run-as", self.app_id, "rm", "-f", STACK_PROBE_PATH, timeout=5))
         attempt(self.reset_modifiers)
         if self.size_changed:
             original = self.original_size.get("override")

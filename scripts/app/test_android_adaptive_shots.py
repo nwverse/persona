@@ -517,6 +517,28 @@ cleanup_shots
             with self.subTest(text=text), self.assertRaises(shots.AdaptiveFailure):
                 shots.ascii_input_argument(text)
 
+    def test_stack_navigation_preserves_legacy_scenes_by_default(self):
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output)
+            runner.read_stack_probe = mock.Mock(return_value={"route": "inbox/mail", "selectedKey": "mail-item"})
+            self.assertEqual(("Agents/chat", "machine/session"), runner.read_navigation())
+            runner.read_stack_probe.assert_not_called()
+
+    def test_stack_navigation_is_used_only_when_scene_opts_in(self):
+        document = scenario()
+        document["requires"]["stackProbe"] = True
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(FakeAdb(), output, document)
+            runner.read_stack_probe = mock.Mock(return_value={"route": "inbox/mail", "selectedKey": "mail-item"})
+            runner.route_override = "inbox"
+            runner.selected_key_override = "override"
+            self.assertEqual(("inbox/mail", "mail-item"), runner.read_navigation())
+            self.assertIsNone(runner.route_override)
+            self.assertIsNone(runner.selected_key_override)
+        document["requires"]["stackProbe"] = "yes"
+        with self.assertRaisesRegex(shots.AdaptiveFailure, "stackProbe"):
+            shots.validate_scenario(document)
+
 
 if __name__ == "__main__":
     unittest.main()
