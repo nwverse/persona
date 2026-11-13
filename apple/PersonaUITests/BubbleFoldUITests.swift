@@ -37,6 +37,13 @@ final class BubbleFoldUITests: XCTestCase {
             + (largest ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : [])
             + (whole ? ["-showWholeBubbles", "YES"] : [])
         app.launchPinned()
+        // The app's icon follows the appearance: switching it, the system says so in an alert over the chat (it covered
+        // the first shot of a run).
+        let notice = NSPredicate(format: "label CONTAINS[c] 'icon' OR label CONTAINS '图标'")
+        for source in [app!, XCUIApplication(bundleIdentifier: "com.apple.springboard")] {
+            let alert = source.alerts.containing(notice).firstMatch
+            if alert.waitForExistence(timeout: 2), alert.buttons.firstMatch.exists { alert.buttons.firstMatch.tap(); break }
+        }
     }
 
     @MainActor private func shot(_ name: String) {
