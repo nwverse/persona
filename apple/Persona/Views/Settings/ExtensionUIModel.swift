@@ -186,6 +186,8 @@ extension APIClient {
         var error: String?
         var lines: ExtensionUIStreamFileLines?
         var cancelled = false
+        /// Whose extension settings the link opens when it is an extension's settings link: an extension page's own.
+        var settingsOwner: ExtensionSettingsOwner = .current
     }
 
     private(set) var fileLines: [String: ExtensionUIStreamFileLines] = [:]
@@ -234,7 +236,7 @@ extension APIClient {
             }
             if result.pop == true { popped = true }
             let url = result.openUrl.flatMap(URL.init(string:)).flatMap { Self.opens($0, item: context.item, owner: plugin) ? $0 : nil }
-            return Outcome(toast: result.toast, url: url, lines: result.lines)
+            return Outcome(toast: result.toast, url: url, lines: result.lines, settingsOwner: linkOwner(url))
         } catch {
             return stream.visible ? Outcome(error: String(localized: "Couldn't Load This Page")) : Outcome(cancelled: true)
         }
@@ -289,6 +291,10 @@ extension APIClient {
     @ObservationIgnored private let initialState: String?
     @ObservationIgnored private let initialManager: String?
     var selectedManager: String? { stream?.manager ?? initialManager }
+
+    /// Whose extension settings a link in an answer opens (`Outcome.settingsOwner`): this page's assistant's; with no
+    /// link, the default, so an answer without one compares as before.
+    private func linkOwner(_ url: URL?) -> ExtensionSettingsOwner { url == nil ? .current : .page(selectedManager) }
 
     /// When the view on screen was last drawn (its `refresh_after` counts from here).
     private(set) var drawnAt: Date?
@@ -465,7 +471,7 @@ extension APIClient {
         if let p = r.push, depth < Self.maxDepth { pushed = p }
         if r.pop == true { popped = true }
         let url = r.openUrl.flatMap(URL.init(string:)).flatMap { Self.opens($0, item: context.item, owner: plugin) ? $0 : nil }
-        return Outcome(toast: r.toast?.isEmpty == false ? r.toast : nil, url: url)
+        return Outcome(toast: r.toast?.isEmpty == false ? r.toast : nil, url: url, settingsOwner: linkOwner(url))
     }
 
     /// A `segmented` picked: shown picked at once, and its action sent with `{name: value}` (and the page's fields when it
@@ -630,7 +636,7 @@ extension APIClient {
             if let p = r.push, depth < Self.maxDepth { pushed = p }
             if r.pop == true { popped = true }
             let url = r.openUrl.flatMap(URL.init(string:)).flatMap { Self.opens($0, item: context.item, owner: plugin) ? $0 : nil }
-            return Outcome(toast: r.toast?.isEmpty == false ? r.toast : nil, url: url)
+            return Outcome(toast: r.toast?.isEmpty == false ? r.toast : nil, url: url, settingsOwner: linkOwner(url))
         } catch let e as APIError where Self.isUnsupported(e) {
             unsupported = true
             return Outcome()
@@ -648,6 +654,35 @@ extension APIClient {
         }
         ExtensionMotion.redraw(from: view, to: v) { view = v }
     }
+
+    // MARK: Pictures (UI version 6)
+
+    /// A picture the hub serves for this page (`src.path`, signed for this extension): only the hub's own image route
+    /// for it gets the device's credentials, never another address (docs/extensions/extensions.md "Pictures through
+    /// the hub").
+    func picture(_ path: String, pixels: Int) async throws -> Data {
+        guard Self.isHubPicture(path, owner: plugin) else { throw APIError(status: 0, message: String(localized: "Couldn't Load This Picture")) }
+        guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
+        return try await api.request("GET", path, query: ["w": String(max(1, pixels))])
+    }
+
+    /// The hub's image route for extension `owner`: `/api/v1/extensions/<owner>/-/image/<token>`.
+    nonisolated static func isHubPicture(_ path: String, owner: String) -> Bool {
+        let prefix = "/api/v1/extensions/" + owner + "/-/image/"
+        guard !owner.isEmpty, !owner.contains("/"), path.hasPrefix(prefix) else { return false }
+        let token = path.dropFirst(prefix.count)
+        return !token.isEmpty && token.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "_.-".contains($0)) }
+    }
+
+    /// A hub picture did not load: its token may have run out, so the page is drawn again (signed anew), at most once a
+    /// minute.
+    func pictureFailed() {
+        guard lastPictureRedraw.map({ Date.now.timeIntervalSince($0) > 60 }) ?? true else { return }
+        lastPictureRedraw = .now
+        Task { await refresh() }
+    }
+
+    @ObservationIgnored private var lastPictureRedraw: Date?
 
     /// The page drawn again, keeping the diffs loaded since (by `load`) that it gives without their lines again: the
     /// extension does not have to remember what was opened (UI version 5).
@@ -687,6 +722,8 @@ extension APIClient {
             return Outcome(error: error.localizedDescription)
         }
     }
+
+    /// The fields' values as the extension gets them: every field of the view, by name.
     var submitted: [String: String] {
         var out: [String: String] = [:]
         for item in components {
@@ -779,7 +816,7 @@ extension APIClient {
     static func opens(_ url: URL, item: String?, owner: String? = nil) -> Bool {
         if url.scheme?.lowercased() == "https" { return url.host()?.isEmpty == false && url.user == nil && url.password == nil }
         // the subscription pages' Set Up with … (#5278): their text to the assistant, never an extension's
-        if SubscriptionsUI.askText(url) != nil { return owner == SubscriptionsUI.id }
+        if SubscriptionsUI.askText(url) != nil || SubscriptionsUI.isGraph(url) { return owner == SubscriptionsUI.id }
         if let settings = ExtensionSettingsLink.extensionID(url) { return owner != nil && settings == owner }
         guard let item, let source = InboxSourceLink.item(url) else { return false }
         return source == item

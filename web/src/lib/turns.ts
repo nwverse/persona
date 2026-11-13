@@ -224,6 +224,7 @@ export function parseUserText(raw: string): { text: string; contexts: Context[];
   const photos: string[] = [];
   let text = withoutViewErrors(raw).replace(CONTEXT_RE, (_, attrs: string, body: string) => {
     const { kind, title, url, ...rest } = tagAttrs(attrs);
+    if (kind === "skill-instructions") return "";
     contexts.push({ kind: kind ?? "context", title, url, text: body.trim(), ...(Object.keys(rest).length ? { attrs: rest } : {}) });
     return "";
   });
@@ -454,9 +455,9 @@ export function pickSubject(inp: Record<string, unknown>): string {
 
 const baseFileName = (p: string) => p.split(/[/\\]/).filter(Boolean).pop() ?? p;
 
-type Pick = (...keys: string[]) => string;
+type PickToolField = (...keys: string[]) => string;
 /** What Claude Code's newer tools are about (iOS ToolPresentation.subject). */
-const CLAUDE_TOOL_CHIP: Record<string, (inp: Record<string, unknown>, pick: Pick) => string> = {
+const CLAUDE_TOOL_CHIP: Record<string, (inp: Record<string, unknown>, pick: PickToolField) => string> = {
   TaskCreate: (_, pick) => pick("subject", "description"),
   TaskUpdate: (inp, pick) => pick("subject", "activeForm") || (inp.taskId != null ? `#${String(inp.taskId)}` : ""),
   TaskGet: (inp) => (inp.taskId != null ? `#${String(inp.taskId)}` : ""),

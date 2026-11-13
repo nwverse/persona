@@ -144,6 +144,8 @@ export interface SessionCapabilities {
   model?: boolean;
   /** Closing the agent independently of terminal access. Older nodes retain terminal-only closing. */
   close?: boolean;
+  /** Renaming it without a terminal (a runtime's session, #6294). Absent: the app's own rule (lib/format.ts sessionCanRename). */
+  rename?: boolean;
   /** The permission mode and effort chips can change it (session.modes, #1843): the node's word, absent from older nodes. */
   modes?: boolean;
   /** Returning to before a user message, with optional native file restoration. */
@@ -848,6 +850,9 @@ export interface Launcher {
   /** A Codex launcher the computer starts with no first message too; absent from an older computer, whose Codex
    *  starts need one. */
   prompt_optional?: boolean;
+  /** A Codex launcher the computer starts in a shell pane the user picked (Run agent here), keeping that pane when the
+   *  start fails (#5504); absent from an older computer, where Run agent here offers Claude Code only. */
+  run_here?: boolean;
   /** How its last check or start went on the computer the list is for (GET /machines/{mid}/launchers,
    *  docs/server/launcher-health.md); absent: never checked, a failure too old to count, or an older hub. */
   health?: LauncherHealth;
@@ -889,6 +894,9 @@ export interface MetricPoint {
   cpu?: number;
   load?: number;
   mem?: number;
+  /** Network history, bytes per second. */
+  rx?: number;
+  tx?: number;
   gap?: boolean;
 }
 
