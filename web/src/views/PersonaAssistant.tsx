@@ -112,7 +112,7 @@ function useAssistantMachine(manager: string | undefined): { machine: string; er
   return manager && state.manager === manager ? state : { machine: "", error: "" };
 }
 
-export function PersonaAssistant({ sid, fresh, routed, onToggleSidebar }: { sid?: string; fresh?: boolean; routed?: RoutedConversation; onToggleSidebar: () => void }) {
+export function PersonaAssistant({ sid, fresh, routed, at, onToggleSidebar }: { sid?: string; fresh?: boolean; routed?: RoutedConversation; at?: string; onToggleSidebar: () => void }) {
   const assistant = useStore((s) => s.assistant);
   const assistantError = useStore((s) => s.assistantError);
   const loaded = useStore((s) => s.loaded);
@@ -183,6 +183,7 @@ export function PersonaAssistant({ sid, fresh, routed, onToggleSidebar }: { sid?
         refreshError={id === main ? assistantError ?? undefined : undefined}
         onRefresh={id === main ? () => void refreshAssistant().catch(() => {}) : undefined}
         offline={offline?.composer}
+        landAt={at}
       />
     );
   }
