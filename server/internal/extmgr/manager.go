@@ -78,6 +78,12 @@ type Options struct {
 	Assistant func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error)
 	// AssistantEvent tells the assistant an event the hub used to send it (feishu.owner).
 	AssistantEvent func(event string, params json.RawMessage)
+	// AssistantSocket serves the assistant's WebSocket routes (assistantwire.SocketRoutes: a meeting's audio socket),
+	// which the hub relays here over a relay stream like the extensions' routes; nil: they are 404 (tests).
+	AssistantSocket http.HandlerFunc
+	// TranscriptionChanged invalidates the assistant's availability cache after an extension registry change.
+	// It must not block or call back into the registry; nil means no observer.
+	TranscriptionChanged func()
 	// DialRelay opens the hub's relay channel with query.
 	DialRelay func(ctx context.Context, query string) (*websocket.Conn, error)
 	// Connected says whether the bus is up now (nil: always), and Connection which connection it is: a comparable

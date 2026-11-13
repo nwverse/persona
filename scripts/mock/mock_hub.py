@@ -2263,6 +2263,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "idle_close_hours": 12,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
+                    "meeting_transcription_default": os.environ.get("MOCK_MEETING_TRANSCRIPTION_DEFAULT", "device"),
+                    "meeting_glossary": [], "meeting_transcription_extension": "",
                     # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
                     # went (#3780, MOCK_MINUTES_DAYS): 0 means forever; finite windows are never fewer than the recordings'.
                     "recording_days": int(os.environ.get("MOCK_RECORDING_DAYS", "14")),
@@ -2299,6 +2301,9 @@ def assistant_state(space="", archived=False):
         out["main"] = cfg["main"]
     if MEETING_ATTENDANCE:  # only from a hub that attends meetings (meeting-minutes.md "Attendance fields")
         out["meeting_attendance_default"] = cfg["meeting_attendance_default"]
+    if meeting_transcription_on():
+        out.update({k: cfg[k] for k in ("meeting_transcription_default", "meeting_glossary", "meeting_transcription_extension")})
+        out["meeting_transcription_ready"] = transcription_ready()
     if MOCK_LEADERS and not space:
         out["leaders"] = MOCK_LEADERS
     return out
@@ -3300,6 +3305,7 @@ def day_result(rid, status, put=False, fallback=None):
         if MEETING_ATTENDANCE: out["attendance"] = "off"
         if fallback and fallback.get("attendance") not in (None, "", "off"):
             out["attendance_problem"] = "not_meeting"
+        transcription_upload_result(rid, fallback or rec, out)
     return out
 
 
@@ -3427,7 +3433,7 @@ def day_put(h, rid, raw):
     if day_expired(rid, body): return h.send_json(day_result(rid, "expired", put=True, fallback=body)) or True
     if have and have["revision"] > body["revision"]:
         return h.send_json(day_result(rid, "stale", put=True, fallback=body)) or True
-    for key in ("calendar", "attendance", "attending_session", "room", "private", "transcription", "recap_final_at"):
+    for key in ("calendar", "attendance", "attending_session", "room", "private", "transcription", "timeline", "recap_final_at"):
         body.pop(key, None)
     if have and have.get("recap_final_at"): body["recap_final_at"] = have["recap_final_at"]
     for i, seg in enumerate(body["segments"]): seg["n"] = i + 1
@@ -3522,6 +3528,7 @@ def recording_minutes_next(rid):
     with PHOTO_LOCK:
         detail = KB_DETAIL.get(("recordings", rid))
         if not detail or rid not in RECORDINGS: return
+        if transcription_hub(rid) and TRANSCRIPTIONS[rid]["state"] not in ("final", "failed"): return
         cited = photos_cited(rid)
         version = (detail.get("minutes") or {}).get("version", 0) + 1
         detail["minutes"] = {**recording_minutes(RECORDINGS[rid], rid), "version": version}
@@ -3553,7 +3560,8 @@ def recording_minutes(body, rid=None):
     first two are points, those that decide / assign / leave something open are decisions / actions / open questions.
     Each item's `at` is its sentence's start (seconds into the recording). A photo with words (its caption, the text
     the phone read, the room's note) is a point of its own that cites it (`"photo": n`, its `at` the photo's)."""
-    segs = [x for x in body.get("segments", []) if x.get("text")]
+    segs = [x for x in (transcription_record(rid) if rid and transcription_hub(rid) else body.get("segments", []))
+            if x.get("text") and not x.get("echo")]  # Persona's echo is not the meeting's (#5905)
     cal = body.get("calendar") or {}
     item = lambda x: {"text": x["text"].rstrip("。"), "at": x["start"]}
     acts = [x for x in segs if "负责" in x["text"]]
@@ -3741,7 +3749,8 @@ def assistant_for_manager(h):
     st = assistant_state("", False)
     notes = MANAGER_NOTES.get(mid, "")
     # Another manager is one from before meeting attendance and the retention settings: none of their fields.
-    st = {k: v for k, v in st.items() if k not in ("main", "notes", "meeting_attendance_default", "recording_days", "minutes_days")}
+    st = {k: v for k, v in st.items() if k not in ("main", "notes", "meeting_attendance_default", "recording_days", "minutes_days",
+                                                           "meeting_transcription_default", "meeting_glossary", "meeting_transcription_extension", "meeting_transcription_ready")}
     return (dict(st, manager=mid, conversations=[], tasks=[], notes=notes, notes_effective=notes), 200)
 
 
@@ -3933,6 +3942,7 @@ def features():
     return _features_without_meeting_attendance() + (["meeting_attendance"] if MEETING_ATTENDANCE else []) + \
         (["meeting_conversation"] if meeting_conversation_on() else []) + (["meeting_live_view"] if meeting_live_view_on() else []) + \
         (["meeting_highlights"] if meeting_highlights_on() else []) + (["meeting_photos"] if meeting_photos_on() else []) + \
+        (["meeting_transcription"] if meeting_transcription_on() else []) + \
         (["recording_day"] if RECORDING_DAY["on"] else [])
 
 
@@ -4091,6 +4101,7 @@ def meeting_route(h, method, p, rid):
                 or not all(isinstance(s, dict) and all(s.get(k) is None or num(s[k]) for k in ("start", "end")) for s in segs):
             return h.send_json({"error": "参数不对"}, 400) or True
         if st["role"] == "off": return h.send_json({"error": "这条录音没有参会", "code": "not_attending"}, 409) or True
+        if transcription_hub(rid): return h.send_json({"code": "hub_transcribes"}, 409) or True
         held = len(st["segments"])
         if frm > held: return h.send_json({"error": "前面的句子还没收到", "code": "live_gap", "next": held}, 409) or True
         new = []
@@ -4263,13 +4274,15 @@ def meeting_conv_fields(st, m, out, asks):
         out["revs"] = {"asks": st.get("asks_rev", 0), **{p: r for p, r in ((m or {}).get("revs") or {}).items()}}
         if meeting_live_view_on(): out["revs"].update(lines=len(st["segments"]), topics=st.get("topics_rev", 0))
         if meeting_highlights_on(): out["revs"]["highlights"] = st.get("highlights_rev", 0)
+        transcription_fields(st["id"], out, revs=True)
     return out
 
 
 # Each part of GET …/live and its fields: photos has only its revision (GET …/photos), lines need `from` (live view).
 # A part the hub does not have (highlights without the feature) has neither fields nor a revision, so it is left out.
 LIVE_PART_FIELDS = {"asks": ("asks",), "room": ("room",), "private": ("private",), "followup": ("followup",), "photos": (),
-                    "lines": ("lines", "more"), "topics": ("topics", "topics_at"), "highlights": ("highlights", "highlights_at")}
+                    "lines": ("lines", "more"), "topics": ("topics", "topics_at"), "highlights": ("highlights", "highlights_at"),
+                    "transcription": ("transcription",), "interim": ("interim",)}
 
 
 def meeting_parts_only(out, parts):
@@ -4288,6 +4301,9 @@ def meeting_changed(rid, parts):
     a second per recording, with every part changed since the last one."""
     m = conv_of(rid, True)
     for p in parts:
+        if p == "interim":
+            m["revs"][p] = TRANSCRIPTIONS.get(rid, {}).get("interim", {}).get("rev", int(time.time() * 1000))
+            continue
         if p in ("asks", "lines", "topics", "highlights"): continue  # the live log's: asks_changed, topics_set and highlights_set raised them, lines is its length
         m["revs"][p] = m["revs"].get(p, 0) + 1
     if "asks" in parts:
@@ -4628,8 +4644,8 @@ def meeting_detail_meta(rid, meta):
     """detail.meta with meeting.json's private mark, room and follow-up; a room meeting's attendance is its room's role
     (absent when off or trimmed), never an attending_session."""
     m = MEETING_CONV.get(rid) if meeting_conversation_on() else None
+    meta = transcription_fields(rid, dict(meta))
     if not m: return meta
-    meta = dict(meta)
     if m["private"] is not None: meta["private"] = m["private"]
     if (v := room_view(m)) is not None:
         meta["room"] = v
@@ -4934,7 +4950,8 @@ def live_view_fields(st, out, frm):
     """GET …/live's phase-2 fields: the lines from `frm` when asked for, and the topics."""
     if frm is not None:
         segs = st["segments"]
-        out["lines"] = [{"n": n, "start": x["start"], "end": x["end"], "text": x["text"]}
+        out["lines"] = [{"n": n, "start": x["start"], "end": x["end"], "text": x["text"],
+                         **({"source": x["source"]} if x.get("source") else {})}
                         for n, x in enumerate(segs[frm:frm + LIVE_LINES_MAX], frm)]
         if len(segs) > frm + LIVE_LINES_MAX: out["more"] = True
     out["topics"] = copy.deepcopy(st.get("topics") or [])
@@ -5608,8 +5625,765 @@ def photo_post(h, rid, raw):
     return h.send_json({"photo": photo_view(rid, x)}) or True
 
 
-def recordings_route(h, method, p):
+# ---------- Meeting transcription (scripted PCM uplink; no speech service is contacted) ----------
+MEETING_TRANSCRIPTION = os.environ.get("MOCK_NO_MEETING_TRANSCRIPTION") != "1"
+TRANSCRIPTION_MODE = {"ready": os.environ.get("MOCK_MEETING_TRANSCRIPTION_READY") != "0", "upstream": "ok",
+                      "fatal": "", "line_seconds": 4, "final_seconds": 2}
+TRANSCRIPTIONS = {}  # Protected by RECORDINGS_LOCK, including socket callbacks and final-pass timers.
+TRANSCRIPTION_SCRIPT = ("我们先把 export cap 保持在 4 MB。", "Let's revisit pricing next week.",  # i18n-ignore: synthetic speech, never translated
+                        "Alice 负责检查 export test。", "Bo will share the notes tomorrow.")  # i18n-ignore: synthetic speech
+
+
+def meeting_transcription_on():
+    return meeting_live_view_on() and MEETING_TRANSCRIPTION
+
+
+def transcription_ready():
+    ref = ASSISTANT_CONFIG["meeting_transcription_extension"] or "voice/gpt-live"
+    ext, _, cid = ref.partition("/")
+    pl = PLUGINS.get(ext, {})
+    return bool(meeting_transcription_on() and TRANSCRIPTION_MODE["ready"] and pl.get("enabled") and
+                pl.get("status") == "running" and cid in pl.get("contributes", {}).get("transcription", []))
+
+
+def transcription_settings(body):
+    """Validate first; a refused settings request changes none of the transcription settings."""
+    out = {k: body[k] for k in ("meeting_transcription_default", "meeting_glossary", "meeting_transcription_extension") if k in body}
+    if "meeting_transcription_default" in out and out["meeting_transcription_default"] not in ("device", "hub"):
+        return {}, "bad_transcription_mode"
+    if "meeting_glossary" in out:
+        terms = out["meeting_glossary"]
+        if not isinstance(terms, list) or not all(isinstance(t, str) for t in terms): return {}, "bad_glossary"
+        clean, seen = [], set()
+        for term in terms:
+            term = " ".join(term.split())
+            if len(term) > 40: return {}, "bad_glossary"
+            if term and term.casefold() not in seen:
+                clean.append(term); seen.add(term.casefold())
+        if len(clean) > 200: return {}, "bad_glossary"
+        out["meeting_glossary"] = clean
+    if "meeting_transcription_extension" in out:
+        ref = out["meeting_transcription_extension"]
+        if not isinstance(ref, str): return {}, "bad_transcription_extension"
+        if ref:
+            ext, _, cid = ref.partition("/")
+            if not cid or cid not in PLUGINS.get(ext, {}).get("contributes", {}).get("transcription", []):
+                return {}, "bad_transcription_extension"
+    return out, None
+
+
+def transcription_number(v):
+    try: return type(v) in (int, float) and math.isfinite(v) and v >= 0
+    except OverflowError: return False
+
+
+def transcription_union(spans, margin=0):
+    out = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1] + margin: out[-1][1] = max(out[-1][1], b)
+        else: out.append([a, b])
+    return out
+
+
+# Persona's echo (#5905, meeting-minutes.md "Persona's echo"), the hub's rule (kb/echo.go) for its own sentences in hub
+# mode: a line overlapping a speaking span widened by 0.5 s whose words are the answer said there (60% of its distinct
+# character bigrams, after NFKC, lower case, letters and decimal digits only); a span without text keeps the time rule
+# from before (half of the line inside, no margin). Checked against spec/fixtures/meeting-echo by the transcription tests.
+def echo_normal(text):
+    return [c for c in "".join(ch.lower() for ch in unicodedata.normalize("NFKC", text))
+            if unicodedata.category(c).startswith("L") or unicodedata.category(c) == "Nd"]
+
+
+def echo_matches(line, spoken):
+    l, s = echo_normal(line), echo_normal(spoken)
+    if not l: return False
+    if len(l) < 2: return l[0] in s
+    said = {(s[i - 1], s[i]) for i in range(1, len(s))}
+    mine = {(l[i - 1], l[i]) for i in range(1, len(l))}
+    return sum(b in said for b in mine) / len(mine) >= 0.6
+
+
+def echo_by(span, start, end, text):
+    if not span.get("text"):
+        length = end - start
+        if length <= 0: return span["start"] <= start <= span["end"]
+        return (min(end, span["end"]) - max(start, span["start"])) / length >= 0.5
+    a, b = span["start"] - 0.5, span["end"] + 0.5
+    overlaps = a <= start <= b if end <= start else end >= a and start <= b
+    return overlaps and echo_matches(text, span["text"])
+
+
+def spoken_cut(text):
+    """A span's text cut at 4000 bytes, at a character boundary."""
+    return text.encode()[:4000].decode(errors="ignore")
+
+
+def spoken_union(spans):
+    """The timeline's spans as one: overlapping and touching ones merged, their texts joined in time order; a text the
+    span already holds (a span received again) counts once; the whole cut like a span's."""
+    out = []
+    for sp in sorted(spans, key=lambda x: (x["start"], x["end"])):
+        if out and sp["start"] <= out[-1]["end"]:
+            last = out[-1]
+            last["end"] = max(last["end"], sp["end"])
+            a, b = last.get("text", ""), sp.get("text", "")
+            if b and b not in a:
+                last["text"] = spoken_cut(b if not a or a in b else a + " " + b)
+        else:
+            out.append(dict(sp))
+    return out
+
+
+def transcription_timeline(t, raw):
+    if not isinstance(raw, dict): return
+    roles, spans = raw.get("roles", []), raw.get("speaking", [])
+    if not isinstance(roles, list) or not isinstance(spans, list) or len(roles) > 100 or len(spans) > 1000: return
+    if any(not isinstance(r, dict) or not transcription_number(r.get("at")) or r.get("attendance") not in MEETING_ROLES for r in roles): return
+    if any(not isinstance(sp, dict) or not transcription_number(sp.get("start")) or not transcription_number(sp.get("end"))
+           or sp["start"] > sp["end"] or not isinstance(sp.get("text", ""), (str, type(None))) for sp in spans): return
+    spans = [{"start": sp["start"], "end": sp["end"], **({"text": spoken_cut(sp["text"])} if sp.get("text") else {})} for sp in spans]
+    have = {r["at"]: r["attendance"] for r in t["timeline"]["roles"]}
+    have.update({r["at"]: r["attendance"] for r in roles})
+    t["timeline"] = {"roles": [{"at": at, "attendance": have[at]} for at in sorted(have)[:100]],
+                     "speaking": spoken_union(t["timeline"]["speaking"] + spans)[:1000]}
+
+
+def transcription_role(rid, at):
+    role = meeting_live(rid)["role"]
+    for r in TRANSCRIPTIONS[rid]["timeline"]["roles"]:
+        if r["at"] > at: break
+        role = r["attendance"]
+    return role
+
+
+def transcription_hub(rid):
+    return meeting_transcription_on() and TRANSCRIPTIONS.get(rid, {}).get("mode") == "hub"
+
+
+def transcription_gaps(t):
+    if "final_gaps" in t: return t["final_gaps"]
+    end = t.get("end", t["held"][-1][1] if t["held"] else 0)
+    at, gaps = 0, []
+    for a, b in t["held"]:
+        if a > at: gaps.append([at, min(a, end)])
+        at = max(at, b)
+        if at >= end: break
+    if at < end: gaps.append([at, end])
+    return transcription_union([g for g in gaps if g[1] > g[0]], margin=0.099999)
+
+
+def transcription_view(rid):
+    t = TRANSCRIPTIONS.get(rid)
+    if not meeting_transcription_on() or not t: return None
+    if t["mode"] == "device": return {"mode": "device"}
+    out = {"mode": "hub", "state": t["state"], "gaps": transcription_gaps(t) if rid not in RECORDINGS_TRIMMED else []}
+    if t.get("problem"): out["problem"] = t["problem"]
+    if t.get("fallback"): out["fallback"] = True
+    return out
+
+
+def transcription_changed(rid):
+    t = TRANSCRIPTIONS[rid]
+    view = transcription_view(rid)
+    if t.get("view") != view:
+        t["view"] = copy.deepcopy(view)
+        meeting_changed(rid, ["transcription"])
+
+
+def transcription_interim(rid):
+    t = TRANSCRIPTIONS.get(rid, {})
+    cap = t.get("interim")
+    if not transcription_hub(rid) or not cap or t.get("state") != "live" or time.time() - cap["time"] > 10:
+        return None
+    edge = t["held"][-1][1] if t["held"] else cap["start"]
+    if transcription_role(rid, edge) == "off": return None
+    return {k: cap[k] for k in ("start", "text")}
+
+
+def transcription_fields(rid, out, revs=False):
+    if (view := transcription_view(rid)) is not None: out["transcription"] = view
+    if revs:
+        if (cap := transcription_interim(rid)) is not None:
+            out["interim"] = cap
+            out["revs"]["interim"] = TRANSCRIPTIONS[rid]["interim"]["rev"]
+    return out
+
+
+def transcription_upload_result(rid, body, out):
+    if not meeting_transcription_on(): return out
+    if recording_kind(body) == "meeting":
+        out["transcription"] = TRANSCRIPTIONS.get(rid, {}).get("mode", "device")
+        if body.get("transcription") == "hub" and out["transcription"] != "hub": out["transcription_problem"] = "unavailable"
+    elif body.get("transcription") == "hub":
+        out.update(transcription="device", transcription_problem="not_meeting")
+    return out
+
+
+def transcription_put(rid, body):
+    if not meeting_transcription_on() or recording_kind(body) != "meeting": return
+    mode = body.get("transcription")
+    if rid not in TRANSCRIPTIONS and mode in ("hub", "device"):
+        mode = "hub" if mode == "hub" and transcription_ready() else "device"
+        TRANSCRIPTIONS[rid] = {"mode": mode, "state": "live", "held": [], "frames": [], "bytes": 0,
+                               "timeline": {"roles": [], "speaking": []}, "hub": [], "pending": [],
+                               "socket": None, "down_at": time.time(), "line_seconds": TRANSCRIPTION_MODE["line_seconds"]}
+        if mode == "hub": transcription_fallback_later(rid)
+        transcription_changed(rid)
+    if not transcription_hub(rid): return
+    t = TRANSCRIPTIONS[rid]
+    transcription_timeline(t, body.get("timeline"))
+    sock = t.get("socket")
+    if t.get("speaking_on") is None or t["speaking_on"] is not sock:  # while up, the socket that saw it open closes it
+        transcription_reconcile(rid, sock["send"] if sock and sock["started"] else None)
+    if t["state"] in ("final", "failed"): return
+    if body.get("complete"):
+        t.setdefault("end", body.get("duration") if transcription_number(body.get("duration")) else (t["held"][-1][1] if t["held"] else 0))
+        if not t.get("complete_at"):
+            t["complete_at"] = time.time()
+            timer = threading.Timer(1800, transcription_deadline, args=(rid, t))
+            timer.daemon = True; timer.start()
+        t["state"] = "finishing"
+        t.pop("interim", None)
+    transcription_changed(rid)
+
+
+def transcription_fallback_later(rid):
+    expected = TRANSCRIPTIONS[rid]
+    def check():
+        with RECORDINGS_LOCK:
+            if TRANSCRIPTIONS.get(rid) is expected: transcription_fallback(rid)
+    timer = threading.Timer(30, check)
+    timer.daemon = True; timer.start()
+
+
+def transcription_fallback(rid, fatal=False):
+    if not transcription_hub(rid): return
+    t = TRANSCRIPTIONS[rid]
+    if t["state"] != "live" or rid in RECORDINGS_TRIMMED: return
+    if fatal or any(time.time() - t[k] >= 30 for k in ("down_at", "degraded_at") if k in t):
+        t["fallback"] = True
+    if not t.get("fallback"): return
+    with MEETING_LOCK:
+        st = meeting_live(rid)
+        spans = [[s["start"], s["end"]] for s in st["segments"]]
+        edge = max((s["end"] for s in st["segments"]), default=0)
+        added = []
+        for s in RECORDINGS.get(rid, {}).get("segments", []):
+            if (s["end"] <= edge or transcription_role(rid, s["end"]) == "off" or s.get("echo") or transcription_echo(t, s) or
+                    transcription_overlap(s, spans) > (s["end"] - s["start"]) / 2): continue
+            line = dict(s, source="device")
+            st["segments"].append(line); st["bytes"] += len(s["text"].encode())
+            added.append(line); spans.append([s["start"], s["end"]]); edge = s["end"]
+        if added:
+            meeting_changed(rid, ["lines"])
+            room_feed(st, added)
+    transcription_changed(rid)
+
+
+def transcription_overlap(s, spans):
+    return sum(max(0, min(s["end"], b) - max(s["start"], a)) for a, b in transcription_union(spans))
+
+
+def transcription_echo(t, s, extra=None):
+    """The echo rule over the timeline's spans, and extra, a span assumed for the hold only (never in the timeline)."""
+    return any(echo_by(sp, s["start"], s["end"], s.get("text", "")) for sp in t["timeline"]["speaking"] + ([extra] if extra else []))
+
+
+# The hold (meeting-minutes.md "No echo goes out first"): a speaking span open this long, longer than any answer the
+# phone says (150 s), is assumed open from then on. The hub counts it from the speaking on; the mock on the recording's
+# clock.
+SPEAKING_HOLD = 180
+
+
+def transcription_unspeak(t):
+    """No speaking span is open any more: the one that was (its start or None, the answer it carried)."""
+    began, said = t.pop("speaking", None), t.pop("speaking_text", "")
+    t.pop("speaking_on", None); t.pop("speaking_assumed", None)
+    return began, said
+
+
+def transcription_assumed(t, s):
+    """The open speaking span once the hold let go of it (assumed open): open to sentence s's end, with the answer it
+    carried, until a speaking off or the timeline closes it; None when none is assumed open."""
+    if t.get("speaking") is None or not t.get("speaking_assumed"): return None
+    return {"start": t["speaking"], "end": max(t["speaking"], s["end"]), "text": t.get("speaking_text", "")}
+
+
+def transcription_reconcile(rid, send=None):
+    """A timeline that has the open speaking span closed (a socket's start, or an upload, repairing a speaking off a
+    dropped socket lost) closes it at once: the sentences held for it are judged now (meeting-minutes.md "No echo goes
+    out first")."""
+    t = TRANSCRIPTIONS[rid]
+    began = t.get("speaking")
+    if began is None: return
+    closing = next((sp for sp in t["timeline"]["speaking"] if sp["start"] <= began + 1 / 16000 < sp["end"]), None)
+    if closing is not None:  # closed there, with the answer the speaking on carried (counted once when it has it)
+        _, said = transcription_unspeak(t)
+        transcription_timeline(t, {"speaking": [{"start": began, "end": closing["end"], **({"text": said} if said else {})}]})
+        transcription_drain(rid, send)
+
+
+def transcription_record(rid):
+    rec = RECORDINGS.get(rid, {})
+    if not transcription_hub(rid): return rec.get("segments", [])
+    hub = TRANSCRIPTIONS[rid]["hub"]
+    spans = [[s["start"], s["end"]] for s in hub]
+    device = [dict(s, source="device") for s in rec.get("segments", [])
+              if transcription_overlap(s, spans) <= (s["end"] - s["start"]) / 2]
+    return sorted(copy.deepcopy(hub) + device, key=lambda s: (s["start"], s["end"]))
+
+
+def transcription_publish(rid):
+    if not transcription_hub(rid) or rid in RECORDINGS_TRIMMED: return
+    detail = KB_DETAIL.get(("recordings", rid))
+    if not detail: return
+    segs = transcription_record(rid)
+    detail["segments"] = segs
+    lines = [s for s in segs if not s.get("echo")]  # Persona's echo stays marked, never the meeting's text
+    detail["meta"]["chars"] = sum(len(s.get("text", "")) for s in lines)
+    detail["summary"] = "\n".join(f'[{clock_of(s["start"])}] {s["text"]}' for s in lines)
+    for entry in KB.get("recordings", []):
+        if entry["id"] == rid: entry["one_line"] = lines[0]["text"] if lines else ""
+    t = TRANSCRIPTIONS[rid]
+    if t["state"] not in ("final", "failed"):
+        detail.pop("minutes", None)
+        detail["meta"]["minutes_state"] = "pending"
+    elif RECORDINGS[rid].get("complete"):
+        if lines:
+            detail["minutes"] = recording_minutes(dict(RECORDINGS[rid], segments=segs), rid)
+            detail["meta"]["minutes_state"] = "ready"
+        else:
+            detail.pop("minutes", None); detail["meta"].pop("minutes_state", None)
+        t["held"] = []  # Only observations and final gaps survive the mock's audio deletion.
+
+
+def transcription_accept(rid, s, send=None, extra=None):
+    """A hub sentence into the hub's transcript, Persona's echo marked; the rest also into the live log and a line."""
+    t = TRANSCRIPTIONS[rid]
+    echo = transcription_echo(t, s, extra or transcription_assumed(t, s))
+    t["hub"].append(dict(s, source="hub", **({"echo": True} if echo else {})))
+    if t.pop("fallback", None): transcription_changed(rid)
+    if t.get("problem") in ("upstream_unavailable", "upstream_failed"):
+        transcription_set_problem(rid, transcription_configured(), send)  # the hub's sentences came again
+    if echo: return  # never the live log, a line frame or the room
+    device = [[x["start"], x["end"]] for x in meeting_live(rid)["segments"] if x.get("source") == "device"]
+    if transcription_overlap(s, device) > (s["end"] - s["start"]) / 2: return
+    if transcription_role(rid, s["end"]) == "off": return
+    with MEETING_LOCK:
+        st = meeting_live(rid)
+        n = len(st["segments"])
+        st["segments"].append(dict(s, source="hub")); st["bytes"] += len(s["text"].encode())
+        meeting_changed(rid, ["lines"])
+        room_feed(st, [s])
+    if send: send(dict(s, type="line", n=n))
+
+
+def transcription_drain(rid, send=None, extra=None):
+    t = TRANSCRIPTIONS[rid]
+    while t["pending"]:
+        s = t["pending"][0]
+        if t.get("speaking") is not None and not t.get("speaking_assumed") and s["end"] > t["speaking"] - 0.5: break
+        t["pending"].pop(0)
+        transcription_accept(rid, s, send, extra)
+    transcription_publish(rid)
+
+
+def transcription_deadline(rid, expected):
     with RECORDINGS_LOCK:
+        if TRANSCRIPTIONS.get(rid) is not expected: return
+        transcription_finish_start(rid, force=True)
+
+
+def transcription_finish_start(rid, force=False):
+    t = TRANSCRIPTIONS.get(rid)
+    if not t or t["mode"] != "hub" or t.get("final_started") or not t.get("complete_at"): return
+    if not force and (t.get("socket") or transcription_gaps(t)): return
+    t["final_started"] = True
+    t["final_gaps"] = transcription_gaps(t)
+    if t.get("socket"): t["socket"]["fail"]("transcription_final")
+    if not t["held"]:
+        transcription_finish(rid, t)
+        return
+    timer = threading.Timer(TRANSCRIPTION_MODE["final_seconds"], transcription_finish, args=(rid, t))
+    timer.daemon = True; timer.start()
+
+
+def transcription_finish(rid, expected):
+    with RECORDINGS_LOCK:
+        t = TRANSCRIPTIONS.get(rid)
+        if t is not expected or rid not in RECORDINGS or rid in RECORDINGS_TRIMMED: return
+        if transcription_ready() and TRANSCRIPTION_MODE["upstream"] in ("ok", "no_interim") and not TRANSCRIPTION_MODE["fatal"]:
+            final = []
+            step = t["line_seconds"]
+            for a, b in t["held"]:
+                while a < b:
+                    end = min(a + step, b)
+                    s = {"start": a, "end": end, "text": TRANSCRIPTION_SCRIPT[int(a / step) % len(TRANSCRIPTION_SCRIPT)], "source": "hub"}
+                    final.append(s)
+                    a = end
+            t["hub"] = final
+        # Replayed or not (no replay: the live sentences stay), the complete upload's timeline marks Persona's echo.
+        t["hub"] = [dict(s, echo=True) if s.get("echo") or transcription_echo(t, s) else s for s in t["hub"]]
+        t["state"] = "final" if t["hub"] else "failed"
+        t.pop("problem", None); t.pop("interim", None); t.pop("fallback", None)
+        transcription_publish(rid)
+        transcription_changed(rid)
+
+
+def transcription_configured():
+    """What the switches make of the upstream now: the problem a job would have."""
+    upstream = TRANSCRIPTION_MODE["upstream"]
+    return ("upstream_unavailable" if not transcription_ready() or upstream == "unavailable" else
+            "upstream_failed" if upstream == "failed" else "no_interim" if upstream == "no_interim" else None)
+
+
+def transcription_problem(rid, send=None):
+    """The problem that stands: a degraded upstream at once; its end only once the hub's sentences (for no_interim,
+    its captions) come again (meeting-minutes.md "Problems"), never on the switch alone."""
+    t = TRANSCRIPTIONS[rid]
+    configured = transcription_configured()
+    if configured is not None or t.get("problem") not in ("upstream_unavailable", "upstream_failed", "no_interim"):
+        transcription_set_problem(rid, configured, send)
+    return t.get("problem")
+
+
+def transcription_set_problem(rid, problem, send=None):
+    t = TRANSCRIPTIONS[rid]
+    if problem == t.get("problem"): return
+    t["problem"] = problem
+    if problem in ("upstream_unavailable", "upstream_failed"):
+        if "degraded_at" not in t:
+            t["degraded_at"] = time.time()
+            transcription_fallback_later(rid)
+    else: t.pop("degraded_at", None)
+    t.pop("interim", None)
+    transcription_changed(rid)
+    if send: send({"type": "problem", "code": problem})
+
+
+def transcription_heard_wait(rid, raw):
+    """A heard ask in hub mode ignores live_next (meeting-minutes.md "In hub mode the live log is the hub's"): the
+    job's sentences up to `at` are flushed (the scripted sentence the audio is in, cut at `at`) once the audio reaches
+    it, and those held for a speaking span waited for; in the fallback an upload whose segments reach `at` is waited
+    for. At most 15 seconds, holding no lock while it waits. A stored ask id asked again waits for nothing."""
+    try: body = json.loads(raw or b"{}")
+    except ValueError: return
+    at = body.get("at") if isinstance(body, dict) else None
+    if not transcription_number(at) or not isinstance(body.get("id"), str): return
+    with MEETING_LOCK:
+        if any(a["id"] == body["id"].lower() for a in MEETING_LIVE.get(rid, {}).get("asks", [])): return
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        with RECORDINGS_LOCK:
+            t = TRANSCRIPTIONS.get(rid)
+            if not transcription_hub(rid) or rid not in RECORDINGS or t["state"] != "live": return
+            if t.get("fallback"):
+                if max((x["end"] for x in RECORDINGS[rid].get("segments", [])), default=0) >= at: return
+            else:
+                sock = t.get("socket")
+                if not sock or not sock["started"] or transcription_configured() in ("upstream_unavailable", "upstream_failed"):
+                    return  # no job transcribes it now: the ask reads what there is
+                if sock["at"] >= at:
+                    start = sock["sentence"]
+                    if at > start:  # the flush: the sentence being said, finished at `at`
+                        step = t["line_seconds"]
+                        t["pending"].append({"start": start, "end": at, "text": TRANSCRIPTION_SCRIPT[int(start / step) % len(TRANSCRIPTION_SCRIPT)]})
+                        t.pop("interim", None)
+                        sock["sentence"] = at
+                        transcription_drain(rid, sock["send"])
+                    if not any(x["end"] <= at for x in t["pending"]): return  # none held back for a speaking span
+        time.sleep(0.05)
+
+
+def transcription_refusal(rid):
+    if rid in RECORDINGS_DELETED: return "recording_deleted"
+    if rid not in RECORDINGS: return "recording_not_found"
+    if MEETING_MODE["kb_read_only"]: return "kb_read_only"
+    if not transcription_hub(rid): return "not_hub"
+    if rid in RECORDINGS_TRIMMED: return "transcript_expired"
+    if TRANSCRIPTIONS[rid].get("final_started"): return "transcription_final"
+    return None
+
+
+def transcription_forbidden(h):
+    token = h.headers.get("Authorization", "").removeprefix("Bearer ").strip() or parse_qs(urlparse(h.path).query).get("token", [""])[0]
+    role = h.headers.get("X-Mock-Role")
+    tok = next((t for t in TOKENS if token in (t.get("token"), t.get("id"))), {})
+    want = os.environ.get("MOCK_DEVICE_TOKEN")
+    paired = not MOCK_PAIR_TOKEN or token in PAIR_DEVICE_TOKENS or (token == MOCK_PAIR_TOKEN and
+             (PAIR_TRADED[0] is None or time.time() < PAIR_TRADED[0] + MOCK_PAIR_GRACE))
+    return (is_read_only(h) or role == "extension" or tok.get("role") in ("answer", "watch", "readonly", "extension") or
+            bool(want and token != want) or not paired)
+
+
+def transcription_preflight(h):
+    if transcription_forbidden(h): return "forbidden", 403
+    if os.environ.get("MOCK_RECORDINGS_DOWN") == "1": return "kb_unavailable", 503
+    manager = other_manager(h)
+    if manager and manager[1] and manager[1][1] == 503: return "assistant_offline", 503
+    return None, 200
+
+
+def transcription_store(rid, at, size):
+    t = TRANSCRIPTIONS[rid]
+    if at > 12 * 3600 or at + size / 32000 > 12 * 3600: return None
+    end = round(at * 16000 + size / 2) / 16000
+    t["bytes"] += size
+    if size: t["held"] = transcription_union(t["held"] + [[at, end]])
+    transcription_changed(rid)
+    return end
+
+
+def transcription_audio_put(h, rid):
+    code, status = transcription_preflight(h)
+    raw = h.last_body or b""
+    if not code and len(raw) > 10 << 20: code, status = "too_large", 413
+    if not code and rid in RECORDINGS_DELETED: code, status = "recording_deleted", 410
+    if not code and rid not in RECORDINGS: code, status = "recording_not_found", 404
+    try: at = float(parse_qs(urlparse(h.path).query).get("at", [""])[0])
+    except ValueError: at = -1
+    if not code and (not transcription_number(at) or len(raw) % 2): code, status = "bad_frame", 400
+    if not code:
+        code = transcription_refusal(rid)
+        status = 403 if code == "kb_read_only" else 409
+    if not code and (at > 12 * 3600 or transcription_store(rid, round(at * 16000) / 16000, len(raw)) is None):
+        code, status = "audio_full", 413
+    if code: return h.send_json({"code": code}, status) or True
+    t = TRANSCRIPTIONS[rid]
+    t["frames"].append({"type": "upload", "at": at, "bytes": len(raw)})
+    gaps = transcription_gaps(t)
+    transcription_finish_start(rid)
+    return h.send_json({"gaps": gaps}) or True
+
+
+def transcription_control(h, method):
+    global MEETING_TRANSCRIPTION
+    if method == "POST":
+        try: body = json.loads(h.last_body or b"{}")
+        except ValueError: body = None
+        if not isinstance(body, dict): return h.send_json({"code": "bad_request"}, 400) or True
+        if any(k in body and type(body[k]) is not bool for k in ("on", "ready")) or \
+                ("upstream" in body and body["upstream"] not in ("ok", "unavailable", "failed", "no_interim")) or \
+                ("fatal" in body and not isinstance(body["fatal"], str)) or \
+                any(k in body and (not transcription_number(body[k]) or body[k] < (1 / 16000 if k == "line_seconds" else 0)) for k in ("line_seconds", "final_seconds")):
+            return h.send_json({"code": "bad_request"}, 400) or True
+        if "on" in body: MEETING_TRANSCRIPTION = body["on"]
+        TRANSCRIPTION_MODE.update({k: v for k, v in body.items() if k in TRANSCRIPTION_MODE})
+        for rid, t in TRANSCRIPTIONS.items():
+            if not MEETING_TRANSCRIPTION and t.get("socket"):
+                t["socket"]["fail"]("not_hub")
+            if t["mode"] != "hub" or t["state"] != "live": continue
+            sock = t.get("socket")
+            if "line_seconds" in body:
+                t["line_seconds"] = body["line_seconds"]
+                if sock: sock["sentence"] = sock["at"]
+            transcription_problem(rid, sock["send"] if sock and sock["started"] else None)
+            if sock and sock["started"] and TRANSCRIPTION_MODE["fatal"]:
+                transcription_fallback(rid, fatal=True)
+                sock["fail"](TRANSCRIPTION_MODE["fatal"])
+    elif method != "GET": return h.send_json({"code": "method_not_allowed"}, 405) or True
+    return h.send_json({"on": meeting_transcription_on(), **TRANSCRIPTION_MODE,
+                        "recordings": {rid: {"frames": t["frames"], "bytes": t["bytes"], "timeline": t["timeline"],
+                                              "gaps": transcription_gaps(t), "held": t["held"], "socket": t.get("socket") is not None,
+                                              "transcription": transcription_view(rid)}
+                                       for rid, t in TRANSCRIPTIONS.items()}}) or True
+
+
+def transcription_socket(h, rid):
+    """One bounded RFC 6455 reader and serialized writer; recording errors are frames, never failed upgrades."""
+    code, status = transcription_preflight(h)
+    if code: return h.send_json({"code": code}, status)
+    key = h.headers.get("Sec-WebSocket-Key", "")
+    accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+    h.send_response(101, "Switching Protocols")
+    h.send_header("Upgrade", "websocket"); h.send_header("Connection", "Upgrade")
+    h.send_header("Sec-WebSocket-Accept", accept); h.end_headers(); h.wfile.flush()
+    lock = threading.Lock()
+    state = {"open": True, "started": False, "at": 0, "ack_bytes": 0}
+
+    def frame(op, data):
+        n = len(data)
+        head = bytes([0x80 | op]) + (bytes([n]) if n < 126 else b"\x7e" + struct.pack(">H", n) if n < 65536 else b"\x7f" + struct.pack(">Q", n))
+        with lock:
+            if not state["open"]: return
+            h.wfile.write(head + data); h.wfile.flush()
+
+    def send(obj):
+        frame(1, json.dumps(obj, ensure_ascii=False).encode())
+
+    def close(code):
+        try: frame(8, struct.pack(">H", code))
+        except OSError: pass
+        state["open"] = False
+        try: h.connection.shutdown(socket.SHUT_RDWR)
+        except OSError: pass
+
+    def fail(code):
+        if code in ("upstream_failed", "upstream_unavailable", "no_upstream", "upstream_forbidden"):
+            transcription_fallback(rid, fatal=True)
+        try: send({"type": "error", "code": code, "fatal": True})
+        except OSError: pass
+        finally: close(1008)
+
+    state.update(send=send, fail=fail)
+    with RECORDINGS_LOCK:
+        if (code := transcription_refusal(rid)):
+            fail(code); return
+        t = TRANSCRIPTIONS[rid]
+        if t["socket"]: t["socket"]["fail"]("replaced")
+        t["socket"] = state
+    h.connection.settimeout(10)
+    try:
+        while state["open"]:
+            head = h.rfile.read(2)
+            if len(head) != 2: break
+            op, n = head[0] & 15, head[1] & 127
+            if n in (126, 127):
+                raw = h.rfile.read(2 if n == 126 else 8)
+                if len(raw) != (2 if n == 126 else 8): break
+                n = int.from_bytes(raw, "big")
+            if not head[0] & 128 or head[0] & 112 or not head[1] & 128 or n > (64 << 10 if op == 2 else 8704 << 10):
+                fail("bad_frame"); break
+            mask, data = h.rfile.read(4), h.rfile.read(n)
+            if len(mask) != 4 or len(data) != n: break
+            data = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+            if op == 8: close(1000); break
+            if op == 9: frame(10, data); continue
+            if op == 10: continue
+            with RECORDINGS_LOCK:
+                if not state["open"]: break
+                if (code := transcription_refusal(rid)): fail(code); break
+                if op == 2:
+                    if not state["started"] or n % 2: fail("bad_frame"); break
+                    at = state["at"]
+                    edge = t["held"][-1][1] if t["held"] else 0
+                    end = transcription_store(rid, at, n)
+                    if end is None: fail("audio_full"); break
+                    t["frames"].append({"type": "binary", "at": at, "bytes": n})
+                    state["at"] = end; state["ack_bytes"] += n
+                    if state["ack_bytes"] >= 5 * 32000:
+                        ack_at = next((b for a, b in t["held"] if a <= end <= b), end)
+                        send({"type": "ack", "at": ack_at}); state["ack_bytes"] %= 5 * 32000
+                    transcription_problem(rid, send)
+                    configured = transcription_configured()  # what the upstream does now; the problem may stand longer
+                    if end <= edge:
+                        state["sentence"] = max(state["sentence"], edge)
+                        continue
+                    if configured in ("upstream_unavailable", "upstream_failed"):
+                        state["sentence"] = end
+                        continue
+                    if at < edge: state["sentence"] = max(state["sentence"], edge)
+                    if t.get("speaking") is not None and not t.get("speaking_assumed") and end >= t["speaking"] + SPEAKING_HOLD:
+                        t["speaking_assumed"] = True  # held long enough: what it held goes, judged with it, never stored
+                        transcription_drain(rid, send)
+                    step = t["line_seconds"]
+                    start = state["sentence"]
+                    while start < end:
+                        stop = start + step
+                        text = TRANSCRIPTION_SCRIPT[int(start / step) % len(TRANSCRIPTION_SCRIPT)]
+                        if configured != "no_interim" and t.get("speaking") is None:
+                            if t.get("problem") == "no_interim": transcription_set_problem(rid, configured, send)  # captions came
+                            caption = {"start": start, "text": text[:max(1, min(len(text), int(len(text) * (end - start) / step)))]}
+                            send(dict(caption, type="interim"))
+                            t["interim"] = dict(caption, time=time.time(), rev=int(time.time() * 1000))
+                            meeting_changed(rid, ["interim"])
+                        if stop > end: break
+                        t["pending"].append({"start": start, "end": stop, "text": text})
+                        t.pop("interim", None)
+                        start = stop
+                    state["sentence"] = start
+                    transcription_drain(rid, send)
+                    continue
+                if op != 1: fail("bad_frame"); break
+                try: msg = json.loads(data)
+                except (ValueError, UnicodeDecodeError): fail("bad_frame"); break
+                if not isinstance(msg, dict): fail("bad_frame"); break
+                kind = msg.get("type")
+                if not state["started"] and kind != "start": fail("bad_frame"); break
+                if kind not in ("start", "seek", "role", "speaking", "end"): continue
+                if not transcription_number(msg.get("at")): fail("bad_frame"); break
+                if msg["at"] > 12 * 3600: fail("audio_full"); break
+                at = round(msg["at"] * 16000) / 16000
+                t["frames"].append(msg)
+                if kind == "start":
+                    if state["started"]: fail("bad_frame"); break
+                    transcription_timeline(t, msg.get("timeline"))
+                    state["started"] = True
+                    t.pop("down_at", None)
+                    state["at"] = state["sentence"] = t["held"][-1][1] if t["held"] else 0
+                    h.connection.settimeout(60)
+                    send({"type": "ready", "from": state["at"], "gaps": transcription_gaps(t), "next": len(meeting_live(rid)["segments"])})
+                    old = t.get("problem")
+                    problem = transcription_problem(rid, send)
+                    if problem and problem == old: send({"type": "problem", "code": problem})
+                    if TRANSCRIPTION_MODE["fatal"]:
+                        transcription_fallback(rid, fatal=True)
+                        fail(TRANSCRIPTION_MODE["fatal"]); break
+                    transcription_reconcile(rid, send)  # a speaking off the socket before lost
+                elif kind == "seek":
+                    state["at"] = at
+                    state["sentence"] = max(at, t["held"][-1][1] if t["held"] else 0)
+                elif kind == "role":
+                    if msg.get("attendance") not in MEETING_ROLES: fail("bad_frame"); break
+                    transcription_timeline(t, {"roles": [{"at": at, "attendance": msg["attendance"]}]})
+                elif kind == "speaking":
+                    if type(msg.get("on")) is not bool or not isinstance(msg.get("text", ""), (str, type(None))): fail("bad_frame"); break
+                    if msg["on"]:
+                        if t.get("speaking") is not None and at > t["speaking"] + 1 / 16000:  # the one open ended unseen
+                            began, said = transcription_unspeak(t)
+                            transcription_drain(rid, send, extra={"start": began, "end": at, "text": said})
+                        if t.get("speaking") is None:  # the answer being said: what its echo is judged against
+                            t["speaking"], t["speaking_text"] = at, spoken_cut(msg.get("text") or "")
+                        t["speaking_on"] = state  # its own speaking off comes on this socket
+                        t.pop("interim", None)
+                    elif t.get("speaking") is not None:
+                        if at < t["speaking"]: fail("bad_frame"); break
+                        began, said = transcription_unspeak(t)  # also after the hold let go of it: the phone said so
+                        span = {"start": began, "end": at}
+                        if said: span["text"] = said
+                        transcription_timeline(t, {"speaking": [span]})
+                        transcription_drain(rid, send)
+                elif kind == "end":
+                    t["end"] = at
+                    send({"type": "ack", "at": at})
+                    tail = min(at, state["at"])
+                    if tail > state["sentence"] and transcription_configured() not in ("upstream_unavailable", "upstream_failed"):
+                        start = state["sentence"]
+                        t["pending"].append({"start": start, "end": tail,
+                                             "text": TRANSCRIPTION_SCRIPT[int(start / t["line_seconds"]) % len(TRANSCRIPTION_SCRIPT)]})
+                    began, said = transcription_unspeak(t)  # still open at the end: judged with it, never stored
+                    transcription_drain(rid, send, extra={"start": began, "end": at, "text": said} if began is not None else None)
+                    t.pop("interim", None)
+                    transcription_changed(rid)
+                    close(1000); break
+    except (OSError, ValueError):
+        if state["open"]:
+            try: fail("bad_frame")
+            except OSError: pass
+    finally:
+        close(1000)
+        with RECORDINGS_LOCK:
+            if TRANSCRIPTIONS.get(rid) is t and t.get("socket") is state:
+                t["socket"] = None
+                t["down_at"] = time.time()
+                if t["state"] == "live": transcription_fallback_later(rid)
+                transcription_finish_start(rid)
+
+
+def recordings_route(h, method, p):
+    audio = re.fullmatch(r"/api/v1/recordings/([^/]+)/audio", p)
+    if audio and method == "GET" and meeting_transcription_on():
+        transcription_socket(h, audio[1].lower())
+        return True
+    ask = re.fullmatch(r"/api/v1/recordings/([^/]+)/ask", p)
+    if ask and method == "POST" and MEETING_ATTENDANCE and not is_read_only(h) and len(getattr(h, "last_body", b"") or b"") <= 64 << 10:
+        transcription_heard_wait(ask[1].lower(), h.last_body)  # before the locks: the uplink takes them meanwhile
+    with RECORDINGS_LOCK:
+        if p == "/mock/meeting_transcription": return transcription_control(h, method)
+        if audio:
+            if not meeting_transcription_on(): return h.send_json({"error": "404 page not found"}, 404, add_error_code=False) or True
+            if method == "PUT": return transcription_audio_put(h, audio[1].lower())
+            return h.send_json({"code": "method_not_allowed"}, 405) or True
         return recordings_route_locked(h, method, p)
 
 
@@ -5663,6 +6437,9 @@ def recordings_route_locked(h, method, p):
     if p == "/mock/recording_minutes" and method == "POST":
         # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too.
         RECORDING_MINUTES[0] = json.loads(h.last_body or b"{}").get("mode", "pending")
+        for t in TRANSCRIPTIONS.values():
+            if t.get("socket"): t["socket"]["fail"]("recording_deleted")
+        TRANSCRIPTIONS.clear()
         meeting_conversation_reset()
         RECORDINGS.clear(); RECORDING_UPLOADED.clear(); RECORDING_MINUTES_ASKED.clear(); MEETING_LIVE.clear(); RECORDINGS_TRIMMED.clear(); RECORDING_DAY_TODOS.clear()
         with PHOTO_LOCK: PHOTO_STORE.clear()
@@ -5693,6 +6470,12 @@ def recordings_route_locked(h, method, p):
         if is_day:
             RECORDINGS[rid]["segments"] = []
             RECORDINGS[rid]["recap_state"] = "ready"
+        if rid in TRANSCRIPTIONS:
+            t = TRANSCRIPTIONS[rid]
+            if t.get("socket"): t["socket"]["fail"]("transcript_expired")
+            t.update(held=[], hub=[], pending=[], final_gaps=[])
+            t.pop("interim", None)
+            transcription_changed(rid)
         live_trim(rid)  # the live log goes: its lines, asks, topics and highlights
         with PHOTO_LOCK:  # what goes into the room (a photo's note, a withdrawn line) never lands in one deleted
             room_delete(rid)  # the room goes at the transcript cut; the private mark and the follow-up stay
@@ -5755,6 +6538,7 @@ def recordings_route_locked(h, method, p):
     if p.rstrip("/") != "/api/v1/recordings/" + p.split("/")[4]:  # a path below a recording that no route took
         return h.send_json({"error": "404 page not found"}, 404) or True
     if method == "DELETE":
+        if (t := TRANSCRIPTIONS.pop(rid, None)) and t.get("socket"): t["socket"]["fail"]("recording_deleted")
         existed = rid in RECORDINGS
         RECORDINGS.pop(rid, None); RECORDING_UPLOADED.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
         kb[:] = [e for e in kb if e["id"] != rid]; KB_DETAIL.pop(("recordings", rid), None)
@@ -5781,7 +6565,7 @@ def recordings_route_locked(h, method, p):
         out = {"id": rid, "revision": body["revision"], "status": "expired"}
         if MEETING_ATTENDANCE: out["attendance"] = "off"
         if (v := upload_room_view(rid, body)) is not None: out["room"] = v
-        return h.send_json(out) or True
+        return h.send_json(transcription_upload_result(rid, body, out)) or True
     if have and have["revision"] > body["revision"]:
         # Nothing written. As the hub answers: the upload's revision and, on a hub that attends, the role in effect (the
         # stored one) and what was wrong with this upload's attendance fields, whatever the status.
@@ -5790,8 +6574,10 @@ def recordings_route_locked(h, method, p):
             out["attendance"] = meeting_live(rid)["role"]
             if room_of(rid) is None and (problem := meeting_attendance(body)[2]): out["attendance_problem"] = problem
             if (v := upload_room_view(rid, body)) is not None: out["room"] = v
-        return h.send_json(out) or True
-    RECORDINGS[rid] = body
+        return h.send_json(transcription_upload_result(rid, body, out)) or True
+    for seg in body.get("segments", []): seg.pop("source", None)
+    transcription_put(rid, body)
+    RECORDINGS[rid] = {k: v for k, v in body.items() if k not in ("transcription", "timeline")}
     RECORDING_UPLOADED[rid] = time.time()
     text = "\n".join("[%d:%02d] %s" % (int(x["start"]) // 60, int(x["start"]) % 60, x["text"]) for x in body.get("segments", []))
     entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
@@ -5799,7 +6585,7 @@ def recordings_route_locked(h, method, p):
     kb[:] = [e for e in kb if e["id"] != rid] + [entry]
     detail = {"meta": {**{k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "calendar")}, "kind": kind,
                        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                       "chars": sum(len(x.get("text") or "") for x in body.get("segments", []))},
+                       "chars": sum(len(x.get("text") or "") for x in body.get("segments", []) if not x.get("echo"))},
               "summary": text, "segments": body.get("segments", [])}
     # A meeting that completes with no text gets no minutes (attending uploads it first with none).
     silent = MEETING_ATTENDANCE and body.get("complete") and not any((x.get("text") or "").strip() for x in body.get("segments", []))
@@ -5832,6 +6618,10 @@ def recordings_route_locked(h, method, p):
     if room is not None:
         room_after_put(rid, body)
         out["room"] = room_view(MEETING_CONV[rid])
+    transcription_upload_result(rid, body, out)
+    transcription_fallback(rid)
+    transcription_publish(rid)
+    transcription_finish_start(rid)
     return h.send_json(out) or True
 KB_DETAIL = {
     ("projects", "weather-app"): {"summary": "# 天气 App\n\n给自己用的天气 App 和桌面小组件。\n\n- **现在**：小组件按小时刷新\n- **下一步**：中号布局的降雨条",
@@ -19592,7 +20382,7 @@ PLUGINS = {
                  "enabled": True, "description": "Telegram 连接器（personad 自带）", "contributes": {"connectors": ["telegram"]},
                  "form": {"fields": []}, "config": {}, "secrets": [], "permissions": [_RUNS]},
     "voice": {"id": "voice", "name": "语音", "kind": "voice", "status": "running", "source": "hub.json", "enabled": True, "read_only": True,
-              "contributes": {"voice": ["voice"]}, "permissions": [_RUNS, {"key": "hub_api", "title": "完整使用 hub",
+              "contributes": {"voice": ["voice"], "transcription": ["gpt-live"]}, "permissions": [_RUNS, {"key": "hub_api", "title": "完整使用 hub",
               "detail": "拿到 hub 的地址和 token，能做 hub 主人能做的一切：读知识库、驱动各台电脑上的 Agent……"}]},
     "example-quota": {"id": "example-quota", "name": "Example 额度", "kind": "quota", "status": "disabled", "version": "0.3.1", "source": "installed",
                       "enabled": False, "description": "查 Example 网关的余额和用量。", "contributes": {},
@@ -21460,6 +22250,10 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path); p = u.path; q = parse_qs(u.query)
         HITS["GET " + p] = HITS.get("GET " + p, 0) + 1
+        audio = re.fullmatch(r"/api/v1/recordings/([^/]+)/audio", p)
+        if audio and meeting_transcription_on():
+            transcription_socket(self, audio[1].lower())
+            return
         if self.token_refused(): return
         if CASE and case_route(self, "GET", p, q, b""): return
         if preview_route and preview_route(self, "GET", p, q): return
@@ -22480,6 +23274,11 @@ class H(BaseHTTPRequestHandler):
         return self.send_json({"path": path, "name": path.rsplit("/", 1)[1], "size": n})
 
     def do_POST(self):
+        audio = self.command == "PUT" and re.fullmatch(r"/api/v1/recordings/([^/]+)/audio", urlparse(self.path).path)
+        if audio and meeting_transcription_on():
+            self.last_body = self.body()
+            with RECORDINGS_LOCK: transcription_audio_put(self, audio[1].lower())
+            return
         if self.token_refused(): return
         if self.command == "POST" and urlparse(self.path).path.startswith("/api/v1/machines/") and urlparse(self.path).path.endswith("/files"):
             return self.upload()
@@ -23698,6 +24497,13 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(assistant_for_manager(self)[0])
         if p == "/api/v1/assistant" and self.command == "PUT":  # Settings › Assistant: only the fields sent change
             body = json.loads(self.last_body or b"{}")
+            transcription_config = {}
+            if meeting_transcription_on():
+                keys = ("meeting_transcription_default", "meeting_glossary", "meeting_transcription_extension")
+                if any(k in body for k in keys) and transcription_forbidden(self):
+                    return self.send_json({"code": "forbidden"}, 403)
+                transcription_config, code = transcription_settings(body)
+                if code: return self.send_json({"code": code}, 400)
             if MEETING_ATTENDANCE and "meeting_attendance_default" in body:  # checked first: a refused request changes nothing
                 if is_read_only(self): return self.send_json({"error": "只有完整权限的设备可以改", "code": "forbidden"}, 403)
                 if body["meeting_attendance_default"] not in MEETING_ROLES:
@@ -23747,6 +24553,7 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["meeting_attendance_default"] = body["meeting_attendance_default"]
             for key in RETENTION_BOUNDS:
                 if key in body: ASSISTANT_CONFIG[key] = body[key]
+            ASSISTANT_CONFIG.update(transcription_config)
             return self.send_json(assistant_state())
         if "/health/reports/" in p and p.startswith("/api/v1/machines/") and self.command == "DELETE":
             name = unquote(p.rsplit("/", 1)[1])

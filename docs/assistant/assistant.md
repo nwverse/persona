@@ -564,6 +564,75 @@ process needs its settings restored. This applies to both the Claude CLI and the
   `bypassPermissions` restart rule remains: a process not started with it cannot switch to it through a control request;
   a busy process finishes its work before the restart. Ultracode remains available only in Agent sessions.
 
+## Explicit skill mentions (Web only, #5357)
+
+The Web assistant's existing mention menu reads `GET /api/v1/assistant/skills?machine_id=…&session_id=…&launcher=…`.
+The owning manager resolves the conversation and effective model/launcher, supplies its own assistant directory and
+identity, and asks that computer's `skills.list` in catalog mode. Client `cwd`, profile and file paths are not accepted
+by this endpoint. Foreign/non-assistant sessions, guest chats and external runtimes without an inventory contract
+cannot expose a supported catalog. The legacy `GET /skills` and non-catalog `skills.list` remain unchanged.
+
+Codex uses the selected launcher's real app-server `skills/list` (`cwds`, `forceReload`), reusing its live connection
+when possible or initializing a short-lived connection without a thread/model. This preserves launcher wrappers and
+their configuration instead of guessing from `~/.persona/skills`. Persona's prepared `.claude/skills` extra root is
+the same as normal Codex startup. Enabled entries with real regular instruction files are accepted; discovery errors
+mark the inventory incomplete. At send time the resolved file becomes a typed `skill` input in `turn/start` or
+`turn/steer`, alongside the unchanged reference text.
+
+Claude resolves the same effective profile as `assistantSend`, then reads only immediate skill directories under
+that profile's `skills` and the working directory's ancestor `.claude/skills` roots (at most 64 ancestors, 512 entries,
+16 KiB frontmatter per file). Names/descriptions are data, not executed YAML or shell substitutions; bodies are not
+read for the menu. `user-invocable: false` and local `skillOverrides: off` are respected.
+Nonempty `user-invocable` scalar forms other than `true` are conservatively omitted by this bounded parser.
+Known strict-plugin policy or `Skill` deny/ask rules refuse this adapter rather than work around native
+customization/approval gates.
+The launcher's existing `--settings` file or inline object is checked through the same settings reader as startup;
+its values are never returned in the catalog or diagnostics.
+Known managed-policy files/drop-in directories or a server-policy cache also refuse the bounded adapter:
+it checks their presence without reading a potentially credential-bearing cache or executing policy helpers.
+This bounded adapter deliberately does **not** claim to enumerate plugin, bundled or remote skills.
+It sends an explicit, server-resolved exact-file reading instruction under existing permissions rather than a native
+slash command, which could resolve a same-name skill elsewhere or apply frontmatter tool/permission overrides.
+
+References are hashes of assistant, computer, working directory, launcher/runtime/profile and skill identity.
+The manager and execution node revalidate selected identities against the current environment. Paths never come
+from a client, and names never serve as fallback lookup keys. Deleted or changed-environment selections return
+`skill_unavailable`, `delivered: none`, `retryable: false`; ordinary text does not query the catalog. Skill bodies
+remain subject to existing runtime permissions and higher-priority instructions.
+
+Offline contracts: `server/internal/assistant/skill_mentions_test.go`,
+`server/internal/node/skill_mentions_test.go`, `server/internal/assistantskills/references_test.go`,
+and `web/src/views/chat/MentionSkill.test.tsx`. Opt-in real runtime checks:
+`node scripts/test/skill-runtime-smoke.mjs codex` (actual inventory, no model),
+`node scripts/test/skill-runtime-smoke.mjs codex --model`, and
+`node scripts/test/skill-runtime-smoke.mjs claude --model`. Model runs use disposable read-only-request fixtures and
+existing authentication; optional `--model-id <existing-model-id>` selects a model for this invocation only.
+Claude also accepts `--settings <current-profile-settings-file>` without copying its contents or changing the default.
+Its Go test bridge uses production catalog, opaque-reference validation and instruction rendering against the
+current profile (`CLAUDE_CONFIG_DIR`, or Claude's unset/default profile), explicitly keeping the catalog partial.
+It confirms an explicit model override against the runtime's initialization event, then requires an actual
+exact-file `Read`/successful tool-result pair and the random marker stored only in
+the disposable instruction body, not merely a successful chat reply. Go must be installed for that bridge.
+Output is allowlisted; arbitrary replies, catalogs and credentials are not printed. A successful runtime
+smoke is not a production Web-to-hub end-to-end test. Synthetic browser fixture:
+`PORT=25357 python3 scripts/mock/skill_mentions.py`.
+
+Inspected browser captures use only that fictional fixture, not the requester's reference image or account data:
+[light](../web/screenshots/skill-mentions/light-menu.png),
+[dark](../web/screenshots/skill-mentions/dark-menu.png),
+[narrow large-text light](../web/screenshots/skill-mentions/narrow-light-menu.png),
+[narrow large-text dark](../web/screenshots/skill-mentions/narrow-dark-menu.png),
+[selected](../web/screenshots/skill-mentions/narrow-selected.png),
+[loading](../web/screenshots/skill-mentions/narrow-loading.png),
+[unavailable](../web/screenshots/skill-mentions/narrow-error.png), and
+[partial](../web/screenshots/skill-mentions/narrow-light-partial.png).
+These demonstrate rendered interaction, not production connectivity or model execution.
+
+Runtime contracts were checked against the official
+[Codex app-server skills documentation](https://developers.openai.com/codex/app-server/#skills) and
+[Claude skills documentation](https://code.claude.com/docs/en/skills).
+No native client feature or build is part of this Web-only change.
+
 ## Workspace mentions (2026-11-06, #5594)
 
 In the assistant's composer (web), `@` also lists **workspaces**: the discovered workspaces of `GET /api/v1/workspaces` (host spaces, current session folders and folders bound on the workspace board, on every computer; see [workspace-board.md](../web/workspace-board.md), "Workspaces and status"). The list is read each time the menu opens, works whether or not the board is turned on, shows one row per computer and folder, and leaves out host spaces without a folder. Agents' composers don't offer it: an Agent already works in one folder.

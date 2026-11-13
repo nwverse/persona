@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantskills"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -307,6 +308,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 	}
 	if guest != nil {
+		if refs, err := assistantskills.References(text); err != nil || len(refs) != 0 {
+			return "", skillSelectionError(assistantskills.ErrReference)
+		}
 		if resume {
 			launcher, options = "", nil // it keeps what it started on (the hub sends none either)
 		}
@@ -327,6 +331,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
+		if refs, err := assistantskills.References(text); err != nil || len(refs) != 0 {
+			return "", skillSelectionError(assistantskills.ErrReference)
+		}
 		if execution.ConfigDir != "" {
 			return "", errors.New("config_dir is only supported for Claude assistant conversations")
 		}
@@ -408,6 +415,15 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if cwd == "" {
 		cwd = n.storedCwd(st.Cwd)
 	}
+	selectionSession := id
+	if !resume {
+		selectionSession = "" // a newly allocated Claude id has no resumable profile yet
+	}
+	selected, err := n.selectedSkills(ctx, selectionSession, cwd, launcher, text, execution)
+	if err != nil {
+		return "", err
+	}
+	selectedLauncher, selectedExecution := launcher, execution
 	// The live snapshot the message starts with, asked for while the process starts (assistant_context.go). A new
 	// Codex conversation has no id yet: it can't be the main one.
 	snapc := make(chan contextAnswer, 1)
@@ -480,6 +496,15 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 
 	n.persistModes(id, mode, effort) // after saving state, including defaults filled on resume
 	n.noteAssistantRecoveryProcess(ctx, p)
+	if launcher != selectedLauncher || execution != selectedExecution || len(selected) > 0 && p.agent == "claude" {
+		// An active process may retain its old environment while a switch waits. Never send selections to that
+		// different environment simply because the display names match. Claude startup can also
+		// reveal a managed-policy cache; recheck before handing exact-file instructions to it.
+		selected, err = n.selectedSkills(ctx, id, cwd, launcher, text, execution)
+		if err != nil {
+			return "", err
+		}
+	}
 	retryMode, retryEffort := n.modesOf(id) // retain the request before an unconfirmed control can roll it back
 	// Controls do not depend on the live context. Start their acknowledged sync
 	// while the snapshot RPC is pending, but join both before writing any input.
@@ -497,7 +522,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		p.turnErrorKind = ""
 		p.lastActive = time.Now()
 		p.mu.Unlock()
-		if err := p.cx.deliver(ctx, live, text, images); err != nil {
+		if err := p.cx.deliver(ctx, live, text, images, selected...); err != nil {
 			p.mu.Lock()
 			p.busy = p.cx.turn() != ""
 			p.mu.Unlock()
@@ -513,6 +538,13 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	content := []map[string]any{}
 	if live != "" {
 		content = append(content, map[string]any{"type": "text", "text": live})
+	}
+	if len(selected) > 0 {
+		skills := make([]prompts.AssistantSelectedSkill, len(selected))
+		for i, e := range selected {
+			skills[i] = prompts.AssistantSelectedSkill{Name: e.Name, Path: e.Path, Ref: e.ID}
+		}
+		content = append(content, map[string]any{"type": "text", "text": prompts.RenderAssistantSelectedSkills(skills)})
 	}
 	if midTurn {
 		content = append(content, interjectNote(interject))
