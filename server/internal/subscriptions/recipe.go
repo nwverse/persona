@@ -290,6 +290,7 @@ type mapped struct {
 	dueBad   bool
 	rawTime  string
 	rawDue   string
+	rawSeen  string
 	hasTitle bool
 }
 
@@ -314,6 +315,9 @@ func mapItem(v any, f *connector.SubscriptionFields, kind string, loc *time.Loca
 	it.SenderID = clip(strings.TrimSpace(get(f.SenderID)), idMax)
 	it.Chat = clip(strings.TrimSpace(get(f.Chat)), idMax)
 	it.ChatName = clip(oneLine(get(f.ChatName)), titleMax)
+	it.ReplyTo = clip(oneLine(get(f.ReplyTo)), titleMax)
+	m.rawSeen = get(f.Seen)
+	it.Seen = seenValue(m.rawSeen)
 	it.Body = clip(get(f.Body), bodyMax)
 	it.Link = clip(get(f.Link), 2000)
 	m.rawTime, m.rawDue = get(f.Time), get(f.DueDate)
@@ -336,13 +340,28 @@ func mapItem(v any, f *connector.SubscriptionFields, kind string, loc *time.Loca
 	if id != "" {
 		it.UID, m.idFound = clip(id, idMax), true
 	} else {
-		it.UID = "h:" + hashOf(it.Title, m.rawTime, it.Sender)[:24]
+		it.UID = weakPrefix + hashOf(it.Title, m.rawTime, it.Sender)[:24]
 	}
 	m.item = it
 	return m
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// weakPrefix starts the uid of an item without an id: a hash of its title, time and sender, which the source knows
+// nothing of (so it cannot be replied to by it).
+const weakPrefix = "h:"
+
+// seenValue says whether a seen field's value (as text writes it) means seen: true, a non-zero number, or true, 1,
+// yes, read or seen in any case.
+func seenValue(s string) bool {
+	switch strings.ToLower(s) {
+	case "true", "yes", "read", "seen":
+		return true
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	return err == nil && f != 0
+}
 
 func hashOf(parts ...string) string {
 	h := sha256.New()

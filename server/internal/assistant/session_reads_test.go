@@ -31,9 +31,11 @@ func (d *listCountingDevs) lists() int { return int(d.n.Load()) }
 // 100 ms coalescing): a pass the fixture started counts too, so the count after it belongs to the call under test
 // alone, not to whenever the background work happened to land.
 func (d *listCountingDevs) settle() {
+	poll := time.NewTicker(200 * time.Millisecond)
+	defer poll.Stop()
 	for {
 		n := d.lists()
-		time.Sleep(200 * time.Millisecond)
+		<-poll.C
 		if d.lists() == n {
 			return
 		}

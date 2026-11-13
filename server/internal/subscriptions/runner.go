@@ -103,7 +103,7 @@ func (s *Service) startDue(ctx context.Context) *sync.WaitGroup {
 		if IsPush(sub) {
 			continue // filled by its device, never pulled
 		}
-		asked := s.asked[sub.ID]
+		asked := s.asked[sub.ID] || s.kicked[sub.ID] && pullScheduled(sub)
 		if !asked && (!pullScheduled(sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
 			continue
 		}
@@ -166,6 +166,7 @@ func (s *Service) runOne(ctx context.Context, id string) {
 	}
 	s.mu.Lock()
 	asked := s.asked[id]
+	kicked := s.kicked[id] && pullScheduled(*sub) // still on: a changed event brought its run forward
 	g := s.gateOf(sub.Connector)
 	now := s.now()
 	g.prune(now)
@@ -183,10 +184,16 @@ func (s *Service) runOne(ctx context.Context, id string) {
 		resume = g.calls[0].Add(time.Hour)
 	}
 	s.mu.Unlock()
-	if !asked && (!pullScheduled(*sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
+	if !asked && !kicked && (!pullScheduled(*sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
+		s.mu.Lock()
+		delete(s.kicked, id) // switched off since
+		s.mu.Unlock()
 		return
 	}
 	if paused || full {
+		s.mu.Lock()
+		delete(s.kicked, id) // held back by the connector's limits: the schedule runs it
+		s.mu.Unlock()
 		// Not a run: the connector's limits hold it back. A pause shows; the hourly budget only moves the run.
 		next := *sub
 		next.NextRunAt = &resume
@@ -205,6 +212,7 @@ func (s *Service) runOne(ctx context.Context, id string) {
 	}
 	s.mu.Lock()
 	delete(s.asked, id)
+	delete(s.kicked, id)
 	s.mu.Unlock()
 	s.execute(ctx, *sub, asked, now)
 }
@@ -312,6 +320,7 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 	run := Run{At: start, MS: ms, Trigger: trigger}
 	var seen []Seen
 	var items []Item
+	var read []string // held items this pull reads as seen now (#6176)
 	// A recipe changed with existing baseline records every page as seen and keeps none of it. Its mark clears only
 	// with the terminal page, so a restart cannot deliver an earlier page as new.
 	baseline := sub.Baseline
@@ -340,6 +349,11 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 			it := m.item
 			it.SubscriptionID = sub.ID
 			items, seen = append(items, it), append(seen, Seen{UID: it.UID, ContentHash: m.hash})
+		}
+		for _, m := range pl.items {
+			if m.item.Seen && known[m.item.UID] && !slices.Contains(read, m.item.UID) {
+				read = append(read, m.item.UID) // read in the source since it was stored: the held item is seen too
+			}
 		}
 		for _, m := range pl.items {
 			sawItems = true
@@ -388,7 +402,7 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 		n := s.nextRun(next, start, false)
 		next.NextRunAt = &n
 	}
-	if !s.commit(ctx, sub, next, &commitData{seen: seen, items: items, baseline: baselineCommit}, &run, start, true) {
+	if !s.commit(ctx, sub, next, &commitData{seen: seen, items: items, read: read, baseline: baselineCommit}, &run, start, true) {
 		return
 	}
 	if pl.continuation != nil {
@@ -480,6 +494,7 @@ func (s *Service) needsRecipe(ctx context.Context, sub, next Subscription, p *Pr
 type commitData struct {
 	seen     []Seen
 	items    []Item
+	read     []string   // uids of held items now seen
 	baseline *time.Time // the baseline mark this run took
 }
 
@@ -500,7 +515,7 @@ func (s *Service) commit(ctx context.Context, sub, next Subscription, d *commitD
 	}
 	c := RunCommit{Sub: next, Revision: sub.Revision, Now: now}
 	if d != nil {
-		c.Seen, c.Items, c.Baseline = d.seen, d.items, d.baseline
+		c.Seen, c.Items, c.Read, c.Baseline = d.seen, d.items, d.read, d.baseline
 	}
 	if err := s.o.Store.CommitRun(ctx, c); err != nil {
 		// Nothing of the run is kept; its lease runs out and the run is made again, deduplicated.
