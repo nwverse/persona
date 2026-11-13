@@ -2,7 +2,7 @@
 // The Agents title row's fold-all button (#6447): every click changes what is on screen, and only the list under the
 // controls. It folds the groups to their headings and opens them; with the list folded under the title it opens the
 // list and every group; in the chat-list view and with no groups it is not there (a first fix folded the whole block,
-// controls and all). A hint names the action and what it changes. The groups here stand in for the sidebar's: headings
+// controls and all). Its tooltip names the action, with no second line. The groups here stand in for the sidebar's: headings
 // driven by useFolded; SidebarFoldAll.test.tsx clicks the real one.
 import { act, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -51,7 +51,8 @@ const button = () => host.querySelector<HTMLButtonElement>("[data-testid=agents-
 /** The glyph an icon draws, and the one a button shows: corners in (Collapse all) or out (Expand all). */
 const glyph = (name: IconName) => renderToStaticMarkup(<Icon name={name} />).match(/ d="([^"]+)"/)?.[1];
 const shows = (b: Element | null | undefined) => b?.querySelector("path")?.getAttribute("d");
-const hint = () => document.getElementById(button()!.getAttribute("aria-describedby")!)?.textContent;
+/** The tooltip after the button: its name, nothing more (#6447). */
+const tip = () => host.querySelector<HTMLElement>("[data-testid=agents-fold-all-tip]")?.textContent;
 const block = () => host.querySelector("[data-block]")!.getAttribute("data-block");
 const opened = () => [...host.querySelectorAll("[data-sidebar-group-heading] button")].map((b) => b.getAttribute("aria-expanded"));
 const press = async () => {
@@ -74,12 +75,12 @@ describe("the Agents fold-all button", () => {
   it("folds every group while any is open, and opens them all once none is", async () => {
     await render(<Block groups={[{ k: "machine:a" }, { k: "machine:b", folded: true }]} />);
     expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.fold_all"));
-    expect(hint()).toBe(t("sidebar.fold_all_hint"));
+    expect(tip()).toBe(t("sidebar.fold_all"));
     expect(shows(button())).toBe(glyph("foldToggle"));
     await press();
     expect(opened()).toEqual(["false", "false"]);
     expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.open_all"));
-    expect(hint()).toBe(t("sidebar.open_all_hint"));
+    expect(tip()).toBe(t("sidebar.open_all"));
     // folded, its corners point out: the next click opens
     expect(shows(button())).toBe(glyph("unfoldToggle"));
     await press();
@@ -107,7 +108,7 @@ describe("the Agents fold-all button", () => {
     await render(<Block blockFolded groups={[{ k: "machine:a", folded: true }, { k: "machine:b", folded: true }]} />);
     expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.open_all"));
     expect(shows(button())).toBe(glyph("unfoldToggle"));
-    expect(hint()).toBe(t("sidebar.open_list_hint"));
+    expect(tip()).toBe(t("sidebar.open_all"));
     await press();
     expect(block()).toBe("open");
     expect(opened()).toEqual(["true", "true"]);
@@ -131,12 +132,13 @@ describe("the Agents fold-all button", () => {
     expect(button()).toBeNull();
   });
 
-  it("shows its hint in a tooltip right after it, named by the button", async () => {
+  it("shows its name in a tooltip right after it, with no line explaining it", async () => {
     await render(<Block groups={[{ k: "machine:a" }]} />);
-    const tip = host.querySelector<HTMLElement>("[data-testid=agents-fold-all-hint]")!;
-    expect(tip.getAttribute("role")).toBe("tooltip");
-    expect(button()!.nextElementSibling).toBe(tip);
-    expect(tip.textContent).toBe(t("sidebar.fold_all") + t("sidebar.fold_all_hint"));
+    const el = host.querySelector<HTMLElement>("[data-testid=agents-fold-all-tip]")!;
+    expect(button()!.nextElementSibling).toBe(el);
+    expect(el.textContent).toBe(t("sidebar.fold_all"));
+    expect(el.getAttribute("aria-hidden")).toBe("true"); // the button's aria-label already says it
+    expect(button()!.hasAttribute("aria-describedby")).toBe(false);
     expect(button()!.hasAttribute("title")).toBe(false);
   });
 });

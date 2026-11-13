@@ -51,7 +51,7 @@ const fold = () => section().querySelector<HTMLButtonElement>("[data-testid=todo
 const glyph = (name: IconName) => renderToStaticMarkup(<Icon name={name} />).match(/ d="([^"]+)"/)?.[1];
 const shows = (b: Element | null | undefined) => b?.querySelector("path")?.getAttribute("d");
 const more = () => section().querySelector<HTMLButtonElement>("[data-testid=todo-decisions-more]");
-const hint = () => document.getElementById(fold()!.getAttribute("aria-describedby")!)?.textContent;
+const tip = () => section().querySelector("[data-testid=todo-decisions-fold-tip]")?.textContent;
 const decisionReads = () => api.mock.calls.filter(([path]) => path.includes("/decisions")).length;
 
 const iso = (agoMs: number) => new Date(Date.now() - agoMs).toISOString();
@@ -126,7 +126,7 @@ describe("a to-do's decisions", () => {
     await open("t1");
     const reads = decisionReads();
     expect(fold()?.getAttribute("aria-label")).toBe(t("todos.decisions_fold"));
-    expect(hint()).toBe(t("todos.decisions_fold_hint"));
+    expect(tip()).toBe(t("todos.decisions_fold"));
     expect(shows(fold())).toBe(glyph("foldToggle"));
 
     await click(fold());
@@ -135,7 +135,7 @@ describe("a to-do's decisions", () => {
     expect(section().textContent).not.toContain(t("todos.decisions_empty"));
     expect(section().textContent).toContain(t("todos.decisions_section", { count: 11 }));
     expect(fold()?.getAttribute("aria-label")).toBe(t("todos.decisions_expand"));
-    expect(hint()).toBe(t("todos.decisions_expand_hint", { count: 11 }));
+    expect(tip()).toBe(t("todos.decisions_expand"));
     expect(shows(fold())).toBe(glyph("unfoldToggle"));
 
     await click(fold());
