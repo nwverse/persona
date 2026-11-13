@@ -80,8 +80,8 @@ describe("FileEdit", () => {
     expect(button(t("files-editor.save"))!.disabled).toBe(true);
     await type("a\nb\nc\n");
     await click(t("files-editor.save"));
+    await vi.waitFor(() => expect(done).toEqual([true]));
     expect(sent).toEqual([{ path: "/w/a.txt", cwd: "/w", text: "a\r\nb\r\nc\r\n", revision: "r1", sha256: await sha256Hex("a\r\nb\r\n") }]);
-    expect(done).toEqual([true]);
   });
 
   it("asks before throwing edits away", async () => {
@@ -96,14 +96,15 @@ describe("FileEdit", () => {
   it("does not overwrite a newer version unless asked twice", async () => {
     answers.push(() => Response.json({ error: "changed", code: "file_changed", revision: "r5" }, { status: 409 }));
     await type("x\n");
+    const changedTitle = t("files-editor.changed_title", { name: "a.txt" });
     await click(t("files-editor.save"));
-    expect(document.body.textContent).toContain(t("files-editor.changed_title", { name: "a.txt" }));
+    await vi.waitFor(() => expect(document.body.textContent).toContain(changedTitle));
     expect(done).toEqual([]);
     await click(t("files-editor.overwrite_anyway"));
-    expect(document.body.textContent).toContain(t("files-editor.overwrite_title"));
+    await vi.waitFor(() => expect(document.body.textContent).toContain(t("files-editor.overwrite_title")));
     await click(t("files-editor.overwrite"));
+    await vi.waitFor(() => expect(done).toEqual([true]));
     expect(sent.at(-1)).toMatchObject({ text: "x\r\n", force: true });
-    expect(done).toEqual([true]);
   });
 
   it("saves a copy under the first free name", async () => {
@@ -111,8 +112,10 @@ describe("FileEdit", () => {
     answers.push(() => Response.json({ error: "taken", code: "exists", name: "a 2.txt" }, { status: 409 }));
     await type("y\n");
     await click(t("files-editor.save"));
+    await vi.waitFor(() => expect(document.body.textContent).toContain(t("files-editor.changed_title", { name: "a.txt" })));
     await click(t("files-editor.save_copy"));
-    expect(sent.slice(1).map((b) => [b.path, b.create])).toEqual([["/w/a 2.txt", true], ["/w/a 3.txt", true]]);
-    expect(done).toEqual([true]);
+    await vi.waitFor(() => expect(done).toEqual([true]));
+    expect(sent.filter((b) => b.create === true).map((b) => [b.path, b.create]))
+      .toEqual([["/w/a 2.txt", true], ["/w/a 3.txt", true]]);
   });
 });
