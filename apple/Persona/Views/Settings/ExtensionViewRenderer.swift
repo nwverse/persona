@@ -263,15 +263,19 @@ struct ExtensionItemRow: View {
         case .metric(let m): metric(m)
         case .progress(let p): progress(p)
         case .row(let r):
-            if let control = r.control, control.drawable {
-                // UI version 6: a switch, a slider or a stepper in the row (`ExtensionControlRow`).
-                ExtensionControlRow(row: r, control: control, model: model, link: $link)
-            } else if let action = r.action, let model {
-                ExtensionActionButton(action: action, title: r.title, model: model, link: $link) { ExtensionComponentRowLabel(row: r, model: model, chevron: true) }
-                    .foregroundStyle(Color.primary)
-            } else {
-                ExtensionComponentRowLabel(row: r, model: model, chevron: false)
+            Group {
+                if let control = r.control, control.drawable {
+                    // UI version 6: a switch, a slider or a stepper in the row (`ExtensionControlRow`).
+                    ExtensionControlRow(row: r, control: control, model: model, link: $link)
+                } else if let action = r.action, let model {
+                    ExtensionActionButton(action: action, title: r.title, model: model, link: $link) { ExtensionComponentRowLabel(row: r, model: model, chevron: true) }
+                        .foregroundStyle(Color.primary)
+                } else {
+                    ExtensionComponentRowLabel(row: r, model: model, chevron: false)
+                }
             }
+            // UI version 6: its extra actions (`ExtensionRowActions.swift`).
+            .extensionRowActions(r.actions, model: model, link: $link)
         case .button(let b):
             if let model {
                 ExtensionActionButton(action: b.action, title: b.title, destructive: b.role == "destructive", model: model, link: $link) {
@@ -335,6 +339,8 @@ struct ExtensionItemRow: View {
             .font(Theme.Font.label).foregroundStyle(.secondary)
             ExtensionChangingText(m.value).font(Theme.Font.title.monospacedDigit()).foregroundStyle(ExtensionUIStyle.ink(m.tone)).lineLimit(1)
                 .minimumScaleFactor(0.6)
+            // UI version 6: its trend under the number, as wide as the metric.
+            if let spark = m.spark { ExtensionSparkLine(spark: spark, width: nil).frame(maxWidth: .infinity) }
             if let d = m.detail, !d.isEmpty { Text(d).font(Theme.Font.label).foregroundStyle(.secondary) }
         }
         .padding(.vertical, Theme.Space.xxs)
