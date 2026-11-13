@@ -132,7 +132,7 @@ def review(repo, pr, worktree, config):
     model = config.get("model")
     argv = argv_with_prefix(
         config.get("command", "claude"),
-        ["-p", prompt, "--output-format", "json", "--json-schema", json.dumps(SCHEMA, separators=(",", ":")),
+        ["-p", "--output-format", "json", "--json-schema", json.dumps(SCHEMA, separators=(",", ":")),
          "--no-session-persistence", "--tools", "Read", "--safe-mode", "--setting-sources", "",
          "--strict-mcp-config", "--permission-mode", "plan", "--disable-slash-commands"],
     )
@@ -143,7 +143,7 @@ def review(repo, pr, worktree, config):
     timeout = int(config.get("timeout_seconds", 900))
     if not 30 <= timeout <= 3600:
         raise WatchError("reviewer timeout must be between 30 and 3600 seconds")
-    result = run(argv, cwd=worktree, timeout=timeout)
+    result = run(argv, cwd=worktree, timeout=timeout, input_text=prompt)
     if result.returncode:
         raise WatchError("reviewer failed (%s): %s" % (result.returncode, bounded(result.stderr, 1200)))
     return parse_result(result.stdout, anchors)

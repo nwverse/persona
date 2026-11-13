@@ -123,7 +123,7 @@ type groupModel struct {
 	mu      sync.Mutex
 	replies []string
 	stops   []string // stop_reason per reply ("" none): "max_tokens" cuts it off, "refusal" is a decline
-	sleep   time.Duration
+	hold    bool     // hold the response until the caller gives up, without a fixed sleep
 	down    bool
 	calls   []capturedCall
 	budgets []int
@@ -152,15 +152,16 @@ func newGroupModel(t *testing.T, replies ...string) (*groupModel, *ai.Client) {
 			m.calls = append(m.calls, c)
 			m.budgets = append(m.budgets, in.MaxTokens)
 			down := m.down
-			sleep := m.sleep
+			hold := m.hold
 			i := min(len(m.calls), len(m.replies)) - 1
 			reply = m.replies[i]
 			if i < len(m.stops) {
 				stop = m.stops[i]
 			}
 			m.mu.Unlock()
-			if sleep > 0 {
-				time.Sleep(sleep)
+			if hold {
+				<-r.Context().Done()
+				return
 			}
 			if down {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -421,7 +422,7 @@ func TestInboxGroupTimeoutIsNotReasked(t *testing.T) {
 	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, fallback: connector.GroupFallbackResult{
 		New: []connector.GroupNew{{Key: "k1", Messages: []string{"m1060", "m1061"}, RuleTier: connector.TierFYI}}}}
 	model, client := newGroupModel(t, groupAnswerOK)
-	model.sleep = 200 * time.Millisecond
+	model.hold = true
 	h, _ := groupHub(t, g, client)
 	h.collectInbox(context.Background(), roundPoll)
 	h.waitGrouping()
