@@ -4913,8 +4913,18 @@ struct FeishuLink: View {
 
 struct SuggestionPill: View {
     var text: String
+    var risky: Bool = false
     var fill: () -> Void
     var send: () -> Void
+
+    /// One policy for every direct-send affordance. The frozen Mac and unverified visionOS keep their existing behavior.
+    var directSend: (() -> Void)? {
+        #if os(iOS)
+        return risky ? nil : send
+        #else
+        return send
+        #endif
+    }
 
     var body: some View {
         Button {
@@ -4934,14 +4944,30 @@ struct SuggestionPill: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button { Haptics.success(); send() } label: { Label("Send Now", systemImage: "arrow.up.circle") }
+            if let directSend {
+                Button { Haptics.success(); directSend() } label: { Label("Send Now", systemImage: "arrow.up.circle") }
+            }
             Button(action: fill) { Label("Fill In", systemImage: Theme.Icon.insert) }
         } preview: {
             Text(text).font(Theme.Font.body).padding(Theme.Space.l).frame(maxWidth: 320, alignment: .leading)
         }
         .accessibilityLabel("Claude suggests: \(text)")
-        .accessibilityHint("Fills the input box. Touch and hold to send right away.")
-        .accessibilityAction(named: "Send Now", send)
+        .modifier(SuggestionAccessibility(send: directSend))
+    }
+}
+
+/// Risky suggestions have no direct-send accessibility action and do not advertise one. Safe suggestions keep both.
+private struct SuggestionAccessibility: ViewModifier {
+    var send: (() -> Void)?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let send {
+            content
+                .accessibilityHint("Fills the input box. Touch and hold to send right away.")
+                .accessibilityAction(named: "Send Now", send)
+        } else {
+            content.accessibilityHint("Fills the input box.")
+        }
     }
 }
 
@@ -5375,7 +5401,7 @@ struct Composer: View, Equatable {
                     .transition(.opacity)
             }
             if let suggestion, !inCall {
-                SuggestionPill(text: suggestion) {
+                SuggestionPill(text: suggestion, risky: model.session(key)?.suggestionRisky == true) {
                     text = suggestion
                     selection = TextSelection(insertionPoint: suggestion.endIndex) // keep typing after it
                     focused = true
