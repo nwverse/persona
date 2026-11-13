@@ -38,6 +38,10 @@ own `site/public/style.css`.
 - **The version in the top bar** is `/dl/VERSION`, written by `scripts/release/publish.sh`; the badge stays hidden
   when the file is missing. It links to `/releases/`, whose latest stable GitHub release may appear before this
   separately published hub version.
+- **Download section** (`#download`, the top bar's 下载): one tile per device with the latest stable files straight
+  from GitHub, filled from `/releases/data.json` with the releases page's own `model.js` (same file choice, same
+  fallback to an older release while one is uploading, same address check). Without the data each tile links to its
+  card on `/releases/`; the visitor's device is marked.
 - **Light only.** The previous page also had a dark variant; this one follows the app icon's paper in both schemes.
 
 ## Legal pages and support
@@ -96,18 +100,18 @@ Persona who may not know GitHub's release layout: they should see the latest ver
 are on in one click, and still reach every other device, component and earlier version.
 
 - **Layout**: a "ticket" for the latest stable version (the version large in the brand face, its date, feature and fix
-  counts) with the download for the visitor's device; the release's highlights; one card per device (iPhone and Apple
+  counts) with the download for the visitor's device; one card per device (iPhone and Apple
   Watch through TestFlight, Android, Mac, Windows, Linux, the web bundle); components and checksum files behind a
   disclosure; and the version history, newest first, each version expandable to its highlights and packages with a link
   to its full notes on GitHub. Same palette, type, top bar and footer as the home page; light and dark, with every color
   a variable at the top of its CSS (the extensions page's night set).
-- **The visitor's device** (`site/public/releases/model.js`, `detectPlatform`) picks the ticket's primary button and the
-  highlighted card. Chromium's architecture hint corrects the guess; Safari reports Intel on Apple silicon, so a Mac
+- **The visitor's device** (`site/public/releases/model.js`, `detectPlatform`) picks the ticket's selected device tab
+  (a row of tabs switches the ticket to any other device) and the highlighted card. Chromium's architecture hint corrects the guess; Safari reports Intel on Apple silicon, so a Mac
   defaults to Apple silicon and both files are always shown. iPads asking for the desktop site count as iPhone.
 - **A release still uploading**: when the latest version has no file for a device, the page offers the newest stable
   release that has one and says so ("v0.4.0's Mac package is still uploading…"). Prereleases are listed in the history
   but never offered as a download.
-- **Highlights** come from GitHub's generated notes (`summarizeNotes` in `site/releases.mjs`): counts of `feat` / `fix`
+- **Highlights** (shown inside each history row) come from GitHub's generated notes (`summarizeNotes` in `site/releases.mjs`): counts of `feat` / `fix`
   items and up to four feature titles, one per area, areas people use first (assistant, iPhone, Android, web …) and
   build, test and release plumbing never. Handles, links and PR numbers are removed; the titles stay in English, as
   the page says.

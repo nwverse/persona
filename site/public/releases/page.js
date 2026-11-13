@@ -3,7 +3,7 @@
 // downloaded from GitHub directly: nothing here goes through this site.
 import {
   DEVICES, COMPONENTS, GITHUB_RELEASES, TESTFLIGHT,
-  archLabel, areaLabel, countsLine, detectPlatform, downloadFor, formatAge, formatDate, formatSize,
+  archLabel, areaLabel, compareVersions, countsLine, detectPlatform, downloadFor, formatAge, formatDate, formatSize,
   hasPackages, isDirectDownload, latestRelease,
 } from "./model.js";
 
@@ -79,11 +79,6 @@ function drawTicket(data, det) {
   const latest = latestRelease(data);
   ticket.classList.remove("loading");
   ticket.removeAttribute("aria-busy");
-  const notices = $("tk-notices");
-  notices.replaceChildren();
-  const actions = $("tk-actions");
-  actions.replaceChildren();
-  $("tk-meta").textContent = "";
 
   $("tk-ver").replaceChildren(el("span", { text: "v" }), document.createTextNode(latest.version));
   $("tk-chip").hidden = false;
@@ -95,33 +90,52 @@ function drawTicket(data, det) {
     $("tk-stats").hidden = false;
   }
 
-  const dev = det.platform ? deviceOf(det.platform) : null;
-  const forLine = $("tk-for");
-  forLine.replaceChildren();
-  if (!dev) {
-    forLine.append(document.createTextNode("挑一台设备开始"));
-    $("tk-title").textContent = "下载 Persona";
-    actions.append(primaryButton({ href: "#devices", text: "选择你的设备", iconName: "down" }),
-      primaryButton({ href: TESTFLIGHT, text: "iPhone 版", external: true, cls: "btn btn-paper" }));
-    $("tk-meta").textContent = "所有安装包都从 GitHub 直接下载。";
-  } else if (dev.id === "ios") {
-    forLine.append(icon("ios"), document.createTextNode("看起来你在用 iPhone 或 iPad"));
+  const mine = det.platform ? deviceOf(det.platform) : null;
+  $("tk-for").replaceChildren(...(mine
+    ? [icon(mine.id), document.createTextNode(mine.id === "ios" ? "看起来你在用 iPhone 或 iPad" : `看起来你在用 ${mine.name}`)]
+    : [document.createTextNode("选一台设备，直接下载")]));
+
+  // One tab per device: the visitor's own first selected, every other one a click away.
+  const tabs = $("tk-tabs");
+  const select = (id) => {
+    for (const b of tabs.children) b.setAttribute("aria-pressed", String(b.dataset.id === id));
+    drawDownload(data, deviceOf(id), id === det.platform ? det.arch : "");
+  };
+  tabs.replaceChildren(...DEVICES.map((dev) => {
+    const b = el("button", { type: "button", class: "tab", "data-id": dev.id, "aria-pressed": "false" }, icon(dev.id), el("span", { text: dev.short }));
+    b.addEventListener("click", () => select(dev.id));
+    return b;
+  }));
+  tabs.hidden = false;
+  select(mine ? mine.id : "ios");
+  ticket.classList.add("ready");
+}
+
+// drawDownload: the ticket's buttons, file line and notices for one device.
+function drawDownload(data, dev, arch) {
+  const latest = latestRelease(data);
+  const notices = $("tk-notices");
+  const actions = $("tk-actions");
+  notices.replaceChildren();
+  actions.replaceChildren();
+  $("tk-meta").textContent = "";
+  if (dev.id === "ios") {
     $("tk-title").textContent = "在 iPhone 上装 Persona";
     actions.append(primaryButton({ href: TESTFLIGHT, text: "打开 TestFlight", external: true }));
     $("tk-meta").textContent = "TestFlight 公开测试 · 需要 iOS 26 · 手表版随 iPhone 版一起提供";
   } else {
-    forLine.append(icon(dev.id), document.createTextNode(`看起来你在用 ${dev.name}`));
-    $("tk-title").textContent = `下载 ${dev.name} 版`;
-    const arches = dev.arches.slice().sort((a, b) => (a === det.arch ? -1 : b === det.arch ? 1 : 0));
-    const found = arches.map((arch) => ({ arch, d: downloadFor(data, dev.id, arch) })).filter((x) => x.d);
-    found.forEach(({ arch, d }, i) => {
-      const text = dev.id === "android" ? "下载 APK" : dev.id === "web" ? "下载网页包" : archLabel(dev.id, arch);
+    $("tk-title").textContent = dev.id === "web" ? "下载网页版" : `下载 ${dev.name} 版`;
+    const arches = dev.arches.slice().sort((a, b) => (a === arch ? -1 : b === arch ? 1 : 0));
+    const found = arches.map((x) => ({ arch: x, d: downloadFor(data, dev.id, x) })).filter((x) => x.d);
+    found.forEach(({ arch: x, d }, i) => {
+      const text = dev.id === "android" ? "下载 APK" : dev.id === "web" ? "下载网页包" : archLabel(dev.id, x);
       actions.append(primaryButton({ href: d.asset.url, text, size: formatSize(d.asset.size), cls: i === 0 ? "btn btn-cheek" : "btn btn-paper" }));
     });
     if (found.length) {
       const first = found[0].d;
       const hint = dev.id === "macos" ? "不确定是哪种芯片？点屏幕左上角的苹果菜单 › 关于本机。"
-        : dev.id === "windows" ? "不确定选哪个，选 x64。" : dev.id === "linux" ? "不确定选哪个，选 x86-64。" : "";
+        : dev.id === "windows" ? "不确定选哪个，选 x64。" : dev.id === "linux" ? "不确定选哪个，选 x86-64。"
+          : dev.id === "web" ? "hub 已经自带网页版，浏览器打开 hub 的地址就能用；只有自己托管网页时才需要这个包。" : "";
       $("tk-meta").textContent = `${first.asset.name} · 从 GitHub 直接下载${hint ? "\n" : ""}${hint}`;
       if (!first.current) {
         notices.append(notice("amber", document.createTextNode(
@@ -135,7 +149,6 @@ function drawTicket(data, det) {
   if (data.stale) {
     notices.append(notice("amber", document.createTextNode(`GitHub 暂时连不上，这是 ${formatAge(data.fetched_at)}读到的版本信息。`)));
   }
-  ticket.classList.add("ready");
 }
 
 function drawFailure(retry) {
@@ -148,25 +161,12 @@ function drawFailure(retry) {
   $("tk-title").textContent = "暂时读不到版本信息";
   $("tk-meta").textContent = "可能是网络不稳，或者 GitHub 暂时连不上。可以重试，也可以直接去 GitHub 下载。";
   $("tk-notices").replaceChildren();
+  $("tk-tabs").hidden = true;
   const again = el("button", { class: "btn btn-cheek", type: "button" }, el("span", { text: "重试" }));
   again.addEventListener("click", retry);
   $("tk-actions").replaceChildren(again,
     primaryButton({ href: GITHUB_RELEASES + "/latest", text: "去 GitHub 下载", external: true, cls: "btn btn-paper" }));
   $("history-list").replaceChildren(el("li", {}, notice("cheek", document.createTextNode("版本列表暂时读不到。"))));
-}
-
-// ---------- highlights ----------
-
-function drawHighlights(latest) {
-  const list = latest.highlights || [];
-  $("highlights").hidden = list.length === 0;
-  if (!list.length) return;
-  $("hl-sub").textContent = [latest.tag, countsLine(latest.counts)].filter(Boolean).join(" · ");
-  $("hl-notes").href = releaseURL(latest);
-  $("hl-list").replaceChildren(...list.map((h) => {
-    const area = areaLabel(h.scope);
-    return el("li", {}, area ? el("span", { class: "area", text: area }) : null, el("p", { text: h.title }));
-  }));
 }
 
 // ---------- devices ----------
@@ -210,9 +210,9 @@ function drawDevices(data, det) {
 // ---------- components and checksums ----------
 
 function drawParts(data) {
-  const latest = latestRelease(data);
-  const stable = data.releases.filter((r) => !r.prerelease);
-  const rel = hasPackages(latest) ? latest : stable.find(hasPackages);
+  // The newest stable release that has components: the latest one may still be uploading them.
+  const hasComponents = (r) => r.assets.some((a) => a.kind === "component");
+  const rel = data.releases.filter((r) => !r.prerelease).sort((a, b) => compareVersions(b.version, a.version)).find(hasComponents);
   $("parts-sec").hidden = !rel;
   if (!rel) return;
   $("parts-sub").textContent = `${rel.tag} · 给想自己部署的人。上面的电脑安装包已经包含这些组件。`;
@@ -301,7 +301,6 @@ async function load(fresh) {
     const data = await res.json();
     if (!latestRelease(data)) throw new Error("no release");
     drawTicket(data, det);
-    drawHighlights(latestRelease(data));
     drawDevices(data, det);
     drawParts(data);
     drawHistory(data);
