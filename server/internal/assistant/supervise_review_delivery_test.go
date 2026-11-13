@@ -89,3 +89,20 @@ func TestAcceptedNeedsTheTasksPRLive(t *testing.T) {
 		})
 	}
 }
+
+func TestAcceptedUnavailableDoesNotCallWorkUnfinished(t *testing.T) {
+	s, todo := deliveryReviewService(t, &fakeForge{err: errors.New("verification unavailable")}, &runningHub{commit: oldHub}, false)
+	_, err := acceptReview(s, todo.ID, nil)
+	if err == nil || !strings.Contains(err.Error(), "交付状态暂时无法验证") {
+		t.Fatalf("missing unavailable-verification guidance: %v", err)
+	}
+	for _, old := range []string{"is not live", "agent_send", "external_event", "outcome cannot"} {
+		if strings.Contains(err.Error(), old) {
+			t.Fatalf("unfinished-work guidance %q remains: %v", old, err)
+		}
+	}
+	if got := todoNow(s, todo.ID); got.DoneAt != nil {
+		t.Fatalf("unavailable verification closed the task: %+v", got)
+	}
+	t.Logf("unavailable verification refusal: %v", err)
+}

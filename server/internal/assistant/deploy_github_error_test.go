@@ -81,6 +81,28 @@ func TestGitHubPauseRetainsCauseAndResume(t *testing.T) {
 	}
 }
 
+func TestGitHubRateLimitPauseReportsOriginalResponse(t *testing.T) {
+	s, _, _, _, forge := deployService(t)
+	forge.err = &githubReadError{status: 403, kind: "rate_limit",
+		detail: "message=API rate limit exceeded; X-RateLimit-Limit=60; X-RateLimit-Remaining=0; X-RateLimit-Resource=core; X-GitHub-Request-Id=request-pause"}
+	first := s.compareGitHub(context.Background(), "o/r", 9, oldHub)
+	paused := s.compareGitHub(context.Background(), "o/r", 10, oldHub)
+	if first.State != deployUnknown || paused.State != deployUnknown || forge.calls != 1 {
+		t.Fatalf("unexpected requests or states: %+v %+v requests=%d", first, paused, forge.calls)
+	}
+	resume := s.deploy.githubDown.UTC().Format(time.RFC3339)
+	for _, want := range []string{first.Err.Error(), resume, "403", "rate_limit", "X-RateLimit-Remaining=0", "request-pause"} {
+		if !strings.Contains(paused.Err.Error(), want) {
+			t.Errorf("paused response lost %q: %v", want, paused.Err)
+		}
+	}
+	if strings.Contains(paused.Err.Error(), "did not answer a moment ago") {
+		t.Fatalf("generic pause reason remains: %v", paused.Err)
+	}
+	t.Logf("first request failure: %v", first.Err)
+	t.Logf("paused response: %v; actual GitHub requests=%d", paused.Err, forge.calls)
+}
+
 func TestGitHubPermissionDoesNotPauseOtherPRs(t *testing.T) {
 	s, _, _, _, forge := deployService(t)
 	forge.err = &githubReadError{status: 403, kind: "permission", detail: "message=forbidden"}
