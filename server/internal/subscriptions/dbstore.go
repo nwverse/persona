@@ -18,7 +18,7 @@ type DB interface {
 	LeaseSubscription(ctx context.Context, id string, now, until time.Time) (bool, error)
 	SubscriptionSeen(ctx context.Context, id string, uids []string) (map[string]bool, error)
 	CommitSubscriptionRun(ctx context.Context, id string, merge func(data []byte, revision int64) ([]byte, error),
-		seen []db.SubscriptionSeenRow, items []db.SubscriptionItemRow, now time.Time) error
+		seen []db.SubscriptionSeenRow, items []db.SubscriptionItemRow, read []string, now time.Time) error
 	SubscriptionItems(ctx context.Context, id string, q db.SubscriptionItemsQuery) ([]db.SubscriptionItemRow, error)
 	PruneSubscriptionItems(ctx context.Context, id string, before time.Time) error
 }
@@ -167,7 +167,7 @@ func (d *DBStore) CommitRun(ctx context.Context, c RunCommit) error {
 		}
 		applyRun(&cur, c, revision == c.Revision)
 		return encode(cur)
-	}, seen, items, c.Now)
+	}, seen, items, c.Read, c.Now)
 }
 
 func (d *DBStore) HeldItems(ctx context.Context, id string, q ItemQuery) ([]Held, error) {

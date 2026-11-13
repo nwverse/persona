@@ -1349,6 +1349,13 @@ if MOCK_CODEX_WAITING:
     SESSIONS.append(sess("macbook", CODEX_WAITING, "weather-app", "/Users/me/code/weather-app", "idle", "idle", "weather-app", 7, "codex", 3, 1,
                          "", agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS))
 
+# MOCK_TERMINAL_ONLY=1 (#6170): a Kiro CLI in a herdr pane, an Agent whose chat Persona cannot draw (no transcript): its empty
+# chat offers Open Terminal. Open it with -openSession macbook/<TERMINAL_ONLY>.
+TERMINAL_ONLY = "c0de0000-0000-4000-8000-000000000002"
+if os.environ.get("MOCK_TERMINAL_ONLY") == "1":
+    SESSIONS.append(sess("macbook", TERMINAL_ONLY, "kiro-demo", "/Users/me/code/kiro-demo", "idle", "idle", "kiro-demo", 8, "kiro", 1, 1,
+                         "", agent="kiro", launcher="kiro"))
+
 
 # MOCK_RUN_HERE_CODEX=<mid,…> (#5504): those computers start Codex in a shell pane the user picked and keep that pane when
 # the start fails (run_here), so Run agent here offers their Codex launchers; the others' stay out, as an older node's.
@@ -8616,6 +8623,7 @@ def cell_width(ch):
 # MOCK_TERMINAL_PANES=1 (with MOCK_TERMINAL_STREAM / MOCK_TERMINAL_CONTROL): the hub says terminal_panes and lists made-up
 # workspaces, tabs and panes of the machines (agents of the mock sessions and plain shells, GET /api/v1/machines/{mid}/panes);
 # POST there opens a new shell tab. A terminal addressed "pane:<id>" is a made-up shell, not the Claude screen.
+# MOCK_PANES_DELAY=<seconds>: GET .../panes answers that late (the Terminals page's "hasn't answered yet" with Retry, #6153).
 PANES_NEW = {}  # machine id -> [(workspace id, pane)] opened by POST
 # The menu actions (close / split / rename / run an agent / git), recorded at GET /mock/node_actions and applied to the
 # layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell, an agent run in a
@@ -13805,6 +13813,56 @@ if os.environ.get("MOCK_PEER_FOLD") == "1":
     mock_peer_fold()
 
 
+# MOCK_LONG_INPUT=1: your own long message folds (#5676): an Agent chat with a long pasted report (past 14 lines on a
+# phone), a twelve-line one that stays whole, and the same report at the end of Persona's conversation. MOCK_LONG_INPUT=perf:
+# forty exchanges, each opened by a long pasted report, for the chat's scrolling frames (docs/apple/performance.md P12),
+# and their twin (LONG_INPUT_TWIN): each report cut to about the lines a folded one takes on a phone, so as many rows
+# to the screen with nothing folded (PerfLongInputTests). Synthetic text.
+LONG_INPUT = "a1f3c2d4-0000-4000-8000-000005676a00"
+LONG_INPUT_TWIN = "a1f3c2d4-0000-4000-8000-000005676a01"
+LONG_REPORT = ("车道 sample-lane：A、C 的 PR 开好了，请批截图（只改 hub 文案 / hub 行为，网页和 App 代码没动）。\n"
+               "A #1201（issue #1188）市场读取报错说清原因 + i18n：填错地址时不再说「版本号是 0」，改成「这个地址返回的不是扩展市场…"
+               "仓库请填 owner/repo」「返回的是网页…」「要更新的 hub」，代理 / 登录页回的 JSON 会引用它的原话；限流、404、要 token 也走 i18n。\n"
+               "截图（改前 main / 改后，中英日、深浅、宽窄）：本机 .lane/shots/a/sheet-*.png。\n"
+               "C #1203（issue #1190）新 hub 第一次开市场不再显示假的「读不到官方扩展 / 去填 token」：首个请求等官方市场第一次读完（最多 10 秒）。"
+               "截图（全新 hub 第一次打开，改前 / 改后）：.lane/shots/c/sheet-c-wide.png、sheet-c-narrow.png。\n"
+               "B 还在跑：扩展装好后列表第一次刷新慢 3 秒，原因是目录缓存过期判断用了本地时间；改成 hub 时间后本地复现不了了，等测试包上手机再确认。\n"
+               "D 卡住：要你决定「扩展更新提示」放设置页还是放收件箱。两种做法的样稿在 .lane/shots/d/，我倾向放设置页（不打扰）。\n"
+               "下一步：批了就合 A、C；B 等测试包；D 等决定。最后一行在这里。")
+LONG_TWELVE = "\n".join("第 %d 行：短短一句。" % (n + 1) for n in range(12))
+LONG_REPLY = "收到。A、C 的截图我都看过了，没问题，可以合。B 等测试包；D 我倾向放设置页，理由和你一样。"
+
+
+def mock_long_input(perf):
+    if perf:
+        cut = LONG_REPORT[:LONG_REPORT.index("代理 / 登录页")]  # ten lines and Show More's, on a phone
+        for sid, report in ((LONG_INPUT, LONG_REPORT), (LONG_INPUT_TWIN, cut)):
+            items = []
+            for n in range(40):
+                m = 60 * 24 - n * 30
+                items.append(it("user", "text", m + 2, text="第 %d 份报告：\n" % (n + 1) + report))
+                items.append(it("assistant", "text", m, text=LONG_REPLY))
+            ITEMS[sid] = items
+        SESSIONS.append(sess("macbook", LONG_INPUT_TWIN, "车道任务跟进（短）", "/Users/me/code/shop-app", "done", "read", "shop-app", 21,
+                             "lanes", 1, 5, LONG_REPLY))
+    else:
+        ITEMS[LONG_INPUT] = [
+            it("user", "text", 30, text="各个车道的进展贴给你，帮我看哪些能合"),
+            it("assistant", "text", 29, text="好的，你贴过来，我一条条看。"),
+            it("user", "text", 12, text=LONG_TWELVE),
+            it("assistant", "text", 11, text="这条不长，不用折。"),
+            it("user", "text", 6, text=LONG_REPORT),
+            it("assistant", "text", 5, text=LONG_REPLY),
+        ]
+        ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 3, text=LONG_REPORT), it("assistant", "text", 2, text=LONG_REPLY)]
+    SESSIONS.append(sess("macbook", LONG_INPUT, "车道任务跟进", "/Users/me/code/shop-app", "done", "read", "shop-app", 20, "lanes", 1, 5,
+                         LONG_REPLY))
+
+
+if os.environ.get("MOCK_LONG_INPUT") in ("1", "perf"):
+    mock_long_input(os.environ.get("MOCK_LONG_INPUT") == "perf")
+
+
 # MOCK_REPLY_BREAKS=1: a reply written line by line (#2088): bold lines with steps right under them, one list numbered
 # on from 5, and a bold line with its sentence on the next line; in an Agents chat and at the end of Persona's
 # conversation. Synthetic text.
@@ -17154,7 +17212,8 @@ def mock_files(p, q):
         if isinstance(v, tuple):
             return {"path": path, "name": name, "size": mock_size(v), "mime": v[0], "data": v[1], "is_dir": False, "truncated": False}, 200
         mime = "text/markdown" if name.endswith(".md") else "text/plain"
-        return {"path": path, "name": name, "size": mock_size(v), "mime": mime, "text": v, "is_dir": False, "truncated": False}, 200
+        return {"path": path, "name": name, "size": mock_size(v), "mime": mime, "text": v, "is_dir": False, "truncated": False,
+                "revision": mock_text_revision(v)}, 200
     home, cwd = mock_abs(mid, arg("cwd"), "")
     root = home + "/" + MOCK_REPO
     if not (cwd == root or cwd.startswith(root + "/")):
@@ -17247,6 +17306,7 @@ MOCK_TREE[MOCK_REPO + "/docs/guide.pdf"] = ("application/pdf", mock_pdf())
 # checkout), `old-settings.json` → ../legacy/settings.json (broken), and a script; GET …/stat?detail=1 answers the Info
 # sheet's fields (mode, owner, group, times, items, a link's target).
 MOCK_LINKS = {}
+MOCK_MODES = {}  # tree key (no trailing /) -> permission bits changed through …/files/chmod (#5831)
 if os.environ.get("MOCK_FILE_LINKS"):
     MOCK_TREE["code/shared/"] = None
     MOCK_TREE["code/shared/colors.json"] = '{"sky": "#4a90d9", "rain": "#5b6b7d"}\n'
@@ -17266,6 +17326,11 @@ def link_real(rel):
     return rel
 
 
+def mock_text_revision(text):
+    """A text file's revision as file?stream=1 gives it and files/write checks it (#5829): its content's hash here."""
+    return "r" + hashlib.sha1(text.encode()).hexdigest()[:12]
+
+
 def mock_stat_detail(mid, asked, cwd):
     """GET …/stat?detail=1 for one path (docs/protocol/protocol.md "File details and links")."""
     home, path = mock_abs(mid, asked, cwd)
@@ -17274,7 +17339,7 @@ def mock_stat_detail(mid, asked, cwd):
     link = MOCK_LINKS.get(rel)
     real = link_real(rel)
     is_dir = real == "" or real.endswith("/")
-    d = {"path": asked, "kind": "dir" if is_dir else "file", "mode": 0o755 if is_dir or rel.endswith(".sh") else 0o644,
+    d = {"path": asked, "kind": "dir" if is_dir else "file", "mode": MOCK_MODES.get(real.rstrip("/"), 0o755 if is_dir or rel.endswith(".sh") else 0o644),
          "owner": "me", "group": "staff", "mtime": ago(hours=5), "ctime": ago(hours=5), "birthtime": ago(days=9)}
     if is_dir:
         d["items"] = len(mock_children(real))
@@ -20565,7 +20630,7 @@ _features_without_file_ops = features
 def features():
     return (_features_without_file_ops() + (["upload_dir", "file_edit"] if FILE_OPS else [])
             + (["file_info"] if os.environ.get("MOCK_FILE_LINKS") else [])
-            + (["file_mkdir", "file_write", "file_zip"] if FILE_OPS else []))
+            + (["file_mkdir", "file_write", "file_zip", "file_copy", "file_chmod", "pane_cwd"] if FILE_OPS else []))
 
 
 def file_ops_key(mid, path, cwd):
@@ -20707,7 +20772,7 @@ def file_ops_route(h, p, body):
 def file_make_route(h, p, body):
     """POST /api/v1/machines/{mid}/files/{mkdir,write,zip} under MOCK_FILE_OPS (#5828): a folder in the tree, a text file
     made or replaced, a real zip of tree entries kept in FILES at a temporary path for …/file/download."""
-    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/(mkdir|write|zip)", p)
+    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/(mkdir|write|zip|copy|chmod)", p)
     if not (FILE_OPS and m): return False
     mid, op = m.groups()
     req = json.loads(body or b"{}")
@@ -20730,9 +20795,35 @@ def file_make_route(h, p, body):
             if taken(rel): return h.send_json({"error": "已经有了", "code": "exists", "name": rel.rpartition("/")[2]}, 409) or True
         elif rel not in MOCK_TREE:
             return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+        elif not req.get("force") and isinstance(MOCK_TREE[rel], str) and req.get("revision") != mock_text_revision(MOCK_TREE[rel]):
+            # changed since it was opened (GET /mock/touch?path=): nothing written, as the node answers
+            return h.send_json({"error": "the file changed on the computer since it was opened", "code": "file_changed",
+                                "revision": mock_text_revision(MOCK_TREE[rel]), "mtime": ago()}, 409) or True
         MOCK_TREE[rel] = text
         fs_changed(mid, [(home + "/" + rel.rpartition("/")[0]).rstrip("/")], True)
-        return h.send_json({"path": home + "/" + rel, "size": len(text.encode()), "revision": "r%d" % len(FILE_OPS_LOG), "mtime": ago()}) or True
+        return h.send_json({"path": home + "/" + rel, "size": len(text.encode()), "revision": mock_text_revision(text), "mtime": ago()}) or True
+    if op == "chmod":  # #5831: the bits kept for the Info sheet's answer
+        home, rel, err = file_ops_key(mid, req.get("path", ""), cwd)
+        if err: return h.send_json(*err) or True
+        if not taken(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+        MOCK_MODES[rel.rstrip("/")] = int(req.get("mode", 0o644)) & 0o777
+        return h.send_json({"path": req["path"], "mode": MOCK_MODES[rel.rstrip("/")]}) or True
+    if op == "copy":  # #5830: the tree entries copied into dir, named as a move names them
+        home, drel, err = file_ops_dir(mid, req.get("dir", ""), cwd)
+        if err: return h.send_json(*err) or True
+        copied = []
+        for path in req.get("paths", []):
+            _, rel, err = file_ops_key(mid, path, cwd)
+            if err: return h.send_json(*err) or True
+            if not taken(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
+            name = rel.rpartition("/")[2]
+            final = file_ops_free(drel, name, req.get("conflict"))
+            if final is None: return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
+            for k, v in list(MOCK_TREE.items()):
+                if k == rel or k == rel + "/" or k.startswith(rel + "/"): MOCK_TREE[drel + final + k[len(rel):]] = v
+            copied.append({"from": path, "to": req["dir"].rstrip("/") + "/" + final})
+        fs_changed(mid, [(home + "/" + drel).rstrip("/")], True)
+        return h.send_json({"copied": copied}) or True
     import io, zipfile
     out, n = io.BytesIO(), 0
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
@@ -21787,6 +21878,12 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if p == "/mock/touch":  # #5829: a file changed on the computer behind an open editor (path relative to the home)
+            rel = q.get("path", [""])[0].lstrip("~/")
+            if isinstance(MOCK_TREE.get(rel), str):
+                MOCK_TREE[rel] += "\n// changed on the computer\n"
+                return self.send_json({"touched": rel})
+            return self.send_json({"error": "no such text file"}, 404)
         if p == "/mock/video-reads":
             with VIDEO_READ_LOCK:
                 if "reset" in q: VIDEO_READS.clear()
@@ -22175,6 +22272,7 @@ class H(BaseHTTPRequestHandler):
                                    "context_tokens": 48200, "output_tokens": 12800, "compactions": 0, "turns": 6,
                                    "started_at": ago(minutes=40), "last_activity": ago()})
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/panes", p):
+            time.sleep(float(os.environ.get("MOCK_PANES_DELAY", "0")))  # seconds: a computer slow to answer (#6153)
             return self.send_json(mock_panes(p.split("/")[4]))
         if p.startswith("/api/v1/sessions/") and p.endswith("/screen"):
             fail = os.environ.get("MOCK_SCREEN_FAIL_AFTER")

@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -68,10 +69,12 @@ type fleetBook struct {
 	clients            assistantwire.Clients
 	prev               map[string]map[string]turnPrev // each machine's list setSessions saw last, by session id
 
-	// sent: each machine's last session list told the hub (fleet.sessions), as JSON. sentMu is held while a list is
-	// decorated and told (publishList), so the lists reach the hub in the order they were made.
+	// sent: what is kept of each machine's last session list told the hub (fleet.sessions): its length and digest, not
+	// its bytes. sentMu is held while a list is decorated, encoded into enc and told (publishList), so the lists reach
+	// the hub in the order they were made; enc is the one buffer every list is encoded into, reused.
 	sentMu sync.Mutex
-	sent   map[string][]byte
+	sent   map[string]sentList
+	enc    bytes.Buffer
 	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
 	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
@@ -364,6 +367,13 @@ func sessionTurnErrorCode(c proto.Session) string {
 		}
 	}
 	return code
+}
+
+// signedOut: conversation c's last turn ended "Not logged in". The node says so only in the turn's words (TurnError,
+// Claude Code's own reply): the lists work the code out of them (sessionTurnErrorCode), while session.get answers the
+// node's session as it is, with no code.
+func signedOut(c proto.Session) bool {
+	return c.TurnErrorCode == proto.TurnErrorNotLoggedIn || sessionTurnErrorCode(c) == proto.TurnErrorNotLoggedIn
 }
 
 // userTurnError: a turn error with code is the user's to fix; a rate limit passes (or is the user's when the

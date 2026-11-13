@@ -2795,6 +2795,12 @@ struct ChatView: View {
                     EmptyStateView(symbol: Theme.Icon.conversation, title: String(localized: "No messages yet"),
                                    message: String(localized: "Codex is open on \(computer). Send its first message below, or type it in its terminal."))
                         .flippedBack().accessibilityIdentifier("chat.codexWaiting")
+                } else if model.session(key)?.isTerminalOnly == true {
+                    // No chat to draw for this Agent: its terminal is the view, one tap here instead of title › ⋯ › Terminal (#6170).
+                    EmptyStateView(symbol: Theme.Icon.terminal, title: String(localized: "This Agent has no chat here"),
+                                   message: String(localized: "Persona can't show it as a chat. Its terminal shows what it is doing."),
+                                   action: (title: String(localized: "Open Terminal"), run: { openTerminal() }))
+                        .flippedBack().accessibilityIdentifier("chat.terminalOnly")
                 } else {
                     EmptyStateView(symbol: Theme.Icon.conversation, title: String(localized: "No messages yet"), message: String(localized: "Send a message to get started."))
                         .flippedBack().accessibilityIdentifier("chat-empty-placeholder")
@@ -5246,7 +5252,7 @@ struct Composer: View, Equatable {
             }
             if isMain {
                 // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
-                ReadinessHomeCard(route: $failureRoute)
+                ReadinessHomeCard(key: key, route: $failureRoute)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if model.session(key)?.assistant == true, let f = model.readiness.failure {
                 CodedFailureCard(failure: f, route: $failureRoute)

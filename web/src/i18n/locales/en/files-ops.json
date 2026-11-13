@@ -59,5 +59,17 @@
   "archive_name": "Archive.zip",
   "zipping_one": "Zipping {count} item on the computer…",
   "zipping_other": "Zipping {count} items on the computer…",
-  "zip_failed": "Couldn’t zip: {error}"
+  "zip_failed": "Couldn’t zip: {error}",
+  "copy_to": "Copy to…",
+  "duplicate": "Duplicate",
+  "compress": "Compress",
+  "copy_one_title": "Copy “{name}” to…",
+  "copy_title_one": "Copy {count} item to…",
+  "copy_title_other": "Copy {count} items to…",
+  "copy_here": "Copy here",
+  "copied_one": "Copied to “{dir}”",
+  "copied_other": "Copied {count} items to “{dir}”",
+  "duplicated_one": "Duplicated",
+  "duplicated_other": "Duplicated {count} items",
+  "compressed": "Compressed into “{name}”"
 }
