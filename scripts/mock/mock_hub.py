@@ -15248,8 +15248,25 @@ if os.environ.get("MOCK_EXTENSION_CARDS") == "1":
         {"type": "link", "title": "查看说明", "url": "https://example.com/guide"}]}]}
     _legacy = {"type": "stat", "title": "今天步数", "value": 8432, "unit": "步", "note": "这是演示数据"}
     _fence = lambda language, data: "```" + language + "\n" + json.dumps(data, ensure_ascii=False) + "\n```"
-    ITEMS[ASK1] = [it("user", "text", 2, text="把今天的概览放到卡片里"),
-                   it("assistant", "text", 1, text=_fence("persona-view", _view) + "\n\n" + _fence("persona-card", _legacy))]
+    # UI version 4's code-hosting components in a card (#827): drawn read-only by ExtensionCodeSummary, now that cards
+    # report UI version 6 and the hub sends them as they are.
+    _code = {"sections": [{"title": "合并请求 #42", "items": [
+        {"type": "header", "title": "登录页支持“记住我”", "subtitle": "remember-me → main · 3 个提交"},
+        {"type": "breadcrumb", "crumbs": [{"title": "app"}, {"title": "web"}, {"title": "login.tsx"}]},
+        {"type": "file_tree", "entries": [
+            {"path": "web/login.tsx", "kind": "file", "status": "modified", "additions": 24, "deletions": 6},
+            {"path": "web/session.ts", "kind": "file", "status": "added", "additions": 41, "deletions": 0},
+            {"path": "web/old-login.css", "kind": "file", "status": "deleted", "additions": 0, "deletions": 18}]},
+        {"type": "code", "path": "web/session.ts", "language": "ts",
+         "text": "export function remember(days: number) {\n  const until = Date.now() + days * 86_400_000\n  return { until }\n}"},
+        {"type": "comment_thread", "comments": [
+            {"author": "评审人", "at": "2026-11-12T09:30:00Z", "body": "“记住我”默认关着比较稳妥。"},
+            {"author": "作者", "at": "2026-11-12T10:05:00Z", "body": "好，已经改成默认关。"}]},
+        {"type": "composer", "name": "reply", "placeholder": "回复", "buttons": [{"title": "发送", "action": {"id": "must-not-run"}}]}]}]}
+    ITEMS[ASK1] = [it("user", "text", 4, text="把今天的概览放到卡片里"),
+                   it("assistant", "text", 3, text=_fence("persona-view", _view) + "\n\n" + _fence("persona-card", _legacy)),
+                   it("user", "text", 2, text="合并请求 #42 现在怎么样了"),
+                   it("assistant", "text", 1, text=_fence("persona-view", _code))]
 
 if os.environ.get("MOCK_SPLIT_TABS"):
     ITEMS.update(split_tabs_items())
