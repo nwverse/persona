@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { api } from "../../lib/api";
+import { loadPages } from "../../lib/lazy-page";
 import { SessionList, type ListCounts } from "../../lib/session-list";
 import { STATE_LABEL } from "../../lib/state-labels";
 import type { AgentState } from "../../lib/types";
@@ -92,6 +93,8 @@ async function search() {
   });
   await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.searchDelay); });
 }
+
+beforeAll(() => loadPages(), 60_000);
 
 describe("paged state chips during count refreshes", () => {
   it("retains every chip and count while a new scope loads, then applies its successful counts", async () => {

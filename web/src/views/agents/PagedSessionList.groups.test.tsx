@@ -1,10 +1,13 @@
+/// <reference types="node" />
 // @vitest-environment jsdom
 // Browse by a computer, a project or a space draws the paged list in that structure: one folding section per group.
+import { readFileSync } from "node:fs";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { api } from "../../lib/api";
+import { loadPages } from "../../lib/lazy-page";
 import { listPair, SessionList, type ListCounts } from "../../lib/session-list";
 import type { SessionCatalog } from "../../lib/session-groups";
 import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
@@ -141,6 +144,18 @@ async function hint() {
     await vi.advanceTimersByTimeAsync(0);
   });
 }
+
+beforeAll(() => loadPages(), 60_000);
+
+describe("the sections' own chunk", () => {
+  // The default list, newest first, is what a first screen draws; the list by group loads when a Browse by is chosen.
+  it("keeps the sections out of the list's static imports", () => {
+    const source = readFileSync("src/views/agents/PagedSessionList.tsx", "utf8");
+    expect(source).not.toMatch(/^import (?!type )[^;]*from\s+["']\.\/GroupedSessions["']/m);
+    expect(source).toMatch(/lazyPage\(\(\) => import\("\.\/GroupedSessions"\)/);
+    expect(source).toMatch(/<Suspense fallback=\{loadingLine\}>\s*<GroupedSessions /);
+  });
+});
 
 describe("the list by computer", () => {
   it("draws one section per computer, the busiest first: the first three open on their sessions, the rest folded and unread", async () => {

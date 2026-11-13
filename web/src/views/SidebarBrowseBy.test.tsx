@@ -3,12 +3,13 @@
 // one section, and each of its rows says which computer it is on.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 import { t } from "../i18n";
+import { loadPages } from "../lib/lazy-page";
 import { connect, reset } from "../lib/store";
 import type { Session } from "../lib/types";
 import { Sidebar } from "./Sidebar";
@@ -91,6 +92,8 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount()); host.remove(); reset(); vi.unstubAllGlobals();
 });
+
+beforeAll(() => loadPages(), 60_000);
 
 describe("the sidebar's Agents by project", () => {
   it("draws a repository on two computers as one project, each row naming its computer", async () => {

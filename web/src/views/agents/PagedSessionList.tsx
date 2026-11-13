@@ -1,5 +1,5 @@
 // Bounded collection views: filters/counts belong to the server; only the loaded prefix lives in React.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
@@ -19,9 +19,14 @@ import { removeStoredValue, storedValue, storeValue } from "../../lib/compatibil
 import { ACTIVE_WINDOWS, activeWindow, splitByActivity, windowStart, type ActiveWindow } from "../../lib/session-activity";
 import { useFolded } from "../../lib/use-folded";
 import { sameValue } from "../../lib/stable-lines";
+import { lazyPage } from "../../lib/lazy-page";
 import { NeedsCount } from "../SidebarSection";
-import { GroupedSessions, type GroupedSource } from "./GroupedSessions";
+import type { GroupedSessionsProps, GroupedSource } from "./GroupedSessions";
 import { useSessionGroups } from "./use-session-groups";
+
+// The list drawn by group is a chunk of its own, loaded when a Browse by is chosen (or was, last time): the default
+// list, newest first, is what a first screen draws (src/startup-preload.ts FIRST_SCREEN_BUDGET).
+const GroupedSessions = lazyPage(() => import("./GroupedSessions").then((m) => m.GroupedSessions)) as <T>(props: GroupedSessionsProps<T>) => ReactNode;
 
 export interface PagedSessionListProps<T> {
   root: SessionList<T>;
@@ -310,6 +315,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const openPlace = useMemo(() => openRow && placeOf ? placeOf(openRow) : undefined, [openRow, placeOf]);
   const shownTotal = sections ? grouped.total : page.total;
   const states = personal ? ["unread", "idle"] : ["needs_you", "working", "unread", "idle", "offline", "unknown"];
+  const loadingLine = <p role="status" className="px-2 py-2 text-xs text-ink-3">{t("sidebar.loading")}</p>;
   return (
     <div data-paged-sessions={personal ? "personal" : "runtime"} data-loaded-sessions={page.rows.length} data-has-more={page.hasMore}>
       <div className="space-y-2 px-1 py-2">
@@ -357,9 +363,11 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       </div>
       {(facetError || scopeError) && <p role="alert" className="px-2 text-xs text-red">{facetError || scopeError}</p>}
       {sections && <>
-        {allGroups && allGroups.length > 0 && <GroupedSessions groups={allGroups} dimension={dimension as GroupDimension} kind={personal ? "personal" : "runtime"} scope={groupScope} source={source}
-          renderRow={renderRow} groupName={groupName} machineName={machineName} open={openPlace} />}
-        {!allGroups && !grouped.error && <p role="status" className="px-2 py-2 text-xs text-ink-3">{t("sidebar.loading")}</p>}
+        {allGroups && allGroups.length > 0 && <Suspense fallback={loadingLine}>
+          <GroupedSessions groups={allGroups} dimension={dimension as GroupDimension} kind={personal ? "personal" : "runtime"} scope={groupScope} source={source}
+            renderRow={renderRow} groupName={groupName} machineName={machineName} open={openPlace} />
+        </Suspense>}
+        {!allGroups && !grouped.error && loadingLine}
         {grouped.error && <div className="px-2 py-2"><p role="alert" className="text-xs text-red">{grouped.error}</p><Button onClick={grouped.retry}>{t("sidebar.retry")}</Button></div>}
         {allGroups && !allGroups.length && !grouped.error && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
       </>}
@@ -373,7 +381,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
           );
         })}
       </div>
-      {page.loading && <p role="status" className="px-2 py-2 text-xs text-ink-3">{t("sidebar.loading")}</p>}
+      {page.loading && loadingLine}
       {page.error && <div className="px-2 py-2"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}
       {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
       {hasMore && !page.loading && !page.error && <Button onClick={() => void list.more().catch(() => {})}>{t("paged-agents.more")}</Button>}
