@@ -82,6 +82,7 @@ struct VNCPage: View {
         }
         .onDisappear {
             #if os(iOS)
+            VNCPiP.shared.pagePicture(nil)
             VNCPiP.shared.pageGone(ref)
             #endif
             VNC.release(ref)
@@ -438,8 +439,17 @@ struct VNCPage: View {
         switch s.phase {
         case .live:
             #if os(iOS) || os(visionOS)
+            #if os(iOS)
+            // The small window's source lies over this picture, and the picture goes into it as it starts (#6333):
+            // hidden while the small window has it, also as the page comes back on Restore until it has grown back.
+            VNCScreen(session: s, mode: mode, interactive: true, region: shownDisplay?.frame,
+                      onView: { v in DispatchQueue.main.async { screenView = v; zoomed = false } }, onZoom: { zoomed = $0 },
+                      onPicture: { VNCPiP.shared.pagePicture($0) })
+                .opacity(model.vncPiP == ref ? 0 : 1)
+            #else
             VNCScreen(session: s, mode: mode, interactive: true, region: shownDisplay?.frame,
                       onView: { v in DispatchQueue.main.async { screenView = v; zoomed = false } }, onZoom: { zoomed = $0 })
+            #endif
             #else
             VNCScreen(session: s, mode: mode, interactive: true)
             #endif
