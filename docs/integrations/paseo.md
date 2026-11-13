@@ -75,6 +75,10 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
       - A transcript the bridge cannot read leaves the current ID. The bridge looks in `$CLAUDE_CONFIG_DIR`, in `~/.claude` and in
         any `CLAUDE_CONFIG_DIR` a Paseo provider sets.
       - The label is written at the Agent's next change in Paseo, never while the directory is being read.
+      - A branch Persona made ("Branch to new chat" below) copies the records of the conversation as they are, so its first
+        record can still name the original's earlier session. It is imported with its own ID on its label, so no line is
+        ever read for it. A copy imported in Paseo's App without a label is not followed into a session the original
+        still has either.
     - `persona.kept` (also set before a rewind from Persona, "Capabilities") means the bridge kept the ID. Such an Agent is not one
       Persona started, so Persona's own tools still ask for permission in it ("Cards"). Once archived, it stays a row under that ID
       (above) and none of its transcripts is named to the node.

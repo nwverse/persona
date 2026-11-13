@@ -177,6 +177,32 @@ test('an id kept for an agent gives way to an agent whose own session it becomes
   assert.equal(fake.requestsOf('update_agent_request').length, 0, 'nothing pinned for an id another agent has')
 })
 
+test("a branch Persona made of a forked conversation is a session of its own, never the original's line", async (t) => {
+  const claudeHome = tempDir(t, 'ppfork-claude-')
+  const claudeDir = join(claudeHome, '.claude')
+  const cwd = tempDir(t, 'ppfork-work-')
+  const created = Date.now() - DAY
+  // The original: begun in Paseo's app, forked once (a rewind), kept under its line's first session.
+  transcript(claudeDir, cwd, A, { started: iso(created + 1000) })
+  transcript(claudeDir, cwd, B, { from: A, started: iso(created + 1000) })
+  const original = claudeAgent(B, { cwd, createdAt: iso(created), updatedAt: iso(created + 5000) })
+  // Branch to new chat copies B's records under a new session as they are: its first record still names A, B's parent.
+  transcript(claudeDir, cwd, C, { from: A, started: iso(created + 1000) })
+  transcript(claudeDir, cwd, D, { from: A, started: iso(created + 1000) })
+  const { node, fake, rows } = await setupWith(t, claudeHome, { agents: [{ agent: original }] })
+  await until('the original kept', () => rows().some((r) => r.session_id === A))
+  // Its first message has Paseo take it over (session.start with resume): imported under its own id, on the label.
+  const res = await node.peer.call('session.start', { cwd, resume: C, launcher: 'my-claude' })
+  assert.equal(res.session.session_id, C)
+  assert.deepEqual(fake.requestsOf('import_agent_request').map((r) => r.labels), [{ 'persona.session': C }])
+  // A copy Paseo's own app imported, without a label, made seconds after the conversation began: A is the original's.
+  fake.upsert(claudeAgent(D, { cwd, title: 'copy', createdAt: iso(created + 2000), updatedAt: iso(Date.now()) }))
+  await until('both listed', () => rows().some((r) => r.session_id === C) && rows().some((r) => r.session_id === D))
+  assert.equal(rows().find((r) => r.session_id === A)?.transcript, B, 'the original is still its own line')
+  assert.equal(rows().filter((r) => r.session_id === A).length, 1)
+  assert.equal(fake.requestsOf('update_agent_request').length, 0)
+})
+
 test("an archived agent Paseo forked before the bridge started: a row of its own under the line's first id, no transcript named", async (t) => {
   const claudeHome = tempDir(t, 'ppfork-claude-')
   const claudeDir = join(claudeHome, '.claude')
