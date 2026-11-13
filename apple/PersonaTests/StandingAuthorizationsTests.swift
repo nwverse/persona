@@ -132,6 +132,18 @@ struct StandingAuthorizationsTests {
         #expect(toasts.shown.first?.message == String(localized: "Couldn't revoke this authorization. It's still in effect. Check the connection and try again."))
     }
 
+    /// Back on the list, the page reads again; a read the hub answered before the revoke landed still lists the grant.
+    @Test func aReadFromBeforeTheRevokeDoesNotBringItBack() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/assistant/standing-authorizations", json: Self.list)
+        hub.on("DELETE", "/api/v1/assistant/standing-authorizations/sa_one", json: #"{"ok":true,"revision":5}"#)
+        let page = page(hub)
+        await page.load()
+        await page.revoke(try #require(page.grants?.first))
+        await page.load() // the stale list, with sa_one
+        #expect(page.grants?.map(\.id) == ["sa_two"])
+    }
+
     @Test func anIDIsOnePathSegment() async {
         let hub = FakeHub()
         hub.on("DELETE", "/api/v1/assistant/standing-authorizations/sa_example%2Fone", json: #"{"ok":true,"revision":2}"#)

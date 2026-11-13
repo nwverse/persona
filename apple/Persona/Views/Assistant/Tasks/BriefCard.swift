@@ -205,6 +205,8 @@ private struct BriefSetupRow: View {
             }
         }
         .padding(.vertical, Theme.Space.xs)
+        // A container, so its Open Settings keeps its own identifier (`brief.setup.open.<id>`) under the row's.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("brief.setup.\(line.id)")
     }
 }

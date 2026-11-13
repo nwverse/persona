@@ -176,6 +176,9 @@ enum StandingAuthorizationText {
     private(set) var failure: Failure?
     /// Revocations sent and not answered yet: a read meanwhile leaves them out, so a row doesn't come back while it goes.
     private(set) var revoking: Set<String> = []
+    /// Grants this page revoked. A read the hub answered before a revoke landed still lists it; the hub never lists
+    /// the same id again (an old id can't be added back), so the page leaves these out for as long as it is open.
+    @ObservationIgnored private var revoked: Set<String> = []
 
     @ObservationIgnored private let deps: Deps
     @ObservationIgnored private var client: APIClient?
@@ -199,7 +202,7 @@ enum StandingAuthorizationText {
         do {
             let list = try await api.standingAuthorizations()
             guard read == reads else { return }
-            grants = list.authorizations.filter { !revoking.contains($0.id) }
+            grants = list.authorizations.filter { !revoking.contains($0.id) && !revoked.contains($0.id) }
             failure = nil
         } catch {
             // The page leaving cancels the read: nothing to show.
@@ -228,6 +231,7 @@ enum StandingAuthorizationText {
         defer { revoking.remove(grant.id) }
         do {
             try await api.revokeStandingAuthorization(grant.id)
+            revoked.insert(grant.id)
             deps.toast(Toast(String(localized: "Authorization revoked"), style: .success))
         } catch {
             if var now = grants, !now.contains(where: { $0.id == grant.id }) {
