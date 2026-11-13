@@ -4,6 +4,9 @@ import OSLog
 import PersonaKit
 import PhotosUI
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 #if DEBUG
 import notify
 #endif
@@ -236,6 +239,7 @@ struct ChatView: View {
 
     /// A subagent of this session being looked at instead of the main agent (read-only, same message UI).
     @State private var viewing: Subagent?
+    @State private var takeoverCoordinator = CodexTakeoverCoordinator()
     /// This view's claim on its subscriptions and on `visibleSession` (another view of the same chat has its own).
     @State private var owner = UUID()
 
@@ -324,6 +328,10 @@ struct ChatView: View {
             .overlay { if liftHost == nil { MessageLiftLayer(menu: menu) } }
             .onAppear { liftHost?.menu = menu }
             .onDisappear { if liftHost?.menu === menu { liftHost?.menu = nil } }
+            .codexTakeoverDialogs(coordinator: takeoverCoordinator) { adopted in
+                model.adopt(adopted)
+                switchTo(adopted.key)
+            }
     }
 
     @ViewBuilder private var chatPage: some View {
@@ -393,6 +401,32 @@ struct ChatView: View {
             #else
             if style == .dev { if sideBars { sideHeader } else { devChrome } }
             #endif
+        }
+    }
+
+    /// The closeout the header's card shows (#3612, `CloseoutCard`): a stopped agent's own account of its work, on its
+    /// own chat (not a subagent's, not an assistant conversation). The Mac app is frozen and draws no card, so it
+    /// keeps the reply as it was written.
+    private var shownCloseout: Closeout? {
+        #if os(macOS)
+        return nil
+        #else
+        guard style == .dev, pane == .chat, viewing == nil, let session, !session.assistant else { return nil }
+        return session.shownCloseout
+        #endif
+    }
+
+    /// The card, at most a share of the page tall (as the workflow section): the conversation stays under it.
+    @ViewBuilder private var closeoutCard: some View {
+        if let closeout = shownCloseout {
+            // Under an open workflow section it starts folded: the two would take most of the page.
+            CloseoutCard(closeout: closeout, artifacts: session?.work?.artifacts ?? [],
+                         maxHeight: pageHeight > 0 ? pageHeight * Theme.Size.workflowShare : nil, startsOpen: !hasWorkflows)
+                // A list row carries only where the closeout stands; what changed and what was verified come with
+                // the session's own read. One that arrived without them (a list push after the chat opened) is read again.
+                .task(id: CloseoutRead(key: key, closeout: closeout)) {
+                    if closeout.did == nil, closeout.verified == nil { await model.refreshSessionDetail(key) }
+                }
         }
     }
 
@@ -961,7 +995,8 @@ struct ChatView: View {
                                        streaming: drawsLive && (frozen.map { !$0.text.isEmpty } ?? liveShown),
                                        quietAgents: quietSubagents, workflowCalls: workflowCalls,
                                        day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil,
-                                       supervision: openSupervision, active: shownRoundActive, background: foldsBackground)
+                                       supervision: openSupervision, active: shownRoundActive, background: foldsBackground,
+                                       closeout: shownCloseout != nil)
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
         if frozen != nil {
@@ -981,6 +1016,8 @@ struct ChatView: View {
             lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
         }
         lines = ChatLines.sourceRuns(lines)
+        // The card in the header says the closeout (#3612): the reply that carried the raw block shows without it.
+        if key.closeout { lines = ChatLines.hidingCloseout(lines) }
         scratch.lines = lines
         scratch.linesKey = key
         ChatTrace.shared.note(shownKey, ChatTrace.screen(lines, live: store.liveText.count, streaming: key.streaming, running: key.live != nil,
@@ -988,10 +1025,12 @@ struct ChatView: View {
         return lines
     }
 
-    /// The main conversation folds its background rounds while the hub's switch is on (docs/apple/ios.md "Background rounds").
+    /// The main conversation and the leader conversations fold their background rounds while the hub's switch is on
+    /// (docs/apple/ios.md "Background rounds", #6595).
     private var foldsBackground: Bool {
         ChatLines.foldsBackground(assistant: style == .assistant, conversation: shownKey.sessionID,
-                                  main: model.assistantMain?.sessionID, on: model.mainBackgroundFolded)
+                                  main: model.assistantMain?.sessionID, on: model.mainBackgroundFolded,
+                                  leaders: Set(model.assistantLeaders))
     }
 
     /// A later turn must not make a frozen historical question look like a live one.
@@ -2611,13 +2650,43 @@ struct ChatView: View {
                         .padding(.leading, Theme.Space.xs)
                 }
                 if let s = session, s.isStopped {
-                    // read-only: its terminal page has the shell it left and Resume (#4754), which Resume here opens (#5521)
-                    StoppedAgentBar(openTerminal: openTerminal, resume: resumeHere)
+                    #if os(iOS)
+                    StoppedAgentBar(session: s, coordinator: takeoverCoordinator, openTerminal: openTerminal, resume: resumeHere) { adopted in
+                        model.adopt(adopted)
+                        switchTo(adopted.key)
+                    } // Resume here opens the terminal page and resumes there (#5521)
+                    #else
+                    StoppedAgentBar(openTerminal: openTerminal) // read-only: its terminal page has the shell and Resume (#4754)
+                    #endif
                 } else if session?.isTerminalOnly == true {
                     // No reader for its conversation here: the terminal is the view, one tap instead of title › ⋯ › Terminal (#6170).
                     TerminalOnlyBar(openTerminal: openTerminal)
                 } else if let s = session, !s.canSend, let reason = s.sourceSubtitle {
+                    #if os(iOS)
+                    if UIDevice.current.userInterfaceIdiom == .phone {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .center, spacing: Theme.Space.s) {
+                                Text(reason).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                                CodexTakeoverControl(session: s, coordinator: takeoverCoordinator) { adopted in
+                                    model.adopt(adopted)
+                                    switchTo(adopted.key)
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                Text(reason).foregroundStyle(.secondary)
+                                CodexTakeoverControl(session: s, coordinator: takeoverCoordinator) { adopted in
+                                    model.adopt(adopted)
+                                    switchTo(adopted.key)
+                                }
+                            }
+                        }
+                        .font(Theme.Font.caption).frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    #else
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    #endif
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
                     Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
@@ -3609,6 +3678,12 @@ struct ChatView: View {
                         .padding(.horizontal, Theme.Space.l)
                         .padding(.bottom, Theme.Space.s)
                 }
+                // What the agent said of its own work as it stopped (#3612): above the transcript, never inside it.
+                if shownCloseout != nil {
+                    closeoutCard
+                        .padding(.horizontal, Theme.Space.l)
+                        .padding(.bottom, Theme.Space.s)
+                }
                 // The ports it listens on (its dev servers, docs/operations/ports.md): a tap opens the page.
                 if let ports = session?.ports, !ports.isEmpty {
                     SessionPortChips(machine: key.machineRef, ports: ports)
@@ -3753,6 +3828,7 @@ struct ChatView: View {
         if tabs || hasActivity || mode != nil { contextRow(tabs: tabs, activity: hasActivity, mode: mode) }
         if let goal = session?.goal { GoalBar(goal: goal) }
         workflowBar
+        closeoutCard
         if let ports = session?.ports, !ports.isEmpty { SessionPortChips(machine: key.machineRef, ports: ports) }
         if pane == .chat {
             if host == nil {
@@ -5961,17 +6037,27 @@ struct TerminalCover: View {
 /// its terminal page shows the shell it left and offers Resume, the one way it runs again. Resume Session here opens that
 /// page and resumes it there (#5521), as the web's line does; the words go above the two buttons, which stay on one line.
 private struct StoppedAgentBar: View {
+#if os(iOS)
     @Environment(\.dynamicTypeSize) private var typeSize
+    var session: Session
+    var coordinator: CodexTakeoverCoordinator
+#endif
     var openTerminal: () -> Void
-    /// Nil keeps the line as it was (the frozen Mac app).
+#if os(iOS)
     var resume: (() -> Void)?
+    var onSession: (Session) -> Void
+#endif
 
     var body: some View {
         Group {
-            if let resume {
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
+#if os(iOS)
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                HStack(spacing: Theme.Space.s) {
                     note
-                    // At the accessibility sizes the two go one above the other: side by side they would be cut short.
+                    CodexTakeoverControl(session: session, coordinator: coordinator, onSession: onSession)
+                }
+                if let resume {
+                    // At accessibility sizes, stack the actions so neither label is cut short.
                     let buttons = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s))
                         : AnyLayout(HStackLayout(spacing: Theme.Space.s))
                     buttons {
@@ -5982,10 +6068,16 @@ private struct StoppedAgentBar: View {
                         .themedButton(prominent: true)
                         .accessibilityIdentifier("chat.stopped.resume")
                     }
+                } else {
+                    HStack { Spacer(minLength: 0); terminal }
                 }
-            } else {
-                HStack(spacing: Theme.Space.s) { note; terminal }
             }
+#else
+            HStack(spacing: Theme.Space.s) {
+                note
+                terminal
+            }
+#endif
         }
         .accessibilityElement(children: .contain)
     }
@@ -6063,6 +6155,8 @@ struct QueueStrip: View {
     @State private var busy = false
     @State private var expanded = false
     @State private var confirmSend = false
+    /// Messages from other conversations collapse into one line until the owner opens them (#6394).
+    @State private var relayedExpanded = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
     @State private var rowHeight: CGFloat = 0
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -6076,7 +6170,7 @@ struct QueueStrip: View {
             .scrollBounceBehavior(.basedOnSize)
             // Its rows' own height until one is measured, not what it is offered: the footer is laid out first (#3703).
             .fixedSize(horizontal: false, vertical: rowHeight == 0)
-            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(total), Self.visibleRows) : nil)
+            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(drawnCount), Self.visibleRows) : nil)
             .padding(.top, Theme.Space.sm)
         } label: {
             Group {
@@ -6198,68 +6292,135 @@ struct QueueStrip: View {
         .accessibilityIdentifier("queue-sending-item")
     }
 
+    /// Messages other conversations sent in, behind the owner's own in the queue (#4342).
+    private var relayedCount: Int { max(queued.count - own, 0) }
+    /// How many rows the opened strip actually draws, for measuring one row's height (a folded relayed block is one line).
+    private var drawnCount: Int {
+        own + sending.count + (relayedCount > 0 ? (relayedExpanded ? relayedCount : 1) : 0)
+    }
+
     private var rows: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            ForEach(Array(queued.enumerated()), id: \.offset) { i, q in
-                let photos = i < own && photoMarks.indices.contains(i) ? photoMarks[i] : 0
-                let draft = QueuedDraft(q, photoCount: photos)
-                Menu {
-                    if i < own {
-                        Button { act(i, delete: false) } label: { Label("Take Back to Edit", systemImage: Theme.Icon.edit) }
-                        if steers, own > 1 {
-                            Button { move(i, by: -1) } label: { Label("Move Up [Queue Strip]", systemImage: Theme.Icon.queueUp) }
-                                .disabled(i == 0)
-                                .accessibilityIdentifier("queue-move-up")
-                            Button { move(i, by: 1) } label: { Label("Move Down [Queue Strip]", systemImage: Theme.Icon.queueDown) }
-                                .disabled(i == own - 1)
-                                .accessibilityIdentifier("queue-move-down")
-                        }
-                    }
-                    Button { UIPasteboard.general.string = draft.text.isEmpty ? q : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
-                    if i < own {
-                        Button(role: .destructive) { act(i, delete: true) } label: { Label("Delete", systemImage: Theme.Icon.delete) }
-                    }
+            ForEach(0..<own, id: \.self) { i in
+                ownRow(i)
+            }
+            if relayedCount > 0 {
+                Button {
+                    withAnimation(Theme.Motion.state) { relayedExpanded.toggle() }
                 } label: {
-                    HStack(alignment: .top, spacing: Theme.Space.s) {
-                        Text("\(i + 1)")
-                            .font(Theme.Font.labelHeavy.monospacedDigit())
-                            .foregroundStyle(Theme.accent)
-                            .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
-                            .background(Theme.accent.opacity(0.14), in: .circle)
-                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            QueuedWords(draft: draft)
-                            if photos > 0 {
-                                HStack(spacing: Theme.Space.xs) {
-                                    ThemedIcon(Theme.Icon.photo)
-                                    Text("\(photos) images")
-                                }
-                                .font(Theme.Font.caption).foregroundStyle(.secondary)
-                            }
-                            if i >= own {
-                                Text("Arrives when this turn ends [Queue Strip]")
-                                    .font(Theme.Font.caption).foregroundStyle(.secondary)
-                            }
-                        }
+                    HStack(spacing: Theme.Space.s) {
+                        ThemedIcon(Theme.Icon.sendNow).font(Theme.Font.label).foregroundStyle(.secondary)
+                        Text("\(relayedCount) messages from other conversations are waiting [Queue Strip]")
+                            .font(Theme.Font.secondary)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                         Spacer(minLength: 0)
-                        ThemedIcon(Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
+                        ThemedIcon(Theme.Icon.expand)
+                            .font(Theme.Font.captionStrong)
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(relayedExpanded ? 180 : 0))
                     }
                     .padding(.horizontal, Theme.Space.m)
                     .padding(.vertical, Theme.Space.s)
-                    .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                    .contentShape(.rect)
                 }
-                .disabled(busy)
-                .accessibilityLabel(i < own ? Text("Item \(i + 1): \(QueuedWords.spoken(draft))") : Text("Item \(i + 1): \(QueuedWords.spoken(draft)), arrives when this turn ends [Queue Strip]"))
-                .accessibilityIdentifier("queue-item")
-                .accessibilityHint(i < own ? Text("Edit, copy or delete") : Text("Copy [Readiness Views d37380]"))
-                .accessibilityValue(photos > 0 ? Text("\(photos) images") : Text(""))
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("queue-relayed-summary")
+                .accessibilityLabel(Text("\(relayedCount) messages from other conversations are waiting [Queue Strip]"))
+                if relayedExpanded {
+                    ForEach(own..<queued.count, id: \.self) { i in
+                        relayedRow(i)
+                    }
+                }
             }
             ForEach(Array(sending.enumerated()), id: \.element.id) { j, msg in
                 sendingRow(msg, number: queued.count + j + 1)
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-            if total > 0 { rowHeight = h / CGFloat(total) }
+            if drawnCount > 0 { rowHeight = h / CGFloat(drawnCount) }
         }
+    }
+
+    /// One of the owner's own queued messages: edit, reorder, copy or delete.
+    @ViewBuilder
+    private func ownRow(_ i: Int) -> some View {
+        let q = queued[i]
+        let photos = photoMarks.indices.contains(i) ? photoMarks[i] : 0
+        let draft = QueuedDraft(q, photoCount: photos)
+        Menu {
+            Button { act(i, delete: false) } label: { Label("Take Back to Edit", systemImage: Theme.Icon.edit) }
+            if steers, own > 1 {
+                Button { move(i, by: -1) } label: { Label("Move Up [Queue Strip]", systemImage: Theme.Icon.queueUp) }
+                    .disabled(i == 0)
+                    .accessibilityIdentifier("queue-move-up")
+                Button { move(i, by: 1) } label: { Label("Move Down [Queue Strip]", systemImage: Theme.Icon.queueDown) }
+                    .disabled(i == own - 1)
+                    .accessibilityIdentifier("queue-move-down")
+            }
+            Button { UIPasteboard.general.string = draft.text.isEmpty ? q : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
+            Button(role: .destructive) { act(i, delete: true) } label: { Label("Delete", systemImage: Theme.Icon.delete) }
+        } label: {
+            HStack(alignment: .top, spacing: Theme.Space.s) {
+                Text("\(i + 1)")
+                    .font(Theme.Font.labelHeavy.monospacedDigit())
+                    .foregroundStyle(Theme.accent)
+                    .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
+                    .background(Theme.accent.opacity(0.14), in: .circle)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    QueuedWords(draft: draft)
+                    if photos > 0 {
+                        HStack(spacing: Theme.Space.xs) {
+                            ThemedIcon(Theme.Icon.photo)
+                            Text("\(photos) images")
+                        }
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                ThemedIcon(Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+        }
+        .disabled(busy)
+        .accessibilityLabel(Text("Item \(i + 1): \(QueuedWords.spoken(draft))"))
+        .accessibilityIdentifier("queue-item")
+        .accessibilityHint(Text("Edit, copy or delete"))
+        .accessibilityValue(photos > 0 ? Text("\(photos) images") : Text(""))
+    }
+
+    /// One message relayed from another conversation: shown only, the only action is copy (#4342).
+    @ViewBuilder
+    private func relayedRow(_ i: Int) -> some View {
+        let q = queued[i]
+        let draft = QueuedDraft(q)
+        Menu {
+            Button { UIPasteboard.general.string = draft.text.isEmpty ? q : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
+        } label: {
+            HStack(alignment: .top, spacing: Theme.Space.s) {
+                Text("\(i + 1)")
+                    .font(Theme.Font.labelHeavy.monospacedDigit())
+                    .foregroundStyle(Theme.accent)
+                    .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
+                    .background(Theme.accent.opacity(0.14), in: .circle)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    QueuedWords(draft: draft)
+                    Text("Arrives when this turn ends [Queue Strip]")
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                ThemedIcon(Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+        }
+        .disabled(busy)
+        .accessibilityLabel(Text("Item \(i + 1): \(QueuedWords.spoken(draft)), arrives when this turn ends [Queue Strip]"))
+        .accessibilityIdentifier("queue-item")
+        .accessibilityHint(Text("Copy [Readiness Views d37380]"))
     }
 
     private func act(_ i: Int, delete: Bool) {
@@ -6654,6 +6815,14 @@ struct ChatLine: Identifiable {
         id = content.id
         self.content = content
     }
+
+    private init(id: String, content: Content) {
+        self.id = id
+        self.content = content
+    }
+
+    /// `line` drawn as `row` under its own id: the list keeps its place (`ChatLines.hidingCloseout`).
+    static func replacing(_ line: ChatLine, with row: ChatRow) -> Self { Self(id: line.id, content: .row(row)) }
 
     static func supervision(id: String, lines: [ChatLine], live: Bool, source: MessageSource? = nil) -> Self {
         Self(.supervision(id: id, lines: lines, live: live, source: source))
@@ -7251,6 +7420,12 @@ struct WorkLine: View, Equatable {
 }
 
 
+/// What the closeout card's detail read follows: the chat and the closeout as the list has it.
+private struct CloseoutRead: Equatable {
+    var key: SessionKey
+    var closeout: Closeout
+}
+
 /// Where a work line's or tool run's header is, told to the chat's pin (`workHeadMoved`). Not from Full Page's copies of
 /// the lines (#1609): they are off screen, and their positions moved the list the next time a header was tapped.
 private struct WorkHeadReport: ViewModifier {
@@ -7327,16 +7502,18 @@ private struct ChatLiveText: View {
         #endif
         // Held: the store is not read, so the deltas do not draw this again.
         let text = held ?? (Self.shows(store) ? store.liveText : "")
+        // Held, or the stream over: the words whole, not revealed further (#6651).
+        let done = held != nil || store.liveDone
         if !text.isEmpty {
             if layout.on {
-                StreamingText(text: text)
+                StreamingText(text: text, done: done)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .chatBoxed(Theme.ChatBox.persona)
                     .chatMark("chat.live")
                     .id("live")
                     .flippedBack()
             } else {
-                StreamingText(text: text).chatMark("chat.live").id("live").flippedBack()
+                StreamingText(text: text, done: done).chatMark("chat.live").id("live").flippedBack()
             }
         }
     }
@@ -7466,6 +7643,8 @@ final class ChatScratch {
         var active = false
         /// Background rounds fold (`ChatLines.foldBackground`): the main conversation with the hub's switch on.
         var background = false
+        /// The header shows the session's closeout card: its raw block is left out of the last reply.
+        var closeout = false
     }
     /// What was sent from this chat lately: its transcript copy arriving brings you to the newest, others do not.
     var sentHere: [(id: UUID, text: String)] = []
