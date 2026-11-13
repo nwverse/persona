@@ -100,7 +100,10 @@ final class InboxBackTests: XCTestCase {
     @MainActor private func swipeBack() {
         sleep(1)
         let window = app.windows.firstMatch
-        window.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.5))
+        // A wide split's interactive-pop edge is the detail column's left edge, beside the still-visible sidebar.
+        let sidebar = app.buttons["sidebar-inbox"].firstMatch
+        let edge = window.frame.width > 600 && sidebar.exists ? (sidebar.frame.maxX + 2) / window.frame.width : 0.005
+        window.coordinate(withNormalizedOffset: CGVector(dx: edge, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)),
                    withVelocity: .slow, thenHoldForDuration: 0.1)
     }
