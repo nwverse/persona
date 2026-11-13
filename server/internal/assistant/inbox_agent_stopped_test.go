@@ -343,7 +343,10 @@ func TestInboxAgentSweepRetriesAnUndoneStop(t *testing.T) {
 	store := &inboxAgentStopFailStore{inboxMemStore: h.st, failStop: true}
 	previousStore := h.Service.store
 	h.Service.store = func() Store { return store }
-	t.Cleanup(func() { h.Service.store = previousStore })
+	t.Cleanup(func() {
+		h.deliverNotes(context.Background(), it) // finish tellSoon's save before restoring the store it reads
+		h.Service.store = previousStore
+	})
 	h.sweepInboxAgents(context.Background(), InboxAgentConfig{Enabled: true}, time.Now())
 	if it.Handling.State != HandlingAgent || it.Agent.State == AgentFailed || inboxAgentStoppedCount(it) != 0 || len(h.f.sentToAgents()) != 0 {
 		t.Fatalf("an undone stop became a timeout: handling %+v, agent %+v, chain %+v", it.Handling, it.Agent, it.Chain)
