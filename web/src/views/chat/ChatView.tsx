@@ -48,6 +48,7 @@ import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { StoppedAgentLine } from "./StoppedAgentLine";
+const TakeoverAction = lazy(() => import("./TakeoverAction"));
 import { scrollBehavior } from "../../ui/stream/motion";
 import { segmentChanges, shiftAbove } from "./offscreen";
 import { glide } from "./glide";
@@ -2515,6 +2516,8 @@ export const Header = memo(function Header({
       {/* wide screens have New chat at the top of the sidebar; a phone's sidebar is a drawer */}
       {assistant && !chrome && session?.space !== "health" && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
       {!chrome && actions}
+      {!assistant && session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server") &&
+        <Suspense fallback={null}><TakeoverAction key={`${session.machine_id}:${session.session_id}`} session={session} /></Suspense>}
       {Boolean(topCenter) && more("end")}
       {chrome && <IconButton icon="x" label={t("sidepanel.close")} onClick={chrome.onClose} />}
       </div>
