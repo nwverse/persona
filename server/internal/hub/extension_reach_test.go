@@ -116,6 +116,10 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 		{"names A: a paged list", "GET", "/api/v1/inbox/done", "", namesA},
 		{"names A by query: a manager route", "GET", "/api/v1/assistant?manager=assistant", "", nil},
 		{"names A: an inbox reply", "POST", "/api/v1/inbox/item-1/reply", `{"text":"x"}`, namesA},
+		{"names A: an inbox merge", "POST", "/api/v1/inbox/merge", `{}`, namesA},
+		{"names A: an inbox merge undo", "POST", "/api/v1/inbox/merge/undo", `{}`, namesA},
+		{"names A: an inbox to-do", "POST", "/api/v1/inbox/todo", `{}`, namesA},
+		{"names A: an inbox to-do undo", "POST", "/api/v1/inbox/todo/undo", `{}`, namesA},
 		{"names A: the knowledge base", "GET", "/api/v1/kb/people", "", namesA},
 		{"names A: another extension's HTTP", "GET", "/api/v1/extensions/lark/things", "", namesA},
 		{"A's card choice", "POST", "/api/v1/interactions/ix_a/choose", `{"option":0,"rev":"old"}`, nil},
@@ -160,6 +164,11 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 			t.Errorf("%s %s: %d %s", c.method, c.path, code, clip(out, 200))
 		}
 	}
+	for _, path := range []string{"/api/v1/inbox/merge", "/api/v1/inbox/merge/undo", "/api/v1/inbox/todo", "/api/v1/inbox/todo/undo"} {
+		if code, out := extDo(t, url, "POST", path, `{}`, nil); code != http.StatusOK || !strings.Contains(out, `"who":"b"`) {
+			t.Errorf("own manager %s: %d %s", path, code, clip(out, 200))
+		}
+	}
 	if code, out := extDo(t, url, "POST", "/api/v1/sessions", `{"machine_id":"mb","cwd":"/tmp","prompt":"hi"}`, nil); code == http.StatusForbidden ||
 		!slices.ContainsFunc(reached(b), func(l string) bool { return strings.Contains(l, `"method":"session.start"`) }) {
 		t.Errorf("an agent on B's machine: %d %s", code, clip(out, 200))
@@ -186,6 +195,8 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"PUT /api/v1/inbox/{id}/folder": "manager", "GET /api/v1/inbox/folders": "manager", "PUT /api/v1/inbox/folders": "manager",
 		"POST /api/v1/inbox/mutes": "manager", "DELETE /api/v1/inbox/mutes/{id}": "manager", "POST /api/v1/inbox/policies": "manager",
 		"PATCH /api/v1/inbox/policies/{id}": "manager", "DELETE /api/v1/inbox/policies/{id}": "manager", "POST /api/v1/inbox/refresh": "manager",
+		"POST /api/v1/inbox/merge": "manager", "POST /api/v1/inbox/merge/undo": "manager",
+		"POST /api/v1/inbox/todo": "manager", "POST /api/v1/inbox/todo/undo": "manager",
 		"GET /api/v1/sessions/archived":                      "own+body",
 		"GET /api/v1/sessions":                               "own+body", // its machines; ?machine_id= another's: 403
 		"GET /api/v1/sessions/{mid}/{sid}/info":              "path",
