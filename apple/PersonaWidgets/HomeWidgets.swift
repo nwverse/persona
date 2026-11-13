@@ -17,7 +17,7 @@ enum HomeTimeline {
         edit(&e)
         if kind == .today {
             e.calendarKey = HomeCalendarState.slot(family, e.calendarView)
-            e.calendarSlot = (calendar ?? HomeCalendarStore.shared.read()).slots[e.calendarKey]
+            e.calendarSlot = calendar?.slots[e.calendarKey]
         }
         e.relevance = HomeRelevance.of(kind, e.context)
         return e
@@ -25,9 +25,9 @@ enum HomeTimeline {
 
     /// Now; when the snapshot turns stale, so old numbers step back without a reload; for the Calendar widget also
     /// midnight (the date and the grids move on) and when a picked day goes back to today. At most four entries.
-    static func timeline(_ kind: HomeKind, family: WidgetFamily, edit: (inout HomeEntry) -> Void) -> Timeline<HomeEntry> {
+    static func timeline(_ kind: HomeKind, family: WidgetFamily, edit: (inout HomeEntry) -> Void) async -> Timeline<HomeEntry> {
         let snapshot = HomeSnapshotStore.shared.read()
-        let calendar = kind == .today ? HomeCalendarStore.shared.read() : nil
+        let calendar = kind == .today ? await HomeCalendarStore.shared.read() : nil
         let now = Date.now
         let first = entry(kind, family: family, at: now, snapshot: snapshot, calendar: calendar, edit: edit)
         var dates: Set<Date> = []
@@ -51,11 +51,14 @@ struct HomeProvider: TimelineProvider {
     func placeholder(in context: Context) -> HomeEntry { HomeTimeline.placeholder }
 
     func getSnapshot(in context: Context, completion: @escaping (HomeEntry) -> Void) {
-        completion(HomeTimeline.entry(kind, family: context.family, at: .now, snapshot: HomeSnapshotStore.shared.read()) { _ in })
+        Task {
+            let calendar = kind == .today ? await HomeCalendarStore.shared.read() : nil
+            completion(HomeTimeline.entry(kind, family: context.family, at: .now, snapshot: HomeSnapshotStore.shared.read(), calendar: calendar) { _ in })
+        }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<HomeEntry>) -> Void) {
-        completion(HomeTimeline.timeline(kind, family: context.family) { _ in })
+        Task { completion(await HomeTimeline.timeline(kind, family: context.family) { _ in }) }
     }
 }
 
@@ -66,11 +69,12 @@ struct HomeEditProvider<Intent: HomeWidgetEdit>: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> HomeEntry { HomeTimeline.placeholder }
 
     func snapshot(for configuration: Intent, in context: Context) async -> HomeEntry {
-        HomeTimeline.entry(kind, family: context.family, at: .now, snapshot: HomeSnapshotStore.shared.read()) { configuration.apply(to: &$0) }
+        let calendar = kind == .today ? await HomeCalendarStore.shared.read() : nil
+        return HomeTimeline.entry(kind, family: context.family, at: .now, snapshot: HomeSnapshotStore.shared.read(), calendar: calendar) { configuration.apply(to: &$0) }
     }
 
     func timeline(for configuration: Intent, in context: Context) async -> Timeline<HomeEntry> {
-        HomeTimeline.timeline(kind, family: context.family) { configuration.apply(to: &$0) }
+        await HomeTimeline.timeline(kind, family: context.family) { configuration.apply(to: &$0) }
     }
 }
 

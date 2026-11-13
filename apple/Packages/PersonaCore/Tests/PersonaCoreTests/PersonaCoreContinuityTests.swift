@@ -3,8 +3,8 @@ import Synchronization
 @testable import PersonaCore
 
 final class PersonaCoreContinuityTests: XCTestCase {
-    func testEveryFixtureThroughTheRealCBinding() throws {
-        let result = try ContinuityBindingReplay.replayAll()
+    func testEveryFixtureThroughTheRealCBinding() async throws {
+        let result = try await ContinuityBindingReplay.replayAll()
         XCTAssertEqual(result.cases, 38)
         XCTAssertEqual(result.steps, 94)
         print("PersonaCore C binding: \(result.cases) cases, \(result.steps) steps, \(result.patches) drained patches")

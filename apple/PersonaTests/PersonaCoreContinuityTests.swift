@@ -5,15 +5,15 @@ import PersonaCore
 
 @MainActor
 final class PersonaCoreContinuityTests: XCTestCase {
-    func testEveryContinuityFixtureThroughRealCBinding() throws {
-        let result = try ContinuityBindingReplay.replayAll()
+    func testEveryContinuityFixtureThroughRealCBinding() async throws {
+        let result = try await ContinuityBindingReplay.replayAll()
         XCTAssertEqual(result.cases, 38)
         XCTAssertEqual(result.steps, 94)
         print("iOS C binding: \(result.cases) cases, \(result.steps) steps, \(result.patches) patches")
     }
 
-    func testEveryContinuityFixtureAgainstNativeChatStore() throws {
-        let result = try NativeChatStoreContinuityReplay.replayAll()
+    func testEveryContinuityFixtureAgainstNativeChatStore() async throws {
+        let result = try await NativeChatStoreContinuityReplay.replayAll()
         XCTAssertEqual(result.cases, 38)
         XCTAssertEqual(result.steps, 94)
         print("iOS native ChatStore: \(result.cases) cases, \(result.steps) steps")

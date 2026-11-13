@@ -44,7 +44,7 @@ struct ShowCalendarViewIntent: AppIntent {
     nonisolated func perform() async throws -> some IntentResult {
         let slot = slot
         if let view = HomeCalendarView(rawValue: view) {
-            HomeCalendarStore.shared.update { $0.show(view, in: slot) }
+            await HomeCalendarStore.shared.update { $0.show(view, in: slot) }
         }
         await HomeCalendarStore.reload()
         return .result()
@@ -68,7 +68,7 @@ struct PickCalendarDayIntent: AppIntent {
 
     nonisolated func perform() async throws -> some IntentResult {
         let slot = slot, day = day, now = Date.now
-        HomeCalendarStore.shared.update { $0.pick(day, in: slot, at: now) }
+        await HomeCalendarStore.shared.update { $0.pick(day, in: slot, at: now) }
         await HomeCalendarStore.reload()
         return .result()
     }

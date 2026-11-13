@@ -7,8 +7,8 @@ import PersonaCore
 /// covered separately through AppModel's real fill path in PersonaCoreContinuityTests.swift.
 @MainActor
 public struct NativeChatStoreContinuityReplay {
-    public static func replayAll(in directory: URL = ContinuityCase.repositoryDirectory) throws -> (cases: Int, steps: Int) {
-        let cases = try ContinuityCase.all(in: directory)
+    public static func replayAll(in directory: URL = ContinuityCase.repositoryDirectory) async throws -> (cases: Int, steps: Int) {
+        let cases = try await ContinuityCase.all(in: directory)
         print("native continuity directory: \(directory.path), cases: \(cases.count)")
         for `case` in cases { try replay(`case`) }
         return (cases.count, cases.reduce(0) { $0 + $1.events.count })
