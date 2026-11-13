@@ -234,9 +234,15 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * 0821d1acca measured ja 474,717 B, 35 B over the old budget; this change takes it to 475,028 B, +311 B: the `?at=` of a
  * search hit's address and the chat's landing on it, which pages back for one further up, waiting while the chat still
  * fills the screen, and its one line when the message is not reached; the search itself stays in ⌘K's on-intent load
- * and All chats' page; 31 B of room so the next main does not tip it).
+ * and All chats' page; 31 B of room so the next main does not tip it). And 1,396 B for the paged Agents list by group
+ * (#6348: ja 476,424 B against 475,028 B on main at 0a7b073399: the Browse by kept in this browser, the groups read from
+ * the hub's catalog or the count maps (lib/session-groups.ts, views/agents/use-session-groups.ts) while the sections'
+ * code loads, the pill's menu from them with a project's remote and directories, the place and space filters and a
+ * list that reads rows only (lib/session-list.ts), and a row's computer under a project on several; the sections
+ * themselves, views/agents/GroupedSessions.tsx, load when a Browse by is chosen, which took 407 B back off; the 31 B of
+ * room stay).
  */
-export const FIRST_SCREEN_BUDGET = 475_059;
+export const FIRST_SCREEN_BUDGET = 476_455;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
