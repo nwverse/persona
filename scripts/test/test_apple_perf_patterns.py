@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Calls that block the thread they run on, or cost milliseconds each time a view redraws, may not grow in the Apple
-sources (docs/apple/performance.md, "Automated checks").
+"""Calls that block the thread they run on, cost milliseconds each time a view redraws, or follow something that changes
+on every frame of an animation may not grow in the Apple sources (docs/apple/performance.md, "Automated checks").
 
 App targets default to MainActor (`SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor` in apple/project.yml), so a Photos fetch, a
 keychain read, a synchronous file read or a full image decode written in a view, a model or an app-target helper runs on
@@ -40,6 +40,9 @@ PATTERNS = {
     # P4: a localization lookup with an explicit locale reads the string tables on every call (1-2 ms; #5438).
     # `interfaceText(_:)` is one; its declaration is not a call.
     "localized-lookup": re.compile(r"(?<!func )\binterfaceText\s*\(|\bString\s*\(\s*localized:[^\n]*\blocale\s*:"),
+    # P7: a view's frame in the window changes on every frame its page slides (the shell's strip, a sheet, a drag), so
+    # state written from one is written, and its readers drawn, on each of them (#5438).
+    "window-frame": re.compile(r"\.\s*frame\s*\(\s*in\s*:\s*\.global\s*\)"),
     # P8: a full decode of an encoded picture.
     "image-decode": re.compile(r"\b(?:UIImage|NSImage)\s*\(\s*(?:data|contentsOfFile)\s*:"),
     # P9: a frame-rate timeline that never pauses.
@@ -127,9 +130,10 @@ class ApplePerfPatternTests(unittest.TestCase):
     def test_no_file_grows_its_blocking_calls(self):
         counts, _ = scan()
         grown, shrunk = compare(counts, load_baseline())
-        self.assertEqual(grown, [], "a blocking call or a per-call localization lookup was added (docs/apple/performance.md, "
-                         "rules P1, P4, P8, P9): move it off the main actor or out of the redraw path (cache a lookup per "
-                         "locale), or mark a verified call `// perf-ok: <reason>`")
+        self.assertEqual(grown, [], "a blocking call, a per-call localization lookup or a read of a window frame was added "
+                         "(docs/apple/performance.md, rules P1, P4, P7, P8, P9): move it off the main actor or out of the "
+                         "redraw path (cache a lookup per locale; measure in the page's own coordinate space or keep the "
+                         "frame unobserved), or mark a verified call `// perf-ok: <reason>`")
         self.assertEqual(shrunk, [], "fewer blocking calls than the baseline: run "
                          "python3 scripts/test/test_apple_perf_patterns.py --update and commit the baseline")
 
@@ -146,6 +150,10 @@ class ApplePerfPatternTests(unittest.TestCase):
         self.assertEqual(calls("try fm.contentsOfDirectory(at: u, includingPropertiesForKeys: nil)"), [("directory-listing", 1)])
         self.assertEqual(calls("SecItemCopyMatching(q as CFDictionary, &out)"), [("keychain-read", 1)])
         self.assertEqual(calls("UserDefaults.standard.synchronize()"), [("defaults-synchronize", 1)])
+        self.assertEqual(calls(".onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in }"), [("window-frame", 1)])
+        self.assertEqual(calls("let f = g.frame( in: .global )"), [("window-frame", 1)])
+        self.assertEqual(calls("$0.frame(in: .named(space))\n$0.frame(in: .local)"), [])
+        self.assertEqual(calls("$0.frame(in: .global).minY // perf-ok: only y, and the box is unobserved"), [])
         self.assertEqual(calls("TimelineView(.animation) { c in }"), [("unpaused-animation", 1)])
         self.assertEqual(calls("TimelineView(.animation(minimumInterval: 1 / 30)) { c in }"), [("unpaused-animation", 1)])
         self.assertEqual(calls("TimelineView(.animation(minimumInterval: 1 / 60, paused: still)) { c in }"), [])

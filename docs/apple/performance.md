@@ -135,7 +135,13 @@ for expensive objects.
 - Fixed before: `ShellState(...)` as a `@State` initial value called the pager and a DEBUG trace on every `RootView`
   rebuild, which kept the main thread at 100% (commit `d2289dee5`, `docs/lessons/ios.md`).
 
-**Do.** Keep the model's `init` empty and create its expensive parts lazily (`@ObservationIgnored private lazy var
+- An initial value is evaluated in the **parent's** `body` (that is where the struct is built), so what it reads, the
+  parent follows. `ShellView`'s `@State private var shell = ShellState(page: … AppModel.shared.selectedTab …)` made
+  `RootView`'s body depend on the app's tab: every switch between Assistant and Agents ran `RootView`, built a throwaway
+  `ShellState` and handed the shell's whole tree new structs to compare (#5438). It reads `AppModel.selectedTabNow` now.
+
+**Do.** An initial value reads nothing observed: take the unobserved accessor (`sessionsNow`, `selectedTabNow`) or pass
+the value in. Keep the model's `init` empty and create its expensive parts lazily (`@ObservationIgnored private lazy var
 manager = PHCachingImageManager()`), or own the object one level up (the page's model) and pass it in.
 
 **Check.** Review: open every class used as a `@State` initial value and read its `init`. To measure, log or count the
@@ -162,10 +168,10 @@ every push and every frame of a scroll.
 **Counter-examples.**
 - `apple/Persona/Views/Inbox/Lark/LarkInline.swift:303`: compiles a regular expression on every call, from every Lark card node's `body`.
 - `apple/Persona/Views/Knowledge/KnowledgeView.swift:1092`: a new `DateFormatter` per call from `body` (`apple/Persona/Views/Knowledge/KnowledgeView.swift:826`).
-- `apple/Shared/StateNames.swift`: `StateName.text` calls `interfaceText(_:)` each time it is read. With an explicit locale,
+- Fixed before, `apple/Shared/StateNames.swift`: `StateName.text` called `interfaceText(_:)` each time it was read. With an explicit locale,
   `String(localized:)` reads the string tables on every call (1–2 ms each on the simulator, against the cached lookup of
   the default locale). The Agents filter chips (`QuickFilterBar.plainChips` → `AgentFilter.title`) and row badges read it
-  on every redraw: 1153 ms of main-thread time over 20 Assistant ⇄ Agents switches, about 57 ms per switch, measured with
+  on every redraw (kept per locale now): 1153 ms of main-thread time over 20 Assistant ⇄ Agents switches, about 57 ms per switch, measured with
   `sample` on an optimized build (#5438).
 - Fixed before: the Agents list grouped, sorted, folded and counted every session in `body` on every push until `AgentsFeed` and
   `AgentListProjection` moved that into the model (`docs/apple/ios-state.md`, steps 1 and 3); Markdown re-parsed finished blocks while streaming until `StreamChunks`.
@@ -208,13 +214,31 @@ in one place, move that read into a small child view. Actions read unobserved va
 - Fixed before: the chat subtitle read `machines`, so every machine heartbeat recomputed the page and all its rows
   (`docs/apple/ios-state.md`, step 5); writing a trace array in `body` made `RootView` observe it and redraw for ever (commit `d2289dee5`).
 
-**Do.** Follow `docs/apple/ios-state.md` ("Keeping redraws small"). Write-only records are `@ObservationIgnored`. A store
+- Fixed before: three reads that made whole pages run on every switch between Assistant and Agents, where nothing they
+  draw changes (#5438, measured with `-perfCounts YES`, bodies per switch):
+  - `AgentsList`'s body worked out whether the list is out of sight from `model.selectedTab`, the strip's `moving` and
+    `model.visibleSession`, all of which change on a switch: 3–4 runs of the list's body, over every row. The reads moved
+    into `AgentsCoverWatch`, a clear view in the list's background that holds the feed and carries the polling.
+  - `ChatView` declared `@Environment(\.dismiss)`. SwiftUI hands out a new `DismissAction` when the presentation around
+    a view changes, and a shell page going behind or coming back counts: 2–3 runs of the chat page, its footer and its
+    transcript. `DismissReader` declares it now and keeps the latest in an unobserved `DismissHolder`.
+  - `ChatsView`'s body read where the shell's bar is drawn (`AgentsHeader.bar`) to fade it. The bar is put back each time
+    the strip rests on Agents and reports its place again: one run of the page and one of the list. The read moved
+    into the bar's own modifier (`AgentsTopBarPlace`).
+
+**Do.** Follow `docs/apple/ios-state.md` ("Keeping redraws small"). An environment value that changes with the
+presentation (`dismiss`, `isPresented`, `scenePhase`, `tabIsActive`) and a model value that only an action or a side
+effect needs are read by a small view or modifier of their own (`DismissReader`, `PageFrontWatcher`, `AgentsCoverWatch`),
+which hands the big view nothing to redraw for. Write-only records are `@ObservationIgnored`. A store
 many pages share hands each one a projection of its own key, built per change: `MeetingPhotos.Album` is one recording's
 photos with each row's content worked out, so the meeting thread reads only their order, each photo row reads the rest,
 and another recording's uploads redraw neither.
 
-**Check.** `RenderBudgetTests` (views per push) and `AllSessionsReadersTests` (who may read `allSessions`) fail on
-regressions; add a `PerfTrace.body("Name")` to a new heavy view so its count shows up.
+**Check.** `RenderBudgetTests` (views per push, and `testShellSwitch`: views per switch between Assistant and Agents) and
+`AllSessionsReadersTests` (who may read `allSessions`) fail on regressions; add a `PerfTrace.body("Name")` to a new heavy
+view so its count shows up. To find what made a body run, put `let _ = Self._printChanges()` at its top in a local build
+and read the app's console (`xcrun simctl launch --console-pty …`): it names the property, environment value or
+observed key path that changed.
 
 ### P6. Lists have stable identities and cheap rows
 
@@ -258,13 +282,25 @@ value written back into state that changes the layout loops for ever and hangs t
   docs/lessons/ios.md「Animated jumps redraw every text they pass」). Jumps to the newest end now move the
   `UIScrollView` (`ChatJumpRun`); jumps to a line keep SwiftUI's (a far one measured a longer frame on the list).
 
-**Do.** Batch into one main-actor hop per frame or per short window (`applyPendingSessions`); compare before assigning;
+- Fixed before: the composer kept where its 「+」 is in the window in `@State`
+  (`.onGeometryChange { $0.frame(in: .global) } action: { plusFrame = $0 }`), for the panel a tap opens. While the
+  shell's strip slides, every window frame on both pages changes on every frame: the bar's body ran about 30 times a
+  switch, each run building its menus and updating its text field again (the 195 ms `TextField` update the watchdog
+  caught, `PlatformTextFieldCoordinator.update` → `setSelection`). It is an unobserved `WindowFrame` now, read on the
+  tap. The Agents header's field did the same with its row's frame, and laid the row out again each frame; it measures
+  in the list's own coordinate space now (#5438).
+
+**Do.** A frame in the window (`.global`) moves whenever anything above the view moves: the shell's strip, the drawer, a
+sheet's drag, the keyboard. Measure in the coordinate space of what the value is about (`.named(…)` on the page or the
+list), take only the component needed (`minY` does not change in a slide sideways), and keep a frame that only an action
+reads in an unobserved object. Batch into one main-actor hop per frame or per short window (`applyPendingSessions`); compare before assigning;
 round geometry to whole points and write it back only when it moved by at least a point. Animate a long list's
 programmatic scroll on its `UIScrollView` (a display link, whole pixels; `ChatJumpRun`), never by animating SwiftUI's
 scroll position; put a far target a screen short first (`ChatJump`).
 
 **Check.** `-perfCounts YES` push time and bodies; the mock hub's `/mock/churn` and `/mock/say?stream=1` drive the load
-(`docs/operations/testing.md`, "Persona page (long main chat)").
+(`docs/operations/testing.md`, "Persona page (long main chat)"). The ratchet counts `window-frame`, every
+`frame(in: .global)`: a new one fails unless its line says why it is fine (`// perf-ok: only y, kept unobserved`).
 
 ### P8. Decode and downsample images off the main thread
 
@@ -408,7 +444,14 @@ Start from a reproduction, measure the base, change one thing, measure again.
    "Probes and assertions") expose state for UI tests. The suites in `scripts/app/perf-test.sh` (`PerfAgentsTests`,
    `PerfAssistantTests`, `PerfComposerTests`, …) do this with `XCTHitchMetric` and report through
    `scripts/app/perf_report.py`.
-7. **In the field.** TestFlight builds report hangs, launch time and memory to Xcode Organizer. MetricKit is not wired yet
+7. **Keep XCTest out of the measured frames.** `element.tap()` resolves the element from an accessibility snapshot of
+   the app, and `waitForExistence` takes one per poll, all on the app's main thread: 55–70 ms each with the `assistant`
+   suite's data, about three quarters of the main thread's busy time during `testTabSwitchAssistantAgents` (#5438). A
+   test that taps and waits inside `measure` reports XCTest's hitches with the app's. For an animation, give the app a
+   cue (a Darwin notification handled by `FrameProbe`, as `com.persona.perf.shell.switch`) and let the test only sleep
+   while frames are recorded (`testTabSwitchAssistantAgentsByCue`; the list glides run inside the app the same way, `FrameProbe.runGlide`). To see the split,
+   `PERF_SAMPLE=<test>` samples the app during a test: XCTest's share is everything under `__XCTPerformOnMainRunLoop`.
+8. **In the field.** TestFlight builds report hangs, launch time and memory to Xcode Organizer. MetricKit is not wired yet
    (#4265).
 
 Report the device or simulator, OS, build settings, data set, number of runs and the range, and say what was not measured.
@@ -417,9 +460,9 @@ Report the device or simulator, OS, build settings, data set, number of runs and
 
 | Check | What it does | State |
 | --- | --- | --- |
-| `scripts/test/test_apple_perf_patterns.py` | Ratchet over Swift under `apple/` (tests excluded): Photos fetches, `SecItemCopyMatching`, `Data` / `String(contentsOf:)`, directory listings, `UserDefaults.synchronize()`, `UIImage(data:)` / `(contentsOfFile:)` / `NSImage(data:)`, `TimelineView(.animation…)` without `paused:`, and localization lookups with an explicit locale (`interfaceText(`,
-`String(localized:…, locale:)`; P4). Each file's counts (`scripts/test/apple_perf_baseline.json`) may only go down; a call verified to run off the main thread is marked `// perf-ok: <reason>`. After removing calls, run it with `--update`; `--list` prints every counted call. Runs in `scripts/ci/python-tests.py`. | Implemented |
-| `RenderBudgetTests`, `AllSessionsReadersTests`, `AppStorageRatchetTests`, `HoldSourceTests`, `ContinuousMotionTests` | Views per push, who reads `allSessions`, files still holding `@AppStorage`, no self-managed waits, every unending animation stops under Reduce Motion | Existing |
+| `scripts/test/test_apple_perf_patterns.py` | Ratchet over Swift under `apple/` (tests excluded): Photos fetches, `SecItemCopyMatching`, `Data` / `String(contentsOf:)`, directory listings, `UserDefaults.synchronize()`, `UIImage(data:)` / `(contentsOfFile:)` / `NSImage(data:)`, `TimelineView(.animation…)` without `paused:`, localization lookups with an explicit locale (`interfaceText(`,
+`String(localized:…, locale:)`; P4), and reads of a view's frame in the window (`frame(in: .global)`; P7). Each file's counts (`scripts/test/apple_perf_baseline.json`) may only go down; a call verified to run off the main thread is marked `// perf-ok: <reason>`. After removing calls, run it with `--update`; `--list` prints every counted call. Runs in `scripts/ci/python-tests.py`. | Implemented |
+| `RenderBudgetTests`, `AllSessionsReadersTests`, `AppStorageRatchetTests`, `HoldSourceTests`, `ContinuousMotionTests` | Views per push and per switch between Assistant and Agents (`testShellSwitch`: no page's body runs, the composer bar's at most three times), who reads `allSessions`, files still holding `@AppStorage`, no self-managed waits, every unending animation stops under Reduce Motion | Existing |
 | `scripts/app/perf-test.sh` | Scroll, navigation and composer hitches per page | Existing, run by hand |
 | Isolation-aware lint | Flag the patterns above only where the compiler says the call is on the main actor (SwiftSyntax or a SourceKit index over the isolation of the enclosing declaration), so the ratchet can become a hard zero | Proposed, #4262 |
 | `scripts/test/test_apple_state_initial_values.py` | P3 ratchet over Swift under `apple/`, including tests: class construction in `@State` with non-trivial `init` bodies or eager stored-property initial values. Each file/type count (`scripts/test/apple_state_initial_values_baseline.json`) may only go down; new entries start at zero. `--update` lowers the baseline; `--list` prints every counted site and its reason. Automatically discovered by `scripts/ci/python-tests.py` in the scripts lane. | Implemented, #4263 |

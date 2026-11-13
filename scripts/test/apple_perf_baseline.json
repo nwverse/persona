@@ -16,6 +16,9 @@
  "apple/Mac/App/MacRichSnapshotBatch.swift": {
   "file-read": 1
  },
+ "apple/Mac/Design/MacTitleRowTitle.swift": {
+  "window-frame": 1
+ },
  "apple/Packages/BeautifulUI/Sources/BeautifulUI/Components/PromptBar.swift": {
   "unpaused-animation": 1
  },
@@ -24,6 +27,9 @@
  },
  "apple/Persona/App/PhonePasteboard.swift": {
   "image-decode": 2
+ },
+ "apple/Persona/DesignSystem/Toasts.swift": {
+  "window-frame": 1
  },
  "apple/Persona/Glasses/MetaGlasses.swift": {
   "image-decode": 1
@@ -46,12 +52,36 @@
  "apple/Persona/Views/Assistant/AssistantView.swift": {
   "image-decode": 1
  },
+ "apple/Persona/Views/Assistant/Tasks/SentViews.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/Assistant/Tasks/TaskViews.swift": {
+  "window-frame": 1
+ },
  "apple/Persona/Views/Chat/AttachSheet.swift": {
   "photos-fetch": 2
  },
  "apple/Persona/Views/Chat/ChatImageLoader.swift": {
   "file-read": 1,
   "image-decode": 1
+ },
+ "apple/Persona/Views/Chat/ChatPin.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/Chat/ChatView.swift": {
+  "window-frame": 4
+ },
+ "apple/Persona/Views/Chat/InjectedLine.swift": {
+  "window-frame": 2
+ },
+ "apple/Persona/Views/Chat/MessageLift.swift": {
+  "window-frame": 2
+ },
+ "apple/Persona/Views/Chat/MessageMenu.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/Chat/MessageViews.swift": {
+  "window-frame": 1
  },
  "apple/Persona/Views/Chat/PhotoAttach.swift": {
   "image-decode": 1
@@ -62,6 +92,12 @@
  "apple/Persona/Views/Chat/VideoAttach.swift": {
   "directory-listing": 2
  },
+ "apple/Persona/Views/Chats/AgentsHeader.swift": {
+  "window-frame": 1
+ },
+ "apple/Persona/Views/Chats/ChatsView.swift": {
+  "window-frame": 3
+ },
  "apple/Persona/Views/Inbox/Lark/LarkAttachment.swift": {
   "directory-listing": 1,
   "file-read": 2
@@ -71,6 +107,9 @@
  },
  "apple/Persona/Views/Inbox/Lark/LarkConversationsModel.swift": {
   "file-read": 1
+ },
+ "apple/Persona/Views/Inbox/Lark/LarkConversationsView.swift": {
+  "window-frame": 1
  },
  "apple/Persona/Views/Inbox/Lark/LarkMedia.swift": {
   "file-read": 1,
@@ -106,6 +145,9 @@
  },
  "apple/Persona/Views/Settings/StorageView.swift": {
   "directory-listing": 2
+ },
+ "apple/Persona/Views/SplitNavigation.swift": {
+  "window-frame": 3
  },
  "apple/PersonaLink/Sources/PersonaLink/LinkModel.swift": {
   "file-read": 1
