@@ -761,6 +761,22 @@ describe("列表状态", () => {
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ action: "reopen", items: [{ id: a.id, version: "v1" }] });
     expect(vi.mocked(toast).mock.lastCall).toEqual(["已移回 1 件", "ok", undefined]);
 
+    // Undo reopens what was filed even when the list no longer carries it (only the newest done items, #5549).
+    vi.mocked(toast).mockClear();
+    fetcher.mockReset().mockResolvedValueOnce(ok({ changed: [{ ...a, done_at: at(0), done_by: "user" }], unchanged: [], skipped: [] }));
+    await setAllDone([a], true);
+    const undo = vi.mocked(toast).mock.lastCall![2]!;
+    fetcher.mockReset().mockResolvedValueOnce(ok({ items: versioned.slice(1) }));
+    await reloadInbox();
+    expect(getInbox().items.some((x) => x.id === a.id)).toBe(false);
+    vi.mocked(toast).mockClear();
+    fetcher.mockReset().mockResolvedValueOnce(ok({ changed: [a], unchanged: [], skipped: [] }));
+    undo.run();
+    await vi.waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ action: "reopen", items: [{ id: a.id, version: "v1" }] });
+    fetcher.mockReset().mockResolvedValueOnce(ok({ items: versioned }));
+    await reloadInbox();
+
     // A failure puts every item back.
     fetcher.mockReset().mockResolvedValueOnce(fail(502, "boom"));
     await setAllDone(getInbox().items, true);

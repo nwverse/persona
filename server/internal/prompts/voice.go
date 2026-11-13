@@ -158,6 +158,8 @@ type VoiceRefused struct {
 	// (a call bound to an agent: its name).
 	Agent bool
 	To    string
+	// Resend: the screen offers to send it anyway (protocol 2's run refused unprompted, #5904: the app's Send Anyway).
+	Resend bool
 }
 
 func RenderVoiceRefused(d VoiceRefused) string { return render("voice/refused", d) }

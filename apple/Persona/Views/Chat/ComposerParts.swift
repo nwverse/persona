@@ -192,7 +192,7 @@ final class StarterDraft {
                                    : String(localized: "Please look at the image [Assistant View 5ad878]"))
             : typed
         let body = AttachedFile.message(said, files: files)
-        return quotes.isEmpty ? body : quotes.map(\.xml).joined(separator: "\n") + "\n\n" + body
+        return ContextRef.message(quotes, body: body)
     }
 }
 
@@ -201,6 +201,9 @@ final class StarterDraft {
 struct ComposerCaptureSheets: ViewModifier {
     @Binding var camera: Bool
     @Binding var glasses: Bool
+    /// Scan Document (#3720) and what to do with its pages (`DocumentScanner.deliver`).
+    @Binding var scan: Bool
+    var pages: ([UIImage]) -> Void
     var add: (UIImage) -> Void
 
     func body(content: Content) -> some View {
@@ -209,6 +212,9 @@ struct ComposerCaptureSheets: ViewModifier {
                 CameraPicker { img in add(img) }.ignoresSafeArea()
             }
             #if os(iOS)
+            .fullScreenCover(isPresented: $scan) {
+                DocumentScanner { pages($0) }.ignoresSafeArea()
+            }
             .sheet(isPresented: $glasses) {
                 GlassesCaptureSheet { img in add(img) }
             }

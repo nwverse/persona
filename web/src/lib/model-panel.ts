@@ -11,6 +11,9 @@ export interface PanelPrice {
   input: number;
   output: number;
   cache_read?: number;
+  /** A 5-minute cache write; `cache_write_1h` a 1-hour one (absent: `cache_write`'s price). */
+  cache_write?: number;
+  cache_write_1h?: number;
 }
 
 /** One model of a provider, as the panel shows and picks it. */
@@ -210,8 +213,11 @@ export const shownEffort = (setup: PanelConfig, model: Pick<PanelModel, "default
 
 /** Why a row of `provider` can't be picked now (undefined: it can): the chat is busy, the provider can't take a pick
  *  here, the launcher fixes its own model, or its list is still being read (no reason to say; a list shown from before
- *  and read again behind it does not wait). */
-export function rowBlock(provider: PanelProvider, state: Pick<PanelState, "busy">): { reason: string } | undefined {
+ *  and read again behind it does not wait). The model that runs now (`current`) can always be picked back while a switch
+ *  waits, unless the chat is busy: that keeps it and drops the switch (#5035, #5054; an agent that can't change its model
+ *  while it runs has no other way back). */
+export function rowBlock(provider: PanelProvider, state: Pick<PanelState, "busy" | "pending">, current = false): { reason: string } | undefined {
+  if (current && state.pending && !state.busy) return undefined;
   const reason = state.busy || provider.unavailable || provider.locked;
   if (reason) return { reason };
   if (provider.models === null) return { reason: "" };
@@ -221,7 +227,7 @@ export function rowBlock(provider: PanelProvider, state: Pick<PanelState, "busy"
 /** Whether a row's setup flyout opens. Recent rows and "Use “…”" have none. The model that runs now has one whenever the
  *  chat applies flyout edits at once (`live`), even while picks are off (busy, or a Codex session that changes only its
  *  effort and Fast); any other row only while it can be picked. */
-export function rowCustomizable(row: Pick<PanelRow, "kind" | "current" | "provider">, state: Pick<PanelState, "busy">, live: boolean): boolean {
+export function rowCustomizable(row: Pick<PanelRow, "kind" | "current" | "provider">, state: Pick<PanelState, "busy" | "pending">, live: boolean): boolean {
   if (row.kind === "recent" || row.kind === "typed" || row.kind === "preset") return false;
   if (row.kind === "model" && row.current && live) return true;
   return !rowBlock(row.provider, state);

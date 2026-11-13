@@ -39,6 +39,13 @@ own `site/public/style.css`.
   when the file is missing.
 - **Light only.** The previous page also had a dark variant; this one follows the app icon's paper in both schemes.
 
+## Legal pages and support
+
+The privacy and terms pages describe the self-hosted app independently of its distribution channel. Their contact links use
+`/#contact`, the home page's existing product-support footer, which offers email and issue reporting. Keep that anchor stable
+and verify the whole route, not just an HTTP 200 from the legal page. `site/worker.test.mjs` pins both links and their destination.
+The App Store review notes give the Release-compatible offline demo entry and its limits (`release.md`, "External testing").
+
 ## Extensions page
 
 `/extensions/` (`site/public/extensions/index.html`, #4781) lists the extensions of the official market: icon, name,
@@ -54,6 +61,20 @@ keep their colors in both. Add a color as a variable with both values, never as 
   reached the old copy is served (marked `stale`, the page says so) for up to 30 days. With no copy at all it answers
   503 and the page offers a retry and the market on GitHub. The signatures are not checked: the page only displays,
   and a hub checks them before it installs anything.
+- **Catalog updates do not deploy the site** (#6132): the signed index is read at request time, not bundled into the
+  static page. The next request reaching the Worker after its 10-minute freshness interval replaces the entire
+  catalog, including removals, versions and icon URLs. Fresh catalog responses also carry `Cache-Control: public,
+  max-age=300`, so browsers and the entry proxy can continue showing a cached response for another five minutes.
+  This is request-driven, not a scheduled rebuild; an already-open page reads again only on reload or Retry.
+  Neither a site rebuild nor a repository-dispatch workflow is needed when the market publishes a new index.
+- **When a new extension appears late**: compare the site's `/extensions/catalog.json` fields `source_commit`,
+  `fetched_at`, `stale` and extension IDs against the signed index's payload. Use `curl --compressed` because the
+  entry can serve a compressed response, then check a newly loaded search page and the icon's actual load.
+  A `stale` response means the Worker could not refresh upstream; an entry `X-Cache: STALE` header describes the
+  proxy cache instead and does not by itself mean the JSON catalog is old. Keep the failing response and headers
+  before claiming which cache layer caused the delay. Test successful replacements with
+  `node --test site/worker.test.mjs`; its expiry regression verifies removal, version and logo changes without
+  restarting the Worker.
 - **Only the public market** (#4816): the Worker rejects a catalog whose `generation.repository` is not
   `nwverse/persona-extensions`, and each extension's source link is its `homepage` only when that points into the
   repository, otherwise `tree/main/extensions/<id>` there (many manifests declare no homepage).

@@ -397,16 +397,11 @@ func (n *Node) terminalControl(ctx context.Context, id string, ctlr host.Control
 	return map[string]any{"cols": p.Cols, "rows": p.Rows, "control": true}, nil
 }
 
-// paneHome is the size the pane's programs see before a phone takes it: its terminal's (host.TermSizer), else its
-// layout's. Zero when neither says; letting go is then a plain release.
+// paneHome is the size the pane's programs see before a phone takes it (host.Streamer's PaneSize: herdr's is the
+// pane's terminal's, not its layout's). Zero when it does not say; letting go is then a plain release.
 func paneHome(ctx context.Context, h host.Controller, pane host.PaneRef) termSize {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if ts, ok := h.(host.TermSizer); ok {
-		if c, r, err := ts.TermSize(ctx, pane); err == nil && c > 0 && r > 0 {
-			return termSize{c, r}
-		}
-	}
 	if st, ok := h.(host.Streamer); ok {
 		if c, r, err := st.PaneSize(ctx, pane); err == nil && c > 0 && r > 0 {
 			return termSize{c, r}

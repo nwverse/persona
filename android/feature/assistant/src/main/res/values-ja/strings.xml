@@ -70,8 +70,13 @@
     <string name="assistant_greeting_noon">こんにちは</string>
     <string name="assistant_greeting_afternoon">こんにちは</string>
     <string name="assistant_greeting_evening">こんばんは</string>
-    <string name="assistant_home_lead">メッセージや予定、手元の作業をお任せください。</string>
-    <string name="assistant_home_note">送信した内容はメインチャットに入ります。オフラインのときは、まずこの端末に保存されます。</string>
+    <string name="assistant_home_lead_main">ここはあなたのメインチャットです。ここで話したことは覚えておきます。コンピューター、スマホ、メール、Lark、整理済みのプロジェクトを確認でき、物事を見守って時間になったらお知らせすることもできます。</string>
+    <string name="assistant_home_lead_side">新しいサイドチャットを始めます。コンピューター、スマホ、メール、Lark、整理済みのプロジェクトを確認でき、物事を見守って時間になったらお知らせすることもできます。</string>
+    <string name="assistant_time_just_now">たった今</string>
+    <plurals name="assistant_time_minutes_ago">
+        <item quantity="other">%1$d分前</item>
+    </plurals>
+    <string name="assistant_time_yesterday">昨日</string>
     <string name="assistant_online_devices">オンラインのデバイス</string>
     <string name="assistant_this_phone">このスマホ</string>
     <string name="assistant_phone_tools_unavailable">スマホのツールは利用不可</string>
@@ -79,11 +84,18 @@
     <string name="assistant_search_chats">チャットを検索</string>
     <string name="assistant_start_main">メインチャットを開始</string>
     <string name="assistant_main_chat">メインチャット</string>
-    <!-- The drawer's newest own chats, between 常驻 and All chats (#4922) -->
+    <!-- The drawer's newest eligible chats, between 常驻 and All chats (#4922, #5196) -->
     <string name="assistant_recent">最近</string>
     <string name="assistant_directions">常駐</string>
     <string name="assistant_background_supervisor">バックグラウンド監督</string>
     <string name="assistant_origin_inbox">受信箱</string>
+    <string name="assistant_origin_task">定期タスク</string>
+    <string name="assistant_origin_lark_agent">Lark /agent</string>
+    <string name="assistant_origin_spawned">チャットから</string>
+    <string name="assistant_origin_extension">拡張機能</string>
+    <string name="assistant_origin_other">その他</string>
+    <string name="assistant_origin_from">%1$sから</string>
+    <string name="assistant_origin_from_extension">拡張機能から</string>
     <string name="assistant_empty_title">チャットはまだありません</string>
     <string name="assistant_empty_detail">メッセージを送って、Personaと話してみましょう。</string>
     <string name="assistant_no_match">一致するチャットはありません</string>
@@ -124,6 +136,9 @@
     </plurals>
     <plurals name="assistant_needs_you_more">
         <item quantity="other">受信トレイにあと%1$d件</item>
+    </plurals>
+    <plurals name="assistant_needs_you_more_agents">
+        <item quantity="other">ほかに%1$d件の要対応</item>
     </plurals>
     <string name="assistant_home_setup_lead">あと一歩で始められます。</string>
     <string name="assistant_suggest_local_detail">説明を開く</string>

@@ -8,7 +8,9 @@
 // window or, on a phone, the part the keyboard leaves has no room. The list opens on All with the model that runs now at
 // about a third of its height. Keys: the search has the focus (with a precise pointer); Tab or ↓ goes to the rows, ↑↓
 // move between them, Enter or Space picks, ← opens a row's flyout, Esc closes the flyout and then the panel. A pick
-// waits for `onPick`: applied, the setup goes into Recent and the panel closes; refused, it stays as it was.
+// waits for `onPick`: applied, the setup goes into Recent and the panel closes; refused, it stays as it was. While the
+// caller asks about a pick in a dialog of its own (`held`: an Agent's "Switch Agent?", #5054) the panel stays open under
+// it, dimmed with the page, and leaves the keys and clicks to it.
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../../i18n";
@@ -75,6 +77,9 @@ export interface ModelPanelProps {
   onHelp?: (provider: string) => void;
   /** "Configure models" instead of opening Settings › Model providers from here (a dialog that closes first). */
   onConfigure?: () => void;
+  /** A dialog the caller opened about the pick on its way is above the panel: the panel sits under its backdrop and
+   *  doesn't close on its clicks, focus or Escape (they are the dialog's). */
+  held?: boolean;
 }
 
 /** The headers of the groups that are not a provider's. */
@@ -100,7 +105,7 @@ interface Geometry {
 
 const rowsOf = (list: HTMLElement | null) => (list ? [...list.querySelectorAll<HTMLElement>("[data-panel-row]")] : []);
 
-export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, onApplyCurrent, onReload, onForget, quotas, currentExtra, header, follow, presets, onPreset, engines, onHelp, onConfigure }: ModelPanelProps): ReactNode {
+export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, onApplyCurrent, onReload, onForget, quotas, currentExtra, header, follow, presets, onPreset, engines, onHelp, onConfigure, held }: ModelPanelProps): ReactNode {
   const store = usePanelStore(scope);
   const listId = useId();
   const [view, setView] = useState<PanelView>({ kind: "all" });
@@ -137,10 +142,10 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
   }, []);
 
   const flyRow = fly ? rows.find((r) => r.key === fly.key) : undefined;
-  // a row that went (a search, another view, a favorite removed) takes its flyout with it
+  // a row that went (a search, another view, a favorite removed) takes its flyout with it; so does a dialog over the panel
   useEffect(() => {
-    if (fly && (!flyRow || !fly.el.isConnected)) setFly(null);
-  }, [fly, flyRow]);
+    if (fly && (held || !flyRow || !fly.el.isConnected)) setFly(null);
+  }, [fly, flyRow, held]);
 
   useEffect(() => {
     if (!flash) return;
@@ -212,18 +217,18 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
   }, [onClose]);
 
   // ── closing from outside ──
-  const latest = useRef({ fly, onClose });
-  latest.current = { fly, onClose };
+  const latest = useRef({ fly, onClose, held });
+  latest.current = { fly, onClose, held };
   useEffect(() => {
     const inside = (n: Node | null) => Boolean(n && (panel.current?.contains(n) || anchor.contains(n) || (n instanceof Element && n.closest("[data-model-flyout]"))));
     const down = (e: PointerEvent) => {
-      if (!inside(e.target as Node | null)) latest.current.onClose();
+      if (!latest.current.held && !inside(e.target as Node | null)) latest.current.onClose();
     };
     const focus = (e: FocusEvent) => {
-      if (!inside(e.target as Node | null)) latest.current.onClose();
+      if (!latest.current.held && !inside(e.target as Node | null)) latest.current.onClose();
     };
     const key = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== "Escape" || e.isComposing || e.keyCode === 229) return;
+      if (latest.current.held || e.key !== "Escape" || e.isComposing || e.keyCode === 229) return;
       e.preventDefault();
       e.stopPropagation();
       const { fly: open, onClose: close } = latest.current;
@@ -400,7 +405,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
     } else if (e.key === "Enter" && searching) {
       // a search and Enter: the first row that can be picked (a typed ID's "Use …" too)
       e.preventDefault();
-      const first = rows.find((r) => !rowBlock(r.provider, state));
+      const first = rows.find((r) => !rowBlock(r.provider, state, r.current));
       if (first) void pick(first);
     }
   };
@@ -448,7 +453,8 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
 
   return createPortal(
     <>
-      <div ref={panel} role="dialog" aria-label={t("ui-modelpanel.list")} data-model-panel className="fixed z-50 flex w-max min-w-[300px] flex-col overflow-hidden rounded-[12px] bg-surface text-ink shadow-overlay" style={style}>
+      {/* under a dialog's backdrop (z-40) while one asks about the pick, above the page otherwise */}
+      <div ref={panel} role="dialog" aria-label={t("ui-modelpanel.list")} data-model-panel data-held={held || undefined} className={cx("fixed flex w-max min-w-[300px] flex-col overflow-hidden rounded-[12px] bg-surface text-ink shadow-overlay", held ? "z-30" : "z-50")} style={style}>
         <div className="flex min-h-0 flex-col" style={{ animation: geo ? "model-panel-content var(--model-panel-fade) var(--model-panel-ease) var(--model-panel-fade-delay) backwards" : undefined }}>
           {header && <div className="shrink-0">{header}</div>}
           <div className="flex shrink-0 items-center gap-2 border-b border-line px-3.5 py-3 text-ink-3">
@@ -534,7 +540,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
                             row={row}
                             second={two.text}
                             describes={two.describes || row.kind === "preset"}
-                            blocked={rowBlock(row.provider, state)}
+                            blocked={rowBlock(row.provider, state, row.current)}
                             customizable={customizable}
                             flyoutOpen={fly?.key === row.key}
                             starred={removes || flash === row.key}

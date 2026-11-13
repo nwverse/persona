@@ -97,6 +97,7 @@ func TestPaneScreenReadsNeedAFullDevice(t *testing.T) {
 	}
 }
 
+// A full device's; cwd (#5832) only to a node with pane_cwd, else node_outdated before the node is asked.
 func TestNewShellIsAFullDevicesAndNamesNoDirectory(t *testing.T) {
 	tn := newTermNode(t)
 	h := tn.hub
@@ -119,6 +120,12 @@ func TestNewShellIsAFullDevicesAndNamesNoDirectory(t *testing.T) {
 	}
 	if got := tn.await(t, 1); len(got) != 1 || got[0] != "panes.new" {
 		t.Errorf("node log = %q", got)
+	}
+	m.mu.Lock()
+	m.info.Protocol, m.info.Capabilities = 1, nil // a node from before pane_cwd
+	m.mu.Unlock()
+	if code := post(roleFull, `{"workspace_id":"w1","cwd":"~/proj"}`); code != http.StatusConflict {
+		t.Errorf("cwd to an old node: %d, want 409", code)
 	}
 }
 
@@ -177,6 +184,24 @@ func TestNodeActionsAreMountedOnTheHTTPRouter(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Errorf("mounted route %s: HTTP %d", path, w.Code)
 		}
+	}
+}
+
+func TestHerdrWorkspaceCloseModeIsForwardedAsAStrictBoolean(t *testing.T) {
+	tn := newTermNode(t)
+	if code := postAction(tn.hub, roleFull, "worktree/delete", `{"workspace_id":"w1","kind":"herdr","preview":true,"close_only":true}`); code != http.StatusOK {
+		t.Fatal(code)
+	}
+	tn.await(t, 1)
+	var got map[string]any
+	if err := json.Unmarshal([]byte(tn.args["worktree.delete"]), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["close_only"] != true || got["kind"] != "herdr" {
+		t.Fatal(got)
+	}
+	if code := postAction(tn.hub, roleFull, "worktree/delete", `{"workspace_id":"w1","kind":"herdr","preview":true,"close_only":"true"}`); code != http.StatusBadRequest {
+		t.Fatal(code)
 	}
 }
 

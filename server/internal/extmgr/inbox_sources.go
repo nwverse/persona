@@ -123,7 +123,8 @@ func (b builtinSources) mail(src *subscriptionsui.Builtin) {
 	if h.mail == nil {
 		return
 	}
-	src.InboxAlways, src.InboxEvery, src.Mutable, src.Read = true, int(inboxMailPoll/time.Second), true, nil
+	on := h.connectors.Feeds("mail", connector.FeedInbox) // its Add to Inbox switch (#5307)
+	src.Inbox, src.InboxEvery, src.Mutable, src.Read = &on, int(inboxMailPoll/time.Second), true, nil
 	accounts, err := h.mail.ListAccounts()
 	if err != nil {
 		h.logf("inbox sources: mail accounts: %v", err)

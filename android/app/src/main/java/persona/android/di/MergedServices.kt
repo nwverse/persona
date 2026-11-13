@@ -41,6 +41,14 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
     override val sessions = stacks.merged(emptyList<Session>(), { s ->
         s.mapped(s.repositories.shownSessions) { list -> list.map(::session) }
     }) { it.flatten() }
+    override val adoptedSessions = stacks.merged(emptyList<Session>(), { s ->
+        s.mapped(s.repositories.sessions.adoptedSessions) { list -> list.map(::session) }
+    }) { it.flatten() }
+    override val startedThreads = stacks.merged(emptyMap<SessionKey, Session>(), { s ->
+        s.mapped(s.repositories.sessions.startedThreads) { entries ->
+            entries.map { (previous, thread) -> key(previous) to session(thread) }.toMap()
+        }
+    }) { maps -> maps.fold(emptyMap()) { acc, one -> acc + one } }
     override val listStatus = stacks.merged(SessionListStatus(), { stack ->
         combine(stack.repositories.sessions.listStatus, listNamespaces) { status, namespaces ->
             if (namespaces?.contains(stack.names.namespace) == false) SessionListStatus(loaded = true)
@@ -88,6 +96,9 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
     override suspend fun adopt(session: Session) = stacks.use(GroupKeys.namespaceOf(session.machineId)) {
         it.repositories.sessions.adopt(it.names.rawSession(session))
     }
+    override suspend fun adoptThread(previous: SessionKey, session: Session) = stacks.use(GroupKeys.namespaceOf(previous.machineId)) {
+        it.repositories.sessions.adoptThread(it.names.raw(previous), it.names.rawSession(session))
+    }
     override suspend fun applyMachine(machine: Machine) = stacks.use(GroupKeys.namespaceOf(machine.id)) {
         it.repositories.sessions.applyMachine(if (it.names.plain) machine else machine.copy(id = GroupKeys.raw(machine.id)))
     }
@@ -112,6 +123,17 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolveOutcome(GroupKeys.raw(id), resolution) }
     override suspend fun discardLocal(id: String) =
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.discardLocal(GroupKeys.raw(id)) }
+    override val delegated = stacks.merged(emptyList<DelegatedAnswer>(), { s ->
+        s.mapped(s.repositories.interactions.delegated) { list -> list.map { it.copy(interaction = interaction(it.interaction)) } }
+    }) { lists -> lists.flatten().sortedBy { it.at } }
+    override val reanswered = stacks.merged(emptyMap<String, Map<String, String>>(), { s ->
+        s.mapped(s.repositories.interactions.reanswered) { changes -> changes.mapKeys { interactionId(it.key) } }
+    }) { maps -> maps.fold(emptyMap()) { all, one -> all + one } }
+    override fun dropDelegated(id: String) {
+        stacks.stacks.value.firstOrNull { it.namespace == GroupKeys.namespaceOf(id) }?.repositories?.interactions?.dropDelegated(GroupKeys.raw(id))
+    }
+    override suspend fun reanswer(id: String, answers: Map<String, String>, manager: String?) =
+        stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.reanswer(GroupKeys.raw(id), answers, manager) }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -292,6 +314,8 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
         override suspend fun editQueue(session: Session, keep: List<Int>) = of(session).editQueue(session, keep)
         override suspend fun sendQueuedNow(session: Session) = of(session).sendQueuedNow(session)
         override suspend fun info(session: Session) = of(session).info(session)
+        override suspend fun completeRow(session: Session) = of(session).completeRow(session)
+        override suspend fun interactionHistory(session: Session) = of(session).interactionHistory(session)
         override suspend fun restoreModel(session: Session) = of(session).restoreModel(session)
         override suspend fun fork(session: Session, atItemId: String) = of(session).fork(session, atItemId)
         override suspend fun rewind(session: Session, target: RewindTarget, restore: RewindRestore) = of(session).rewind(session, target, restore)

@@ -152,6 +152,96 @@ func TestWorktreePrepareReadsTheRepository(t *testing.T) {
 	}
 }
 
+func TestWorktreePrepareUsesSnapshotDirectoryForCwd(t *testing.T) {
+	w := worktreeNode(t)
+	w.f.reply("workspace.list", map[string]any{"workspaces": []any{
+		map[string]any{"workspace_id": "w1", "label": "proj", "number": 1},
+	}})
+	w.f.reply("session.snapshot", snapshot(
+		[]any{map[string]any{"workspace_id": "w1", "label": "proj", "number": 1}},
+		[]any{map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "label": "1", "number": 1}},
+		nil, []any{map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "cwd": w.repo}},
+	))
+	listSessions(t, w.n)
+	w.f.reset()
+
+	res, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": w.repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["root"] != resolved(t, w.repo) || res["path"] != filepath.Join(w.home, ".herdr", "worktrees", "proj") {
+		t.Fatalf("prepare from pane directories = %v", res)
+	}
+}
+
+func TestSpaceHoldingFallsBackToWorkspaceList(t *testing.T) {
+	w := worktreeNode(t)
+	w.f.reply("session.snapshot", herdrFail{Code: "unavailable", Message: "snapshot unavailable"})
+	w.f.reply("workspace.list", map[string]any{"workspaces": []any{
+		map[string]any{"workspace_id": "w1", "label": "proj", "number": 1, "cwd": w.repo},
+	}})
+	h, err := w.n.hostOfKind(host.Herdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.f.reset()
+
+	workspace, err := spaceHolding(context.Background(), h, w.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspace != "w1" {
+		t.Fatalf("spaceHolding from workspace.list = %q", workspace)
+	}
+	if got := w.f.trace("workspace.list"); len(got) != 1 {
+		t.Fatalf("workspace.list calls = %v", got)
+	}
+}
+
+func TestSpaceHoldingEmptySnapshotPreservesWorkspaceListError(t *testing.T) {
+	w := worktreeNode(t)
+	w.f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	w.f.reply("workspace.list", herdrFail{Code: "unavailable", Message: "workspace list unavailable"})
+	h, err := w.n.hostOfKind(host.Herdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.f.reset()
+
+	_, err = spaceHolding(context.Background(), h, w.repo)
+	if err == nil || !strings.Contains(err.Error(), "workspace list unavailable") || strings.Contains(err.Error(), "不在这台电脑的任何工作区里") {
+		t.Fatalf("spaceHolding with an empty snapshot: %v", err)
+	}
+	if got := w.f.trace("workspace.list"); len(got) != 1 {
+		t.Fatalf("workspace.list calls = %v", got)
+	}
+}
+
+func TestWorktreePrepareDoesNotGuessFromConflictingPaneDirectories(t *testing.T) {
+	w := worktreeNode(t)
+	w.f.reply("workspace.list", map[string]any{"workspaces": []any{
+		map[string]any{"workspace_id": "w1", "label": "proj", "number": 1},
+	}})
+	w.f.reply("session.snapshot", snapshot(
+		[]any{map[string]any{"workspace_id": "w1", "label": "proj", "number": 1}},
+		[]any{map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "label": "1", "number": 1}},
+		nil, []any{
+			map[string]any{"pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1", "cwd": w.repo},
+			map[string]any{"pane_id": "w1:p2", "tab_id": "w1:t1", "workspace_id": "w1", "cwd": filepath.Join(w.home, "other")},
+		},
+	))
+	listSessions(t, w.n)
+	w.f.reset()
+
+	_, err := request(t, w.n, "worktree.prepare", map[string]any{"cwd": w.repo})
+	if err == nil || !strings.Contains(err.Error(), "不在这台电脑的任何工作区里") {
+		t.Fatalf("prepare with conflicting pane directories: %v", err)
+	}
+	if got := w.f.trace("worktree.create", "workspace.create"); len(got) != 0 {
+		t.Errorf("prepare changed something: %v", got)
+	}
+}
+
 func TestWorktreePrepareNamesTheRepositoryOfALinkedCheckout(t *testing.T) {
 	w := worktreeNode(t)
 	linked := filepath.Join(w.home, "elsewhere", "feature-checkout")

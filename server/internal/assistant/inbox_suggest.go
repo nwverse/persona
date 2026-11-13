@@ -128,6 +128,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		relate(it, b.items[strings.TrimSpace(id)])
 	}
 	var card *MessageCard
+	var handed *handoffCard
 	stop := false
 	if from == nil && in.Kind == "" && it.open() && it.Handling != nil && it.Handling.State == HandlingLooking {
 		// Only the recap: this turn changes nothing else, the event goes back to where it was.
@@ -145,6 +146,9 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		it.SuggestSeq++
 		g := &InboxSuggestion{Version: it.SuggestSeq, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
 			Handback: in.Handback, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from}
+		if in.Kind == SuggestReply && !in.Handback {
+			g.MailTarget = mailTarget(*it)
+		}
 		if in.Kind == SuggestAgent {
 			if m, ok := s.machineByName(ctx, strings.TrimSpace(in.Machine)); ok {
 				g.MachineID = m.ID
@@ -185,6 +189,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		if in.Kind == SuggestReply && from == nil {
 			card = messageCardOf(it)
 		}
+		handed = handoffCardOf(it, g, in.Outcome)
 	}
 	id := it.ID
 	b.settle(w)
@@ -197,6 +202,9 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	}
 	if card != nil {
 		s.messageCard(ctx, id, *card)
+	}
+	if handed != nil {
+		s.postHandoffCard(ctx, *from, id, *handed)
 	}
 	if stop {
 		s.tellSoon(ctx, it)
@@ -229,7 +237,7 @@ func (s *Service) toolInboxSuggest(ctx context.Context, self string, args json.R
 		return "The recap is updated.", nil
 	}
 	if from != nil {
-		return "The suggestion is in the user's inbox; nothing goes out until they confirm. What they do with it is told here; later messages on the item are not.", nil
+		return "The suggestion is in the user's inbox and shown in this chat as a card (no need to repeat it in full); nothing goes out until they confirm. What they do with it is told here; later messages on the item are not.", nil
 	}
 	return "The suggestion is in the user's inbox; nothing goes out until they confirm. End this turn: what comes next (their answer, new messages) is sent here.", nil
 }

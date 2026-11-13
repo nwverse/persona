@@ -79,7 +79,11 @@ internal fun Session.status(): Status = Status.entries.firstOrNull { it.name == 
  * of the current space and shows the strip only when there is a tab to switch to.
  */
 @Composable
-internal fun ChatSiblingTabs(session: Session, tabs: List<Session>, onOpenSession: (SessionKey) -> Unit) {
+internal fun ChatSiblingTabs(
+    session: Session, tabs: List<Session>, onOpenSession: (SessionKey) -> Unit,
+    /** At the row's end, after ⋯: the loop and background pill on Glass (iOS `contextRow`, #4339 C8). */
+    trailing: (@Composable () -> Unit)? = null,
+) {
     val labels = remember(tabs) { siblingTabs(tabs) }
     var all by remember { mutableStateOf(false) }
     val list = rememberLazyListState()
@@ -103,6 +107,7 @@ internal fun ChatSiblingTabs(session: Session, tabs: List<Session>, onOpenSessio
         }
         JIconButton(PhIcons.DotsThree, pluralStringResource(if (waiting) R.plurals.chat_tabs_all_waiting else R.plurals.chat_tabs_all, tabs.size, tabs.size),
             { all = true }, badge = waiting)
+        trailing?.invoke()
     }
     if (all) JSheet(onDismiss = { all = false }, title = pluralStringResource(R.plurals.chat_tabs_sheet_title, tabs.size, tabs.size), scrollable = true) {
         labels.forEach { label ->
