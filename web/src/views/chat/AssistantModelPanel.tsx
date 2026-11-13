@@ -137,7 +137,15 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
     }
     if (!chat.session) {
       const row = list?.models.find((m) => m.id === config.model);
-      pickFast(Boolean(startServiceTier && config.fast && modelSupportsFast(row)));
+      const fast = Boolean(startServiceTier && config.fast && modelSupportsFast(row));
+      if (!pick && fast) {
+        // A Recent or Favorite can differ from the shown setup only by Fast. Pin every displayed start option anyway:
+        // a cleared main must not revive its carried launcher, model or effort just because assistantPickOf saw no model edit.
+        const pin = assistantPickOf(config, list, null);
+        if (!pin) return false;
+        keepHere(pin);
+      }
+      pickFast(fast);
     }
     return true;
   };

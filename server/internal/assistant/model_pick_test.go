@@ -17,6 +17,23 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+func TestCarriedMainStartIgnoresUnnamedServiceTier(t *testing.T) {
+	ctx := context.Background()
+	s, f := pickFixture(t)
+	if r := putPick(t, s, "main", `{"launcher":"cx","model":"gpt-5","effort":"low"}`); r.Code != 200 {
+		t.Fatal(r.Body.String())
+	}
+	if _, err := s.clearMain(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := startConv(t, s, `{"prompt":"hi","main":true,"service_tier":"priority"}`)
+	p := f.lastSend(t)
+	// The tier belonged to a setup the client did not name. The carried pick still runs, but never inherits that tier.
+	if code != 200 || p["launcher"] != "cx" || p["model"] != "gpt-5" || p["effort"] != "low" || p["service_tier"] != nil {
+		t.Fatalf("under-specified Fast reached the carried pick: %d %v", code, p)
+	}
+}
+
 func TestBusHelloNamesAssistantStartServiceTier(t *testing.T) {
 	b := NewBusHub(BusOptions{Hub: "http://[fd00::20]:18660", Token: "t"})
 	p, _ := b.client.HelloParams().(map[string]any)

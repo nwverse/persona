@@ -505,6 +505,10 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	if carried != nil && (p.Launcher != "" || p.Model != "") {
 		carried = nil
 	}
+	if carried != nil && p.ServiceTier != "" && p.Launcher == "" && p.Model == "" {
+		// An unnamed tier can belong only to the client's displayed default, not to this carried setup it did not show.
+		p.ServiceTier = ""
+	}
 	if carried != nil {
 		// Held to what a message on it is held to: one that can't run here any more refuses this start, saying why
 		// with the same codes, and is dropped, so the next start runs on the default. Never a silent fallback.

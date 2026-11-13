@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
 import { NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel, pickEffort, pickFast, pickLauncher, pickModel } from "../../lib/assistant-chat";
+import { panelSections } from "../../lib/model-panel";
 import { getSession, getState, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import type { ModelPanelProps } from "../../ui/model-panel/ModelPanel";
@@ -274,6 +275,48 @@ describe("an older hub and the new-conversation page", () => {
     expect(pickedFast()).toBe(true);
     expect(await act(() => panel.props!.onApplyCurrent!({ fast: true, effort: "high" }))).toBe(true);
     expect(pickedEffort(NEW_CONVERSATION)).toBe("high");
+  });
+
+  it("a Fast-only whole-setup pick pins the displayed default launcher, model and effort", async () => {
+    defaultSetup = { provider: "codex", model: "gpt-fast", effort: "low" };
+    await show(undefined);
+    await open();
+    const shown = panel.props!.state.current!;
+    expect(shown).toEqual({ provider: "codex", model: "gpt-fast", effort: "low" });
+    expect(await act(() => panel.props!.onPick({ ...shown, fast: true }))).toBe(true);
+    expect(pickedLauncher(NEW_CONVERSATION)).toBe("codex");
+    expect(pickedModel(NEW_CONVERSATION)).toBe("gpt-fast");
+    expect(pickedEffort(NEW_CONVERSATION)).toBe("low");
+    expect(pickedFast()).toBe(true);
+    // A speed-only edit keeps the setup; only the explicit Follow default resets every part.
+    expect(await act(() => panel.props!.onApplyCurrent!({ fast: false }))).toBe(true);
+    expect(pickedLauncher(NEW_CONVERSATION)).toBe("codex");
+    expect(pickedModel(NEW_CONVERSATION)).toBe("gpt-fast");
+    expect(pickedEffort(NEW_CONVERSATION)).toBe("low");
+    expect(pickedFast()).toBe(false);
+    await act(async () => strip()!.querySelector("button")!.click());
+    expect([pickedLauncher(NEW_CONVERSATION), pickedModel(NEW_CONVERSATION), pickedEffort(NEW_CONVERSATION)]).toEqual([undefined, undefined, undefined]);
+    expect(pickedFast()).toBe(false);
+  });
+
+  it("a Recent row for the shown default with Fast is pickable and sends fast: true", async () => {
+    defaultSetup = { provider: "codex", model: "gpt-fast", effort: "low" };
+    await show(undefined);
+    await open();
+    const recent = panelSections({
+      providers: panel.props!.providers,
+      state: panel.props!.state,
+      view: { kind: "recent" },
+      query: "",
+      favorites: [],
+      recent: [{ provider: "codex", model: "gpt-fast", effort: "low", fast: true }],
+      overrides: {},
+    }).flatMap((s) => s.rows).find((r) => r.kind === "recent");
+    expect(recent?.provider.unavailable).toBeUndefined();
+    expect(recent?.setup).toEqual({ provider: "codex", model: "gpt-fast", effort: "low", fast: true });
+    expect(await act(() => panel.props!.onPick(recent!.setup))).toBe(true);
+    expect(pickedFast()).toBe(true);
+    expect([pickedLauncher(NEW_CONVERSATION), pickedModel(NEW_CONVERSATION), pickedEffort(NEW_CONVERSATION)]).toEqual(["codex", "gpt-fast", "low"]);
   });
 
   it("an older hub does not offer a first-turn Fast choice it would ignore", async () => {
