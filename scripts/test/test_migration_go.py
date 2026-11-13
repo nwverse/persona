@@ -13,7 +13,7 @@ from migration_go import fixture_toolchain
 class MigrationGoTests(unittest.TestCase):
     def test_old_system_go_selects_new_module_compiler_with_isolated_home(self):
         with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory).resolve()  # on macOS /var links to /private/var, which the fake Go's cwd reports
+            base = Path(directory)
             home, cache, server, selected = [base / name for name in ('home', 'cache', 'server', 'selected')]
             for path in (home, cache, server, selected / 'bin'):
                 path.mkdir(parents=True)
@@ -31,7 +31,8 @@ class MigrationGoTests(unittest.TestCase):
                 'else:\n'
                 ' assert sys.argv[1:] == ["env", "-json", "GOROOT"]\n'
                 ' assert os.environ["GOTOOLCHAIN"] == "auto"\n'
-                f' assert pathlib.Path.cwd() == pathlib.Path({str(server)!r})\n'
+                # The same directory: getcwd reports it resolved (on macOS /var links to /private/var).
+                f' assert pathlib.Path.cwd().samefile({str(server)!r})\n'
                 f' assert os.environ["HOME"] == {str(home)!r}\n'
                 f' assert os.environ["GOMODCACHE"] == {str(cache)!r}\n'
                 ' assert "go 1.27.1" in pathlib.Path("go.mod").read_text()\n'

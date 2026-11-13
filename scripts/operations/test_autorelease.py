@@ -89,8 +89,7 @@ class AutoreleaseTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="autorelease-tests-")
         self.addCleanup(self.temporary.cleanup)
-        # Resolved: on macOS /var is a link to /private/var, and the worker's children report the resolved directory.
-        self.root = Path(self.temporary.name).resolve()
+        self.root = Path(self.temporary.name)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         self.env.update(HOME=str(self.root), GIT_CONFIG_NOSYSTEM="1", LC_ALL="C")
         self.origin = self.root / "origin.git"
@@ -212,9 +211,10 @@ class AutoreleaseTests(unittest.TestCase):
         for entry in self.actions():
             self.assertEqual(entry["args"][0], self.initial)
             self.assertEqual(entry["head"], self.initial)
-            self.assertEqual(entry["cwd"], str(self.worktree))
+            # The worker resolves its configured paths (on macOS the temporary /var links to /private/var).
+            self.assertEqual(entry["cwd"], str(self.worktree.resolve()))
             self.assertEqual(entry["selected_environment"], "configured-value")
-            self.assertTrue(Path(entry["checkpoint"]).is_relative_to(self.state_dir))
+            self.assertTrue(Path(entry["checkpoint"]).is_relative_to(self.state_dir.resolve()))
         self.assertTrue(all(record["last_success"] == self.initial
                             for record in self.state()["targets"].values()))
         self.assertFalse(self.notify_log.exists())
