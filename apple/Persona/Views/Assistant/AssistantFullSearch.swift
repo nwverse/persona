@@ -11,13 +11,13 @@ struct AssistantFullSearch: View {
     @State private var query = ""
     @FocusState private var focused: Bool
     /// What was said in the chats, found by the manager (#6284): merged into the title / last-message matches.
-    @State private var chatSearch = AssistantChatSearch()
+    @State private var chatSearch: AssistantChatSearch? // made on the first query (P3: no work in the initial value)
 
     /// The sidebar's conversations (the latest first), read here: the sidebar under the cover is off the window, and what
     /// it handed in would not follow a conversation that comes or is renamed meanwhile.
     private var hits: [AssistantSearchMerge.Row] {
         let local = AssistantSidebarSearch.filter(model.assistantConversations, query)
-        guard let answer = chatSearch.answer(for: query) else { return local.map { AssistantSearchMerge.Row(session: $0) } }
+        guard let answer = chatSearch?.answer(for: query) else { return local.map { AssistantSearchMerge.Row(session: $0) } }
         return AssistantSearchMerge.rows(local: local, answer: answer, known: model.assistantConversations + model.archivedConversations)
     }
 
@@ -51,7 +51,8 @@ struct AssistantFullSearch: View {
         .background(Theme.pageBackground.ignoresSafeArea())
         .onAppear { focused = true }
         .onChange(of: query) { _, q in
-            chatSearch.search(q, api: model.api, on: model.features(model.hub?.group ?? "").contains(AssistantChatSearch.feature))
+            if chatSearch == nil, !q.isEmpty { chatSearch = AssistantChatSearch() }
+            chatSearch?.search(q, api: model.api, on: model.features(model.hub?.group ?? "").contains(AssistantChatSearch.feature))
         }
         .accessibilityAction(.escape) { dismiss() } // VoiceOver's scrub, as on a sheet
     }

@@ -783,7 +783,7 @@ struct AssistantSidebar: View {
     @State private var query = ""
     @State private var searchOpen = false
     /// What was said in the chats, found by the manager (#6284): merged into the title / last-message matches.
-    @State private var chatSearch = AssistantChatSearch()
+    @State private var chatSearch: AssistantChatSearch? // made on the first query (P3: no work in the initial value)
     #if os(iOS)
     /// The open iPhone Duo's search, over the whole window (`footerSearch`).
     @State private var fullSearch = false
@@ -931,7 +931,8 @@ struct AssistantSidebar: View {
             }
         }
         .onChange(of: query) { _, q in
-            chatSearch.search(q, api: model.api, on: model.features(model.hub?.group ?? "").contains(AssistantChatSearch.feature))
+            if chatSearch == nil, !q.isEmpty { chatSearch = AssistantChatSearch() }
+            chatSearch?.search(q, api: model.api, on: model.features(model.hub?.group ?? "").contains(AssistantChatSearch.feature))
         }
     }
 
@@ -1346,7 +1347,7 @@ struct AssistantSidebar: View {
     /// The search's rows: the local matches, and once the manager answers, its results first (archived chats too).
     private func searchRows(_ all: [Session]) -> [AssistantSearchMerge.Row] {
         let local = AssistantSidebarSearch.filter(all, query, names: model.directionNames)
-        guard let answer = chatSearch.answer(for: query) else { return local.map { AssistantSearchMerge.Row(session: $0) } }
+        guard let answer = chatSearch?.answer(for: query) else { return local.map { AssistantSearchMerge.Row(session: $0) } }
         return AssistantSearchMerge.rows(local: local, answer: answer, known: all + model.archivedConversations)
     }
 
@@ -1360,7 +1361,7 @@ struct AssistantSidebar: View {
             .padding(.top, 40)
         } else {
             heading(String(localized: "\(hits.count) Chats [Assistant Sidebar a72a2a]")) { EmptyView() }
-            if chatSearch.answer(for: query)?.partial == true {
+            if chatSearch?.answer(for: query)?.partial == true {
                 Text("Still going through older chats; some may not show yet.")
                     .font(Theme.Font.label).foregroundStyle(.secondary)
                     .padding(.horizontal, Theme.Space.m)
