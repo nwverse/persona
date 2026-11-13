@@ -19362,6 +19362,19 @@ LIVE = []  # (send, subscribed session ids) of each open WebSocket
 # GET /api/v1/messaging lists the source lark, /api/v1/messaging/lark/… answers in the protocol's shapes, the feature
 # messaging is on, every {type: lark} push goes out as {type: messaging} too.
 MOCK_MESSAGING = os.environ.get("MOCK_MESSAGING") == "1"
+# Settings › Inbox Sources › Source Relationships (`GET /api/v1/subscriptions/-/graph`, SourcesGraphView): one
+# extension's reads, two sources and the Inbox; `-openSourcesGraph YES`, then tap `graph.source.news` for its sheet.
+SOURCES_GRAPH = {
+    "extensions": [{"id": "mail", "name": "Mail", "line": "Two accounts"}],
+    "reads": [{"id": "mail.inbox", "extension": "mail", "title": "Inbox", "direct": True},
+              {"id": "mail.lists", "extension": "mail", "title": "Mailing lists", "push": True}],
+    "sources": [{"id": "news", "read": "mail.lists", "name": "Newsletters", "icon": "", "line": "Daily at 9:00",
+                 "badge": {"text": "On", "tone": "positive"}, "reading": True, "to": ["inbox"], "state": "active",
+                 "ask": "persona://assistant?q=newsletters"},
+                {"id": "work", "read": "mail.inbox", "name": "Work mail", "icon": "", "line": "As it arrives",
+                 "reading": True, "to": ["inbox"], "state": "active"}],
+    "destinations": [{"id": "inbox", "name": "Inbox", "line": "What needs you"}],
+}
 if MOCK_MESSAGING:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import lark_messaging
@@ -23006,6 +23019,7 @@ class H(BaseHTTPRequestHandler):
         if preview_route and preview_route(self, "GET", p, q): return
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
+        if p == "/api/v1/subscriptions/-/graph": return self.send_json(SOURCES_GRAPH)
         if recordings_route(self, "GET", p): return
         if custom_models_route(self, "GET", p, q): return
         if managers_route(self, "GET", p): return
