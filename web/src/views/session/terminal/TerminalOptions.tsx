@@ -215,8 +215,8 @@ export function AppearanceRow() {
     <div className={ROW}>
       <Icon name="sun" size={15} className="shrink-0 text-ink-3" />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[12.5px] text-ink">{t("session-terminal-terminaloptions.appearance")}</div>
-        <div className="truncate text-[11px] text-ink-3" title={t("session-terminal-terminaloptions.appearance_tooltip")}>
+        <div className="truncate text-meta text-ink">{t("session-terminal-terminaloptions.appearance")}</div>
+        <div className="truncate text-label text-ink-3" title={t("session-terminal-terminaloptions.appearance_tooltip")}>
           {APPEARANCE[appearance].hint}
         </div>
       </div>
