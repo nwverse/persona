@@ -1151,7 +1151,7 @@ func TestInboxGroupReopensADoneEvent(t *testing.T) {
 	answer := `{"assign":[{"message":"m1060","event":"lark:F1:900"},{"message":"m1061","event":"lark:F1:900"}],
 		"events":[{"event":"lark:F1:900","title":"示例发布跟进","summary":"对方补充了时间","tier":"action","reason":"继续追问","urgent":true}]}`
 	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
-	model, client := newGroupModel(t, answer)
+	_, client := newGroupModel(t, answer)
 	h, _ := groupHub(t, g, client)
 	it := h.inbox.items["lark:F1:900"]
 	it.Count, it.Read = 1, true
@@ -1184,7 +1184,7 @@ func TestInboxGroupCloseoutKeepsADoneEvent(t *testing.T) {
 	answer := `{"assign":[{"message":"m1060","event":"lark:F1:900"},{"message":"m1061","event":"lark:F1:900"}],
 		"events":[{"event":"lark:F1:900","title":"不应改掉的标题","summary":"不应改掉的总结","tier":"action","reason":"不应改掉的理由","urgent":true,"reopen":false}]}`
 	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
-	model, client := newGroupModel(t, answer)
+	_, client := newGroupModel(t, answer)
 	h, _ := groupHub(t, g, client)
 	it := h.inbox.items["lark:F1:900"]
 	it.Count, it.Read = 1, true
@@ -1212,7 +1212,7 @@ func TestInboxGroupMutedDoneEventStaysDone(t *testing.T) {
 	answer := `{"assign":[{"message":"m1060","event":"lark:F1:900"},{"message":"m1061","event":"lark:F1:900"}],
 		"events":[{"event":"lark:F1:900","title":"示例新标题","tier":"action","reason":"继续追问"}]}`
 	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
-	model, client := newGroupModel(t, answer)
+	_, client := newGroupModel(t, answer)
 	h, _ := groupHub(t, g, client)
 	it := h.inbox.items["lark:F1:900"]
 	it.Count, it.Read, it.Reason = 1, true, "示例原理由"
@@ -1235,7 +1235,7 @@ func TestInboxGroupModelKeepsEstablishedTitle(t *testing.T) {
 	for _, titleBy := range []string{TitleByAssistant, TitleByUser} {
 		t.Run(titleBy, func(t *testing.T) {
 			g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
-			model, client := newGroupModel(t, groupAnswerOK)
+			_, client := newGroupModel(t, groupAnswerOK)
 			h, _ := groupHub(t, g, client)
 			it := h.inbox.items["lark:F1:1051"]
 			it.Tier, it.TitleBy, it.Summary = TierFYI, titleBy, "已经写过的总结"
@@ -1257,7 +1257,7 @@ func TestInboxGroupReopenKeepsEstablishedTitle(t *testing.T) {
 			answer := `{"assign":[{"message":"m1060","event":"lark:F1:900"},{"message":"m1061","event":"lark:F1:900"}],
 				"events":[{"event":"lark:F1:900","title":"模型新标题","summary":"模型新总结","tier":"action","reason":"继续追问"}]}`
 			g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
-			model, client := newGroupModel(t, answer)
+			_, client := newGroupModel(t, answer)
 			h, _ := groupHub(t, g, client)
 			it := h.inbox.items["lark:F1:900"]
 			it.Count, it.TitleBy, it.Summary = 1, titleBy, "已经写过的总结"
