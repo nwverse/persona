@@ -232,24 +232,29 @@ class InboxOneRowTest {
         rule.onNodeWithText(res.getString(R.string.inbox_group_fyi)).assertExists()
     }
 
-    @Test fun aDoneHistoryItemStillOpensItsEventPageAndThatPageSaysItIsGone() {
-        // Documented existing behaviour (not this change's regression): the done history is merged into the list only,
-        // so the event page, which reads the live snapshot, cannot find an item that is no longer listed.
-        val old = item("old", "Handled long ago", "Old preview",
+    private fun historyInbox() = FakeInbox(listOf(InboxRecord(InboxItem("recent", kind = "dm", title = "Handled yesterday",
+        doneAt = "2026-11-12T09:00:00Z", updatedAt = "2026-11-12T09:00:00Z", version = "v-recent"))),
+        expanded = listOf("action", "fyi", "done")).also { inbox ->
+        inbox.history = listOf(item("old", "Handled long ago", "Old preview",
             event = InboxEventFields(chain = listOf(InboxChainEntry("e-old", kind = "received", text = "Hi"))),
-            doneAt = "2026-11-01T10:00:00Z", feedId = null)
-        // One done item in the list opens Done, which pages the older history in beside it.
-        val recent = InboxRecord(InboxItem("recent", kind = "dm", title = "Handled yesterday", doneAt = "2026-11-12T09:00:00Z",
-            updatedAt = "2026-11-12T09:00:00Z", version = "v-recent"))
-        val inbox = FakeInbox(listOf(recent), expanded = listOf("action", "fyi", "done")).also { it.history = listOf(old) }
-        screen(inbox)
-        rule.waitForIdle()
+            doneAt = "2026-11-01T10:00:00Z", feedId = null))
+    }
+
+    @Test fun aDoneHistoryItemOpensItsEventPageAsBefore() {
+        // The done history is merged into the list only; an item past it still opens its event page, which is where the
+        // pages it links to (source, chain) live. The page finding nothing is the next test's separate, existing gap.
+        screen(historyInbox())
         row("Handled long ago").assertExists()
         row("Handled long ago").performClick()
         rule.waitForIdle()
         assertEquals(listOf<NavKey>(InboxEventRoute("old")), opened)
+    }
+
+    @Test fun theEventPageOfAnItemPastTheSnapshotSaysItIsMissingAsBefore() {
+        // Documented existing behaviour, not this change's regression (docs: an item beyond the list's few days is not in
+        // the snapshot): the event page cannot find it and says so. Pinned so this change neither fixes nor worsens it.
         rule.setContent { PersonaTheme(reduceMotion = true) {
-            InboxEventScreen(inbox, InboxEventRoute("old"), navigator)
+            InboxEventScreen(historyInbox(), InboxEventRoute("old"), navigator)
         } }
         rule.waitForIdle()
         rule.onNodeWithText(res.getString(R.string.inbox_item_missing)).assertExists()
