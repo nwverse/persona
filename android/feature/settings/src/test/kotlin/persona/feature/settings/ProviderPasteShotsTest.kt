@@ -131,7 +131,13 @@ class ProviderPasteShotsTest {
     @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-night-xhdpi")
     @Test fun anImportLinkDarkOpensReviewAndPrefillWithoutSaving() = importLinkOpensReviewAndPrefill(true)
 
-    private fun importLinkOpensReviewAndPrefill(dark: Boolean) {
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-xhdpi", fontScale = 2.0f)
+    @Test fun anImportLinkLargestTextLightOpensReviewAndPrefill() = importLinkOpensReviewAndPrefill(false, largest = true)
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-night-xhdpi", fontScale = 2.0f)
+    @Test fun anImportLinkLargestTextDarkOpensReviewAndPrefill() = importLinkOpensReviewAndPrefill(true, largest = true)
+
+    private fun importLinkOpensReviewAndPrefill(dark: Boolean, largest: Boolean = false) {
         val api = Providers()
         val firstLink = "persona://provider/import?v=1&data=FAKE-EXAMPLE-KEY"
         var link by mutableStateOf(firstLink)
@@ -143,7 +149,7 @@ class ProviderPasteShotsTest {
             }
         }
         rule.waitForIdle()
-        val suffix = if (dark) "dark" else "light"
+        val suffix = (if (dark) "dark" else "light") + (if (largest) "-ax" else "")
         rule.onNodeWithText("Opened from a link", substring = true).assertExists()
         rule.onNodeWithText("A provider import link").assertExists()
         rule.onNodeWithText("Work gateway").assertExists()

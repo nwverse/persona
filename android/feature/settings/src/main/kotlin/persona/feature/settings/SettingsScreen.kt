@@ -366,9 +366,9 @@ private fun SettingsContent(
             var importLink by remember { mutableStateOf<String?>(null) }
             val requestedImport = ProviderImportRequests.pending.value
             LaunchedEffect(requestedImport, providerService != null) {
-                if (requestedImport != null && providerService != null) {
-                    importLink = requestedImport
-                    ProviderImportRequests.clear()
+                if (requestedImport != null) {
+                    val link = ProviderImportRequests.take()
+                    if (providerService != null) importLink = link
                 }
             }
             if (importLink != null && providerService != null) {

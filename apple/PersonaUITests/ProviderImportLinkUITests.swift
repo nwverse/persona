@@ -13,10 +13,11 @@ final class ProviderImportLinkUITests: XCTestCase {
         return URL(string: "persona://provider/import?v=\(version)&data=\(data)")!
     }
 
-    @MainActor private func launch(_ scheme: String) -> XCUIApplication {
+    @MainActor private func launch(_ scheme: String, largest: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-openChatsFresh", "YES", "-ui.scheme", scheme]
+        if largest { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
         app.launchPinned()
         sleep(8) // pairing and the hub's first answer settle before the external link arrives
         return app
@@ -40,10 +41,10 @@ final class ProviderImportLinkUITests: XCTestCase {
 
     @MainActor func testImportLinkOpensWizardPrefilled() throws {
         let payload = #"{"kind":"custom","name":"Example Gateway","endpoints":[{"protocol":"openai-chat","baseUrl":"https://example.invalid/v1","models":["m1","m2"]}]}"#
-        for scheme in ["light", "dark"] {
+        for (scheme, largest) in [("light", false), ("dark", false), ("light", true), ("dark", true)] {
             let before = launcherNames()
             XCTAssertFalse(before.isEmpty, "the mock's providers are readable")
-            let app = launch(scheme)
+            let app = launch(scheme, largest: largest)
             open(link(payload), in: app)
             // The wizard is pre-filled with the draft: its name and base URL sit in fields.
             let base = app.textFields.matching(NSPredicate(format: "value CONTAINS[c] %@", "example.invalid")).firstMatch
@@ -51,7 +52,8 @@ final class ProviderImportLinkUITests: XCTestCase {
             XCTAssertEqual(app.textFields["wizard.name"].value as? String, "example-gateway")
             sleep(1)
             let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] ?? "/tmp"
-            try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent("persona-import-wizard-\(scheme).png"))
+            let suffix = scheme + (largest ? "-ax" : "")
+            try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent("persona-import-wizard-\(suffix).png"))
             XCTAssertEqual(launcherNames(), before, "opening and reviewing the link saves nothing")
             app.terminate()
         }

@@ -351,7 +351,8 @@ struct ModelLaunchersView: View {
     /// draft, or say why it can't be opened. The link is dropped here, never shown or kept.
     private func openImport() async {
         guard let link = model.providerImport else { return }
-        model.providerImport = nil
+        // Clearing the id-keyed task's state before the await can cancel the parse. Clear on every exit instead.
+        defer { model.providerImport = nil }
         // The hello may not have arrived yet when a link opens the app. The parse route is the authority here;
         // an older hub answers 404, which is the same "can't open import links yet" the web shows.
         guard let api = requestScope.api(model) else { return }
