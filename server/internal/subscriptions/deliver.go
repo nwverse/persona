@@ -360,7 +360,8 @@ func (d deliverer) threadThing(key string, items []Held) connector.InboxThing {
 	b.WriteString(d.block(last.Item, heldAt(last)))
 	t := connector.InboxThing{Thread: d.thread(key), Kind: cmpOr(last.Kind, d.sub.Recipe.Kind), Label: d.sub.Label,
 		Title: last.Title, Sender: last.Sender, Preview: clip(oneLine(last.Body), previewMost), Context: b.String(),
-		At: heldAt(last), Last: last.UID, Rules: d.rules, Extra: d.fallback(due), Tags: d.tags(&last.Item)}
+		At: heldAt(last), Last: last.UID, Rules: d.rules, Extra: d.fallback(due), Tags: d.tags(&last.Item),
+		Read: last.Seen} // read in the source up to its newest item: read here (#6176)
 	if strings.HasPrefix(last.Link, "https://") {
 		t.URL = last.Link
 	}
@@ -461,7 +462,8 @@ func (d deliverer) digestThing(items []Held) connector.InboxThing {
 	}
 	return connector.InboxThing{Thread: thread, Kind: wire.ConnectorSubscriptionKindSubDigest, Label: d.sub.Label,
 		Title: title, Preview: clip(oneLine(cmpOr(items[0].Title, items[0].Body)), previewMost), Context: strings.Join(lines, "\n"),
-		At: heldAt(items[0]), Last: "digest:" + hashOf(uids...)[:24], Rules: d.rules, Extra: d.fallback(false), Tags: d.tags(nil)}
+		At: heldAt(items[0]), Last: "digest:" + hashOf(uids...)[:24], Rules: d.rules, Extra: d.fallback(false), Tags: d.tags(nil),
+		Read: !slices.ContainsFunc(items, func(h Held) bool { return !h.Seen })} // every item read in the source (#6176)
 }
 
 // snapshotThing is a snapshot that changed: the state as the source answered it.

@@ -410,6 +410,9 @@ type Item struct {
 	SenderID string `json:"sender_id,omitempty"`
 	Chat     string `json:"chat,omitempty"`
 	ChatName string `json:"chat_name,omitempty"`
+	// Seen: the item was seen in the source (#6176), when the pull that stored it or a later one read it so; never
+	// turned off again.
+	Seen bool `json:"seen,omitempty"`
 }
 
 // Seen is a dedup key kept for a subscription (subscription_seen).
