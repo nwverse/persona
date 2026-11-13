@@ -152,7 +152,31 @@ describe("Hand to AI: where the item went", () => {
     expect(body.kind).toBe("agent");
     expect(body.session).toEqual({ machine_id: "laptop", session_id: "s-9" });
     expect(body).not.toHaveProperty("text");
-    expect(String(body.title ?? "")).toBeTruthy();
+    expect(body.title).toBe("Fresh agent");
+  });
+
+  it("names an agent with no title by its folder, as the row does, and never by the localized 'untitled'", async () => {
+    // a session the hub gave no title: the row shows the folder's name
+    world.sessions = { mac: [{ ...agent, title: "", cwd: "/work/release-check" }] };
+    await reloadInbox();
+    render();
+    const row = [...document.body.querySelectorAll('[role="radio"]')].find((b) => b.textContent?.includes("release-check")) as HTMLButtonElement;
+    expect(row).toBeTruthy();
+    act(() => row.click());
+    await act(async () => sendButton().click());
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    expect(records()[0].body!.title).toBe("release-check");
+    expect(String(records()[0].body!.title)).not.toContain("未命名");
+
+    // and a started agent with none: its folder too
+    calls.length = 0;
+    render();
+    await act(async () => (document.body.querySelector('[data-testid="handoff-new-agent"]') as HTMLButtonElement).click());
+    await vi.waitFor(() => expect(openNewAgent).toHaveBeenCalledTimes(1));
+    const preset = vi.mocked(openNewAgent).mock.calls[0][0] as NewAgentPreset;
+    act(() => preset.onStarted!({ ...started, title: undefined as unknown as string } as Session));
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    expect(records()[0].body!.title).toBe("code");
   });
 
   it("gives every record its own client_id", async () => {
