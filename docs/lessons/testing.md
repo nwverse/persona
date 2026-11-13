@@ -1,5 +1,18 @@
 # Lessons: testing and validation
 
+- Fixture teardown is part of a test's elapsed time (#5730). A scripted terminal whose shell is ready immediately
+  does not need a fixed startup pause. When a test has finished its assertions, cancel background prompt checks
+  owned by that fixture and join them before restoring package settings or closing sockets. Delivery/recovery tests
+  must still await the check before their assertions; cancellation at teardown must not substitute for those checks.
+  Keep normal detached delivery and production wait limits unchanged, and measure serial and partitioned commands
+  separately when evaluating the gain.
+
+- A transport fixture that already reads every reply should wake its request waiter from that reader (#5730).
+  Register by request ID before sending, retain JSON-RPC errors, remove waiters on cancellation/EOF/write failure,
+  and keep duplicate or late replies from blocking the reader. Polling an already available approval response
+  added about 23 seconds to the complete shell-name security matrix. Keep every classification assertion and
+  verify the transport with real pipes and held approvals; virtual time can expose an unnecessary polling tick.
+
 - A counter of a shared resource (lists, calls, reads) must not include what a fixture's own background passes do
   (#6121). `TestIdlePassesReadWhatRuns` counted `closeDoneTaskAgents`'s machine lists, but `liveLoop`'s signal-driven
   pass (a 100 ms coalescing window) listed the same machine from the fixture's earlier calls, so the count was 0 or 1
@@ -1019,3 +1032,13 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - Don't detect a missing tool by one wording of its error: ask it directly in the test's own environment
   (`scripts/test/compose_cli.py` runs `docker compose version`) and skip with how to enable the check
   (`PERSONA_TEST_DOCKER_CONFIG`, `docs/operations/hub-update.md`).
+
+## Swift 6.2 `swift test` copies `.xcstrings` without compiling `.lproj` (2026-11-13, #6258)
+
+- Under Xcode 26.0 (Swift 6.2), `xcrun swift test` copies `Localizable.xcstrings` into `Bundle.module` as-is
+  (`Copying Localizable.xcstrings`) without generating `.lproj` directories, whereas newer toolchains and `xcodebuild`
+  (`scripts/app/mac-link.sh`) compile it at build time.
+- SwiftPM tests that point a bundle override at `<language>.lproj`
+  (`apple/PersonaLink/Tests/PersonaLinkTests/LinkTextTests.swift`) fall back to compiling `Localizable.xcstrings` on
+  demand with `/usr/bin/xcrun xcstringstool compile`, and cover that path with a synthetic uncompiled `.bundle` test so
+  newer local Xcode versions still exercise it.

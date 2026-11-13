@@ -567,12 +567,30 @@ type WorktreeCreated struct {
 
 // WorktreeCreate has herdr make a Git worktree checkout at path (an absolute path) from the repository of a workspace
 // and open it as a workspace grouped under that one, without moving the computer's focus. An existing local branch is
-// checked out; any other name becomes a new branch from the workspace's HEAD. herdr never forces anything: a branch
+// checked out; any other name becomes a new branch from base when given, else from the workspace's HEAD. herdr never forces anything: a branch
 // checked out elsewhere, or a path git refuses, is an error.
-func (c *Client) WorktreeCreate(ctx context.Context, workspace, branch, path string) (*WorktreeCreated, error) {
+func (c *Client) WorktreeCreate(ctx context.Context, workspace, branch, path string, base ...string) (*WorktreeCreated, error) {
+	params := map[string]any{"workspace_id": workspace, "branch": branch, "path": path, "focus": false}
+	args := []string{"worktree", "create", "--workspace", workspace, "--branch", branch, "--path", path}
+	if len(base) > 0 && base[0] != "" {
+		params["base"] = base[0]
+		args = append(args, "--base", base[0])
+	}
 	var res WorktreeCreated
-	err := c.call(ctx, "worktree.create", map[string]any{"workspace_id": workspace, "branch": branch, "path": path, "focus": false}, &res,
-		"worktree", "create", "--workspace", workspace, "--branch", branch, "--path", path, "--no-focus")
+	err := c.call(ctx, "worktree.create", params, &res, append(args, "--no-focus")...)
+	return &res, err
+}
+
+// WorktreeCreateFromCwd is WorktreeCreate from a main checkout that has no open workspace.
+func (c *Client) WorktreeCreateFromCwd(ctx context.Context, cwd, branch, path string, base ...string) (*WorktreeCreated, error) {
+	params := map[string]any{"cwd": cwd, "branch": branch, "path": path, "focus": false}
+	args := []string{"worktree", "create", "--cwd", cwd, "--branch", branch, "--path", path}
+	if len(base) > 0 && base[0] != "" {
+		params["base"] = base[0]
+		args = append(args, "--base", base[0])
+	}
+	var res WorktreeCreated
+	err := c.call(ctx, "worktree.create", params, &res, append(args, "--no-focus")...)
 	return &res, err
 }
 

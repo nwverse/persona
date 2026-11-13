@@ -50,7 +50,9 @@ async function undoArchive(s: Session, title: string, deps: ConversationMenuDeps
   reread(deps);
 }
 
-/** 设为常驻 / 取消常驻 for a conversation that is not the main one (`leader`: it is one now). */
+/** 设为常驻 / 取消常驻 for a conversation that is not the main one (`leader`: it is one now). Both ask a second time
+ * before the hub call (#6214): the first choice only arms the row, the second runs it, and the detail says what moves —
+ * unpinning sends the chat back to 最近 and returns its open tasks to the main chat's supervision, nothing deleted. */
 export function leaderItem(s: Session, leader: boolean, deps: ConversationMenuDeps = conversationMenuDeps): MenuItem {
   const title = sessionTitle(s);
   return {
@@ -58,6 +60,12 @@ export function leaderItem(s: Session, leader: boolean, deps: ConversationMenuDe
     label: leader ? t("conversation-menu.end_leader") : t("conversation-menu.make_leader"),
     icon: "pin",
     accel: "p",
+    confirm: leader ? t("conversation-menu.end_leader_confirm") : t("conversation-menu.make_leader_confirm"),
+    confirmDetail: leader
+      ? t("conversation-menu.end_leader_confirm_detail")
+      : t("conversation-menu.make_leader_confirm_detail"),
+    // The menu stays open while the hub call runs, shows a refusal in place, and closes only on success.
+    inline: true,
     onSelect: async () => {
       try {
         await deps.lead(s, !leader);

@@ -110,8 +110,9 @@ nonisolated struct RecordingUpload: Encodable, Sendable {
         }
     }
 
-    /// Persona is saying an answer now (`MeetingSpeaker.openSpan`): the lines its stretch so far echoes are marked (left
-    /// out, to a hub without `meeting_echo`), and the stretch goes with the others.
+    /// Persona is saying an answer now (`MeetingSpeaker.openSpan`, or the meeting call's voice: `MeetingCall.openSpan`):
+    /// the lines its stretch so far echoes are marked (left out, to a hub without `meeting_echo`), and the stretch goes
+    /// with the others.
     mutating func speaking(_ open: RecordingSpan) {
         let echoes = { (s: Segment) in s.echo != true && open.echoes(RecordingSentence(start: s.start, end: s.end, text: s.text)) }
         guard marksEcho else {
@@ -542,7 +543,10 @@ final class RecordingSync {
         var body = RecordingUpload(entry, hubEcho: hubEcho())
         #if os(iOS)
         // Persona is saying an answer in this meeting right now: what the microphone hears of it isn't the meeting's.
-        if let open = MeetingSpeaker.shared.openSpan(for: entry.id) { body.speaking(open) }
+        // The meeting call's voice (#3862 phase 4) as well: each open stretch, with what it is saying, marks its echo.
+        for open in [MeetingSpeaker.shared.openSpan(for: entry.id), MeetingCall.shared.openSpan(for: entry.id)].compactMap({ $0 }) {
+            body.speaking(open)
+        }
         #endif
         do {
             let data = try await api.request("PUT", "/api/v1/recordings/\(entry.id.uuidString.lowercased())", body: body, timeout: 60)

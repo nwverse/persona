@@ -87,9 +87,7 @@ struct TerminalsView: View {
             problem(TerminalsLoad.withRequest(String(localized: "This computer hasn't answered yet."), request), ref)
         case .rows(let list):
             let rows = TerminalsList.rows(list)
-            if rows.isEmpty {
-                Text("No terminals on this computer.").font(Theme.Font.label).foregroundStyle(.secondary).themedRow()
-            }
+            if rows.isEmpty { empty(list, ref) }
             ForEach(rows) { r in row(r, on: ref, in: list).themedRow() }
         case .waiting:
             // Its panes are on their way; no answer within `patience` says so, with Retry (#6153). The row's own task
@@ -99,6 +97,22 @@ struct TerminalsView: View {
                     try? await Task.sleep(for: TerminalsLoad.patience)
                     if !Task.isCancelled { loads[ref.path, default: TerminalsLoad()].expire(load.request) }
                 }
+        }
+    }
+
+    /// A computer with no terminals: New Terminal when its engine can open one (in its home folder when it has no
+    /// workspace yet), otherwise where terminals come from.
+    @ViewBuilder private func empty(_ list: TerminalPanes, _ ref: MachineRef) -> some View {
+        if let space = TerminalsList.spaces(list).first {
+            HStack(spacing: Theme.Space.m) {
+                Text("No terminals open on this computer.").font(Theme.Font.label).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button("New Terminal") { newTerminal(on: ref, space: space) }
+                    .foregroundStyle(Theme.accent).lineLimit(1).accessibilityIdentifier("terminals.new")
+            }
+            .themedRow()
+        } else {
+            Text("Terminals open here when an Agent starts on this computer.").font(Theme.Font.label).foregroundStyle(.secondary).themedRow()
         }
     }
 
@@ -253,7 +267,7 @@ struct TerminalsView: View {
         guard let api = model.api(ref.group) else { return }
         Task {
             do {
-                var body = ["workspace_id": space.id]
+                var body = space.id.isEmpty ? ["cwd": "~"] : ["workspace_id": space.id] // no workspace yet: the node opens one
                 if !space.kind.isEmpty { body["kind"] = space.kind }
                 let data = try await api.nodeAction(machine: ref.id, "panes", body)
                 await load()
@@ -360,10 +374,12 @@ nonisolated enum TerminalsList {
         }
     }
 
-    /// The workspaces a new terminal can open in: those of hosts that open tabs.
+    /// The workspaces a new terminal can open in: those of hosts that open tabs. A host that opens tabs but has no
+    /// workspace yet offers its home folder (id ""): the node opens a new workspace there.
     static func spaces(_ list: TerminalPanes) -> [Space] {
         list.hosts.filter(\.newTab).flatMap { h in
-            h.workspaces.map { Space(id: $0.id, label: $0.label.isEmpty ? $0.id : $0.label, kind: h.kind) }
+            h.workspaces.isEmpty ? [Space(id: "", label: String(localized: "Home Folder"), kind: h.kind)]
+                : h.workspaces.map { Space(id: $0.id, label: $0.label.isEmpty ? $0.id : $0.label, kind: h.kind) }
         }
     }
 

@@ -193,6 +193,8 @@ func (o *placeOrigins) pruneLocked(now time.Time) {
 func (h *Hub) askOrigin(p sessionlist.Place, e *placeOrigin, slot chan struct{}) {
 	o := &h.origins
 	slot <- struct{}{}
+	// The slot is given back once the answer is recorded: the next ask of this computer then sees what this one found.
+	defer func() { <-slot }()
 	o.mu.Lock()
 	quiet := o.clock().Before(o.silent[p.Machine]) // an ask ahead of this one found the node does not answer these
 	o.mu.Unlock()
@@ -200,7 +202,6 @@ func (h *Hub) askOrigin(p sessionlist.Place, e *placeOrigin, slot chan struct{})
 	if !quiet {
 		origin, answer = h.repositoryOrigin(p)
 	}
-	<-slot
 	now := o.clock()
 	o.mu.Lock()
 	defer o.mu.Unlock()
