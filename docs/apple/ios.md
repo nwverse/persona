@@ -50,7 +50,11 @@ conversation's id) last. The app neither groups to-dos by supervisor nor works o
   title and state word; a tap opens its card), its Agents a level in as the list's own rows (`slotRow`, live state), their
   sub-Agents further in; a sub-Agent the list does not have is drawn from the tree (state dot, title, its state in words)
   and opens its session. The listed Agents the tree does not have end in By To-do's Started Manually and Unassigned
-  (Unassigned folded unless one of them needs you), so no Agent disappears. Under a quick filter or a search a to-do
+  (Unassigned folded unless one of them needs you), so no Agent disappears. In By To-do itself (#6458) both groups
+  start folded below the to-dos unless one of their Agents needs you, open when no to-do is above them, stay listed while
+  empty when no quick filter or search narrows the list, color their count by their most urgent Agent's state (needs you,
+  finished unseen, working: `TodoAgentGroup.mostUrgent`, a to-do's order), and say what they hold behind an ⓘ beside
+  their title (`InfoTip`, a popover) and as an open, empty group's only row. Under a quick filter or a search a to-do
   without a matching Agent is left out. No Sort in this grouping (the tree's order). `DirectionAgentSections` builds it,
   `AgentListRows.directions` is the Mac's ↑ / ↓ order.
 - **Tests**: `DirectionTreeTests` (decoding, the 404, the event, the words, the leaders / names / counts the sidebar

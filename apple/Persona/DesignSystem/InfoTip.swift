@@ -21,8 +21,13 @@ struct InfoTip: View {
         .accessibilityLabel(String(localized: "About \(name)"))
         .accessibilityHint(text)
         .accessibilityIdentifier("infoTip")
+        #if DEBUG
+        // a screenshot's ⓘ shown open: -showInfoTip <name> (docs/operations/testing.md, AgentsTodoGroupsUITests)
+        .onAppear { if UserDefaults.standard.string(forKey: "showInfoTip") == name { shown = true } }
+        #endif
         .popover(isPresented: $shown) {
             Text(text)
+                .accessibilityIdentifier("infoTip.text")
                 .font(Theme.Font.secondary)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
