@@ -41,21 +41,22 @@ struct InboxBackNavigationTests {
         #expect(!AssistantCurrentNavigation.clearsPushedPages(oldHub: nil, newHub: nil))
     }
 
-    /// Both waiting-Agent rows (the inbox list and the new-chat page) share the chain's existing session decision.
-    @Test func waitingAgentRowsPushWithoutMovingEitherTab() {
-        keepingDefaults {
-            let model = AppModel()
-            model.selectedTab = .assistant
-            model.openChat = nil
-            let tab = model.selectedTab, current = model.assistantCurrent
-            var pushed: [InboxChatRoute] = []
-            InboxEventOpen.session(Self.other, manager: false, owner: nil, model: model) { pushed.append($0) }
-            #expect(pushed == [InboxChatRoute(key: model.inHub(Self.other), manager: nil)])
-            #expect(model.selectedTab == tab && model.assistantCurrent == current && model.openChat == nil)
+    /// Both waiting-Agent rows (the inbox list and the new-chat page) push only a session of the current hub, under its
+    /// own group. Another group's card keeps model.open, which selects that group for an assistant conversation.
+    @Test func waitingAgentRowsPushOnlyWithinTheCurrentHub() {
+        let key = SessionKey(group: "one", machineID: "server", sessionID: "agent")
+        var pushed: [InboxChatRoute] = []
+        var opened: [SessionKey] = []
+        InboxWaitingOpen.session(key, currentHub: "one", push: { pushed.append($0) }, open: { opened.append(key) })
+        #expect(pushed == [InboxChatRoute(key: key, manager: nil)])
+        #expect(opened.isEmpty)
 
-            InboxEventOpen.session(Self.other, manager: false, owner: nil, model: model)
-            #expect(model.selectedTab == .chats && model.openChat == Self.other)
-        }
+        let other = SessionKey(group: "two", machineID: key.machineID, sessionID: key.sessionID)
+        InboxWaitingOpen.session(other, currentHub: "one", push: { pushed.append($0) }, open: { opened.append(other) })
+        #expect(pushed.count == 1 && opened == [other], "a foreign group's route must not be pushed on this hub")
+
+        InboxWaitingOpen.session(key, currentHub: "one", push: nil, open: { opened.append(key) })
+        #expect(opened == [other, key], "no closure keeps the old open even on the current hub")
     }
 
     /// The direct Thread row and a to-do sheet's Agent row use the same route and the item's manager.

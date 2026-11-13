@@ -36,8 +36,10 @@ final class InboxBackTests: XCTestCase {
     }
 
     @MainActor private func shot(_ name: String) {
-        guard let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] else { return }
-        let url = URL(fileURLWithPath: dir).appendingPathComponent("inbox-back-\(name).png")
+        let env = ProcessInfo.processInfo.environment
+        guard let dir = env["PERSONA_SHOTS"] else { return }
+        let look = env["PERSONA_SHOTS_APPEARANCE"].map { "-" + $0 } ?? ""
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("inbox-back-\(name)\(look).png")
         try? app.screenshot().pngRepresentation.write(to: url)
     }
 
