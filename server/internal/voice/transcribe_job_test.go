@@ -425,7 +425,7 @@ func TestTranscriptionWithoutCaptions(t *testing.T) {
 			if _, verbatim := live.Sessions(); verbatim != 3 {
 				t.Errorf("%d verbatim sessions", verbatim)
 			}
-			if refuse != strings.Contains(logs.String(), "refused the interim-caption extension: verbatim sessions start without it") {
+			if refuse != strings.Contains(logs.String(), "refused the interim-caption extension: started again without it") {
 				t.Errorf("log:\n%s", logs)
 			}
 			asked := len(live.Starts())

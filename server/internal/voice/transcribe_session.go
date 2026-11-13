@@ -264,16 +264,17 @@ type trUp struct {
 // sentence) unless the provider is known not to grant it. A service that refuses it on a verbatim session gets the
 // session again without it, and one that refuses the text-only output gets it again without that (its output audio
 // is then billed); both are remembered for that provider. A refusal on the caption session ends the job's captions
-// (errNoCaptions, sessionUp).
+// (errNoCaptions, sessionUp). What a session asks for is decided as the job opens it: the sessions a job opens
+// together ask alike, whichever of them the service answers first.
 func (s *trSession) connect(ctx context.Context, instructions string) {
 	j := s.j
+	caption := s.kind == trCaption
+	partial := caption || j.memo().captions.Load() != trNotGranted
+	textOnly := !j.memo().noTextOnly.Load()
 	go func() {
 		began := time.Now()
 		sctx, cancel := context.WithTimeout(ctx, startTimeout)
 		defer cancel()
-		caption := s.kind == trCaption
-		partial := caption || j.memo().captions.Load() != trNotGranted
-		textOnly := !j.memo().noTextOnly.Load()
 		var up upLink
 		var started tevent
 		var err error
@@ -283,9 +284,8 @@ func (s *trSession) connect(ctx context.Context, instructions string) {
 			switch {
 			case err == nil:
 			case !caption && partial && errors.Is(err, errNoCaptions):
-				if j.memo().captions.Swap(trNotGranted) != trNotGranted {
-					j.logf("provider %s: the service refused the interim-caption extension: verbatim sessions start without it", j.p.ID)
-				}
+				j.memo().captions.Store(trNotGranted)
+				j.logf("session %d (verbatim): the service refused the interim-caption extension: started again without it", s.no)
 				partial = false
 				continue
 			case textOnly && errors.As(err, &refused) && upstreamCode(err) == "" && refusedField(refused, partial) == "text_only":
