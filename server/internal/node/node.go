@@ -1587,6 +1587,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.unwatch":
 		n.unwatch(p.SessionID)
 		return ok(nil)
+	case "session.seen": // the user saw it in Persona: only a runtime keeping its own unread mark is told (runtimes_calls.go)
+		return ok(nil)
 	case "codex.settings":
 		list, err := n.getCodexSettings()
 		return map[string]any{"settings": list}, err

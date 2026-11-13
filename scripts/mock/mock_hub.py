@@ -17571,6 +17571,148 @@ def mock_chat_search():
 
 if os.environ.get("MOCK_CHAT_SEARCH") == "1":
     mock_chat_search()
+
+
+# GET /api/v1/assistant/search (#6282, docs/protocol/protocol.md "Assistant chat search"): the assistant's conversations
+# found by their title, the user's words or the replies, the way the manager answers (search_routes.go there), over the
+# whole of ITEMS at once (no index to wait for). What a message counts as is spec/fixtures/chat-search's "index"
+# (test_assistant_search_mock.py checks it). MOCK_ASSISTANT_SEARCH=0 is a hub from before it: no feature, 404.
+ASSISTANT_SEARCH = os.environ.get("MOCK_ASSISTANT_SEARCH") != "0"
+_features_without_assistant_search = features
+
+
+def features():
+    return _features_without_assistant_search() + (["assistant_search"] if ASSISTANT_SEARCH else [])
+
+
+_SEARCH_DROP = [re.compile(r"(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>\s*"),
+                re.compile(r"(?s)<(?:persona|jarvis)-context\b[^>]*>.*?</(?:persona|jarvis)-context>\s*"),
+                re.compile(r"<(?:persona|jarvis)-file\b[^>]*?/?>(?:\s*</(?:persona|jarvis)-file>)?")]
+_SEARCH_PASTED = re.compile(r"(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>")
+_SEARCH_IMAGES = [re.compile(r"(?s)<attached_images>.*?</attached_images>"), re.compile(r"\[Image #\d+\]\s?")]
+_SEARCH_ACTION = re.compile(r'\n<persona-action view="[^"<>]*" action="[^"<>]*">\{[^<>]*\}</persona-action>$')
+_SEARCH_CARD = re.compile(r"```(persona-view|persona-card)[^\n]*\n(.*?)\n```[^\n]*(?:\n|$)", re.S)
+
+
+def search_card_text(text):
+    """A reply with each card as its fallback (an old persona-card: its title), as AssistantCardText."""
+    def one(m):
+        try:
+            raw = json.loads(m.group(2))
+        except ValueError:
+            raw = {}
+        title = raw.get("title", "").strip() if m.group(1) == "persona-card" and isinstance(raw, dict) and isinstance(raw.get("title"), str) else ""
+        fallback = raw.get("fallback", "").strip() if isinstance(raw, dict) and isinstance(raw.get("fallback"), str) else ""
+        return (title or fallback) + "\n"
+    return _SEARCH_CARD.sub(one, text)
+
+
+def search_index_text(item):
+    """What the manager's index keeps of an item (spec/fixtures/chat-search "index"); None for nothing."""
+    if item.get("kind") != "text":
+        return None
+    text = item.get("text") or ""
+    if item.get("role") == "assistant":
+        text = search_card_text(text)
+    elif item.get("role") == "user":
+        if item.get("from") or item.get("injected"):
+            return None
+        for r in _SEARCH_DROP:
+            text = r.sub("", text)
+        text = _SEARCH_PASTED.sub(r"\1", text)
+        for r in _SEARCH_IMAGES:
+            text = r.sub("", text)
+        text = _SEARCH_ACTION.sub("", text.strip()).strip()
+    else:
+        return None
+    return text if text.strip() else None
+
+
+def search_fold(s):
+    return unicodedata.normalize("NFKC", s).lower()
+
+
+def search_snippet(body, words):
+    """The text around the first match on one line, "…" where cut, and every match's UTF-16 [start, end)."""
+    start, end = 0, min(len(body), 120)
+    low = search_fold(body)
+    for w in words:
+        at = low.find(w)
+        if at >= 0 and len(low) == len(body):
+            start, end = max(0, at - 40), min(len(body), at + len(w) + 80)
+            break
+    snippet = ("…" if start else "") + " ".join(x.strip() for x in body[start:end].splitlines() if x.strip()) + ("…" if end < len(body) else "")
+    marked, low = [False] * len(snippet), search_fold(snippet)
+    for w in words:
+        i = low.find(w) if len(low) == len(snippet) else -1
+        while i >= 0:
+            for j in range(i, i + len(w)):
+                marked[j] = True
+            i = low.find(w, i + len(w))
+    utf16 = [0]
+    for ch in snippet:
+        utf16.append(utf16[-1] + (2 if ord(ch) > 0xFFFF else 1))
+    ranges, i = [], 0
+    while i < len(snippet):
+        if not marked[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(snippet) and marked[j]:
+            j += 1
+        ranges.append([utf16[i], utf16[j]])
+        i = j
+    return snippet, ranges
+
+
+def assistant_search(q, limit=30):
+    words = []
+    for w in search_fold(q.strip()[:200]).split():
+        if w not in words and len(words) < 8:
+            words.append(w)
+    main = ASSISTANT_CONFIG.get("main")
+    convs = [c for c in ASSISTANT if c.get("space") != "health" and "/health" not in (c.get("cwd") or "")]
+    out = {"results": [], "partial": False, "indexed": {"done": len(convs), "total": len(convs)}}
+    if not words:
+        return out
+    whole = " ".join(words)
+    results = []
+    for c in convs:
+        sid = c["session_id"]
+        title = (c.get("title") or "").strip()
+        shown = "" if sid == main or title in ("", "Claude Code", "assistant") else title
+        rank = 0
+        if shown and all(w in search_fold(shown) for w in words):
+            rank = 2 if search_fold(shown).startswith(whole) else 1
+        hits = []
+        for it in sorted(ITEMS.get(sid, []), key=lambda x: x["seq"], reverse=True):
+            body = search_index_text(it)
+            if body is not None and all(w in search_fold(body) for w in words):
+                hits.append((it, body))
+        if not rank and not hits:
+            continue
+        shown_hits = []
+        for it, body in hits[:3]:
+            snippet, ranges = search_snippet(body, words)
+            shown_hits.append({"item_id": it["id"], "seq": it["seq"], "role": it["role"], "ts": it.get("ts"), "snippet": snippet, "ranges": ranges})
+        r = {"session_id": sid, "machine_id": c.get("machine_id", "server"), "title": c.get("title", ""), "updated_at": c.get("updated_at"),
+             "hits": shown_hits}
+        if sid == main:
+            r["main"] = True
+        if c.get("archived"):
+            r["archived"] = True
+        if c.get("origin"):
+            r["origin"] = c["origin"]
+        if rank:
+            r["title_match"] = True
+        if len(hits) > 3:
+            r["more_hits"] = len(hits) - 3
+        results.append((rank, c.get("updated_at") or "", shown_hits[0]["ts"] if shown_hits else "", sid, r))
+    titled = sorted([x for x in results if x[0]], key=lambda x: x[1], reverse=True)  # the latest updated first,
+    titled.sort(key=lambda x: -x[0])  # then a title starting with the query above one holding it
+    others = sorted([x for x in results if not x[0]], key=lambda x: x[2] or "", reverse=True)
+    out["results"] = [x[4] for x in titled + others][:max(1, min(int(limit or 30), 50))]
+    return out
 SOCKETS = set()
 
 
@@ -22710,6 +22852,9 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
             if p in ("/api/v1/assistant/tasks", "/api/v1/assistant/runs"): return self.send_json({"tasks": [], "runs": []})
+        if p == "/api/v1/assistant/search":
+            if not ASSISTANT_SEARCH: return self.send_json({"error": "not found"}, 404)
+            return self.send_json(assistant_search(q.get("q", [""])[0], q.get("limit", ["30"])[0]))
         if p == "/api/v1/assistant/leaders": return self.send_json(mock_leaders_list())
         if p == "/api/v1/assistant/directions/tree":
             if os.environ.get("MOCK_LEGACY_HUB"): return self.send_json({"error": "not found"}, 404)
@@ -26080,6 +26225,8 @@ def plugins_route(handler, p, body):
         return True
     if PLUGINS_MODE and p.startswith("/api/v1/extensions/showcase/-/ui/"):
         return mock_showcase(handler, p.rsplit("/", 1)[-1], body)
+    if PLUGINS_MODE and p.startswith("/api/v1/extensions/showcase/-/image/"):
+        return _showcase_image(handler, p.rsplit("/", 1)[-1])
     if p == "/mock/invalidate" and PLUGINS_MODE:
         return mock_invalidate(handler)
     if p == "/mock/controls/reset" and PLUGINS_MODE:
@@ -26114,6 +26261,7 @@ def mock_showcase(handler, ui, body):
     request = json.loads(body) if body else {}
     if ui == "controls":
         return _showcase_controls(handler, view, request)
+    _sign_refs(view)
     if request.get("action") == "context":
         return _showcase_context(handler, request.get("values") or {})
     if request.get("action"):
@@ -26158,6 +26306,38 @@ def _showcase_controls(handler, view, request):
             c["action"]["confirm"] = words
     handler.send_json({"items": [changed]} if changed else {"view": view})
     return True
+
+
+# Pictures through the hub (UI version 6's `ui.image`, #827): as the hub does for an app of version 6, every `ref` gets a
+# `path` of the hub's image route (here the token is the ref itself, nothing signed), and the route answers a made-up
+# picture of the ref's shape; `missing` and unknown refs answer 404, to show a picture that does not load.
+_SHOWCASE_PICTURES = {"garden": (320, 240, (86, 150, 92)), "camera.front_door": (480, 270, (88, 104, 128)),
+                      "plant": (240, 240, (64, 160, 110)), "map": (480, 200, (226, 222, 210))}
+
+
+def _sign_refs(obj):
+    if isinstance(obj, list):
+        for x in obj: _sign_refs(x)
+    elif isinstance(obj, dict):
+        ref = obj.get("ref")
+        if isinstance(ref, str) and "path" not in obj and re.fullmatch(r"[A-Za-z0-9_.-]+", ref):
+            obj["path"] = "/api/v1/extensions/showcase/-/image/" + ref
+        for v in obj.values(): _sign_refs(v)
+
+
+def _showcase_image(handler, ref):
+    shape = _SHOWCASE_PICTURES.get(ref)
+    if not shape:
+        handler.send_json({"error": "没有这张图", "code": "not_found"}, 404)
+        return True
+    w, h, (r, g, b) = shape
+    # A soft diagonal light over the ref's color, so cropping and fitting show.
+    lift = lambda c, x, y: min(255, c + (x + y) * 60 // (w + h))
+    data = _png_rgba(w, h, lambda x, y: (lift(r, x, y), lift(g, x, y), lift(b, x, y), 255))
+    handler.send_response(200)
+    handler.send_header("Content-Type", "image/png"); handler.send_header("Content-Length", str(len(data)))
+    handler.send_header("Cache-Control", "private, max-age=600")
+    handler.end_headers(); handler.wfile.write(data)
 
 
 def _showcase_context(handler, values):

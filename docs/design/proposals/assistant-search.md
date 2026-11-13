@@ -1,7 +1,9 @@
 # Proposal: find an assistant chat by what was said in it, and one rule for search in chat
 
 Status: approved by the owner on 2026-11-13 (#6280), decisions in section 9. Building in order: the shared rule and web
-search in chat (#6281), the manager's index and endpoint (#6282), web (#6283), iOS (#6284); Android is #6285.
+search in chat (#6281, merged), the manager's index and endpoint (#6282), web (#6283), iOS (#6284); Android is #6285.
+As built in #6282: no `ts` index (every search scans the text anyway), and the rebuild / empty command of section 5 is
+#6340.
 Audience: everyday Assistant users (super rules 0 and 4). Agents' own history is out of scope (#757).
 
 ## 1. Problem
@@ -88,7 +90,6 @@ CREATE TABLE assistant_search_items (
   body text NOT NULL,                -- the visible text by section 2; snippets are cut from it
   folded text NOT NULL,              -- body after NFKC and lower case; only matched
   PRIMARY KEY (machine_id, session_id, seq, item_id));
-CREATE INDEX ON assistant_search_items (ts DESC);
 CREATE TABLE assistant_search_cursors (
   machine_id text NOT NULL, session_id text NOT NULL,
   history text NOT NULL,             -- the transcript's history token
@@ -126,7 +127,7 @@ without injected prompts or tools) is a few tens of MB at most: a scan of 10 to 
   make it resume after a restart. Until it is done the answer has `partial: true` and `indexed`, and the apps say
   "Still going through older chats…".
 - **Offline and gone**: an offline computer's chats wait for its next `sessions.changed`. A transcript the node says is
-  gone, or a deleted chat, drops its rows. `personad assistant search-reindex [--purge]` rebuilds or empties it.
+  gone, or a deleted chat, drops its rows. A command to rebuild or empty it is #6340.
 - **Several assistants**: each manager indexes its own chats in its own database.
 
 ## 6. Speed
@@ -145,7 +146,8 @@ without injected prompts or tools) is a few tens of MB at most: a scan of 10 to 
 - **Who**: the hub's device tokens, the owner's devices. Not in the extensions' scopes, and not a tool the model can call.
 - **Logs**: never the query; counts and durations only. No query history is kept.
 - **Snippets**: about 40 characters before the match and 80 after, from the cleaned text.
-- **Removal**: with the chat; `--purge` empties the index; dropping the manager's database removes it.
+- **Removal**: with the chat (a chat gone from the list for a day); dropping the manager's database removes it; a
+  command to empty it is #6340.
 
 ## 8. The apps
 

@@ -699,3 +699,35 @@ func TestMeetingRoomDeleted(t *testing.T) {
 	r.do("DELETE", "/api/v1/recordings/"+meetingOther, "", nil, http.StatusOK)
 	waitFor(t, "the deleted recording's room deleted", func() bool { return !r.s.isRoom(other) })
 }
+
+// A room's row in the lists the apps and the extensions read (GET /api/v1/sessions) is the assistant's (its
+// guest-meeting/<recording id> directory counts as the assistant's since #6077) and says its origin meeting, its
+// recording and its title, so that the voice extension refuses an ordinary call bound to it (meeting_room) and the apps
+// leave its voice button out. Another row the book has an origin for is not an assistant's conversation and says none.
+func TestMeetingRoomRowSaysItsOrigin(t *testing.T) {
+	ft := newFleetTest(t)
+	machine, _ := ft.s.fleetMachine("mac")
+	sid := meetingSessionID(meetingRec, partRoom)
+	room := proto.Session{SessionID: sid, Agent: "claude", Status: proto.StatusIdle, Title: "The meeting is starting.",
+		Cwd: path.Join(path.Dir(machine.assistantCwd()), "guest-meeting", meetingRec)}
+	agent := proto.Session{SessionID: "agent", Agent: "claude", Cwd: "/home/u/src", PaneID: "p1", Status: proto.StatusIdle, Title: "Fix the build"}
+	ft.d.setSessions("mac", []proto.Session{room, agent})
+	ctx := context.Background()
+	started := time.Date(2026, 11, 13, 14, 0, 0, 0, time.UTC)
+	ft.s.originSet(ctx, "mac", sid, OriginMeeting, meetingRec, "")
+	ft.s.titleFixed("mac", sid, started, titleMeeting, "Design review")
+	ft.s.originSet(ctx, "mac", "agent", OriginTask, "task1", "")
+	rows := map[string]proto.Session{}
+	for _, sess := range ft.s.decoratedUnarchived("mac") {
+		rows[sess.SessionID] = sess
+	}
+	if r := rows[sid]; !r.Assistant || r.Origin != OriginMeeting || r.OriginRef != meetingRec || !strings.Contains(r.Title, "Design review") {
+		t.Fatalf("the room's row: assistant %v, origin %q %q, title %q", r.Assistant, r.Origin, r.OriginRef, r.Title)
+	}
+	if r := rows["agent"]; r.Origin != "" || r.OriginRef != "" || r.Title != "Fix the build" {
+		t.Fatalf("an agent's row: origin %q %q, title %q", r.Origin, r.OriginRef, r.Title)
+	}
+	if r, ok := ft.s.decoratedSession("mac", sid); !ok || r.Origin != OriginMeeting || r.OriginRef != meetingRec {
+		t.Fatalf("the room's row alone: %v %q %q", ok, r.Origin, r.OriginRef)
+	}
+}

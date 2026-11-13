@@ -147,6 +147,7 @@ func (h *Hub) features() []string {
 	out = append(out, h.meetingEchoFeatures()...)
 	out = append(out, h.meetingTranscriptionFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
+	out = append(out, h.assistantSearchFeatures()...)
 	// The assistant's card interfaces, always on (docs/assistant/assistant-views.md, #5509): assistant_views is declarative
 	// actions (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions. Neither says
 	// a client may run HTML: that is each platform's own security sign-off, else fallback.
@@ -154,8 +155,9 @@ func (h *Hub) features() []string {
 	for _, f := range h.extReport().Features {
 		switch f {
 		case featureAgentSessionArchives, featureAgentSessionArchiveClose, featureMeetingAttendance, featureMeetingConversation,
-			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay:
-			continue // only manager hello can promise fleet archive support, the meeting features and all-day recordings
+			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
+			featureAssistantSearch:
+			continue // only manager hello can promise fleet archive support, the meeting features, all-day recordings and chat search
 		}
 		if !slices.Contains(out, f) {
 			out = append(out, f)
