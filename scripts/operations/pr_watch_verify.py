@@ -4,7 +4,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from pr_watch_common import WatchError, bounded, checked, run
+from pr_watch_common import WatchError, bounded, checked, run, verification_env
 
 
 def command_with_prefix(command, arguments):
@@ -19,8 +19,8 @@ def result_summary(result):
     return bounded((result.stdout + "\n" + result.stderr).strip(), 4500)
 
 
-def run_check(name, argv, worktree, timeout):
-    result = run(argv, cwd=worktree, timeout=timeout)
+def run_check(name, argv, worktree, timeout, environ=None):
+    result = run(argv, cwd=worktree, timeout=timeout, environ=environ)
     return {"name": name, "command": argv, "ok": result.returncode == 0,
             "summary": "" if result.returncode == 0 else result_summary(result)}
 
@@ -57,10 +57,10 @@ def ui_change(names):
 
 
 def persona_checks(worktree, pr, timeout, config):
-    """Use the same lane/path mapping as the repository's portable CI."""
+    """Use trusted watcher/base path mapping, never import PR-controlled Python."""
     base, head = pr["baseRefOid"], pr["headRefOid"]
     names = checked(["git", "diff", "--name-only", "--no-renames", base + "..." + head], cwd=worktree).splitlines()
-    selected = load_paths(worktree).select(names)
+    selected = load_paths(Path(__file__).resolve().parents[2]).select(names)
     commands = []
     for lane in ("server", "web", "android", "runtimes", "scripts"):
         if selected.get(lane):
@@ -131,7 +131,7 @@ def extension_checks(worktree, pr, timeout):
     return commands
 
 
-def verify(repo, pr, worktree, config):
+def verify(repo, pr, worktree, config, environ=None):
     """Return actual completed check evidence. A failed or unavailable check raises."""
     profile = config.get("profile", "commands")
     timeout = int(config.get("timeout_seconds", 3600))
@@ -160,7 +160,7 @@ def verify(repo, pr, worktree, config):
         raise WatchError("unknown verification profile")
     results = []
     for name, argv in commands:
-        result = run_check(name, argv, worktree, timeout)
+        result = run_check(name, argv, worktree, timeout, environ)
         results.append(result)
         if not result["ok"]:
             raise WatchError("%s failed:\n%s" % (name, result["summary"]))

@@ -113,6 +113,23 @@ def pr_snapshot(repo, number, timeout=90, environ=None):
     return data
 
 
+def verification_env():
+    """PR-controlled build scripts must not inherit GitHub or assistant credentials."""
+    env = clean_env()
+    for key in list(env):
+        if key.startswith(("GH_", "GITHUB_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "AWS_", "AZURE_")):
+            env.pop(key, None)
+    for key in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"):
+        env.pop(key, None)
+    # Build caches are supplied explicitly by the trusted verifier config. Tests
+    # that need a home get an empty one, never the maintainer's gh login.
+    import tempfile
+    home = tempfile.mkdtemp(prefix="pr-watch-verification-home-")
+    env["HOME"] = home
+    env["XDG_CONFIG_HOME"] = str(Path(home) / ".config")
+    return env
+
+
 def atomic_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
