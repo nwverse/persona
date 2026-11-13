@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { InboxItem } from "./inbox";
 import { inboxOriginForSession, type InboxOriginInput } from "./inbox-origin";
-import type { AssistantInfo, Session } from "./types";
+import type { Session } from "./types";
 
 const MID = "machine-a";
 const SID = "conversation";
