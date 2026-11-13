@@ -2572,7 +2572,11 @@ struct ChatView: View {
 
     /// The agent's pending cards, and in DEBUG the sample ones the screenshot switches add (`-showSampleQuestion YES`…).
     private var pendingCards: [PendingCards.Card] {
-        var cards = model.interactions(for: key).map { PendingCards.Card(interaction: $0, enabled: model.canAnswer($0)) }
+        var cards = model.interactions(for: key).map { ix in
+            // A stopped Agent's work card stays open for putting it off or dismissing it, which send the Agent nothing (#6839).
+            let answerable = model.canAnswer(ix)
+            return PendingCards.Card(interaction: ix, enabled: answerable || ix.isManagerWork, localOnly: !answerable && ix.isManagerWork)
+        }
         // A card answered in a terminal dialog of several questions stays, greyed, until the next one comes (#2970).
         if let move = model.screenMoves[key], !cards.contains(where: { $0.interaction.kind == .screen }) {
             cards.append(PendingCards.Card(interaction: move.card, enabled: false))
@@ -2585,6 +2589,10 @@ struct ChatView: View {
         ]
         for (flag, sample) in samples where UserDefaults.standard.bool(forKey: flag) {
             if let ix = sample(key) { cards.append(PendingCards.Card(interaction: ix, enabled: true)) }
+        }
+        // `-showSampleStoppedWork YES`: a manager work card on an Agent that has stopped (#6839).
+        if UserDefaults.standard.bool(forKey: "showSampleStoppedWork"), let ix = Interaction.sampleStoppedWork(key) {
+            cards.append(PendingCards.Card(interaction: ix, enabled: true, localOnly: true))
         }
         // `-showVoiceSample asking|approval|plan_feedback`: the card the voice asks about or points to.
         cards += VoiceSample.cards(key).map { PendingCards.Card(interaction: $0, enabled: true) }

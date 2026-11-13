@@ -466,6 +466,7 @@ struct InteractionPanel: View {
 struct QuestionForm: View {
     @Environment(AppModel.self) private var model
     @Environment(\.cardFormCap) private var formCap
+    @Environment(\.cardLocalOnly) private var localOnly
     var interaction: Interaction
     @State private var contentHeight: CGFloat = 0
     @State private var footerHeight: CGFloat = 0
@@ -567,8 +568,10 @@ struct QuestionForm: View {
                 if i > 0 { Divider().padding(.leading, 50) }
                 option(q, opt, number: i + 1)
             }
-            Divider().padding(.leading, 50)
-            otherRow(q)
+            if !localOnly { // a typed answer would go to the stopped Agent
+                Divider().padding(.leading, 50)
+                otherRow(q)
+            }
         }
         .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
     }
@@ -577,6 +580,7 @@ struct QuestionForm: View {
         let selected = picks[q.question, default: []].contains(opt.label)
         let (label, recommended) = Self.display(opt.label)
         let assistantPick = assistantPicks(q).contains(opt.label)
+        let blocked = localOnly && !interaction.isLocalChoice(opt, in: q) // it would message a stopped Agent
         return Button { if !dragged { pick(q, opt) } } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 ZStack {
@@ -590,7 +594,7 @@ struct QuestionForm: View {
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     HStack(spacing: Theme.Space.sm) {
-                        Text(label).font(Theme.Font.heading).foregroundStyle(.primary)
+                        Text(label).font(Theme.Font.heading).foregroundStyle(blocked ? .tertiary : .primary)
                         if recommended { RecommendedTag() }
                         if assistantPick { AssistantPickTag() }
                     }
@@ -609,7 +613,7 @@ struct QuestionForm: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .disabled(isSending)
+        .disabled(isSending || blocked)
         .accessibilityLabel(label + (recommended ? String(localized: ", recommended", comment: "Accessibility suffix: the recommended option") : "")
                             + (assistantPick ? String(localized: ", the assistant's pick", comment: "Accessibility suffix: the option the assistant recommends") : "")
                             + (selected ? String(localized: ", selected", comment: "Accessibility suffix: a selected option") : ""))
@@ -727,7 +731,16 @@ struct QuestionForm: View {
     }
 
     private var allAnswered: Bool { questions.allSatisfy { answer($0) != nil } }
-    private var canAdvance: Bool { questions.indices.contains(page) && answer(questions[page]) != nil }
+    private var canAdvance: Bool { questions.indices.contains(page) && answer(questions[page]) != nil && allowed(questions[page]) }
+
+    /// Only put-off choices while the card takes nothing else (`cardLocalOnly`): a pick made before the Agent stopped
+    /// doesn't go.
+    private func allowed(_ q: Question) -> Bool {
+        guard localOnly else { return true }
+        let set = picks[q.question, default: []]
+        return !set.isEmpty && (other[q.question] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && q.options.filter { set.contains($0.label) }.allSatisfy { interaction.isLocalChoice($0, in: q) }
+    }
 
     /// The answers as the review shows them, by question.
     private var shownAnswers: [Int: String] {
@@ -739,6 +752,7 @@ struct QuestionForm: View {
     }
 
     private func submit() {
+        guard questions.allSatisfy(allowed) else { return }
         if !allAnswered {
             if let next = questions.firstIndex(where: { answer($0) == nil }) { withAnimation(Theme.Motion.standard) { page = next } }
             return
@@ -753,12 +767,18 @@ struct QuestionForm: View {
 
     private func send() {
         guard !isSending else { return } // a second tap sends nothing
-        sending = true
-        otherFocused = false
         var answers: [String: String] = [:]
         for q in questions { answers[q.question] = answer(q) }
+        let resolution = Resolution(answers: answers)
+        // A review made while the Agent could answer, sent after it stopped: only put-off answers go (#6839).
+        if localOnly, !interaction.isLocalResolution(resolution) {
+            withAnimation(Theme.Motion.standard) { reviewing = false }
+            return
+        }
+        sending = true
+        otherFocused = false
         Task {
-            await model.resolve(interaction, Resolution(answers: answers))
+            await model.resolve(interaction, resolution)
             sending = false
         }
     }
@@ -1674,6 +1694,19 @@ extension Interaction {
         """
         return try? JSON.decoder.decode(Interaction.self, from: Data(json.utf8))
     }
+
+    /// A manager work card on an Agent whose model request failed (the hub's `persona_triage` card, #6753).
+    static func sampleStoppedWork(_ key: SessionKey) -> Interaction? {
+        // i18n-ignore
+        let json = """
+        {"id":"sample-work","machine_id":"\(key.machineID)","session_id":"\(key.sessionID)","kind":"question","tool_name":"persona_triage","questions":[
+         {"question":"模型请求失败了，要怎么处理？","header":"模型错误","multi_select":false,"options":[
+          {"label":"继续","description":"让 Agent 接着做"},
+          {"label":"稍后再说","description":"先放一放，之后再提醒我","action":"defer"},
+          {"label":"不用管了","description":"收起这张卡","action":"defer"}]}]}
+        """
+        return try? JSON.decoder.decode(Interaction.self, from: Data(json.utf8))
+    }
 }
 #endif
 
@@ -1703,6 +1736,7 @@ extension ApprovalCardOptions {
 struct BUIQuestionForm: View {
     @Environment(AppModel.self) private var model
     @Environment(\.cardFormCap) private var formCap
+    @Environment(\.cardLocalOnly) private var localOnly
     var interaction: Interaction
     /// Several questions (#2970): the card's answers held for the review, the question the card opens at when it comes
     /// back, and a new card each time (its answers and page are read once).
@@ -1776,7 +1810,7 @@ struct BUIQuestionForm: View {
             }
         } else {
             let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
-            ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, startAt: startAt, answers: kept, skipLabel: nil,
+            ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1, localOnly: localOnly ? interaction : nil) }, startAt: startAt, answers: kept, skipLabel: nil,
                          continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: isSending ? String(localized: "Sending…") : String(localized: "Submit"),
                          customPlaceholder: String(localized: "Other answer…"),
                          sentMessage: isSending ? String(localized: "Sending…") : String(localized: "Sent"),
@@ -1802,9 +1836,17 @@ struct BUIQuestionForm: View {
 
     private func send(_ answers: ApprovalAnswers) {
         guard !isSending else { return } // a second tap sends nothing
+        let resolution = Resolution(answers: Self.answers(answers, questions))
+        // Answers held for the review while the Agent could answer, sent after it stopped: only put-off answers go
+        // (#6839); back to the questions, whose other choices are now off.
+        if localOnly, !interaction.isLocalResolution(resolution) {
+            kept = ApprovalAnswers()
+            reopen(at: 0)
+            return
+        }
         sending = true
         Task {
-            await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions)))
+            await model.resolve(interaction, resolution)
             sending = false
         }
     }
@@ -1819,16 +1861,19 @@ struct BUIQuestionForm: View {
         return out
     }
 
-    /// `picks`: the options the assistant recommends (#544).
-    static func card(_ q: Question, picks: [String] = []) -> ApprovalQuestion {
+    /// `picks`: the options the assistant recommends (#544). `localOnly`: the card takes only the choices that send its
+    /// Agent nothing (`cardLocalOnly`, #6839); the rest and the typed answer are off.
+    static func card(_ q: Question, picks: [String] = [], localOnly: Interaction? = nil) -> ApprovalQuestion {
         ApprovalQuestion(
             id: q.question, q.question, kind: q.multiSelect ? .multiple : .single,
             choices: q.options.map { o in
                 let (label, recommended) = display(o.label)
                 let tag = recommended ? String(localized: "Recommended") : picks.contains(o.label) ? String(localized: "Assistant's pick") : nil
-                return ApprovalQuestion.Choice(label, detail: o.description, tag: tag)
+                return ApprovalQuestion.Choice(label, detail: o.description, tag: tag,
+                                               isEnabled: localOnly.map { $0.isLocalChoice(o, in: q) } ?? true)
             },
-            eyebrow: eyebrow(q)
+            eyebrow: eyebrow(q),
+            allowsCustom: localOnly == nil
         )
     }
 
