@@ -9,9 +9,10 @@ import { filterQuery, PAGE_SIZE, SessionList, type ListFilters } from "../../lib
 import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
 import { onHubEvent } from "../../lib/store";
 import { useFolded } from "../../lib/use-folded";
+import { nestUnderParents } from "../../lib/side-sessions";
 import { Button } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
+import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
 import { GroupCount, NeedsCount, Section } from "../SidebarSection";
 
 /** How a section's own list is read: the collection the groups are of, as the list above them reads it. */
@@ -23,6 +24,8 @@ export interface GroupedSource<T> {
   event: "sessions_list" | "agents";
   summary: boolean;
   roots: boolean;
+  /** The list's own parentOf (#5935): a section draws a side session under its parent as the flat list does. */
+  parentOf?: (row: T) => string | undefined;
 }
 
 export interface GroupedSessionsProps<T> {
@@ -113,7 +116,7 @@ function GroupPlaces({ group, machineName }: { group: SessionGroup; machineName:
 function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
   group: SessionGroup; dimension: GroupDimension; scope: ListFilters; source: GroupedSource<T>; renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode;
 }) {
-  const { path, identity, compare, removeIdentity, event, summary, roots } = source;
+  const { path, identity, compare, removeIdentity, event, summary, roots, parentOf } = source;
   // rows only: the section's numbers are the ones its heading already has
   const list = useMemo(() => new SessionList<T>(path, identity, compare, undefined, removeIdentity, { summary, roots, counts: false }),
     [path, identity, compare, removeIdentity, summary, roots]);
@@ -128,13 +131,18 @@ function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
   }, [list, filters, event]);
   // the newest few first, so several open sections fit a screen; "Load more" shows what is read, then reads on
   const [limit, setLimit] = useState<number>(SESSION_LIST_METRICS.groupPreview);
-  const rows = page.rows.length > limit ? page.rows.slice(0, limit) : page.rows;
+  const shown = page.rows.length > limit ? page.rows.slice(0, limit) : page.rows;
+  // a session started from another one shown here comes under it, a level in (#5935), as in the flat list
+  const nesting = useMemo(() => parentOf ? nestUnderParents(shown, identity, parentOf) : null, [shown, identity, parentOf]);
+  const rows = nesting?.rows ?? shown;
   const more = () => {
     if (page.rows.length <= limit) void list.more().catch(() => {});
     setLimit(limit + PAGE_SIZE);
   };
   return <>
-    {rows.map((row) => <div key={identity(row)} data-session-row="">{renderRow(row, dimension, group)}</div>)}
+    {rows.map((row) => <div key={identity(row)} data-session-row="">
+      {nesting?.nested.has(row) ? <div data-nested-session className={SESSION_LIST_STYLE.nestedRow}>{renderRow(row, dimension, group)}</div> : renderRow(row, dimension, group)}
+    </div>)}
     {page.loading && !page.loaded && <p role="status" className="px-2 py-1 text-xs text-ink-3">{t("sidebar.loading")}</p>}
     {page.error && <div className="px-2 py-1"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}
     {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-1 text-xs text-ink-3">{t("sidebar.no_match")}</p>}

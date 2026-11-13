@@ -47,7 +47,8 @@ type InboxGroupInput struct {
 	Context string   // their text, as the connector wrote it
 	Events  string   // the events tool's answer without a query (JSON)
 	Calls   []InboxGroupCall
-	Left    int // tool calls still allowed
+	Left    int    // tool calls still allowed
+	Problem string // the previous answer's validation or JSON error, shown once for correction
 }
 
 // InboxGroupCall is one tool call and its result (JSON as the tool answered, cut).
@@ -100,6 +101,7 @@ type InboxJudgeInput struct {
 type InboxTask struct {
 	ID, Title, State string
 	Last             string // what its latest agent said last, in a line
+	Notes            string // the task's own description, clipped: the judge reads its subject there and quotes it as evidence
 }
 
 func RenderInboxJudgeInput(in InboxJudgeInput) string { return render("inbox/judge_input", in) }
@@ -171,6 +173,7 @@ type InboxHandlingNote struct {
 	Owner            string
 	Text             string
 	Edited           bool
+	Failed           bool
 	Context          string
 	Machine, Session string
 	Handoff          bool // the note goes to a conversation the event was handed to (wrapped by inbox/handoff_note)
@@ -181,6 +184,7 @@ const (
 	NoteNewMessages  = "inbox/handling/new_messages"
 	NoteSent         = "inbox/handling/sent"
 	NoteAgentStarted = "inbox/handling/agent_started"
+	NoteAgentStopped = "inbox/handling/agent_stopped"
 	NoteHandback     = "inbox/handling/handback"
 	NoteRejected     = "inbox/handling/rejected"
 	NoteInstructed   = "inbox/handling/instructed"

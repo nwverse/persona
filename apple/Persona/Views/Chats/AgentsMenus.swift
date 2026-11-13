@@ -202,6 +202,8 @@ struct AgentRowMenu: View, Equatable {
     nonisolated var interruptible = false
     /// Mark as Seen is offered: there is something new it said.
     nonisolated var unread = false
+    nonisolated var takeoverAvailable = false
+    nonisolated var continueAvailable = false
     nonisolated let actions: Actions
 
     @MainActor final class Actions {
@@ -209,26 +211,34 @@ struct AgentRowMenu: View, Equatable {
         private var closeHandler: (Session) -> Void = { _ in }
         private var linkTodoHandler: (Session) -> Void = { _ in }
         private var deleteHandler: (Session) -> Void = { _ in }
+        private var takeoverHandler: (Session) -> Void = { _ in }
+        private var continueHandler: (Session) -> Void = { _ in }
 
         func update(rename: @escaping (Session) -> Void, close: @escaping (Session) -> Void, linkTodo: @escaping (Session) -> Void = { _ in },
-                    delete: @escaping (Session) -> Void = { _ in }) {
+                    delete: @escaping (Session) -> Void = { _ in }, takeover: @escaping (Session) -> Void = { _ in },
+                    continueInNewSession: @escaping (Session) -> Void = { _ in }) {
             renameHandler = rename
             closeHandler = close
             linkTodoHandler = linkTodo
             deleteHandler = delete
+            takeoverHandler = takeover
+            continueHandler = continueInNewSession
         }
 
         func rename(_ s: Session) { renameHandler(s) }
         func close(_ s: Session) { closeHandler(s) }
         func linkTodo(_ s: Session) { linkTodoHandler(s) }
         func delete(_ s: Session) { deleteHandler(s) }
+        func takeover(_ s: Session) { takeoverHandler(s) }
+        func continueInNewSession(_ s: Session) { continueHandler(s) }
     }
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.key == b.key && a.pinned == b.pinned && a.muted == b.muted && a.looping == b.looping && a.live == b.live
             && a.terminal == b.terminal && a.renamable == b.renamable && a.closable == b.closable
             && a.attachable == b.attachable && a.deletable == b.deletable
-            && a.paneActions == b.paneActions && a.interruptible == b.interruptible && a.unread == b.unread && a.actions === b.actions
+            && a.paneActions == b.paneActions && a.interruptible == b.interruptible && a.unread == b.unread
+            && a.takeoverAvailable == b.takeoverAvailable && a.continueAvailable == b.continueAvailable && a.actions === b.actions
     }
 
     var body: some View {
@@ -253,6 +263,16 @@ struct AgentRowMenu: View, Equatable {
         if unread {
             Button { model.markSeen(key) } label: { Label("Mark as Seen", systemImage: Theme.Icon.view) }
         }
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            if takeoverAvailable {
+                Button { if let s = now() { actions.takeover(s) } } label: { Label("Take over", systemImage: Theme.Icon.terminal) }
+            }
+            if continueAvailable {
+                Button { if let s = now() { actions.continueInNewSession(s) } } label: { Label("Continue in a new session", systemImage: Theme.Icon.compose) }
+            }
+        }
+        #endif
         if renamable {
             Button { if let s = now() { actions.rename(s) } } label: {
                 Label(String(localized: "agent.rename", defaultValue: "Rename Agent…"), systemImage: Theme.Icon.edit)
@@ -332,6 +352,8 @@ extension AgentRowMenu {
                   terminal: s.canTerminal, renamable: s.canRename, closable: s.canClose, attachable: s.canAttach, deletable: s.canDelete,
                   paneActions: NodeMenu.offersPaneActions(s),
                   interruptible: (s.state == .working || s.state == .needsYou) && s.canInterrupt, unread: s.state == .unread,
+                  takeoverAvailable: s.isCodex && !s.canSend && s.capabilities?.takeover?.canResume == true,
+                  continueAvailable: s.isCodex && !s.canSend && s.capabilities?.takeover != nil,
                   actions: actions)
     }
 }

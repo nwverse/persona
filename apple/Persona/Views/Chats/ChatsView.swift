@@ -731,6 +731,7 @@ private struct AgentsList: View {
     @State private var answering: Interaction?
     /// The long-press menu's actions on a row (not observed: see `AgentRowMenu`).
     @State private var rowActions = AgentRowMenu.Actions()
+    @State private var takeoverCoordinator = CodexTakeoverCoordinator()
     /// The agents, the questions and the machines the list shows (`AgentsFeed`): held still while it is scrolled or
     /// out of sight.
     @State private var feed = AgentsFeed()
@@ -756,6 +757,7 @@ private struct AgentsList: View {
     }
 
     private var sessions: [Session] { feed.following ? feed.sessions : model.sessionLists.sessions }
+
     private var machines: [Machine] { feed.following ? feed.machines : model.scopedMachines() }
     /// What the rows read (a machine's name, an agent's label), filled by each run of the body and not observed. SwiftUI
     /// tracks what each row of a `List` read when it was last drawn: a row that asked the model for its machine went on
@@ -851,9 +853,9 @@ private struct AgentsList: View {
     /// only their header, and the agent searched for was not there to open; quiet spaces and idle rows already open).
     /// Sections that start folded: By Status's Seen is the long tail. For them the saved list holds "!<id>" once opened.
     private static let foldedByDefault: Set<String> = ["state/idle"]
-    /// Sections whose default depends on what they hold (Unassigned, `TodoAgentGroup.folded`): the saved list holds "<id>"
-    /// or "!<id>" once the user chose, nothing until then (#1836).
-    private static let foldedByChoice: Set<String> = ["todo:none"]
+    /// Sections whose default depends on what they hold (Started Manually and Unassigned, `TodoAgentGroup.folded`): the
+    /// saved list holds "<id>" or "!<id>" once the user chose, nothing until then (#1836, #6458).
+    private static let foldedByChoice: Set<String> = ["todo:none", "todo:manual"]
 
     /// Starts folded: `foldedByDefault`, and a working tree's「N 个子项」(#3075).
     private static func foldsByDefault(_ id: String) -> Bool {
@@ -940,13 +942,36 @@ private struct AgentsList: View {
         let _ = macRows.update(rowsInOrder(unpinned: unpinned, pinned: pinnedAgents, active: active, quiet: quiet, tree: tree, byHost: byHost))
         #endif
         let _ = rowActions.update(rename: { renamingSession = $0 }, close: { closingSession = $0 }, linkTodo: { linkingSession = $0 },
-                                  delete: { deletingSession = $0 })
+                                  delete: { deletingSession = $0 }, takeover: { session in
+                                      Task {
+                                          if let adopted = await takeoverCoordinator.takeOver(session, model: model) {
+                                              model.adopt(adopted)
+                                              openFromList(adopted.key)
+                                          }
+                                      }
+                                  }, continueInNewSession: { session in
+                                      Task {
+                                          if let adopted = await takeoverCoordinator.continueInNewSession(session, model: model) {
+                                              model.adopt(adopted)
+                                              openFromList(adopted.key)
+                                          }
+                                      }
+                                  })
 
+        // The list and the chain below are erased in a few places (#6735). Unoptimized, a function reserves a stack slot on
+        // entry for every opaque intermediate of a modifier chain, each holding everything before it: ~45 modifiers
+        // over the List made `observedAgentList` reserve 422 KB, and a Debug build on an iPhone (a 1 MB main-thread
+        // stack, the simulator's is 8 MB) overflowed on every launch into Agents. An erased type is the same on every
+        // update, so the list keeps its identity and state. `AgentsListStackTests` measures the page.
         observedAgentList(
-            agentList(base: base, filtered: filtered, unpinned: unpinned, pinnedAgents: pinnedAgents,
-                      needsYou: needsYou, unreadShown: unreadShown, active: active, quiet: quiet,
-                      tree: tree, byHost: byHost, hasSearchResults: projection.hasSearchResults),
+            AnyView(agentList(base: base, filtered: filtered, unpinned: unpinned, pinnedAgents: pinnedAgents,
+                              needsYou: needsYou, unreadShown: unreadShown, active: active, quiet: quiet,
+                              tree: tree, byHost: byHost, hasSearchResults: projection.hasSearchResults)),
             base: base, interactions: interactions, quiet: quiet, matching: matching)
+            .codexTakeoverDialogs(coordinator: takeoverCoordinator) { adopted in
+                model.adopt(adopted)
+                openFromList(adopted.key)
+            }
     }
 
     // Opaque helper boundaries keep the same List/modifier tree while allowing
@@ -1197,7 +1222,7 @@ private struct AgentsList: View {
 
     private func observedAgentList<Content: View>(_ content: Content, base: [Session], interactions: [Interaction],
                                                  quiet: [SpaceGroup], matching: Set<SessionKey>) -> some View {
-        let decorated = styledAgentList(content, base: base, interactions: interactions)
+        let decorated = AnyView(styledAgentList(content, base: base, interactions: interactions))
         .refreshable { await model.sessionLists.reload(); await model.refresh() }
         // Whether each machine's herdr runs, while the list is in sight (a modifier of its own: in this chain the
         // compiler ran out of time type-checking it).
@@ -1218,7 +1243,7 @@ private struct AgentsList: View {
         .confirmClose($closingSession)
         .confirmDeleteSession($deletingSession)
         .nodeActionPrompts()
-        let sheets = decorated
+        let sheets = AnyView(decorated)
         .sheet(item: $creatingChild, onDismiss: {
             guard let child = createdWorktree else { return }
             createdWorktree = nil
@@ -1246,7 +1271,7 @@ private struct AgentsList: View {
                 TodoLinkAgentSheet(space: TodoItem.Space(machineID: group.machineID, space: space))
             }
         }
-        let list = sheets
+        let list = AnyView(sheets)
         .onChange(of: model.visibleSession) { _, key in if key != nil { openedWorkspace = nil } }
         .task(id: listQuery) {
             paginationArmed = false
@@ -2330,11 +2355,12 @@ private struct AgentsList: View {
         }
     }
 
-    /// One section per todo, its agents ordered; agents opened by hand in herdr go into "Started Manually" (open); the other
-    /// unassigned ones into "Unassigned" (folded by default, open while one of them needs you or nothing is above it:
-    /// `TodoAgentGroup.folded`).
+    /// One section per todo, its agents ordered; agents opened by hand in the terminal go into "Started Manually", the other
+    /// unassigned ones into "Unassigned": each folded by default, open while one of them needs you or nothing is above it
+    /// (`TodoAgentGroup.folded`), and listed while empty when nothing narrows the list, to say what it would hold (#6458).
     @ViewBuilder private func todoSections(_ live: [Session]) -> some View {
-        let todoGroups = TodosLogic.buildTodoAgentGroups(sessions: live, todos: TodoStore.shared.todos, isMuted: model.isMuted)
+        let keepEmpty = query.isEmpty && quick == .all && !live.isEmpty
+        let todoGroups = TodosLogic.buildTodoAgentGroups(sessions: live, todos: TodoStore.shared.todos, isMuted: model.isMuted, keepEmpty: keepEmpty)
         todoGroupSections(todoGroups, mixedHosts: Set(live.compactMap(\.hostKind)).count > 1)
     }
 
@@ -2343,23 +2369,31 @@ private struct AgentsList: View {
         ForEach(todoGroups) { g in
             let id = g.key
             let folded = g.todoID == nil ? isFolded(id, otherwise: g.folded) : isFolded(id)
-            if !g.sessions.isEmpty {
+            if !g.sessions.isEmpty || g.hint != nil {
                 listSection {
                     if !folded {
-                        cappedRows(g.sessions, key: id) { s in slotRow(s, context: true, showHost: mixedHosts) }
+                        if g.sessions.isEmpty, let hint = g.hint {
+                            groupEmptyRow(hint)
+                        } else {
+                            cappedRows(g.sessions, key: id) { s in slotRow(s, context: true, showHost: mixedHosts) }
+                        }
                     }
                 } header: {
-                    FoldButton(title: g.name, folded: folded, detail: String(localized: "\(g.sessions.count) [Chats View cb60bd]")) { toggleFold(id, shown: folded) } label: {
+                    // A group says what it holds with its count, for VoiceOver too: its header is one element (#6458).
+                    FoldButton(title: g.name, folded: folded, detail: [String(localized: "\(g.sessions.count) [Chats View cb60bd]"), g.hint ?? ""].filter { !$0.isEmpty }
+                        .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label"))) { toggleFold(id, shown: folded) } label: {
                         HStack(spacing: Theme.Space.sm) {
                             if compact {
                                 Text(g.name).font(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
                             } else {
                                 Text(g.name)
                             }
+                            if let hint = g.hint { InfoTip(name: g.name, text: hint).textCase(nil) }
                             if let st = g.todoStatus {
                                 CountBadge(count: g.sessions.count, look: .tone(st.todoTone))
                             } else {
-                                CountBadge(count: g.sessions.count, look: .tone(StatusPalette.idle))
+                                // the most urgent of its agents' states, the rule a to-do's count follows (#6458)
+                                CountBadge(count: g.sessions.count, look: .tone(g.mostUrgent?.tone ?? StatusPalette.idle))
                             }
                             if let todoID = g.todoID,
                                 g.sessions.allSatisfy({ TodosLogic.isOnTodosHub(sessionGroup: $0.key.group, hubGroup: model.hub?.group) }) {
@@ -2382,6 +2416,18 @@ private struct AgentsList: View {
                 .listSectionSpacing(folded ? .custom(0) : .default)
             }
         }
+    }
+
+    /// An open group with no agents (#6458): what it would hold, in its place.
+    private func groupEmptyRow(_ hint: String) -> some View {
+        Text(hint)
+            .font(compact ? CompactList.meta : Theme.Font.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .listRowInsets(rowInsets(level: 0))
+            .listRowBackground(floating ? Color.clear : nil)
+            .listRowSeparator(.hidden)
+            .accessibilityIdentifier("agents.groupEmpty")
     }
 
     /// By Pinned (#4352, `DirectionAgentSections`) from the hub's tree; nil without one.
@@ -2423,7 +2469,7 @@ private struct AgentsList: View {
                             } else {
                                 Text(title).lineLimit(1)
                             }
-                            DirectionCountsLine(counts: e.direction.counts).textCase(nil)
+                            DirectionCountsLine(direction: e.direction).textCase(nil)
                         }
                     }
                 }

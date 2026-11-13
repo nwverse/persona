@@ -93,6 +93,14 @@ In the Persona chat on iPhone, the results of `phone_location_current`, `phone_l
 
 Coordinates are WGS-84 everywhere, mainland China included: Core Location, MapKit's search (`MKLocalSearch`, `CLGeocoder`), `MKMapSnapshotter` and `MKDirections` take and give WGS-84, and MapKit shifts the mainland map (GCJ-02) itself. Nothing in Persona converts, so a place found by search, the phone's own fix and a saved place agree, and a reminder's circle is where the user meant (`docs/lessons/ios.md`, "MapKit speaks WGS-84 in mainland China too").
 
+### Reminders imported as to-dos (#4009)
+
+Under Settings › Phone data, once Reminders is on, **Import into To-dos** (off by default) sends the incomplete
+reminders of the lists the user leaves on (all of them at first) to the hub, which makes to-dos of them, one way
+(`RemindersImport`, `RemindersImporter`; `docs/assistant/todos.md`, "Imported from Reminders"). It runs on launch, on
+return to the foreground and when the Reminders database changes while the app is in front, and sends nothing when the
+batch is the same as the last one the hub took.
+
 ### Reminders by place (#6564)
 
 "Remind me to buy milk on the way home": the assistant writes a reminder with a location alarm (`EKAlarm.structuredLocation` and `proximity`), and iOS watches the circle itself, like a reminder made in the Reminders app. Persona needs no background location and no "Always" permission; the alarm goes off on the phone and the watch even when Persona is closed. A location alarm goes off once.

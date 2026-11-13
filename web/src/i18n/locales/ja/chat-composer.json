@@ -41,5 +41,6 @@
   "more_actions": "その他の操作",
   "add_more": "ファイル、画像などを追加",
   "queue": "キューに追加",
-  "queue_hint": "キューに追加：エージェントの作業が終わったら送信（Enter）"
+  "queue_hint": "キューに追加：エージェントの作業が終わったら送信（Enter）",
+  "cmd_permissions_desc": "権限モードを切り替え"
 }

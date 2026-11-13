@@ -124,13 +124,15 @@ fun EntryProviderScope<NavKey>.agentsEntries(
             }
             val creationService = LocalAgentCreationService.current
             val starPrompt = persona.core.designsystem.LocalStarPrompt.current
+            // New Agent's attachments go up through the chat's upload service of the machine's hub group (#2321).
+            val uploads = rememberNewAgentUploads()
             val creationModel = creationService?.let { service ->
                 viewModel(key = "new-agent:${service.scope}:${System.identityHashCode(service)}") {
                     NewAgentViewModel(service, wiring.creationPreferences?.let { AgentCreationPreferences(context, it) }
                         ?: AgentCreationPreferences(context), dependencies.sessions().machines,
                         sender = dependencies.sender(), adopt = dependencies.sessions()::adopt,
                         usage = dependencies.machines()?.let { m -> { id: String -> m.usageWindows(id) } },
-                        launched = { starPrompt?.launched() })
+                        launched = { starPrompt?.launched() }, uploads = uploads)
                 }
             }
             val groups by dependencies.groups().groups.collectAsStateWithLifecycle()

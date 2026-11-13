@@ -276,6 +276,7 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun endDirection(session: SessionKey) = source.endDirection(names.raw(session))
         override suspend fun newMainConversation(carrySummary: Boolean, expect: String?) =
             source.newMainConversation(carrySummary, expect)
+        override suspend fun clearMainConversation(expect: String?) = source.clearMainConversation(expect)
         private fun ScheduledTask.local() =
             copy(machineId = machineId?.takeIf { it.isNotBlank() }?.let(names::machineId),
                 runMachineId = runMachineId?.takeIf { it.isNotBlank() }?.let(names::machineId))
@@ -365,11 +366,11 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
         override suspend fun newAgentModel() = source.newAgentModel()
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             source.launcherModels(names.rawMachine(machineId), launcher, refresh)
-        override suspend fun worktreeStatus(machineId: String, cwd: String) = source.worktreeStatus(names.rawMachine(machineId), cwd)
-        override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String) =
-            source.addWorktree(names.rawMachine(machineId), cwd, nameHint, branch)
-        override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean) =
-            source.removeWorktree(names.rawMachine(machineId), path, deleteBranch, force)
+        override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?) = source.worktreeStatus(names.rawMachine(machineId), cwd, kind)
+        override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?) =
+            source.addWorktree(names.rawMachine(machineId), cwd, nameHint, branch, kind)
+        override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean, kind: String?) =
+            source.removeWorktree(names.rawMachine(machineId), path, deleteBranch, force, kind)
     }
 }
 

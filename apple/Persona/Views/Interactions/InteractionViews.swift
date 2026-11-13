@@ -107,7 +107,7 @@ struct InteractionPreviewCard: View {
                     .foregroundStyle(StatusPalette.needsYou.dot)
                     .scaledFrame(width: Theme.Size.icon) // one column: the titles line up card to card
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(title).font(Theme.Font.heading).lineLimit(1)
+                    Text(title).font(Theme.Font.heading).lineLimit(2) // a row title may wrap; the buttons below never do
                     if showsPlace {
                         Text(interaction.placeLine(machine: machine))
                             .font(Theme.Font.label)
@@ -292,6 +292,8 @@ struct InteractionPanel: View {
     @Environment(\.cardRoom) private var room
     @Environment(\.cardFits) private var fits
     @Environment(\.cardArea) private var area
+    /// A lone question card that may grow past half the page (`PendingCards.growsAlone`, #6277): the area is its only cap.
+    @Environment(\.cardTakesArea) private var takesArea
     /// The header row's height: with the card's margins, what of `fits` the form may not have.
     @State private var headerHeight: CGFloat = 0
     /// The plan full screen. Its button sits in this header: floating over the plan it covered the last line.
@@ -316,7 +318,9 @@ struct InteractionPanel: View {
     /// The same fit without the keyboard: a long question's actions stay inside the cards' actual area, not below it.
     private var areaCap: CGFloat { cap(for: area) }
 
-    private var formCap: CGFloat { min(room > 0 ? room * 0.55 : .infinity, fitsCap, areaCap) }
+    /// A little over half of what the page has; a lone question growing past half the page (`takesArea`) has only the
+    /// area's cap, or this would stop it short again.
+    private var formCap: CGFloat { min(room > 0 && !takesArea ? room * 0.55 : .infinity, fitsCap, areaCap) }
 
     /// The keyboard leaves the card so little that under its header row the form would show the question and hardly
     /// a choice (a small iPhone, the shell's composer): the row (its title, ⋯ and fold) steps aside while the keyboard
@@ -815,7 +819,7 @@ struct PlanForm: View {
     @ViewBuilder private var plain: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             ScrollView {
-                Markdown(MarkdownMemo.content(interaction.plan ?? ""))
+                Markdown(MarkdownMemo.content(interaction.plan ?? "")).readingContent()
                     .markdownTheme(.persona)
                     .markdownTextStyle { ForegroundColor(Theme.primaryText) }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -855,7 +859,7 @@ struct PlanForm: View {
         .sheet(isPresented: $showFull) {
             NavigationStack {
                 ScrollView {
-                    Markdown(MarkdownMemo.content(interaction.plan ?? "")).markdownTheme(.persona)
+                    Markdown(MarkdownMemo.content(interaction.plan ?? "")).readingContent().markdownTheme(.persona)
                         .markdownTextStyle { ForegroundColor(Theme.primaryText) }.padding()
                 }
                 .navigationTitle(PlanText.title(interaction.plan ?? ""))
@@ -1874,7 +1878,7 @@ struct BUIPlanForm: View {
             Task { await model.resolve(interaction, Self.resolution(answers)) }
         } context: { _ in
             ScrollView {
-                Markdown(MarkdownMemo.content(interaction.plan ?? ""))
+                Markdown(MarkdownMemo.content(interaction.plan ?? "")).readingContent()
                     .markdownTheme(.persona)
                     .markdownTextStyle { ForegroundColor(Theme.primaryText) }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1885,7 +1889,7 @@ struct BUIPlanForm: View {
         .sheet(isPresented: $showFull) {
             NavigationStack {
                 ScrollView {
-                    Markdown(MarkdownMemo.content(interaction.plan ?? "")).markdownTheme(.persona)
+                    Markdown(MarkdownMemo.content(interaction.plan ?? "")).readingContent().markdownTheme(.persona)
                         .markdownTextStyle { ForegroundColor(Theme.primaryText) }.padding()
                 }
                 .navigationTitle(PlanText.title(interaction.plan ?? ""))

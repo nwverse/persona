@@ -416,9 +416,14 @@ struct InboxPage: View {
                     ThemedIcon(n == 0 ? Theme.Icon.unchecked : n == g.items.count ? Theme.Icon.successFilled : Theme.Icon.partlyChecked)
                         .font(Theme.Font.heading)
                         .foregroundStyle(n == 0 ? Color.secondary : Theme.accent)
+                        .tapTargetHeight()
+                        // A finger wide too, the title where it was: hit over the header's inset and the gap before the
+                        // title, whose own button, drawn after it, keeps its taps (#6658).
+                        .tapTargetOutset(.horizontal)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(String(localized: "Select All in \(g.title)"))
+                .accessibilityIdentifier("inbox.pickGroup")
             }
             Button {
                 withAnimation(Theme.Motion.standard) { setGroupOpen(section, g.key, !open) }
@@ -432,13 +437,15 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.groupTitle")
             if n > 0 { Text("\(n) Picked").font(Theme.Font.caption).foregroundStyle(Theme.accent).lineLimit(1) }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush) // its buttons are the room above and below (#6576)
         .id(Self.groupID(section, g.key))
     }
 
@@ -650,7 +657,6 @@ struct InboxPage: View {
                     // iPhone the scroll edge reached from the top down to it, over every row between (#4218).
                     Section {
                         doneHeader(count: count, groups: dg, proxy: proxy)
-                            .listRowInsets(.vertical, Theme.Space.s)
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
                             .accessibilityAddTraits(.isHeader)
@@ -713,9 +719,11 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.doneTitle")
             if groups.count > 1 {
                 Menu {
                     ForEach(groups) { g in
@@ -725,13 +733,18 @@ struct InboxPage: View {
                     Button("Collapse All") { for g in groups { setGroupOpen("done", g.id, false) } }
                     Button("Expand All") { for g in groups { setGroupOpen("done", g.id, true) } }
                 } label: {
+                    // a finger wide too: the two-character zh-Hans label is about 30 pt
                     Text("Jump To").font(Theme.Font.secondary).lineLimit(1)
+                        .tapTargetHeight()
+                        .scaledFrame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
+                        .frame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
+                        .contentShape(.rect)
                 }
                 .accessibilityIdentifier("inbox.jumpTo")
             }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush)
         .id("|done")
     }
 
@@ -767,7 +780,9 @@ struct InboxPage: View {
         HStack(spacing: Theme.Space.sm) {
             if InboxItem.Tier(rawValue: key)?.folds == false {
                 // In Progress: always open, a plain title (inbox phase 1).
+                // as tall as the other sections' titles, which are buttons
                 Text("\(title) · \(count)").font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
+                    .tapTargetHeight()
                 Spacer(minLength: 0)
             } else {
             Button {
@@ -780,19 +795,24 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.sectionTitle")
             }
             if let clear {
-                Button(clear.0) { withAnimation(Theme.Motion.standard) { clear.1() } }
-                    .font(Theme.Font.secondary)
-                    .lineLimit(1)
-                    .buttonStyle(.borderless)
+                Button { withAnimation(Theme.Motion.standard) { clear.1() } } label: {
+                    Text(clear.0).tapTargetHeight().contentShape(.rect)
+                }
+                .font(Theme.Font.secondary)
+                .lineLimit(1)
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("inbox.clear")
             }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush)
     }
 
     private func agentRow(_ ix: Interaction) -> some View {
@@ -1008,7 +1028,7 @@ struct InboxRow: View {
                                 // white, where the row sets the words' color for these (MacHoverRow).
                                 .font(Theme.Font.secondary)
                                 .foregroundStyle(item.isDone ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary.opacity(0.9))).lineLimit(2)
-                            Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                            if !item.repeatsSummary { Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1) }
                         }
                     } else {
                         Text(from).font(Theme.Font.secondary).lineHeight(.secondary).foregroundStyle(.secondary).lineLimit(2)
@@ -1051,6 +1071,7 @@ struct InboxRow: View {
 
     /// Who wrote what (under the AI's summary once it has one).
     private var from: String {
+        if item.isAssistantRow { return item.preview } // the tag says who: no "Assistant:" in front
         if let doc = item.doc { return doc.typeName + " · " + item.preview } // the preview names who: Li Lei mentioned you
         if item.moment != nil { return String(localized: "\(item.sender ?? ""): \(item.preview)", comment: "Who wrote it: what they wrote") } // who commented, on the post in the title
         if let c = item.connector { // example-org/example-repo#12 · bob: please take a look
@@ -1063,6 +1084,17 @@ struct InboxRow: View {
     }
 
     private var avatar: some View {
+        Group {
+            if item.isAssistantRow {
+                // The assistant's own row wears the assistant's avatar, with no source badge.
+                PersonaAvatar(size: Theme.Size.avatar).opacity(item.isDone ? 0.6 : 1)
+            } else {
+                sourceAvatar
+            }
+        }
+    }
+
+    private var sourceAvatar: some View {
         ZStack(alignment: .bottomTrailing) {
             Group {
             if let doc = item.doc {

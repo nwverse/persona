@@ -98,8 +98,11 @@ export const canRenameIn = (host: string | undefined) => canChangeHost(host) || 
 
 /** Claude Code, and a launcher the computer says it starts in a pane the user picked, keeping that pane when the start
  *  fails (`run_here`: its Codex launchers, #5504). An older computer's failed Codex start closes its pane, here the
- *  user's own shell (#5275): there Codex starts from "New agent" in a tab of its own. */
-export const launchableHere = (l: Launcher) => l.run_here || (l.agent_type || l.agent || "claude") === "claude";
+ *  user's own shell (#5275): there Codex starts from "New agent" in a tab of its own. Never one that starts the session
+ *  in a desktop app (#5480, lib/desktop-start.ts's sources, spelled out here so that module stays off the first screen):
+ *  typed into a shell it would run nothing, and the computer refuses it. */
+export const launchableHere = (l: Launcher) =>
+  l.source !== "claude_desktop" && l.source !== "codex_app" && (l.run_here || (l.agent_type || l.agent || "claude") === "claude");
 
 export const GIT_OPS = [
   { op: "pull", label: t("lib-node-actions.git_pull"), accel: "p", done: "lib-node-actions.git_pull_done" },
