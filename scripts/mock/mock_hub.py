@@ -19929,6 +19929,124 @@ def zrle_rect(px, W, x, y, w, h, z):
     return struct.pack(">I", len(comp)) + comp
 
 
+# MOCK_SCREEN_VIDEO=1|missing (#3954): MacBook's node offers the live screen's video channel (`screen_video`; =missing:
+# Screen Recording isn't granted for Persona Screen), and …/screen/video/connect?pair=… plays
+# scripts/mock/screen_video/fixture.bin (a made-up desktop; make_fixture.sh makes it again) round and round at 30 fps:
+# `hello`, `format`, then its frames, numbered on and stamped with this clock. Only for a pair a 5900 connection carried
+# (else 403, as the node's not_signed_in). GET /mock/screen-video says what the phone sent (`start`s, report count) and
+# how many streams are open; …?drop=1 closes them all, ?refuse=1 refuses new ones (503, ?refuse=0 back), ?pause=locked
+# sends `paused` with that reason (no frames and no heartbeats, as the helper), ?resume=1 sends `resumed` and starts over
+# with `hello`, `format` and the keyframe.
+SCREEN_VIDEO = {"mode": os.environ.get("MOCK_SCREEN_VIDEO", ""), "pairs": set(), "streams": [], "starts": [], "reports": 0,
+                "refuse": False}
+_SCREEN_VIDEO_FIXTURE = []
+
+
+def screen_video_fixture():
+    """The fixture's messages as (type, body), read once."""
+    if not _SCREEN_VIDEO_FIXTURE:
+        data = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "screen_video", "fixture.bin"), "rb").read()
+        i = 0
+        while i < len(data):
+            n = struct.unpack(">I", data[i:i + 4])[0]
+            _SCREEN_VIDEO_FIXTURE.append((data[i + 4], data[i + 5:i + 4 + n]))
+            i += 4 + n
+    return _SCREEN_VIDEO_FIXTURE
+
+
+def screen_video_control(h, q):
+    if q.get("drop", ["0"])[0] == "1":
+        for st in list(SCREEN_VIDEO["streams"]): st["open"] = False
+    if "refuse" in q: SCREEN_VIDEO["refuse"] = q["refuse"][0] == "1"
+    if "pause" in q:
+        for st in SCREEN_VIDEO["streams"]: st["pause"] = q["pause"][0]
+    if q.get("resume", ["0"])[0] == "1":
+        for st in SCREEN_VIDEO["streams"]: st["resume"] = True
+    h.send_json({"open": sum(1 for st in SCREEN_VIDEO["streams"] if st["open"]), "starts": SCREEN_VIDEO["starts"],
+                 "reports": SCREEN_VIDEO["reports"], "refuse": SCREEN_VIDEO["refuse"]})
+
+
+def screen_video_connect(h, mid):
+    """…/screen/video/connect?pair=…: the helper's side of the video channel, from the fixture (see MOCK_SCREEN_VIDEO)."""
+    pair = parse_qs(urlparse(h.path).query).get("pair", [""])[0]
+    if not pair: return h.send_json({"error": "a pair is required"}, 400)
+    if pair not in SCREEN_VIDEO["pairs"]:
+        return h.send_json({"error": "the paired screen-sharing stream has not signed in"}, 403)
+    if SCREEN_VIDEO["refuse"] or SCREEN_VIDEO["mode"] == "missing":
+        return h.send_json({"error": "no live-screen video helper on this node"}, 503)
+    key = h.headers.get("Sec-WebSocket-Key", "")
+    accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+    h.send_response(101, "Switching Protocols")
+    h.send_header("Upgrade", "websocket"); h.send_header("Connection", "Upgrade")
+    h.send_header("Sec-WebSocket-Accept", accept); h.end_headers(); h.wfile.flush()
+    st = {"open": True, "pause": None, "resume": False, "started": threading.Event()}
+    SCREEN_VIDEO["streams"].append(st)
+    lock = threading.Lock()
+
+    def ws(op, data):
+        n = len(data)
+        hdr = bytes([0x80 | op]) + (bytes([n]) if n < 126 else bytes([126]) + struct.pack(">H", n) if n < 65536 else bytes([127]) + struct.pack(">Q", n))
+        with lock:
+            h.wfile.write(hdr + data); h.wfile.flush()
+
+    def msg(t, body):
+        ws(0x2, struct.pack(">IB", len(body) + 1, t) + body)
+
+    def play():
+        msgs = screen_video_fixture()
+        hello, fmt, frames = msgs[0], msgs[1], msgs[2:]
+        if not st["started"].wait(10): st["open"] = False; return
+        number, i, restart = 0, 0, True
+        try:
+            while st["open"]:
+                if st["pause"]:
+                    msg(5, json.dumps({"reason": st["pause"]}).encode())
+                    st["pause"] = None
+                    while st["open"] and not st["resume"]: time.sleep(0.1)
+                if st["resume"]:
+                    st["resume"] = False
+                    msg(6, b"{}")
+                    restart = True
+                if restart: msg(*hello); msg(*fmt); i, restart = 0, False
+                body = frames[i][1]
+                number += 1
+                msg(3, struct.pack(">IQ", number, int(time.monotonic() * 1e6)) + body[12:])
+                i = (i + 1) % len(frames)
+                time.sleep(1 / 30)
+        except OSError:
+            pass
+        try: ws(0x8, struct.pack(">H", 1000))
+        except OSError: pass
+        st["open"] = False
+
+    threading.Thread(target=play, daemon=True).start()
+    buf, r = b"", h.rfile
+    try:
+        while st["open"]:
+            hd = r.read(2)
+            if len(hd) < 2: break
+            op = hd[0] & 0x0F; n = hd[1] & 0x7F
+            if n == 126: n = struct.unpack(">H", r.read(2))[0]
+            elif n == 127: n = struct.unpack(">Q", r.read(8))[0]
+            mask = r.read(4) if hd[1] & 0x80 else b"\0\0\0\0"
+            payload = bytes(b ^ mask[k % 4] for k, b in enumerate(r.read(n)))
+            if op == 8: break
+            if op == 9: ws(0xA, payload); continue
+            buf += payload
+            while len(buf) >= 4 and len(buf) >= 4 + struct.unpack(">I", buf[:4])[0]:
+                n = struct.unpack(">I", buf[:4])[0]
+                t, body, buf = buf[4], buf[5:4 + n], buf[4 + n:]
+                if t == 16:
+                    SCREEN_VIDEO["starts"].append(json.loads(body or b"{}"))
+                    st["started"].set()
+                elif t == 17:
+                    SCREEN_VIDEO["reports"] += 1
+    except OSError:
+        pass
+    st["open"] = False
+    h.close_connection = True
+
+
 def fake_screen_sharing():
     """Listens on 127.0.0.1 and serves RFB 3.8 as macOS's Screen Sharing offers it: Apple Remote Desktop's sign-in (30;
     the AES through openssl) and VeNCrypt Plain; ZRLE when asked for, else Raw. Its port is FAKE_SCREEN["port"]."""
@@ -21013,6 +21131,9 @@ def computer_of(machine_id, enabled):
     c = {"enabled": enabled, **COMPUTER_STATES.get(state, COMPUTER_STATES["ready"])}
     if machine_id == "macbook" and c.get("screen_sharing") and FAKE_NODE_DISPLAYS:
         c["displays"] = FAKE_NODE_DISPLAYS  # MOCK_SCREEN_DISPLAYS=2:node
+    if machine_id == "macbook" and c.get("screen_sharing") and SCREEN_VIDEO["mode"]:  # MOCK_SCREEN_VIDEO (#3954)
+        c["screen_video"] = {"version": 1, "codecs": ["hevc", "h264"],
+                             "permission": "missing" if SCREEN_VIDEO["mode"] == "missing" else "granted"}
     return c
 
 
@@ -23526,6 +23647,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/ports": return self.send_json({"connects": PORT_LOG})
         if p == "/mock/lark/uploads": return self.send_json(LARK_UPLOAD_REPLIES)  # #1035: what each attachment quoted
         if MOCK_WEB and (p.startswith("/screen/") or p.startswith("/assets/")): return self.web_file(p)
+        if p == "/mock/screen-video": return screen_video_control(self, parse_qs(urlparse(self.path).query))
+        if SCREEN_VIDEO["mode"] and p.startswith("/api/v1/machines/") and p.endswith("/screen/video/connect"):
+            return screen_video_connect(self, p.split("/")[4])
         if p.startswith("/api/v1/machines/") and "/ports/" in p:
             parts = p.split("/")  # ['', 'api', 'v1', 'machines', mid, 'ports', port, ('connect')]
             port = int(parts[6]) if parts[6].isdigit() else 0
@@ -26064,6 +26188,8 @@ class H(BaseHTTPRequestHandler):
         except OSError:
             return self.send_json({"error": "nothing is listening on port %d" % port}, 404)
         PORT_LOG.append({"machine_id": mid, "port": port})
+        if port == 5900 and (pair := parse_qs(urlparse(self.path).query).get("pair", [""])[0]):
+            SCREEN_VIDEO["pairs"].add(pair)  # the video channel binds to it (MOCK_SCREEN_VIDEO, #3954)
         key = self.headers.get("Sec-WebSocket-Key", "")
         accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
         self.send_response(101, "Switching Protocols")
