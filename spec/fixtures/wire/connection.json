@@ -117,6 +117,7 @@
         "sessions_manager",
         "sessions_page_counts",
         "sessions_hierarchy",
+        "sessions_catalog",
         "machine_rename",
         "assistant_views",
         "assistant_html_bridge"
@@ -250,6 +251,7 @@
           "sessions_manager",
           "sessions_page_counts",
           "sessions_hierarchy",
+          "sessions_catalog",
           "machine_rename",
           "assistant_views",
           "assistant_html_bridge"
@@ -374,6 +376,7 @@
         "sessions_manager",
         "sessions_page_counts",
         "sessions_hierarchy",
+        "sessions_catalog",
         "machine_rename",
         "assistant_views",
         "assistant_html_bridge"
@@ -496,6 +499,7 @@
           "sessions_manager",
           "sessions_page_counts",
           "sessions_hierarchy",
+          "sessions_catalog",
           "machine_rename",
           "assistant_views",
           "assistant_html_bridge"

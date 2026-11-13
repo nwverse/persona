@@ -26,6 +26,9 @@ type SessionCapabilities struct {
 	Attach    bool `json:"attach"`
 	// Close is independent of terminal access. Absent on older nodes, where clients retain terminal-only closing.
 	Close *bool `json:"close,omitempty"`
+	// Rename permits session.rename's title without a terminal (a runtime's session, #6294). Absent on older nodes,
+	// where clients keep renaming for terminal sessions only.
+	Rename *bool `json:"rename,omitempty"`
 	// Modes: the apps' permission mode and effort chips can change this session (session.modes). Absent (nil) from a node
 	// older than it, where the apps keep guessing from agent and source_kind; false where a change would only be refused
 	// (a Claude outside Persona's terminals, a runtime that did not declare caps.modes). A pointer so a hub that decodes

@@ -2,6 +2,7 @@
 // i18n-ignore-file: DEBUG-only made-up recording for screenshots
 import Foundation
 #if os(iOS)
+import AVFoundation
 import UIKit
 #endif
 
@@ -91,8 +92,9 @@ enum RecordingSamples {
     /// `room-listening|room-taking-part`: the same as a room meeting (#3862) started with the live view (phase 2), whose
     /// sheet is the meeting page;
     /// `room-whiteboard`: `room-taking-part` started with photos, which adds a made-up whiteboard photo as the camera
-    /// would (#3862 phase 3); `minutes` / `pending`: a finished meeting whose page opens (its minutes from the hub, or
-    /// still being written). Both recordings are made up.
+    /// would (#3862 phase 3); `room-talk-held`: `room-taking-part` with Talk held for 10 s once the meeting call is up
+    /// (#3862 phase 4; every room sample feeds canned audio into the recorder's tap for Talk); `minutes` / `pending`: a
+    /// finished meeting whose page opens (its minutes from the hub, or still being written). Both recordings are made up.
     static func showMeetingIfAsked() {
         #if os(iOS)
         guard let mode = UserDefaults.standard.string(forKey: "showMeetingSample") else {
@@ -135,7 +137,7 @@ enum RecordingSamples {
         // the made-up meeting's upload tells the hub, as a real one would, and its lines go to the hub's live log, the last
         // one just before the tap (12:34). `room-listening` / `room-taking-part`: the meeting's own room conversation
         // attends instead (#3862), not private; `room-whiteboard` takes part and takes photos.
-        let room = ["room-listening", "room-taking-part", "room-whiteboard"].contains(mode)
+        let room = ["room-listening", "room-taking-part", "room-whiteboard", "room-talk-held"].contains(mode)
         let photos = mode == "room-whiteboard"
         if ["listening", "taking-part", "answered"].contains(mode) || room {
             if room {
@@ -157,6 +159,14 @@ enum RecordingSamples {
         try? RecordingLibrary.shared.save(live)
         RecordingCapture.shared.showSample(liveMeeting, elapsed: 754, paused: mode == "paused", interrupted: mode == "interrupted")
         if photos { Task { await addWhiteboard() } }
+        // The room meetings' microphone for Talk (#3862 phase 4): canned audio into the recorder's tap. `room-talk-held`:
+        // `room-taking-part` with Talk held for a while once the meeting call is up (the held page's screenshot), its
+        // first-use note shown again.
+        if room {
+            MeetingCall.shared.forgetPrivacyNote()
+            startTalkAudio()
+        }
+        if mode == "room-talk-held" { Task { await holdTalk() } }
         if mode == "answered" {
             let first = MeetingAsk.Exchange(recordingID: liveMeeting, at: 612, question: "Mac 上的录音现在谁在跟？", typed: true,
                                             state: .answered("还没有定负责人。上次周会把它列为待定问题，计划下周同一时间再对。"),
@@ -171,6 +181,63 @@ enum RecordingSamples {
     }
 
     #if os(iOS)
+    nonisolated(unsafe) private static var talkAudioTask: Task<Void, Never>?
+    /// The made-up words of a Talk span asked without the call (`transcribeTalkSample`).
+    static let talkQuestion = "上次评审定的导出上限是多少？"
+
+    /// The room samples' microphone (#3862 phase 4): canned PCM into the recorder's tap (`RecordingCapture.feedSample`),
+    /// 100 ms at a time at about real time, so Talk has audio to send with no microphone: 3 s of a voice-like tone, then
+    /// 2 s of quiet, again and again (a talk window hears speech, then silence). Nothing reaches the level meter or the
+    /// files: only Talk listens.
+    @MainActor private static func startTalkAudio() {
+        talkAudioTask?.cancel()
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false) else { return }
+        talkAudioTask = Task { @MainActor in
+            var tick = 0
+            while !Task.isCancelled, RecordingCapture.shared.recordingID == liveMeeting, RecordingCapture.shared.isSample {
+                try? await Task.sleep(for: .milliseconds(100))
+                let frames = 1600
+                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)),
+                      let channel = buffer.floatChannelData?[0] else { return }
+                buffer.frameLength = AVAudioFrameCount(frames)
+                let voiced = tick % 50 < 30
+                for i in 0..<frames {
+                    let t = Double(tick * frames + i) / 16000
+                    // A low hum with a slower swell: loud enough to count as speech (`MeetingTalkWindow.speechLevel`).
+                    channel[i] = voiced ? Float(0.12 * sin(2 * .pi * 180 * t) * (0.6 + 0.4 * sin(2 * .pi * 3 * t))) : 0
+                }
+                RecordingCapture.shared.feedSample(buffer)
+                tick += 1
+            }
+        }
+    }
+
+    /// `room-talk-held`: once the meeting call is up (at most 30 s; without one the span goes without it) and the page
+    /// has shown the Wording under Talk for a moment (at most 10 s more; without it the span stays on the phone), Talk is
+    /// held for 10 seconds as a finger would, so the page shows it held, then let go.
+    @MainActor private static func holdTalk() async {
+        for _ in 0..<150 where !MeetingCall.shared.isLive(liveMeeting) {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        for _ in 0..<50 where !MeetingCall.shared.privacyShown(liveMeeting) {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        guard MeetingCall.shared.beginTalk(liveMeeting, from: .hold) else { return }
+        try? await Task.sleep(for: .seconds(10))
+        if MeetingCall.shared.talk?.window == false { MeetingCall.shared.endTalk() }
+    }
+
+    /// Talk without a call in a room sample: there is no segment to transcribe, so the span's words are made up as a
+    /// transcription would write them, and the spoken question goes as it would in a real meeting.
+    @MainActor static func transcribeTalkSample(_ id: UUID, span: RecordingSpan) {
+        guard id == liveMeeting, RecordingCapture.shared.isSample else { return }
+        RecordingLibrary.shared.change(id) { entry in
+            let index = entry.nextIndex
+            entry.segments.append(RecordingSegment(index: index, start: span.start, duration: max(0, span.end - span.start), sentences: [
+                RecordingSentence(start: span.start, end: span.end, text: talkQuestion)]))
+        }
+    }
+
     /// `room-whiteboard`: once the hub has the meeting with its room (the first upload's `200`, 10 s at most), a made-up
     /// whiteboard goes the way a camera photo goes (`MeetingPhotos.add`), so the real pipeline runs: downscaled, read on
     /// the phone, uploaded, sent into the room, and the room's note.

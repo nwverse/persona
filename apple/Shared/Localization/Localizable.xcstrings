@@ -24,6 +24,236 @@
         }
       }
     },
+    "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音频保留在这台 iPhone 上，只有按住“说话”时例外：那时说的内容会发送到语音服务。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音声はこの iPhone に残ります。ただし「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。"
+          }
+        }
+      }
+    },
+    "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service. Its text syncs to Knowledge and is kept for %lld days.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service. Its text syncs to Knowledge and is kept for %1$lld days."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音频保留在这台 iPhone 上，只有按住“说话”时例外：那时说的内容会发送到语音服务。文字会同步到知识库，并保留 %1$lld 天。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音声はこの iPhone に残ります。ただし「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。テキストはナレッジに同期されて %1$lld 日間保存されます。"
+          }
+        }
+      }
+    },
+    "Done [Talk Window]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "说完"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終了"
+          }
+        }
+      }
+    },
+    "Hold Talk while you speak, then let go.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold Talk while you speak, then let go."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "说话时按住“说话”，说完再松开。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "話している間は「話す」を押し続け、話し終えたら指を離してください。"
+          }
+        }
+      }
+    },
+    "Hold while you speak. Persona answers when you let go.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold while you speak. Persona answers when you let go."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "说话时按住，松开后 Persona 回答。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "話している間は押し続けてください。指を離すと Persona が答えます。"
+          }
+        }
+      }
+    },
+    "Listening to you…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listening to you…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在听你说…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "聞いています…"
+          }
+        }
+      }
+    },
+    "Listening to you… Let go when you’re done.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listening to you… Let go when you’re done."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在听你说…说完就松开。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "聞いています…話し終えたら指を離してください。"
+          }
+        }
+      }
+    },
+    "Listening to you… Tap Talk when you’re done.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listening to you… Tap Talk when you’re done."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在听你说…说完点一下“说话”。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "聞いています…話し終えたら「話す」をタップしてください。"
+          }
+        }
+      }
+    },
+    "Open a Talk Window": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a Talk Window"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开始说话"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "話し始める"
+          }
+        }
+      }
+    },
+    "Persona didn’t hear anything. Hold Talk while you speak.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona didn’t hear anything. Hold Talk while you speak."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 没听到内容。说话时请按住“说话”。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona には何も聞こえませんでした。話している間は「話す」を押し続けてください。"
+          }
+        }
+      }
+    },
     "Starts in the Codex App. With no folder it goes where the App keeps chats in no project; a new folder is made when it starts." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -43,6 +273,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Codex App でチャットを開始します。フォルダを選ばない場合は、App がプロジェクトなしのチャットを置く場所に入ります。新しいフォルダはチャット開始時に作成されます。"
+          }
+        }
+      }
+    },
+    "Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service. The transcript goes to Knowledge.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starts recording a meeting in Persona, named after the calendar event happening now. Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service. The transcript goes to Knowledge."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Persona 中开始会议录音，以日历里正在进行的会议命名。音频保留在这台 iPhone 上，只有按住“说话”时例外：那时说的内容会发送到语音服务。转写文字进入知识库。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personaで会議の録音を始め、カレンダーで進行中の予定の名前を付けます。音声はこの iPhone に残ります。ただし「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。文字起こしはナレッジに入ります。"
+          }
+        }
+      }
+    },
+    "Talk [Meeting Talk]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "说话"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "話す"
+          }
+        }
+      }
+    },
+    "Talk to Persona in the Meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk to Persona in the Meeting"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在会议中和 Persona 说话"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議で Persona と話す"
           }
         }
       }
@@ -89,6 +388,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Claude アプリのサイドバーで 1 つのグループにまとまります"
+          }
+        }
+      }
+    },
+    "To talk to Persona in this meeting, hold Talk on the meeting’s page while it records.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To talk to Persona in this meeting, hold Talk on the meeting’s page while it records."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "想在这场会议里和 Persona 说话，请在录音时到会议页面按住“说话”。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この会議で Persona と話すには、録音中に会議のページで「話す」を押し続けてください。"
           }
         }
       }
@@ -392,6 +714,52 @@
         }
       }
     },
+    "In Mouse Mode, pinch to zoom in and out; when zoomed in, dragging with two fingers moves the view instead of scrolling. In either mode, “…” › Zoom In zooms in around the pointer and Zoom to Fit shows the whole screen again. In Trackpad Mode two fingers only scroll, and a zoomed view follows the pointer." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In Mouse Mode, pinch to zoom in and out; when zoomed in, dragging with two fingers moves the view instead of scrolling. In either mode, “…” › Zoom In zooms in around the pointer and Zoom to Fit shows the whole screen again. In Trackpad Mode two fingers only scroll, and a zoomed view follows the pointer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マウスモードではピンチで拡大・縮小します。拡大中は、2本指のドラッグでスクロールではなく画面を移動します。どちらのモードでも「…」›「拡大」でポインタを中心に拡大し、「画面に合わせる」で画面全体の表示に戻ります。トラックパッドモードでは2本指はスクロールだけで、拡大中の画面はポインタに合わせて動きます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "鼠标模式下双指开合放大、缩小；放大以后，两指拖动是移动画面，不再滚动。两种模式都可以用「…」›「放大」以指针为中心放大，「还原」回到整个屏幕。触控板模式下两指只滚动，放大后画面跟着指针走。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Landscape" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Landscape"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "横向き"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "横屏"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "May bring the same things as “%@”. If they do, turn one of them off." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -507,6 +875,52 @@
         }
       }
     },
+    "Rotate to Landscape" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rotate to Landscape"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "横向きにする"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转为横屏"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Rotate to Portrait" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rotate to Portrait"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "縦向きにする"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转为竖屏"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Set Up with %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -575,6 +989,29 @@
           }
         }
       }
+    },
+    "Tap the rotate button next to the clipboard to turn the screen sideways for a larger view, and tap it again to turn it back upright. Once tapped, the screen keeps that orientation until you close it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap the rotate button next to the clipboard to turn the screen sideways for a larger view, and tap it again to turn it back upright. Once tapped, the screen keeps that orientation until you close it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クリップボードの横にある回転ボタンをタップすると横向きになり、大きく表示されます。もう一度タップすると縦向きに戻ります。タップした後は、閉じるまでその向きのままです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点剪贴板旁边的转屏按钮，画面转成横屏、显示更大；再点一下转回竖屏。点过以后，画面保持这个方向，直到关掉。"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "This File Is Empty" : {
       "extractionState" : "manual",
@@ -975,6 +1412,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "終値"
+          }
+        }
+      }
+    },
+    "Couldn't Load This Picture": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't Load This Picture"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载这张图片"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この画像を読み込めません"
           }
         }
       }
@@ -4324,6 +4783,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你的位置"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Zoom In" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom In"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拡大"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放大"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Zoom to Fit" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom to Fit"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画面に合わせる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还原"
           }
         }
       },
@@ -20667,6 +21172,29 @@
       },
       "extractionState" : "manual"
     },
+    "Agent stopped and closed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent stopped and closed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェントを停止して閉じました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止并关闭 Agent"
+          }
+        }
+      }
+    },
     "Agent stopped and closed. The chat history was kept." : {
       "localizations" : {
         "en" : {
@@ -28019,19 +28547,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Background round"
+            "value" : "Reported from the background"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "后台轮次"
+            "value" : "后台回报"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックグラウンドのラウンド"
+            "value" : "バックグラウンドからの報告"
           }
         }
       }
@@ -63090,6 +63618,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Go back to before this message: everything after it is removed from the conversation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Go back to before this message: everything after it is removed from the conversation."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージを送る前に戻ります。以降のチャットは会話から削除されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回到发这条消息之前：之后的对话会被移除。"
+          }
+        }
+      }
     },
     "Go through my Lark messages that @mention me: which need a reply from me, and draft the ones you can" : {
       "localizations" : {
@@ -104024,29 +104575,6 @@
       },
       "extractionState" : "manual"
     },
-    "Pinch to zoom in and out. When zoomed in, dragging with two fingers moves the view instead of scrolling." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pinch to zoom in and out. When zoomed in, dragging with two fingers moves the view instead of scrolling."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ピンチで拡大・縮小します。拡大中は、2本指のドラッグでスクロールではなく画面を移動します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "双指开合放大、缩小。放大以后，两指拖动是移动画面，不再滚动。"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "Pinch: change text size" : {
       "localizations" : {
         "en" : {
@@ -116417,19 +116945,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Running in the background"
+            "value" : "Working in the background…"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "后台运行中"
+            "value" : "后台处理中…"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックグラウンドで実行中"
+            "value" : "バックグラウンドで作業中…"
           }
         }
       }
@@ -130410,6 +130938,29 @@
       },
       "extractionState" : "manual"
     },
+    "Stops the current task and ends this session" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stops the current task and ends this session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のタスクを停止して、このセッションを終了します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止当前任务，并结束这个会话"
+          }
+        }
+      }
+    },
     "Stops the current task, quits %@, and closes its terminal tab (only this pane when split)" : {
       "localizations" : {
         "en" : {
@@ -131656,19 +132207,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Supervision record"
+            "value" : "Handled in the background"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "督办记录"
+            "value" : "已在后台处理"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "監督記録"
+            "value" : "バックグラウンドで処理済み"
           }
         }
       }
@@ -131679,19 +132230,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Supervision record · running"
+            "value" : "Handling in the background…"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "督办记录 · 处理中"
+            "value" : "正在后台处理…"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "監督記録 · 処理中"
+            "value" : "バックグラウンドで処理中…"
           }
         }
       }
@@ -171059,25 +171610,71 @@
         }
       }
     },
-    "No terminals on this computer.": {
+    "New Terminal": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No terminals on this computer."
+            "value": "New Terminal"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このコンピュータにはターミナルがありません。"
+            "value": "新規ターミナル"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这台电脑上没有终端。"
+            "value": "新建终端"
+          }
+        }
+      }
+    },
+    "No terminals open on this computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No terminals open on this computer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータで開いているターミナルはありません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑上没有打开的终端。"
+          }
+        }
+      }
+    },
+    "Terminals open here when an Agent starts on this computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminals open here when an Agent starts on this computer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータで Agent を開始すると、ここにターミナルが表示されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在这台电脑上启动 Agent 后，终端会显示在这里。"
           }
         }
       }

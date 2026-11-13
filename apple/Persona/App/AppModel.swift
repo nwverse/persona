@@ -3000,10 +3000,12 @@ final class AppModel {
         guard let api = api(key.group), rewinding.insert(key).inserted else { return false }
         defer { rewinding.remove(key) }
         toast = Toast(String(localized: "Rewinding…"))
+        // A session whose node declares rewind (#6294): its own lines, and no Claude input box to have kept the message.
+        let offer = Rewind.offer(session(key))
         do {
             var full: String?
-            if let cut = Rewind.cutItem(items, id: itemID) { full = try await api.fullItem(key, id: cut).text }
-            guard let target = Rewind.target(items, id: itemID, full: full) else {
+            if let cut = Rewind.cutItem(items, id: itemID, anyLine: offer.declared) { full = try await api.fullItem(key, id: cut).text }
+            guard let target = Rewind.target(items, id: itemID, full: full, anyLine: offer.declared) else {
                 toast = Toast(String(localized: "This message has no text, so you can't rewind to it"), style: .error)
                 return false
             }
@@ -3012,6 +3014,8 @@ final class AppModel {
             let result = (try? JSON.decoder.decode(Rewind.Result.self, from: data)) ?? Rewind.Result()
             if result.inputCleared == true {
                 drafts[key] = text
+                toast = Toast(Rewind.done(result, asked: restore), style: .success)
+            } else if offer.declared {
                 toast = Toast(Rewind.done(result, asked: restore), style: .success)
             } else {
                 let done = Rewind.done(result, asked: restore)
@@ -3029,7 +3033,7 @@ final class AppModel {
 
     @discardableResult
     func close(_ key: SessionKey) async -> Bool {
-        guard let session = latest(key), session.canTerminal else {
+        guard let session = latest(key), session.canClose else {
             toast = Toast(String(localized: "This agent can't be stopped and closed from the phone"), style: .error)
             return false
         }
@@ -3050,7 +3054,9 @@ final class AppModel {
             }
             if let list = sessionsByMachine[key.machineRef] { sessionsByMachine[key.machineRef] = ended(list) }
             if let list = pendingSessions[key.machineRef] { pendingSessions[key.machineRef] = ended(list) }
-            toast = Toast(String(localized: "Agent stopped and closed. The chat history was kept."), style: .success)
+            // A session without a terminal (a runtime's, #6294): whether its history stays is its runtime's, so not promised.
+            toast = Toast(session.canTerminal ? String(localized: "Agent stopped and closed. The chat history was kept.")
+                                              : String(localized: "Agent stopped and closed"), style: .success)
             Haptics.success()
             return true
         } catch {
@@ -3680,9 +3686,10 @@ final class AppModel {
         await refresh()
     }
 
-    /// Renames an agent's herdr tab and / or its Claude session name (nil leaves that one alone).
+    /// Renames an agent's herdr tab and / or its Claude session name (nil leaves that one alone); a session without a
+    /// terminal, its name where its runtime keeps it (`Session.canRename`, #6294).
     func renameSession(_ k: SessionKey, tab: String?, title: String?) async {
-        guard session(k)?.canTerminal == true, let api = api(k.group) else { return }
+        guard session(k)?.canRename == true, let api = api(k.group) else { return }
         let tab = tab?.trimmingCharacters(in: .whitespacesAndNewlines), title = title?.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             try await api.renameSession(k, tabName: tab?.isEmpty == false ? tab : nil, title: title?.isEmpty == false ? title : nil)

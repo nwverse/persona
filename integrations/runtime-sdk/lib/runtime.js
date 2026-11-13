@@ -74,6 +74,9 @@ export function defaultSocketPath() {
  * @property {(params: {session_id: string, permission_mode?: string, effort?: string, model?: string}) => Promise<void>} [modes] - the
  *   phone's permission mode / effort for a session (caps.modes; model requires options.modelSwitch); values are Persona's: default / acceptEdits / plan /
  *   auto / bypassPermissions, low … max.
+ * @property {(params: {session_id: string}) => Promise<void>} [seen] - the user saw the session in Persona (caps.seen): a
+ *   runtime that keeps an unread mark of its own (Paseo's requiresAttention) clears it, so the session is not unread
+ *   there too. The node sends it only for a session the runtime lists as done (unread).
  * @property {(params: {cwd: string, workspace_id?: string, branch?: string, create_branch?: boolean, base?: string,
  *   name?: string, key?: string}) => Promise<{workspace: object}>} [createWorkspace] - a worktree of the repository cwd is
  *   in, made by the runtime as a workspace of its own (caps.workspaces): branch checked out as it is (create_branch
@@ -248,6 +251,7 @@ export function createRuntime(driver, options) {
     if (typeof driver.models === 'function') caps.models = true
     if (typeof driver.check === 'function') caps.check = true
     if (typeof driver.rewind === 'function') caps.rewind = true
+    if (typeof driver.seen === 'function') caps.seen = true
     // Its own archive, both ways: an archive Persona could not undo is not offered.
     if (typeof driver.archive === 'function' && typeof driver.unarchive === 'function') caps.archive = true
     // Workspaces of its own, which it lists (workspacesChanged) and makes worktrees as.
@@ -776,6 +780,9 @@ export function createRuntime(driver, options) {
       case 'session.rename':
         await need(driver.rename, 'rename')(params)
         schedulePush()
+        return { ok: true }
+      case 'session.seen':
+        await need(driver.seen, 'seen')(params)
         return { ok: true }
       case 'session.close':
         await need(driver.close, 'close')(params)

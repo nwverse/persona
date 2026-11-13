@@ -62,7 +62,7 @@ test("Paseo's agents are the engine's sessions: Claude Code's by its session and
   assert.equal(node.hello.name, 'Paseo')
   assert.equal(node.hello.version, '0.14.0', "Paseo's version")
   assert.deepEqual(node.hello.caps, { start: true, send: true, interrupt: true, rename: true, close: true, assistant: false, modes: true, model: true,
-    models: true, check: true, rewind: true, workspaces: true, resume: true, readonly: true })
+    models: true, check: true, rewind: true, seen: true, workspaces: true, resume: true, readonly: true })
   assert.deepEqual(node.hello.launchers.map((l) => [l.name, l.agent]), [['my-claude', 'claude'], ['my-codex', 'codex'], ['grok', 'paseo']])
   assert.deepEqual(node.hello.launchers[0].models, [{ id: 'fable[1m]', name: 'Fable', default: true, efforts: ['low', 'high', 'max'], default_effort: 'max' }])
   const byId = Object.fromEntries(rows().map((r) => [r.session_id, r]))
@@ -419,6 +419,34 @@ test("Settings › Models' test: one real prompt through Paseo's provider, its p
   await assert.rejects(call(node, 'launchers.check', { launcher: 'nope', cwd: dir, prompt: 'Say OK' }), /no provider nope/)
 })
 
+test("seen in Persona, no longer unread in Paseo: a loaded agent's mark cleared, a stored one's through its workspace, never one that asks", async (t) => {
+  const { fake, node, a, rows } = await setup(t)
+  fake.handlers.clear_agent_attention = (msg) => ({ payload: { agentId: msg.agentId, agents: [] } })
+  fake.handlers['workspace.clear_attention.request'] = (msg) => ({ payload: { workspaceId: msg.workspaceId, clearedAgentIds: [a.grok.id], results: [], success: true, error: null } })
+  fake.update(a.claude.id, { requiresAttention: true })
+  await until('unread', () => rows().find((r) => r.session_id === SID)?.status === 'done')
+  await call(node, 'session.seen', { session_id: SID })
+  assert.deepEqual(fake.requestsOf('clear_agent_attention').map((r) => r.agentId), [a.claude.id])
+  // Stored (closed): through its workspace, while it is the only one flagged there; not the agent's own (it would start it).
+  fake.update(a.claude.id, { requiresAttention: false })
+  fake.update(a.grok.id, { requiresAttention: true, status: 'closed' })
+  await until('the grok flagged', () => fake.agents.get(a.grok.id).agent.requiresAttention === true)
+  await until('known flagged', () => rows().find((r) => r.session_id === SID)?.status === 'idle')
+  await call(node, 'session.seen', { session_id: `paseo-${a.grok.id}` })
+  assert.deepEqual(fake.requestsOf('workspace.clear_attention.request').map((r) => r.workspaceId), ['wks_1'])
+  assert.equal(fake.requestsOf('clear_agent_attention').length, 1, 'never clear_agent_attention for a stored agent')
+  fake.update(a.labeled.id, { requiresAttention: true })
+  await until('another flagged', () => rows().find((r) => r.session_id === 'paseo-e1')?.status === 'done')
+  await call(node, 'session.seen', { session_id: `paseo-${a.grok.id}` })
+  assert.equal(fake.requestsOf('workspace.clear_attention.request').length, 1, 'not while another agent of the workspace is flagged')
+  // Waiting for an answer, or not flagged: nothing.
+  fake.permission(a.labeled.id, { id: 'p-1', provider: 'claude', name: 'Bash', kind: 'tool', input: { command: 'ls' } })
+  await until('blocked', () => rows().find((r) => r.session_id === 'paseo-e1')?.status === 'blocked')
+  await call(node, 'session.seen', { session_id: 'paseo-e1' })
+  await call(node, 'session.seen', { session_id: SID })
+  assert.equal(fake.requestsOf('clear_agent_attention').length, 1)
+})
+
 const MCP_JSON = {
   mcpServers: {
     persona: { command: '/usr/bin/personad', args: ['mcp'], env: { PERSONA_HOME: '/home/u/.persona' } },
@@ -457,7 +485,7 @@ test("a new Claude Code session gets the Agent's own Persona tools preapproved; 
   await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' })
   assert.deepEqual(fake.requestsOf('agent.create.request').at(-1).config.toolPolicy, { preapproved: [
     { kind: 'mcp', server: 'persona', tool: 'report_to_supervisor' }, { kind: 'mcp', server: 'persona', tool: 'todo_decision_add' },
-  ] }, "only the servers it is given (no jarvis server here)")
+  ] }, "only the servers it is given (none under the former name here)")
   await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-codex' })
   assert.equal(fake.requestsOf('agent.create.request').at(-1).config.toolPolicy, undefined, 'Codex: Paseo would limit the server to those tools')
   fake.handlers['agent.create.request'] = (msg) => msg.config.toolPolicy

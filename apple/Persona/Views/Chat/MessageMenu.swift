@@ -52,6 +52,8 @@ final class MessageMenu {
     /// session never offers it, else why it is off now ("" when on).
     @ObservationIgnored var rewind: ((String, String, Rewind.Restore) -> Void)?
     @ObservationIgnored var rewindBlock: () -> String? = { nil }
+    /// What the chat's session offers once it is tapped (#6294, `Rewind.offer`): its own lines, the files too.
+    @ObservationIgnored var rewindOffer: () -> Rewind.Offer = { .init() }
     /// The message of yours whose Rewind was tapped: the chat asks what to restore (a dialog of the page, like `more`).
     var rewinding: RewindAsk?
     /// The reply whose ⋯ was tapped: the chat shows its menu (a dialog of the page, not of the bar, which the list's
@@ -517,9 +519,10 @@ struct MessageActionBar: View {
         return (isUser ? 5 : 4) + (forks(id: id, isUser: isUser, menu: menu) ? 1 : 0) + (rewinds(id: id, isUser: isUser, menu: menu) ? 1 : 0)
     }
     /// Your own message ends in Rewind when the chat's session is a Claude agent's and the message is a transcript line
-    /// of its own (`<uuid>#<n>`); while the session cannot, the dialog says why.
+    /// of its own (`<uuid>#<n>`), or the session's node declares rewind and the message is a line of its own (#6294);
+    /// while the session cannot, the dialog says why.
     static func rewinds(id: String, isUser: Bool, menu: MessageMenu) -> Bool {
-        isUser && menu.rewind != nil && menu.rewindBlock() != nil && Rewind.entry(of: id) != nil
+        isUser && menu.rewind != nil && menu.rewindBlock() != nil && Rewind.entry(of: id, anyLine: menu.rewindOffer().declared) != nil
     }
     /// Forward in Share's place (#3807): on iPhone and iPad, for a message in the transcript of a chat that forwards.
     static func forwards(menu: MessageMenu, pending: Bool) -> Bool {

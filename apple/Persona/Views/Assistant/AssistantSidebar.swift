@@ -1423,6 +1423,9 @@ struct AssistantSidebar: View {
         let counts: String? = model.assistantLeaders.contains(s.sessionID)
             ? model.directionCounts[s.sessionID].flatMap { DirectionCountsText.label(working: $0.working, needsYou: $0.needsYou) }
             : nil
+        // One activity mark for the whole row (#6230): it spins whether this conversation runs its own turn or only the
+        // Agents under it work; the row's own needs-you / unread dot still takes precedence.
+        let leadWorking = model.assistantLeaders.contains(s.sessionID) && ((model.directionCounts[s.sessionID]?.working ?? 0) > 0)
         // What opened it when Persona did (#5195): the rule All Chats' filters use, so its mark and its filter agree.
         let source = isMain ? nil : AutoConversations.source(of: s, tasks: taskChats.known(on: model.api))
         return Button { open(s.key) } label: {
@@ -1443,7 +1446,7 @@ struct AssistantSidebar: View {
                 if let counts {
                     Text(counts).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                 }
-                RowStateMark(state: s.state)
+                RowStateMark(state: s.state, working: leadWorking)
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Sidebar.rowPadding)
