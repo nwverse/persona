@@ -25,6 +25,12 @@ READING_FILES = {
     "Views/Inbox/ConnectorThread/GitHubThreadView.swift": "a thread comment's body",
     "Views/Inbox/Lark/LarkMessageContent.swift": "a Lark message's text",
     "Views/Knowledge/KnowledgeView.swift": "a knowledge page's body",
+    "Views/Todos/TodoDetailView.swift": "a to-do's notes, read and edited",
+    "Recording/MeetingThreadView.swift": "a transcript's words in the meeting's thread",
+    "Recording/RecordingDayView.swift": "a day's transcript lines",
+    "Recording/RecordingMinutesSummary.swift": "minutes' points and transcript lines",
+    "Recording/RecordingMinutesView.swift": "the minutes' points",
+    "Recording/RecordingsSection.swift": "a recording's transcript sentences",
     "Views/RootView.swift": "the root, which keeps the chosen size for them (a mention in a comment)",
 }
 
