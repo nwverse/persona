@@ -1,7 +1,6 @@
 package persona.feature.settings
 
 import android.app.Activity
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
@@ -78,10 +77,7 @@ internal object AppInstaller {
                             apk.inputStream().use { it.copyTo(output) }
                             session.fsync(output)
                         }
-                        val result = Intent(context, InstallResultActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            .putExtra(PackageInstaller.EXTRA_SESSION_ID, sessionId)
-                        val pending = PendingIntent.getActivity(context, sessionId, result, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-                        session.commit(pending.intentSender)
+                        session.commit(installResultCallback(context, sessionId).intentSender)
                     }
                 } catch (error: Exception) {
                     installer.abandonSession(sessionId)
@@ -98,6 +94,23 @@ internal object AppInstaller {
             throw AppUpdateFailure(failedStage, error)
         }
         finally { gate.unlock() }
+    }
+
+    suspend fun pendingSessions(context: Context): Set<Int> = withContext(Dispatchers.IO) {
+        context.packageManager.packageInstaller.mySessions
+            .filter { it.appPackageName == context.packageName && it.isSealed }
+            .mapTo(mutableSetOf()) { it.sessionId }
+    }
+
+    /** Only an explicit confirmation may cancel sealed sessions; never include a newer session. */
+    suspend fun cancelPending(context: Context, confirmed: Set<Int>) = withContext(Dispatchers.IO) {
+        check(gate.tryLock()) { "Another installation is being prepared" }
+        try {
+            val installer = context.packageManager.packageInstaller
+            installer.mySessions.filter {
+                it.sessionId in confirmed && it.appPackageName == context.packageName && it.isSealed
+            }.forEach { installer.abandonSession(it.sessionId) }
+        } finally { gate.unlock() }
     }
 
     private fun requireNewerVersion(context: Context, update: AppUpdate) {

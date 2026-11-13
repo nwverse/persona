@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Installs the Persona plugin into an opencode config directory (docs/integrations/opencode.md "Install"): one file in plugins/ that
+// Installs the Persona plugin into an opencode config directory (docs/integrations/opencode.md "Installation"): one file in plugins/ that
 // re-exports this checkout's plugin, so updating the checkout updates the plugin. opencode loads plugins/*.js of its
 // config directory by itself; the shared `opencode serve` has to be restarted once to pick it up.
 //

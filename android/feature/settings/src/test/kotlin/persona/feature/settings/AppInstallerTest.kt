@@ -83,7 +83,7 @@ class AppInstallerTest {
         org.robolectric.util.ReflectionHelpers.setField(installer.mySessions.single(), "sealed", true)
         assertThrows(IllegalStateException::class.java) { runBlocking { AppInstaller.install(context, updates, update) } }
         assertEquals(1, downloads)
-        installer.abandonSession(installer.mySessions.single().sessionId)
+        AppInstaller.cancelPending(context, AppInstaller.pendingSessions(context))
         AppInstaller.install(context, updates, update)
         assertEquals(1, downloads)
         assertEquals(1, installer.mySessions.size)

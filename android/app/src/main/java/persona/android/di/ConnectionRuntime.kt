@@ -21,6 +21,9 @@ import persona.core.contracts.api.*
 import persona.core.data.*
 import persona.core.domain.Pairing
 import persona.core.hub.*
+import persona.core.hub.tunnel.HubTunnel
+import persona.core.hub.tunnel.HubWays
+import persona.core.hub.tunnel.SshIdentity
 import java.net.InetAddress
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -49,7 +52,7 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
     private val scope = app.scope
     private val version = app.packageManager.getPackageInfo(app.packageName, 0).versionName.orEmpty()
     private val os by lazy {
-        val system = detectedPhoneSystem()
+        val system = detectedPhoneSystem(app)
         buildJsonObject { put("name", system.name); put("version", system.version); put("sdk", Build.VERSION.SDK_INT) }
     }
     private val heartbeatPolicy by lazy {
@@ -122,13 +125,22 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
     /** Waits until nothing built on a group's data uses it any more (GroupStacks sets this); then it may close. */
     internal var beforeClose: suspend (GroupRuntime) -> Unit = {}
 
+    private class Opening(val group: GroupRuntime, val members: List<HubMember>, val tunnels: List<HubTunnel>)
     /** Group being opened, by storage path: HubDataStore.openGroup calls the transport factory from inside. */
-    private val opening = ConcurrentHashMap<String, Pair<GroupRuntime, List<HubMember>>>()
+    private val opening = ConcurrentHashMap<String, Opening>()
 
     val dataStore = HubDataStore(app, scope) { storage, credentials ->
-        val (group, members) = opening[storage.path] ?: throw IllegalStateException("No group is being opened")
-        group.createTransport(storage, credentials, members)
+        val open = opening[storage.path] ?: throw IllegalStateException("No group is being opened")
+        open.group.createTransport(storage, credentials, open.members, open.tunnels)
     }
+
+    private val identityLock = Mutex()
+    @Volatile private var identity: SshIdentity? = null
+    /** Every group's tunnels (docs/operations/network.md "Connecting to hub through SSH"). */
+    private val ways = HubWays(identity = ::sshIdentity)
+    private class PairedHubTunnels(val pairing: String, val hubAddress: String, val routes: PairedTunnels)
+    /** Each paired hub's tunnel settings and address, by hub id: read once, then kept as they are saved. */
+    private val pairedTunnels = MutableStateFlow<Map<String, PairedHubTunnels>>(emptyMap())
 
     init {
         scope.launch {
@@ -170,6 +182,13 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
 
     /** Every group's outbox in one list; a message goes to the group its session belongs to. */
     val messages: MessageSender = object : MessageSender {
+        override val sendReceipts = groups.flatMapLatest { list ->
+            val flows = list.mapNotNull { group -> group.data?.messages?.sendReceipts?.map { entries ->
+                val names = GroupNames(group.namespace)
+                entries.map(names::receipt)
+            } }
+            if (flows.isEmpty()) flowOf(emptyList()) else combine(flows) { lists -> lists.flatMap { it } }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
         override val outbox = groups.flatMapLatest { list ->
             val flows = list.mapNotNull { group -> group.data?.messages?.outbox?.map { entries ->
                 val names = GroupNames(group.namespace)
@@ -177,10 +196,25 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
             } }
             if (flows.isEmpty()) flowOf(emptyList()) else combine(flows) { lists -> lists.flatMap { it } }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
-        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) {
+        override val writtenAt = groups.flatMapLatest { list ->
+            val flows = list.mapNotNull { it.data?.messages?.writtenAt }
+            if (flows.isEmpty()) flowOf(emptyMap()) else combine(flows) { maps ->
+                maps.fold(emptyMap<String, Long>()) { acc, one -> acc + one }
+            }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
+        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) =
+            send(session, text, clientMessageId, clearDraft, null, null)
+        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) {
             gate.withLock {
                 val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
-                checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.send(GroupKeys.rawKey(session), text, clientMessageId, clearDraft)
+                checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.send(
+                    GroupKeys.rawKey(session), text, clientMessageId, clearDraft, launcher, model)
+            }
+        }
+        override suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) {
+            gate.withLock {
+                val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
+                checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.sendApplyingSwitch(GroupKeys.rawKey(session), text, clientMessageId)
             }
         }
         override suspend fun cancel(clientMessageId: String) = gate.withLock {
@@ -188,6 +222,10 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         }
         override suspend fun discard(clientMessageId: String) = gate.withLock {
             owner(clientMessageId)?.messages?.discard(clientMessageId) ?: false
+        }
+        // By its session: a cancelled message is in no group's outbox any more.
+        override fun restore(message: OutboxMessage) {
+            groupOf(message.session.machineId)?.data?.messages?.restore(message.copy(session = GroupKeys.rawKey(message.session)))
         }
         override suspend fun retry(clientMessageId: String) = gate.withLock {
             owner(clientMessageId)?.messages?.retry(clientMessageId) ?: false
@@ -199,6 +237,9 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
             .firstOrNull { data -> data.messages.outbox.value.any { it.clientMessageId == clientMessageId } }
             ?: current.value
     }
+
+    /** Whether the group owning this namespaced machine currently has a desktop app connected. */
+    fun desktopOnline(machineId: String): Boolean? = groupOf(machineId)?.let { groupDesktops.online(it.id) }
 
     /** The group a merged-list machine id belongs to (by its suffix). */
     internal fun groupOf(machineId: String): GroupRuntime? {
@@ -261,16 +302,19 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
 
     suspend fun pair(pairing: Pairing) = gate.withLock { pairLegacyLocked(pairing) }
 
-    /** Replaces every pairing with [credentials] (already verified and encrypted by the pairing flow). */
-    suspend fun pair(credentials: HubCredentials) = gate.withLock {
+    /**
+     * Replaces every pairing with [credentials] (already verified and encrypted by the pairing flow); [access] is the
+     * Cloudflare Access service token the pairing was made with.
+     */
+    suspend fun pair(credentials: HubCredentials, access: HubAccess? = null) = gate.withLock {
         cleanupLocked()
-        addLocked(credentials)
+        addLocked(credentials, access = access)
         app.pairings.clear()
     }
 
     /** Adds a hub next to the existing ones: into the group its mesh puts it in, else as a new group. */
-    suspend fun addHub(credentials: HubCredentials): String? = gate.withLock {
-        addLocked(credentials).also { app.pairings.clear() }
+    suspend fun addHub(credentials: HubCredentials, access: HubAccess? = null): String? = gate.withLock {
+        addLocked(credentials, access = access).also { app.pairings.clear() }
     }
 
     private suspend fun pairLegacyLocked(pairing: Pairing) {
@@ -284,9 +328,9 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         app.pairings.clear()
     }
 
-    private suspend fun addLocked(credentials: HubCredentials, hubName: String? = null): String? {
+    private suspend fun addLocked(credentials: HubCredentials, hubName: String? = null, access: HubAccess? = null): String? {
         require(credentials.hubAddress.isNotBlank() && credentials.deviceToken.isNotBlank())
-        val stored = dataStore.storeHub(credentials)
+        val stored = dataStore.storeHub(credentials, access)
         val change = dataStore.change { it.addPairedHub(StoredScope.of(stored), hubName, System.currentTimeMillis()) }
         lastRevoked = false
         applyLocked(change.document, change.erase)
@@ -300,8 +344,14 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
 
     private suspend fun cleanupLocked(revoked: Boolean = false) = withContext(NonCancellable) {
         lastRevoked = revoked
+        // Sign out on each hub before forgetting it (#5538, as Apple's HubSignOut.swift): only a revoked credential
+        // makes the hub drop this device's pushes and Live Activities; forgetting it here does not. The local cleanup
+        // runs either way, so a hub that cannot be reached is not a reason to stay paired.
+        revokeOnHubsLocked()
         closeAllLocked()
         persona.platform.notify.Notify.disconnect(app)
+        ways.retain(emptySet())
+        pairedTunnels.value = emptyMap()
         dataStore.eraseAll()
         registry.value = GroupsDocument()
         dataStore.publish(null)
@@ -326,6 +376,17 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
     private suspend fun closeLocked(group: GroupRuntime) {
         group.close()
         group.data?.let { runCatching { dataStore.closeGroup(it) } }
+    }
+
+    /** Revokes every group's credential on its hub, best-effort per hub. A hub that cannot be reached is not retried. */
+    private suspend fun revokeOnHubsLocked() {
+        for (group in mutableGroups.value) revokeOnHubLocked(group)
+    }
+
+    /** Revokes this device's credential on one hub (#5538): the hub then drops its pushes and Live Activities. */
+    private suspend fun revokeOnHubLocked(group: GroupRuntime?) {
+        val deviceId = group?.data?.credentials?.deviceId?.takeIf { it.isNotBlank() } ?: return
+        revokeCredential(group.connection, deviceId)
     }
 
     /**
@@ -354,11 +415,14 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
             mutableGroups.value = kept
             try { dataStore.erase(erase) } catch (_: Exception) { Log.w("ConnectionRuntime", "Erasure deferred until restart") }
         }
+        val pairedHubs = document.groups.flatMap { group -> group.hubs.map { it.hubId } }.toSet()
+        pairedTunnels.update { it.filterKeys(pairedHubs::contains) }
+        ways.retain(pairedHubs)
         val next = document.groups.mapNotNull { entry ->
             val namespace = document.namespace(entry.id)
             val existing = kept.firstOrNull { it.id == entry.id }
             if (existing != null) {
-                existing.update(entry, namespace, members(entry))
+                existing.update(entry, namespace, members(entry), tunnels(entry))
                 existing
             } else try {
                 openLocked(entry, namespace)
@@ -398,8 +462,8 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
     }
 
     private suspend fun openLocked(entry: StoredGroup, namespace: String?): GroupRuntime {
-        val group = GroupRuntime(entry, namespace, app, settings, this)
-        opening[entry.storage.path] = group to members(entry)
+        val group = GroupRuntime(entry, namespace, app, settings, this, ways)
+        opening[entry.storage.path] = Opening(group, members(entry), tunnels(entry))
         try {
             val data = dataStore.openGroup(entry.storage.scope, entry.home.pairing.scope)
             group.activate(data)
@@ -423,6 +487,26 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
             catch (_: Exception) { null }
         }
         return paired + entry.mesh.filter { it.endpoints.isNotEmpty() }.map { meshMember(it, it.hubId == center || it.center == true) }
+    }
+
+    /** The tunnels of the group's paired hubs, its own hub's first; a hub whose settings cannot be read has none. */
+    private suspend fun tunnels(entry: StoredGroup): List<HubTunnel> = entry.hubs.flatMap { hub ->
+        val saved = pairedTunnels.value[hub.hubId]?.takeIf { it.pairing == hub.pairing.path } ?: try {
+            val address = dataStore.credentials(hub.pairing.scope)?.hubAddress ?: return@flatMap emptyList()
+            PairedHubTunnels(hub.pairing.path, address, dataStore.tunnels(hub.pairing.scope))
+                .also { loaded -> pairedTunnels.update { it + (hub.hubId to loaded) } }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { return@flatMap emptyList() }
+        HubTunnel.of(hub.hubId, saved.hubAddress, saved.routes.ssh, saved.routes.proxy)
+    }
+
+    private suspend fun sshIdentity(): SshIdentity = identity ?: identityLock.withLock {
+        identity ?: run {
+            val seed = try { dataStore.deviceSshKey(SshIdentity::generateSeed) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) { throw TunnelException(TunnelProblem.KeyUnavailable, failure) }
+            SshIdentity(seed, SshIdentity.comment(app.deviceName)).also { identity = it }
+        }
     }
 
     private suspend fun publishSelectionLocked() {
@@ -540,6 +624,7 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
     }
 
     private suspend fun removeGroupLocked(groupId: String, revoked: Boolean = false): Unit = withContext(NonCancellable) {
+        revokeOnHubLocked(mutableGroups.value.firstOrNull { it.id == groupId })
         val change = dataStore.change { it.removeGroup(groupId) }
         if (change.document.groups.isEmpty()) {
             // The last group: exactly what disconnecting the only pairing always did.
@@ -599,13 +684,68 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         }
     }
 
+    /** Settings › Hubs › SSH Tunnel and Local Proxy of every paired hub. */
+    val hubTunnels: HubTunnelSettings = object : HubTunnelSettings {
+        private val live = this@ConnectionRuntime.groups.flatMapLatest { list ->
+            if (list.isEmpty()) flowOf(emptyMap())
+            else combine(list.map { group -> combine(group.state, group.tunnel) { state, tunnel -> group.id to (state to tunnel) } }) { it.toMap() }
+        }
+        override val hubs: StateFlow<List<HubTunnelInfo>> = combine(registry, pairedTunnels, ways.states, live) { document, saved, states, groups ->
+            document.groups.flatMap { entry ->
+                val (state, tunnel) = groups[entry.id] ?: (ConnectionState.WaitingForNetwork to null)
+                // A hub too old to say its id: its connection cannot tell which tunnel is its own.
+                entry.hubs.filterNot { it.hubId.startsWith("legacy-") }.mapNotNull { hub ->
+                    val paired = saved[hub.hubId]?.takeIf { it.pairing == hub.pairing.path } ?: return@mapNotNull null
+                    HubTunnelInfo(hub.hubId, hub.name ?: shortHubName(hub.hubId), paired.hubAddress, paired.routes.ssh, paired.routes.proxy,
+                        states[hub.hubId to TunnelKind.Ssh], states[hub.hubId to TunnelKind.Proxy],
+                        routed = tunnel?.takeIf { it.hubId == hub.hubId }?.kind,
+                        online = state in setOf(ConnectionState.Online, ConnectionState.Updating), access = paired.routes.access)
+                }
+            }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+        override suspend fun deviceKey() = sshIdentity().deviceKey
+        override suspend fun verifySsh(hubId: String, route: SshRoute) = ways.verifySsh(route)
+        override suspend fun saveSsh(hubId: String, route: SshRoute?) = saveTunnels(hubId, TunnelKind.Ssh) { it.copy(ssh = route) }
+        override suspend fun verifyProxy(hubId: String, route: LocalProxyRoute) {
+            val address = pairedTunnels.value[hubId]?.hubAddress ?: throw IllegalStateException("Not a paired hub")
+            ways.verifyProxy(route, address, hubId)
+        }
+        override suspend fun saveProxy(hubId: String, route: LocalProxyRoute?) = saveTunnels(hubId, TunnelKind.Proxy) { it.copy(proxy = route) }
+        override suspend fun saveAccess(hubId: String, access: HubAccess?) = saveTunnels(hubId, null) { it.copy(access = access) }
+    }
+
+    /** A paired hub's Cloudflare Access service token, as its connection's requests send it (read per request). */
+    override fun access(hubId: String): HubAccess? = pairedTunnels.value[hubId]?.routes?.access
+
+    /**
+     * A tunnel that waited for new settings (a refused key, a changed server key) is dialled again once they are saved;
+     * [kind] null is the Cloudflare Access token, which only needs a connection that is not up to try again.
+     */
+    private suspend fun saveTunnels(hubId: String, kind: TunnelKind?, change: (PairedTunnels) -> PairedTunnels): Unit = gate.withLock {
+        val entry = registry.value.groups.firstOrNull { group -> group.hubs.any { it.hubId == hubId } }
+            ?: throw IllegalStateException("Not a paired hub")
+        val hub = entry.hubs.first { it.hubId == hubId }
+        val address = pairedTunnels.value[hubId]?.takeIf { it.pairing == hub.pairing.path }?.hubAddress
+            ?: dataStore.credentials(hub.pairing.scope)?.hubAddress ?: throw IllegalStateException("Not a paired hub")
+        val saved = dataStore.updateTunnels(hub.pairing.scope, change)
+        pairedTunnels.update { it + (hubId to PairedHubTunnels(hub.pairing.path, address, saved)) }
+        kind?.let { ways.unblock(hubId, it) }
+        val group = mutableGroups.value.firstOrNull { it.id == entry.id } ?: return@withLock
+        val online = group.state.value in setOf(ConnectionState.Online, ConnectionState.Updating)
+        group.updateTunnels(tunnels(entry))
+        if (!online) group.reconnect()
+    }
+
     override fun reconnect() {
         if (state.value == ConnectionState.Revoked && groups.value.isEmpty()) return
         refreshNetwork()
         groups.value.forEach { it.reconnect() }
     }
 
-    override val groupLinks get() = groups.value.map { group -> GroupLink(group.state) { refreshNetwork(); group.reconnect() } }
+    override val groupLinks get() = groups.value.map { group ->
+        GroupLink(group.state, reconnect = { refreshNetwork(); group.reconnect() }, wake = group::onWake)
+    }
 
     override fun send(message: JsonObject): Boolean = selected.value?.connectionOrNull?.send(message) ?: false
 

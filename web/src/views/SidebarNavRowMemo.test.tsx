@@ -42,7 +42,7 @@ import { Sidebar } from "./Sidebar";
 const machines: Machine[] = [{ id: "mac", name: "MacBook", online: true }];
 const sessions: Session[] = [{ machine_id: "mac", session_id: "s1", title: "Task 1", cwd: "/code", status: "idle", state: "idle" }];
 const agents: AgentSession[] = ["a1", "a2", "a3"].map((id, i) => ({ id: `example:${id}`, source: "example", sessionKey: id, provider: "example", title: `Agent ${i + 1}`, canSend: true, unreadCount: 0, rankTimeMs: 0 }));
-const answers: Record<string, unknown> = { "/api/v1/sessions": { sessions }, "/api/v1/machines": { machines }, "/api/v1/agents/sessions": { sessions: agents }, "/api/v1/agents": { sources: [] } };
+const answers: Record<string, unknown> = { "/api/v1/sessions": { sessions }, "/api/v1/machines": { machines }, "/api/v1/agents/sessions": { sessions: agents }, "/api/v1/agents": { sources: [{ source: "example", enabled: true }] } };
 
 // built once here: the counting href() would count these calls too
 const pagePaths = ["home", "inbox", "settings"].map((name) => href({ name } as Parameters<typeof href>[0]));

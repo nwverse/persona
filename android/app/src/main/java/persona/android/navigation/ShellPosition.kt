@@ -7,11 +7,15 @@ import persona.core.navigation.AppTab
 import persona.core.navigation.ChatRoute
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.io.File
+
+/** Reject retired enum values instead of coercing just that field and restoring the rest of an old shell. */
+private val positionCodec = Json(JsonCodec) { coerceInputValues = false }
 
 @Serializable
 internal data class ShellPosition(
-    val tab: AppTab = AppTab.Agents,
+    val tab: AppTab = AppTab.Persona,
     val machine: String = "",
     val chats: Map<AppTab, ChatRoute> = emptyMap(),
 )
@@ -25,7 +29,7 @@ internal class ShellPositionStore(context: Context, scope: String) {
 
     fun load(): ShellPosition = synchronized(lock) {
         if (retired) return@synchronized ShellPosition()
-        runCatching { JsonCodec.decodeFromString<ShellPosition>(AtomicFile(file).openRead().bufferedReader().use { it.readText() }) }
+        runCatching { positionCodec.decodeFromString<ShellPosition>(AtomicFile(file).openRead().bufferedReader().use { it.readText() }) }
             .getOrDefault(ShellPosition())
     }
 

@@ -16,7 +16,7 @@ import (
 	"strings"
 )
 
-// The resident node (`personad node --attach`, docs/server/server.md "Resident node") is what the connector forwards to. Setting
+// The resident node (`personad node --attach`, docs/server/server.md "Persistent node") is what the connector forwards to. Setting
 // it up here is packaging only, so that one command (Linux: `persona-link install`) or one app (the Mac menu bar app)
 // sets a computer up as the node service: it writes the same service scripts/deploy/node-launchd.sh does, and leaves one
 // that is already there as it is. What the node does stays in personad.

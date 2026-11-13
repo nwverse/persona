@@ -41,8 +41,10 @@ func TestAssistantDirectoriesAreTheMachinesManagers(t *testing.T) {
 	b.report(t, devicewire.State{Machine: proto.Machine{ID: "mb", Name: "mb"}, Info: info})
 	eventually(t, 5*time.Second, "ma, mb", func() bool { return h.localMachine("ma") != nil && h.localMachine("mb") != nil })
 	ma, mb := h.localMachine("ma"), h.localMachine("mb")
-	if ma.assistantCwd() != "/home/me/.persona/assistant" || mb.assistantCwd() != "/home/me/.persona/assistant-m-0b0b0b" {
-		t.Fatalf("directories: %q %q", ma.assistantCwd(), mb.assistantCwd())
+	// Each machine's manager's directory on it.
+	cwdA, cwdB := ma.assistantCwdOf(h.machineOwner("ma")), mb.assistantCwdOf(h.machineOwner("mb"))
+	if cwdA != "/home/me/.persona/assistant" || cwdB != "/home/me/.persona/assistant-m-0b0b0b" {
+		t.Fatalf("directories: %q %q", cwdA, cwdB)
 	}
 	for _, c := range []struct {
 		m    *Machine
@@ -196,7 +198,8 @@ func TestAnExtensionsTokenOnlyOnItsManagersThings(t *testing.T) {
 	}
 	for _, l := range strings.Split(a.log(), "\n") { // asked whose token it is (extensions.authorize), nothing else
 		if l != "" && !strings.HasPrefix(l, extwire.MethodAuthorize+" ") && !strings.HasPrefix(l, "assistant.tools") &&
-			!strings.Contains(l, `"method":"fs.watch"`) { // (the hub's own on ma's connection)
+			!strings.Contains(l, `"method":"fs.watch"`) && // (the hub's own on ma's connection)
+			!strings.HasPrefix(l, devicewire.MethodEngineGet+" ") { // (the move's own: mb's engine choice)
 			t.Fatalf("A was reached: %s", l)
 		}
 	}

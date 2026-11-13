@@ -10,10 +10,13 @@ extension APIClient {
     /// tell "export forbidden" (→ read the JSON tree) from "format unsupported" (→ open in Feishu). `APIClient.request`
     /// only keeps flat `{"error":"…"}` messages, so this does the GET itself.
     func feishuDocsGet<T: Decodable>(_ path: String, query: [String: String] = [:], as: T.Type = T.self) async throws -> T {
-        var req = URLRequest(url: url("/api/v1/lark/raw/" + path, query: query), timeoutInterval: 60)
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        let path = "/api/v1/lark/raw/" + path
+        var req = URLRequest(url: url(path, query: query), timeoutInterval: 60)
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
-        let (data, resp) = try await session.data(for: req)
+        for (name, value) in routing(path, query) { req.setValue(value, forHTTPHeaderField: name) }
+        let (data, resp) = try await session.data(for: req, delegate: HubRedirects.shared)
+        try CloudflareAccessError.check(resp, body: data, access: config.access)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else { throw FeishuDocsFailure(status: status, code: FeishuDocsFailure.code(from: data)) }
         return try JSON.decoder.decode(T.self, from: data)

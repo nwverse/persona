@@ -387,6 +387,7 @@ func TestAcceptanceReloadedAsks(t *testing.T) {
 	f.settings = &Settings{Timezone: "Asia/Shanghai"}
 	st := &memStore{}
 	s := newServiceOn(t, f, st)
+	s.ownerVerifiesAll = true
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		r := botReady
 		r.PublicURL = cardlessWeb

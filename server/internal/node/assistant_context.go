@@ -11,7 +11,7 @@ import (
 )
 
 // The assistant's live snapshot (the time, agents waiting, unread chats, today's meetings…) goes at the start of each
-// message, in a <persona-context> block, not into the system prompt (docs/assistant/assistant.md "Live snapshot"). The prompt cache
+// message, in a <persona-context> block, not into the system prompt (docs/assistant/assistant.md "Live snapshots and prefix caching"). The prompt cache
 // is a prefix: the system prompt comes before the whole conversation, so a system prompt that differs from one start
 // to the next would make every request after a restart write the entire history again. Claude Code (2.1.314) keeps a
 // resumed conversation on the system prompt it was first started with instead, so the snapshot there was the one
@@ -105,6 +105,7 @@ func (n *Node) contextCompacted(id string) {
 	n.mu.Lock()
 	delete(n.ctxSent, id)
 	n.mu.Unlock()
+	n.forgetFallback(id) // the refused turns are summarized away: its own model again (#3788)
 }
 
 // toolsAtStart notes the tools a conversation's process started with (claude's init) and says so when they differ

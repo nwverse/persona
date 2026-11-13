@@ -1,5 +1,5 @@
 #!/bin/bash
-# Screenshots of the Mac app, light and dark, without the screen (docs/apple/mac.md "Screenshots"): the app renders its own
+# Screenshots of the Mac app, light and dark, without the screen (docs/apple/mac.md "Build, run, screenshot"): the app renders its own
 # window into a PNG (`-macSnapshot`, DEBUG builds) and quits, so this works while the Mac is locked.
 #
 #   scripts/app/mac_shot.sh <name> [launch args…]

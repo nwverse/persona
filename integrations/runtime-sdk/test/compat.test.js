@@ -109,6 +109,8 @@ test('compat context only strips bare live snapshots and MCP aliases keep sessio
     assert.equal(cleanUserText(snapshot+' hello'), 'hello')
     const quoted = `<${scheme}-context source="user">keep</${scheme}-context>`
     assert.equal(quoted.replace(SNAPSHOT_RE,''), quoted)
+    // the view feedback after the snapshot is the model's too (#4335)
+    assert.equal((snapshot+'<persona-view-errors>\nThe view v1 failed its check.\n</persona-view-errors>\nhello').replace(SNAPSHOT_RE,''), 'hello')
   }
   const servers = mcpServers('/bin/personad','session',true)
   assert.deepEqual(servers.map((s)=>s.name),['persona','jarvis'])

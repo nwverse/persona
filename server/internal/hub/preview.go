@@ -152,7 +152,7 @@ func (h *Hub) previewConnect(w http.ResponseWriter, r *http.Request, m *Machine)
 	defer c.CloseNow()
 	stopClose := context.AfterFunc(r.Context(), func() { _ = c.CloseNow() })
 	defer stopClose()
-	id := "v" + strconv.FormatInt(streamSeq.Add(1), 10)
+	id := hubStreamIDs.next("v")
 	if err := mux.Open(id); err != nil {
 		previewRefuse(r.Context(), c, "offline", err)
 		return

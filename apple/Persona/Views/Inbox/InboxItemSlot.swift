@@ -1,7 +1,7 @@
 import Observation
 import SwiftUI
 
-// The inbox_item slot (docs/extensions/extensions.md「UI 插槽」, #1682): a plugin that contributes a UI with placement inbox_item for
+// The inbox_item slot (docs/extensions/extensions.md「UI slots」, #1682): a plugin that contributes a UI with placement inbox_item for
 // one of its connectors draws the detail of that connector's inbox items. The app asks the hub which sources have one
 // (GET /api/v1/plugins/-/ui?placement=inbox_item, read once per hub); an item of such a source opens as the plugin's
 // View, drawn as a plugin_page is, with `context.item` the item's id. Anything else opens today's detail: a source no
@@ -275,7 +275,7 @@ struct InboxExtensionItemPage: View {
     /// The renderer hands its links here.
     private var links: Binding<LinkTarget?> {
         Binding(get: { nil }, set: { target in
-            guard let url = target?.url, !slot.open(url), !AppModel.shared.openIfExtensionSettings(url) else { return }
+            guard let url = target?.url, !slot.open(url), !AppModel.shared.openIfExtensionSettings(url, from: .page(page.selectedManager)) else { return }
             openURL(url)
         })
     }

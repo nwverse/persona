@@ -19,6 +19,8 @@ type InboxTriage struct {
 	Rules string // the user's own rules, trimmed: the item's source's (InboxThing.Rules), else inbox.rules
 	// Language is the summary's language by its own name ("English", "Japanese" written in Japanese); "" is Chinese, as before i18n.
 	Language string
+	// Context is what extensions wrote for the Inbox (contributes.prompts inbox_context; inbox/extension_context).
+	Context []ExtensionContext
 }
 
 func RenderInboxTriage(t InboxTriage) string { return render("inbox/triage", t) }
@@ -62,6 +64,10 @@ type InboxDraft struct {
 	// Language is the user's language by its own name ("English", "Japanese" in Japanese), for a WeChat reply when the other side's
 	// is unclear; "" keeps WeChat replies in Chinese, as before i18n.
 	Language string
+	// Context is what extensions wrote for the Inbox (inbox/extension_context); Rewrite asks again after a draft
+	// repeated a sentence an extension marked never to quote.
+	Context []ExtensionContext
+	Rewrite bool
 }
 
 func RenderInboxDraft(d InboxDraft) string { return render("inbox/draft", d) }
@@ -195,3 +201,49 @@ type InboxHandoffNote struct {
 }
 
 func RenderInboxHandoffNote(n InboxHandoffNote) string { return render("inbox/handoff_note", n) }
+
+// InboxFolders is the system prompt that files items into folder paths (inbox/folders, #2463).
+type InboxFolders struct {
+	Owner       string // "" is the Chinese "you"
+	FolderRules string // the user's folder rules, trimmed
+	Rules       string // the user's triage rules (inbox.rules), trimmed: what they care about
+	// Language is the new folders' language by its own name; "" leaves it to Chinese or the folders already there.
+	Language string
+	MaxDepth int // levels a new folder may have
+}
+
+func RenderInboxFolders(f InboxFolders) string { return render("inbox/folders", f) }
+
+// InboxFoldersInput is one batch of items to file, with the folders in use and the user's own moves (inbox/folders_input).
+type InboxFoldersInput struct {
+	Folders  []InboxFolderUse
+	Examples []InboxFolderExample
+	Items    []InboxFolderItem
+}
+
+// InboxFolderUse is a folder in use and how many items are in it.
+type InboxFolderUse struct {
+	Path  string
+	Count int
+}
+
+// InboxFolderExample is an item the user filed by hand.
+type InboxFolderExample struct {
+	Title, Sender, Folder string
+}
+
+// InboxFolderItem is an item to file, as the model reads it (one line each, the preview cut).
+type InboxFolderItem struct {
+	ID, Kind, Source, Title, Sender, Summary, Preview string
+}
+
+func RenderInboxFoldersInput(in InboxFoldersInput) string { return render("inbox/folders_input", in) }
+
+// SubscriptionKind is a source subscription's kind of Inbox item (#2039, inbox/kinds/subscription): what its items'
+// type line says (InboxItem.Described, through the round's kinds).
+type SubscriptionKind struct {
+	Kind  string // sub_mail … sub_digest, sub_failing
+	Label string // the subscription's label: whose items they are
+}
+
+func RenderSubscriptionKind(k SubscriptionKind) string { return render("inbox/kinds/subscription", k) }

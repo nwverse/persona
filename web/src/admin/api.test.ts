@@ -176,7 +176,7 @@ describe("extensions", () => {
   });
 });
 
-describe("usage sources (docs/server/usage-windows.md「账号池网关」)", () => {
+describe("usage sources (docs/server/usage-windows.md「Account-pool gateways」)", () => {
   it("reads, saves, edits, tests and removes through /usage-sources, with the CSRF token on writes", async () => {
     setCsrf("tok");
     const calls = stub(200, { source: { id: "s1" }, sources: [] });

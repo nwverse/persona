@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 @testable import Persona
 
-/// ⌥-click on a list row opens it in a window of its own (docs/apple/mac.md「窗口」): only an option-click reaches the
+/// ⌥-click on a list row opens it in a window of its own (docs/apple/mac.md「Separate chat windows」): only an option-click reaches the
 /// catcher; every other click goes to what is under it.
 @MainActor struct MacOptionClickTests {
     private func mouse(_ type: NSEvent.EventType, _ flags: NSEvent.ModifierFlags, at point: NSPoint = NSPoint(x: 50, y: 20),

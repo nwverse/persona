@@ -1,5 +1,5 @@
 // Pieces the two step-by-step sign-ins share (Settings › Connectors' login card in HubConnector.tsx, Settings › Channels'
-// binding in Channels.tsx; docs/extensions/connectors.md "Sign-in"): the QR code drawn from the hub's modules, saving it as a picture,
+// binding in Channels.tsx; docs/extensions/connectors.md "Login supports"): the QR code drawn from the hub's modules, saving it as a picture,
 // asking a step again every interval until it is scanned / entered, and the note for a step this page cannot draw.
 import { useEffect } from "react";
 import type { ConnectorPrompt } from "../../lib/connectors";

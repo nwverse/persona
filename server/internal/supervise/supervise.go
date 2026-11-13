@@ -33,6 +33,7 @@ import (
 	"github.com/nwverse/persona/server/internal/hub"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/manager"
+	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -163,17 +164,13 @@ func (f hubFile) stopWait() time.Duration {
 	return stopWait
 }
 
-// loopback is the hub's address on this machine for its listen address (hub's hubLocalURL): loopback when it
-// listens on every address, else the address it listens on.
+// loopback is the hub's address on this machine for its listen address (managerconf.LocalHubURL), the default one
+// for a listen address without a port too.
 func loopback(listen string) string {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil || port == "" {
-		return "http://127.0.0.1:18660"
+	if _, port, err := net.SplitHostPort(listen); err == nil && port == "" {
+		listen = ""
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	return "http://" + net.JoinHostPort(host, port)
+	return managerconf.LocalHubURL(listen)
 }
 
 // programOf is what runs name's part (persona-hub, persona-manager): that program beside e.self with own when it is

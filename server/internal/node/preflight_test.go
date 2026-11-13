@@ -206,7 +206,7 @@ func TestPreflightCheckWordsOnAMac(t *testing.T) {
 		{item: 1, path: items[1].path + "/review", target: "../../Desktop/skills/review", link: true, state: "hung"},
 	}, unchecked: 1}
 	for via, who := range map[string]string{
-		"launchd": "/Users/me/.persona/bin/personad（常驻 node，由 launchd 启动）",
+		"launchd": "/Users/me/.persona/bin/personad（启动 node 的 launchd 服务运行的程序）",
 		"ssh":     "sshd-keygen-wrapper",
 		"":        "运行 node 的终端或 App",
 	} {

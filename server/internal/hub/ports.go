@@ -58,7 +58,22 @@ func (o *portOpens) has(mid string, port int) bool {
 	return ok && time.Since(at) < portOpenedFor
 }
 
-var streamSeq atomic.Int64
+// streamIDs names the hub's streams to nodes (forwarded ports "p", previews "v"). A node's Mux belongs to its
+// connection with the manager and outlives a hub restart, and it refuses for a while an id it heard closed before
+// it opened (streams.Mux.Open): so the ids carry a token of this hub process and are never used twice.
+type streamIDs struct {
+	token string
+	seq   atomic.Int64
+}
+
+func newStreamIDs() *streamIDs { return &streamIDs{token: randomHex(6)} }
+
+// next is a new id starting with kind.
+func (s *streamIDs) next(kind string) string {
+	return kind + s.token + "-" + strconv.FormatInt(s.seq.Add(1), 10)
+}
+
+var hubStreamIDs = newStreamIDs()
 
 func (h *Hub) portRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/machines/{mid}/ports/{port}", h.withMachine(h.probePort))
@@ -179,7 +194,7 @@ func (h *Hub) connectPort(w http.ResponseWriter, r *http.Request, m *Machine) {
 		callErr(w, err)
 		return
 	}
-	id := "p" + strconv.FormatInt(streamSeq.Add(1), 10)
+	id := hubStreamIDs.next("p")
 	if err := mux.Open(id); err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return

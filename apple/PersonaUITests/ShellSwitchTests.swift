@@ -1,6 +1,6 @@
 import XCTest
 
-/// The shell's Assistant | Agents switch after a page from the drawer (docs/apple/ios.md「新外壳」): open Knowledge (or Inbox, Scheduled Tasks,
+/// The shell's Assistant | Agents switch after a page from the drawer (docs/apple/ios.md「New shell」): open Knowledge (or Inbox, Scheduled Tasks,
 /// Machines), go back, switch to Agents: the Agents list must be what is drawn, not just the switch saying so (TestFlight 70:
 /// the switch said Agents over the empty chat); switch back: Assistant again. Swiped back from Knowledge with its search open, the
 /// root kept a system navigation bar that pushed the top bar ~106 pt down: a tap on the switch where it belongs hit

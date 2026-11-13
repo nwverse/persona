@@ -1,7 +1,7 @@
 import SwiftUI
 
 #if os(visionOS)
-/// A conversation in a window of its own (docs/apple/mac.md「对话单独开窗口」, the same idea on Apple Vision Pro):
+/// A conversation in a window of its own (docs/apple/mac.md「Separate chat windows」, the same idea on Apple Vision Pro):
 /// `WindowGroup(for: SessionKey.self)`, so a few agents can float side by side and the system brings the windows back
 /// (the key is the window's restorable value). Inside, the chat page as Agents shows it; what it pushes (files, Git,
 /// a subagent…) goes on this window's own stack, as on iPad.

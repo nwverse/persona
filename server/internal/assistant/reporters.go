@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Reporting conversations (#3192, docs/extensions/lark-agent.md "Tasks handed out"): a conversation started with report_tasks (a
+// Reporting conversations (#3192, docs/extensions/lark-agent.md "Dispatched tasks"): a conversation started with report_tasks (a
 // plugin's /agent asks for it) is told about the tasks it opens as the main conversation is about its quiet ones
 // (quiet.go): they are quiet, and each notice goes into it, so it can hand the result on (the /agent conversation
 // replies in Feishu). Kept in the settings table: a task outlives the hub's process.

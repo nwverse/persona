@@ -1,4 +1,4 @@
-// In-conversation search (docs/web/web.md "In-conversation search", Android ChatSearch.kt, parity N26): literal, case-insensitive
+// In-conversation search (docs/web/web.md "Search in chat", Android ChatSearch.kt, parity N26): literal, case-insensitive
 // matching over what is loaded of a chat (words, thoughts, tool names, tool input and output, system events), newest
 // first, at most SEARCH_LIMIT hits; and where a hit sits in the chat's lines, for going to it.
 import type { Item } from "./types";

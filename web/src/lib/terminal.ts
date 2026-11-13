@@ -181,25 +181,19 @@ export class WheelLines {
   }
 }
 
-/** The grid a panel of this size holds at this cell size (what the browser asks to drive the terminal at). */
-export function fitGrid(width: number, height: number, cellWidth: number, cellHeight: number): { cols: number; rows: number } | null {
-  if (!(cellWidth > 0 && cellHeight > 0 && width > 0 && height > 0)) return null;
-  return { cols: Math.floor(width / cellWidth), rows: Math.floor(height / cellHeight) };
-}
-
 /** A grid worth driving at (smaller than this, Claude Code cannot lay itself out). */
 export function usableGrid(g: { cols: number; rows: number } | null | undefined): g is { cols: number; rows: number } {
   return Boolean(g && g.cols >= 10 && g.rows >= 4);
 }
 
 /**
- * A font stack with `family` before its generic family (the fallback the browser reaches for characters the
- * monospaced fonts lack): `"JetBrains Mono", Menlo, monospace` → `"JetBrains Mono", Menlo, "<family>", monospace`.
+ * A font stack with a range-limited `family` first. Named desktop fallbacks can resolve to a CJK face, so the
+ * size-adjusted face must precede them as well as the generic family. Its unicode-range limits which glyphs it draws.
  */
 export function withFamily(stack: string, family: string): string {
   const parts = stack.split(",").map((s) => s.trim()).filter(Boolean);
   const generic = parts.length && /^monospace$/i.test(parts[parts.length - 1]) ? parts.pop()! : "monospace";
-  return [...parts.filter((p) => p !== `"${family}"`), `"${family}"`, generic].join(", ");
+  return [`"${family}"`, ...parts.filter((p) => p !== `"${family}"`), generic].join(", ");
 }
 
 // ── colors ──────────────────────────────────────────────

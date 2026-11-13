@@ -110,7 +110,7 @@ struct IslandSide: View {
                 if leading { IslandMinimal(state: state, stale: stale, limited: true, look: state.drawnLook) }
             } else {
                 if leading {
-                    // The persona, then the most urgent count (docs/apple/live-activity.md「形象」).
+                    // The persona, then the most urgent count (docs/apple/live-activity.md「Avatar」).
                     IslandLeading(state: state, stale: stale, look: state.drawnLook).padding(.leading, IslandMetrics.edge)
                 } else {
                     IslandCellView(cell: IslandCell.sides(state).right).padding(.trailing, IslandMetrics.edge)

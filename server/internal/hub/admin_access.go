@@ -247,7 +247,7 @@ func (h *Hub) addrsInScope(scope adminScope, r *http.Request) bool {
 }
 
 // adminCanSetup: only a source the scope lets in by address may set the first password; under "any" someone from
-// the internet must not get there first (docs/operations/admin.md "First-run setup").
+// the internet must not get there first (docs/operations/admin.md "Admin password and sessions").
 func (h *Hub) adminCanSetup(r *http.Request) bool {
 	return h.addrsInScope(h.adminScope(), r)
 }

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
@@ -230,13 +231,40 @@ func (n *Node) sendKeys(ctx context.Context, pane string, keys ...string) error 
 	return h.SendKeys(ctx, ref, keys...)
 }
 
-// hostPrompt is the host's own prompt (no fallback; prompt types when the host knows no agent there).
+// hostPrompt is the host's own prompt (no fallback; prompt types when the host knows no agent there). Hosts paste the
+// text, where a control character could end the paste and press keys: every caller's text goes in inert.
 func (n *Node) hostPrompt(ctx context.Context, pane, text string) error {
 	h, ref, err := n.paneHost(pane)
 	if err != nil {
 		return err
 	}
-	return h.Prompt(ctx, ref, text)
+	return h.Prompt(ctx, ref, inertControls(text))
+}
+
+// inertControls is text as it may go into a terminal in a paste: an ESC becomes inertEscape and every other control
+// character but newline, carriage return and tab (Unicode Cc) becomes <U+XXXX>, so none of them is a key; bytes that
+// are not UTF-8 become U+FFFD.
+func inertControls(text string) string {
+	if utf8.ValidString(text) && !strings.ContainsFunc(text, pasteControl) {
+		return text
+	}
+	var b strings.Builder
+	for _, r := range text {
+		switch {
+		case r == '\x1b':
+			b.WriteString(inertEscape)
+		case pasteControl(r):
+			fmt.Fprintf(&b, "<U+%04X>", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// pasteControl: a control character inertControls makes inert.
+func pasteControl(r rune) bool {
+	return unicode.Is(unicode.Cc, r) && r != '\n' && r != '\r' && r != '\t'
 }
 
 // defaultHost is where new sessions start and where spaces without a host kind live: the set's default host (#2576;

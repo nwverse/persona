@@ -16,7 +16,7 @@ struct ViewerIcon: View {
     }
 }
 
-/// The top bar over a full-screen picture, as Photos has it (docs/apple/ios.md「图片查看器」): a round button on each side,
+/// The top bar over a full-screen picture, as Photos has it (docs/apple/ios.md「Information architecture」): a round button on each side,
 /// what the page is about in between. The sides carry their own surface (`viewerRound()`); a side with nothing to
 /// offer passes `ViewerBarSpacer()` so the middle stays centered.
 struct ViewerTopBar<Leading: View, Center: View, Trailing: View>: View {

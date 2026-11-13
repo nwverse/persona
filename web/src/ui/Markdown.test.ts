@@ -2,6 +2,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import katex from "katex";
 import { hasMath, linkify, normalizeMath, splitCode } from "./Markdown";
 
+// The machine's answers about paths (lib/path-presence.ts), for the cache's path-link key; every other request is real.
+const api = vi.hoisted(() => vi.fn(async (_url: string) => ({ stats: [] as { path: string; kind: string }[] })));
+vi.mock("../lib/api", async (orig) => ({ ...(await orig<typeof import("../lib/api")>()), api: (url: string) => api(url) }));
+// How many blocks react-markdown parsed: its Markdown() runs once per parse, called by markdown-cache.ts or drawn as
+// <ReactMarkdown>.
+const parses = vi.hoisted(() => ({ n: 0 }));
+vi.mock("react-markdown", async (orig) => {
+  const real = await orig<typeof import("react-markdown")>();
+  return { ...real, default: (options: Parameters<typeof real.default>[0]) => (parses.n++, real.default(options)) };
+});
+
 describe("normalizeMath", () => {
   it("rewrites \\( \\) to inline dollars", () => {
     expect(normalizeMath("面积是 \\(\\pi r^2\\)。")).toBe("面积是 $\\pi r^2$。");
@@ -86,7 +97,7 @@ describe("KaTeX", () => {
     expect(html).toContain('<span data-math-pending="inline">$\\pi r^2$</span>');
     expect(html).toMatch(/data-math-pending="display">\$\$\nE=mc\^2\n\$\$/);
     // an ordinary code span is still code
-    expect(renderToStaticMarkup(createElement(Markdown, { text: "`a_b`" }))).toContain("<code>a_b</code>");
+    expect(renderToStaticMarkup(createElement(Markdown, { text: "`a_b`" }))).toMatch(/<code [^>]*data-copy-code[^>]*>a_b<\/code>/);
   });
 
   it("renders what normalizeMath writes and mhchem once loaded", async () => {
@@ -101,6 +112,10 @@ describe("KaTeX", () => {
     const html = renderToStaticMarkup(createElement(Markdown, { text: "面积 $\\pi r^2$" }));
     expect(html).toContain('class="katex"');
     expect(html).not.toContain("data-math-pending");
+    // the block the test before drew while KaTeX was out: drawn again with it, not as the kept tree (markdown-cache.ts)
+    const again = renderToStaticMarkup(createElement(Markdown, { text: "面积 $\\pi r^2$\n\n$$\nE=mc^2\n$$" }));
+    expect(again).toContain('class="katex-display"');
+    expect(again).not.toContain("data-math-pending");
   });
 });
 
@@ -186,11 +201,13 @@ describe("Mermaid blocks", () => {
     const { renderToStaticMarkup } = await import("react-dom/server");
     const { createElement } = await import("react");
     const { Markdown } = await import("./Markdown");
-    for (const text of ["```js\nlet a = 1\n```", "```mermaid\ngraph TD; A-->B\n```"]) {
-      const html = renderToStaticMarkup(createElement(Markdown, { text }));
-      expect(html).toContain("[@media(hover:none)]:opacity-100");
-      expect(html).toMatch(/aria-label="拷贝代码"[^>]*touch-hit/);
-    }
+    // a code block's Copy is in its title bar, always shown (#2984); a diagram's buttons show on a touch screen
+    const code = renderToStaticMarkup(createElement(Markdown, { text: "```js\nlet a = 1\n```" }));
+    expect(code).toMatch(/data-code-bar[^]*aria-label="拷贝代码"[^>]*touch-hit/);
+    expect(code).not.toContain("opacity-0");
+    const diagram = renderToStaticMarkup(createElement(Markdown, { text: "```mermaid\ngraph TD; A-->B\n```" }));
+    expect(diagram).toContain("[@media(hover:none)]:opacity-100");
+    expect(diagram).toMatch(/aria-label="拷贝代码"[^>]*touch-hit/);
   });
 
   it("errors read in Chinese with the line, Mermaid's text kept", async () => {
@@ -275,3 +292,103 @@ describe("Markdown tables (#5275)", () => {
   });
 });
 
+// Finished blocks drawn again from markdown-cache.ts (#2465): a kept tree draws what a fresh one does, and a change of
+// anything a tree is made from (machine, directory, formulas in or out, the path-link set) never draws another's.
+describe("Markdown cache (#2465)", () => {
+  const CORPUS = [
+    "## 结果 Results\n\n| step | before | after |\n| --- | ---: | ---: |\n| parse | 1,496 ms | $O(n \\log n)$ |\n| 渲染 | **快** | `src/a.ts:12` |",
+    "面积 $\\pi r^2$，水是 $\\ce{H2O}$，热量 $\\pu{123 kJ/mol}$，价格 $5\n\n$$\n\\sum_{i=1}^{n} t_i\n$$",
+    "```ts\nconst a: number = 1 // one\n```\n\n```go\nfunc main() { fmt.Println(\"hi\") }\n```\n\n```python\nrows = [r for r in batch]  # keep\n```\n\n```nosuchlang\nplain $5\n```\n\n```\nno language\n```",
+    "读 src/a.ts:12 和 `src/a.ts`，见 [报告](./report.md) 与 https://example.com/x。\n\n- 这是**「重要」**的事\n- > 引用 $x^2$",
+  ];
+  const there = async () => {
+    const { askPaths, resetPathPresence } = await import("../lib/path-presence");
+    resetPathPresence();
+    api.mockImplementation(async (url: string) => ({
+      stats: new URL(url, "http://x").searchParams.get("paths")!.split("\n").map((path) => ({ path, kind: path === "src/a.ts" ? "file" : "missing" })),
+    }));
+    askPaths("mac", "/repo", ["src/a.ts"]);
+    await vi.waitFor(async () => expect((await import("../lib/path-presence")).pathStat("mac", "/repo", "src/a.ts")?.kind).toBe("file"));
+    return resetPathPresence;
+  };
+  const draw = async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const { Markdown } = await import("./Markdown");
+    const { markdownCache, forgetMarkdown } = await import("./markdown-cache");
+    vi.stubGlobal("localStorage", { getItem: () => "test-token" });
+    const html = (props: { text: string; mid?: string; cwd?: string }, cached = true) => {
+      markdownCache.on = cached;
+      try {
+        return renderToStaticMarkup(createElement(Markdown, props));
+      } finally {
+        markdownCache.on = true;
+      }
+    };
+    return { html, forgetMarkdown };
+  };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("draws a kept tree, and the one it keeps, as the block drawn without the cache", async () => {
+    const { loadMath } = await import("./stream/math");
+    await loadMath();
+    const forget = await there();
+    const { html, forgetMarkdown } = await draw();
+    forgetMarkdown();
+    for (const text of CORPUS) {
+      for (const props of [{ text }, { text, mid: "mac", cwd: "/repo" }]) {
+        const fresh = html(props, false);
+        expect(html(props)).toBe(fresh); // kept now
+        expect(html(props)).toBe(fresh); // drawn from the cache
+      }
+    }
+    expect(html({ text: CORPUS[3], mid: "mac", cwd: "/repo" })).toContain("file/download?path=%2Frepo%2Fsrc%2Fa.ts");
+    forget();
+  });
+
+  it("draws a conversation opened again from its kept trees, without parsing its replies", async () => {
+    const { html, forgetMarkdown } = await draw();
+    forgetMarkdown();
+    // each draw is a new root, as a conversation opened again mounts its replies anew (ChatView remounts)
+    const open = () => CORPUS.map((text) => html({ text, mid: "mac", cwd: "/repo" }));
+    const before = parses.n;
+    const first = open();
+    expect(parses.n - before).toBe(CORPUS.length);
+    expect(open()).toEqual(first);
+    expect(parses.n - before).toBe(CORPUS.length);
+  });
+
+  it("draws a block again without parsing it, and does not keep one block that would push out a chat", async () => {
+    const { cachedMarkdown, forgetMarkdown } = await import("./markdown-cache");
+    forgetMarkdown();
+    const parsed = vi.fn();
+    const plugins = [() => parsed];
+    const opts = (children: string, remarkPlugins = plugins) => ({ children, remarkPlugins });
+    const tree = cachedMarkdown("k", opts("# a"));
+    expect(cachedMarkdown("k", opts("# a"))).toBe(tree);
+    expect(parsed).toHaveBeenCalledTimes(1);
+    // another remark plugin list (a reply read line by line, say) is another tree under the same key
+    expect(cachedMarkdown("k", opts("# a", [...plugins]))).not.toBe(tree);
+    expect(parsed).toHaveBeenCalledTimes(2);
+    const long = "x".repeat(300_000);
+    expect(cachedMarkdown(long, opts(long))).not.toBe(cachedMarkdown(long, opts(long)));
+    expect(parsed).toHaveBeenCalledTimes(4);
+  });
+
+  it("keys the machine, the directory and the path-link set", async () => {
+    const { html, forgetMarkdown } = await draw();
+    forgetMarkdown();
+    const text = CORPUS[3];
+    const base = { text, mid: "mac", cwd: "/repo" };
+    const before = html(base); // no answer about src/a.ts yet: plain text, kept
+    expect(before).not.toContain("path=%2Frepo%2Fsrc%2Fa.ts");
+    const forget = await there();
+    const variants = [base, { ...base, mid: "mini" }, { ...base, cwd: "/other" }, { text }];
+    const drawn = variants.map((v) => html(v));
+    expect(drawn[0]).toContain("path=%2Frepo%2Fsrc%2Fa.ts"); // the link set changed: not the tree kept before
+    expect(drawn).toEqual(variants.map((v) => html(v, false)));
+    expect(variants.map((v) => html(v))).toEqual(drawn);
+    expect(new Set([before, ...drawn]).size).toBe(variants.length + 1); // each of them changes what is drawn
+    forget();
+  });
+});

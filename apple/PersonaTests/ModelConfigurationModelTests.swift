@@ -9,6 +9,10 @@ struct ModelConfigurationModelTests {
     private static let detail = #"{"purpose":\#(purpose),"providers":\#(providers)}"#
     private static let lark = #"{"id":"lark.agent","category_id":"agent.new","parent":"agent.new","name":"飞书 /agent","group":"Agents","kind":"launcher","override":{},"effective":{"provider":"launcher.strong","model":"model-a","effort":"medium"},"revision":7,"fields":["provider","model","effort"],"provider_ids":["launcher.strong","legacy.ai"],"inherited_from":"Agents"}"#
     private static let larkDetail = #"{"purpose":\#(lark),"providers":\#(providers)}"#
+    /// The Inbox's AI twin as a hub that lets it be set apart sends it (#4232).
+    private static let twin = lark.replacingOccurrences(of: "lark.agent", with: "inbox.agent").replacingOccurrences(of: "飞书 /agent", with: "AI 分身执行")
+        .replacingOccurrences(of: #""revision":7"#, with: #""revision":0"#)
+    private static let twinDetail = #"{"purpose":\#(twin),"providers":\#(providers)}"#
 
     private func make(_ hub: FakeHub) -> ModelConfigurationModel { .init(deps: .init(api: { hub.client })) }
 
@@ -117,6 +121,66 @@ struct ModelConfigurationModelTests {
         #expect(hub.sent("PATCH", "/api/v1/model-config/purposes/agent.new").isEmpty)
     }
 
+    /// The AI twin is set apart like Lark /agent: listed beside it, its own record and revision, Follow Agents to reset.
+    @Test func theAITwinIsAnotherIndependentUseOfAgents() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/model-config", json: #"{"purposes":[\#(Self.purpose),\#(Self.twin),\#(Self.lark)],"providers":\#(Self.providers)}"#)
+        hub.on("GET", "/api/v1/model-config/purposes/inbox.agent", json: Self.twinDetail)
+        var saved = try JSON.decoder.decode(ModelPurposeDetail.self, from: Data(Self.twinDetail.utf8))
+        hub.on("PATCH", "/api/v1/model-config/purposes/inbox.agent") { req in
+            let body = try JSONSerialization.jsonObject(with: req.body ?? Data()) as! [String: Any]
+            #expect(body["revision"] as? Int == saved.purpose.revision)
+            if body["provider"] is NSNull {
+                saved.purpose.override = .init()
+                saved.purpose.inheritedFrom = "Agents"
+            } else {
+                saved.purpose.override = .init(provider: body["provider"] as? String, model: body["model"] as? String, effort: body["effort"] as? String)
+                saved.purpose.inheritedFrom = nil
+            }
+            saved.purpose.revision += 1
+            let purpose = String(decoding: try JSON.encoder.encode(saved.purpose), as: UTF8.self)
+            return Data(#"{"purpose":\#(purpose),"providers":\#(Self.providers)}"#.utf8)
+        }
+        let page = make(hub)
+        await page.load()
+        #expect(page.categories.map(\.id) == ["agent.new"])
+        #expect(page.independentPurposes.map(\.id) == ["inbox.agent", "lark.agent"])
+        #expect(page.independentPurposes.allSatisfy(ModelConfigurationModel.followsAgents))
+        #expect(!ModelConfigurationModel.followsAgents(page.categories[0]))
+        await page.load(purposeID: "inbox.agent")
+        let twin = try #require(page.purpose)
+        #expect(twin.id == "inbox.agent" && twin.revision == 0 && page.isAgentsOverride && !page.isLarkAgent)
+        #expect(page.inheritanceStatus(twin) == String(localized: "Follow Agents"))
+        page.chooseProvider("launcher.strong")
+        page.draft.model = "twin-model"
+        page.draft.effort = "low"
+        #expect(await page.save())
+        #expect(page.purpose?.revision == 1)
+        #expect(page.inheritanceStatus(try #require(page.purpose)) == String(localized: "Separately configured"))
+        page.restoreInheritance()
+        #expect(await page.save())
+        let reset = try #require(page.purpose)
+        #expect(reset.revision == 2 && reset.override.isEmpty)
+        #expect(page.inheritanceStatus(reset) == String(localized: "Follow Agents"))
+        #expect(hub.sent("PATCH", "/api/v1/model-config/purposes/inbox.agent").count == 2)
+        #expect(hub.sent("PATCH", "/api/v1/model-config/purposes/agent.new").isEmpty)
+        #expect(hub.sent("PATCH", "/api/v1/model-config/purposes/lark.agent").isEmpty)
+    }
+
+    /// A hub from before #4232 keeps the twin a read-only use: it is not listed apart and opens Agents.
+    @Test func anOlderHubsTwinStaysAUseOfAgents() async {
+        let hub = FakeHub()
+        let readOnly = Self.twin.replacingOccurrences(of: #"["provider","model","effort"]"#, with: "[]")
+        hub.on("GET", "/api/v1/model-config", json: #"{"purposes":[\#(Self.purpose),\#(Self.lark)],"providers":\#(Self.providers)}"#)
+        hub.on("GET", "/api/v1/model-config/purposes/inbox.agent", json: #"{"purpose":\#(readOnly),"providers":\#(Self.providers)}"#)
+        hub.on("GET", "/api/v1/model-config/purposes/agent.new", json: Self.detail)
+        let page = make(hub)
+        await page.load()
+        #expect(page.independentPurposes.map(\.id) == ["lark.agent"])
+        await page.load(purposeID: "inbox.agent")
+        #expect(page.purpose?.id == "agent.new" && !page.isAgentsOverride)
+    }
+
     @Test func independentConflictRetainsAllDraftFieldsAndBlocksAnotherWrite() async {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/model-config/purposes/lark.agent", json: Self.larkDetail)
@@ -193,7 +257,7 @@ struct ModelConfigurationModelTests {
         #expect(page.error?.contains("更新服务器") == true)
     }
 
-    /// A use whose connection the hub holds (docs/assistant/model-config.md「上游限流」): the time as Go writes it, counted down.
+    /// A use whose connection the hub holds (docs/assistant/model-config.md「Upstream rate limits」): the time as Go writes it, counted down.
     @Test func decodesAHeldConnectionAndCountsItDown() async throws {
         let held = #"{"id":"inbox.triage","category_id":"inbox.triage","uses":[{"name":"收件箱分拣"}],"name":"信息筛选","group":"默认模型","kind":"api","override":{},"effective":{"provider":"legacy.ai"},"revision":0,"status":"额度用完，23 分钟后重试","limit":{"reason":"quota","until":"2026-11-02T20:13:00.123456789+08:00"}}"#
         let hub = FakeHub()
@@ -272,13 +336,6 @@ struct ModelConfigurationModelTests {
         #expect(!page.saving)
         await page.load(purposeID: "agent.new")
         #expect(!page.conflict && page.error == nil && !page.dirty)
-    }
-
-    @Test func restoringInheritanceEncodesExplicitNulls() throws {
-        let patch = ModelConfigurationPatch(revision: 9, binding: .init(), fields: ["provider", "model", "effort"])
-        let body = try JSONSerialization.jsonObject(with: JSON.encoder.encode(patch)) as! [String: Any]
-        #expect(body["revision"] as? Int == 9)
-        #expect(body["provider"] is NSNull && body["model"] is NSNull && body["effort"] is NSNull)
     }
 
     @Test func aTaskTimeEditDoesNotOverwriteCentralModelChoices() throws {

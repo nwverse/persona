@@ -3,6 +3,7 @@ package extmgr
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,16 @@ func TestCallApps(t *testing.T) {
 		{"computer_run", "", `const a = await cua.getApp("Calculator"); await cua.launch("Terminal");`, "", "Calculator,Terminal", true},
 		{"computer_run", "", `await cua.launch('Terminal'); return 1`, "", "Terminal", true},
 		{"computer_run", "", `const a = await cua.getApp("Calculator"); await cua.launch(name);`, "", "Calculator", false},
+		// JavaScript allows space and comments before the call's parentheses, and a computed callee: those calls
+		// are not read, so the script's apps are unknown and it is asked about every time, however many apps of it
+		// were read. An always-allowed Calculator must not make them run without a card.
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); const b = await cua.getApp ("Terminal"); await b.click();`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); const b = await cua.getApp/*x*/("Terminal"); await b.click();`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); const b = await cua["getApp"]("Terminal"); await b.click();`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); await cua.launch ("Terminal");`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); await cua.launch/*x*/("Terminal");`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); const f = cua.launch; await f("Terminal");`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); await cua.getApp("Term\u0069nal");`, "", "Calculator", false},
 	} {
 		apps, whole := callApps(c.name, c.app, c.script, json.RawMessage(c.steps))
 		if strings.Join(apps, ",") != c.want || whole != c.whole {
@@ -43,7 +54,7 @@ func TestCallApps(t *testing.T) {
 }
 
 // The first time an app is operated on a Mac the phone is asked; "Always allow" keeps it (by bundle id) until removed. A
-// terminal is asked about every time, with no "Always allow", and so is a script whose apps cannot all be read.
+// terminal is asked about every time, with no "Always allow". A script whose apps cannot all be read is refused (#4336).
 func TestComputerAppsAreAskedOnce(t *testing.T) {
 	h, _ := extensionTestHub(t)
 	h.opts.AssistantMachine = func() string { return "assistant-box" } // where the assistant's conversations run
@@ -97,6 +108,23 @@ func TestComputerAppsAreAskedOnce(t *testing.T) {
 			t.Fatalf("%+v", res)
 		}
 	}
+	// A script that hides the Terminal call from the literal reader: its apps are unknown, so it is refused before
+	// any card (it could open System Settings by a computed name, #4336), even though Calculator is always allowed.
+	for _, script := range []string{
+		`const a = await cua.getApp("Calculator"); const b = await cua.getApp ("Terminal"); await b.click();`,
+		`const a = await cua.getApp("Calculator"); await cua.launch ("Terminal");`,
+		`const a = await cua.getApp(name); return 1`,
+	} {
+		args := `{"machine": "mac", "script": ` + strconv.Quote(script) + `}`
+		_, before := seen()
+		if res := h.callComputerTool(short, "conv1234", "computer_run", json.RawMessage(args)); !res.IsError ||
+			!strings.Contains(res.Content[0].Text, "cua.getApp") {
+			t.Fatalf("%s: an unreadable script is refused and told how to name its apps: %+v", script, res)
+		}
+		if _, after := seen(); len(after) != len(before) {
+			t.Fatalf("%s: refused before anything ran on the Mac: %+v", script, after[len(before):])
+		}
+	}
 	code, out := call(t, mux, "GET", "/api/v1/machines/mac/computer/apps", h.cfg.Token, "")
 	apps, _ := out["apps"].([]any)
 	if code != 200 || len(apps) != 1 || apps[0].(map[string]any)["bundle_id"] != "com.apple.calculator" || apps[0].(map[string]any)["name"] != "Calculator" {
@@ -111,12 +139,6 @@ func TestComputerAppsAreAskedOnce(t *testing.T) {
 		}
 		<-done
 	}
-	go func() { _ = answerCard(t, h, false, false) }()
-	if res := h.callComputerTool(ctx, "conv1234", "computer_run", json.RawMessage(`{"machine": "mac", "script": "const a = await cua.getApp(name); return 1"}`)); !res.IsError ||
-		!strings.Contains(res.Content[0].Text, "declined") {
-		t.Fatalf("a script naming its apps by expression: asked, declined: %+v", res)
-	}
-
 	if code, out := call(t, mux, "DELETE", "/api/v1/machines/mac/computer/apps/com.apple.calculator", h.cfg.Token, ""); code != 200 || len(out["apps"].([]any)) != 0 {
 		t.Fatalf("removed: %d %v", code, out)
 	}
@@ -131,7 +153,7 @@ func TestComputerAppsAreAskedOnce(t *testing.T) {
 	if res := h.callComputerTool(short, "conv1234", "computer_run", json.RawMessage(`{"machine": "mac", "steps": `+term+`}`)); res.IsError {
 		t.Fatalf("turned off: nothing asked: %+v", res)
 	}
-	if _, after := seen(); len(after) != len(before)+1 {
-		t.Fatal("turned off: no list_apps either, only the call")
+	if _, after := seen(); len(after) != len(before)+3 || after[len(after)-1].Tool != "run_steps" {
+		t.Fatalf("turned off: no card, only the look at the apps and windows (#4336), then the call: %+v", after[len(before):])
 	}
 }

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Settings › Appearance › Light & Dark (docs/apple/ios.md「深浅色」): picking Dark or Light draws the app that way (checked on `probe.scheme`,
+/// Settings › Appearance › Light & Dark (docs/apple/ios.md「Light & Dark」): picking Dark or Light draws the app that way (checked on `probe.scheme`,
 /// the look the page is actually in) and puts the default Avatar (Mochi)'s matching icon on the home screen, through the
 /// system's alert where the simulator supports alternate icons; Match System hands both back. Runs in the demo mode (no
 /// hub). Screenshots go to PERSONA_ICON_SHOTS when set: the page and the home screen after each pick.

@@ -15,6 +15,11 @@ import (
 
 // The finished push's decision and the unified states (fleet_push.go, fleet.go), moved from the hub's tests.
 
+// markStates is fillStateMarks with the machine's whole list.
+func (s *Service) markStates(machine string, list []proto.Session, now time.Time) {
+	s.fillStateMarks(machine, list, now, true)
+}
+
 func TestTurnTracker(t *testing.T) {
 	t0 := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
 	at := func(sec int) time.Time { return t0.Add(time.Duration(sec) * time.Second) }

@@ -22,5 +22,9 @@
   "review_cancelled": "取り消し",
   "thread_feishu": "Lark のトピック",
   "thread_channel": "トピック（{channel}）",
-  "thread_line": "{kind} · {name}"
+  "thread_line": "{kind} · {name}",
+  "orphaned": "誰も作業していません",
+  "orphaned_error": "エラー後に終了",
+  "orphaned_closed": "終了済み",
+  "orphaned_offline": "パソコンがオフライン"
 }

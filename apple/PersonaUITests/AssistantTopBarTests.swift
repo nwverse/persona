@@ -1,6 +1,6 @@
 import XCTest
 
-/// The Persona tab's top bar and its sidebar (docs/apple/ios.md「Persona 顶栏和侧边栏」): the avatar's menu (Knowledge, Details, the
+/// The Persona tab's top bar and its sidebar (docs/apple/ios.md「Persona top bar and sidebar」): the avatar's menu (Knowledge, Details, the
 /// copy items), Chat History on the left opening the sidebar, a swipe to the right anywhere on the page doing the same,
 /// New Chat on the right, picking a conversation in the sidebar, and the bar staying put while a long chat scrolls.
 /// Against scripts/mock/mock_hub.py (PERSONA_MOCK_HUB): its main conversation is「今天要处理的事」, the long one is ASK4.

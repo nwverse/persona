@@ -177,6 +177,35 @@ struct TodosLogicTests {
         #expect(store.todos == before)
     }
 
+    /// Got It (#5707): the mark shows at once, the hub's takes its place (PUT …/seen), Undo takes it off (DELETE), and the
+    /// list's own fields (the ask the PUT's answer leaves out) stay.
+    @Test func setSeenMarksAtOnceAndUndoTakesItOff() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: #"{"todos":[{"id":"t1","title":"Seen","done_at":"2026-11-10T09:00:00Z","ask":{"verdict":"v","asked_at":"2026-11-10T09:00:00Z"}}]}"#)
+        hub.on("PUT", "/api/v1/todos/t1/seen", json: #"{"todo":{"id":"t1","title":"Seen","done_at":"2026-11-10T09:00:00Z","seen_at":"2026-11-10T10:00:00Z"}}"#)
+        hub.on("DELETE", "/api/v1/todos/t1/seen", json: #"{"todo":{"id":"t1","title":"Seen","done_at":"2026-11-10T09:00:00Z"}}"#)
+        let store = TodoStore.shared
+        await store.refresh(api: hub.client)
+        let task = Task { try await store.setSeen(id: "t1", true, api: hub.client) }
+        try await task.value
+        #expect(store.todo(id: "t1")?.seenAt == ISO8601DateFormatter().date(from: "2026-11-10T10:00:00Z"))
+        #expect(store.todo(id: "t1")?.ask != nil)
+        #expect(hub.sent("PUT", "/api/v1/todos/t1/seen").count == 1)
+        try await store.setSeen(id: "t1", false, api: hub.client)
+        #expect(store.todo(id: "t1")?.seenAt == nil)
+        #expect(hub.sent("DELETE", "/api/v1/todos/t1/seen").count == 1)
+    }
+
+    /// A Got It the hub refuses (no route: 404) puts the mark back as it was and says why to its caller.
+    @Test func setSeenRollsBackWhenTheWriteFails() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: #"{"todos":[{"id":"t1","title":"Seen","done_at":"2026-11-10T09:00:00Z"}]}"#)
+        let store = TodoStore.shared
+        await store.refresh(api: hub.client)
+        await #expect(throws: APIError.self) { try await store.setSeen(id: "t1", true, api: hub.client) }
+        #expect(store.todo(id: "t1")?.seenAt == nil)
+    }
+
     /// Only a 404 from GET /api/v1/todos means an old hub (the sidebar entrance hides); other failures keep it shown.
     @Test func only404MarksAnOldHub() {
         #expect(TodosLogic.isOldHub(APIError(status: 404, message: "no route")))
@@ -238,11 +267,11 @@ struct TodosLogicTests {
     }
 
     @Test func todoPresentationPreservesLabelsOrderAndColors() {
-        let states: [TaskState] = [.needsYou, .unread, .working, .followup, .notStarted, .done, .failed]
-        #expect(states.map(\.todoLabel) == ["需要你", "完成未看", "工作中", "待跟进", "未开始", "已完成", "没开起来"])
-        #expect(states.map(\.todoRank) == [0, 1, 2, 3, 4, 5, 6])
+        let states: [TaskState] = [.needsYou, .unread, .working, .waiting, .followup, .notStarted, .done, .failed]
+        #expect(states.map(\.todoLabel) == ["需要你", "完成未看", "工作中", "等待中", "待跟进", "未开始", "已完成", "没开起来"])
+        #expect(states.map(\.todoRank) == [0, 1, 2, 3, 4, 5, 6, 7])
         #expect(TaskState.allCases.sorted { $0.todoRank < $1.todoRank } == states)
-        let tones = [StatusPalette.needsYou, StatusPalette.unread, StatusPalette.working,
+        let tones = [StatusPalette.needsYou, StatusPalette.unread, StatusPalette.working, StatusPalette.working,
                      StatusPalette.idle, StatusPalette.idle, StatusPalette.idle, StatusPalette.idle]
         for (state, tone) in zip(states, tones) {
             #expect(state.todoTone.dot == tone.dot)
@@ -757,7 +786,7 @@ struct TodosLogicTests {
         #expect(hub.sent("GET", "/api/v1/todos").count == 1)
     }
 
-    /// A task the hub closed (docs/assistant/todos.md「自动完成」) reads 「自动完成」 with its reason; reopened or closed by the user, it does not.
+    /// A task the hub closed (docs/assistant/todos.md「Automatic completion」) reads 「自动完成」 with its reason; reopened or closed by the user, it does not.
     @Test func autoDoneTodo() throws {
         let json = """
         {"id":"t","title":"统一连接器 logo 尺寸","done_at":"2026-11-04T08:00:00Z","origin":"conv","done_by":"auto",

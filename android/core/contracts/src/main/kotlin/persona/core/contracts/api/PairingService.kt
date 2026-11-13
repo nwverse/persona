@@ -9,6 +9,9 @@ data class PairingRequest(
     val fp: String? = null,
     val tls: Int? = null,
     val alt: List<String> = emptyList(),
+    /** A Cloudflare Access service token entered before pairing: the pairing's own requests already carry it. */
+    val access: HubAccess? = null,
+    val deviceId: String? = null,
 ) {
     override fun toString() = "PairingRequest(credentials=redacted)"
 }
@@ -19,11 +22,24 @@ data class PairingProgress(
     val timestamp: String? = null,
     val candidates: List<ConnectionCandidate> = emptyList(),
 )
-enum class PairingFailure { InvalidCode, Dns, Refused, Unreachable, Timeout, LocalPermission, Certificate, Expired, Incompatible, TlsRequired, Unknown }
-class PairingException(val reason: PairingFailure) : Exception(reason.name)
+enum class PairingFailure { InvalidCode, Dns, Refused, Unreachable, Timeout, LocalPermission, Certificate, Expired, Incompatible, TlsRequired,
+    /** Cloudflare Access stopped the request: no service token was set, or the one set was refused. */
+    AccessRequired, AccessRejected,
+    /**
+     * The link's address behind a reverse proxy or tunnel presented a certificate this phone doesn't trust (#2622): the
+     * proxy's, not the hub's key; [PairingException.address] names it.
+     */
+    ProxyCertificate,
+    Unknown }
+/** [address]: the address the failure is about, when the message names one ([PairingFailure.ProxyCertificate]). */
+class PairingException(val reason: PairingFailure, val address: String? = null) : Exception(reason.name)
 
 interface PairingService {
     val isPaired: StateFlow<Boolean>
+    /** Opens the hub's HTTPS OPAQUE page; passwords never pass through the native API. */
+    suspend fun passwordLogin(address: String, progress: (PairingProgress) -> Unit) {
+        throw PairingException(PairingFailure.Incompatible)
+    }
     suspend fun pair(request: PairingRequest)
     /** Implementations must report actual stages and verify identity before exchanging credentials. */
     suspend fun pair(request: PairingRequest, progress: (PairingProgress) -> Unit) {

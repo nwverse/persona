@@ -51,11 +51,14 @@ type linuxCollector struct {
 	cpu   cpuTimes
 	cores []cpuTimes
 	net   netCounters
-	buf   bytes.Buffer // what read read last, reused between samples
+	// The interfaces net adds up (netSample).
+	counted map[string]bool
+	buf     bytes.Buffer // what read read last, reused between samples
 	// Whether each interface is physical, forgotten every listEvery: resolving its /sys link takes a few syscalls,
 	// and a host running containers has a veth per container.
 	nics   map[string]bool
 	nicsAt time.Time
+	lookup func(name string) bool // physical, or a stand-in in tests; nil is physical
 	mounts mountCache
 }
 
@@ -92,15 +95,7 @@ func (c *linuxCollector) Sample(now time.Time) proto.MetricSample {
 		s.MemTotal, s.MemUsed = limit, min(used, limit)
 	}
 	if b, err := c.read("/proc/net/dev"); err == nil {
-		cur := netCounters{at: now}
-		for name, v := range parseNetDev(b) {
-			if c.isPhysical(name, now) {
-				cur.rx += v[0]
-				cur.tx += v[1]
-			}
-		}
-		s.NetRx, s.NetTx = netRates(c.net, cur)
-		c.net = cur
+		s.NetRx, s.NetTx = c.netSample(parseNetDev(b), now)
 	}
 	mounts := []string{"/"}
 	if b, err := c.read("/proc/self/mountinfo"); err == nil {
@@ -121,6 +116,45 @@ func (c *linuxCollector) Sample(now time.Time) proto.MetricSample {
 		}
 	}
 	return s
+}
+
+// netSample is the network rates since the last call, from each interface's counters (parseNetDev): the physical
+// interfaces added up. In a container's own network namespace /sys calls every interface virtual (eth0 is one end of
+// a veth pair), so when none is physical the name decides, as without /sys: eth0 counts, lo does not. When the set
+// added up changes, a newcomer's bytes since boot would draw a spike, so that sample has no rate, as on Windows.
+func (c *linuxCollector) netSample(dev map[string][2]uint64, now time.Time) (rx, tx *float64) {
+	byName := true
+	for name := range dev {
+		if c.isPhysical(name, now) {
+			byName = false
+			break
+		}
+	}
+	counts := func(name string) bool {
+		if byName {
+			return !virtualName(name)
+		}
+		return c.isPhysical(name, now)
+	}
+	cur, same, n := netCounters{at: now}, true, 0
+	for name, v := range dev {
+		if counts(name) {
+			cur.rx += v[0]
+			cur.tx += v[1]
+			same, n = same && c.counted[name], n+1
+		}
+	}
+	if !same || n != len(c.counted) {
+		c.counted, c.net = make(map[string]bool, n), netCounters{}
+		for name := range dev {
+			if counts(name) {
+				c.counted[name] = true
+			}
+		}
+	}
+	rx, tx = netRates(c.net, cur)
+	c.net = cur
+	return rx, tx
 }
 
 // read reads a /proc file into c.buf: the bytes are good until the next read.
@@ -145,7 +179,11 @@ func (c *linuxCollector) isPhysical(name string, now time.Time) bool {
 	}
 	p, ok := c.nics[name]
 	if !ok {
-		p = physical(name)
+		if c.lookup != nil {
+			p = c.lookup(name)
+		} else {
+			p = physical(name)
+		}
 		c.nics[name] = p
 	}
 	return p

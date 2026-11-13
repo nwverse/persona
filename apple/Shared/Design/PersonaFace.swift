@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// What the persona's dot shows (docs/apple/persona.md「状态」). Raw values are persona.json's.
+/// What the persona's dot shows (docs/apple/persona.md「States」). Raw values are persona.json's.
 nonisolated enum PersonaState: String, CaseIterable, Identifiable, Sendable {
     case idle, thinking, working
     case needsYou = "needs_you"

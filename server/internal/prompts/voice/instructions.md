@@ -1,7 +1,7 @@
 {{- /* The realtime voice model's instructions. A call bound to a conversation (protocol 2: .Target) has its own
 paragraph and the snapshot of that conversation (voice/target); otherwise the work goes to the Persona main
 conversation (protocol 1). The sentence before the notes is the one measured with the <agent_output> framing
-(docs/lessons/voice.md「注入实测用的原文」): keep it. A session after a pause (.Paused, docs/assistant/voice.md「暂停」) is told
+(docs/lessons/voice.md「Verbatim injection-test text」): keep it. A session after a pause (.Paused, docs/assistant/voice.md「Suspension」) is told
 what was said before it as a session after a drop is, without the drop. */ -}}
 {{- if eq .Lang "en" -}}
 {{- $who := or .Owner "the user" -}}

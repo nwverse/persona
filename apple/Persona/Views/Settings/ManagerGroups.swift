@@ -16,8 +16,15 @@ nonisolated struct ManagerRoster: Equatable, Sendable {
     /// The default manager: the roster's `default`, else the one marked default, else the hub's own assistant.
     var defaultID: String
 
+    /// The managers without their inbox counts (`HubManager.inboxNeedsYou`): those move with every change of an inbox,
+    /// and a roster is what pages compare to know whether to draw again. `AppModel.inboxNeedsYou` keeps them.
     init(managers: [HubManager], defaultID: String? = nil) {
-        self.managers = managers
+        self.managers = managers.map { m in
+            guard m.inboxNeedsYou != nil else { return m }
+            var m = m
+            m.inboxNeedsYou = nil
+            return m
+        }
         self.defaultID = defaultID.flatMap { $0.isEmpty ? nil : $0 } ?? managers.first(where: \.isDefault)?.id ?? Self.assistant
     }
 
@@ -52,20 +59,47 @@ nonisolated struct ManagerRoster: Equatable, Sendable {
         return installed.compactMap { m in byOwner[m.id].map { ManagerGroup(manager: m, items: $0) } }
     }
 
+    /// What asking a hub for its roster came to: the list, none (a hub without one: 404 with no code), or no answer now.
+    nonisolated enum Answer: Sendable {
+        case list(APIClient.ManagerList)
+        case absent
+        case unread
+    }
+
+    static func ask(_ api: APIClient) async -> Answer {
+        do {
+            return .list(try await api.managers())
+        } catch let e as APIError where e.status == 404 && e.code == nil {
+            return .absent
+        } catch {
+            return .unread
+        }
+    }
+
     /// The roster for a page about to group: nil from a hub without one (404 with no code), the page's last one when
     /// it can't be read now.
     static func read(_ api: APIClient, keeping last: ManagerRoster?) async -> ManagerRoster? {
-        do {
-            return ManagerRoster(try await api.managers())
-        } catch let e as APIError where e.status == 404 && e.code == nil {
-            return nil
-        } catch {
-            return last
+        switch await ask(api) {
+        case .list(let list): ManagerRoster(list)
+        case .absent: nil
+        case .unread: last
         }
     }
 }
 
 extension ManagerRoster {
+    /// A merged settings list belongs to the current assistant only. Before the roster arrives,
+    /// a saved non-default pick still filters by its stamp; a legacy default list stays intact.
+    nonisolated static func settingsItems<T>(_ items: [T], roster: ManagerRoster?, manager: String?,
+                                             stamped: (T) -> String?) -> [T] {
+        if let roster {
+            let owner = roster.owner(manager)
+            return items.filter { roster.owner(stamped($0)) == owner }
+        }
+        guard let manager else { return items }
+        return items.filter { stamped($0) == manager }
+    }
+
     /// The name of manager `id`, for the page of one of its things to say whose it is; nil for the default's page
     /// (`id` nil), or when the roster can't be read or lacks it.
     static func name(of id: String?, _ api: APIClient?) async -> String? {
@@ -81,11 +115,18 @@ nonisolated struct ManagerGroup<T>: Identifiable {
     var id: String { manager.id }
 }
 
-/// A group's heading on a page grouped by manager: its dot, its name and how many, and while it is offline when it last
-/// synced (from the roster's `last_seen`). The name as the user wrote it, never in capitals.
+extension ManagerRoster {
+    /// The manager a request about something stamped `manager` names: none while that is the default, and the one it came
+    /// from after another became the default.
+    func naming(_ manager: String?) -> String? { manager == defaultID ? nil : manager }
+}
+
+/// A group's heading on a page grouped by manager: its dot, its name and how many (none for a list it couldn't read), and
+/// while it is offline when it last synced (from the roster's `last_seen`). The name as the user wrote it, never in
+/// capitals.
 struct ManagerHeading: View {
     var manager: HubManager
-    var count: Int
+    var count: Int?
 
     var body: some View {
         let status = ManagersText.status(manager, now: .now)
@@ -104,7 +145,7 @@ struct ManagerHeading: View {
                 HStack(spacing: Theme.Space.sm) {
                     managerDot(status.tone)
                     Text(manager.name).lineLimit(1).layoutPriority(1)
-                    Text("\(count)").monospacedDigit().foregroundStyle(.secondary)
+                    if let count { Text("\(count)").monospacedDigit().foregroundStyle(.secondary) }
                     Spacer(minLength: Theme.Space.s)
                     if let offline { Text(offline).lineLimit(1) }
                 }

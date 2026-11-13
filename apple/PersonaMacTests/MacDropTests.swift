@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// Files dragged onto a chat's composer (docs/apple/mac.md「细节」): pictures go into the message as images, everything else
+/// Files dragged onto a chat's composer (docs/apple/mac.md「Details」): pictures go into the message as images, everything else
 /// is uploaded to the session's machine and its path typed in, as the + menu's Photos / Files do.
 struct MacDropTests {
     @Test func picturesBecomeImagesTheRestUploads() {

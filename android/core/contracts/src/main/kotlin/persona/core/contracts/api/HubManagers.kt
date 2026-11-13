@@ -49,7 +49,7 @@ data class ManagerRoster(
     val installed: List<HubManager> get() = managers.filterNot { it.isInstalling }
         .sortedBy { if (it.id == defaultManagerId) 0 else 1 }
 
-    /** More than one installed manager: the pages group by manager and the assistant page offers the switcher. */
+    /** More than one installed manager: another one's computers, conversations and offline state are told apart. */
     val isMulti: Boolean get() = installed.size > 1
 
     /** The default manager's id: the roster's `default`, else the one marked default, else the hub's own assistant. */
@@ -57,22 +57,15 @@ data class ManagerRoster(
 
     fun manager(id: String?): HubManager? = managers.firstOrNull { it.id == id }
 
+    /**
+     * The installed manager a thing stamped [manager] is shown under: its own, or the default's for no stamp and for
+     * one the roster does not list (deleted, still installing), so nothing is left on no assistant's pages.
+     */
+    fun shownUnder(manager: String?): String =
+        manager?.takeIf { id -> id.isNotBlank() && managers.any { it.id == id && !it.isInstalling } } ?: defaultManagerId
+
     /** Which manager an item stamped with [manager] belongs to: no stamp is the default manager's. */
     fun ownerOf(manager: String?): String = manager?.takeIf { it.isNotBlank() } ?: defaultManagerId
-
-    /**
-     * [items] by the manager they belong to ([managerOf]; no stamp is the default's): the installed managers in
-     * [installed]'s order, empty groups left out; items of a manager the roster does not list (deleted, still
-     * installing) come last, by their id. Null with one manager: nothing groups then.
-     */
-    fun <T> groups(items: List<T>, managerOf: (T) -> String?): List<ManagerGroup<T>>? {
-        if (!isMulti) return null
-        val byOwner = items.groupBy { ownerOf(managerOf(it)) }
-        val known = installed.mapNotNull { m -> byOwner[m.id]?.let { ManagerGroup(m.id, m, it) } }
-        val ids = installed.map { it.id }.toSet()
-        val others = byOwner.keys.filter { it !in ids }.sorted().map { id -> ManagerGroup(id, manager(id), byOwner.getValue(id)) }
-        return known + others
-    }
 
     companion object {
         /** The hub's own assistant's id: what an unstamped live update comes from. */
@@ -80,16 +73,44 @@ data class ManagerRoster(
     }
 }
 
-/** One manager's share of a list; [manager] is null for an id the roster does not list. */
-data class ManagerGroup<T>(val id: String, val manager: HubManager?, val items: List<T>)
+/**
+ * The current assistant as the pages ask about it (docs/assistant/managers.md "Clients"): every page lists what is its, by the
+ * `manager` its things carry. [roster] is the selected hub's (null until read, or from a hub without managers: the
+ * choice's own default decides then), [group] the group that hub is of ([persona.core.contracts.GroupKeys]).
+ */
+data class CurrentAssistant(
+    val roster: ManagerRoster? = null,
+    val choice: AssistantManagerChoice.Choice = AssistantManagerChoice.Choice(),
+    val group: String? = null,
+) {
+    /** The current assistant's id. */
+    val id: String get() = choice.shown
+
+    /** It as the roster has it; null before the roster is read. */
+    val manager: HubManager? get() = roster?.manager(id)
+
+    /** Whether a thing stamped [manager] (an inbox item, a to-do; no stamp: the default's) is the current assistant's. */
+    fun owns(manager: String?): Boolean = roster?.let { it.shownUnder(manager) == id } ?: choice.owns(manager)
+
+    /**
+     * The same for a thing on the computer [machineId] (a session, a card, the computer itself). Another group's
+     * computers are not this hub's managers' at all: they are on every assistant's pages, as before.
+     */
+    fun ownsOn(machineId: String, manager: String?): Boolean =
+        persona.core.contracts.GroupKeys.namespaceOf(machineId) != group || owns(manager)
+
+    /** What waits for the user at the other assistants ([ManagerRoster.waiting]'s tally): the dot on the sidebar's button. */
+    fun othersWaiting(waiting: Map<String, Int>): Boolean = waiting.any { (manager, count) -> count > 0 && manager != id }
+}
 
 /**
- * Which manager the assistant page shows (docs/assistant/managers.md step 4): null is the default manager, and requests go as
- * before; an id puts `X-Persona-Manager` on the assistant's requests (`/api/v1/assistant…`) to [hubId]'s hub, and the
- * page lists that manager's conversations. Live updates that name a conversation (feed items, cards, plans) go by it,
- * whichever manager's it is, so another manager's conversation open elsewhere stays live. Process-wide like
- * [persona.core.contracts.ClientLanguage]: the assistant page sets it, the hub client and the assistant's repositories
- * read it.
+ * The current assistant: the manager every page shows (docs/assistant/managers.md "Clients"), picked in the sidebar's
+ * switcher and kept per hub on this device. Null is the default manager, and requests go as before; an id puts
+ * `X-Persona-Manager` on the requests that are the current assistant's (`/api/v1/assistant…`, the knowledge base, a new
+ * to-do) to [hubId]'s hub, and the pages list that manager's conversations, agents, computers, inbox and to-dos. Live
+ * updates that name a conversation (feed items, cards, plans) go by it, whichever manager's it is, so another
+ * manager's conversation open elsewhere stays live. Process-wide like [persona.core.contracts.ClientLanguage]: the
+ * switcher sets it, the hub client, the repositories and the pages read it.
  */
 object AssistantManagerChoice {
     /** [manager] null: the default; [defaultId] is the roster's default (whose conversations the page lists then). */
@@ -110,7 +131,7 @@ object AssistantManagerChoice {
         state.value = Choice(hubId, id, defaultId.ifBlank { ManagerRoster.ASSISTANT_MANAGER })
     }
 
-    /** The assistant page picked [manager] (null or the default: the default) of the hub it is on now. */
+    /** The switcher picked [manager] (null or the default: the default) of the hub it is on now. */
     fun pick(manager: String?) = state.value.let { choose(it.hubId, manager, it.defaultId) }
 
     /** Back to the default (another hub, unpaired, a test's end). */
@@ -129,12 +150,6 @@ object AssistantManagerChoice {
     // web keeps the same registry (manager-choice.ts).
     private val items = java.util.concurrent.ConcurrentHashMap<Pair<String?, List<String>>, String>()
 
-    // Pins: while a page about one manager's thing is open (an extension's, an inbox item's chat, mail or thread), the
-    // requests under its prefixes name that manager; the latest pin of a prefix wins, and it goes with the page.
-    private val pins = java.util.concurrent.ConcurrentHashMap<Pair<String?, List<String>>, List<Pin>>()
-
-    private class Pin(val manager: String)
-
     /** A merged list of [hubId]'s hub (the one shown now) showed the thing at [path] (segments under /api/v1) as [manager]'s. */
     fun noteItem(path: List<String>, manager: String?, hubId: String? = state.value.hubId) {
         if (path.isEmpty() || path.any { it.isEmpty() }) return
@@ -142,25 +157,17 @@ object AssistantManagerChoice {
         if (id == null) items.remove(hubId to path) else items[hubId to path] = id
     }
 
-    /** Requests under each of [prefixes] (segments under /api/v1) go to [manager] until the returned function is called. */
-    fun pin(prefixes: List<List<String>>, manager: String?, hubId: String? = state.value.hubId): () -> Unit {
-        val id = manager?.takeIf { it.isNotBlank() } ?: return {}
-        val keys = prefixes.filter { it.isNotEmpty() }.map { hubId to it }
-        val mine = Pin(id)
-        keys.forEach { key -> pins.compute(key) { _, list -> (list ?: emptyList()) + mine } }
-        return { keys.forEach { key -> pins.computeIfPresent(key) { _, list -> (list - mine).ifEmpty { null } } } }
-    }
-
     /**
-     * The manager a request to [path] (segments under /api/v1) of [hubId]'s hub is for, from a pin or a list that showed
-     * it (or the thing it is under); null: send none (none known, or the default).
+     * The manager a request to [path] (segments under /api/v1) of [hubId]'s hub is for, from a list that showed it (or
+     * the thing it is under); null: send none (none known, or the default). A page's own pins are [ManagerPins].
      */
-    fun itemHeader(path: List<String>, hubId: String? = state.value.hubId): String? {
-        val default = state.value.defaultId
+    fun itemHeader(path: List<String>, hubId: String? = state.value.hubId): String? =
+        itemManager(path, hubId)?.takeIf { it != state.value.defaultId }
+
+    /** The recorded owner, including the default; delayed card actions must not follow the current selection. */
+    fun itemManager(path: List<String>, hubId: String? = state.value.hubId): String? {
         for (n in path.size downTo 1) {
-            val key = hubId to path.subList(0, n)
-            val owner = pins[key]?.lastOrNull()?.manager ?: items[key] ?: continue
-            return owner.takeIf { it != default }
+            items[hubId to path.subList(0, n)]?.let { return it }
         }
         return null
     }
@@ -195,8 +202,52 @@ data class HubManager(
     val installing: String? = null,
     /** Online on a build that reads no settings of its own (no `config.own`): it runs on built-in defaults until updated. */
     @SerialName("needs_update") val needsUpdate: Boolean = false,
+    /**
+     * Its inbox items still to do in "Needs you" (the inbox's badge); null when the hub cannot tell (offline, still
+     * installing, an older hub), which counts as none.
+     */
+    @SerialName("inbox_needs_you") val inboxNeedsYou: Int? = null,
 ) {
     val isInstalling: Boolean get() = !installing.isNullOrBlank()
+}
+
+/**
+ * What waits for the user at each manager, for the switcher's badges (docs/assistant/managers.md "Clients", the same
+ * rule on every client): its agents waiting for the user, each session once however many cards it has, plus its inbox's
+ * "Needs you" as the roster counts it ([HubManager.inboxNeedsYou]; absent: none). An agent waits when it has a pending
+ * card ([requests]) or is in Needs you; [sessionCounts] leaves out the sessions the tabs leave out too (quiet, muted),
+ * and [counts] the cards. A card on no listed session counts once by itself. A card or session without a stamp is
+ * the default manager's; a card goes by its session's manager when it names none.
+ */
+fun ManagerRoster.waiting(
+    requests: List<persona.core.contracts.Interaction>,
+    sessions: List<persona.core.contracts.Session>,
+    /** The group this roster's hub is of: another group's cards and sessions are no manager's of this one. */
+    group: String? = null,
+    counts: (persona.core.contracts.Interaction) -> Boolean = { true },
+    sessionCounts: (persona.core.contracts.Session) -> Boolean = { true },
+): Map<String, Int> {
+    fun here(machineId: String) = persona.core.contracts.GroupKeys.namespaceOf(machineId) == group
+    val bySession = sessions.associateBy { it.key }
+    val tally = HashMap<String, Int>()
+    // Each waiting agent once, under its manager: (manager, session).
+    val agents = HashSet<Pair<String, persona.core.contracts.SessionKey>>()
+    requests.distinctBy { it.id to it.sessionKey }.filter { here(it.machineId) }.forEach { card ->
+        val session = bySession[card.sessionKey]
+        when {
+            session == null -> if (counts(card)) tally.merge(shownUnder(card.manager), 1, Int::plus)
+            sessionCounts(session) && counts(card) -> agents += shownUnder(card.manager ?: session.manager) to session.key
+        }
+    }
+    // A session in Needs you with no card here (stuck on the computer's own prompt); one with a card is its cards'.
+    val asked = requests.mapTo(HashSet()) { it.sessionKey }
+    sessions.forEach { session ->
+        if (session.agentState == persona.core.contracts.AgentState.NeedsYou && session.key !in asked && here(session.machineId) &&
+            sessionCounts(session)) agents += shownUnder(session.manager) to session.key
+    }
+    agents.forEach { (manager, _) -> tally.merge(manager, 1, Int::plus) }
+    managers.forEach { manager -> manager.inboxNeedsYou?.takeIf { it > 0 }?.let { tally.merge(manager.id, it, Int::plus) } }
+    return tally
 }
 
 /** A one-time install code (10 minutes, used once) and, from a hub that gives them, the commands that use it. */
@@ -221,4 +272,35 @@ data class ManagerCommands(val service: String? = null, val docker: String? = nu
  */
 class RequestManager(val id: String) : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
     companion object Key : kotlin.coroutines.CoroutineContext.Key<RequestManager>
+}
+
+/**
+ * A page's pins (an extension's page, an inbox item's chat, mail or thread): the requests made inside it to a path under
+ * one of its prefixes (segments under /api/v1) of [hubId]'s hub name its manager, as [RequestManager] does; the longest
+ * prefix wins, and a [RequestManager] wins over it. It goes only with the page's own requests (the APIs it hands its
+ * children carry it), so another page, a background refresh or the page under it on the stack is not pinned.
+ */
+class ManagerPins private constructor(private val prefixes: Map<List<String>, String>, val hubId: String?) :
+    kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+
+    /** The manager pinned for [path], the default's id included; null: not pinned. */
+    private fun owner(path: List<String>): String? = (path.size downTo 1).firstNotNullOfOrNull { prefixes[path.subList(0, it)] }
+
+    /** What a request to [path] of [hubId]'s hub names: "" for the default (none, and no stamp); null: not pinned. */
+    fun manager(path: List<String>, hubId: String? = AssistantManagerChoice.current.value.hubId): String? {
+        if (hubId != this.hubId) return null
+        val owner = owner(path) ?: return null
+        return owner.takeIf { it != AssistantManagerChoice.current.value.defaultId } ?: ""
+    }
+
+    override fun equals(other: Any?) = other is ManagerPins && other.prefixes == prefixes && other.hubId == hubId
+    override fun hashCode() = prefixes.hashCode() * 31 + hubId.hashCode()
+
+    companion object Key : kotlin.coroutines.CoroutineContext.Key<ManagerPins> {
+        /** Requests under each of [prefixes] name [manager]; null (nothing pinned) for no manager. */
+        fun of(prefixes: List<List<String>>, manager: String?, hubId: String? = AssistantManagerChoice.current.value.hubId): ManagerPins? {
+            val id = manager?.takeIf { it.isNotBlank() } ?: return null
+            return ManagerPins(prefixes.filter { it.isNotEmpty() }.associateWith { id }, hubId)
+        }
+    }
 }

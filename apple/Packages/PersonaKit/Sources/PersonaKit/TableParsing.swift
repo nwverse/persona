@@ -1,7 +1,7 @@
 import Compression
 import Foundation
 
-/// One sheet of a table file (docs/apple/ios.md「表格」): its cells as text, row by row; rows can be shorter than `columns`.
+/// One sheet of a table file (docs/apple/ios.md「Tables」): its cells as text, row by row; rows can be shorter than `columns`.
 public nonisolated struct TableSheet: Sendable, Equatable {
     public var name: String
     public var rows: [[String]] = []

@@ -2,7 +2,7 @@ package proto
 
 import "time"
 
-// MetricSample is one reading of a machine, every MetricEvery (sysmon; docs/server/machines.md "What is measured"). A nil field
+// MetricSample is one reading of a machine, every MetricEvery (sysmon; docs/server/machines.md "Collection definitions"). A nil field
 // was not measured (the first sample has no CPU or network rate: those need two readings).
 type MetricSample struct {
 	T         int64     `json:"t"`               // Unix seconds

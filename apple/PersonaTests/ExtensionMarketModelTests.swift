@@ -37,7 +37,9 @@ struct ExtensionMarketModelTests {
 
     private static let detail = #"{"id":"example-calendar","name":"Example 日历","kind":"connectors","status":"running"}"#
 
-    private func market(_ hub: FakeHub) -> ExtensionMarketModel { ExtensionMarketModel(deps: .init(api: { hub.client })) }
+    private func market(_ hub: FakeHub, roster: ManagerRoster? = nil) -> ExtensionMarketModel {
+        ExtensionMarketModel(deps: .init(api: { hub.client }, roster: { roster }))
+    }
 
     @Test func theCatalogDecodesAndSaysHowEachStands() async throws {
         let hub = FakeHub()
@@ -46,9 +48,15 @@ struct ExtensionMarketModelTests {
         await page.load()
         let items = try #require(page.items)
         #expect(page.error == nil && items.count == 4 && page.markets.count == 2 && page.platform == "linux-amd64")
-        #expect(items.map(ExtensionMarketText.step) == [.install, .upgrade, .unavailable, .upToDate])
-        #expect(ExtensionMarketText.state(items[1]) == "可升级 · 1.0.0 → 1.1.0")
-        #expect(items[0].id == "m1/example-calendar" && items[0].marketName == "Example 插件")
+        let byID = Dictionary(uniqueKeysWithValues: items.map { ($0.pluginID, $0) })
+        let calendar = try #require(byID["example-calendar"])
+        let gateway = try #require(byID["example-gateway"])
+        #expect(ExtensionMarketText.step(calendar) == .install)
+        #expect(ExtensionMarketText.step(gateway) == .upgrade)
+        #expect(ExtensionMarketText.step(try #require(byID["team-windows"])) == .unavailable)
+        #expect(ExtensionMarketText.step(try #require(byID["example-notes"])) == .upToDate)
+        #expect(ExtensionMarketText.state(gateway) == "可升级 · 1.0.0 → 1.1.0")
+        #expect(calendar.id == "m1/example-calendar" && calendar.marketName == "Example 插件")
         #expect(page.markets[1].hasToken && page.markets[1].error == "读不到索引" && page.markets[1].warnings == ["第 3 个插件：没有 manifest"])
         #expect(page.markets[0].fetchedAt != nil)
     }
@@ -124,6 +132,60 @@ struct ExtensionMarketModelTests {
         #expect(page.markets.map(\.id) == ["m2"] && page.market == nil && page.error == nil)
     }
 
+    @Test func removalCountsOnlyTheDefaultManagersAffectedExtensions() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins", json: #"{"plugins":[{"id":"a","name":"A","kind":"ui","status":"running","source":"installed","auto_upgrade":true,"market":"m1"},{"id":"b","name":"B","kind":"ui","status":"disabled","source":"installed","auto_upgrade":false,"market":"m1"},{"id":"c","name":"C","kind":"ui","status":"running","source":"installed","auto_upgrade":true,"market":"m2"},{"id":"other","name":"Other","kind":"ui","status":"running","source":"installed","manager":"other","auto_upgrade":true,"market":"m1"}]}"#)
+        let roster = ManagerRoster(managers: [
+            HubManager(id: "assistant", name: "Assistant", online: true),
+            HubManager(id: "other", name: "Other", online: true),
+        ], defaultID: "assistant")
+        let page = market(hub, roster: roster)
+        await page.prepareRemoval(of: "m1")
+        #expect(page.removalMarket == "m1" && page.removalCount == 2)
+        #expect(page.error == nil, "counting is explanatory and must not block the market page")
+    }
+
+    private static let managerCopies = #"{"plugins":[{"id":"default","name":"Default","kind":"ui","status":"running","manager":"m-2","auto_upgrade":true,"market":"m1"},{"id":"builtin","name":"Built-in assistant","kind":"ui","status":"running","manager":"assistant","auto_upgrade":true,"market":"m1"},{"id":"unstamped","name":"Unstamped","kind":"ui","status":"running","auto_upgrade":true,"market":"m1"}]}"#
+
+    @Test func removalCountUsesTheRostersActualDefaultManager() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins", json: Self.managerCopies)
+        let roster = ManagerRoster(managers: [
+            HubManager(id: "m-2", name: "Second", online: true),
+            HubManager(id: "assistant", name: "Assistant", online: true),
+        ], defaultID: "m-2")
+        let page = market(hub, roster: roster)
+        await page.prepareRemoval(of: "m1")
+        #expect(page.removalCount == 2, "the m-2 copy and the default's unstamped copy count; the assistant's copy does not")
+    }
+
+    @Test func removalCountStaysUnknownWhenTheDefaultManagerIsUnknown() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins", json: Self.managerCopies)
+        let page = market(hub)
+        await page.prepareRemoval(of: "m1")
+        #expect(page.removalCount == nil, "without the roster, an explicitly stamped assistant is not necessarily the default")
+    }
+
+    @Test func removalCountDistinguishesAnOldHubFromNoAffectedExtensions() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins", json: #"{"plugins":[{"id":"old","name":"Old","kind":"ui","status":"running","source":"installed","auto_upgrade":true}]}"#)
+        let page = market(hub)
+        await page.prepareRemoval(of: "m1")
+        #expect(page.removalMarket == "m1" && page.removalCount == nil, "an auto-upgrade item without market means the hub cannot give a trustworthy count")
+
+        hub.on("GET", "/api/v1/plugins", json: #"{"plugins":[{"id":"c","name":"C","kind":"ui","status":"running","source":"installed","auto_upgrade":true,"market":"m2"}]}"#)
+        await page.prepareRemoval(of: "m1")
+        #expect(page.removalCount == 0)
+    }
+
+    @Test func removalCopyCoversUnknownNoneOneAndSeveral() {
+        #expect(ExtensionMarketText.removalReason(nil) == "hub 不再读这个市场。从它装的扩展留着，但不再升级，直到用同样的地址把市场加回来。")
+        #expect(ExtensionMarketText.removalReason(0) == "hub 不再读这个市场。没有扩展是从它装的。")
+        #expect(ExtensionMarketText.removalReason(1) == "hub 不再读这个市场。从它装的 1 个扩展留着，但不再升级，直到用同样的地址把市场加回来。")
+        #expect(ExtensionMarketText.removalReason(2) == "hub 不再读这个市场。从它装的 2 个扩展留着，但不再升级，直到用同样的地址把市场加回来。")
+    }
+
     @Test func installingGoesThroughThePreviewsDigest() async throws {
         let hub = FakeHub()
         var installed = false
@@ -178,6 +240,32 @@ struct ExtensionMarketModelTests {
         #expect(upgraded == .object(["preview_id": .string("pv2"), "permissions_digest": .string("d2")]))
     }
 
+    /// A rename (#2511): the upgrade row says the ID changes, and a market page opened under the old ID (a link from
+    /// before the rename) still finds the extension and upgrades the installed one.
+    @Test func aRenamedExtensionIsFoundUnderEitherID() async throws {
+        let upgrade = try JSON.decoder.decode(ExtensionUpgrade.self, from: Data(
+            #"{"id":"old-gateway","market":"m1","from":"1.0.0","to":"1.1.0","state":"needs_permission","rename_from":"old-gateway","rename_to":"example-gateway","detail":"ID 从 old-gateway 改为 example-gateway"}"#.utf8))
+        #expect(upgrade.id == "old-gateway" && upgrade.renameTo == "example-gateway")
+        #expect(ExtensionText.upgradeDetail(upgrade) == "ID 从 old-gateway 改为 example-gateway", "the hub's words for the ID change, not a permissions change")
+
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins/-/catalog", json: Self.catalog(#"""
+        {"market":"m1","id":"example-gateway","name":"Example 网关面板","version":"1.1.0","installed":"1.0.0","installed_source":"installed",
+         "from_this_market":true,"upgradable":true,"replaces":"old-gateway","rename_from":"old-gateway"}
+        """#))
+        hub.on("POST", "/api/v1/plugins/-/catalog/preview", json: #"""
+        {"preview_id":"pv3","manifest":{"id":"example-gateway","version":"1.1.0"},"permissions":[],"permissions_digest":"d3","upgrade":true,"from":"1.0.0",
+         "rename_from":"old-gateway"}
+        """#)
+        hub.on("POST", "/api/v1/plugins/old-gateway/-/upgrade", json: #"{"id":"example-gateway","name":"Example 网关面板","kind":"ui","status":"running"}"#)
+        let page = MarketExtensionModel(market: "m1", id: "old-gateway", deps: .init(api: { hub.client }))
+        await page.load()
+        #expect(page.error == nil && page.item?.pluginID == "example-gateway" && page.step == .upgrade)
+        await page.prepare()
+        #expect(await page.confirm())
+        #expect(hub.sent("POST", "/api/v1/plugins/old-gateway/-/upgrade").count == 1)
+    }
+
     @Test func aRefusedPreviewIsSaid() async {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/plugins/-/catalog", json: Self.catalog(Self.windows))
@@ -211,7 +299,7 @@ struct ExtensionMarketModelTests {
     }
 }
 
-/// A plugin's View (docs/extensions/extensions.md「声明式 UI」).
+/// A plugin's View (docs/extensions/extensions.md「Declarative UI」).
 @MainActor
 struct ExtensionViewModelTests {
     private static let view = #"""
@@ -238,7 +326,7 @@ struct ExtensionViewModelTests {
         #expect(v.sections[1].items[3].field?.choices?.map(\.label) == ["个人", "team"])
         #expect(page.values == ["note": "hi", "token": "", "auto": "false", "plan": "team"], "a secret is never prefilled")
         #expect(ExtensionUIStyle.tone("danger") == Theme.danger && ExtensionUIStyle.tone("bogus") == .secondary)
-        // Drawing sends no action and no values; the context says where and for whom (docs/extensions/extensions.md「UI 插槽」, context).
+        // Drawing sends no action and no values; the context says where and for whom (docs/extensions/extensions.md「UI slots」, context).
         let body = try JSON.decoder.decode(JSONValue.self, from: hub.requests.last?.body ?? Data())
         #expect(body["action"] == nil && body["values"] == nil && body["state"] == nil)
         #expect(body["context"]?["ui_version"] == .number(3) && body["context"]?["platform"] == .string("ios"))

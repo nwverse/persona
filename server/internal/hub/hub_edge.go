@@ -18,7 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/update"
 )
 
-// The hub's edge (internal/hubedge, docs/operations/hub-restart.md "Blue-green switch"): `personad hub run` holds the ports and runs the
+// The hub's edge (internal/hubedge, docs/operations/hub-restart.md "Blue-green switching: the hub's edge"): `personad hub run` holds the ports and runs the
 // hub as a slot behind them (`personad hub slot`), so an update or a deploy starts the new binary next to the one
 // serving and switches only once it is up. Without the edge (Windows, Docker, PERSONA_HUB_EDGE=0) the hub serves by
 // itself, as before.

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// Picking the way to a hub that has tunnels (docs/operations/network.md「经 SSH 隧道连 hub」, "Connecting to hub through
+/// Picking the way to a hub that has tunnels (docs/operations/network.md「Connecting to hub through SSH」, "Connecting to hub through
 /// a local SOCKS5 proxy"): the same steps for the SSH tunnel, the local proxy and the in-app tunnel. `HubWay.next` is
 /// pure, so each test walks through the steps by hand, telling it what each one came to.
 struct HubWayTests {

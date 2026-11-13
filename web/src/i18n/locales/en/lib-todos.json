@@ -22,5 +22,9 @@
   "review_cancelled": "Cancelled",
   "thread_feishu": "Lark topic",
   "thread_channel": "Topic ({channel})",
-  "thread_line": "{kind} · {name}"
+  "thread_line": "{kind} · {name}",
+  "orphaned": "Nobody is working on this",
+  "orphaned_error": "closed after an error",
+  "orphaned_closed": "closed",
+  "orphaned_offline": "computer offline"
 }

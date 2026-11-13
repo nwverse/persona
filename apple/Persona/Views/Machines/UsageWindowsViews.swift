@@ -189,7 +189,7 @@ struct UsageAccountsList: View {
 }
 
 #if !os(macOS)
-/// Machines' Subscription Usage (docs/server/usage-windows.md「界面」): the accounts' 5h / 7d windows under the machines' cards. Not drawn while
+/// Machines' Subscription Usage (docs/server/usage-windows.md「UI」): the accounts' 5h / 7d windows under the machines' cards. Not drawn while
 /// the hubs have none. The Mac has the same at the foot of its sections column (`MacUsageFooter`).
 struct UsageWindowsCard: View {
     var store = UsageWindowsStore.shared

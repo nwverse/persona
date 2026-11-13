@@ -18,8 +18,9 @@ import { openMedia } from "./LarkThread";
 // ── mail ─────────────────────────────────────────────────
 
 /** A mail: who, the body (its HTML in a sandboxed frame), attachments. Opening it marks it read in the mailbox; with
- * Settings › Translation on for mail, a foreign one is shown translated ("Original" one click away). Replies are written by hand. */
-export function MailBody({ item }: { item: InboxItem }) {
+ * Settings › Translation on for mail, a foreign one is shown translated ("Original" one click away). Replies are written by hand.
+ * `onLatest`: an older message from the handling chain is open; the action returns to the thread's latest. */
+export function MailBody({ item, onLatest }: { item: InboxItem; onLatest?: () => void }) {
   const m = item.mail!;
   const uid = m.uids[m.uids.length - 1];
   const mailbox = m.mailbox || "INBOX";
@@ -86,6 +87,11 @@ export function MailBody({ item }: { item: InboxItem }) {
   const allDraft = replyAllDraft(m.account_id, msg, accounts.find((a) => a.id === m.account_id)?.email);
   return (
     <div className="mx-auto max-w-[760px] px-4 py-4 sm:px-6">
+      {onLatest && (
+        <div className="mb-3 flex justify-center">
+          <Button tone="quiet" icon="chevronDown" onClick={onLatest}>{t("inbox-inboxbodies.latest")}</Button>
+        </div>
+      )}
       <div className="flex flex-col items-start gap-3 sm:flex-row">
         <dl className="grid min-w-0 flex-1 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12.5px]">
           <dt className="text-ink-3">{t("inbox-inboxbodies.from")}</dt>
@@ -170,6 +176,7 @@ const FRAME_HEAD =
 
 function MailFrame({ html }: { html: string }) {
   const ref = useRef<HTMLIFrameElement>(null);
+  const manager = useItemManager();
   const [height, setHeight] = useState(240);
   // undoes what the last load hooked onto the frame's document. The observer lives in this window: left connected, it
   // keeps that document and this frame's state alive, one more on each load and on each frame that goes (a new mail of
@@ -190,7 +197,7 @@ function MailFrame({ html }: { html: string }) {
       const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
       if (!a) return;
       e.preventDefault();
-      if (/^(https?:|mailto:)/i.test(a.href)) openLink(a.href);
+      if (/^(https?:|mailto:)/i.test(a.href)) openLink(a.href, undefined, manager);
     };
     doc.addEventListener("click", click);
     release.current = () => {
@@ -222,7 +229,7 @@ export function DocBody({ item }: { item: InboxItem }) {
   return (
     <div className="mx-auto max-w-[760px] px-4 py-4 sm:px-6">
       <div className="flex flex-wrap items-center gap-2">
-        <Button tone="secondary" icon="external" onClick={() => openLink(doc.url, item.title)}>{t("inbox-inboxbodies.open_doc", { kind })}</Button>
+        <Button tone="secondary" icon="external" onClick={() => openLink(doc.url, item.title, item.manager)}>{t("inbox-inboxbodies.open_doc", { kind })}</Button>
         {doc.reply && (
           <span className="flex items-center gap-1.5 text-[12px] text-ink-3">
             <Glyph name="reply" size={12} />

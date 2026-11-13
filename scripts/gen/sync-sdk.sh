@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copies the extension SDK of this checkout into an extension repository (docs/extensions/extensions.md "Writing an extension: SDK, templates and CLI"):
+# Copies the extension SDK of this checkout into an extension repository (docs/extensions/extensions.md "Writing extensions: SDK, templates and command line"):
 # <repo>/sdk/go (the Go SDK: wire, ext, exttest, and a go.mod) and <repo>/sdk/ts (the TypeScript SDK), and records
 # which commit it came from in <repo>/sdk/VERSION. Extension repositories keep this copy instead of fetching the
 # private main repository; their go.mod replaces github.com/nwverse/persona/sdk/go with ./sdk/go.
@@ -27,7 +27,7 @@ if [ "$what" = all ] || [ "$what" = ts ]; then
   mkdir -p "$dest/sdk/ts"
   # Keep the declared development commands usable; never copy installed dependencies or build output.
   cp -R "$here/sdk/ts/src" "$here/sdk/ts/scripts" "$here/sdk/ts/typechecks" "$dest/sdk/ts/"
-  cp "$here/sdk/ts/package.json" "$here/sdk/ts/package-lock.json" "$here/sdk/ts/README.md" "$here"/sdk/ts/tsconfig*.json "$dest/sdk/ts/"
+  cp "$here/sdk/ts/package.json" "$here/sdk/ts/package-lock.json" "$here/sdk/ts/README.md" "$here/sdk/ts/.gitignore" "$here"/sdk/ts/tsconfig*.json "$dest/sdk/ts/"
   # Tests use package-local canonical fixtures; do not overwrite the destination repository's schema.
   mkdir -p "$dest/sdk/ts/fixtures"
   cp "$here"/schema/extension/examples/UIStream*.json "$here/schema/extension/examples/Manifest.custom-contributions.json" "$dest/sdk/ts/fixtures/"

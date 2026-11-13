@@ -9,17 +9,17 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extwire"
-	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The hub's own settings persona_settings offers (docs/assistant/assistant.md "Operating Persona itself", 2026-11-01): the tool is the
-// assistant's (its own settings are its own: "About me", its launcher, …), which lists these (app.call settings.list) and
-// hands the actions on them to the hub (app.tool persona_settings). One registry: each setting says what it is, how to
-// read it and how a change is made. Reads are free; every change is a card on the phone that says what changes (before
-// → after) and is applied only when approved. What the card needs filled in (a password) is typed on the phone and
-// never passes through the model. Some things are never here: the hub's and devices' tokens, pairing, which machines
-// the hub reaches, permission modes.
+// The hub's own settings persona_settings offers (docs/assistant/assistant.md "Current structure", the "Control Persona
+// itself" row): the tool is the assistant's (its own settings are its own: "About me", its launcher, …), which lists
+// these (app.call settings.list) and hands the actions on them to the hub (app.tool persona_settings). One registry:
+// each setting says what it is, how to read it and how a change is made. Reads are free; every change is a card on the
+// phone that says what changes (before → after) and is applied only when approved. What the card needs filled in (a
+// password) is typed on the phone and never passes through the model. Some things are never here: the hub's and
+// devices' tokens, pairing, which machines the hub reaches, permission modes.
 
 // selfSetting is one thing Persona may change. A value setting has set; a list has add / remove.
 type selfSetting struct {
@@ -83,14 +83,8 @@ func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, 
 	if s == nil {
 		for _, ms := range h.managerSettings(ctx, from) { // the caller's (mail, the sources' own rules): it does the change
 			if ms.Key == a.Key {
-				var res struct {
-					Text string `json:"text"`
-				}
-				if err := h.extCallTo(ctx, from, extwire.HubSettingsTool, map[string]any{"machine_id": m.cfg.ID, "session_id": sessionID,
-					"arguments": args}, &res); err != nil {
-					return "", err
-				}
-				return res.Text, nil
+				return h.managerSettingsTool(ctx, from, a.Action, map[string]any{"machine_id": m.cfg.ID, "session_id": sessionID,
+					"arguments": args})
 			}
 		}
 		return "", fmt.Errorf("no setting %q (action list shows them)", a.Key)
@@ -123,8 +117,11 @@ func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, 
 	if err != nil {
 		return "", err
 	}
-	if r.Allow == nil || !*r.Allow {
-		return "The user declined on the phone: nothing changed.", nil
+	if !r.UserAllowed() { // only the user's own answer counts: an expired card, or one answered for them, is no decline (#3722)
+		if r.UserDenied() {
+			return "The user declined the change: nothing changed.", nil
+		}
+		return prompts.RenderSettingUnanswered(), nil
 	}
 	for _, f := range change.fields {
 		if !f.Optional && strings.TrimSpace(r.Values[f.Key]) == "" {
@@ -141,22 +138,28 @@ func orNone(s string) string {
 	return s
 }
 
-// ss is a hub-self_settings text in l.
-func ss(l i18n.Lang, name string, args ...i18n.Args) string {
-	return i18n.T(l, "hub-self_settings."+name, args...)
-}
-
-// clipped is a value as the card shows it, in l.
-func clipped(l i18n.Lang, s string) string {
-	if strings.TrimSpace(s) == "" {
-		return ss(l, "none")
+// managerSettingsTool hands persona_settings on one of manager id's own settings to it (extwire.HubSettingsTool) and
+// answers what it says. A change is a card the manager shows, waits for (its own fifteen minutes) and then makes; the
+// hub only passes the call on. So it waits as long as its caller does, not callBus's two minutes: those told the
+// assistant the change had failed while the card stayed on the phone and was still applied when approved later
+// (#5907). When the caller stops waiting, so does the manager, which withdraws its card (serveBus's Cancels). Reading
+// (get) shows no card and keeps the two minutes.
+func (h *Hub) managerSettingsTool(ctx context.Context, id, action string, params any) (string, error) {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return "", err
 	}
-	return clip(oneLine(s), 120)
-}
-
-// changeSummary is the card's "change title: before → after".
-func changeSummary(l i18n.Lang, title, before, after string) string {
-	return ss(l, "change", i18n.Args{"title": title, "before": clipped(l, before), "after": clipped(l, after)})
+	call := h.callBus
+	if action != "get" {
+		call = h.callBusAsIs
+	}
+	var res struct {
+		Text string `json:"text"`
+	}
+	if err := call(ctx, id, extwire.MethodHubCall, extwire.HubCall{Method: extwire.HubSettingsTool, Params: raw}, &res); err != nil {
+		return "", err
+	}
+	return res.Text, nil
 }
 
 // managerSettings are the manager's persona_settings entries (none while it is away).

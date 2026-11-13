@@ -51,9 +51,16 @@ describe("收件箱的行菜单", () => {
     const m = rowMenu(it0, false);
     expect(m.map((x) => x.key)).toEqual(["done", "mute:sender:u1", "mute:chat:c1", "policy:sender:u1", "policy:chat:c1"]);
     expect(m.map((x) => !!x.divider)).toEqual([false, true, false, true, false]);
-    expect(m[1].hint).toBeTruthy();
+    expect(m[1].detail).toBeTruthy();
     m[2].onSelect();
     expect(calls.mute.at(-1)).toEqual([it0, chat]);
+  });
+
+  it("adds 移到文件夹… last when the list shows folders", () => {
+    expect(rowMenu(item({ mutes: [sender] }), false).some((x) => x.key === "folder")).toBe(false);
+    const m = rowMenu(item({ mutes: [sender], folder: "work/alerts" }), false, true);
+    expect(m.map((x) => x.key)).toEqual(["done", "mute:sender:u1", "policy:sender:u1", "folder"]);
+    expect([m[3].label, m[3].hint, m[3].divider]).toEqual(["移到文件夹…", "work/alerts", true]);
   });
 });
 

@@ -214,14 +214,6 @@ func topicRecords(before, after []BotChat) []botRecord {
 	return out
 }
 
-// topicsCommand reads the owner's message as the command that opts a group in or out: /topics or /话题群 (a full-width
-// slash too), alone or with "on" / "off" (关), after the @ of the bot that a group message may start with. on is
-// false for "off". ok is false for any other text, which is then an ordinary message. "home" is on too: see topicsCmd.
-func topicsCommand(text string, mentions []feishubot.Mention) (on, ok bool) {
-	cmd, ok := topicsCmd(text, mentions)
-	return cmd == topicsOn || cmd == topicsHome, ok
-}
-
 // The commands /topics takes: it opts the group in, out, or makes it the home topic group (opting it in if it is not).
 const (
 	topicsOn   = "on"
@@ -229,7 +221,9 @@ const (
 	topicsHome = "home"
 )
 
-// topicsCmd is topicsCommand that also tells "/topics home" (主群 in Chinese) from "/topics".
+// topicsCmd reads the owner's message as the command that opts a group in or out: /topics or /话题群 (a full-width
+// slash too), alone or with "on" / "off" (关) or "home" (主群 in Chinese), after the @ of the bot that a group
+// message may start with. ok is false for any other text, which is then an ordinary message.
 func topicsCmd(text string, mentions []feishubot.Mention) (cmd string, ok bool) {
 	t := strings.TrimSpace(text)
 	for stripped := true; stripped; {

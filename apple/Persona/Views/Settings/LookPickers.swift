@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Two of Settings › Appearance's three choices of how the app looks (docs/apple/ios.md「设计语言」), each apart from the others: Theme Color
+// Two of Settings › Appearance's three choices of how the app looks (docs/apple/ios.md「Design language」), each apart from the others: Theme Color
 // (`ThemeColorPicker`) and Interface Style (`StylePicker`); the third is Avatar (`PersonaPicker`). A choice rebuilds the view tree
 // (`AppModel.look`); Appearance stays open because the settings path is AppModel's.
 

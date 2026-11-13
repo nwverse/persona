@@ -58,6 +58,21 @@ struct ShellStateTests {
         #expect(model.openChat == key)
     }
 
+    /// A tap on an Agent's notification while the drawer is out: the drawer goes, or it would cover the chat (#3114).
+    @Test func openingAnAgentsChatClosesTheDrawer() {
+        let model = AppModel()
+        model.selectedTab = .assistant
+        let shell = ShellState()
+        shell.attach(to: model)
+        defer { shell.detach(from: model) }
+        shell.drawer.progress = 1
+        #expect(shell.drawer.isOpen)
+        let key = SessionKey(machineID: "m", sessionID: "s")
+        model.open(key)
+        #expect(!shell.drawer.isOpen)
+        #expect(shell.page == 1 && model.openChat == key)
+    }
+
     @Test func aDetachedShellNoLongerRoutes() {
         let model = AppModel()
         let shell = ShellState()
@@ -110,17 +125,6 @@ struct ShellStateTests {
         pager.slide(to: 1)
         pager.slide(to: 0)
         #expect(!pager.lingering, "the moving bar stayed with no finger down")
-    }
-
-    @Test func theLinkOpensTheRowAndFoldsIt() {
-        let n = ShellNotices()
-        n.linkChanged(.connecting)
-        #expect(n.shown == .link(.connecting))
-        n.linkChanged(.updating)
-        #expect(n.shown == .link(.updating))
-        n.linkChanged(.online)
-        #expect(n.shown == nil)
-        #expect(n.opened == 1 && n.folded == 1, "opened \(n.opened), folded \(n.folded): the row folded in between")
     }
 
     /// A toast is the result of something just done: it floats (`ToastWindow`) and brings no link state (#1053).

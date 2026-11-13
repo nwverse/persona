@@ -335,7 +335,8 @@ final class LocalProxies {
         close(id, forget: true)
     }
 
-    private func close(_ id: String, forget: Bool) {
+    /// `forget`: no longer the way to start first next time (`recent`).
+    func close(_ id: String, forget: Bool) {
         epochs[id, default: 0] += 1
         starting[id] = nil
         drop(id, forget: forget)
@@ -496,7 +497,7 @@ extension AppModel {
     /// details and Settings › hub say.
     func localProxyState(_ group: String) -> (hub: PairedHub, route: LocalProxyRoute, routed: Bool, state: LocalProxies.State?)? {
         guard let link = link(group), let on = link.live.currentConfig,
-              let hub = registry.members(group).first(where: { $0.config == on }), let route = hub.localProxy, route.isUsable else { return nil }
+              let hub = registry.members(group).first(where: { $0.configs.contains(on) }), let route = hub.localProxy, route.isUsable else { return nil }
         let proxies = LocalProxies.shared
         return (hub, route, proxies.routed.contains(hub.id), proxies.states[hub.id])
     }

@@ -8,7 +8,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 )
 
-// The computers the center drives and the ways to each (docs/archive/operations/plan-hub-center.md 5, docs/server/mesh.md "Several ways"). A way —
+// The computers the center drives and the ways to each (docs/archive/operations/plan-hub-center.md 5, docs/server/mesh.md "Multiple paths to one computer"). A way —
 // a path — is a hub.json entry of this hub (local, service, link, ssh, tailcat) or one of a member hub's (the center
 // opens the node's stream through that hub, peer_node.go). Paths that turn out to reach the same computer (the same
 // machine_uid in node.info) are one machine: listed once, connected through one path at a time (a resident node takes

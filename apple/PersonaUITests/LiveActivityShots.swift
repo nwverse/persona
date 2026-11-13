@@ -17,7 +17,7 @@ final class LiveActivityShots: XCTestCase {
             // The persona on the activity (`persona`, the default, or the hub's `nwverse`, which needs PERSONA_MOCK_HUB to be downloaded from).
             if let persona = env["PERSONA_PERSONA"] { app.launchArguments += ["-openPersona", persona] }
             if let pair = Self.pair { app.launchArguments += ["-pairURL", pair] }
-            // PERSONA_UI_LANGUAGE=en|ja|zh-Hans: the activity in that interface language (docs/apple/ios.md「界面语言」).
+            // PERSONA_UI_LANGUAGE=en|ja|zh-Hans: the activity in that interface language (docs/apple/ios.md「Interface language」).
             if let lang = env["PERSONA_UI_LANGUAGE"] { app.launchArguments += ["-AppleLanguages", "(\(lang))"] }
             app.launchPinned()
             sleep(env["PERSONA_MOCK_HUB"] == nil ? 4 : 8) // a package is downloaded first
@@ -73,7 +73,7 @@ final class LiveActivityShots: XCTestCase {
     }
 
     /// A persona chosen in Settings › Appearance › Avatar while the activity runs reaches the island within seconds, without a new
-    /// activity (docs/apple/live-activity.md「形象」). `PERSONA_PERSONA_SWITCH=nwverse,persona`: starts on the first,
+    /// activity (docs/apple/live-activity.md「Avatar」). `PERSONA_PERSONA_SWITCH=nwverse,persona`: starts on the first,
     /// then picks each next one in Settings and photographs the island 3 s after leaving the app. A hub package needs
     /// PERSONA_MOCK_HUB (scripts/mock/mock_hub.py with MOCK_PERSONAS=builtin).
     @MainActor func testSwitchingPersonaRedrawsTheIsland() throws {
@@ -142,7 +142,7 @@ final class LiveActivityShots: XCTestCase {
         }
     }
 
-    /// Another app's activity beside ours (docs/apple/live-activity.md「和其他 App 共用灵动岛」): the peer app
+    /// Another app's activity beside ours (docs/apple/live-activity.md「Sharing the Dynamic Island with other apps」): the peer app
     /// (apple/IslandPeer, `PERSONA_ISLAND_PEER` is its bundle id) starts one when it opens. Then, with the peer in front
     /// in landscape, ours alone in the landscape island (limited in width too). The peer ends its activity again.
     @MainActor private func shared(with id: String, _ phase: String) {

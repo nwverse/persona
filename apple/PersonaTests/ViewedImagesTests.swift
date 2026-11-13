@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The images a turn's work looked at (`ViewedImages`, docs/protocol/protocol.md「这一轮看过的图片」), by the hub's rules, from
+/// The images a turn's work looked at (`ViewedImages`, docs/protocol/protocol.md「Images viewed this turn」), by the hub's rules, from
 /// the work itself and from a fold that hides it; and where their strip goes (`ChatLines`): between the work line and
 /// the answer, also while the turn runs.
 @MainActor

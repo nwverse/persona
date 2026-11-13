@@ -4,6 +4,8 @@ import Observation
 /// One filtered, frozen list window. HTTP work is serialized; changing the query cancels and fences the old work.
 /// Delta upserts outside the window do not become rows. Their overlay only prevents a later frozen page resurrecting
 /// old values, and is released when the snapshot is exhausted or the query resets.
+/// A `legacy` query on a paging hub is a complete copy instead (`complete`): every page of complete rows read once,
+/// then each hint reads only what changed since its revision, and new rows join it (#3759).
 @MainActor @Observable final class SessionListModel<Row: Decodable & Equatable & Sendable> {
     typealias Page = SessionListPage<Row>
     typealias Fetch = @MainActor (SessionListQuery, String?, String?) async throws -> Page
@@ -16,6 +18,8 @@ import Observation
     private(set) var paged = false
     private(set) var error: String?
     private(set) var query = SessionListQuery()
+    /// The rows are the whole collection with a checkpoint (a legacy query on a paging hub), not a window.
+    @ObservationIgnored private(set) var complete = false
     @ObservationIgnored private(set) var revision: String?
     @ObservationIgnored private var snapshotRevision: String?
     @ObservationIgnored private var cursor: String?
@@ -34,6 +38,10 @@ import Observation
     @ObservationIgnored private var fetch: Fetch
     @ObservationIgnored private var fetchCounts: @MainActor (SessionListQuery) async throws -> SessionListCounts
     @ObservationIgnored var changed: (([Row]) -> Void)?
+    /// Rows a delta brought that are not in the window (sessions started after it was read, or further down): they
+    /// stay out of `rows`, as the window is frozen, but what looks sessions up by id still needs them (#2003: a
+    /// to-do's new agent was missing and shown as Follow Up while it worked).
+    @ObservationIgnored var outside: (([Row]) -> Void)?
 
     init(id: @escaping (Row) -> String, removalID: @escaping (String) -> String?,
          fetch: @escaping Fetch, counts: @escaping @MainActor (SessionListQuery) async throws -> SessionListCounts,
@@ -67,6 +75,7 @@ import Observation
         loaded = false
         loading = false
         paged = false
+        complete = false
         total = 0
         hasMore = false
         revision = nil
@@ -108,8 +117,10 @@ import Observation
     }
 
     /// Preserve the short hint-merging window, then single-flight with one dirty follow-up. Later hints do not
-    /// move the pending deadline; there is no refresh cooldown or maximum request rate.
-    func invalidate() {
+    /// move the pending deadline; there is no refresh cooldown or maximum request rate. A hint for the revision the
+    /// list already holds (the one every connect sends, a burst's repeat) brings nothing and starts no read.
+    func invalidate(revision hinted: String? = nil) {
+        if let hinted, loaded, paged || complete, hinted == revision { return }
         guard hintTask == nil else { return }
         let gen = generation
         hintTask = Task { [weak self] in
@@ -135,7 +146,7 @@ import Observation
         guard generation == gen, !Task.isCancelled else { return }
         if !loaded { await run(first: true) }
         else if refresh {
-            if paged { await synchronizeRead() }
+            if paged || complete { await synchronizeRead() }
             else { await run(first: true) } // Legacy hubs still return their complete list.
         }
     }
@@ -148,12 +159,41 @@ import Observation
         let work = Task { [weak self] in
             guard let self else { return }
             do {
-                let page = try await self.fetch(self.query, first ? nil : self.cursor, nil)
+                var page: Page
+                if first { page = try await self.fetch(self.query, nil, nil) }
+                else {
+                    do { page = try await self.fetch(self.query, self.cursor, nil) }
+                    catch let expired as APIError where expired.status == 409 {
+                        // The hub keeps a frozen window 5 minutes (fewer when newer ones push it out), so reaching
+                        // the end of a list open that long always lands here. Starting over from the first page cut
+                        // the list back to 50 rows and the scroll view put the reader near the top; keep the rows and
+                        // read a fresh window as deep as they have scrolled, plus a page.
+                        try await self.rebaseline(depth: self.rows.count + 1, generation: gen)
+                        return
+                    }
+                }
                 try Task.checkCancellation()
                 guard self.generation == gen else { return }
+                let complete = first && self.query.legacy && page.isPaged
+                if complete {
+                    // Every frozen page of the same revision, so the copy is complete before `since` follows it.
+                    var cursors = Set<String>()
+                    while page.hasMore == true {
+                        guard let next = page.nextCursor else { throw APIError(status: 0, message: "Missing list cursor") }
+                        guard cursors.insert(next).inserted else { throw APIError(status: 0, message: "Repeated list cursor") }
+                        let more = try await self.fetch(self.query, next, nil)
+                        try Task.checkCancellation()
+                        guard self.generation == gen else { return }
+                        guard more.revision == page.revision else { throw APIError(status: 409, message: "List snapshot changed") }
+                        page.sessions += more.sessions
+                        page.hasMore = more.hasMore
+                        page.nextCursor = more.nextCursor
+                    }
+                }
                 if first {
                     self.rows = self.unique(page.sessions)
-                    self.paged = page.isPaged
+                    self.complete = complete
+                    self.paged = page.isPaged && !complete
                     if !self.paged { self.counts = nil }
                     self.snapshotRevision = page.revision
                     self.revision = page.revision
@@ -167,7 +207,7 @@ import Observation
                     }
                     self.rows += self.unique(added)
                 }
-                if first { self.total = page.total ?? self.rows.count }
+                if first { self.total = complete ? self.rows.count : page.total ?? self.rows.count }
                 self.cursor = page.nextCursor
                 self.hasMore = page.hasMore == true && page.nextCursor != nil
                 self.loaded = true
@@ -181,6 +221,7 @@ import Observation
                     self.counts = counts
                 }
                 if !self.hasMore { self.overlays = [:]; self.removed = [] }
+                self.recoveries = 0 // read through: a later expiry (the next hub restart) may rebuild the baseline again
             } catch {
                 if self.generation == gen, !Task.isCancelled { self.error = error.localizedDescription }
                 if self.generation == gen, (error as? APIError)?.status == 409, self.recoveries < 1 {
@@ -205,17 +246,17 @@ import Observation
         if dirty {
             dirty = false
             if !loaded { await run(first: true) }
-            else if paged { await synchronizeRead() }
+            else if paged || complete { await synchronizeRead() }
         }
     }
 
     func synchronize() async {
-        guard paged else { return }
+        guard paged || complete else { return }
         await refresh()
     }
 
     private func synchronizeRead() async {
-        guard paged, let since = revision, task == nil else { return }
+        guard paged || complete, let since = revision, task == nil else { return }
         let gen = generation
         let readID = UUID()
         dirty = false
@@ -242,22 +283,30 @@ import Observation
                     next = page.hasMore == true ? page.nextCursor : nil
                     if page.hasMore == true && next == nil { throw APIError(status: 0, message: "Missing list cursor") }
                 } while next != nil
-                let counts = try await self.fetchCounts(self.query)
+                // A complete copy counts its own rows; a window's counts come from the hub.
+                var counts: SessionListCounts?
+                if !self.complete { counts = try await self.fetchCounts(self.query) }
                 try Task.checkCancellation()
                 guard self.generation == gen else { return }
-                let rows = self.rows.compactMap { row -> Row? in
+                let window = Set(self.rows.map(self.id))
+                var rows = self.rows.compactMap { row -> Row? in
                     let key = self.id(row)
                     return removals.contains(key) ? nil : upserts[key] ?? row
                 }
+                let beyond = upserts.filter { !window.contains($0.key) && !removals.contains($0.key) }
+                    .sorted { $0.key < $1.key }.map { $0.value }
+                if self.complete { rows += beyond } // a new session belongs to the whole collection
                 if rows != self.rows { self.rows = rows; self.changed?(rows) }
+                if !self.complete, !beyond.isEmpty { self.outside?(beyond) }
                 if self.hasMore {
                     for key in removals { self.overlays[key] = nil; self.removed.insert(key) }
                     for (key, row) in upserts where !removals.contains(key) { self.overlays[key] = row; self.removed.remove(key) }
                 }
-                self.total = total
-                self.counts = counts
+                self.total = self.complete ? rows.count : total
+                if !self.complete { self.counts = counts }
                 self.revision = target // only the last successful delta page advances the checkpoint
                 self.error = nil
+                self.recoveries = 0
             } catch {
                 guard self.generation == gen, !Task.isCancelled else { return }
                 self.error = error.localizedDescription
@@ -279,6 +328,44 @@ import Observation
         if dirty {
             dirty = false
             if !loaded { await run(first: true) } else { await synchronizeRead() }
+        }
+    }
+
+    /// A fresh frozen window at least `depth` rows deep (or all there is), swapped in at once: the rows on screen stay
+    /// until then.
+    private func rebaseline(depth: Int, generation gen: Int) async throws {
+        let first = try await fetch(query, nil, nil)
+        try Task.checkCancellation()
+        guard generation == gen else { return }
+        var fresh = unique(first.sessions)
+        var page = first
+        while fresh.count < depth, page.hasMore == true, let next = page.nextCursor {
+            page = try await fetch(query, next, nil)
+            try Task.checkCancellation()
+            guard generation == gen else { return }
+            // Not a 409: the recovery below would start over from the first page and shrink the list after all.
+            guard page.revision == first.revision else { throw APIError(status: 0, message: "List snapshot changed") }
+            let seen = Set(fresh.map(id))
+            fresh += unique(page.sessions.filter { !seen.contains(id($0)) })
+        }
+        rows = fresh
+        paged = first.isPaged
+        snapshotRevision = first.revision
+        revision = first.revision
+        total = first.total ?? fresh.count
+        cursor = page.nextCursor
+        hasMore = page.hasMore == true && page.nextCursor != nil
+        overlays = [:]
+        removed = []
+        loaded = true
+        error = nil
+        recoveries = 0
+        changed?(rows)
+        if paged {
+            let counts = try await fetchCounts(query)
+            try Task.checkCancellation()
+            guard generation == gen else { return }
+            self.counts = counts
         }
     }
 

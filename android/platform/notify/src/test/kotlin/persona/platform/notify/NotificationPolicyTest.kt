@@ -84,6 +84,12 @@ class NotificationPolicyTest {
         assertEquals("alert", NotificationPolicy.channel(NotifyEvent("alert", "machine", "session")))
         assertEquals(Notifier.CH_DONE, NotificationPolicy.channel(NotifyEvent("done", "machine", "session")))
         assertEquals(Notifier.CH_DONE, NotificationPolicy.channel(NotifyEvent("reply", "machine", "session")))
+        // As the hub sends it (#4035): decoding used to turn "reply" into "unknown", which posts nothing.
+        for ((kind, channel) in listOf("reply" to Notifier.CH_DONE, "done" to Notifier.CH_DONE, "assistant" to Notifier.CH_ASSISTANT, "alert" to "alert")) {
+            val wire = persona.core.contracts.ServerEvent.decode(
+                """{"type":"notify","kind":"$kind","machine_id":"machine","session_id":"session","title":"t","body":"b"}""") as NotifyEvent
+            assertEquals(kind, channel, NotificationPolicy.channel(wire))
+        }
         assertEquals(Notifier.CH_ASSISTANT, NotificationPolicy.channel(NotifyEvent("assistant", "machine", "session")))
         assertNull(NotificationPolicy.channel(NotifyEvent("interaction", "machine", "session")))
         assertNull(NotificationPolicy.channel(NotifyEvent("unknown", "machine", "session")))
@@ -147,4 +153,18 @@ class NotificationPolicyTest {
         dialog = ScreenDialog(options = listOf(DialogOption("input", "输入", kind = "type_something")) +
             List(4) { DialogOption("$it", "选项 $it") }),
     )
+
+    /** #3731: an "Awaiting reply" notification stayed after unpairing or turning lock-screen details off. */
+    @Test fun clearTakesDownEveryPostedKind() {
+        listOf("done", "reply", "assistant", "alert").forEach { kind ->
+            val event = NotifyEvent(kind, "machine", "session")
+            assertNotNull(kind, NotificationPolicy.channel(event))
+            assertTrue(kind, NotificationPolicy.cleared(NotificationPolicy.tag(event)))
+            assertTrue(kind, NotificationPolicy.cleared(NotificationPolicy.tag(event.copy(id = "progress-1"))))
+        }
+        NotificationPolicy.resultTags(SessionKey("machine", "session")).forEach { assertTrue(it, NotificationPolicy.cleared(it)) }
+        assertTrue(NotificationPolicy.cleared("interaction:request-1"))
+        assertTrue(NotificationPolicy.cleared("stopped"))
+        assertFalse(NotificationPolicy.cleared("ongoing"))
+    }
 }

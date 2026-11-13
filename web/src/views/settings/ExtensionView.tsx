@@ -27,9 +27,10 @@ import { useStore } from "../../lib/store";
 import { canTryUIStream } from "../../lib/extension-ui-stream-gate";
 import { lazyPage } from "../../lib/lazy-page";
 import { PageBoundary } from "../PageBoundary";
-import { otherManager } from "../../lib/manager-choice";
+import { otherManager, useLinkManager } from "../../lib/manager-choice";
 import type { UIRowControl } from "../../lib/extension-ui-v6";
 import { t } from "../../i18n";
+import { SUBSCRIPTIONS_UI } from "../../lib/subscriptions-ui";
 
 const inputClass =
   "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
@@ -93,6 +94,8 @@ function useInvalidate(extension: string, ui: string, draw: () => void) {
       if (id && id !== ui) return;
       now();
     });
+    // the subscription pages (#2041): a subscription saved, run or deleted anywhere draws them again
+    const offSubscription = extension === SUBSCRIPTIONS_UI ? onHubEvent("subscription", () => now()) : () => {};
     // a reconnect the hub could not resume: an invalidate missed meanwhile is not replayed (#4954)
     const offHello = onHubEvent("hello", (msg) => !isResumed(msg) && now());
     const shown = () => {
@@ -101,6 +104,7 @@ function useInvalidate(extension: string, ui: string, draw: () => void) {
     document.addEventListener("visibilitychange", shown);
     return () => {
       off();
+      offSubscription();
       offHello();
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", shown);
@@ -159,7 +163,8 @@ export function ExtensionUI(props: Parameters<typeof LegacyExtensionUI>[0]) {
   if (waitingHello && !legacyNegotiation) return <Loading />;
   // System/embedded slots remain full fitted snapshots. Old hubs keep the exact existing component.
   // Another manager's extension draws over HTTP, which names its manager on each request (docs/assistant/managers.md "Clients").
-  if (legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager)) return <LegacyExtensionUI {...props} />;
+  // The subscription pages (#2041) are the manager's, drawn over HTTP only.
+  if (legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager) || props.extension === SUBSCRIPTIONS_UI) return <LegacyExtensionUI {...props} />;
   return (
     <PageBoundary page={`extension:${props.extension}/${props.ui}`}>
       <Suspense fallback={<Loading />}>
@@ -169,7 +174,7 @@ export function ExtensionUI(props: Parameters<typeof LegacyExtensionUI>[0]) {
   );
 }
 export function LegacyExtensionUI({
-  extension, ui, context, embedded, compact, bare, title, onUnsupported, onMissing, onFailed, revision, onOpenSource, pages, history: withHistory, state: firstState, onWide, navigation, active = true, manager,
+  extension, ui, context, embedded, compact, bare, title, onUnsupported, onMissing, onFailed, revision, onOpenSource, pages, history: withHistory, state: firstState, onWide, onDepth, navigation, active = true, manager,
 }: {
   extension: string; ui: string; context?: UIContext; embedded?: boolean; compact?: boolean; bare?: boolean; title?: string;
   /** Whose extension it is (another manager's inbox item or computer, docs/assistant/managers.md "Clients"); none: the default's. */
@@ -181,8 +186,11 @@ export function LegacyExtensionUI({
   active?: boolean;
   /** The view drawn needs a wide page (UI version 4: split, code, diffs) or not. */
   onWide?: (wide: boolean) => void;
+  /** How many pages deep its stack is, whenever that changes (Inbox Sources keeps its List / Relationships switch on the first). */
+  onDepth?: (depth: number) => void;
 }) {
   const [stack, setStack] = useState<UIPage[]>(() => [{ ui, ...(firstState ? { state: firstState } : {}) }]);
+  const linkManager = useLinkManager();
   const top = stack[stack.length - 1];
   const [view, setView] = useState<UIView | null>(null);
   const [error, setError] = useState("");
@@ -204,6 +212,7 @@ export function LegacyExtensionUI({
   const mode = pages ?? (compact || embedded ? "open" : "stack");
   const depth = stack.length;
   const pageKey = `${depth}\n${top.ui}`;
+  useEffect(() => onDepth?.(depth), [depth, onDepth]);
 
   // the first page follows the props (a different extension or page opened in the same place)
   useEffect(() => {
@@ -321,16 +330,18 @@ export function LegacyExtensionUI({
     setBusy(action.id);
     const mine = ++asked.current;
     try {
-      const r = outcome(await actUI(extension, top.ui, action.id, { context, state: stateRef.current, values: sent, manager }), context?.item);
+      const r = outcome(await actUI(extension, top.ui, action.id, { context, state: stateRef.current, values: sent, manager }), context?.item, extension);
       // what it says to do is still done; the view it answers only while nothing was asked since
       const latest = mine === asked.current;
       if (r.view && latest) show(r.view, !!(extra && "q" in extra)); // a search keeps what is typed
       if (r.items && latest) setView((v) => (v ? patchView(v, r.items) : v));
       if (r.toast) toast(r.toast, "ok");
-      if (r.url) openLink(r.url);
+      if (r.url) openLink(r.url, undefined, linkManager);
       if (r.source) onOpenSource?.();
       // an extension's own settings (persona://settings/extensions/<id>) open in the app
       if (r.settings) navigate(r.settings);
+      // the subscription pages' Set Up with … (persona://ask): the text to the assistant's main conversation, which opens
+      if (r.ask) askAssistant(r.ask);
       if (r.push) push(r.push);
       if (r.pop) pop();
       if (r.reload) load();
@@ -375,7 +386,7 @@ export function LegacyExtensionUI({
     const at = asked.current;
     let r: ReturnType<typeof outcome> | null = null;
     try {
-      r = outcome(await actUI(extension, top.ui, c.action.id, { context, state: stateRef.current, values: { ...c.action.values, [c.name]: value } }), context?.item);
+      r = outcome(await actUI(extension, top.ui, c.action.id, { context, state: stateRef.current, values: { ...c.action.values, [c.name]: value }, manager }), context?.item, extension);
     } catch (e) {
       toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error");
     }
@@ -390,7 +401,7 @@ export function LegacyExtensionUI({
     if (r.items) setView((v) => (v ? patchView(v, r.items) : v));
     if ((r.view || r.items) && !entry.queued) setControls((x) => without(x, c.name));
     if (r.toast) toast(r.toast, "ok");
-    if (r.url) openLink(r.url);
+    if (r.url) openLink(r.url, undefined, linkManager);
     if (r.push) push(r.push);
     if (r.pop) pop();
     if (r.reload) load(true);
@@ -628,7 +639,7 @@ export function LegacyExtensionUI({
             </>
           }
         >
-          <p className="text-[13px] leading-relaxed break-words text-ink-2">{confirming.action.confirm}</p>
+          <p className="text-[13px] leading-relaxed whitespace-pre-line break-words text-ink-2">{confirming.action.confirm}</p>
         </Dialog>
       )}
     </div>
@@ -704,4 +715,12 @@ function LauncherSection({ place, launcher, machine }: { place: UIPlace; launche
       <ExtensionUI extension={place.extension} ui={place.id} context={context} embedded onUnsupported={() => setGone(true)} />
     </div>
   );
+}
+
+/** Sends the subscription pages' Set Up with … text to the assistant's main conversation (Ask Persona), loading the
+ *  outbox only then; a conversation that can't start says so. Inbox Sources' relationship view sends the same. */
+export function askAssistant(text: string) {
+  void import("../../lib/outbox")
+    .then((m) => m.askPersona(text))
+    .catch((e: unknown) => toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error"));
 }

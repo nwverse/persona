@@ -34,7 +34,7 @@ class LaunchInput(
 /** Debug-only pages; their routes and code stay out of release builds. */
 interface DeveloperTools {
     @Composable fun session(session: ShellSession): ShellSession = session
-    /** The page the settings tab offers, such as the component catalog. */
+    /** The developer page offered by Settings, such as the component catalog. */
     val home: NavKey
     val homeTitle: String
     fun EntryProviderScope<NavKey>.register(navigator: Navigator)

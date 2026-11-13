@@ -74,6 +74,58 @@ class PagedSessionsMockTests(unittest.TestCase):
             self.assertEqual(status, 409)
             self.assertEqual(body["code"], code)
 
+    def test_since_answers_changed_entered_and_removed_rows_from_the_journal(self):
+        sessions = hub.SESSIONS
+        saved = [dict(s) for s in sessions]
+        self.addCleanup(lambda: sessions.__setitem__(slice(None), saved))
+        base = self.read(summary=0, limit=200)
+        self.assertFalse(base["has_more"])
+        self.assertEqual(hub.current_list_revision(), base["revision"])
+        changed, gone = sessions[0], sessions[1]
+        changed["last_text"] = "a newer line"
+        gone_key = hub.LIST_TUPLE(hub.decorated_session(gone))
+        del sessions[1]
+        delta = self.read(summary=0, limit=200, since=base["revision"])
+        self.assertNotEqual(delta["revision"], base["revision"])
+        self.assertEqual(hub.current_list_revision(), delta["revision"])
+        self.assertEqual([s["session_id"] for s in delta["sessions"]], [changed["session_id"]])
+        self.assertEqual(delta["sessions"][0]["last_text"], "a newer line")
+        self.assertEqual(delta["remove"], [gone_key])
+        self.assertEqual(delta["total"], base["total"] - 1)
+        # A filtered delta: a row leaving the filter is a removal there, one entering it an upsert.
+        state = changed["state"]
+        before = self.read(summary=1, limit=200, state=state)
+        changed["state"] = "unknown" if state != "unknown" else "idle"
+        left = self.read(summary=1, limit=200, state=state, since=before["revision"])
+        self.assertIn(hub.LIST_TUPLE(hub.decorated_session(changed)), left["remove"])
+        # One slot a change: removals and rows page together under the target revision.
+        small = self.read(summary=0, limit=1, since=base["revision"])
+        self.assertTrue(small["has_more"])
+        rest = self.read(summary=0, limit=200, since=base["revision"], cursor=small["next_cursor"])
+        self.assertEqual(rest["revision"], small["revision"])
+        self.assertEqual(len(small["sessions"]) + len(small["remove"]) + len(rest["sessions"]) + len(rest["remove"]), 2)
+
+    def test_journal_is_bounded_like_the_hub(self):
+        sessions = hub.SESSIONS
+        saved = [dict(s) for s in sessions]
+        self.addCleanup(lambda: sessions.__setitem__(slice(None), saved))
+        oldest = self.read(summary=1, limit=1)["revision"]
+        for k in range(hub.LIST_JOURNAL_SIZE + 1):
+            sessions[0]["last_text"] = "round %d" % k
+            hub.current_list_revision()
+        body, status = hub.paged_sessions({"summary": ["1"], "since": [oldest]})
+        self.assertEqual((status, body["code"]), (409, "revision_expired"))
+        self.assertLessEqual(len(hub.LIST_JOURNAL), hub.LIST_JOURNAL_SIZE)
+
+    def test_strict_summary_rows_drop_chat_arrays_like_the_hub(self):
+        run = {"task_id": "w", "name": "audit", "running": True, "phases": ["A", "B"], "phase_index": 2, "agents": [{"id": "a"}]}
+        row = hub.summary_row({"session_id": "s", "workflows": [run], "background": [{"id": "w", "kind": "workflow"},
+                                                                               {"id": "b", "kind": "shell"}]})
+        self.assertFalse({"workflows", "background", "subagents"} & set(row))
+        self.assertEqual((row["running_workflows"], row["background_count"], row["background_tasks_count"]), (1, 2, 1))
+        self.assertEqual(row["workflow_progress"], {"task_id": "w", "name": "audit", "running": True, "phase_index": 2, "phase_count": 2})
+        self.assertTrue(row["waiting"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   AWAIT_FULL_MS,
@@ -11,7 +12,6 @@ import {
   decodeBase64,
   decodeShortcuts,
   encodeKey,
-  fitGrid,
   fontLoadQuery,
   historyAnchor,
   keyDecision,
@@ -201,9 +201,7 @@ describe("input", () => {
     expect(w.add(0, 0, 16, 30)).toBe(0);
   });
 
-  it("fits a grid to the panel and drives only a usable one", () => {
-    expect(fitGrid(800, 480, 7.8, 16)).toEqual({ cols: 102, rows: 30 });
-    expect(fitGrid(800, 480, 0, 16)).toBeNull();
+  it("drives only a usable grid", () => {
     expect(usableGrid({ cols: 102, rows: 30 })).toBe(true);
     expect(usableGrid({ cols: 9, rows: 30 })).toBe(false);
     expect(usableGrid({ cols: 40, rows: 3 })).toBe(false);
@@ -337,10 +335,22 @@ describe("key names from xterm's bytes", () => {
 });
 
 describe("font stack", () => {
-  it("puts a family before the generic monospace, once", () => {
-    expect(withFamily('"JetBrains Mono", Menlo, monospace', "X")).toBe('"JetBrains Mono", Menlo, "X", monospace');
-    expect(withFamily("Menlo", "X")).toBe('Menlo, "X", monospace');
-    expect(withFamily('Menlo, "X", monospace', "X")).toBe('Menlo, "X", monospace');
+  it("puts a range-limited fallback before named families, once", () => {
+    expect(withFamily('"JetBrains Mono", Menlo, monospace', "X")).toBe('"X", "JetBrains Mono", Menlo, monospace');
+    expect(withFamily("Menlo", "X")).toBe('"X", Menlo, monospace');
+    expect(withFamily('Menlo, "X", monospace', "X")).toBe('"X", Menlo, monospace');
+  });
+
+  it("prefers Linux monospace faces before UI and substituted desktop fallbacks", () => {
+    const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+    const stack = /--font-mono:\s*([^;]+);/.exec(css)?.[1] ?? "";
+    const families = stack.split(",").map((family) => family.trim().replaceAll('"', ""));
+    expect(families.at(-1)).toBe("monospace");
+    for (const family of ["DejaVu Sans Mono", "Liberation Mono"]) {
+      expect(families.indexOf(family)).toBeGreaterThanOrEqual(0);
+      expect(families.indexOf(family)).toBeLessThan(families.indexOf("ui-monospace"));
+      expect(families.indexOf(family)).toBeLessThan(families.indexOf("Menlo"));
+    }
   });
 });
 

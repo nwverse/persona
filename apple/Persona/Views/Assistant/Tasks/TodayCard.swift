@@ -1,7 +1,7 @@
 import EventKit
 import SwiftUI
 
-// The top of the day in the main conversation (docs/assistant/unified-entry.md「对话的形状」): a line with the date, and the
+// The top of the day in the main conversation (docs/assistant/unified-entry.md「Chat structure」): a line with the date, and the
 // Today card — what finished overnight, what did not go through, what waits, the day's meetings, the chats that @ the
 // user, the phone's reminders due today. Each row is one tap: open the task, or say the obvious thing to Persona.
 
@@ -174,7 +174,9 @@ struct TodayRow: View {
         case .open(let id): store.detailTask = id
         case .board: store.showBoard = true
         case .say(let text):
-            if let key = AppModel.shared.assistantMain { AppModel.shared.sendNow(key, text: text) }
+            // Written by the card from what the app read (a calendar event's title): marked, so it never counts as the
+            // user's own words for a secret hand-off's Always rule.
+            if let key = AppModel.shared.assistantMain { AppModel.shared.sendNow(key, text: text, via: .card) }
         case .routines: Self.showRoutines?()
         }
     }

@@ -81,6 +81,8 @@ export interface LookView {
   rev?: string;
   bytes?: number;
   manifest?: PersonaManifest;
+  /** The hub made it from an image the user uploaded (#2404): the only looks that can be deleted from the apps. */
+  uploaded?: boolean;
 }
 
 /** GET /looks's current: the chosen look (null: never chosen on this hub) and the one to show. */
@@ -169,7 +171,7 @@ export function usablePersonas(list: PersonaInfo[] | null | undefined): PersonaI
 }
 
 /**
- * What the face shows for a Persona conversation (AppModel.personaState, docs/apple/persona.md "State"): "Offline" while the hub or
+ * What the face shows for a Persona conversation (AppModel.personaState, docs/apple/persona.md "States"): "Offline" while the hub or
  * Persona's computer is out of reach, "Needs you" when it waits on you, "Thinking" / "Working" while a turn runs (thinking until it
  * writes or calls a tool), else "Idle".
  */

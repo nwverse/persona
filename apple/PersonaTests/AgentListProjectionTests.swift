@@ -23,6 +23,27 @@ import Testing
         #expect(repo.worktrees.count == 1 && repo.flat)
     }
 
+    /// By App (#3756): Collapse All / Expand All act on the app sections, offline agents' apps included, pinned ones'
+    /// not (they are under Pinned).
+    @Test func byAppSectionsAreWhatCollapseAllFolds() throws {
+        var desktop = try session("desktop", state: "offline")
+        desktop.agent = "claude"
+        desktop.agentSurface = "desktop"
+        var terminal = try session("terminal", state: "working")
+        terminal.agent = "codex"
+        terminal.agentSurface = "cli"
+        var pinned = try session("pinned", state: "working")
+        pinned.agent = "codex"
+        pinned.agentSurface = "desktop"
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "app"
+        settings.preferences[""] = .init(pins: Pins(), mutes: Pins())
+        settings.preferences[""]!.pins.sessions = ["fixture-box/pinned"]
+        let result = AgentListProjection.build(input([desktop, terminal, pinned], settings: settings))
+        // The pinned agent is listed under Pinned: its app has no section of its own.
+        #expect(result.menuSections == ["app/desktop/claude code", AppGroups.otherID])
+    }
+
     @Test func pinMuteAndHeldUnreadRulesKeepTheirExistingMeaning() throws {
         let pinned = try session("pinned")
         let muted = try session("muted", state: "unread")
@@ -370,5 +391,64 @@ import Testing
         await cache.pending?.value
         #expect(resolve(cache, next, revision: 2, state: state).base.map(\.key) == next.sessions.map(\.key))
         #expect(state.readerChanges == 1)
+    }
+
+    @Test func composableDimensionFiltersSearchScopesAndSearchAsCodeFilterProjection() throws {
+        var claude = try session("claude-opus", state: "working", cwd: "/code/persona")
+        claude.agent = "claude"
+        claude.model = "claude-opus-5-5"
+        claude.asks = "Should we enable composable filters?"
+        claude.lastText = "Running `vitest`\nFinished composable filter bar."
+
+        var codex = try session("codex-err", state: "needs_you", cwd: "/code/orca")
+        codex.agent = "codex"
+        codex.model = "gpt-5"
+        codex.turnError = "Upstream gateway timeout"
+
+        var settings = AgentListProjection.Settings()
+        settings.preferences[""] = .init(pins: Pins(), mutes: Pins())
+        settings.preferences[""]!.pins.sessions = ["fixture-box/claude-opus"]
+
+        // Filter by harness + model + pinnedOnly
+        settings.harness = "claude"
+        settings.model = "opus"
+        settings.pinnedOnly = true
+        let byDims = AgentListProjection.build(input([claude, codex], settings: settings))
+        #expect(byDims.base.map(\.sessionID) == ["claude-opus"])
+        #expect(byDims.searchPlan.code.contains("s.harness === \"claude\""))
+        #expect(byDims.searchPlan.code.contains("s.isPinned"))
+
+        // Structured inline operators + errors scope
+        var opSettings = AgentListProjection.Settings()
+        opSettings.query = "harness:codex project:orca is:error timeout"
+        opSettings.searchScope = .errors
+        let byOps = AgentListProjection.build(input([claude, codex], settings: opSettings))
+        #expect(byOps.base.map(\.sessionID) == ["codex-err"])
+
+        // Conversation scope excludes tool noise (`Running vitest`) while matching prose
+        var proseSettings = AgentListProjection.Settings()
+        proseSettings.searchScope = .conversation
+        proseSettings.query = "vitest"
+        #expect(AgentListProjection.build(input([claude, codex], settings: proseSettings)).base.isEmpty)
+        proseSettings.query = "composable"
+        #expect(AgentListProjection.build(input([claude, codex], settings: proseSettings)).base.map(\.sessionID) == ["claude-opus"])
+
+        // Evidence snippet attributes role and highlights match
+        let snippet = try #require(claude.evidenceSnippet(query: "composable", scope: .all))
+        #expect(snippet.role == .user)
+        #expect(snippet.match.lowercased() == "composable")
+    }
+
+    /// Search in All finds a working tree's sessions by their branch, as the web, Android and the hub's paged list do
+    /// (#4770). The Titles scope does not read it.
+    @Test func searchFindsASessionByItsBranch() throws {
+        var tree = try session("login-form")
+        tree.branch = "fix/123-login"
+        let other = try session("release-notes")
+        var settings = AgentListProjection.Settings()
+        settings.query = "FIX/123"
+        #expect(AgentListProjection.build(input([tree, other], settings: settings)).base.map(\.sessionID) == ["login-form"])
+        settings.searchScope = .title
+        #expect(AgentListProjection.build(input([tree, other], settings: settings)).base.isEmpty)
     }
 }

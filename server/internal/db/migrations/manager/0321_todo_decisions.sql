@@ -1,4 +1,4 @@
--- The calls the user made on a todo (#1618, docs/assistant/todos.md "Decision log"): what was asked, what was chosen and why, where
+-- The calls the user made on a todo (#1618, docs/assistant/todos.md "Decision records"): what was asked, what was chosen and why, where
 -- it came from. A decision is written by hand in the todo, or by the hub when the user answers a question card of an
 -- agent working on it (source 'card': the machine, session and interaction it came from). A later decision may
 -- supersede an earlier one of the same todo: the old one is kept, and only those no other decision supersedes are in

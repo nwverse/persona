@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -84,6 +86,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	readsChanged := b.recordReads(r)
 	batch := b.batch
 	batch.registered = r.Names
+	// Done past inboxForget leaves memory; its row stays as history until purgeInboxHistory (below) deletes it.
 	for id, it := range b.items {
 		if it.DoneAt != nil && time.Since(*it.DoneAt) > inboxForget {
 			b.drop(id)
@@ -103,6 +106,9 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	b.batch = nil
 	b.mu.Unlock()
 	s.saveInboxUndo(ctx, changed, s.undoWrites(ws, "what the round changed"))
+	if st := s.inboxDB(); st != nil {
+		s.purgeInboxHistory(ctx, st, now)
+	}
 	if readsChanged && len(changed) == 0 {
 		s.inboxChanged(ctx, nil) // nothing came in, but which sources could be read did (saveInbox tells otherwise)
 	}
@@ -113,7 +119,9 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 }
 
 // recordReads keeps which of a round's sources could not be read, under b.mu: a source read now (or off) is cleared,
-// one that failed is marked, one the hub no longer has goes, the others keep theirs. It says whether that changed.
+// one that failed is marked, one the hub no longer has goes, the others keep theirs. The mail accounts are a mail
+// round's (those it names as failed; a round without mail keeps them, and they go with mail itself). It says whether
+// that changed.
 func (b *inboxBook) recordReads(r assistantwire.InboxRound) bool {
 	next := map[string]string{}
 	for id, code := range b.readErrs {
@@ -133,10 +141,44 @@ func (b *inboxBook) recordReads(r assistantwire.InboxRound) bool {
 		changed = changed || b.readErrs[id] != code
 	}
 	b.readErrs = next
+	mail := b.mailReadErrs
+	if _, there := r.Names["mail"]; r.Mail != nil || r.Names != nil && !there {
+		mail = map[string]assistantwire.InboxMailFailed{}
+		if r.Mail != nil {
+			for _, f := range r.Mail.Failed {
+				if f.ID != "" && f.ReadError != "" {
+					mail[f.ID] = f
+				}
+			}
+		}
+	}
+	changed = changed || !maps.Equal(mail, b.mailReadErrs)
+	b.mailReadErrs = mail
 	return changed
 }
 
 // ---- the connectors' ----
+
+// withoutCounts are a source's generic things with no extra.count, for one that does not say what it means there
+// (InboxSource.Counts): each of their moves counts one, as it always did.
+func withoutCounts(things []connector.InboxThing) []connector.InboxThing {
+	var out []connector.InboxThing
+	for i, t := range things {
+		if t.Extra == nil || t.Extra.Count == 0 {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(things)
+		}
+		x := *t.Extra
+		x.Count = 0
+		out[i].Extra = &x
+	}
+	if out == nil {
+		return things
+	}
+	return out
+}
 
 // collectSource applies one connector's things: its batches go to be related to events (in the background), a
 // migrated connector's things with extra keep the items' own blocks, the others become generic items; then the open
@@ -160,6 +202,9 @@ func (s *Service) collectSource(ctx context.Context, src assistantwire.InboxSour
 			}
 		}
 		things = generic
+	}
+	if !src.Counts {
+		things = withoutCounts(things)
 	}
 	var changed []*InboxItem
 	b.mu.Lock()

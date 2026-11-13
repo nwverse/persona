@@ -3,6 +3,6 @@
   "ssh_unsupported": "不再添加 ssh 电脑：在那台电脑上装 node 服务，选「电脑来连」或「hub 来连」；hub.json 里已有的 ssh 电脑照常能用",
   "exists": "已经有这个 id 的电脑",
   "invalid_name": "名字最多 40 个字，不能换行",
-  "keeps_machines": "这个管理者自己的列表里还有电脑。删除它之前，先把这些电脑移给别的管理者",
+  "keeps_machines": "这个助手自己的列表里还有电脑。删除它之前，先把这些电脑移给别的助手",
   "default_machine": "这是 hub 自带的默认电脑，每次启动都会回来。要删掉它，在 hub.json 里写 \"machines\": [] 然后重启 hub"
 }

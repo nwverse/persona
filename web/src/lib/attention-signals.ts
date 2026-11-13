@@ -3,10 +3,11 @@
 import { useEffect, useRef } from "react";
 import { attentionReason, interactionCanAnswer, sessionTitle, stateOf } from "./format";
 import { agentKey } from "./pins";
+import { homeKey } from "./folded-rows";
 import { useCounts, useAgentSessions } from "./sessions";
 import { getState, useStore } from "./store";
 import { answeredTags, attentionSoundEnabled, badgeText, batchDue, finishedBatch, detectNewCards, detectTransitions, pickEvent, rateLimiter, SETTLE_MS, settledTags, suppressed, tabTitle, trackTurns, type Turn } from "./attention";
-import { claimNotification, closeNotification, dismissNotification, releaseClaim, FRONT_BEAT_MS, inQuietHours, loadNotifyPrefs, markFront, notificationText, notifyPrefs, waitingCard, otherTabInFront, postNotification, systemNotifyActive, wants, managerMuted } from "./notify";
+import { claimNotification, closeNotification, dismissNotification, releaseClaim, FRONT_BEAT_MS, inQuietHours, loadNotifyPrefs, markFront, notificationText, notifyPrefs, waitingCard, otherTabInFront, postNotification, systemNotifyAllowed, wants, managerMuted } from "./notify";
 import { defaultManager } from "./manager-choice";
 import { failedTagsOver, listenForNotificationClicks } from "./notification-answer";
 import { isMuted } from "./session-actions";
@@ -166,13 +167,17 @@ const ASK_TITLE = {
   elicitation: "notify.elicitation_title",
 } as const;
 
-/** A system notification for the event (Settings › Notifications): only while no tab of the app is in front (that one's title, badge
- *  and sounds cover it), and once for all the open tabs. Clicking it opens the agent's conversation. `card` is the new
+/** No notification goes out from any tab now: they are off, or one of the tabs is in front (that one's title, badge and
+ *  sounds cover it) and "Always show system notifications" is off (#2451). */
+const unannounced = () => !systemNotifyAllowed({ here: inFront(), other: otherTabInFront() });
+
+/** A system notification for the event (Settings › Notifications): only while unannounced says so, and once for all
+ *  the open tabs. Clicking it opens the agent's conversation. `card` is the new
  *  card of a session that was already "Needs you" (#4058): it replaces the agent's earlier "Needs you" one (same tag), and the tabs
  *  share it by the card, so a transition just posted does not keep it back. Undefined when it was not posted, else
  *  the card a "Needs you" one is about. */
 function notify(s: Session | undefined, kind: "needs" | "finished", card?: Interaction): { about?: string } | undefined {
-  if (inFront() || otherTabInFront() || !systemNotifyActive()) return;
+  if (unannounced()) return;
   if (!s && card?.session_id !== "") return;
   const tag = `${s ? agentKey(s) : `card:${card!.id}`}#${kind}`;
   if (!claimNotification(card ? `${tag}@${card.id}` : tag)) return;
@@ -204,9 +209,6 @@ function notify(s: Session | undefined, kind: "needs" | "finished", card?: Inter
 const BATCH_TAG = "finished#batch";
 /** What the tabs claim a batch by: its agents, so the tabs post one batch once. */
 const batchClaim = (keys: readonly string[]) => `${BATCH_TAG}@${[...keys].sort().join(",")}`;
-
-/** No notification goes out from any tab now: one of them is in front, or they are off. */
-const unannounced = () => inFront() || otherTabInFront() || !systemNotifyActive();
 
 /** One notification for several finished turns (#4945), under the same rules as notify's; clicking it opens the overview.
  *  `names` are the first few of `keys` (finishedBatch), `more` that there are others. The caller checked unannounced. */
@@ -293,7 +295,7 @@ export function useAttentionSignals(label: string, pane: { mid: string; sid: str
     cards.current = fresh.ids;
     for (const k of bare.current) if (next.get(k) !== "needs_you") bare.current.delete(k);
     for (const e of fresh.events) bare.current.delete(e.key);
-    for (const e of events) if (e.kind === "needs" && !interactions.some((ix) => agentKey(ix) === e.key)) bare.current.add(e.key);
+    for (const e of events) if (e.kind === "needs" && !interactions.some((ix) => homeKey(ix) === e.key)) bare.current.add(e.key);
     // answered or seen, here or elsewhere: its system notification goes too (#3458); and one about a card that is gone,
     // while the session waits on another; and a Could not allow one about a card that is gone
     const settled = new Set([...settledTags(prev.current, next), ...answeredTags(announced.current, interactions), ...failedTagsOver(interactions)]);

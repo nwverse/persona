@@ -2,7 +2,7 @@ import AppKit
 import Testing
 @testable import Persona
 
-/// The app's real menu bar (the tests run inside Persona.app): every shortcut docs/apple/mac.md「菜单和快捷键」 promises is
+/// The app's real menu bar (the tests run inside Persona.app): every shortcut docs/apple/mac.md「Menus and shortcuts」 promises is
 /// on a menu item, and no two items share one (a second ⌘⏎ / ⌘⌫ once took the composer's keys, 2026-11-01).
 @MainActor
 struct MacMenuShortcutTests {

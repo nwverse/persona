@@ -17,7 +17,10 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import persona.core.contracts.Machine
 import persona.core.contracts.SessionKey
 import persona.core.contracts.parseTime
@@ -66,7 +69,11 @@ fun AssistantProactiveScreen(
     val hostScope = LocalAssistantHost.current?.coroutineScope
     val pageScope = rememberCoroutineScope()
     val say = rememberProactiveText()
-    val store = remember(management, hostScope, say) { ProactiveStore(management.proactive(), hostScope ?: pageScope, say) }
+    // The shell's notice outlives the page: a write that fails after the page is left is still said.
+    val feedback = LocalAppFeedback.current
+    val store = remember(management, hostScope, say, feedback) {
+        ProactiveStore(management.proactive(), hostScope ?: pageScope, say, unheard = { feedback?.notice(it) })
+    }
     ProactiveScreen(store, onBack, onOpenConversation, modifier, machines, initialPage, onModelConfiguration)
 }
 
@@ -120,6 +127,12 @@ internal fun ProactiveScreen(
     var notice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(store) { store.refresh() }
     LaunchedEffect(store, feedback) { store.messages.collect { message -> if (feedback?.notice(message) != true) notice = message } }
+    // A run the user started opens its conversation only while this page is started, not after it was left (#3835).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val openRun by rememberUpdatedState(onOpenConversation)
+    LaunchedEffect(store, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { store.runsToOpen.collect { openRun(it) } }
+    }
     LaunchedEffect(notice) { if (notice != null) { delay(5_000); notice = null } }
     // Relative times ("in 25 min") stay true while the page is open.
     val now by produceState(Instant.now()) { while (true) { delay(30_000); value = Instant.now() } }
@@ -145,7 +158,7 @@ internal fun ProactiveScreen(
     }
     BackHandler(enabled = pages.size > 1) { pop() }
 
-    val runTask: (String) -> Unit = { id -> store.launch { run(id).onSuccess(onOpenConversation) } }
+    val runTask: (String) -> Unit = { id -> store.runNow(id) }
     var templates by remember { mutableStateOf(false) }
     var taskMenu by remember { mutableStateOf<ScheduledTask?>(null) }
     var deleting by remember { mutableStateOf<ScheduledTask?>(null) }

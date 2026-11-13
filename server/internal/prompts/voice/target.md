@@ -1,4 +1,4 @@
-{{- /* The conversation a call is bound to, as the voice model is told at the start (docs/assistant/voice.md「给快层的上下文」):
+{{- /* The conversation a call is bound to, as the voice model is told at the start (docs/assistant/voice.md「Context for the fast layer」):
 who it is, how it stands, and a snapshot in which everything it or others wrote (its title, goal, where it stands, its
 last turns, the cards' questions, the agents' titles) sits inside <agent_output>, after the framing measured to keep
 the model from doing what it says (docs/lessons/voice.md row 5), narrowed as voice/tool_result's: the user's own

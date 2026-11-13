@@ -25,10 +25,11 @@ class FeedEventTest {
 
     private class Api(val items: List<FeedItem>) : TasksApi {
         val asked = mutableListOf<String?>()
+        var taskCards: List<persona.core.contracts.AssistantTaskCard>? = null
         override suspend fun todos() = emptyList<Todo>()
         override suspend fun feed(conversation: String, since: String?): FeedResponse {
             asked += since
-            return FeedResponse(items.filter { item -> since?.let { item.at.orEmpty() > it } ?: true })
+            return FeedResponse(items.filter { item -> since?.let { item.at.orEmpty() > it } ?: true }, taskCards = taskCards)
         }
         override suspend fun startPlan(id: String, remember: Boolean): TaskPlan = error("unused")
         override suspend fun dismissPlan(id: String): TaskPlan = error("unused")
@@ -59,6 +60,30 @@ class FeedEventTest {
         assertEquals(listOf("a1", "a2"), store.feeds.value["c1"]?.map { it.id })
         store.load("c1") // loaded once: later loads only ask for what came after
         assertEquals(listOf(null, "2026-11-04T10:00:00Z"), api.asked)
+    }
+
+    @Test fun taskCardUpsertsSurviveEmptyFailedAndOlderIncrementalReads() {
+        val api = Api(emptyList())
+        val scope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Unconfined)
+        val store = TasksStore(api, Connection(), scope)
+        val card = persona.core.contracts.AssistantTaskCard("plan:p:0", "t", "p", 0,
+            at = "2026-11-10T10:00:00Z", updatedAt = "2026-11-10T10:01:00Z", state = "working")
+        try {
+            api.taskCards = listOf(card)
+            store.load("c1")
+            assertEquals(listOf(card), store.taskCards.value["c1"])
+            val accepted = card.copy(state = "accepted", updatedAt = "2026-11-10T10:01:00.500Z")
+            api.taskCards = listOf(accepted)
+            store.load("c1")
+            api.taskCards = emptyList()
+            store.load("c1")
+            api.taskCards = null
+            store.load("c1")
+            api.taskCards = listOf(card)
+            store.load("c1")
+            assertEquals(listOf(accepted), store.taskCards.value["c1"])
+            assertEquals(null, store.taskCards.value["other"])
+        } finally { scope.coroutineContext[kotlinx.coroutines.Job]?.cancel() }
     }
 
     /**

@@ -5,8 +5,9 @@
 // (`assistant_readiness`) nothing here shows and the page behaves as before.
 import { useEffect, useSyncExternalStore } from "react";
 import { t } from "../i18n";
-import { api, ApiError, errorText } from "./api";
+import { api, ApiError, errorText, isAbort, pastHub } from "./api";
 import { navigate } from "./router";
+import { withStarPrompt } from "./star-prompt-load";
 import { getState, hubHas, useStore } from "./store";
 
 export const READINESS_FEATURE = "assistant_readiness";
@@ -103,7 +104,7 @@ export function helpTopic(id: string): HelpTopic {
 }
 
 /** The action ids a card can draw a button for (5.1); an id this page does not know is text only (5, general rules). */
-const ACTIONS = new Set(["add_computer", "confirm_computer", "wake_computer", "install_claude", "login_claude", "connect_model", "edit_provider", "test_assistant", "enable_tls", "open_admin"]);
+const ACTIONS = new Set(["add_computer", "confirm_computer", "wake_computer", "install_claude", "login_claude", "connect_model", "edit_provider", "test_assistant", "main_chat_model", "enable_tls", "open_admin"]);
 
 export function knownAction(id: string | undefined): boolean {
   return Boolean(id && ACTIONS.has(id));
@@ -127,6 +128,8 @@ export function actionLabel(id: string): string {
       return t("lib-readiness.action_edit_provider");
     case "test_assistant":
       return t("lib-readiness.action_test_assistant");
+    case "main_chat_model":
+      return t("lib-readiness.action_main_chat_model");
     case "enable_tls":
     case "open_admin":
       return t("lib-readiness.action_open_admin");
@@ -161,6 +164,8 @@ export function runAction(id: string, o: { launcher?: string; onHelp: (topic: He
       return navigate(providersPath());
     case "edit_provider":
       return navigate(o.launcher ? providersPath(o.launcher) : "/settings?tab=models");
+    case "main_chat_model": // the Main chat purpose of the model configuration: pick one of the machine's launchers
+      return navigate("/settings?tab=models");
     case "test_assistant":
       void refreshReadiness({ probe: true });
       return;
@@ -228,18 +233,22 @@ interface ReadinessState {
   /** The hub answered 404: an older hub, the page as before. */
   unsupported: boolean;
   probing: boolean;
+  /** "Try it" got no answer (the hub took too long, the network dropped, an error): what to say instead of a result; "" none. */
+  probeError: string;
   at: number;
   /** A request has finished (answered or failed): before it, "no readiness" means "not known yet". */
   tried: boolean;
 }
 
-let rs: ReadinessState = { readiness: null, unsupported: false, probing: false, at: 0, tried: false };
+let rs: ReadinessState = { readiness: null, unsupported: false, probing: false, probeError: "", at: 0, tried: false };
 const listeners = new Set<() => void>();
 let inflight: Promise<void> | null = null;
 // Every request's number: an answer lands only if no later request has answered first (a forced ask after a change
 // must not be overwritten by one sent before it).
 let asked = 0;
 let answered = 0;
+// true until this tick ends after a request is made: what a forced ask may still share
+let issuing = false;
 
 function set(patch: Partial<ReadinessState>) {
   rs = { ...rs, ...patch };
@@ -248,26 +257,44 @@ function set(patch: Partial<ReadinessState>) {
 
 /** How long a fetched answer is good for before a visit asks again. */
 const FRESH_MS = 5_000;
+const BLOCKED_RETRY_MS = 2_000;
+const BLOCKED_RETRY_MAX_MS = 60_000;
+
+/** The hub's own limit for "Try it": the one-word check (healthCheckTimeout, 100 s) and then the node's self-check
+ *  (readinessWaitGet, 12 s). The read waits past it (`pastHub`), so a slow check still ends in its result (#1892). */
+export const PROBE_HUB_MS = 112_000;
 
 /**
  * Asks the hub again (a visit, a machine coming or going, after a failure, "Try it"'s probe). `force` asks even with a
- * fresh answer; `changed` also asks with an answer in flight: that one may have been worked out before the change made
- * here. The rest share the one in flight (each can hold a node self-check for seconds).
+ * fresh answer and shares only a request made in this same tick (every gate on the page asking at once); `changed` always
+ * asks anew. An answer already in flight may have been worked out before the change, so neither takes it. The rest share
+ * the one in flight (each can hold a node self-check for seconds).
  */
 export function refreshReadiness(o: { force?: boolean; probe?: boolean; changed?: boolean } = {}): Promise<void> {
   if (!o.probe && !o.force && !o.changed && Date.now() - rs.at < FRESH_MS) return Promise.resolve();
-  if (inflight && !o.probe && !o.changed) return inflight;
-  if (o.probe) set({ probing: true });
+  if (inflight && !o.probe && !o.changed && (!o.force || issuing)) return inflight;
+  if (o.probe) set({ probing: true, probeError: "" });
+  if (!o.probe) {
+    issuing = true;
+    queueMicrotask(() => (issuing = false));
+  }
   const mine = ++asked;
   // a probe always lands: it is the only answer that carries "Try it"'s result, however long it took
   const lands = () => (o.probe || mine > answered) && ((answered = Math.max(answered, mine)), true);
-  const p = api<Readiness>(o.probe ? `${READINESS_PATH}?probe=1` : READINESS_PATH)
+  const p = (o.probe ? api<Readiness>(`${READINESS_PATH}?probe=1`, { timeout: pastHub(PROBE_HUB_MS) }) : api<Readiness>(READINESS_PATH))
     .then((r) => {
-      if (lands()) set({ readiness: r, unsupported: false, at: Date.now() });
+      // a newer answer replaces a failed try's words, as it replaces a try's result
+      if (!lands()) return;
+      const prev = rs.readiness;
+      set({ readiness: r, unsupported: false, probeError: "", at: Date.now() });
+      // a step was still open and now it is ready: maybe setup just finished, for the GitHub star toast (#5761)
+      if (prev?.next && r.ready) withStarPrompt((m) => m.starPromptReadiness(prev, r));
     })
     .catch((e) => {
       // 404: an older hub; 503 assistant_offline and the rest: keep what was there, ask again next time
       if (e instanceof ApiError && e.status === 404 && lands()) set({ unsupported: true, readiness: null, at: Date.now() });
+      // "Try it" ends in words either way: a try that got no answer says why, and an earlier try's result is not shown for it
+      else if (o.probe && !isAbort(e)) set({ probeError: errorText(e) || t("lib-api.hub_no_response") });
     })
     .finally(() => {
       if (o.probe) set({ probing: false });
@@ -276,6 +303,29 @@ export function refreshReadiness(o: { force?: boolean; probe?: boolean; changed?
     });
   if (!o.probe) inflight = p;
   return p;
+}
+
+/** The send button stands in for a missing step: asks the hub again at growing intervals (2 s up to a minute), so an old
+ *  answer does not hold it after the step is done; an unanswered ask keeps the last value and is tried again. Hidden
+ *  pages skip the ask. Returns the stop. */
+export function retryWhileBlocked(): () => void {
+  let n = 0;
+  let timer: ReturnType<typeof setTimeout>;
+  let stopped = false;
+  const schedule = () => {
+    timer = setTimeout(() => {
+      n++;
+      const ask = document.visibilityState === "hidden" ? Promise.resolve() : refreshReadiness();
+      void ask.finally(() => {
+        if (!stopped) schedule();
+      });
+    }, Math.min(BLOCKED_RETRY_MAX_MS, BLOCKED_RETRY_MS * 2 ** n));
+  };
+  schedule();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
 }
 
 function subscribe(l: () => void) {
@@ -325,7 +375,7 @@ export function claudeMissing(r: Readiness | null | undefined): boolean {
 
 /** For tests: forget everything. */
 export function resetReadiness(r: Readiness | null = null) {
-  rs = { readiness: r, unsupported: false, probing: false, at: r ? Date.now() : 0, tried: !!r };
+  rs = { readiness: r, unsupported: false, probing: false, probeError: "", at: r ? Date.now() : 0, tried: !!r };
   inflight = null;
   listeners.forEach((l) => l());
 }
@@ -334,7 +384,7 @@ export function resetReadiness(r: Readiness | null = null) {
  * The main conversation's readiness, or null on a hub without it (and until the first answer). Asked on a visit, when
  * the machines change (one added or confirmed, one going offline or coming back) and when the window comes back into view.
  */
-export function useReadiness(enabled = true): { readiness: Readiness | null; probing: boolean; pending: boolean } {
+export function useReadiness(enabled = true): { readiness: Readiness | null; probing: boolean; probeError: string; pending: boolean } {
   // a page that never shows the card (an agent session, a side panel) does not ask
   const supported = useStore((s) => hubHas(s.features, READINESS_FEATURE)) && enabled;
   // a computer confirmed (trust pending → omitted) changes the computer step as much as one coming online
@@ -354,6 +404,6 @@ export function useReadiness(enabled = true): { readiness: Readiness | null; pro
       window.removeEventListener("focus", on);
     };
   }, [supported]);
-  if (!supported || s.unsupported) return { readiness: null, probing: false, pending: false };
-  return { readiness: s.readiness, probing: s.probing, pending: !s.readiness && !s.tried };
+  if (!supported || s.unsupported) return { readiness: null, probing: false, probeError: "", pending: false };
+  return { readiness: s.readiness, probing: s.probing, probeError: s.probeError, pending: !s.readiness && !s.tried };
 }

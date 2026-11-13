@@ -3,6 +3,7 @@ package managerconf
 import (
 	"encoding/json"
 	"errors"
+	"net"
 )
 
 // Binding is the built-in manager's binding to its hub when it is a service of its own (docs/assistant/managers.md
@@ -81,6 +82,19 @@ const BuiltinCodeEnv = "PERSONA_MANAGER_CODE"
 // the built-in manager at hub with the code in BuiltinCodeEnv unless its binding works, then install its service.
 func BuiltinInstallArgs(hub string) []string {
 	return []string{"manager", "install", "--builtin", "--join", hub}
+}
+
+// LocalHubURL is the hub on this machine, from its listen address (hub.json's listen): loopback when it listens on
+// every address, else the address it listens on; the default port on loopback when listen is not host:port.
+func LocalHubURL(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "http://127.0.0.1:18660"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // BuiltinCheckArgs is the command line that says, before anything is changed, whether the manager's program can

@@ -1,4 +1,4 @@
-// Who gets an input when the terminal is herdr's own client (docs/integrations/terminal.md "Conflicts in the full view", #2700). In the full
+// Who gets an input when the terminal is herdr's own client (docs/integrations/terminal.md "Full view conflicts", #2700). In the full
 // surface the whole terminal area is herdr's: its right-click menus, its prefix key, its mouse selection. Persona keeps
 // what herdr does not use, or what needs a modifier herdr does not bind. These are the decisions, as pure functions;
 // views/session/terminal/full.ts and FullTerminal.tsx only wire them to events. The single-pane surface is untouched

@@ -1,10 +1,10 @@
 // Messages that are not plain bubbles (iOS MergedUserBubble / PeerMessage / LoopTickRow): a finished exchange's several
 // messages in one bubble, a message another Claude session sent, and a /loop waking the agent again.
+import { openTask } from "../../lib/handoff";
 import { useState } from "react";
 import { clock } from "../../lib/format";
 import { splitQuotes } from "../../lib/drafts";
 import { taskOfInjected } from "../../lib/injected";
-import { openPanel } from "../../lib/panel";
 import { getSession, useStore } from "../../lib/store";
 import type { Injected } from "../../lib/types";
 import type { UserMessage } from "../../lib/turns";
@@ -116,7 +116,7 @@ function injectedIcon(n: Injected): { name: IconName; tone: string } {
 }
 
 /** A message Persona typed in for the model (a task's notice, a scheduled run…): one centered line, never its words.
- *  A task's opens the task; a scheduled run's shows what the task asks. docs/protocol/protocol.md "Messages Persona injects". */
+ *  A task's opens the task; a scheduled run's shows what the task asks. docs/protocol/protocol.md "Messages injected by Persona". */
 export function InjectedHint({ msg, sid }: { msg: UserMessage; sid: string }) {
   const n = msg.injected!;
   const todos = useStore((s) => s.todos);
@@ -135,7 +135,7 @@ export function InjectedHint({ msg, sid }: { msg: UserMessage; sid: string }) {
   return (
     <div className="flex flex-col items-center gap-2" data-injected={n.kind}>
       {todo ? (
-        <button type="button" className={cx(pill, "hover:bg-hover")} onClick={() => openPanel({ kind: "task", todo })} aria-label={t("chat-messages.open_task", { line: n.line })}>
+        <button type="button" className={cx(pill, "hover:bg-hover")} onClick={() => openTask(todo)} aria-label={t("chat-messages.open_task", { line: n.line })}>
           {body}
         </button>
       ) : n.detail ? (

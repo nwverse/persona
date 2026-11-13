@@ -136,6 +136,44 @@ describe("系统通知", () => {
   });
 });
 
+describe("Always show system notifications (#2451)", () => {
+  beforeEach(() => localStorage.setItem("persona.systemNotifyAlways", "1"));
+
+  it("posts while this page is in front, and clicking opens the conversation", async () => {
+    focused = true;
+    await show([session("a", "working")]);
+    await show([session("a", "needs_you")]);
+    expect(posted).toEqual([{ title: "a 需要你", body: "a 的最后一句", tag: "m/a#needs" }]);
+    act(() => notifications[0].onclick?.());
+    expect(location.pathname).toBe("/s/m/a");
+  });
+
+  it("posts while another tab is in front", async () => {
+    _setTabId("tab-other");
+    markFront(true);
+    _setTabId("tab-me");
+    await show([session("a", "working")]);
+    await show([session("a", "needs_you")]);
+    expect(posted.map((p) => p.title)).toEqual(["a 需要你"]);
+  });
+
+  it("still once for all tabs: one another tab just posted is not posted again", async () => {
+    focused = true;
+    localStorage.setItem("persona.notified", JSON.stringify({ "m/a#needs": Date.now() }));
+    await show([session("a", "working"), session("b", "working")]);
+    await show([session("a", "needs_you"), session("b", "needs_you")]);
+    expect(posted.map((p) => p.title)).toEqual(["b 需要你"]);
+  });
+
+  it("does nothing while the main switch is off", async () => {
+    focused = true;
+    localStorage.removeItem("persona.systemNotify");
+    await show([session("a", "working")]);
+    await show([session("a", "needs_you")]);
+    expect(posted).toEqual([]);
+  });
+});
+
 describe("一批做完的合成一条（#4945）", () => {
   const long = "2026-01-01T09:58:00Z";
   const working = (...ids: string[]) => ids.map((id) => session(id, "working", long));
@@ -242,7 +280,7 @@ describe("已在需要你时又来一张卡（#4058）", () => {
     await show([session("a", "needs_you")], [ask]);
     expect(posted).toEqual([{ title: "a 在问你", body: "用哪个框架？", tag: "m/a#needs" }]);
     await show([session("a", "needs_you")], [ask, perm]);
-    expect(posted.at(-1)).toEqual({ title: "a 要你批准", body: "go test ./...", tag: "m/a#needs" });
+    expect(posted.at(-1)).toEqual({ title: "a 需要你授权", body: "go test ./...", tag: "m/a#needs" });
     await show([session("a", "needs_you")], [perm, ask]); // a snapshot again, the same cards
     await show([{ ...session("a", "needs_you"), last_text: "新的一句" }]);
     expect(posted).toHaveLength(2);
@@ -251,9 +289,9 @@ describe("已在需要你时又来一张卡（#4058）", () => {
   it("通知说的那张卡答掉了就收回，会话还在等另一张也收回", async () => {
     await show([session("a", "needs_you")], [ask]);
     await show([session("a", "needs_you")], [ask, perm]);
-    expect(posted.map((p) => p.title)).toEqual(["a 要你批准"]);
+    expect(posted.map((p) => p.title)).toEqual(["a 需要你授权"]);
     await show([session("a", "needs_you")], [ask]);
-    expect(closed).toEqual(["a 要你批准"]);
+    expect(closed).toEqual(["a 需要你授权"]);
     await show([session("a", "needs_you")], [ask]);
     expect(closed).toHaveLength(1);
   });
@@ -264,7 +302,7 @@ describe("已在需要你时又来一张卡（#4058）", () => {
     expect(posted.map((p) => p.title)).toEqual(["a 需要你"]);
     vi.setSystemTime(T0 + 10_000);
     await show([session("a", "needs_you")], [perm]);
-    expect(posted.at(-1)).toEqual({ title: "a 要你批准", body: "go test ./...", tag: "m/a#needs" });
+    expect(posted.at(-1)).toEqual({ title: "a 需要你授权", body: "go test ./...", tag: "m/a#needs" });
     await show([session("a", "needs_you")], [perm, { ...ask, id: "q2" }]);
     expect(posted.at(-1)?.title).toBe("a 在问你");
   });
@@ -296,7 +334,7 @@ describe("已在需要你时又来一张卡（#4058）", () => {
       await show([session("a", "working")]);
       await show([session("a", "needs_you")], [perm]);
       await act(async () => {});
-      expect(shown).toEqual([{ title: "a 要你批准", ix: "p1" }]);
+      expect(shown).toEqual([{ title: "a 需要你授权", ix: "p1" }]);
       expect(posted).toEqual([]);
     });
 
@@ -305,7 +343,7 @@ describe("已在需要你时又来一张卡（#4058）", () => {
       await show([session("a", "needs_you")], [{ ...perm, fields: [{ key: "pw", label: "密码", secret: true }] }]);
       await act(async () => {});
       expect(shown).toEqual([]);
-      expect(posted.map((p) => p.title)).toEqual(["a 要你批准"]);
+      expect(posted.map((p) => p.title)).toEqual(["a 需要你授权"]);
     });
 
     it("不能批的会话（approve=false）：不带按钮，照旧弹普通通知", async () => {
@@ -314,7 +352,7 @@ describe("已在需要你时又来一张卡（#4058）", () => {
       await show([locked], [perm]);
       await act(async () => {});
       expect(shown).toEqual([]);
-      expect(posted.map((p) => p.title)).toEqual(["a 要你批准"]);
+      expect(posted.map((p) => p.title)).toEqual(["a 需要你授权"]);
     });
   });
 });

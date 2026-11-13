@@ -4,14 +4,19 @@ import WidgetKit
 @main
 struct PersonaWidgetsBundle: WidgetBundle {
     init() {
-        // The app's interface language (App Group), for this extension's next launch (docs/apple/ios.md「界面语言」).
+        // The app's interface language (App Group), for this extension's next launch (docs/apple/ios.md「Interface language」).
         LanguageStore.shared.follow(LanguageStore.shared.groupResolved)
     }
 
     var body: some Widget {
+        AgentsHomeWidget()
+        InboxHomeWidget()
+        RecordHomeWidget()
         ExtensionSystemWidget()
         FleetLiveActivity()
         CompatibleFleetLiveActivity()
+        RecordingLiveActivity()
+        MeetingRecordingControl()
         AskPersonaControl()
         PersonaAgentsControl()
         CompatibleAssistantControl()

@@ -7,7 +7,7 @@ import persona.core.contracts.generated.ExtensionViewAction
 import persona.core.contracts.generated.ExtensionViewActionStatus
 import persona.core.domain.views.AssistantCard
 
-// How an assistant's card reads in each state (docs/assistant/assistant-views.md "Actions and pages" "Persistent submits"): what can be tapped,
+// How an assistant's card reads in each state (docs/assistant/assistant-views.md "Actions and multiple pages" "Persistent submits"): what can be tapped,
 // what was chosen, what was sent. The renderer stays the extensions' (ExtensionViewContent.kt); only the page it is given
 // changes.
 

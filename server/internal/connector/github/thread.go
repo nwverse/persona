@@ -19,7 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 )
 
-// A pull request or issue opened in the app as GitHub's own thread (connector.Threads, docs/extensions/connectors.md "Chat page"):
+// A pull request or issue opened in the app as GitHub's own thread (connector.Threads, docs/extensions/connectors.md "Interfaces: one manifest, dispatched by declaration"):
 // its header (state, author, labels, branches, description) and its timeline, a page at a time, newest page first:
 // comments, reviews, comments on lines with the diff before them, CI checks (a failure with the end of its log) and
 // the gray lines of what happened (labeled, merged, renamed). Every list is read with If-None-Match: GitHub answers

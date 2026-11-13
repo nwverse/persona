@@ -84,7 +84,7 @@ func injectedCases() []injectedCase {
 		c("user_bell_without_marker", "用户自己打的「🔔 任务…」没有通知的说明行：不认。", notice,
 			"🔔 任务「买菜」做完了\n帮我记一下", nil),
 		c("user_alarm_plain", "用户自己打的「⏰ 明天提醒我」：不认。", run, "⏰ 明天八点提醒我开会", nil),
-		c("plain_text", "普通的话不认。", "docs/protocol/protocol.md「Persona 注入的消息」", "帮我看看这个 PR", nil),
+		c("plain_text", "普通的话不认。", "docs/protocol/protocol.md「Messages injected by Persona」", "帮我看看这个 PR", nil),
 	}
 }
 
@@ -98,7 +98,7 @@ func TestParseInjected(t *testing.T) {
 			t.Errorf("%s: got %s, want %s", c.Name, g, w)
 		}
 	}
-	// The shape every spec/fixtures domain has (spec/README.md "Fixture conventions").
+	// The shape every spec/fixtures domain has (spec/README.md "夹具约定").
 	b, err := json.MarshalIndent(struct {
 		Version int            `json:"version"`
 		Cases   []injectedCase `json:"cases"`

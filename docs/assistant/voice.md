@@ -4,7 +4,7 @@ Voice mode has two layers: the **fast layer** is the GPT-Live-compatible realtim
 the **slow layer** is the chat you were in when you opened voice mode (Persona's main chat, or any Claude Code / Codex session in Agents), responsible for doing the work.
 Your instructions go to that chat immediately; when the round finishes, the fast layer speaks the conclusion in a sentence or two. Agent questions can be answered by voice, but plan approvals and tool permissions require tapping cards on screen.
 The realtime voice service address and Key can be configured in the App (Key encrypted on the hub). This document is the feature design (finalized 2026-11-06, umbrella issue #3489).
-Phase one follows the sub-issues in section 7; after each step, align this document with the code. Protocol 1 frames and the config file syntax (the manager's manager.json) remain defined by `docs/extensions/extensions.md`
+Phase one is done and this document follows the code; how it was split into issues, its acceptance and test plan, its risks and the design-review answers are in [voice-plan.md](../archive/assistant/voice-plan.md). Protocol 1 frames and the config file syntax (the manager's manager.json) remain defined by `docs/extensions/extensions.md`
 ("Voice (kind = voice)" and "Built-in voice extension"); this document covers only protocol 2 and these changes. GPT-Live test findings go into docs/lessons/voice.md (created in #3495).
 
 ## 0. Decisions and current state
@@ -21,10 +21,10 @@ Phase one follows the sub-issues in section 7; after each step, align this docum
 
 **Current state**
 
-- The hub has built-in voice extension `personad voice` (`server/internal/voice`), supporting GPT-Live's `live` and `codex` dialects. Only Android has a voice page; iOS has no voice client yet.
+- The hub has built-in voice extension `personad voice` (`server/internal/voice`), supporting GPT-Live's `live` and `codex` dialects. Clients: iOS and visionOS (`apple/Persona/Voice/`, `apple/Persona/Views/Voice/`; section 6), the web app (6.11) and Android's voice page, which speaks protocol 1 and so always talks to the main chat.
 - Since #3502, the extension speaks protocol 2 (`GET /info` returns `protocol: 2`, `features`): `start` with `protocol: 2` and `target` binds to that chat (main chat, another Persona chat, or any Agent),
   with `run` / `link` frames, 409 mapping and `resend`, `状态：` (status), `停止：` (stop), `回答：` (answer), trimmed `resume`, and an interruption gate. Since #3504, questions are supported (`asks`: `ask` frames, voice answers, only category spoken for approvals),
-  and since #3505 the upstream pauses (`suspend`: closed while the target works and the call has been quiet for 60 seconds, back when there is something to say or you speak, `link{paused / waking / live}`, 4.9); `features` is `[target, runs, asks, resume, suspend]`. Protocol 1 frames are unchanged.
+  and since #3505 the upstream pauses (`suspend`: closed while the target works and the call has been quiet for 60 seconds, back when there is something to say or you speak, `link{paused / waking / live}`, 4.9); `features` is `[target, runs, asks, resume, suspend, speak, speech_gate]` (`speak` since #5004: `POST /speak` reads a text aloud outside a call, 4.15; `speech_gate` since #5904: what the user-speech gate held back can be sent anyway, and `start` takes `speech_gate`, 4.4). Protocol 1 frames are unchanged.
 - Since #3503, rounds in the bound chat not assigned during this call are also spoken (observed runs, protocol 2 only; main-chat rounds from other channels get just one sentence). For a bound Agent with session triage enabled, model errors that the manager will "continue" do not count as completion; triage waiting on an external dependency announces "Waiting for X" once; model errors speak only the category.
   A heartbeat is spoken after 2 minutes working silently; protocol 2 interruption `clear` follows upstream signals (`incomplete` arriving after a reply has finished does not count), with PCM energy used when the upstream reports no reply boundaries (4.5 rule 7).
   Since #2297, a fast layer that owes the user an answer (their line, a typed line, a result handed to it) and stays silent for 15 seconds gets one `say` nudge (4.5 rule 9).
@@ -35,6 +35,16 @@ Phase one follows the sub-issues in section 7; after each step, align this docum
   Calls from other extensions still only say "Check your phone". Since #3500, upstreams are configurable in the App, with Keys encrypted on the hub.
 - In the live dialect with tools enabled, tools such as `send_to_agent` and `ask_persona` execute with the hub token (`voice/tools.go`). Since #3501, only full devices get all declarations (other extensions only `ask_persona`); writes go through the user-speech gate, and other people's words in read-only tool results go into an `<agent_output>` data block.
   Protocol 2 with a bound chat declares `search_knowledge`, `list_agents`, and `delegate_task` (delegating to the bound chat, 4.4 "Tools").
+
+**Limits**
+
+- Plans and tool permissions are never answered by voice: the call names the kind of card that waits, and you tap it (decision 5, 4.7).
+- A call lives only on screen: on a phone, going to the background, leaving the chat or an incoming call ends it (6.5), and its captions are not saved into the conversation (section 2's table).
+- No voice on the Mac, and Android opens voice for the main chat only.
+
+**Meeting mode** (#3862, planned): a call bound to a recorded meeting's room conversation (`start` with `mode: "meeting"` and `recording_id`), connected for the whole meeting on the recorder's own capture, hearing only what the user says while holding Talk (`talk` frames; Talk's audio in either transcription mode), with `delegate_task` to the room as its only tool and no owner notes in its instructions. A room takes no other call (`meeting_room`); the contract is [meeting-minutes.md](./meeting-minutes.md) "Phase 4: realtime voice in the meeting".
+
+**Not yet** (phase two, unscheduled): saved captions interleaved by time in the thread; background and lock-screen calls (Live Activities); switching chats by voice; voice on the Mac and the watch; Android's entry for agents; an entry without a chat (`ShellHome`); dedicated realtime-voice settings with `POST /test` (5.6); other upstream protocols (decision 3) and several upstreams in the App.
 
 **GPT-Live constraints** (upstream docs and existing code, expanded through tests in #3495)
 
@@ -163,7 +173,7 @@ Phase one follows the sub-issues in section 7; after each step, align this docum
 
 **M. Disconnection**
 
-- **Upstream drops**: reconnect at most 3 times, resetting after 60 seconds stable. Reconnecting plays a tone and shows "Reconnecting".
+- **Upstream drops**: reconnect at most 3 times, resetting after 60 seconds stable. An upstream that stays connected but takes no frame for 10 seconds counts as a drop. Reconnecting plays a tone and shows "Reconnecting".
 - **App-to-hub drops**: automatically retry 3 times after 1, 4, 10 seconds, with `resume` in `start`. Rounds finished during the gap are still spoken. After all three failures, show "Continue".
 
 ### 1.3 Errors
@@ -178,7 +188,7 @@ All UI text is localized; raw upstream text appears only in "Details".
 | Upstream 503 | "Realtime voice service temporarily unavailable", with "Retry" | `upstream_unavailable` |
 | Session offline, computer online | Bind normally. On first utterance show "Starting Claude…", at most 5 minutes | Hub sends with `--resume` |
 | Computer offline | Second row "This computer is offline; speech cannot be sent", also spoken by the fast layer | `machine_offline` (nonfatal) |
-| Instruction was not yours (gate failed, 4.4) | Fast layer says "You did not say this, so I did not send it" | run `refused`, `code: "unprompted"` |
+| No fresh request heard from the user (gate failed, 4.4) | #5904: fast layer says it did not hear a fresh request from the user since the last result (or lately), so it held it back to be safe; they can say it again, or tap "Send Anyway". Second row "Didn't hear you ask for this just now, so it wasn't sent: “<what was held back>”" (quoted, so Send Anyway confirms words the user can see) with "Send Anyway" (hub with `speech_gate`, a run with a task) and "Never Mind". Never worded as if someone else said it | run `refused`, `code: "unprompted"`; Send Anyway sends `resend{id}` |
 | 409 `dialog_open` | Plan card: "Return as feedback". Other cards: "Claude is waiting for you to handle the card above" | Send 409 |
 | 409 `dialog_open` with `notice: true` | Automatically resend with `dismiss_notice`, invisible to the user | Same as `agent_send` |
 | 409 `input_draft` | "Claude's composer contains unsent text from the computer: ‘…’", with "Clear and send" (only when `clearable`) and "Cancel" | App sends `resend{clear_draft: "<raw clearable text>"}` |
@@ -248,15 +258,15 @@ the hub forwards App HTTP / WS unchanged through `/api/v1/bus/relay` to the mana
    - 503 `assistant_offline` (manager absent): no entry this time; check again on returning to foreground;
    - Android does not read `/info` and keeps using protocol 1.
 3. The extension sends new frames only when `start` carries `protocol: 2`. Clients without it (Android, #1931) receive no extra frames.
-4. Future features add `features`, not a protocol bump. Phase one: `target`, `runs`, `asks`, `resume`, `suspend`; advertise only implemented ones (#3502 has `target`, `runs`, `resume`; #3504 adds `asks`; #3505 adds `suspend`).
+4. Future features add `features`, not a protocol bump. Phase one: `target`, `runs`, `asks`, `resume`, `suspend`; advertise only implemented ones (#3502 has `target`, `runs`, `resume`; #3504 adds `asks`; #3505 adds `suspend`). #5004 adds `speak`: the extension takes `POST /speak` (4.15), which is not part of a call; an extension without it is older, and the iPhone says meeting answers in its on-device voice then. #5904 adds `speech_gate`: a run the user-speech gate refused (`unprompted`) with a task is kept for a `resend` (the app's "Send Anyway"), and `start` takes `speech_gate` (3.2); an extension without it keeps no such run, so the app offers no button for it, and its settings page shows no switch.
 
 ### 3.2 App → extension
 
 | Frame | New / changed | Notes |
 | --- | --- | --- |
-| `{"type":"start","model","voice","protocol":2,"target":{"machine_id","session_id"},"recent":[…],"history":[…],"resume":{…},"echo_cancellation":true}` | Changed: last six fields optional; protocol 2 requires `target` | `target` is ChatView's key. The extension derives kind from session `assistant`; the App does not send it. `recent`: last 3 turns held by the App, `[{role, text}]`, at most 300 characters each. `history`: existing captions for this call, sent on resume, at most 40 utterances, same format. `resume`: `{runs: [{id, msg_ids, task, base_seq, started_at, state}]}`, unfinished only; return `started_at` unchanged from the `run` frame (string or number). `echo_cancellation` (#5789): whether the microphone records with echo cancellation (iOS `VoiceAudio.cancelsEcho`); `false` makes user captions not count for the user-speech gate (4.4), absent is taken as `true` |
+| `{"type":"start","model","voice","protocol":2,"target":{"machine_id","session_id"},"recent":[…],"history":[…],"resume":{…},"echo_cancellation":true,"speech_gate":false}` | Changed: last seven fields optional; protocol 2 requires `target` | `target` is ChatView's key. The extension derives kind from session `assistant`; the App does not send it. `recent`: last 3 turns held by the App, `[{role, text}]`, at most 300 characters each. `history`: existing captions for this call, sent on resume, at most 40 utterances, same format. `resume`: `{runs: [{id, msg_ids, task, base_seq, started_at, state}]}`, unfinished only; return `started_at` unchanged from the `run` frame (string or number). `echo_cancellation` (#5789): whether the microphone records with echo cancellation (iOS `VoiceAudio.cancelsEcho`); `false` makes user captions not count for the user-speech gate (4.4), absent is taken as `true`. `speech_gate` (#5904, feature `speech_gate`): `false` turns the user-speech gate off for this call (the iPhone's "Only Send What I Just Said", 6.7), `true` leaves it on. The iPhone and the web always send it (the web always `true`: it has no switch): saying it at all tells the hub the app has "Send Anyway", so an `unprompted` refusal is kept for a `resend` and the fast layer offers it (4.4). Absent (an app from before #5904) is on, and the hub keeps no such run and never tells the user to tap a button that app does not have; an older hub ignores the field. Only a full device's call may turn it off: another extension's call (3.7) keeps the gate, and its log says the request was not taken |
 | Binary PCM16 / `interrupt` / `text` | Unchanged | Send zero frames while muted; `text` counts as user speech |
-| `{"type":"resend","id","clear_draft":"<raw clearable text>"}` | New | Resend the run rejected with 409, same id. `clear_draft` is the raw text the node verifies (`node/sendsafe.go` clears only when it matches the clearable composer line **exactly**), taken from `run.clearable`, like iOS / web outboxes returning hub `clearable`; not `run.draft`: with an IDE selection marker (`[⧉ Selected 3 lines from foo.go] fix it`), `draft` is the whole line, `clearable` only `fix it`. #3502's extension uses its remembered raw hub text whenever `clear_draft` is nonempty (even an App returning `draft` clears correctly). Only runs rejected by hub 409 on this connection qualify; unprompted, unclear, or approval-word rejections cannot be resent, nor can pre-resume ones. Refused runs count as finished and are excluded from `resume`; the App offers "Resend" / "Clear and send" only for runs reported `refused` on the **current connection** (`VoiceConversation.canResend`); after resume, say it again. Resending starts a new run: `started_at`, baseline, and "seen working" restart at resend time (#3502) |
+| `{"type":"resend","id","clear_draft":"<raw clearable text>"}` | New | Resend the run rejected with 409, same id. `clear_draft` is the raw text the node verifies (`node/sendsafe.go` clears only when it matches the clearable composer line **exactly**), taken from `run.clearable`, like iOS / web outboxes returning hub `clearable`; not `run.draft`: with an IDE selection marker (`[⧉ Selected 3 lines from foo.go] fix it`), `draft` is the whole line, `clearable` only `fix it`. #3502's extension uses its remembered raw hub text whenever `clear_draft` is nonempty (even an App returning `draft` clears correctly). Only runs rejected by hub 409 on this connection qualify, and (#5904, feature `speech_gate`) runs the user-speech gate refused (`unprompted`) that had a task: when the app's `start` said `speech_gate` (true or false) the hub keeps the message it would have sent, and a resend is the user's own confirmation, sent as it is past the gate. Its first send never reached the approval-word check, so its resend has it: a lone approval word while a card waits is refused `on_screen` (a new `run` frame), not typed (decision 5). An `unprompted` refusal with nothing to send, one to an app whose `start` did not say `speech_gate`, unclear (`empty`) or approval-word (`on_screen`) rejections cannot be resent, nor can pre-resume ones. Refused runs count as finished and are excluded from `resume`; the App offers "Resend" / "Clear and send" / "Send Anyway" only for runs reported `refused` on the **current connection** (`VoiceConversation.canResend`; "Send Anyway" for an `unprompted` one only when `ready` lists `speech_gate`, the run has a task and its frame says `resendable`: an older hub ignores its resend, and no hub keeps one without a task or longer than the task the frame quotes); after resume, say it again. Resending starts a new run: `started_at`, baseline, and "seen working" restart at resend time (#3502) |
 
 The plan card's "Return as feedback" calls `resolve` directly from the App (with feedback), not through the extension.
 
@@ -268,14 +278,14 @@ The plan card's "Return as feedback" calls `resolve` directly from the App (with
 | `transcript`, binary | Changed (protocol 2 only): optional `before` | #5587: a line is opened only once it has words, so a caption's `text` is never empty (a reply that only called a tool came as whitespace, and the App got `""` finals). #5673: `{"type":"transcript","id":"u3","role":"user","text":"…","final":false,"before":"a4"}`: the user's line goes before the fast layer's line `a4` (the first of the fast layer's lines after the user's last line that, with the ones after it, began after the user's voice last ended): its caption came 1.2–1.4 s after they stopped, after the fast layer began answering (lessons "Timeline"). Every frame of that line carries it; the App places the row when it first sees it, before that row of the same connection, and at the end when `before` is missing, empty, or names a row it does not have. A later user line never goes before an earlier one. Where the upstream says when the fast layer's turns end (`response.event`, `turn.done`), the fast layer's line the caption came in is not ended by it: the rest of the answer stays in the same line. Without such a signal the caption is that line's only end and still ends it (the line is still placed). Protocol 1's frames are unchanged (no `before`, the caption ends the line) |
 | `clear` | Changed (protocol 2 only) | Sent proactively when user interruption exceeds the gate, setting `dropAudio` (4.5 rule 7). #3503: if upstream reports reply boundaries (`response.event` on the tested service), follow only its `incomplete`; no send for `incomplete` after the same reply was `completed` (replaced by the next segment). Otherwise use PCM energy. Protocol 1 sends on upstream interruption with no energy rule; since #4719, replacement interruptions are also ignored |
 | `tool` | Unchanged | Protocol 2 uses it only for read-only function tools (knowledge search, viewing Agents); delegated work uses `run`, reconnect state becomes `link{reconnecting}` / `link{live}` |
-| `{"type":"run","id","task","state","msg_ids","base_seq","started_at","code?","message?","draft?","clearable?"}` | New | `state`: `sending`, `sent`, `working`, `needs_you`, `blocked` (waiting externally or on another Agent; #3503: hub triage says this round waits for deployment, CI, another Agent; triage arrives about 15 seconds after a round stops, so `blocked` may follow `done`, continuing the same run and later reaching `done` again, 4.3), `held` (answered once, background still running), `done`, `failed`, `refused` (with `code`, including `unprompted`), `unknown` (502), `folded` (merged into the next run). After hold, `base_seq` updates. #3502 format: `id` is message `client_msg_id` (`voice-<16 hex digits>`), already in `msg_ids` before sending (used to locate it on resume); `started_at` is RFC 3339; `clearable` is the raw string from hub 409 (only present for one clearable text line; `draft` is all composer text and may differ). "Clear and send" returns it unchanged as `clear_draft`. After fold, the following run frame is sent again with all merged `msg_ids` (used on resume). `code`: for `refused`, hub 409 code (`dialog_open`, `input_draft`, `open_elsewhere`…) or `unprompted`, `empty`, `on_screen` (single approval word, 4.4); for `failed`, hub code or `unreachable`; for `unknown`, `unknown`; `done` after interruption is `stopped`. `message` is the hub's raw text |
+| `{"type":"run","id","task","state","msg_ids","base_seq","started_at","code?","message?","draft?","clearable?","resendable?"}` | New | `state`: `sending`, `sent`, `working`, `needs_you`, `blocked` (waiting externally or on another Agent; #3503: hub triage says this round waits for deployment, CI, another Agent; triage arrives about 15 seconds after a round stops, so `blocked` may follow `done`, continuing the same run and later reaching `done` again, 4.3), `held` (answered once, background still running), `done`, `failed`, `refused` (with `code`, including `unprompted`), `unknown` (502), `folded` (merged into the next run). After hold, `base_seq` updates. #3502 format: `id` is message `client_msg_id` (`voice-<16 hex digits>`), already in `msg_ids` before sending (used to locate it on resume); `started_at` is RFC 3339; `clearable` is the raw string from hub 409 (only present for one clearable text line; `draft` is all composer text and may differ). "Clear and send" returns it unchanged as `clear_draft`. After fold, the following run frame is sent again with all merged `msg_ids` (used on resume). `code`: for `refused`, hub 409 code (`dialog_open`, `input_draft`, `open_elsewhere`…) or `unprompted` (the user-speech gate; with `speech_gate`, one with a task can be resent), `empty`, `on_screen` (single approval word, 4.4); for `failed`, hub code or `unreachable`; for `unknown`, `unknown`; `done` after interruption is `stopped`. `message` is the hub's raw text. `resendable: true` (#5904): the extension keeps the run for a `resend` (a 409's, or what the user-speech gate held back whose task the frame shows whole); the App and the web offer "Send Anyway" for an `unprompted` one only then |
 | `{"type":"ask","interaction_id","state":"asking"\|"answered"\|"released","by?":"voice"\|"elsewhere"}` | New | Which card is being asked by voice. #3504: send `asking` when the question actually reaches the fast layer (not while waiting for the interruption gate); voice resolution sends `answered{by: voice}`; screen / other-device resolution (card gone, `resolve` returns 404 / 410 / `already` / 409 `prompt_changed`, or another 409 with card already gone) sends `released{by: elsewhere}`. Two unclear answers handed to screen, `停止：` (stop) ending the round, or `resolve` missing the hub reply with card already gone (unknown resolver) sends `released` without `by`. Never send the latter states for a card without prior `asking`. One card at a time |
 | `{"type":"link","state":"live"\|"paused"\|"waking"\|"reconnecting"}` | New (`suspend`) | Upstream state (protocol 2 only). `reconnecting`: the upstream dropped and is reconnecting (#3502); `paused`: the extension paused the upstream (4.9); `waking`: a wake has begun; `live`: a new upstream session is up (after a reconnect or a wake). While paused and waking the App keeps sending audio (all-zero frames when muted); the extension keeps the last 3 seconds and replays them first once up; `text` frames are kept too and sent once up. #3505: 3 failed wakes in a row are a fatal `upstream_failed`, with no further `link` |
 | `error` | Changed: optional `code` added | `no_upstream`, `upstream_forbidden`, `upstream_unavailable`, `upstream_failed`, `target_gone`, `target_read_only`, `target_forbidden` (fatal), `machine_offline` (nonfatal), `model_unavailable` (nonfatal: default model used). All present since #3502; `upstream_*` included in both protocols (`code` was already optional). Failure to reach the hub while looking up target is fatal without `code` (chat existence unknown); so is protocol 2 without `target` |
 
 ```
 App  → {"type":"start","protocol":2,"model":"custom/gpt-live-1","target":{"machine_id":"m1","session_id":"s1"},"recent":[…]}
-ext  → {"type":"ready","protocol":2,"features":["target","runs","asks","resume","suspend"],"input_rate":16000,"output_rate":24000,"target":{…,"kind":"agent","agent_label":"Claude Code"}}
+ext  → {"type":"ready","protocol":2,"features":["target","runs","asks","resume","suspend","speak","speech_gate"],"input_rate":16000,"output_rate":24000,"target":{…,"kind":"agent","agent_label":"Claude Code"}}
 ext  → transcript u1 … (user) / a1 … (fast layer: "OK, handed it to Claude")
 ext  → {"type":"run","id":"voice-7c1e…","msg_ids":["voice-7c1e…"],"task":"Fix the failing login-page tests","state":"sending","base_seq":812,…}
 ext  → run …"sent" → …"working" → {"type":"link","state":"paused"} → {"type":"link","state":"live"} → run …"done" (fast layer also speaks the result)
@@ -328,7 +338,7 @@ ext  → run …"sent" → …"working" → {"type":"link","state":"paused"} →
 | Revoked device | WS closed immediately |
 
 - The extension holds the hub main token (unchanged), so binding any chat is not privilege escalation for full devices.
-- All writes (send, `resolve`, `interrupt`) also pass the 4.4 user-speech gate, preventing Agent output from making the fast layer issue instructions itself.
+- All writes (send, `resolve`, `interrupt`) also pass the 4.4 user-speech gate, preventing Agent output from making the fast layer issue instructions itself. Only a full device's `start` can turn the gate off (`speech_gate: false`, #5904); another extension's call keeps it.
 
 ## 4. Server design (mainly `server/internal/voice`)
 
@@ -350,6 +360,7 @@ ext  → run …"sent" → …"working" → {"type":"link","state":"paused"} →
 | `items.go` (new) | HTTP `ItemSource` for `channel.ReadTurn` |
 | `spoken.go` (new) | Make replies speakable: identify code blocks, tables, inline code, paths, `file:line`, hashes, URLs, Markdown markers; placeholders from `prompts/voice/spoken.md` (paths keep filename only); truncate as "beginning + end" |
 | `info.go` (new) | `GET /info` |
+| `speak.go` (new, #5004) | `POST /speak`: one text read aloud in its own upstream session, its audio streamed back (4.15) |
 | `calllog.go` (new, #1485) | The call's log: per-call id, start and end lines, counts, how failures and hub answers are written (see 4.14) |
 | `fake.go` (new) | `fake` dialect (manager.json only, for development): no upstream, App `text` directly delegates, `say` / commentary returns unchanged as fast-layer captions. Works against real hub and Agent without GPT-Live |
 | `config.go` (changed) / `hub.go` (changed) | Merge config, allow no upstream; send requests use ctx rather than a 30-second client timeout |
@@ -444,6 +455,8 @@ type voiceRun struct {
   - latest utterance no older than 30 seconds.
 
   Otherwise do not execute; run `refused{code: "unprompted"}`, fast layer speaks `refused.md#unprompted`. Read-only status queries are exempt.
+  - **Sending it anyway** (#5904): a protocol 2 task or answer in words the gate refused keeps the message it would have sent (its id is the run's), and the run is kept for a `resend` like a 409's, when the app's `start` said `speech_gate` (an app from before it has no "Send Anyway": nothing is kept, and the fast layer only says to say it again). The App's "Send Anyway" is the user's own confirmation and goes past the gate, still with the approval-word check its first send never reached (a lone "OK" while a card waits is refused `on_screen`); the bar quotes what was held back, so the user sees what they confirm, and only a task the run shows whole (`taskMost`, 80 characters) is kept for it: a longer one could hide a second instruction past the quote, so it is only said again. The fast layer is told the screen offers it (`refused.md`'s `Resend`). The refusal's words say Persona did not hear a fresh request from the user since the last result (or lately), so it held it back to be safe, never that someone else said it. Stops, card answers, `send_to_agent` and protocol 1 have no run to resend: say it again.
+  - **The switch** (#5904): a full device's `start` with `speech_gate: false` (the iPhone's "Only Send What I Just Said" turned off, 6.7) turns the gate off for the call: a handover goes without the user's words. A `whenSaid` handover still waits, within `gateWait`, for a caption that is due, so the user's words go with the message. The gate still decides and logs: the line says it is off and what it would have decided (4.14). Another extension's call cannot turn it off (3.7).
   - **Wait for captions first** (#3501): on the tested service, the whole utterance caption arrives 1.2–1.4 s after speech ends, later than model speech and tool calls (lessons "Timeline").
     If the gate fails, wait up to 2.5 seconds (`gateWait`); execute if the caption arrives, otherwise reject.
   - **The user's own voice counts too** (#5672): when the fast layer's reply only calls the tool and says nothing, the tested service holds the user's caption until a later reply speaks, that is, until after the call's result
@@ -473,7 +486,7 @@ type voiceRun struct {
   - #5506: when the gate is already open (the user spoke earlier) but the App's audio had the user's voice after their last caption, the caption of the request that triggered the delegation is still on its way (it comes 0.1–0.4 s after the call): wait for it too, within the same `gateWait`, then build the message. Without it after `gateWait`, send what was captioned.
     #5790: not when the fast layer's reply that made the call ended (`response.completed`) without any audio: the tested service holds that caption until the call's result (lessons "Late captions on replies that only call a tool"), so it cannot come in time and waiting only delayed the message by the full 2.5 s. With the gate open the message goes as soon as that reply ends; a closed gate is unchanged. Upstreams that do not say when replies start and end wait as before.
   - Agent messages do not request "keep replies brief".
-  - Still `<persona-context>`: attributed blocks have not migrated (`../protocol/protocol.md` ("Rename")).
+  - Still `<persona-context>`: attributed blocks have not migrated (`../protocol/protocol.md` ("Tags in messages")).
 - **Timeout**:
   - Hub send wait: normally 90 seconds; session `offline` or `Starting`, 5 minutes.
   - Extension waits another 30 seconds.
@@ -488,11 +501,13 @@ type voiceRun struct {
   | 409 `input_draft` | `refused`, `draft` / `clearable` | "Its composer has unsent text" | With `clearable`, "Clear and send" → `resend{clear_draft: clearable}` |
   | Other 409 / 4xx | `refused` / `failed` | One-sentence reason | One-line reason |
   | 502 `unknown` | `unknown` | "Not sure whether it was sent" | "Check the chat", **no resend** |
+  | User-speech gate (no 409; #5904) | `refused`, `unprompted` | "Didn't hear a fresh request from you, so I held it back; say it again" (to an app whose `start` said `speech_gate`, with a task: "or tap Send Anyway") | "Didn't hear you ask for this just now, so it wasn't sent: “<task>”"; with a task and `speech_gate`, "Send Anyway" → `resend{id}` |
 - **Approval-word interception**: if target has pending `plan`, `permission`, or `screen` cards and delegation matches `channel`'s `yes` / `no` / `planApprove` word lists, do not send; fast layer only says "Tap on screen".
   #3502 implements this in protocol 2 sending (`channel.IsApprovalWord`, cards checked after gate success), run `refused{code: on_screen}`, prompt `refused.md#on_screen`; protocol 1 does not intercept (headless main-chat target).
   Excludes `elicitation` (original design included it): hub `GET /api/v1/interactions` sends forms only to connected clients declaring `elicitation` (`hub/elicitation.go`); the extension's hub token cannot receive them, so interception, snapshots, and status never include them. A terminal form occupies the keyboard; node sending returns `dialog_open`.
-- **Fold**: only **after new instruction receives 200**, call `newRun.Fold(old)`. Rejected or `unknown` messages are not folded or added to any run's `MsgIDs`; otherwise `runAnswer` waits 10 minutes for a message that will never appear.
+- **Fold**: only **after new instruction receives 200**, call `newRun.Fold(old)`. Rejected or `unknown` messages are not folded or added to any run's `MsgIDs`; otherwise the run waits `channel.QueuedMost` (10 minutes) for a message that will never appear (`voice/runs.go`).
 - **Tools**:
+  - `search_knowledge {query, kind?}` (`mcp/voice/search_knowledge.md`) is `GET /api/v1/kb-search`; its optional `kind` (the kinds `kb_search` takes, `recordings` for past meetings, #3862 phase 6) searches one kind only. A hub from before ignores it and searches every kind; an unknown one is the hub's 400, a failed search.
   - Non-full role: only `ask_persona` (3.7).
   - Protocol 2 bound target: read-only `search_knowledge`, `list_agents`, plus **`delegate_task`** (`mcp/voice/delegate_task.md`: bound-chat delegation, `task` may carry `状态：` (status), `停止：` (stop), `回答：` (answer)); remove `send_to_agent`, `ask_persona`, which bypass the bound target.
     Original design kept only two read-only tools, but the tested service **cannot delegate without tools** (lessons "Other behavior"), so #3502 adds this bound-chat-only tool. Like `ask_persona`, its call stays open and returns the round reply.
@@ -576,7 +591,7 @@ Titles, goals, progress, recent turns, card questions, and Agent titles go insid
    - Threshold basis: tested model keeps speaking for `嗯嗯` (mm-hmm), 0.43 seconds, but stops for `等一下` (wait), 0.64 seconds, and `对对对` (yes, yes, yes), 0.70 seconds. Do not use the model's own 0.8-second stopping delay as threshold: it would miss short interruptions the model honors, while most abandoned audio is already in the App (9–10× realtime).
      Residual echo and ambient noise on real devices make continuous energy more likely; confirm 0.5 seconds on hardware;
    - protocol 1: upstream interruption sends `clear`, without an energy rule; ignore `incomplete` replacing an already `completed` reply (#4719, same as protocol 2).
-8. **Heartbeat** (#3503, both protocols): a working run (not `held`, not another-channel round) with `heartbeatAfter` (2 minutes) of call silence gets `progress.md`, "Still working, elapsed time":
+8. **Heartbeat** (#3503, both protocols): a working run (not `held`, not another-channel round) with `heartbeatAfter` (2 minutes) of call silence gets `progress.md`:
    "Sound" includes model playback not finished, voiced App audio, user captions or typed text, and this run's last announcement;
    speak only `activity` category ("Running tests / reading", no commands or paths) and time since assignment (observed runs since session became working), never Agent text, and do not close the user-speech gate.
    #3503 real-service run: a task took 2.5 minutes; at 2 minutes the model said "Still running, over two minutes, no result yet", without reading any command arguments.
@@ -653,7 +668,7 @@ Titles, goals, progress, recent turns, card questions, and Agent titles go insid
 - **Approval and other cards**: combine newly read cards into one `needs_you.md` sentence (categories only; protocol 2 "on screen", protocol 1 "in the main chat on your phone"), once per card;
   spoken "Approve" still hits 4.4 `on_screen`. Unanswerable questions (`fields`, `secret`, identical question texts) are announced as "a question to answer on screen / phone".
   This waits for announcement gate (model playback +1.5 seconds, user pause 1.2 seconds, at most 15 seconds); users may tap meanwhile. On later card reads, if **all cards** in a queued announcement are gone, drop it (`sentWords.cards`).
-- **Questions the assistant is still considering answering** (`Delegating`, `docs/assistant/assistant.md` ("The assistant answers questions first")) are not asked until handed to the user (`Delegating` false).
+- **Questions the assistant is still considering answering** (`Delegating`, `docs/assistant/assistant.md` ("Assistant answers questions first")) are not asked until handed to the user (`Delegating` false).
 - **Round stopped at a card**: cards announce themselves; run only changes to `needs_you`, no `report.md#needs_you`. With no speakable card (form, `blocked` without card), retain "Check your phone".
   #5500 (end-to-end on the tested service): a terminal dialog becomes a card only once the node has read the screen, about 1.5 seconds after the session already shows `blocked`, so the round said "Check your phone" and then the card's category, two sentences for one card.
   "Check your phone" now waits `cardGrace` (5 seconds) for a card of that chat and is dropped when one comes; it is said at once only when no card can speak for itself (another extension's call). And a session listed `working` while a card waits on the user (the main chat's permission hook keeps a headless claude `working`; a Claude Code question through its hook too) waits on the user:
@@ -717,7 +732,7 @@ How #3505 does it (`suspend.go`; constants from lessons "Recommended constants",
 
 ### 4.10 Reconnect and resume
 
-- **Upstream drops**: existing `lost()`, at most 3 attempts, reset after 60 seconds stable. New instructions include refreshed snapshot, last 40 utterances, pending runs; old delegations invalid. Pausing and waking are not drops (4.9).
+- **Upstream drops**: existing `lost()`, at most 3 attempts, reset after 60 seconds stable. Every write to the upstream waits at most `upWriteTimeout` (10 s); on that deadline the WebSocket closes itself, `readUpstream` fails and `lost()` runs, so an upstream that stops reading cannot hold the call (or the app hanging up) forever. New instructions include refreshed snapshot, last 40 utterances, pending runs; old delegations invalid. Pausing and waking are not drops (4.9).
   #3502: both protocols reset if this session survives 60 seconds (`stableAfter`); three failed attempts or three consecutive drops send fatal `upstream_failed`; protocol 2 App receives `link{reconnecting}` / `link{live}`.
   If Agent-written snapshot parts (title, goal, progress, recent turns, card questions, Agent titles) differ from the prior session (more text during disconnect), the new session has read Agent content: close user-speech gate on coming online, rejecting delegation as `unprompted` until user speaks again. Unchanged snapshot does not close it, allowing the user's pre-disconnect utterance.
 - **App-extension drops** (network switch; forwarded WS closed by hub redeploy; manager restart also restarts extension):
@@ -744,7 +759,7 @@ How #3505 does it (`suspend.go`; constants from lessons "Recommended constants",
 | `ask.md` | New (#3504) | Voice question from structured data (question, `header`, option names/descriptions in `<agent_output>`); only names spoken unless asked; question number/total, multi-select, `Again`; user speech delivered with answer prefix until done (protocol 2 excludes status/stop), `Tool` identifies delivery tool. Format only ("<question>? <option one>, <option two>… or <last option>?"), no concrete examples: model copies their questions/options (lessons "After voice question answering"). #5501: the form has as many slots as there are options ("<option one> or <option two>?" for two, "The option is <the option>." for one); with three slots the end-to-end run read two options as "Postgres, SQLite, or SQLite?" |
 | `needs_you.md` | New (#3504) | Screen-only cards, combine one read into category sentence (permission: command/file/network/MCP/other tool; plan; terminal dialog; form; unanswerable question), no commands, paths, plan content, no proxy approval; `Here` distinguishes protocol 2 screen from protocol 1 "X on your phone" |
 | `answered.md` | New (#3504) | Voice-asked card finished: `voice` (submitted; `Unfollowed`: no subsequent tracked run and not protocol 2 bound chat with observed tracking, #3503; no result promise), `elsewhere` (screen answer while asking, proactive confirmation), `late` (answer arrived after elsewhere resolution), `unknown` (disconnected during submit, card gone, check screen), `failed` (not submitted: fixed wording for `Code` `input_draft` / `dialog_open`, no raw hub text; other errors use hub wording), `screen` (twice unclear, hand to screen) |
-| `refused.md` | New (#3501: `unprompted` / `empty` / `unknown` / `unreachable` / `failed`, `Agent` for Agent target; #3502 adds `dialog_open` with plan-feedback option, `input_draft`, `on_screen`, `To` bound Agent name, other 409 `failed` with hub text) | Branch by `code`. No hub answer due to timeout/disconnect means `unknown` (may have sent, do not ask repeat); `failed` without hub reason omits reason, never reads URL or Go error |
+| `refused.md` | New (#3501: `unprompted` / `empty` / `unknown` / `unreachable` / `failed`, `Agent` for Agent target; #3502 adds `dialog_open` with plan-feedback option, `input_draft`, `on_screen`, `To` bound Agent name, other 409 `failed` with hub text; #5904 rewords `unprompted` and adds `Resend`) | Branch by `code`. `unprompted` says Persona did not hear a fresh request since the last result (or lately) and held it back to be safe, never that it did not come from the user; with `Resend` (a protocol 2 run kept for Send Anyway) it adds that the screen can send it anyway. No hub answer due to timeout/disconnect means `unknown` (may have sent, do not ask repeat); `failed` without hub reason omits reason, never reads URL or Go error |
 | `tool_result.md` | New (#3501) | Function results: other people's words from knowledge/Agent reads in `<agent_output>`; not found, error, bad arguments, sent |
 | `folded.md` | New (#3502) | Folded into next: sentence in new result via `report.md`, never sent separately |
 | `observed.md` | New (#3503) | Other-channel round: "New reply on WeChat" (`Channel` name, empty for scheduled tasks/reports "elsewhere"), no contents |
@@ -761,7 +776,7 @@ How #3505 does it (`suspend.go`; constants from lessons "Recommended constants",
 
 ### 4.12 The `channel` package
 
-- Move `readTurn`, `runAnswer` from `assistant/channels_runs.go` into new channel/read.go. Assistant uses `s.call`, voice uses HTTP; keep one implementation:
+- `channel/read.go` is the one turn reader both use: the assistant reads through the bus (`busTranscript`, `assistant/channels_answer.go`), voice over HTTP (`httpItems`, `voice/items.go`):
 
   ```go
   type ItemSource interface {
@@ -771,7 +786,7 @@ How #3505 does it (`suspend.go`; constants from lessons "Recommended constants",
   func ReadTurn(ctx context.Context, src ItemSource, r *Run) (Reading, error)
   func RunAnswer(r *Run, items []proto.Item) ([]proto.Item, bool)
   ```
-- Add `MatchOption(q proto.Question, text string) (label string, ok bool)`, and make `optionAnswer` call it. Text channels then recognize "second" and option names too.
+- `MatchOption(q proto.Question, text string) (label string, ok bool)` (`channel/options.go`) matches numbers, ordinals and option names; `optionAnswer` calls it, so text channels recognize "second" and option names too.
 
 ### 4.13 Server tests
 
@@ -832,7 +847,7 @@ How #3505 does it (`suspend.go`; constants from lessons "Recommended constants",
   protocol 2 interruption: 0.4-second backchannel no clear, 0.6-second voiced audio with 60-ms gaps clears, post-playback speech no clear, protocol 1 same audio no clear regression; upstream boundaries bypass energy, follow incomplete;
   `incomplete` after `completed` ignored in both protocols; actual protocol 1 interruption still sends it (regression, #4719); energy interruption on `等一下` (Wait) drops abandoned remainder, plays reply 1.2 seconds later without captions; `barge` accumulation.
   Before test end, await extension call including tracking/speech loops, so `-race` tuning changes do not race prior test loops (`converse` waits both). Goldens add `progress.*`, `observed.*`, `report.observed*`, `report.error_*`, `report.partial_error`; assert working/done distinction, intact blocks, no Agent text in heartbeats.
-  Manual: this branch's `personad voice` (live, `tools`, `key_file`) against the tested service and fake hub with a 150-second Agent round, `docs/lessons/voice.md` ("After speaking other rounds, heartbeat, and interruption").
+  Manual: this branch's `personad voice` (live, `tools`, `key_file`) against the tested service and fake hub with a 150-second Agent round, `docs/lessons/voice.md` ("After reading turns started elsewhere, heartbeat, and interruption (#3503, 2026-11-06)").
 - **#3505 covered** (`voice/suspend_test.go`, fake upstream `sessionsUp` recording frames per session): delegated work in progress, quiet for `pauseAfter`, then `link{paused}` and the old session gets `session.close`; no heartbeat and no new session while paused, even past `heartbeatAfter`;
   `状态：` (status) wakes it (`waking` → `live`), the new session's instructions use the pause wording with "Previous conversation" and "Still waiting" and without the line that woke it, and the status answer is on the new session's delegation; quiet again, pause again, woken by the result, `say` in the new session (not the old session's delegation), run `done` as usual;
   muted all-zero frames (4 seconds) and a 100 ms blip do not wake it, 300 ms of voice does; the replay is audio from the last 3 seconds (plus the few voiced frames read during the replay), both voiced stretches present, before live audio, and the old session got no frame; a line typed while paused wakes it, is sent once up, is not in the instructions, and the App still gets its caption;
@@ -859,6 +874,10 @@ How #3505 does it (`suspend.go`; constants from lessons "Recommended constants",
   Each negative test fails with its rule taken out.
 - **#1485 covered** (`voice/calllog_test.go`): a bound call with one `delegate_task` logs its start, binding, upstream session and tools, the function call and its delegation, the gate's decision, the run's states and its send, and its last line with the counts, every line with the call's id; a handover nobody asked for logs the gate's refusal and the run refused (`unprompted`); calls at the same time have their own ids, and a start that fails says its code. None of the typed line, the caption, the model's reply, the task or the agent's answer is in the log.
 
+- **#5904 covered** (`voice/bound_test.go`, `voice/gate_test.go`, `voice/calllog_test.go`): a handover nobody was heard asking for is refused `unprompted`, the model is told the screen can send it anyway, and the app's `resend` sends the task under the same id, `sending` → `sent`, logged as the user's own confirmation (`TestUnpromptedRunCanBeSentAnyway`); to an app whose start does not say `speech_gate` nothing is kept and the model does not mention the button (`TestUnpromptedRunToAnAppWithoutSendAnyway`); a lone approval word held back and sent anyway while a permission card waits is refused `on_screen`, not typed (`TestSendAnywayKeepsTheApprovalWordCheck`); a task longer than the bar quotes is not kept for Send Anyway (`TestSendAnywayOnlyForATaskShownWhole`); `speech_gate: false` lets it through with the log saying the gate is off and what it would have decided, `true` or absent still refuses, another extension's call cannot turn it off, and `ready` lists `speech_gate` (`TestSpeechGateOff`); every decision line says what it went by: the agent time and how it moved (sent, acked, reconnect), the caption, typed line and own voice and why each did or did not count (`TestGateExplainsItsDecision`, the call log tests, `TestGateClosesWhenTheModelTakesTheAnswerIn`, `TestReconnectWithNewAgentWordsClosesTheGate`), the own voice as it was when the model handed it over, not as more of it was heard while a caption was waited for (`TestGateLogsTheOwnVoiceItWentBy`). Goldens add `refused.unprompted_resend.*`.
+
+- **#5004 covered** (`voice/speak_test.go`): the text goes to a session of its own with the read-aloud instructions (the owner's name, the text's language, never the notes) and no tools, word for word as the live dialect's commentary; the reply's audio comes back unchanged with `X-Persona-Audio-Rate` at the session's rate, and the session is closed (`session.close`) at the reply's end, or once its audio stops on a service that never says so; another extension, an answer-only device, no text, too long, a malformed model or voice are refused without a session; no upstream is `503 no_upstream`; a refused key (handshake or model list) `502 upstream_forbidden`, a service that is down `503 upstream_unavailable`, an error before audio `502 upstream_failed`, nothing said in time `504 no_audio`; a refused voice gets one more session with the default voice; the phone hanging up closes the session; the `fake` dialect answers with silence, and a model of an upstream no longer set up falls back to the default without the voice. The log has none of the text, the key or the service's address. Goldens add `read_aloud.*`.
+
 ### 4.14 Diagnosing a call (#1485)
 
 What happened in a call can be read afterwards from the extension's log: one line per meaningful event, each beginning with the call's id (`call 7:`, counted from 1 since the extension last started), so the lines of calls at the same time can be told apart.
@@ -877,7 +896,7 @@ Lines without a call id are the extension's own: its providers as it starts, its
 | Line | Meaning |
 | --- | --- |
 | `conversation opened (role "full")` | The app's socket came in; the role the hub found (`""` from a hub that does not say: taken as full). |
-| `start: protocol 2, model rt/m1 (live dialect), voice "…", target m/a1[, language en, no echo cancellation, picked up again with N lines and N runs]` | The app's start as taken: the protocol (`protocol 1 (asked 2)`: another extension's call), the model and dialect, the conversation it asks to be bound to (protocol 1: the main conversation of the moment). |
+| `start: protocol 2, model rt/m1 (live dialect), voice "…", target m/a1[, language en, no echo cancellation, speech gate off, picked up again with N lines and N runs]` | The app's start as taken: the protocol (`protocol 1 (asked 2)`: another extension's call), the model and dialect, the conversation it asks to be bound to (protocol 1: the main conversation of the moment). `speech gate off` (#5904): the app turned the user-speech gate off; `speech gate off asked: not for another extension's call` when another extension's call asked. |
 | `bound: agent m/a1, its machine online` | Protocol 2: the target was found (`main`, `assistant` or `agent`) and whether its machine is connected. A target that is gone or read-only ends the call: `start failed after …: target_gone`. |
 | `upstream: session 1 started in 412ms (first), 24000 Hz, tools search_knowledge,list_agents,delegate_task (bound)` | An upstream session is up: how long it took from dialing, why it was opened (`first`, `reconnect N`, `woken`), its audio rate and the function tools it declared, or `none` and why (the dialect takes none, the provider is set to declare none, its service refused them). |
 | `provider rt: the service refused the function tools as the session started (…); starting it again without them` | The service refused the tools (#1420): the same session again without them. |
@@ -888,17 +907,30 @@ Lines without a call id are the extension's own: its providers as it starts, its
 | `delegation dlg1: made in session 1[, waiting 2s for its function call]` | The model handed something over. With tools, its function call is waited for; `no function call came: handed over as it is` when none did. |
 | `function call delegate_task (call c1, delegation dlg1, session 1)` | The model called a function tool (`call c1: … is a tool this session did not declare: ignored` for one it was not given). |
 | `delegation dlg1: a task for agent m/a1 (34 characters)` | How a handover was routed: `a status (not gated)`, `a stop`, `the answer to card ix1`, `an answer in words`, `a task`; `no words: the user's last line` when the model gave no task. |
-| `delegation dlg1: the user-speech gate let it through (caption) in 300ms` | The gate's decision (4.4): through by a `caption`, a `typed line` or the user's `own voice` (their caption had not come), or `refused it (unprompted) after 2.5s`. The model is then told it was not sent. |
+| `delegation dlg1: the user-speech gate let it through (caption) in 300ms; from the handover: agent words 4.2s before (acked), caption 1.1s before (counted), typed line none, own voice 1.6s before (counted)` | The gate's decision (4.4): through by a `caption`, a `typed line` or the user's `own voice` (their caption had not come), or `refused it (unprompted) after 2.5s` (the model is then told it was not sent), or `is off (the app's setting): let it through in …; on, it would have refused it (unprompted) unless the user's words came within 2.5s` (or `let it through (caption)`; #5904). Then what it went by (#5904), times from when the model handed it over: the agent's words it was held to and what last moved that time (`sent` to the model, `acked` by the service, a `reconnect`'s snapshot), and the user's last caption, typed line and own voice (as the gate had it when the model handed it over: it decided by that), each `counted` or why not (`not after the agent words`, `over 30s old`, `after the handover`, `no echo cancellation`), and `waited 400ms for a caption due: it came` / `it had not come` when a caption was due. Times and sources only, never words. |
 | `run voice-…: for delegation dlg1, in session 1` | A run was made for a handover (protocol 1 runs are `d1`, `d2`…). |
 | `run voice-…: sending`, `sent`, `working`, `needs_you`, `held`, `blocked`, `done`, `failed (code)`, `refused (code)`, `unknown (unknown)` | A run's state changes (the run frame's states, 3.3), with its code: `unprompted`, `empty`, `on_screen`, `input_draft`, `dialog_open`, `unreachable`, `stopped`… `folded into run …` when a later run took it over. Observed turns say `(observed)`. |
 | `run voice-…: sent to m/a1: HTTP 409 input_draft in 120ms[, clearing the draft]` | A send to the hub: `ok`, the status and code it refused with (`delivered unknown` when it may have been typed), or `no answer (…)` (a broken connection, a timeout). Protocol 1 also logs `started a main conversation on m: ok in 2.1s` when there was none. |
-| `run voice-…: the app sends it again`, `run voice-…: handed back by the app (working)` | A resend the user asked for; a run the app handed back when it picked the call up again. |
+| `run voice-…: the app sends it again`, `run voice-…: handed back by the app (working)` | A resend the user asked for (`(the user's own confirmation, past the user-speech gate)` for an `unprompted` one, #5904); a run the app handed back when it picked the call up again. |
 | `card ix1: asked by voice`, `card ix1: answered (voice)`, `card ix1: released (elsewhere)`, `cards ix2: to be done on the screen, said by their kind` | Cards (4.7). |
 | `delegation dlg2: status answered: working, 1 cards waiting`, `delegation dlg3: stop: stopped` | A status answered (or `unreachable`, `gone`), a stop and how it went (`idle`, `gone`, `stop_failed`). |
 | `told the app: error machine_offline`, `fatal error upstream_failed: the call ends` | An error frame the app was sent. |
 | `conversation closed after 3m12s (the app hung up (1000)): user lines 4 (typed 1), model lines 5, delegations 2, function calls 2, runs 2 (done 1, refused 1), observed turns 0, cards asked 0, reconnects 0, pauses 1, nudges 0` | The call's end: how long it lasted, why it ended (the app hung up with its close code, its connection dropped, writing to it failed, `start failed: <code>`, `fatal error <code>`), and its counts; runs by their last state. |
 
-**Reading one.** For "the model went quiet": a `nudge:` line says it owed an answer that long and was reminded once; none means nothing was owed by the rules of 4.5 rule 9 (it had spoken, a run was working, a card was asked, no echo cancellation). For "the model said it handed it over, and nothing came": find the call by its time (`conversation opened`), then look for a `delegation` or `function call` line. None: the model never handed anything over (it only said it did). A refusal by the gate: the user's words had not reached the service (no caption, no typed line, no own voice since the agent last spoke). A run that ends `refused` or `failed`, or a send that is not `ok`: the hub's code says why. A run `done` on a conversation other than the one expected: check `bound:` (protocol 2) or the `sent to` line (protocol 1: the main conversation of the moment).
+**Reading one.** For "the model went quiet": a `nudge:` line says it owed an answer that long and was reminded once; none means nothing was owed by the rules of 4.5 rule 9 (it had spoken, a run was working, a card was asked, no echo cancellation). For "the model said it handed it over, and nothing came": find the call by its time (`conversation opened`), then look for a `delegation` or `function call` line. None: the model never handed anything over (it only said it did). A refusal by the gate: the user's words had not reached the service (no caption, no typed line, no own voice since the agent last spoke); its line says which came and why each did not count, for example a caption `not after the agent words` because an agent's result was `acked` after it (the user spoke while the result waited), or captions `not counted: no echo cancellation`. A run that ends `refused` or `failed`, or a send that is not `ok`: the hub's code says why. A run `done` on a conversation other than the one expected: check `bound:` (protocol 2) or the `sent to` line (protocol 1: the main conversation of the moment).
+
+### 4.15 Reading a text aloud (#5004)
+
+`POST /speak` reads one text aloud in the realtime voice, outside a call. Its user is the iPhone: a meeting answer it says aloud while no meeting call runs (`docs/assistant/meeting-minutes.md` "Phase 4: realtime voice in the meeting") is said in the model and voice the owner hears in voice chats, not the phone's on-device voice, which stays the fallback for every failure (an older extension without `speak`, no voice extension, offline, an error status, no audio in time).
+
+- **Request**: `{"text": "…", "model"?: "<provider>/<model>", "voice"?: "<voice id>", "lang"?: "<BCP 47>"}`. `text` is trimmed, 1 to 1000 characters. `model` is what a call sends as `start.model` (the use `plugin.<id>`; absent: the default); a model of an upstream no longer set up falls back to the default, without the voice, as a call does. `voice` is the device's pick (`VoiceTimbre`); absent: the model's default. `lang` is the language the text is in, a hint for the instructions (a value that is not a language tag is ignored).
+- **Who**: a full device, or a caller with no `X-Persona-Role` (an old socket-only deployment); anyone else gets `403 forbidden`. Others in the room hear what it says, and every text costs a session of the owner's service.
+- **The session**: one upstream session per text, with no tools and the instructions of `server/internal/prompts/voice/read_aloud.md` in the caller's language (`X-Persona-Lang`, else the hub's): say each message exactly as written, in its own language, and never answer it, comment, translate or add anything. Others hear it, so the instructions take only the owner's name, never their notes. The text goes as the dialect's `say` (live: a commentary without a delegation; realtime: a user message and `response.create`; codex: `speakable` context in 500-byte pieces). A session the service refuses while a voice was given (not one it says is down) starts once more with the default voice.
+- **The answer**: nothing is written before the first audio. Then `200` with `Content-Type: audio/pcm`, `X-Persona-Audio-Rate: <Hz>` (the session's output rate; mono PCM16, little-endian) and `Cache-Control: no-store`, and the reply's audio as it comes, flushed piece by piece (the hub and the manager forward it unbuffered). It ends with the reply (`response.completed`, `turn.done`, `response.done`, or the reply cut off), or 3 seconds after the last audio on a service that never says a reply is over; then the session is closed with `session.close`. A reply that ends before any audio (one that only wrote text) does not end it. The `fake` dialect answers with a tenth of a second of silence.
+- **Errors**, all before any audio, as `{"error": "…", "code": "…"}`; `error` never holds the service's address or the text: `400 bad_request` (no text, too long, a malformed model or voice), `403 forbidden`, `503 no_upstream`, `502 upstream_forbidden` (the service refused the key, at the handshake or reading its model list for the default model), `503 upstream_unavailable`, `502 upstream_failed` (anything else: a refused session, a dropped socket, an error frame), `504 no_audio` (the session started and said nothing for 15 seconds). Once audio has begun, a failure only ends the body early.
+- **Limits**: 150 seconds in all. The phone hanging up (Stop Speaking, the next answer) closes the session at once. A read-aloud counts in `GET /health`'s `conversations`, so a redeploy waits for it.
+- **The log**: one line per text, such as `speak 3: custom/gpt-live-1, voice default, 86 characters: done; 241920 bytes at 24000 Hz in 5.42s` (outcomes `done`, `done (quiet)`, `the app hung up`, `the session dropped`, `failed, <status> <code> (<why>)`), and a line when the model was gone or the voice refused. Never the text.
+- **Mock**: `scripts/mock/voice_mock.py` lists `speak` and answers `POST …/voice/speak` with a short tone (`MOCK_VOICE_SPEAK=ok|fail|slow|off`, or `GET /mock/voice2?speak=…`), for the iPhone's tests.
 
 ## 5. Configurable GPT-Live upstream
 
@@ -976,13 +1008,15 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
 | `PUT /api/v1/extensions/<id>/-/config`, `PUT/DELETE …/-/secrets/key`, `PUT …/-/enabled` | Full device | Existing. Changes restart extension, interrupt active call; App resumes automatically |
 | `GET /api/v1/extensions/<id>/info` | Full device | `{protocol, features, setup?, warnings?}`, no Key or upstream list |
 | `GET …/models`, `GET …/voices?model=` | Device allowed to reach extension | Existing. Form upstream model id `custom/<model>` |
+| `POST …/speak` | Full device | #5004: a text read aloud in the realtime voice, its audio streamed back (4.15) |
 
 `POST /test` (connection test) and `/info.upstreams` come in phase two with dedicated settings.
 
 ### 5.7 Model and voice
 
 - **Model**: purpose `plugin.<id>`; App sends `effective.model` as `start.model` (matching Android `resolveVoiceModel`). Change in call "⋯" with `.modelConfigurationSheet(isPresented:purposeID:)`.
-- **Voice**: read `/voices?model=`, select in "⋯", remembered locally. Changing voice restarts the call (resume).
+- **Voice**: read `/voices?model=`, select in the call's "⋯" or outside a call on the voice extension's settings page (6.7), remembered on the device per group of hubs and extension (`VoiceTimbre`) and sent as `start.voice`. Changing it during a call keeps the call: a new connection picks it up where it was (resume), and the new name shows at once.
+- **The list when the service's cannot be read** (#2411): `catalog.voices` (`server/internal/voice/models.go`) answers with the last good list for that model, else the dialect's built-in one (the public GPT-Live voices, Codex's for codex), with `"stale": true`, never 502. Good lists are kept 10 minutes; a failure is never kept as an answer, so the next request asks the service again. A service that has no list (404 / 405 / 501) gets the built-in one as its list (not stale, kept). With no model named and the service's model list unreadable (no default model to find), it answers with the last good list of any of the first upstream's models, else the built-in one, stale. The last good model list also stands in for `/models` and a call's default model. Each failing list is logged once until it reads again, with the status or the network error only (never the credential, the key command's output, the service's answer or its address). Only an unknown provider (404), no upstream (503 `no_upstream`) and a malformed model id (400) are errors.
 
 ### 5.8 Migration and rollback
 
@@ -993,11 +1027,12 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
 ### 5.9 Clients
 
 - **Phase one**: with built-in schema/secrets, generic **Settings › Extensions › Realtime Voice** details on iOS / Mac, Android, web can configure address, protocol, models, Key, enabled state; admin `/admin` has switch too. Satisfies decision 3.
-- **Phase two**: dedicated realtime-voice settings (connection test, model/voice selectors); configure multiple upstreams in App once object arrays are supported.
+- **Voice row (#2411, iOS)**: the voice extension's page has a "Voice Chat" section with the voice this device's calls speak with (6.7), drawn by the app, not the extension's form.
+- **Phase two**: dedicated realtime-voice settings (connection test, model selector); configure multiple upstreams in App once object arrays are supported.
 
 ## 6. iOS design
 
-### 6.1 Entry (iOS only; no Mac or visionOS in phase one)
+### 6.1 Entry (iOS and visionOS; not the Mac yet)
 
 1. **Optional `voice:` callback in `ShellComposerBar`**:
    - collapsed row: idle `[+][composer][dictation][voice]`, working `[+][composer][voice][stop]`, dictation in expanded row;
@@ -1040,7 +1075,8 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
 - **Shape**: call bar reuses `ComposerSurface`, changed private → internal. All style differences stay inside; pages never check `usesBeautifulUI`.
 - **Left**: mute/unmute. **Center**: orb, "Interrupt voice" button while fast layer speaks. **Right**: end.
 - **Second row**: pure `VoiceBarLine.make(phase:link:runs:session:cards:muted:asking:notice:label:dismissed:resendable:)` (#3508), in this order:
-  - why the last instruction did not go (the newest run is `refused` / `failed` / `unknown` and not put away with "Never Mind"), with "Resend", "Clear and Send", "Never Mind", "Send Back as Feedback". "Resend" / "Clear and Send" only for a run refused on the connection up now (`resendable`, i.e. `canResend`), "Clear and Send" only with `clearable`; a 409 `dialog_open` while a plan card waits gets "Send Back as Feedback" (the app's own `resolve`, `approve: false` with the words as feedback);
+  - why the last instruction did not go (the newest run is `refused` / `failed` / `unknown` and not put away with "Never Mind"), with "Resend", "Clear and Send", "Send Anyway", "Never Mind", "Send Back as Feedback". "Resend" / "Clear and Send" / "Send Anyway" only for a run refused on the connection up now (`resendable`, i.e. `canResend`), "Clear and Send" only with `clearable`; a 409 `dialog_open` while a plan card waits gets "Send Back as Feedback" (the app's own `resolve`, `approve: false` with the words as feedback);
+    #5904: one the user-speech gate held back (`unprompted`) says "Didn't hear you ask for this just now, so it wasn't sent: “<task>”" (never that someone else said it; the task quoted, so the user sees what they confirm) with "Send Anyway" (`resend`, the user's confirmation; `voice-line-anyway`) when `ready` listed `speech_gate` and the run has a task (an older hub keeps no such run, and none keeps one without a task);
   - "This computer is offline; what you say can't be sent" (the non-fatal `machine_offline`);
   - "Claude is asking you; just say your answer" (the card the `ask` frame is about) / "Needs a tap from you" (any other pending card);
   - "Waiting for Claude · Speak to resume" (upstream paused; the first row already says "Voice Paused", so it is not repeated);
@@ -1052,8 +1088,9 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
 - **First row**: `VoiceBarStatus.make` gives the words beside the orb and the orb's phase: Connecting… / Listening / Hearing you / Speaking / Muted / Voice Paused / Resuming… / Reconnecting… / "<tool>…" (read-only tools). Where the words do not fit between mute, orb and end (accessibility sizes: "Voice Pa…" was cut, or wrapped), they go under the row (`ViewThatFits`).
 - **Height**: the bar lays itself out at its own height (`fixedSize(vertical:)`); with many cards the cards' area scrolls (squeezed, the second line was cut to one and the first row's words shrank). During a call, where the page is short (large text), the cards' area stops where the footer would run over the conversation, keeping `Theme.Size.voiceThreadRoom` (44 pt, about a caption line) of it in sight (`PendingCards.cap`); at standard sizes the cards keep their half page, and nothing changes outside calls. It is worked out only from values the cards do not move: the page height, the open header (`fixedHeader`), the bar's own measured height (`VoiceBarRoom`) and the count's. A folding header or the measured footer fed back into it and changed it every frame (CPU at 99%, UI tests never saw the app idle).
 - **Thread tail**: `VoiceThreadTail(key:held:)` reads `VoiceCalls` itself; ChatView only places it at the newest end (next to the sentinel): at most 6 captions under "Voice · This call only", in the order they were said (a caption with `before` is put in front of that row, #5673). Bottom-pinning: `VoiceTailFollow`, written like `ChatStreamFollow`, calls `contentArrived` when the shown rows change (a new caption, appended or put before another) or the last grows by 40 characters; while the user reads history (`frozen`) the tail stays as it was (`held`). Full text in `VoiceTranscriptSheet`.
-- **During call**: main-chat footer hides TaskDock and RouteChip, restores on end.
+- **During call**: main-chat footer hides the action bar (`AssistantActionBar`) and RouteChip, restores on end.
 - **"⋯"**: type an utterance (`text` frame), full captions, voice, model.
+  Voice (#2411) is the voices of the call's model with the current one named under it (picked on this device, else the model's default). The list (`VoiceVoicesLoader`, shared with the settings row) is asked for when the bar shows, again 2, 5 and 15 seconds after a failure, whenever the menu opens without a list or with a stale one (at most once per 2 seconds, so a menu redrawn as the state changes cannot ask in a loop), and on Retry. While it is asked for the item says "Loading voices…" (disabled); after a failure "Couldn't load · Retry" (a tap asks again; short enough for one line in a menu in every language); a model with no voices "None for this model". A stale list is shown as it is and asked for again on the next open.
 - **Cards**: unchanged `PendingCards`, resolved through `model.resolve`; the asked card shows "Asking by Voice" in its title row (`VoiceAskMark` after `InteractionPanel`'s title, from the `ask` frame; an icon alone where the row is short, so it never widens the card and the page). New cards play haptic/tone.
 - **Ended by itself** (1.2 L): the composer comes back with a row over it, "Voice ended · <why>", with "Continue" (endings that may just pass: the background, a phone call, a lost connection, idle) or "Retry" (failures), plus "Open Settings" and "Details" (`VoiceEndNote` / `VoiceEndedStrip`). The why maps `VoiceEnd` and `error.code` to localized words; the extension's or upstream's own words are only under "Details". The user's own endings (End, leaving the page, another call) leave nothing.
 
@@ -1114,6 +1151,7 @@ struct VoiceDeps { var api: () -> APIClient?                 // Refetch each con
   - **Before the microphone** (#5029): nothing reads `AVAudioEngine.inputNode` until `VoiceCapture.plan` says there is an input. Reading it sets the I/O unit up, and an input that cannot start makes that setup wait on an RPC that times out and aborts the app (nothing to catch). So, with the session active: recording permission (else `permissionDenied`), `isInputAvailable` (else `audioFailed`); a route change that leaves no input ends the call as `audioFailed` too.
   - **Simulator**: the session reports the Mac's microphone whether or not the Mac lets the simulator use it, so `VoiceInputProbe` first starts a short AudioQueue recording on its own queue (an AudioQueue that cannot start waits in `AudioQueueStart` instead of aborting) and the call waits up to 3 s. Started: plain capture, never VoiceProcessing (it does not run there: it turns on, then the engine will not start with it, and each extra I/O unit is one more setup that can time out). Not started: the call ends as `audioFailed` ("Something went wrong with the microphone or speaker", Retry); a probe still waiting is not started again until it comes back. On a device, VoiceProcessing first and plain capture if it fails, logged once.
   - No local interruption detection, always follow extension `clear`: same route as user captions, local detection would not be faster.
+  - **Audio route** (#3015, `VoiceRoute` in PersonaKit, `VoiceRouteTests`): the session is `.playAndRecord` / `.voiceChat` with `.defaultToSpeaker`, `.allowBluetoothHFP` and `.allowBluetoothA2DP` (no AirPlay: too much delay for a conversation). A connected device plays the voice and its own microphone records (Bluetooth hands-free, a wired headset, CarPlay, USB); a device that can only listen (A2DP, LE) plays with the phone's microphone, unless the same device offers hands-free, which wins. With nothing connected, the loudspeaker, never the earpiece (`overrideOutputAudioPort(.speaker)` when the route lands there). Decided at the start, again once the engine runs, on every route change in the first 2 s (a hands-free microphone comes up late), and later only when a device arrives or leaves (`routeChangeNotification` `newDeviceAvailable` / `oldDeviceUnavailable`): other changes (a pick in Control Center, the call's own preferred input or override) are left as they are, and a microphone asked for once and not taken is not asked for again until a device comes or goes. A route change that stops the engine rebuilds the tap; if the engine will not start again, a new engine (voice processing, plain capture if it will not run); only when that fails does the call end (`audioFailed`). The call's preferred input and override are cleared when it ends. Route changes are logged as port kinds only (`voice: route after …`), never device names.
 - **Coordinate with #1931** (do not change that PR): before #3507, comment in #1951 with this document:
   1. **Names**: independent phone `Voice*`, not `DuplexVoice*`, `InputPump`, `PCM16`, `VoicePlugin*`, `APIClient.voicePlugins()`.
   2. **Call ownership**: `VoiceCalls` with surface. **Background-ending rules apply only to `surface == .phone`**; CarPlay ends only its own call.
@@ -1152,27 +1190,32 @@ struct VoiceDeps { var api: () -> APIClient?                 // Refetch each con
 
 - Phase one generic **Settings › Extensions › Realtime Voice** details: address, name, protocol, model list, sample rate, write-only Key, enabled state.
 - Changed address host shows Key cleared.
-- Model/voice in call "⋯"; dedicated settings phase two.
+- **Voice outside a call** (#2411, `VoiceTimbreSection`): on that page, while the extension is on and running, on a device with calls (iPhone, iPad, Apple Vision Pro) and for the default manager's copy (calls talk to that one), a "Voice Chat" section with a Voice row: the voices of the model the use `plugin.<id>` picks (`VoiceConversation.resolveModel`, its default when that cannot be used) and the current one. A pick is stored per group of hubs and extension (`VoiceTimbre`, the same key the call's "⋯" writes), so the next call starts with it, and a call going on with this extension takes it up at once (`change(voice:)`). States as in the call's menu: "Loading voices…", "Couldn't load voices" with Retry, "None for this model". It is the app's own section: the extension's form, secrets and switch are unchanged, and other extensions' pages have nothing new. Voice Chat's "Open Settings" (the "+" menu's explanation, 6.1) already lands on this page.
+- **Only Send What I Just Said** (#5904, `VoiceSpeechGateSection` under the Voice row, shown with it and only when the extension's `/info` lists `speech_gate`): a switch, on by default, with the footer "When on, Persona sends a request only right after you speak, so an agent's results read aloud can't give instructions for you. Turn it off if it keeps holding back your own requests." Kept per group of hubs and extension on this device (`VoiceSpeechGate`, UserDefaults `voice.speechGate.<group or ->.<extension>`, nothing kept while on); every call's `start` carries it, `speech_gate: false` when off and `true` when on (4.4: saying it also tells the hub the app has Send Anyway), and a call going on with this extension picks itself up again with it (`change(speechGate:)`, like the voice). Visible and reversible (principle 3); the hub still logs what the gate would have decided. The web has no switch yet.
+- Model in call "⋯"; a dedicated model selector is phase two.
 
 ### 6.8 DEBUG and screenshots
 
 - **Launch arguments** (add all to `scripts/release/release.sh`, ensure no Swift-identifier collision):
-  - `-showVoiceSample listening|speaking|working|paused|asking|approval|refused|plan_feedback|ended|setup`: no socket/mic, fake states; may combine `-openSession`;
+  - `-showVoiceSample listening|speaking|working|paused|asking|approval|refused|plan_feedback|unprompted|ended|setup`: no socket/mic, fake states; may combine `-openSession`. `unprompted` (#5904): an instruction the user-speech gate held back, with "Send Anyway" (its `ready` lists `speech_gate`, as every sample's does);
   - `-openVoice YES`: real mock flow (taps the voice button once the page offers a call). `-openVoice silent`: the same real socket, bar and thread with no microphone or speaker (`VoiceSample.SilentAudio` reports playing for as long as the received PCM lasts): on a simulator whose Mac does not let it record, `-openVoice YES` ends after the 3-second probe with "Something went wrong with the microphone or speaker" (6.4, lessons "The iOS voice mode", #5029), so such a simulator walks the flow this way.
 - **Mock**: new scripts/mock/voice_mock.py, imported by `mock_hub.py` with `MOCK_VOICE=1`, avoiding other PR edits there.
   - Add voice in `/api/v1/extensions`, `/info`, `/models`, `/voices`, `purposes/plugin.voice`;
   - `/ws` sends a scripted sequence: `ready` → partial-to-final captions → `run` from sending to working → `link paused/live` → `ask` → `run refused(input_draft)` → `run done`; `interrupt` returns `clear`;
     #5673: the answer to the question is a late caption: the fast layer's `a3` begins, then the user's `u3` with `before: "a3"`, then the rest of `a3`;
-    #3508: only a `start` with `protocol: 2` and a `target` gets this script; any other start (Android) is handed to mock_hub.py's protocol 1 script unchanged. The instruction is written into that conversation as a user message and the conversation turns working; the question is a real card (`interaction` push), answered "by voice" at 21 s unless tapped first; `resend` takes a refused run through sending → working again. `MOCK_VOICE=setup` is an extension that needs setup, `MOCK_VOICE=p1` an old one whose `/info` is 404, `MOCK_VOICE_PACE=0.1` runs the script ten times as fast, and `GET /mock/voice2` shows what the app sent.
+    #3508: only a `start` with `protocol: 2` and a `target` gets this script; any other start (Android) is handed to mock_hub.py's protocol 1 script unchanged. The instruction is written into that conversation as a user message and the conversation turns working; the question is a real card (`interaction` push), answered "by voice" at 21 s unless tapped first; `resend` takes a refused run through sending → working again. `MOCK_VOICE=setup` is an extension that needs setup, `MOCK_VOICE=p1` an old one whose `/info` is 404, `MOCK_VOICE_PACE=0.1` runs the script ten times as fast, and `GET /mock/voice2` shows what the app sent (each start with its `echo_cancellation` and `speech_gate`). #5904: its features include `speech_gate`, and `GET /mock/voice2?unprompted=1` has every call going on hand over something nobody was heard asking for (`run refused{unprompted}`), which `resend` sends.
   - new scripts/mock/test_voice_mock.py.
+  - #2411: `GET …/voice/-/` is the extension's settings page (the Voice row's screenshots); `/voices` fails, waits or says stale on demand: `MOCK_VOICE_VOICES=fail|slow|flaky|stale` (`slow` waits `MOCK_VOICE_VOICES_DELAY` seconds, default 6; `flaky` fails the first two asks), the same per request with `?mock=…`, or for the rest of the run with `GET /mock/voice2?voices=fail|slow|flaky|stale|ok`; `/mock/voice2` counts the asks (`voices`).
 - **Screenshots**: UI tests `launchPinned()`. Matrix: main/Agent chat × dark/light × Glass/BeautifulUI × standard/AX large text.
-  #3508: `PersonaUITests/VoiceModeTests` (`TEST_RUNNER_PERSONA_VOICE_HUB` pointing at a `MOCK_VOICE=1` mock, `TEST_RUNNER_PERSONA_SHOTS` for the images): four matrix cases (Agent / main × standard / AX XL) each shoot ten samples; `testOpenVoiceWalksTheScript` walks the mock's script with `-openVoice silent` (connected → handed over → working → paused → asked → refused, Clear and Send → result read out → End), then checks that the background leaves "Continue" and that going back closes the socket.
+  #3508: `PersonaUITests/VoiceModeTests` (`TEST_RUNNER_PERSONA_VOICE_HUB` pointing at a `MOCK_VOICE=1` mock, `TEST_RUNNER_PERSONA_SHOTS` for the images): four matrix cases (Agent / main × standard / AX XL) each shoot eleven samples (`unprompted` shows `voice-line-anyway`); `testOpenVoiceWalksTheScript` walks the mock's script with `-openVoice silent` (connected → handed over → working → paused → asked → refused, Clear and Send → result read out → End), then checks that the background leaves "Continue" and that going back closes the socket.
+  #5904: `PersonaUITests/VoicePickerTests` `testTheSpeechGateSwitch` (`-tab settings -openExtension voice` against the same mock) finds "Only Send What I Just Said" on, turns it off (shots `picker-<style>-<appearance>-settings-speech-gate-on|off.png`), checks the next call's start says `speech_gate: false` through `/mock/voice2`, then turns it on again and checks the next start says `speech_gate: true`.
 
 ### 6.9 Mac and other platforms
 
-- Models, frames, views compile in shared iOS/Mac sources. Audio has iOS implementation only; `VoiceAvailability` unsupported on macOS/visionOS.
+- Models, frames, views compile in shared iOS/Mac sources. Call audio (`PhoneVoiceAudio`) runs on iOS and visionOS, where `VoicePlatform.current` is `.phone` (docs/apple/vision.md); the Mac gets `NoVoiceAudio` and `VoiceAvailability` is `unsupported` there.
 - Separate follow-up Mac issue. macOS `AVAudioEngine` also supports voice processing; Codex voice is desktop-first.
 - Watch compiles tokens only, no UI.
+- The web app has its own client (#2273), on the same protocol 2 and the same pure rules: 6.11.
 
 ### 6.10 iOS tests (PersonaTests, FakeHub + `FakeVoiceSocket` + `FakeVoiceAudio`)
 
@@ -1189,179 +1232,18 @@ struct VoiceDeps { var api: () -> APIClient?                 // Refetch each con
   - "Return as feedback" calls resolve with feedback (#3508 App `model.resolve`, not call);
   - idle timer disabled on start, restored on end.
 - **#3508**: `VoiceBarLineTests` (every second-line case and its buttons, the first row and the orb), `VoiceNotesTests` (the "+" explanations, the ended row), `VoiceModeTests` (`isOver` changes only as a call ends or picks up, `VoiceCalls.isLive`, Never Mind, the plan feedback body, Clear and Send returns `clearable`, the cue tones' rate, length and gain).
+- **#2411**: `VoiceVoicesLoaderTests` (the list asked for once per model, the retries after 2, 5 and 15 s and none after, an open or Retry asking at once but not twice within 2 s, a stale list kept while asked for again, a late answer dropped after the picker went, the current voice's name, where the settings row shows); hub: `catalog_test.go` (last good list, built-in list, a service without a list, no default model, the endpoint's 200 `stale` and a log without the credential).
+- **#5904**: `VoiceBarLineTests` (an `unprompted` refusal quotes its task and offers Send Anyway only while resendable and with a task, and never says someone else said it), `VoiceModeTests` (Send Anyway sends `resend{id}` with an extension that lists `speech_gate`; none without it, nor for a run with no task), `VoiceConversationTests` (the switch off puts `speech_gate: false` in `start`, on `true`), `VoiceSpeechGateTests` (the wire field, the preference, a change during a call reopens it, the settings section only with the feature).
 - **#5029**: `VoiceCaptureTests` (`VoiceCapture.plan`: no permission or no input ends before the probe, a device uses voice processing without one, the simulator records plain only once the probe started; a probe that has not come back is not started again until it does); `VoiceConversationTests` (a start that finds no input ends as `audioFailed`, a refused recording as `permissionDenied`).
 
-## 7. Work breakdown
+### 6.11 The web client (#2273)
 
-Umbrella issue #3489, with sub-issues below. Each PR corresponds to one sub-issue (`Closes #<sub-issue>`) and also `Refs #3489`. All sizes include tests.
-When everything is complete, move this section to `docs/archive/`.
+The web app's voice chat follows this section's design; `docs/web/web.md` ("Voice chat") has the page-side detail and `web/e2e/voice.mjs` walks the mock's script in a browser. Where it differs from iOS:
 
-| Issue | Title (issues and PRs in English) | Scope | Size | Dependencies |
-| --- | --- | --- | --- | --- |
-| #3495 | Empirical tests of GPT-Live behavior / docs(lessons): GPT-Live delegation behaviour | No feature code. Connect `personad voice` to a GPT-Live-compatible upstream (local is fine), test every question listed under risk 1 in section 8, write findings in new docs/lessons/voice.md, and choose the constants for 4.5 | S | — |
-| #3496 | Voice-mode design document / docs: voice mode design | This document, CLAUDE.md documentation index, two pointers in `docs/extensions/extensions.md` | S | — |
-| #3497 | channel: shared turn reading, option matching by ordinal and name / refactor(channel): share turn reading and spoken option matching | 4.12 | M (about 500) | — |
-| #3498 | hub: forward caller identity to extensions and disconnect on revocation / feat(hub): tell extensions who is calling and cut them on revoke | 3.6 | S (about 300) | — |
-| #3500 | Configure realtime voice upstream in the App / feat(voice): configure the GPT-Live upstream from the app | Section 5: manifest, adoption, environment variables, merge, `needs_setup`, Key/address binding, model fallback, `docs/extensions/extensions.md` | L (about 1000) | #3263 (merged) |
-| #3501 | Track voice delegation by round and speak the full reply / fix(voice): follow the delegated turn, not the session's last line | `hublink`, `runs`, `items`, `spoken`, user-speech gate, role-based tool restrictions, `fake` dialect; target remains main chat; `report` / `delegated` / `spoken` prompts and `docs/assistant/prompts.md` | L (about 1300) | #3497 |
-| #3502 | Bind voice to the current chat (protocol 2) / feat(voice): bind a voice call to the conversation it was opened from | `/info`, `target`, `send` (409 mapping, `resend`), `run` frames, Fold, status queries, stop prefix, one commentary per delegation, announcement gate, trimmed `resume`; prompts `instructions` / `target` / `handoff` / `agent_message` / `status` / `refused` / `folded` / `send_to_agent` | L (about 1800) | #3495, #3498, #3501 |
-| #3503 | Speak rounds started elsewhere, heartbeats, and interruption / feat(voice): observed turns, heartbeats and barge-in | Observed runs (channel filtering), `Work` / `TurnErrorKind`, heartbeat, `progress` / `observed` prompts, protocol 2 interruption `clear` (follow upstream signals, otherwise PCM energy for 0.5 seconds; lessons recommends no backchannel filtering; protocol 1 regression tests) | M (about 900) | #3502 |
-| #3504 | Answer Agent questions by voice, direct approvals to cards / feat(voice): answer agent questions by voice, point approvals to the cards | `asks.go`, `ask` frames, approval-word interception, `ask` / `needs_you` / `answered` prompts | M (about 800) | #3502 |
-| #3505 | Suspend upstream while waiting for the Agent / feat(voice): pause the upstream while the agent works | 4.9, `link` frames | M (about 600) | #3503 |
-| #3506 | iOS design system: voice orb and tokens / feat(ios): voice orb, tokens and icons | 6.6 | S (about 400) | — |
-| #3507 | iOS voice-call foundation / feat(ios): voice call engine | `VoiceWire`, `VoiceSocket`, `PhoneVoiceAudio`, `VoiceConversation`, `VoiceCalls`, `VoiceAvailability`, unit tests; coordinate in #1951 first | L (about 1700) | #3496 |
-| #3508 | iOS: voice mode in main-chat and Agent pages / feat(ios): voice mode in the main conversation and agent chats | Entry, `VoiceBar`, thread tail, lifecycle, tones, `ask` marker, plan feedback, DEBUG samples, voice_mock.py, screenshots | L (about 2000) | #3506, #3507 |
-
-```
-Research #3495 ─────────────┐
-Server   #3497 ─▶ #3501 ─▶ #3502 ─▶ #3503 ─▶ #3505
-         #3498 ─────────────┘  └─▶ #3504
-Config   #3500 (#3263 merged, no other dependencies)
-iOS      #3506 ─┐
-         #3507 ─┴─▶ #3508 (entry appears only with /info.protocol ≥ 2, after #3502 is deployed)
-```
-
-- Can run in parallel from the start: #3495, #3496, #3497, #3498, #3500, #3506, #3507. #3501 is the first server feature PR, benefiting Android immediately.
-- #3508 can merge first: the entry stays hidden without hub protocol 2, so it will not ship with known bugs exposed.
-- About 11k lines total.
-
-**Phase two (one issue each, unscheduled)**: dedicated iOS realtime-voice settings + `POST /test`; Mac voice; persisted captions interleaved by time in the thread; entry without a main chat (`ShellHome`).
-
-**Acceptance**
-
-| PR | Acceptance |
-| --- | --- |
-| #3495 | docs/lessons/voice.md answers every risk-1 question and specifies every constant in 4.5 |
-| #3497 | Existing assistant tests all pass; new `channel` tests cover pagination, `/full`, Fold segmentation; `MatchOption` recognizes `2 / 第二个 / 二 / second / option name / multi-select` (the Chinese examples mean "second" / "two") |
-| #3498 | Hub and extmgr tests: caller-forged `X-Persona-*` stripped; correct headers for full device, extension token, and main token; forwarded WS closed after revocation |
-| #3500 | Postgres-backed extmgr tests (`test-server.sh`; if hub lacks Go, use local Postgres container or tunnel and state which in PR) covering same id after adoption, `disabled`, default off without entry, `needs_setup`, no Key echo, Key cleared on host change, upgrade/rollback. Voice unit tests cover merge/id collisions. Manual: filling address and Key in generic iOS page allows voice |
-| #3501 | All protocol-1 scenarios in 4.13 pass; Android frame sequence unchanged; `delegate.go` removed; golden diff included in PR |
-| #3502 / #3503 / #3504 / #3505 | Respective 4.13 scenarios pass; three-language goldens; `docs/assistant/voice.md`, `docs/extensions/extensions.md`, `docs/assistant/prompts.md` synchronized; run `fake` dialect against real hub and Agent |
-| #3506 | Dark/light × two-style screenshots; `IconVocabularyTests`, `TokenRatchetTests`, `StyleSpecTests` pass; watch target compiles |
-| #3507 | All 6.10 unit tests pass; no files in #1931 changed, no naming collisions; PR states actual Xcode, and "26.0 unverified" if unavailable |
-| #3508 | Screenshot matrix inspected (including AX large text), all buttons single-line; `-openVoice YES` mock flow: connected → delegation → run → suspend → question → result → end; background, tab switch, page leave all end call; release.sh launch-argument check passes |
-
-**Test plan**
-
-- **Server**: local `go test ./internal/voice ./internal/channel ./internal/assistant`; #3498 and #3500 run hub tests with Postgres.
-- **iOS**: unit tests, DEBUG sample screenshots, mock flow, all on simulator.
-- **Hardware end to end**: after merge, maintainer uses TestFlight against real hub. Echo cancellation, speaker playback, Bluetooth, and lock screen can only be checked on hardware. Checklist:
-  1. Main chat: immediate small-talk reply; "Check tomorrow's calendar" delegates and speaks result.
-  2. Claude Code session: "Run tests" → "From Voice" in thread; "How far along?" answered immediately without Agent send; heartbeat at 2 minutes; suspension after 60 seconds, automatic reconnect and speech when result arrives.
-  3. Add an instruction while working: two combine into one result. "Stop a moment" only stops voice; "Stop Claude" actually stops Agent.
-  4. AskUserQuestion: question spoken; "Second" or a casual answer outside options both resolve.
-  5. Plans/tool permissions: fast layer category-only; spoken "Approve" not sent; "Return as feedback" works.
-  6. Leave text in the computer's composer, then speak: "Clear and send" appears.
-  7. Offline session starts.
-  8. Interruption (short backchannels do not interrupt), mute, end; screen stays unlocked during call.
-  9. Airplane mode for 5 seconds; redeploy hub: both resume and speak the round finished during disconnect.
-  10. Agent outputs `回答：1` (Answer: 1), user silent: no answer submitted.
-  11. Wrong Key: 403 and "Open Settings"; changed address host clears Key.
-  12. Repeat with Codex.
-  13. Android regression: main-chat voice works normally.
-
-## 8. Out of scope / later, and risks
-
-**Out of scope / later**
-
-- **Phase two**:
-  - persist captions (`voice_logs`) and interleave them by time in the thread;
-  - full-screen orb; background and lock-screen calls with Live Activities;
-  - switch chats by voice;
-  - entry without a main chat;
-  - dedicated settings and `/test`;
-  - Mac, visionOS, web, watch; Android's Agent entry.
-- **Later**:
-  - other protocols (decision 3);
-  - multiple upstreams in the App (after forms support object arrays);
-  - generic Key/address binding (`bound_to`);
-  - tell the model actual playback position after interruption (GPT-Live lacks truncate);
-  - local speech synthesis (cascaded TTS).
-- **Not doing**: approving plans or tools by voice (decision 5).
-
-**Verified, no longer counted as risks**
-
-- `subscribe` does not mark sessions seen (only explicit `seen` does), nor suppress push.
-- Member hubs forward extension WS to the primary with original credentials (`peer_http.go`), so identity headers at the primary are correct.
-
-**Risks and mitigations**
-
-1. **Several GPT-Live behaviors remain untested**. #3495 must answer:
-   - can a delegation stay open for several minutes;
-   - does the first commentary close the delegation;
-   - does `say` interrupt model speech;
-   - does the model treat wrapped Agent output as instructions;
-   - how instruction size affects opening latency.
-
-   Mitigation: #3495 before #3502; pacing and limits are constants; every assumption has a fallback (`say`).
-2. **Prompt injection**: Agent output enters the fast layer. Mitigations:
-   - user-speech gate;
-   - Agent text in data blocks;
-   - only read-only tools after target binding;
-   - approvals never answered by voice.
-
-   Residual risk: within 30 seconds after user speech, injected content may still mislead the model.
-3. **Misrecognized instructions sent immediately** (decision 4): messages carry original-speech context so the Agent can notice problems and ask; sent body visible in thread; user can always say "No, change it to…".
-4. **Billing**: suspension (#3505) and idle ending. Screen-off background calls are phase two.
-5. **Always-on screen uses battery**: only during calls, only `.phone`; restored at end.
-6. **Hub redeploy disconnects calls**: App resumes automatically, Check speaks results completed during the gap.
-7. **Conflicts with #1931**: type names, microphone text, call ownership, shared files. Independent names, rules by surface, coordinate #1951 first. #1931 still has not run CI.
-8. **Hardware audio only through TestFlight**: simulator may not even support echo cancellation; fallback covers it.
-9. **No precedent for adopting hub.json entries**: document in `docs/extensions/extensions.md`; test upgrade, rollback, `disabled`; build atop merged #3263.
-10. **Security**: extension holds main token. Mitigations: caller identity headers, role restrictions, disconnect on revocation, Key/address binding, warnings for `ws://`.
-11. **Linked hubs**: target not on the extension's hub gets no pushed events, only 5-second polling; results may be seconds late.
-12. **Codex terminal-session items may lack `client_msg_id`**: use `Probe`, so the body must start with the task itself.
-13. **ChatView is a hot path**: it reads only `isBound`; tail, levels, and captions are separately observed views; verify bottom-pinning remains intact.
-14. **Compatibility**: only Xcode 26.0 SDK APIs; Tokens in `Shared/` must compile for watchOS 10; VoiceOver and call speech interfere, requiring hardware checks.
-15. **Conflicts with other open PRs**: #2931 and #3342 change `ShellComposerBar`; several PRs change `mock_hub.py`, `Icons.swift`. Mitigation: rebase by merge order; separate voice mock file.
-
-## Appendix: handling review comments
-
-Design-review comments (2026-11-05 / 06) and responses, retained as the rationale for tradeoffs.
-
-| Comment | Response | Reason |
-| --- | --- | --- |
-| Protocol-1 message id collisions | Accepted | Use `voice-<UUIDv4>`; only `resend` retains original id (4.3) |
-| Protocol-2 call survives revocation | Accepted | Register forwarded WS by principal, close on revocation, include in #3498 |
-| Protocol-3 function tools bypass permissions | Accepted | Non-full declares only `ask_persona` (#3501: no tools means no delegation); bound target keeps only read-only tools; target rejection fatal |
-| Protocol-4 prompt-injection feedback loop | Accepted | User-speech gate + `<agent_output>` data block, remove "(System)" prefix |
-| Protocol-5 address change steals Key | Accepted | Changing host clears Key in the same request (5.2) |
-| Protocol-6a no utterance-complete event | Accepted | Merge with Experience-3: 1.2-second silence + upstream silent 1.5 seconds |
-| Protocol-6b multiple commentary messages for one delegation | Accepted | One final result per delegation; other speech uses `say`, error fallback `say` |
-| Protocol-6c thinking swallows acknowledgement | Accepted | No incremental progress; only its own handoff within 3 seconds of delegation creation |
-| Protocol-6d reconnect limit never resets | Accepted | Reset after 60 seconds stable; suspension counted separately |
-| Protocol-6e codex dialect `say` only 500 bytes | Accepted | Send chunks |
-| Protocol-6f truncated `QuestionText`, no path for screen answers | Accepted | `ask.md` uses structured data, speaks only option names; brief `say` confirmation while asking |
-| Protocol-7 Fold meets send failure | Accepted | Fold only after 200; rejected messages excluded from `MsgIDs` |
-| Protocol-8 premature or duplicate announcements | Accepted | Look adds `TurnErrorKind` / `Work`; create observed run only when target has no run |
-| Protocol-9 main-chat target drifts | Accepted | Protocol 2 fixes target at `ready`; protocol 1 unchanged |
-| Protocol-10 `clear_draft` is a string | Accepted | `resend` returns raw hub `clearable` (#3502 review: not `draft`, differs with IDE selection markers) |
-| Protocol-11 duplicate speech after resume | Accepted | Update `base_seq` after Hold; resume unfinished runs only; relocate on seq rollback |
-| Protocol-12 inconsistent compatibility and numbers | Accepted | Interruption `clear` protocol 2 only with `dropAudio`; reconnect 1, 4, 10 seconds; hub waits 90 seconds; nil `capabilities` sendable; background rules phone-only |
-| Protocol-13 crossed-out risks and new constraints | Accepted | Old risks 5, 11 moved to "Verified"; nonblocking hubLink reader |
-| Experience-1 status cannot be queried, treated as instruction | Accepted | Status prefix answered directly by extension; no incremental progress |
-| Experience-2 `clear` on first sound | Partly accepted | Protocol 2 only, backchannel threshold; no "tell model playback position": no truncate or silent path, and model already has full text |
-| Experience-3 waiting for utterance completion hangs | Accepted | 1.2-second silence timer |
-| Experience-4 lock screen disconnects, continuous billing | Accepted | No auto-lock during call; "Continue" until page leave; suspension separate #3505 |
-| Experience-5 "About 1 second" impossible | Accepted | App provides `recent`; snapshot wait ≤500 ms; 3-second pre-`ready` buffer |
-| Experience-6 casual answers enter a loop | Accepted | While asking, all delegation counts as answers; plan "Return as feedback" through a tap, consistent with decision 5 |
-| Experience-7 other-channel round read aloud | Accepted | Main chat speaks only App/voice rounds; other channels one sentence |
-| Experience-8 commands and paths read aloud | Accepted | Broader summary rules; approvals category-only; audible templates mark working/done, golden assertion |
-| Experience-9 ambiguous "Stop" | Accepted | Stop only silences voice; stop prefix calls `interrupt`; separate buttons |
-| Experience-10 entry hard to find | Accepted | Voice button persistent with empty composer; working dictation moves to expanded row; `voiceChannel` reused |
-| Experience-11 squeezed thread, unlike Codex | Partly accepted | Temporary caption rows at thread tail, notifications merged into second row, task dock collapsed, renamed VoiceBar; chronological insertion awaits persistence in phase two |
-| Experience-12 accessibility | Accepted | Orb is "Interrupt voice" while fast layer speaks; state announcements only |
-| Experience-13 errors silent when not looking | Accepted | Local tones/haptics; localized error codes, raw text in details |
-| Experience-14 Mac | Accepted | Separate follow-up issue, outside phase one |
-| Scope-1 missing empirical step | Accepted | #3495 prerequisite for #3502; `fake` dialect; #3500 parallel from day one |
-| Scope-2 acceptance impossible on dev machine | Accepted | iOS acceptance only simulator/mock/unit tests; hardware checklist after merge; local Postgres tests allowed, stated in PR |
-| Scope-3 size underestimated, can cut scope | Partly accepted | Cut dedicated settings, `/test`, `/info.upstreams`, iOS protocol 1; previously separate item merged into #3508; sizes now include tests. Keep trimmed `resume`: frequent hub redeploys, and gap-completed rounds are the results users await. Keep "Clear and send": `input_draft` is otherwise a voice dead end, and App already holds draft |
-| Scope-4 #3508 ships with known bugs | Partly accepted | #3501 first server PR. #3508 entry protocol 2 only, may merge first without exposing protocol 1 bugs |
-| Scope-5 #3502 too large | Partly accepted | Split #3502, #3503, #3505. Interruption protocol 2 only, Android unaffected, included in #3503 with protocol 1 regressions rather than separate PR |
-| Scope-6 lifecycle conflict with #1931 | Partly accepted | Background rules phone-only, coordinate shared files first. Still adapt #1931 audio per decision 6, as shared engine and ask author to use it |
-| Scope-7 #3500 conflicts with ongoing extension work | Accepted | Build atop merged #3263; tests; `docs/extensions/extensions.md`; follow `hubJSONWaitsForTriageModel` |
-| Scope-8 model-facing text assembled in Go | Accepted | Placeholders, backchannels, folded, observed all templates, with `Language` and three-language goldens |
-| Scope-9 old risks 5, 11 answerable now | Accepted | Document in 3.5; nonlocal machines polling-only |
-| Scope-10 contradiction between 3.4 and 3.7 | Accepted | Answer permission by `X-Persona-Role`, not protocol version |
-| Scope-11 no entry without main chat | Accepted | Protocol 2 removes `startMain`; `ShellHome` entry phase two |
-| Scope-12 conflicts with other open PRs | Accepted | Localization mechanism on master at merge; separate voice_mock.py; correct `modelConfigurationSheet(isPresented:purposeID:)` signature |
+- **HTTPS is required**: browsers give the microphone only to secure contexts (HTTPS, or `localhost` on the same computer). A hub reached over plain HTTP on another address cannot record, so the voice button explains that and offers the hub's HTTPS address when its `hello` advertises one (`public_url` if https, else an https endpoint, by name first); it never fails silently. A hub meant for voice in the browser needs TLS (its own, or a reverse proxy: `docs/operations/network.md`).
+- **The credential rides in the query**: a browser cannot set `Authorization` on a WebSocket, so the socket is `…/extensions/<id>/ws?token=<the browser's device token>`; the hub accepts `?token=` on every route and strips it before forwarding (`hub/extensions_link.go`). A refused handshake's status is invisible to a browser: a socket that never opened asks `GET …/info` and treats its status as the handshake's (401, 403 end the call; 404 only before a first `ready`), as 6.5 says.
+- **Entry**: the composer's voice button only; the web's **+** picks files directly, so where the user can act (set the extension up, update it, open the HTTPS address, use another browser) the button stays and its click explains (1.3's words). With no voice extension, an answer-only credential (`/info` 403) or a read-only chat there is no button. The main conversation's task dock and route chip step aside during a call, as 1.2 A.2 says.
+- **Audio**: `getUserMedia` with the browser's echo cancellation, noise suppression and gain control (`echo_cancellation` in `start` comes from the track's settings); an AudioWorklet resamples to `input_rate` with an anti-aliasing low-pass and sends 20 ms PCM16 frames (zero frames muted), 50 a second for the whole call (the capture context's output is kept just above zero so Chrome never moves it to a slower sink after 30 s of silence: docs/lessons/voice.md); a second AudioContext at `output_rate` plays the voice back to back and drops everything queued on `clear`. No pre-microphone probe like 6.4's simulator one: `getUserMedia` either answers or is refused. Both contexts are created inside the click that starts the call.
+- **Lifecycle**: leaving the conversation or closing the tab ends the call; a hidden tab keeps it (people work in other windows while an agent runs), unless the browser suspends the audio, which ends it with Continue. Idle, reconnect and resume as 6.5. No screen lock to hold, no phone calls, no haptics.
+- **Send anyway** (#5904): the bar's line for a run the user-speech gate held back quotes it and has "Send anyway" (`sendAnyway`, a `resend`) when the call's `ready` lists `speech_gate` and the run has a task, as on iOS; every `start` says `speech_gate: true` (no switch on the web), which tells the hub the page has the button; `web/e2e/voice.mjs` shoots it (`<chat>-<lang>-<theme>-unprompted.png`) through the mock's `/mock/voice2?unprompted=1`.
+- **Not yet**: the model sheet in the call's ⋯ (the voice picker is there), Mac-style multi-window calls, the Android client's entry for agents, the "Only Send What I Just Said" switch (6.7).

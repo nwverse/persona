@@ -16,7 +16,7 @@ import (
 	"strings"
 )
 
-// Looks' files (docs/extensions/extensions.md "Looks"): what the hub holds a look's pictures to when it installs an extension and
+// Looks' files (docs/extensions/extensions.md "Avatars"): what the hub holds a look's pictures to when it installs an extension and
 // before it serves them, here so an extension's own tests can hold them to the same (CheckLooks).
 
 const (

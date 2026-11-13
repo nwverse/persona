@@ -1,6 +1,6 @@
 import Foundation
 
-/// Formulas in Markdown (docs/apple/ios.md「公式和图」), rewritten into what MarkdownUI can carry before it parses:
+/// Formulas in Markdown (docs/apple/ios.md「Math and diagrams」), rewritten into what MarkdownUI can carry before it parses:
 /// - display math — `$$…$$` and `\[…\]` on lines of their own, or a line that is one formula — becomes a ```math
 ///   fence (`RenderedBlock` draws it);
 /// - inline math — `$…$` and `\(…\)` — becomes an inline image `![…](persona-math:…)` (`MathInlineImages`).

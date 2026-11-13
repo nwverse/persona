@@ -1,12 +1,13 @@
 // Where Settings is (#1996): which category the URL opens, and the list of them a phone shows first. Wide, the
 // categories are in the left sidebar and /settings is "General"; phone width, /settings is the list (as on iOS), a category is
-// /settings?tab=… pushed over it, and Back goes back to the list.
+// /settings?tab=… pushed over it, and Back goes back to the list. An item's page (an extension, a channel, a connector) is
+// pushed over its category's page the same way at any width, so Back steps out of it one level (#2800).
 import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
 
-export type Tab = "general" | "persona" | "notifications" | "models" | "agents" | "channels" | "connectors" | "extensions" | "shortcuts" | "devices" | "hub" | "managers";
-export const TABS: Tab[] = ["general", "persona", "notifications", "models", "agents", "channels", "connectors", "extensions", "shortcuts", "devices", "hub", "managers"];
+export type Tab = "general" | "persona" | "notifications" | "models" | "agents" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar";
+export const TABS: Tab[] = ["general", "persona", "notifications", "models", "agents", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
 export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
@@ -31,12 +32,16 @@ const LEGACY_TABS: Record<string, { tab: Tab; section: SettingsSection | null }>
 // `hint`: one short line under the category on the phone's list (#3636), so what it holds is clear without opening it.
 export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string }> = {
   general: { label: t("settings-nav.tab_general"), icon: "gear", hint: t("settings-nav.hint_general") },
-  persona: { label: "Persona", icon: "spark", hint: t("settings-nav.hint_persona") },
+  persona: { label: t("settings-nav.tab_profile"), icon: "spark", hint: t("settings-nav.hint_persona") },
+  avatar: { label: t("settings.avatar"), icon: "smile", hint: t("settings-nav.hint_avatar") },
+  knowledge: { label: t("settings-nav.tab_knowledge"), icon: "layers", hint: t("settings-nav.hint_knowledge") },
   notifications: { label: t("settings-nav.tab_notifications"), icon: "bell", hint: t("settings-nav.hint_notifications") },
   models: { label: t("settings-nav.tab_models"), icon: "layers", hint: t("settings-nav.hint_models") },
   agents: { label: t("settings-nav.tab_agents"), icon: "terminal", hint: t("settings-nav.hint_agents") },
   channels: { label: t("settings-nav.tab_channels"), icon: "chat", hint: t("settings-nav.hint_channels") },
   connectors: { label: t("settings-nav.tab_connectors"), icon: "link", hint: t("settings-nav.hint_connectors") },
+  // the manager's pages of every source of the Inbox (#5278), shown with inbox_sources
+  sources: { label: t("settings-nav.tab_sources"), icon: "inbox", hint: t("settings-nav.hint_sources") },
   extensions: { label: t("settings-nav.tab_extensions"), icon: "extension", hint: t("settings-nav.hint_extensions") },
   shortcuts: { label: t("settings-nav.tab_shortcuts"), icon: "keyboard", hint: t("settings-nav.hint_shortcuts") },
   devices: { label: t("settings-nav.tab_devices"), icon: "key", hint: t("settings-nav.hint_devices") },
@@ -44,68 +49,19 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
   managers: { label: t("settings-nav.tab_managers"), icon: "person", hint: t("settings-nav.hint_managers") },
 };
 
-/** The sidebar (desktop) and the phone's list: the categories in four sections. */
-export const NAV_GROUPS: { title: string; tabs: Tab[] }[] = [
-  { title: t("settings-nav.group_personal"), tabs: ["general", "notifications", "shortcuts"] },
-  { title: t("settings-nav.group_assistant"), tabs: ["persona", "models", "agents"] },
-  { title: t("settings-nav.group_connections"), tabs: ["channels", "connectors", "extensions"] },
-  { title: t("settings-nav.group_system"), tabs: ["devices", "hub", "managers"] },
+/** The sidebar (desktop) and the phone's list: the categories in three groups, in this order (docs/assistant/managers.md
+ *  "The current assistant"): the current assistant's settings, each page reading and writing that assistant only
+ *  ("<name>'s settings", with Switch); this device's; and the hub's, the same whichever assistant is current. */
+export type NavGroup = "assistant" | "device" | "hub";
+export const NAV_GROUPS: { key: NavGroup; tabs: Tab[] }[] = [
+  { key: "assistant", tabs: ["models", "persona", "channels", "connectors", "sources", "extensions", "knowledge", "agents"] },
+  { key: "device", tabs: ["general", "notifications", "shortcuts"] },
+  { key: "hub", tabs: ["hub", "managers", "avatar", "devices"] },
 ];
 
-// ── search ──────────────────────────────────────────────
-
-/** A group (or a models/agents section) inside a page that the search box can jump to. */
-export interface SearchGroup {
-  tab: Tab;
-  group: string;
-  /** The `data-settings-group` marker of a Group, or the element id of a models/agents section. */
-  anchor: string;
-  hint?: string;
-}
-
-/** The group headings the search box matches (a curated static index; titles are the pages' own headings). */
-export const SEARCH_INDEX: SearchGroup[] = [
-  // General
-  { tab: "general", group: t("settings.appearance"), anchor: "appearance" },
-  { tab: "general", group: t("settings.sidebar_pages"), anchor: "sidebar-pages" },
-  // Persona
-  { tab: "persona", group: t("settings.avatar"), anchor: "avatar" },
-  { tab: "persona", group: t("settings.agent_preferences"), anchor: "agent-preferences" },
-  { tab: "persona", group: t("settings-triagesettings.title"), anchor: "triage" },
-  { tab: "persona", group: t("workspace-board.setting_group"), anchor: "agent-group" },
-  { tab: "persona", group: t("settings.this_browser"), anchor: "this-browser" },
-  // Models' sections and Agents' sections (their element ids)
-  { tab: "models", group: t("settings-nav.tab_providers"), anchor: "settings-providers" },
-  { tab: "models", group: t("settings-nav.tab_model_config"), anchor: "settings-model-config" },
-  { tab: "agents", group: "Claude Code", anchor: "settings-claude" },
-  { tab: "agents", group: "Codex", anchor: "settings-codex" },
-  { tab: "agents", group: "Antigravity", anchor: "settings-agy" },
-  { tab: "agents", group: "omp", anchor: "settings-omp" },
-  // Notifications
-  { tab: "notifications", group: t("settings-notifications.system_title"), anchor: "system" },
-  { tab: "notifications", group: t("settings-notifications.done_title"), anchor: "done" },
-  // Connectors
-  { tab: "connectors", group: t("settings-connectors.mail"), anchor: "mail" },
-  { tab: "connectors", group: t("settings-connectors.lark"), anchor: "lark" },
-  { tab: "connectors", group: t("settings-sent.entry_label"), hint: t("settings-sent.hint"), anchor: "sent" },
-  // Extensions
-  { tab: "extensions", group: t("settings-extensions.title"), anchor: "extensions" },
-  { tab: "extensions", group: t("settings-extensions.market_title"), anchor: "market" },
-  // Shortcuts / hub
-  { tab: "shortcuts", group: t("settings-shortcutsettings.terminal_title"), anchor: "shortcuts-terminal" },
-  { tab: "hub", group: t("settings-hubsettings.version"), anchor: "hub-version" },
-  { tab: "hub", group: t("settings-hubsettings.update"), anchor: "hub-update" },
-];
-
-/** The search box's matches: categories by label / hint, and page groups by their heading. */
-export function searchSettings(query: string): { tabs: Tab[]; groups: SearchGroup[] } {
-  const q = query.trim().toLocaleLowerCase();
-  if (!q) return { tabs: [], groups: [] };
-  return {
-    tabs: TABS.filter((t) => (TAB_INFO[t].label + " " + TAB_INFO[t].hint).toLocaleLowerCase().includes(q)),
-    groups: SEARCH_INDEX.filter((g) => (g.group + " " + (g.hint ?? "")).toLocaleLowerCase().includes(q)),
-  };
-}
+/** The current assistant's group: its pages follow the pick, and an item opened in one goes back to its list when the
+ *  pick changes (an item is one assistant's). */
+export const ASSISTANT_TABS: ReadonlySet<Tab> = new Set(NAV_GROUPS[0].tabs);
 
 /** The category and item a URL's query names; `tab` is null when it names none (the phone's list). */
 export function settingsAt(search: string, hash = ""): { tab: Tab | null; sub: string | null; section: SettingsSection | null } {
@@ -153,9 +109,45 @@ function sectionOfHash(hash: string, tab: Tab): SettingsSection | null {
   return null;
 }
 
-/** The history state of a category opened from the phone's list: Back from it returns to the list. */
+/** The history state of a category opened from the phone's list: Back from it returns to the list. Its value is how many
+ *  entries back the list is (true: one; an item's page over such a category: two). */
 export const FROM_LIST = "personaSettingsList";
+/** The history state of an item's page (an extension, a channel, a connector) opened from its category's page: Back from
+ *  it returns to that page. */
+export const FROM_SUB = "personaSettingsSub";
+
+const marker = (state: unknown, key: string): unknown => (state && typeof state === "object" ? (state as Record<string, unknown>)[key] : undefined);
 
 export function openedFromList(state: unknown): boolean {
-  return Boolean(state && typeof state === "object" && (state as Record<string, unknown>)[FROM_LIST]);
+  return Boolean(marker(state, FROM_LIST));
+}
+
+export function openedFromSub(state: unknown): boolean {
+  return Boolean(marker(state, FROM_SUB));
+}
+
+/** How many entries back the phone's list is from this one; 0: it is not under it. */
+export function stepsToList(state: unknown): number {
+  const n = marker(state, FROM_LIST);
+  return typeof n === "number" && n > 0 ? n : n ? 1 : 0;
+}
+
+/** The state of an item's page pushed over its category's page (`state`). */
+export function itemState(state: unknown): Record<string, unknown> {
+  const n = stepsToList(state);
+  return n ? { [FROM_SUB]: true, [FROM_LIST]: n + 1 } : { [FROM_SUB]: true };
+}
+
+/** The state an entry keeps when another category replaces it: its way back to the list, not to the item's category. */
+export function categoryState(state: unknown): Record<string, unknown> | null {
+  if (!openedFromList(state)) return null;
+  const rest = { ...(state as Record<string, unknown>) };
+  delete rest[FROM_SUB];
+  return rest;
+}
+
+/** Whether a category's item is a page one level below the category's page. A model purpose opens in a dialog, which
+ *  Back closes only where it is a sheet (ui/atoms Dialog), so it stays on the category's entry. */
+export function itemIsPage(tab: Tab): boolean {
+  return tab === "channels" || tab === "connectors" || tab === "extensions";
 }

@@ -24,4 +24,20 @@ type SessionCapabilities struct {
 	Approve   bool `json:"approve"`
 	Terminal  bool `json:"terminal"`
 	Attach    bool `json:"attach"`
+	// Close is independent of terminal access. Absent on older nodes, where clients retain terminal-only closing.
+	Close *bool `json:"close,omitempty"`
+	// Modes: the apps' permission mode and effort chips can change this session (session.modes). Absent (nil) from a node
+	// older than it, where the apps keep guessing from agent and source_kind; false where a change would only be refused
+	// (a Claude outside Persona's terminals, a runtime that did not declare caps.modes). A pointer so a hub that decodes
+	// an older node's row and encodes it again keeps it absent.
+	Modes *bool `json:"modes,omitempty"`
+	// Model explicitly permits changing the model through session.modes. Absent preserves older clients' heuristics.
+	Model *bool `json:"model,omitempty"`
+	// Rewind permits returning to before a user message. RewindCode additionally permits restoring files.
+	// Absent preserves older clients' Claude terminal behavior.
+	Rewind     *bool `json:"rewind,omitempty"`
+	RewindCode *bool `json:"rewind_code,omitempty"`
 }
+
+// CanModes is a Modes value.
+func CanModes(on bool) *bool { return &on }

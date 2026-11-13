@@ -9,7 +9,7 @@
 package rpc
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,6 +30,8 @@ type message struct {
 	Params json.RawMessage `json:"params,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  *Error          `json:"error,omitempty"`
+	// line is the whole line, written already (Marshaled params); nothing else is set.
+	line []byte
 }
 
 type Error struct {
@@ -63,18 +65,20 @@ func (droppedError) Is(target error) bool { return target == ErrClosed }
 type Limits struct{ FrameBytes, ConcurrentRequests, PendingCalls int }
 
 type Peer struct {
-	Limits Limits
-	prefix string
-	w      io.Writer
+	Limits       Limits
+	TrackReplies bool // enable AfterReply hooks for a resident's drain boundary
+	prefix       string
+	w            io.Writer
 	// wsem is a one-slot semaphore around w, not a mutex: a write can block for good (SSH stdin to a frozen node,
 	// a stalled relay WebSocket), and whoever waits behind it must still return on its ctx or on Close.
-	wsem    chan struct{}
-	nextID  atomic.Int64
-	mu      sync.Mutex
-	pending map[string]chan message
-	closed  chan struct{}
-	once    sync.Once
-	err     error
+	wsem      chan struct{}
+	nextID    atomic.Int64
+	mu        sync.Mutex
+	pending   map[string]chan message
+	suspended bool
+	closed    chan struct{}
+	once      sync.Once
+	err       error
 
 	OnRequest Handler
 	OnEvent   EventHandler
@@ -128,12 +132,11 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 		}
 		p.mu.Unlock()
 	}
-	sc := bufio.NewScanner(r)
 	maximum := 64 * 1024 * 1024
 	if p.Limits.FrameBytes > 0 {
 		maximum = p.Limits.FrameBytes
 	}
-	sc.Buffer(make([]byte, min(64*1024, maximum)), maximum)
+	sc := newLineReader(r, maximum) // a bufio.Scanner that gives back what a long line grew (linereader.go)
 	for sc.Scan() {
 		var m message
 		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
@@ -172,11 +175,11 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 		case m.ID != "":
 			p.mu.Lock()
 			ch := p.pending[m.ID]
+			if ch != nil {
+				ch <- m // publish the reply before WaitPending can observe its completion
+			}
 			delete(p.pending, m.ID)
 			p.mu.Unlock()
-			if ch != nil {
-				ch <- m
-			}
 		}
 	}
 	err := sc.Err()
@@ -188,6 +191,11 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 }
 
 func (p *Peer) handle(ctx context.Context, m message) {
+	if p.TrackReplies {
+		hooks := &replyHooks{}
+		ctx = context.WithValue(ctx, replyKey{}, hooks)
+		defer hooks.run()
+	}
 	defer func() {
 		p.mu.Lock()
 		cancel := p.running[m.ID]
@@ -211,7 +219,7 @@ func (p *Peer) handle(ctx context.Context, m message) {
 	} else if err != nil {
 		out.Error = &Error{Message: err.Error()}
 	} else {
-		b, merr := json.Marshal(res)
+		b, merr := marshal(res)
 		if merr != nil {
 			out.Error = &Error{Message: merr.Error()}
 		} else {
@@ -231,12 +239,43 @@ func (p *Peer) write(m message) error {
 	return p.writeContext(context.Background(), m)
 }
 
+// encodeLine is marshal(m) and its newline, encoded into one buffer: the same bytes and errors without copying the
+// line once more to append the newline.
+func encodeLine(m message) ([]byte, error) {
+	if m.line != nil {
+		return m.line, nil
+	}
+	var b bytes.Buffer
+	if err := plainEncoder(&b).Encode(m); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+// marshal is json.Marshal(v) with < > & as they are. Escaped, they cost six bytes each, and a transcript's HTML or
+// code went out at up to three times its size in every page and push (#2907); a later encoder keeps escapes it is
+// given, so only the first hop can leave them out. Escapes already in a json.RawMessage stay as they are, and U+2028
+// and U+2029 are still escaped, as encoding/json does without HTML escaping.
+func marshal(v any) ([]byte, error) {
+	var b bytes.Buffer
+	if err := plainEncoder(&b).Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
+}
+
+// plainEncoder is an encoder to w that leaves < > & as they are (marshal).
+func plainEncoder(w io.Writer) *json.Encoder {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	return enc
+}
+
 func (p *Peer) writeContext(ctx context.Context, m message) error {
-	b, err := json.Marshal(m)
+	b, err := encodeLine(m)
 	if err != nil {
 		return err
 	}
-	b = append(b, '\n')
 	if p.Limits.FrameBytes > 0 && len(b) > p.Limits.FrameBytes {
 		return errFrameBudget
 	}
@@ -264,7 +303,8 @@ func (p *Peer) writeContext(ctx context.Context, m message) error {
 	return err
 }
 
-// Call sends a request and decodes the result into out (if non-nil).
+// Call sends a request and decodes the result into out (if non-nil). Params that are Appended are written straight
+// into the request's line.
 func (p *Peer) Call(ctx context.Context, method string, params any, out any) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -272,6 +312,10 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 	id := fmt.Sprintf("%s%d", p.prefix, p.nextID.Add(1))
 	ch := make(chan message, 1)
 	p.mu.Lock()
+	if p.suspended {
+		p.mu.Unlock()
+		return ErrSuspended
+	}
 	if p.Limits.PendingCalls > 0 && len(p.pending) >= p.Limits.PendingCalls {
 		p.mu.Unlock()
 		return errors.New("rpc: runtime pending-call budget exceeded")
@@ -283,22 +327,30 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 		delete(p.pending, id)
 		p.mu.Unlock()
 	}()
-	raw, err := json.Marshal(params)
-	if err != nil {
+	var req message
+	if a, ok := params.(Appended); ok {
+		if size, ok := callSize(id, method, a); ok {
+			if p.Limits.FrameBytes > 0 && size > p.Limits.FrameBytes { // before the line is made
+				return errFrameBudget
+			}
+			req.line = callLine(id, method, a, size)
+		} else {
+			params = json.RawMessage(a.Append(make([]byte, 0, a.Size))) // the encoder writes the envelope
+		}
+	}
+	if req.line == nil {
+		raw, err := marshal(params)
+		if err != nil {
+			return err
+		}
+		req = message{ID: id, Method: method, Params: raw}
+	}
+	if err := p.writeContext(ctx, req); err != nil {
 		return err
 	}
-	if err := p.writeContext(ctx, message{ID: id, Method: method, Params: raw}); err != nil {
-		return err
-	}
+	var m message
 	select {
-	case m := <-ch:
-		if m.Error != nil {
-			return m.Error
-		}
-		if out != nil && len(m.Result) > 0 {
-			return json.Unmarshal(m.Result, out)
-		}
-		return nil
+	case m = <-ch:
 	case <-ctx.Done():
 		if p.Cancels[method] {
 			params, _ := json.Marshal(map[string]string{"id": id})
@@ -306,17 +358,48 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 		}
 		return ctx.Err()
 	case <-p.closed:
-		return ErrDropped
+		// A drain can close the transport after Serve published the reply but before this goroutine resumed.
+		// That known result wins over an ambiguous connection drop.
+		select {
+		case m = <-ch:
+		default:
+			return ErrDropped
+		}
 	}
+	if m.Error != nil {
+		return m.Error
+	}
+	if out != nil && len(m.Result) > 0 {
+		return json.Unmarshal(m.Result, out)
+	}
+	return nil
 }
 
 // Notify sends a one-way event.
 func (p *Peer) Notify(event string, params any) error {
-	raw, err := json.Marshal(params)
+	return p.NotifyContext(context.Background(), event, params)
+}
+
+// NotifyContext bounds waiting for the writer. Once writing starts, the transport owner must close a stalled
+// connection to interrupt it; cancellation alone cannot stop an arbitrary io.Writer.
+func (p *Peer) NotifyContext(ctx context.Context, event string, params any) error {
+	if raw, ok := params.(Marshaled); ok {
+		if line, ok := marshaledLine(event, raw); ok {
+			return p.writeContext(ctx, message{line: line})
+		}
+		params = json.RawMessage(raw)
+	}
+	// Bytes already encoded go into the envelope as they are: its encoder checks and compacts them as this one would,
+	// with the same errors, so the line is the same without encoding them twice (a computer's session list each time
+	// it changes). An empty one is what json.Marshal says it is (an error).
+	if raw, ok := params.(json.RawMessage); ok && len(raw) > 0 {
+		return p.writeContext(ctx, message{Event: event, Params: raw})
+	}
+	raw, err := marshal(params)
 	if err != nil {
 		return err
 	}
-	return p.write(message{Event: event, Params: raw})
+	return p.writeContext(ctx, message{Event: event, Params: raw})
 }
 
 func (p *Peer) Close(err error) {

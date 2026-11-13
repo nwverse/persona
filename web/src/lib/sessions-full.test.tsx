@@ -8,11 +8,17 @@ import type { Session } from "./types";
 const fixture = vi.hoisted(() => ({
   state: { sessions: {} as Record<string, Session[]>, features: [] as string[], loaded: false },
   listeners: new Set<() => void>(),
-  events: new Map<string, Set<() => void>>(),
+  events: new Map<string, Set<(msg?: Record<string, unknown>) => void>>(),
   api: vi.fn(),
   owner: "first-login",
 }));
-vi.mock("./api", () => ({ api: fixture.api, credentialOwner: () => fixture.owner }));
+vi.mock("./api", () => {
+  class ApiError extends Error {
+    constructor(readonly status: number, message: string, readonly body: Record<string, unknown> = {}) { super(message); }
+    get code() { return typeof this.body.code === "string" ? this.body.code : undefined; }
+  }
+  return { api: fixture.api, credentialOwner: () => fixture.owner, ApiError };
+});
 vi.mock("./store", async () => {
   const { useSyncExternalStore } = await import("react");
   const subscribe = (listener: () => void) => {
@@ -23,7 +29,7 @@ vi.mock("./store", async () => {
     getState: () => fixture.state,
     subscribe,
     useStore: <T,>(select: (state: typeof fixture.state) => T) => useSyncExternalStore(subscribe, () => select(fixture.state), () => select(fixture.state)),
-    onHubEvent: (event: string, listener: () => void) => {
+    onHubEvent: (event: string, listener: (msg?: Record<string, unknown>) => void) => {
       if (!fixture.events.has(event)) fixture.events.set(event, new Set());
       fixture.events.get(event)!.add(listener);
       return () => { fixture.events.get(event)!.delete(listener); };
@@ -31,6 +37,7 @@ vi.mock("./store", async () => {
   };
 });
 import { useFullAgentSessions } from "./sessions";
+import { ApiError } from "./api";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const row = (session_id: string, patch: Partial<Session> = {}): Session => ({
@@ -50,7 +57,7 @@ const publish = (patch: Partial<typeof fixture.state>) => {
   fixture.state = { ...fixture.state, ...patch };
   fixture.listeners.forEach((listener) => listener());
 };
-const push = (event: string) => fixture.events.get(event)?.forEach((listener) => listener());
+const push = (event: string, msg?: Record<string, unknown>) => fixture.events.get(event)?.forEach((listener) => listener(msg));
 const advance = async (ms: number) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
 let host: HTMLDivElement;
 let root: Root | undefined;
@@ -284,7 +291,7 @@ describe("complete session snapshots for the sidebar fallback", () => {
     fixture.api.mockReturnValue(request.promise);
     fixture.state.sessions = { demo: [row("bounded-page")] };
     await mount();
-    expect(fixture.api).toHaveBeenCalledWith("/sessions", { signal: expect.any(AbortSignal) });
+    expect(fixture.api).toHaveBeenCalledWith("/sessions?summary=0&limit=200", { signal: expect.any(AbortSignal) });
     expect(host.querySelector("output")!.dataset.loaded).toBe("false");
     const rows = Array.from({ length: 75 }, (_, i) => row(`agent-${i}`));
     await resolve(request, [...rows, row("assistant", { assistant: true })]);
@@ -495,5 +502,103 @@ describe("complete session snapshots for the sidebar fallback", () => {
     await act(async () => { root!.unmount(); root = undefined; });
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
     expect(fixture.api).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A paging hub (#3759): complete pages of up to 200 rows under `e<epoch>.<n>`, and `since` with every change after it.
+function pagingHub(count: number) {
+  type Change = { n: number; upsert: Session[]; remove: string[] };
+  const hub = { rows: Array.from({ length: count }, (_, i) => row(`agent-${i}`)), epoch: 1, n: 1, log: [] as Change[], baselines: 0, deltas: 0, legacy: 0 };
+  const revision = () => `e${hub.epoch}.${hub.n}`;
+  fixture.api.mockImplementation(async (path: string) => {
+    const [route, query = ""] = path.split("?");
+    expect(route).toBe("/sessions");
+    const q = new URLSearchParams(query);
+    if (![...q.keys()].length) { hub.legacy++; return { sessions: hub.rows }; }
+    expect([q.get("summary"), q.get("limit")]).toEqual(["0", "200"]);
+    const since = q.get("since");
+    if (since !== null) {
+      hub.deltas++;
+      const [epoch, n] = since.slice(1).split(".").map(Number);
+      if (epoch !== hub.epoch) throw new ApiError(409, "expired", { code: "revision_expired" });
+      const changes = new Map<string, Session | null>();
+      for (const change of hub.log.filter((c) => c.n > n)) {
+        for (const id of change.remove) changes.set(id, null);
+        for (const s of change.upsert) changes.set(s.session_id, s);
+      }
+      const sessions = [...changes.values()].filter((s): s is Session => s !== null);
+      const remove = [...changes].filter(([, s]) => s === null).map(([id]) => JSON.stringify(["demo", id]));
+      return { sessions, remove, has_more: false, revision: revision(), total: hub.rows.length };
+    }
+    hub.baselines++;
+    const start = Number(q.get("cursor") ?? 0), end = Math.min(start + 200, hub.rows.length);
+    const more = end < hub.rows.length;
+    return { sessions: hub.rows.slice(start, end), remove: [], has_more: more, ...(more ? { next_cursor: String(end) } : {}), revision: revision(), total: hub.rows.length };
+  });
+  /** One hint's worth of change: a row's new title, now and then a new session or one gone. */
+  const change = (k: number) => {
+    hub.n++;
+    const upsert = [row(`agent-${k % 10}`, { title: `round ${k}` })];
+    const remove: string[] = [];
+    if (k === 7) upsert.push(row("started-7"));
+    if (k === 11) remove.push(`agent-${count - 1}`);
+    hub.rows = hub.rows.filter((s) => !remove.includes(s.session_id)).map((s) => upsert.find((u) => u.session_id === s.session_id) ?? s);
+    hub.rows.push(...upsert.filter((u) => !hub.rows.some((s) => s.session_id === u.session_id)));
+    hub.log.push({ n: hub.n, upsert, remove });
+  };
+  return { hub, revision, change };
+}
+
+describe("a complete copy on a paging hub", () => {
+  const ids = () => host.querySelector("output")!.textContent!.split(",");
+
+  it("reads the complete list once, then only what changed, through a minute of hints", async () => {
+    const { hub, revision, change } = pagingHub(266);
+    await mount();
+    expect(hub.baselines).toBe(2);
+    expect(ids()).toHaveLength(266);
+    for (let k = 0; k < 120; k++) { // two hints a second while agents work
+      await advance(500);
+      change(k);
+      await act(async () => { push("sessions_list", { revision: revision() }); });
+    }
+    await advance(3_000);
+    expect(hub.baselines).toBe(2);
+    expect(hub.legacy).toBe(0);
+    expect(hub.deltas).toBeGreaterThan(10);
+    expect(hub.deltas).toBeLessThanOrEqual(21); // reads stay three seconds apart
+    expect(ids()).toHaveLength(266);
+    expect(ids()).toContain("started-7");
+    expect(ids()).not.toContain("agent-265");
+    const titles = host.querySelector("output")!.dataset.titles!.split(",");
+    expect(titles[ids().indexOf("agent-9")]).toBe("round 119");
+  });
+
+  it("starts no read for a hint of the revision it already holds", async () => {
+    const { hub, revision, change } = pagingHub(3);
+    await mount();
+    await act(async () => { push("sessions_list", { revision: revision() }); });
+    await advance(10_000);
+    expect([hub.baselines, hub.deltas]).toEqual([1, 0]);
+    change(1);
+    await act(async () => { push("sessions_list", { revision: revision() }); });
+    await advance(3_000);
+    expect([hub.baselines, hub.deltas]).toEqual([1, 1]);
+    expect(host.querySelector("output")!.dataset.titles).toContain("round 1");
+  });
+
+  it("rebuilds the copy when a hub restart expires its revision, then follows deltas again", async () => {
+    const { hub, revision, change } = pagingHub(250);
+    await mount();
+    hub.epoch = 2;
+    change(3);
+    await act(async () => { push("hello"); });
+    expect([hub.baselines, hub.deltas]).toEqual([4, 1]);
+    expect(host.querySelector("output")!.dataset.titles).toContain("round 3");
+    change(4);
+    await act(async () => { push("sessions_list", { revision: revision() }); });
+    await advance(3_000);
+    expect([hub.baselines, hub.deltas]).toEqual([4, 2]);
+    expect(host.querySelector("output")!.dataset.titles).toContain("round 4");
   });
 });

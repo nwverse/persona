@@ -3,7 +3,7 @@ package prompts
 import "strings"
 
 // TodoDecisions is the context a handoff to an agent carries for a todo's decisions in effect (todo/decisions,
-// #1618, docs/assistant/todos.md "Decision log"). The caller leaves out the closing tags
+// #1618, docs/assistant/todos.md "Decision records"). The caller leaves out the closing tags
 // ("</persona-context>") from the texts.
 type TodoDecisions struct {
 	Title     string
@@ -75,7 +75,7 @@ func RenderTodoTitleInput(prompt string) string {
 }
 
 // TodoOutcome is the system prompt pulling what a finished task came to out of its agents' last replies: a one-line
-// outcome, links, decisions, pitfalls (todo/outcome, docs/assistant/todos.md "Recording the outcome", #2820).
+// outcome, links, decisions, pitfalls (todo/outcome, docs/assistant/todos.md "Record conclusions on completion", #2820).
 type TodoOutcome struct {
 	Owner string
 }
@@ -101,6 +101,15 @@ func RenderTodoOutcomeInput(in TodoOutcomeInput) string { return render("todo/ou
 type TodoProject struct {
 	Name, OneLine string
 	Outcomes      []TodoProjectOutcome
+	// Extensions are what extensions wrote for this project (contributes.prompts project_context), each under its
+	// extension's name.
+	Extensions []ExtensionContext
+}
+
+// ExtensionContext is one extension's text for a prompt: Name is the extension's, Text what it wrote (cleaned and
+// within its limit by the extension manager).
+type ExtensionContext struct {
+	Name, Text string
 }
 
 // TodoProjectOutcome is one finished todo's outcome as the project's timeline keeps it.
@@ -108,9 +117,10 @@ type TodoProjectOutcome struct {
 	When, Title, Text string
 }
 
-// RenderTodoProject is the block; empty when there is nothing to say (no one line and no outcomes).
+// RenderTodoProject is the block; empty when there is nothing to say (no one line, no outcomes, nothing from an
+// extension).
 func RenderTodoProject(p TodoProject) string {
-	if p.OneLine == "" && len(p.Outcomes) == 0 {
+	if p.OneLine == "" && len(p.Outcomes) == 0 && len(p.Extensions) == 0 {
 		return ""
 	}
 	return render("todo/project", p)

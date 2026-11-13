@@ -35,7 +35,7 @@ So Persona's Discord = **server channels your own bot can see** + **messages you
   (disgo was tried first: its Gateway client races between heartbeat and close under `go test -race`, its message search retries for minutes while Discord indexes, `after=0` is silently dropped, and it logs bodies.)
 - Uses only HTTPS (and WSS from D3), so it **can run in the sandbox**: `permissions.network` lists Discord's hosts, and outbound traffic goes through the hub's egress proxy (which tunnels WebSockets too).
 - Being HTTP only, D1 and D2 can later become a TypeScript source extension (`docs/archive/extensions/source-extension-migration-2026-11-07.md`) as soon as those run in production; only D3 waits for controlled outbound WebSocket support (#1166) there.
-- Doesn't run on a node: programs on a node can't call hub methods (`docs/extensions/extensions.md` ("Programs that run on a computer")), so they can't be connectors.
+- Doesn't run on a node: programs on a node can't call hub methods (`docs/extensions/extensions.md` ("Programs running on computers")), so they can't be connectors.
 
 What the manifest looks like when all steps are done (D1 has `status`, `tools`, `archive`, `login` and only `discord.com`; D3 adds the Gateway's hosts):
 
@@ -99,7 +99,7 @@ The Gateway (from D3) asks for `GUILDS`, `GUILD_MESSAGES` and `MESSAGE_CONTENT` 
   Edits and deletions are not synced in the first version (item 3 of "Decided by the user").
 - **No people records** (item 2 of "Decided by the user"; Discord's developer policy forbids profiling users): messages carry only the sender's name, **no `sender_id` and no `sender_handles`**.
   The knowledge base only creates people and records identity hints when a message has `sender_id` (`notePerson` in `server/internal/kb/archive.go`), and person notes during compaction only cover people already in the conversation
-  (`notePersonNote` in `server/internal/kb/compress.go`), so the hub needs no change; the extension's tests guard that no message carries either field.
+  (`notePersonNote` in `server/internal/kb/people.go`), so the hub needs no change; the extension's tests guard that no message carries either field.
 - **Attachments** (D4): `archive.media` refs are message and attachment ids, and the file is fetched fresh when the hub asks (Discord's attachment links are signed and expire). They apply to messages archived from D4 on: the knowledge base keeps the first archived version of a message.
 - **"Send to Persona" messages** go into the knowledge base too: into the conversation of their channel, `discord-<channel id>` (also for DMs and channels the bot can't see; such conversations contain only the messages the user clicked),
   named from the channel info in the interaction. Until the hub fetches them, they're kept in the extension's own data directory (`PERSONA_EXTENSION_DATA`), so an extension restart loses nothing.

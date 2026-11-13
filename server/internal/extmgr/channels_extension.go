@@ -16,7 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The channels plugins contribute (the channel extension point, docs/extensions/channels.md "How extensions contribute channels"),
+// The channels plugins contribute (the channel extension point, docs/extensions/channels.md "Contributing a channel"),
 // the hub's part: the program talks to its chat app — it hands the hub the owner's messages (channel.receive), which go
 // to the assistant (channels.receive), and sends what the assistant gives it (channels.send → channel.send). Commands,
 // where a message goes, the turn, what is asked in text, pushes and the sync mirror are the assistant's.

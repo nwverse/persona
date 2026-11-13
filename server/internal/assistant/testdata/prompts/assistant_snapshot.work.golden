@@ -6,8 +6,8 @@
   - 完成未看：选方案（server，session_id=cccccccc，链接 http://hub.example.com:18660/s/server/cccccccc-3）：等你选 D2 / D4；没分诊（server，session_id=dddddddd，链接 http://hub.example.com:18660/s/server/dddddddd-4）
   - 在问用户、用户看过还没回的（用户问有什么要处理时带上；别替用户回答）：看过没回（server，session_id=99999999，链接 http://hub.example.com:18660/s/server/99999999-7）：要推到 beta 吗？
   - 在等的（hub 到时会叫醒它们，不用管）：等部署（server，session_id=bbbbbbbb，链接 http://hub.example.com:18660/s/server/bbbbbbbb-2）：等部署跑完再跑线上测试
-  - 做完的（24 小时内）：修登录（server，session_id=aaaaaaaa，链接 http://hub.example.com:18660/s/server/aaaaaaaa-1）：已合并 PR #12
-  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：屏蔽了（server，session_id=ffffffff，链接 http://hub.example.com:18660/s/server/ffffffff-6）：删掉这个分支吗？
-- iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请他打开 App
+  - 做完的（24 小时内）：1 个，agents_list state=done 查
+  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：1 个，agents_list state=muted 查
+- iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
 - 已安排的跟进：没有
 - 每天的定时任务：早报（工作日 09:00）

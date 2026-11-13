@@ -3,7 +3,7 @@ import UIKit
 
 /// `-showPopFrames YES`: every display frame, where the lists, navigation bars and search bars are (window points),
 /// logged when anything changed ("POPF …", `log stream --predicate 'eventMessage CONTAINS "POPF"'`). For going into a
-/// chat and back frame by frame (#340, docs/lessons/ios.md「别在导航容器上做按页面开关的让位」).
+/// chat and back frame by frame (#340, docs/lessons/ios.md「Do not toggle per-page clearance on navigation containers」).
 @MainActor final class PopFrames: NSObject {
     static let shared = PopFrames()
     private var link: CADisplayLink?

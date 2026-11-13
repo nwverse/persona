@@ -228,7 +228,7 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 		// Nothing runs the built-in manager here unless the user does: a problem, with both ways out.
 		e.report("manager", false, "内置管理者是自己的服务（assistant.mode service），这次没装它（"+e.noManagerServiceWhy(ctx)+"），现在没有东西运行它",
 			"要么自己让它一直运行：personad hub manager-code 拿一个码，PERSONA_MANAGER_CODE=<码> personad manager join --builtin "+
-				hubLocalURL(cfg.Listen)+" 绑定，再一直运行 PERSONA_ASSISTANT_DEPLOY=service "+bin+" assistant；"+
+				managerconf.LocalHubURL(cfg.Listen)+" 绑定，再一直运行 PERSONA_ASSISTANT_DEPLOY=service "+bin+" assistant；"+
 				"要么 personad hub manager-mode child 后重启 hub，让 hub 自己拉起它")
 		return nil
 	}
@@ -252,7 +252,7 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 	// kept a binding that works, or stopped first) is voided after.
 	programBefore, wasActive := e.builtinProgram(), e.builtinActive(ctx)
 	out, err := e.run(ctx, []string{"PERSONA_HOME=" + e.root, managerconf.BuiltinCodeEnv + "=" + code},
-		bin, managerconf.BuiltinInstallArgs(hubLocalURL(cfg.Listen))...)
+		bin, managerconf.BuiltinInstallArgs(managerconf.LocalHubURL(cfg.Listen))...)
 	_ = e.voidCode(ctx, cfg.Config, code)
 	if err != nil {
 		why := lastLine(string(out))

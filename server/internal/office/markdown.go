@@ -1,8 +1,10 @@
 package office
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
+	"html"
 	"image"
 	_ "image/gif" // image.DecodeConfig for a picture's size
 	_ "image/jpeg"
@@ -15,7 +17,9 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	east "github.com/yuin/goldmark/extension/ast"
+	gmhtml "github.com/yuin/goldmark/renderer/html"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 // The Markdown a document or a deck is written in (GitHub's: tables, strikethrough, task lists), as blocks of runs
@@ -180,7 +184,7 @@ func soleImage(n ast.Node) *ast.Image {
 
 // picture reads an image's file; nil for one on the web.
 func (p *parser) picture(img *ast.Image) (*picture, error) {
-	dest := string(img.Destination)
+	dest := destination(img.Destination)
 	if strings.Contains(dest, "://") {
 		return nil, nil
 	}
@@ -224,7 +228,11 @@ func (p *parser) inlines(n ast.Node, style run) []run {
 		switch c := c.(type) {
 		case *ast.Text:
 			r := style
-			r.text = string(c.Value(p.src))
+			if c.IsRaw() {
+				r.text = codeLine(c.Value(p.src))
+			} else {
+				r.text = unescape(c.Value(p.src))
+			}
 			out = append(out, r)
 			if c.HardLineBreak() {
 				out = append(out, run{br: true})
@@ -235,6 +243,9 @@ func (p *parser) inlines(n ast.Node, style run) []run {
 		case *ast.String:
 			r := style
 			r.text = string(c.Value)
+			if !c.IsRaw() && !c.IsCode() {
+				r.text = unescape(c.Value)
+			}
 			out = append(out, r)
 		case *ast.CodeSpan:
 			s := style
@@ -254,7 +265,7 @@ func (p *parser) inlines(n ast.Node, style run) []run {
 			out = append(out, p.inlines(c, s)...)
 		case *ast.Link:
 			s := style
-			s.link = string(c.Destination)
+			s.link = destination(c.Destination)
 			out = append(out, p.inlines(c, s)...)
 		case *ast.AutoLink:
 			r := style
@@ -278,6 +289,32 @@ func (p *parser) inlines(n ast.Node, style run) []run {
 		}
 	}
 	return out
+}
+
+// unescape is Markdown text as the characters it stands for: backslash escapes and entity and numeric references
+// resolved (CommonMark 2.4, 2.5), as goldmark's own renderer resolves them. Its writer leaves the result HTML-escaped,
+// which html.UnescapeString undoes exactly.
+func unescape(b []byte) string {
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	gmhtml.DefaultWriter.Write(w, b)
+	_ = w.Flush() // a bytes.Buffer does not fail
+	return html.UnescapeString(buf.String())
+}
+
+// codeLine is a piece of a code span as written, a line ending in it a space (CommonMark 6.1).
+func codeLine(b []byte) string {
+	s := string(b)
+	if line, ok := strings.CutSuffix(s, "\n"); ok {
+		return strings.TrimSuffix(line, "\r") + " "
+	}
+	return s
+}
+
+// destination is a link's or a picture's target with its escapes and references resolved, as goldmark does before it
+// percent-encodes one; left unencoded, a relative file path or a non-ASCII URL stays as written.
+func destination(b []byte) string {
+	return string(util.ResolveEntityNames(util.ResolveNumericReferences(util.UnescapePunctuations(b))))
 }
 
 // plain is runs' words alone.

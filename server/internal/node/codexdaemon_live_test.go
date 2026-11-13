@@ -23,7 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Codex panes on a shared app-server, answered over its protocol (docs/integrations/codex.md "Sessions on a daemon"): a real
+// Codex panes on a shared app-server, answered over its protocol (docs/integrations/codex.md "Sessions on the daemon"): a real
 // `codex app-server` on a socket of its own (never the daemon in use), a TUI attached to it in the isolated herdr, and
 // a node that knows only that app-server (discovery off) and answers the cards the way the phone does. Env as
 // TestLiveCodexCards; PERSONA_CODEX_DAEMON=1 runs it (scripts/test/test-codex.sh, for a Codex with app-server daemons), and

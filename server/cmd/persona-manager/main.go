@@ -46,6 +46,8 @@ const usage = `usage:
                            unless hub.json says assistant.external (token: stdin or PERSONA_ASSISTANT_TOKEN)
   persona-manager assistant drop-shared-tables [--yes]
                            drop the built-in manager's old tables from the hub's database, once its data moved
+  persona-manager assistant north-star [--date YYYY-MM-DD] [--split RFC3339] [--tz Area/City] [--brief en]
+                           read the interruption and availability north star from the databases, read-only
   persona-manager join --builtin <hub address> [<code>] [--install]
                            bind the built-in manager's own service to the hub (persona-hub manager-code prints a code;
                            left out, it is read from PERSONA_MANAGER_CODE, which other users of the machine cannot
@@ -54,7 +56,7 @@ const usage = `usage:
                            the built-in manager's own service: install (and start) it, remove it, show it
   persona-manager join|run|install|uninstall|status …
                            a manager made in the app: trade its install code, run it, install it as a service
-                           (docs/assistant/managers.md; persona-manager status -h for the details)
+                           (docs/assistant/managers.md; persona-manager manager -h for the details)
   persona-manager extension …  the extensions on this machine (docs/extensions/extensions.md "Command line")
   persona-manager voice     the built-in voice extension (the manager runs it)
   persona-manager tailcat-key  print the built-in manager's tailcat key (created the first time)

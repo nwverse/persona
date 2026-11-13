@@ -161,7 +161,7 @@ try {
     await until('the reply after the phone tool', () => node.items(sid).some((i) => i.role === 'assistant' && i.text === 'The phone answered'), 60_000)
   }
 
-  // A background subagent (docs/integrations/dsh.md "Subagents and background jobs"): the parent's turn ends while it runs; the parent's row
+  // A background subagent (docs/integrations/dsh.md "Subagents and background tasks"): the parent's turn ends while it runs; the parent's row
   // lists it running (the apps' "Waiting"), the phone reads and watches it as "<parent>@<child>", and when it finishes the
   // parent is woken. (DSH pins a delegated child's approvals to never: it runs within the scope it was given and asks
   // nobody, so no card comes from it here; the unit tests cover the cards of a child whose policy was switched back.)

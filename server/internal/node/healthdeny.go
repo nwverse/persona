@@ -10,7 +10,7 @@ import (
 )
 
 // healthDenyRules are the permission rules that keep an assistant conversation outside the health space off the
-// health space's files (docs/assistant/health.md "How the directory and memory are isolated", #3282): its directory (the assistant directory's sibling,
+// health space's files (docs/assistant/health.md "How directories and memory are isolated", #3282): its directory (the assistant directory's sibling,
 // and the data directory's in case they differ) and its Claude project directories (auto memory, transcripts). Deny
 // rules hold over any allow rule: "Always allow in this session" and bypassPermissions included. A health conversation
 // gets the other managers' health spaces only (health, health-<id>), never its own. Bash is not covered: a command can

@@ -13,13 +13,13 @@ import persona.feature.assistant.NeedsYouLine
 
 /**
  * Where a line of the Persona home's "Needs you now" opens, as a notification would open it: an agent's request in its
- * conversation on the Agents tab (a card outside any session on Agents with its sheet open), an inbox item on the inbox
- * tab (the page the inbox list would open for it).
+ * conversation on the Agents tab (a card outside any session on Agents with its sheet open), an inbox item under Persona
+ * with the Inbox list as its parent.
  */
 internal fun needsYouRoute(line: NeedsYouLine): ResolvedRoute = when (line) {
     is NeedsYouLine.Agent -> sessionlessCard(line.session, line.requestId)
         ?: ResolvedRoute(AppTab.Agents, ChatRoute(line.session.machineId, line.session.sessionId, ConversationKind.Agent))
-    is NeedsYouLine.Inbox -> ResolvedRoute(AppTab.Inbox, InboxItemRoute(line.itemId))
+    is NeedsYouLine.Inbox -> ResolvedRoute(AppTab.Persona, InboxItemRoute(line.itemId))
 }
 
 /** Where a chat's "Next: …" line (#4325) opens: that conversation with that card first, or a sessionless card on Agents. */

@@ -2,7 +2,7 @@ import PersonaKit
 import SwiftUI
 import WebKit
 
-/// An .html file previewed in isolation (docs/apple/ios.md「HTML 预览」): a web view of its own with no website data kept,
+/// An .html file previewed in isolation (docs/apple/ios.md「File viewer」): a web view of its own with no website data kept,
 /// scripts off and every network load blocked unless the ⋯ menu turns them on; the page cannot navigate (a link is
 /// opened the app's way instead). Files next to it (pictures, style sheets, fonts, scripts) are read from the machine
 /// through the hub and put into the page first (`HTMLResources`), so they show with the network off.
@@ -49,7 +49,7 @@ struct HTMLFileView: View {
     }
 }
 
-/// An HTML piece shown inline in isolation (a notebook's HTML result, docs/apple/ios.md「Jupyter 笔记本」): scripts and the
+/// An HTML piece shown inline in isolation (a notebook's HTML result, docs/apple/ios.md「File viewer」): scripts and the
 /// network off, a light stylesheet for tables, as tall as its content (sideways inside when wide); `failed` when it
 /// does not load, for the text version to stand in.
 struct HTMLSnippetView: View {

@@ -4,7 +4,7 @@ package proto
 // thinking with xhigh effort)"): the node reads it off the pane about once a second while a client watches the
 // session and sends it as the notification "session.live" {session_id, live}; the hub passes it to the session's
 // subscribers that asked for the feature "session_live" as {type: "live", machine_id, session_id, live}. A nil
-// live means the turn is over or the line is gone (docs/protocol/protocol.md "Live state").
+// live means the turn is over or the line is gone (docs/protocol/protocol.md "Live status").
 type SessionLive struct {
 	// Verb is the spinner's word without the ellipsis ("Frosting").
 	Verb string `json:"verb,omitempty"`

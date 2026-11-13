@@ -48,11 +48,11 @@ func TestRuntimeStaysAcrossHubConnections(t *testing.T) {
 	if hub, _ := rt.helloR["hub"].(bool); hub {
 		t.Fatal("hello said a hub is connected before one was")
 	}
-	if f, _ := json.Marshal(rt.helloR["features"]); string(f) != `["prefer_running","resume_argv","handover","transcript","launchers","start_params","modes","resume"]` {
+	if f, _ := json.Marshal(rt.helloR["features"]); string(f) != `["prefer_running","resume_argv","handover","transcript","launchers","start_params","modes","resume","codex_thread","unlisted_transcripts"]` {
 		t.Fatalf("features %s", f)
 	}
 	_ = rt.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "session-1", "status": "done"}}})
-	waitFor(t, "the list kept without a hub", func() bool { return len(rh.reg.sessions()) == 1 })
+	waitFor(t, "the list kept without a hub", func() bool { return len(rh.reg.appendSessions(nil)) == 1 })
 
 	a, _ := runtimeNodeOn(t, rh)
 	if _, ok := listed(t, a)["session-1"]; !ok {

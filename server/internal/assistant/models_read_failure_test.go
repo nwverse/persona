@@ -87,6 +87,7 @@ func (h providerReadHub) DeviceCall(ctx context.Context, call DeviceCall) (json.
 }
 
 // Both API and runnable providers are seeded through the real handlers. Every secret is synthetic.
+// Only the launcher has custom headers: direct API providers reject that unsupported setting.
 func providerReadFixture(t *testing.T) (*Service, *fakeHub, *providerReadFailureStore) {
 	t.Helper()
 	f := newFakeHub().withMachine()
@@ -94,7 +95,7 @@ func providerReadFixture(t *testing.T) (*Service, *fakeHub, *providerReadFailure
 	st := &downStore{memStore: &memStore{}}
 	s := withSettings(t, f, New(Options{Hub: providerReadHub{f}, Store: func() Store { return st }, Logf: testLogf(t)}))
 	for _, body := range []string{
-		`{"name":"old_api","kind":"api","api":"responses","base_url":"https://api.example.com/v1","model":"original","api_key":"synthetic-api-key","headers":"X-Test: synthetic-api-header"}`,
+		`{"name":"old_api","kind":"api","api":"responses","base_url":"https://api.example.com/v1","model":"original","api_key":"synthetic-api-key"}`,
 		`{"name":"old_launcher","base_url":"https://gw.example.com","model":"original","api_key":"sk-test-import-a","headers":"X-Test: synthetic-launcher-header","env":"X_TEST_TOKEN=synthetic-env","args":["--verbose"],"effort":"high"}`,
 	} {
 		if r := request(s, "POST", "/api/v1/launchers", body); r.Code != http.StatusOK {
@@ -383,7 +384,11 @@ func TestProviderReadFailureReconnectKeepsNodeConfiguration(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("recovery produced %d calls", len(calls))
 	}
-	if _, err := f.DeviceCall(ctx, DeviceCall{Device: calls[0].MachineID, Method: calls[0].Method, Params: calls[0].Params}); err != nil {
+	_, err := f.DeviceCall(ctx, DeviceCall{Device: calls[0].MachineID, Method: calls[0].Method, Params: calls[0].Params})
+	if fb := calls[0].Fallback; isUnknownMethod(err) && fb != nil { // a node from before the catalog, as internal/devices does
+		_, err = f.DeviceCall(ctx, DeviceCall{Device: fb.MachineID, Method: fb.Method, Params: fb.Params})
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	got := providerPushes(f)
@@ -416,11 +421,12 @@ func TestProviderReadFailureAssignmentIsCheckedAndRecovers(t *testing.T) {
 	}
 }
 
-func TestProviderReadFailureDeleteRetainsInUseFallback(t *testing.T) {
+func TestProviderReadFailureDeleteRetainsExplicitUse(t *testing.T) {
 	s, f, st := providerReadFixture(t)
-	// Without explicit choices, these API purposes use the first managed API provider.
+	// Explicit choices keep these API purposes on the first managed API provider.
 	for _, id := range []string{"kb", "inbox.triage"} {
-		if err := st.memStore.PutSetting(context.Background(), modelRecordKey(id), modelRecord{}); err != nil {
+		binding := modelRecord{Binding: ModelBinding{Provider: "launcher.old_api"}}
+		if err := st.memStore.PutSetting(context.Background(), modelRecordKey(id), binding); err != nil {
 			t.Fatal(err)
 		}
 	}

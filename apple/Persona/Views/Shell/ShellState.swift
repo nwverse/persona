@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The ChatGPT-style shell on an iPhone (docs/apple/ios.md「新外壳」): Assistant (the Persona assistant) and Agents (the Agents list)
+/// The ChatGPT-style shell on an iPhone (docs/apple/ios.md「New shell」): Assistant (the Persona assistant) and Agents (the Agents list)
 /// under one top switch, the drawer on the left (Inbox, Scheduled Tasks, Knowledge, Machines, the conversations, Settings), Settings as a sheet.
 ///
 /// The pages read this from the environment (`\.shell`): nil means a regular-width iPad / iPhone Duo,
@@ -155,6 +155,8 @@ import SwiftUI
 /// Pages the Assistant page pushes for the shell.
 enum ShellPage: Hashable, Sendable {
     case newConversation, profile, inbox, todos, routines, knowledge, machines, health
+    /// Recordings (meeting recordings started from the drawer, a Control, Siri…; docs/apple/recording.md): this device's.
+    case recordings
     /// An extension's main-navigation page (nav_page) from the drawer.
     case extensionPage(ExtensionNavRoute)
 }

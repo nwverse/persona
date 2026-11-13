@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// New Worktree…'s form (`WorktreeForm`, docs/integrations/terminal.md「新建 worktree…」), the same cases as the web's worktree.test.ts.
+/// New Worktree…'s form (`WorktreeForm`, docs/integrations/terminal.md「New worktree…」), the same cases as the web's worktree.test.ts.
 struct WorktreeFormTests {
     @Test func creationRetriesKeepTheirReceiptUntilTheTargetOrParametersChange() {
         var attempt = WorktreeForm.CreationAttempt()

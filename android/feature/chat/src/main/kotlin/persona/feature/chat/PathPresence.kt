@@ -14,7 +14,8 @@ import persona.core.contracts.api.SessionPathStats
  * those are linked, in the text and as chips. Asked in batches a moment after rows show, all in the session's working
  * directory, and remembered: a path that is there for 30 minutes, a missing one for 2 (the agent may be about to write
  * it), no answer for 1. Until the answer comes, and when none can (an old node, no network), a path is plain text.
- * Used from the main thread, with a main-thread [scope] (the chat page's).
+ * [ask] runs on the main thread, with a main-thread [scope] (the chat page's); [kind] and [linkable] read snapshot state
+ * and work from any thread (the page's prewarm calls them on a background dispatcher).
  */
 @Stable
 internal class PathPresence(

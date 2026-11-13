@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A machine's OS as a small mark (docs/server/machines.md「系统图标」): the Apple logo for macOS, each Linux distribution's
+/// A machine's OS as a small mark (docs/server/machines.md「System information」): the Apple logo for macOS, each Linux distribution's
 /// own mark (Simple Icons, `Theme.Brand.os`) in its color, a generic Linux penguin for the rest.
 struct OSBadge: View {
     var system: MachineSystem?

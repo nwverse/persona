@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_update_pending_cancel">Cancel pending installation</string>
+    <string name="settings_update_pending_confirm">Cancel the pending Persona update? Your pairing and app data are kept. You can download the update again afterwards.</string>
+    <string name="settings_update_pending_cancelled">The pending installation was cancelled. You can retry the update.</string>
+    <string name="settings_update_pending_failed">Cannot check or cancel the pending installation. Try again.</string>
+</resources>

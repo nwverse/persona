@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -14,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// What comes from the nodes is the manager's (docs/server/machines.md "Who handles the computers' events"). The hub did all of this until the
+// What comes from the nodes is the manager's (docs/server/machines.md "Who handles computer events"). The hub did all of this until the
 // manager connected the computers itself; it moved here as it was (fleet_*.go):
 //
 //   - the interactions (approval / question / plan / screen / Codex cards): made from the nodes' interaction.create
@@ -52,6 +53,9 @@ type fleetBook struct {
 	// screenHandedBack: screen card id -> the card handed back to the computer (fleet_ix_screen.go screenHandedBackLocked):
 	// the same dialog still on screen gets no new card until the agent moves on (#4867).
 	screenHandedBack map[string]screenGone
+	// handoffBy: hand-off card id -> the approval that claimed it, with the device the hub vouched for (secret_handoff.go:
+	// only such an approval counts).
+	handoffBy map[string]handoffClaim
 	// upgradeEvery / upgradeFor override screenUpgradeEvery / screenUpgradeFor (0: those; upgradeScreenCard). Tests
 	// shorten them on their own Service before any session list comes, so an upgrade loop another test left running
 	// never reads what this one writes (#4554).
@@ -63,18 +67,24 @@ type fleetBook struct {
 	stopSig, pushedSig map[[2]string]string
 	turns              *turnTracker // "machine/session" -> the turn in progress, for the finished push
 	clients            assistantwire.Clients
-	prev               map[string][]proto.Session // each machine's list setSessions saw last
+	prev               map[string]map[string]turnPrev // each machine's list setSessions saw last, by session id
 
-	// sent: each machine's last session list told the hub (fleet.sessions), as JSON. sentMu is held while a list is
-	// decorated and told (publishList), so the lists reach the hub in the order they were made.
+	// sent: what is kept of each machine's last session list told the hub (fleet.sessions): its length and digest, not
+	// its bytes. sentMu is held while a list is decorated, encoded into enc and told (publishList), so the lists reach
+	// the hub in the order they were made; enc is the one buffer every list is encoded into, reused.
 	sentMu sync.Mutex
-	sent   map[string][]byte
-	// shown: the list last told the hub for each machine, decorated (the reminders of agents awaiting a reply read it
-	// instead of decorating every list each minute, agents_reply.go).
+	sent   map[string]sentList
+	enc    bytes.Buffer
+	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
+	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
 	shown   map[string][]proto.Session
 	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
 	asks asksMemo
+	// folds: what each machine's last complete list folded its children under (fleet_fold.go), for the rows and
+	// cards sent without the rest of the list.
+	foldMu sync.Mutex
+	folds  map[string]sessionFold
 
 	// rep is the last snapshot's parts the session lists show (fleetTakeSnapshot).
 	rep fleetReport
@@ -168,6 +178,34 @@ func (g guardedStore) InteractionOutcome(ctx context.Context, id string) (status
 func (g guardedStore) Interactions(ctx context.Context, machine, session string, limit int) (out []db.InteractionRecord, err error) {
 	defer guard(&err)
 	return g.st.Interactions(ctx, machine, session, limit)
+}
+
+// lateAnswerer is a store that records an answer given after a card expired (db.DB); one without it records none.
+type lateAnswerer interface {
+	LateAnswer(ctx context.Context, id string, answers map[string]string, by, reason string) (bool, error)
+}
+
+func (g guardedStore) LateAnswer(ctx context.Context, id string, answers map[string]string, by, reason string) (ok bool, err error) {
+	defer guard(&err)
+	l, has := g.st.(lateAnswerer)
+	if !has {
+		return false, errNoTable
+	}
+	return l.LateAnswer(ctx, id, answers, by, reason)
+}
+
+// interactionPager is a store that pages the history by time (db.DB); one without it answers errNoTable.
+type interactionPager interface {
+	InteractionsPage(ctx context.Context, q db.InteractionQuery) (db.InteractionPage, error)
+}
+
+func (g guardedStore) InteractionsPage(ctx context.Context, q db.InteractionQuery) (out db.InteractionPage, err error) {
+	defer guard(&err)
+	p, ok := g.st.(interactionPager)
+	if !ok {
+		return out, errNoTable
+	}
+	return p.InteractionsPage(ctx, q)
 }
 
 func (g guardedStore) AllowAlways(ctx context.Context, session, tool string, keys []string) (err error) {
@@ -346,12 +384,8 @@ type stateMark struct {
 	at    time.Time
 }
 
-// markStates fills in StateSince: the time an agent's state last changed, kept until it changes again. It drops the
-// marks and hook flags of the machine's sessions no longer listed.
-func (s *Service) markStates(machine string, list []proto.Session, now time.Time) {
-	s.fillStateMarks(machine, list, now, true)
-}
-
+// fillStateMarks fills in StateSince: the time an agent's state last changed, kept until it changes again. A complete
+// list also drops the marks and hook flags of the machine's sessions no longer listed.
 func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.Time, complete bool) {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()

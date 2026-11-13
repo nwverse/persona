@@ -40,7 +40,9 @@ export function defaultListenPathMatches(actual, configured, canonical) {
   return actual === configured || (configured === canonical && actual === LEGACY_LISTEN_PATH)
 }
 export const MCP_SERVER_NAMES = ['persona', 'jarvis']
-export const SNAPSHOT_RE = /<(persona|jarvis)-context>[\s\S]*?<\/\1-context>\s*/g
+// The snapshot Persona starts an assistant message with, and the view feedback the node may put after it (#4335):
+// both for the model, not the user's words.
+export const SNAPSHOT_RE = /<(persona|jarvis)-context>[\s\S]*?<\/\1-context>\s*|<persona-view-errors\b[^>]*>[\s\S]*?<\/persona-view-errors>\s*/g
 export const SNAPSHOT_END_RE = /^\s*<\/(?:persona|jarvis)-context>\s*/i
 export function contextWrapped(text) { return /^(?:<persona-context>|<jarvis-context>)/.test(text) }
 export function mcpToolNames(name) { return MCP_SERVER_NAMES.map((server) => `mcp__${server}__${name}`) }

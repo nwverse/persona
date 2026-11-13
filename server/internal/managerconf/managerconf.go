@@ -2,7 +2,7 @@
 // sections of the configuration that only the manager uses (connectors, extensions, bots, mail sign-ins, Lark,
 // usage sources), which the built-in manager used to read and write in the hub's hub.json. A manager made in the app
 // keeps them in the manager.json of its own directory, next to its identity (id, hub, token); the built-in manager,
-// which the hub starts, in DefaultDir. Move takes the sections out of hub.json once.
+// which the hub starts, in DefaultDir. MoveExcept takes the sections out of hub.json once.
 package managerconf
 
 import (
@@ -32,7 +32,7 @@ func DefaultDir(home string) string {
 // DefaultFile is the built-in manager's manager.json.
 func DefaultFile(home string) string { return filepath.Join(DefaultDir(home), File) }
 
-// Moved are the sections of hub.json that are the manager's: Move takes them into manager.json, and only the
+// Moved are the sections of hub.json that are the manager's: MoveExcept takes them into manager.json, and only the
 // manager reads them there. A key with a dot is one key of a section whose other keys stay the hub's
 // ("assistant.owner": the hub keeps assistant.external). A section added here later is moved by the next start
 // (Marker lists what was).
@@ -62,12 +62,12 @@ type Marker struct {
 	HubBackups map[string]string `json:"hub_backups,omitempty"`
 }
 
-// backupPrefix names the copies of hub.json's sections Move keeps (the node's path guard refuses every file named
-// hub.json*). They hold only the sections taken over, never the rest of hub.json: the hub's token and database
+// backupPrefix names the copies of hub.json's sections MoveExcept keeps (the node's path guard refuses every file
+// named hub.json*). They hold only the sections taken over, never the rest of hub.json: the hub's token and database
 // password do not belong in a manager's directory.
 const backupPrefix = "hub.json.before-manager-json-"
 
-// Report is what Move did.
+// Report is what MoveExcept did.
 type Report struct {
 	// Moved are the sections it copied into manager.json this time.
 	Moved []string
@@ -83,17 +83,16 @@ type Report struct {
 	Untrimmed []string
 }
 
-// Move copies the Moved sections of hubDir's hub.json that manager.json at file has not taken over yet into it, once,
-// and records it (MarkerKey); a section manager.json has already keeps manager.json's value (Ignored when hub.json's
-// differs). hub.json itself is not
-// changed: an older build switched back still finds what it read before (later edits are manager.json's only). No
-// hub.json, or nothing new to take over: manager.json is not touched. Stale lists the sections taken over whose value
-// in hub.json is no longer what it was then (a hand edit of hub.json, or an older build's, which nothing reads).
-func Move(hubDir, file string) (Report, error) { return MoveExcept(hubDir, file, nil) }
-
-// MoveExcept is Move with the keys in drop (a dotted one: that key of its section) left out of hub.json: a built-in
-// manager the hub did not start leaves HelloSections out, which the hub hands it from its own hub.json at the
-// handshake (MoveFrom), not this machine's.
+// MoveExcept copies the Moved sections of hubDir's hub.json that manager.json at file has not taken over yet into it,
+// once, and records it (MarkerKey); a section manager.json has already keeps manager.json's value (Ignored when
+// hub.json's differs). hub.json itself is not changed: an older build switched back still finds what it read before
+// (later edits are manager.json's only). No hub.json, or nothing new to take over: manager.json is not touched. Stale
+// lists the sections taken over whose value in hub.json is no longer what it was then (a hand edit of hub.json, or an
+// older build's, which nothing reads).
+//
+// The keys in drop (a dotted one: that key of its section) are left out of hub.json: a built-in manager the hub did
+// not start leaves HelloSections out, which the hub hands it from its own hub.json at the handshake (MoveFrom), not
+// this machine's.
 func MoveExcept(hubDir, file string, drop []string) (Report, error) {
 	var rep Report
 	hubPath := filepath.Join(hubDir, "hub.json")
@@ -133,7 +132,7 @@ func MoveExcept(hubDir, file string, drop []string) (Report, error) {
 // move (MoveExcept): its machine's hub.json may be a stub or a copy, and the hub's values were the ones in
 // effect. The hub hands them over raw at the handshake instead (Legacy, assistantwire.Hello.LegacyConfig), and the
 // manager takes them over once (MoveFrom). Of inbox only the models and the AI twin's machine came that way; the rest
-// of it was read on the manager's own machine, and moves with Move.
+// of it was read on the manager's own machine, and moves with MoveExcept.
 var HelloSections = []string{"agents", "kb", "ai", "hook_timeout_minutes",
 	"assistant.owner", "assistant.notes", "assistant.machine", "assistant.launcher",
 	"inbox.triage_ai", "inbox.judge_ai", "inbox.agent.machine"}
@@ -229,7 +228,7 @@ func MoveFrom(legacy []byte, file string) (Report, error) {
 }
 
 // take copies keys of hub that manager.json at file has not taken over yet into it, records them in the marker, and
-// keeps a copy of what it took beside it (Move). withStale: say which sections hub has changed since they moved.
+// keeps a copy of what it took beside it (MoveExcept). withStale: say which sections hub has changed since they moved.
 func take(file string, hub *Object, keys []string, withStale bool) (Report, error) {
 	var rep Report
 	now := time.Now().UTC()
@@ -295,8 +294,8 @@ func readMarker(o *Object) (Marker, error) {
 	return m, nil
 }
 
-// backupName is name when it names one of Move's copies, directly in the manager's directory; else "": a marker
-// edited by hand or broken never points Move at another file there (manager.json itself, a hub.json).
+// backupName is name when it names one of MoveExcept's copies, directly in the manager's directory; else "": a
+// marker edited by hand or broken never points MoveExcept at another file there (manager.json itself, a hub.json).
 func backupName(name string) string {
 	if name != "" && name == filepath.Base(name) && strings.HasPrefix(name, backupPrefix) {
 		return name
@@ -308,7 +307,7 @@ func backupName(name string) string {
 // kept hub.json whole) down to those sections, so the hub's token and database password do not stay in the
 // manager's directory: a copy the marker names, to the sections it names it for; one it doesn't (its manager.json
 // was not written then), to the Moved ones. A temporary file one of them was being written to when a start was cut
-// short (WriteFileAtomic's, beside it) is removed: Move writes them only under the directory's lock, which this
+// short (WriteFileAtomic's, beside it) is removed: MoveExcept writes them only under the directory's lock, which this
 // holds. What it could not cut is returned, with why (a copy that is not JSON, or not a plain file, is left as it
 // is, and said).
 func trimBackups(dir string, m Marker) []string {

@@ -107,13 +107,29 @@ func (d *Devices) storedChoice(machine string) (proto.EngineChoice, bool) {
 	return proto.EngineChoice{}, false
 }
 
+// engineChoiceToMove is the machine's stored set for a move to another manager (devicewire.MethodEngineGet): nil when
+// never chosen, an error while settings can't be read (not "never chosen", which would let the move drop it).
+func (d *Devices) engineChoiceToMove(machine string) (*proto.EngineChoice, error) {
+	c, ok := d.storedChoice(machine)
+	d.engines.mu.Lock()
+	loaded := d.engines.loaded
+	d.engines.mu.Unlock()
+	switch {
+	case !loaded:
+		return nil, errors.New("engines: settings not readable")
+	case !ok:
+		return nil, nil
+	}
+	return &c, nil
+}
+
 // errUnknownEngine: not one of proto.EngineNames, or a set that is not valid.
 var errUnknownEngine = errors.New("unknown engine")
 
 // setEngine stores the machine's single engine (PUT with {"engine"}): the set it stands for.
 func (d *Devices) setEngine(ctx context.Context, machine, engine string) error {
 	if _, ok := proto.EngineNames[engine]; !ok {
-		return fmt.Errorf("%w %q (herdr, herdr-core, herdr-both, orca, paseo)", errUnknownEngine, engine)
+		return fmt.Errorf("%w %q (herdr, herdr-core, herdr-both, orca, paseo, cindy)", errUnknownEngine, engine)
 	}
 	return d.setEngineChoice(ctx, machine, proto.EngineHostsOf(engine))
 }
@@ -173,17 +189,19 @@ type engineUse struct {
 // ignores the set (proto.Machine.EngineSetsUnsupported says so when that is not the same). Calls take turns per machine and each sends
 // the value stored when it runs, so the node ends on the latest choice. A node that refuses it (too old) keeps herdr:
 // logged, the stored choice stands.
-func (m *Machine) useEngine(ctx context.Context, peer *rpc.Peer) {
+func (m *Machine) useEngine(ctx context.Context, peer *rpc.Peer) error {
 	m.engineMu.Lock()
 	defer m.engineMu.Unlock()
 	c, ok := m.d.storedChoice(m.cfg.ID)
 	if !ok {
-		return
+		return nil
 	}
 	engine := proto.LegacyEngine(c)
-	if err := peer.Call(ctx, "engine.use", engineUse{Engine: engine, Hosts: c.Hosts, Default: c.Default}, nil); err != nil {
+	err := peer.Call(ctx, "engine.use", engineUse{Engine: engine, Hosts: c.Hosts, Default: c.Default}, nil)
+	if err != nil && !restartingError(err) {
 		m.d.logf("[%s] the node did not take engine %s %v (it stays on its own engine until updated): %v", m.cfg.ID, engine, c.Hosts, err)
 	}
+	return err
 }
 
 // putEngine is PUT /api/v1/machines/{mid}/engine, with a set {"hosts": ["herdr", "orca"], "default": "herdr"}

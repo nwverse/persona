@@ -292,12 +292,20 @@ internal class ProactiveStore(
     /** Says failures in the page's language. */
     private val say: ProactiveText,
     private val clock: () -> Instant = Instant::now,
+    /** Where a message goes when no page is listening to [messages] (a write that failed after the page was left). */
+    private val unheard: (String) -> Unit = {},
 ) {
     private val mutable = MutableStateFlow(ProactiveState())
     val state: StateFlow<ProactiveState> = mutable.asStateFlow()
     private val notices = MutableSharedFlow<String>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     /** Failures and confirmations worth telling the user about, in words for this page. */
     val messages: SharedFlow<String> = notices.asSharedFlow()
+    private val started = MutableSharedFlow<SessionKey>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    /**
+     * The conversation a "Run now" started, for the page to open. Without replay: a run that finishes after the page
+     * was left is not kept for later, so nothing pulls the user away from where they went (it is in the history).
+     */
+    val runsToOpen: SharedFlow<SessionKey> = started.asSharedFlow()
     private val writes = Mutex()
     private var tokens = 0L
 
@@ -409,20 +417,28 @@ internal class ProactiveStore(
         return result
     }
 
+    /** "Run now" from the page: the run goes on after the page is left, but only a page still collecting [runsToOpen] opens it. */
+    fun runNow(id: String): Job = scope.launch { run(id).onSuccess { key -> started.tryEmit(key) } }
+
     /** "New chat next time": the hub forgets the task's own conversation, so the next run starts one. */
     suspend fun fresh(id: String): Result<ScheduledTask> {
         mutable.update { it.copy(busy = it.busy + "fresh:$id") }
         val result = try { attempt { api.freshTask(id) } } finally { mutable.update { it.copy(busy = it.busy - "fresh:$id") } }
         result.onSuccess { task ->
             put(task)
-            notices.tryEmit(say.string(R.string.assistant_proactive_fresh_done))
+            tell(say.string(R.string.assistant_proactive_fresh_done))
         }.onFailure { report(R.string.assistant_proactive_not_saved, it) }
         return result
     }
 
     /** [what] is a sentence with the reason as `%1$s` ("Couldn't save: %1$s"). */
     private fun report(@StringRes what: Int, error: Throwable) {
-        notices.tryEmit(say.string(what, failureReason(say, error)))
+        tell(say.string(what, failureReason(say, error)))
+    }
+
+    /** To the page when it is listening; otherwise (it was left while a write went on) to [unheard], not dropped. */
+    private fun tell(message: String) {
+        if (notices.subscriptionCount.value == 0 || !notices.tryEmit(message)) unheard(message)
     }
 }
 

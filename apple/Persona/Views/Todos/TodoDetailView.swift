@@ -12,6 +12,8 @@ struct TodoDetailView: View {
     @FocusState private var titleFocused: Bool
     @State private var isEditingNotes = false
     @State private var editingNotesText = ""
+    /// The notes' mic (#2188): Done and leaving the page end it.
+    @State private var dictation = Dictation()
     @State private var showHandoff = false
     @State private var showDeleteConfirm = false
     @State private var showReleased = false
@@ -26,6 +28,19 @@ struct TodoDetailView: View {
 
     private var currentTodo: TodoItem? {
         store.todo(id: todoID)
+    }
+
+    /// Marks the to-do seen when it is in Just finished and the hub keeps seen marks; a failure leaves it there.
+    private func seeIfJustFinished() async {
+        guard let todo = currentTodo, model.hubFeatures.contains(TodoSeen.feature) else { return }
+        // no restores read (UserDefaults, P2): a restore only takes a to-do out of Shelved, never into Just finished; the
+        // sessions as they are now, not watched (an action, AllSessionsReadersTests)
+        let lookup = TodosLogic.makeSessionLookup(model.sessionsNow)
+        let t = TodoTriageLogic.triage(todo, lookup: lookup, now: .now,
+                                       superseded: TodoTriageLogic.supersededFailedStarts(store.todos).contains(todo.id),
+                                       calendar: TodoCalendar.userCalendar)
+        guard t.section == .justDone else { return }
+        try? await store.setSeen(id: todo.id, true, after: t.last)
     }
 
     var body: some View {
@@ -101,6 +116,13 @@ struct TodoDetailView: View {
             if !focused { commitTitle() }
         }
         .onDisappear { commitTitle() }
+        #if !os(macOS)
+        // Opening a Just finished to-do is seeing it (#5707): it is filed under Done, where the list has it on the way
+        // back. Nothing is said: the user did not ask for it. Not on the Mac, whose list stays beside the page.
+        .task(id: currentTodo != nil) { await seeIfJustFinished() }
+        #endif
+        // A tab switch hides the page without onDisappear: the mic must not go on listening behind it.
+        .onTabVisibility(appear: {}, disappear: stopDictation)
         .onAppear {
             #if DEBUG
             if UserDefaults.standard.bool(forKey: "showTodoHandoff") {
@@ -131,6 +153,11 @@ struct TodoDetailView: View {
             do { _ = try await store.update(id: todo.id, title: t) } catch { model.show(error) }
             if savingTitle == t { savingTitle = nil }
         }
+    }
+
+    /// Ends dictation, and a start still asking for permission with it (#3407).
+    private func stopDictation() {
+        dictation.stop()
     }
 
     /// Deletes the todo and leaves its page; a failed delete keeps the page and shows the error.
@@ -164,7 +191,7 @@ struct TodoDetailView: View {
                         .onSubmit { commitTitle() }
 
                     HStack(spacing: Theme.Space.sm) {
-                        Chip(text: todo.statusLabel(status), look: .tone(status.todoTone))
+                        Chip(text: todo.statusLabel(status), look: .tone(todo.shownState(status).todoTone))
                         Text("·")
                             .foregroundStyle(.secondary)
                         Text("\(activeAgents.count) agents")
@@ -180,7 +207,7 @@ struct TodoDetailView: View {
                     }
 
                     if todo.autoDone {
-                        // The hub closed it (docs/assistant/todos.md「自动完成」): say why, and how to undo it.
+                        // The hub closed it (docs/assistant/todos.md「Automatic completion」): say why, and how to undo it.
                         Text(todo.autoDoneReason.map { String(localized: "The agent stopped and the work looked finished, so it was marked done: \($0). If it isn't, tap “Reopen”.") }
                              ?? String(localized: "The agent stopped and the work looked finished, so it was marked done. If it isn't, tap “Reopen”."))
                             .font(Theme.Font.caption)
@@ -207,8 +234,18 @@ struct TodoDetailView: View {
                             .font(Theme.Font.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
+                        FieldMicButton(dictation: dictation, text: $editingNotesText, id: "todo.notes.mic") {
+                            // On the notes as they are, one tap opens the editor and dictates into it.
+                            if !isEditingNotes {
+                                editingNotesText = text.notes
+                                isEditingNotes = true
+                            }
+                        }
+                        .font(Theme.Font.captionStrong)
+                        .foregroundStyle(Theme.accent)
                         Button(isEditingNotes ? String(localized: "Done [Extension System Presentation c0b3fb]") : String(localized: "Edit [Message Menu 051836]")) {
                             if isEditingNotes {
+                                stopDictation() // what is saved is what the field shows
                                 let n = editingNotesText.trimmingCharacters(in: .whitespacesAndNewlines)
                                 Task {
                                     do {
@@ -228,12 +265,14 @@ struct TodoDetailView: View {
                         .font(Theme.Font.captionStrong)
                         .lineLimit(1)
                         .foregroundStyle(Theme.accent)
+                        .accessibilityIdentifier("todo.notes.edit")
                     }
 
                     if isEditingNotes {
                         TextField(String(localized: "To-do notes"), text: $editingNotesText, axis: .vertical)
                             .lineLimit(3...8)
                             .textFieldStyle(.plain)
+                            .accessibilityIdentifier("todo.notes.field")
                             .padding(Theme.Space.s)
                             .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
                     } else if !text.notes.isEmpty {
@@ -259,7 +298,8 @@ struct TodoDetailView: View {
 
             Section {
                 if activeAgents.isEmpty {
-                    Text("No agents are running. Tap “Hand to Agent” below to assign one.")
+                    Text(todo.isDone ? String(localized: "No agents on it now. Reopen it to hand it to an agent.")
+                                     : String(localized: "No agents are running. Tap “Hand to Agent” below to assign one."))
                         .font(Theme.Font.secondary)
                         .foregroundStyle(.secondary)
                         .padding(.vertical, Theme.Space.xs)
@@ -444,18 +484,21 @@ struct TodoDetailView: View {
 
     private func bottomBar(_ todo: TodoItem) -> some View {
         HStack(spacing: Theme.Space.m) {
-            Button {
-                showHandoff = true
-            } label: {
-                HStack(spacing: Theme.Space.xs) {
-                    ThemedIcon(Theme.Icon.handToAI)
-                    Text("Hand to Agent").lineLimit(1).minimumScaleFactor(0.8)
+            // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
+            if !todo.isDone {
+                Button {
+                    showHandoff = true
+                } label: {
+                    HStack(spacing: Theme.Space.xs) {
+                        ThemedIcon(Theme.Icon.handToAI)
+                        Text("Hand to Agent").lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .font(Theme.Font.heading)
+                    .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
                 }
-                .font(Theme.Font.heading)
-                .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+                .themedButton(prominent: true)
+                .controlSize(.large)
             }
-            .themedButton(prominent: true)
-            .controlSize(.large)
 
             Button {
                 store.toggleDone(todo)

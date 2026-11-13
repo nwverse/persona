@@ -31,6 +31,8 @@ func TestPersonaCardsBecomeNumbers(t *testing.T) {
 			[]string{"| 今天的热量分配 · 推荐全天摄入 | 2,250 kcal |\n| --- | --- |\n| 早餐 · 已吃 | 555 kcal |\n| 午餐 | 900 kcal |\n| 晚餐 | 750 kcal |\n| 还能吃 | 45 kcal |\n"}},
 		{"stacked bar without a total", `{"type":"stacked_bar","unit":"小时","note":"按手表记录","segments":[{"label":"深睡","value":1.2},{"label":"浅睡","value":4.1}]}`,
 			[]string{"| 合计 | 5.3 小时 |\n", "| 深睡 | 1.2 小时 |\n", "|\n\n按手表记录\n"}},
+		{"ring with what remains", `{"type":"ring","title":"今天的热量","total":{"value":2000,"unit":"kcal"},"segments":[{"label":"早餐","value":480},{"label":"午餐","value":720}]}`,
+			[]string{"| 今天的热量 | 2,000 kcal |\n| --- | --- |\n| 早餐 | 480 kcal |\n| 午餐 | 720 kcal |\n| 剩余 | 800 kcal |\n"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := PersonaCards("结论。\n\n" + cardFence(tc.card) + "\n\n后面的话")
@@ -80,16 +82,36 @@ func TestPersonaCardsTheAppsCannotDraw(t *testing.T) {
 	}
 }
 
-// Only persona-card blocks change: other code, a persona-view block (drawn elsewhere), a card shown as an example
-// inside another code block, and text with no card at all stay as they were.
+// Only the assistant's card blocks change: other code, a card shown as an example inside another code block, and text
+// with no card at all stay as they were.
 func TestPersonaCardsLeaveTheRest(t *testing.T) {
 	for _, in := range []string{
 		"没有卡片，`code` 和 **加粗**。\n\n```json\n{\"type\":\"stat\",\"value\":1}\n```\n",
 		"````markdown\n```persona-card\n{\"type\":\"stat\",\"value\":1}\n```\n````\n",
-		"```persona-view\n{\"type\":\"metric\",\"label\":\"a\",\"value\":\"1\",\"fallback\":\"a 1\"}\n```\n",
+		"````markdown\n```persona-view\n{\"fallback\":\"a 1\",\"sections\":[]}\n```\n````\n",
 	} {
 		if got := PersonaCards(in); got != in {
 			t.Errorf("changed:\n%q\n→\n%q", in, got)
+		}
+	}
+}
+
+// A persona-view card (the apps draw it, Feishu cannot) is its text fallback, never its JSON or HTML; one without a
+// fallback is a placeholder.
+func TestPersonaCardsWriteViewsAsFallback(t *testing.T) {
+	view := "```persona-view\n{\"fallback\":\"Plan B: half a day.\",\"sections\":[{\"items\":[{\"type\":\"html\",\"html\":\"<script>x()</script>\"}]}]}\n```"
+	for _, tc := range []struct{ in, want string }{
+		{"Pick one.\n\n" + view + "\n\nDone.", "Pick one.\n\nPlan B: half a day.\n\nDone."},
+		{"Pick one.\n" + view + "\nDone.", "Pick one.\n\nPlan B: half a day.\n\nDone."},
+		{view, "Plan B: half a day.\n"},
+		{"```persona-view\n{\"sections\":[]}\n```", "〔卡片〕\n"}, // i18n-ignore: the shared placeholder (sdk/go/wire)
+	} {
+		got := PersonaCards(tc.in)
+		if got != tc.want {
+			t.Errorf("%q\n→ %q\nwant %q", tc.in, got, tc.want)
+		}
+		if strings.Contains(got, "{") || strings.Contains(got, "script") {
+			t.Errorf("card source left: %q", got)
 		}
 	}
 }

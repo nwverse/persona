@@ -97,18 +97,6 @@ func TestCallBothDirections(t *testing.T) {
 	}
 }
 
-func TestCallNilOutStillReturnsError(t *testing.T) {
-	hub, node := pair(t)
-	node.OnRequest = func(context.Context, string, json.RawMessage) (any, error) {
-		return map[string]any{"ok": true}, nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := hub.Call(ctx, "anything", nil, nil); err != nil {
-		t.Fatalf("call with nil out: %v", err)
-	}
-}
-
 func TestCallPropagatesErrorMessage(t *testing.T) {
 	hub, node := pair(t)
 	node.OnRequest = func(context.Context, string, json.RawMessage) (any, error) {
@@ -119,6 +107,29 @@ func TestCallPropagatesErrorMessage(t *testing.T) {
 	err := hub.Call(ctx, "session.start", nil, nil)
 	if err == nil || err.Error() != "herdr is not running" {
 		t.Fatalf("want the remote message, got %v", err)
+	}
+}
+
+// A call's params and its reply cross the line with < > & as they are, not six bytes each (#2907): a message or a
+// tool input of HTML or code would go out at up to three times its size.
+func TestCallKeepsHTMLCharacters(t *testing.T) {
+	const html = `<b>&amp;</b>`
+	hub, node := pair(t)
+	var got json.RawMessage
+	node.OnRequest = func(_ context.Context, _ string, params json.RawMessage) (any, error) {
+		got = append(json.RawMessage(nil), params...)
+		return map[string]string{"html": html}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var reply json.RawMessage
+	if err := hub.Call(ctx, "session.send", map[string]string{"html": html}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	for hop, b := range map[string]json.RawMessage{"params": got, "reply": reply} {
+		if want := `{"html":"` + html + `"}`; string(b) != want {
+			t.Errorf("%s: %s, want %s", hop, b, want)
+		}
 	}
 }
 

@@ -98,6 +98,20 @@ struct PersonaShortcuts: AppShortcutsProvider {
             shortTitle: "New To-Do",
             systemImageName: "checklist" // icon: App Shortcuts take only a literal
         )
+        #if os(iOS)
+        AppShortcut(
+            intent: StartMeetingRecordingIntent(),
+            phrases: [
+                "Record with \(.applicationName)",
+                "Record a meeting with \(.applicationName)",
+                "Record this meeting with \(.applicationName)",
+                "Start recording in \(.applicationName)",
+                "\(.applicationName), record the meeting",
+            ],
+            shortTitle: "Record [Recordings Section ef2821]",
+            systemImageName: "waveform.circle" // icon: App Shortcuts take only a literal (Theme.Icon.recording)
+        )
+        #endif
     }
 
     nonisolated static var shortcutTileColor: ShortcutTileColor { .tangerine }

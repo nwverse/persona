@@ -42,15 +42,39 @@ func listKeySized(list []proto.Session, size int) string {
 		w.quote(s.Branch, '/')
 		w.quote(s.SpaceID, '/')
 		w.quote(s.SpaceKind, '\n')
+		if h := s.Hierarchy; h != nil { // the node's of it: when it began, the parent a blocked runtime child asks for
+			w.b.WriteString("lineage:")
+			w.quote(h.AskingParentSessionID, '/')
+			w.int(unixOf(&h.StartedAt), '\n')
+		}
+		if s.TitleSource != proto.TitleSourceUnknown || s.TitleManual || s.OutputTokens != 0 {
+			w.b.WriteString("naming:")
+			w.quote(s.TitleSource.String(), '/')
+			w.str(strconv.FormatBool(s.TitleManual), '/')
+			w.int(int64(s.OutputTokens), '\n')
+		}
 		writeUltracodeKey(&w, s)
+		if s.ServiceTier != "" || len(s.ServiceTiers) > 0 {
+			fmt.Fprintf(&w.b, "speed:%q/%v\n", s.ServiceTier, s.ServiceTiers)
+		}
 		// A completed background scan can discover a fallback without a new transcript revision or status.
 		if s.ModelFallback != nil || s.TurnErrorCode != "" {
 			fmt.Fprintf(&w.b, "model-fallback:%+v/%q\n", s.ModelFallback, s.TurnErrorCode)
+		}
+		if s.ModelRestore != nil { // a restore asked (model_restore.go): no new revision says so
+			fmt.Fprintf(&w.b, "model-restore:%+v\n", *s.ModelRestore)
 		}
 		if s.Activity != "" { // a new step shows at once, not with the next 10 s of updated_at
 			w.b.WriteString("activity:")
 			w.str(s.Activity, '/')
 			w.int(unixOf(s.ActivityAt), '\n')
+		}
+		// Restored runtime metadata changes assistant classification without a new runtime event.
+		if s.SourceKind == "runtime" {
+			w.b.WriteString("runtime-state:")
+			w.quote(s.Cwd, '/')
+			w.quote(s.Launcher, '/')
+			w.str(strconv.FormatBool(s.StartedByPersona), '\n')
 		}
 		// A new reason or link alone is a change.
 		w.b.WriteString("attention:")
@@ -88,11 +112,7 @@ func listKeySized(list []proto.Session, size int) string {
 		w.str(s.SourceThreadID, '/')
 		w.str(s.SourceInstanceID, '/')
 		w.str(s.ReadOnlyReason, '/')
-		if s.Capabilities != nil {
-			fmt.Fprint(&w.b, s.Capabilities)
-		} else {
-			w.b.WriteString("<nil>")
-		}
+		w.caps(s.Capabilities)
 		w.b.WriteByte('/')
 		w.str(strconv.FormatBool(s.Attached), '/')
 		w.str(s.CodexRoute, '/')
@@ -147,7 +167,7 @@ func listKeySized(list []proto.Session, size int) string {
 			w.quote(p.Current, '\n')
 		}
 		// A subagent's new call shows at once (its card says what it does now, #5602); the list goes out at most once a
-		// second, with the poll.
+		// second, with the poll. Its model and tokens ride along (#5030).
 		for _, a := range s.Subagents {
 			w.str(a.ID, ':')
 			w.str(strconv.FormatBool(a.Running), ':')
@@ -190,6 +210,35 @@ func (w *keyWriter) quote(s string, sep byte) {
 	w.tmp = strconv.AppendQuote(w.tmp[:0], s)
 	w.b.Write(w.tmp)
 	w.b.WriteByte(sep)
+}
+
+// caps writes a session's capabilities by value, as %v would print them with Modes dereferenced ("<nil>" when absent).
+// Never through fmt: Modes is a pointer, and a fresh one each poll would print a new address and change the key every
+// second.
+func (w *keyWriter) caps(c *proto.SessionCapabilities) {
+	if c == nil {
+		w.b.WriteString("<nil>")
+		return
+	}
+	w.b.WriteString("&{")
+	for _, v := range [...]bool{c.Read, c.Send, c.Interrupt, c.Approve, c.Terminal, c.Attach} {
+		w.str(strconv.FormatBool(v), ' ')
+	}
+	if c.Modes == nil {
+		w.b.WriteString("<nil>")
+	} else {
+		w.b.WriteString(strconv.FormatBool(*c.Modes))
+	}
+	if c.Model != nil {
+		w.b.WriteString(" model=" + strconv.FormatBool(*c.Model))
+	}
+	if c.Rewind != nil {
+		w.b.WriteString(" rewind=" + strconv.FormatBool(*c.Rewind))
+	}
+	if c.RewindCode != nil {
+		w.b.WriteString(" rewind_code=" + strconv.FormatBool(*c.RewindCode))
+	}
+	w.b.WriteByte('}')
 }
 
 // quotes writes a list of strings as %q would ([] when empty, the rare others through fmt).

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The file viewer's models (docs/apple/ios.md「文件查看器」): lines and pages of a text file, colors worked out in chunks,
+/// The file viewer's models (docs/apple/ios.md「File viewer」): lines and pages of a text file, colors worked out in chunks,
 /// the JSON outline, Markdown cut into pieces, and which mentioned paths are linked.
 @MainActor
 struct FileViewerTests {

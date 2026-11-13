@@ -10,7 +10,32 @@ import persona.core.contracts.Todo
 /** Where a supervised task's review stands. */
 enum class ReviewStage { Ongoing, Pending, Rework, NeedsUser, Accepted, Cancelled }
 
-/** The stage that holds now (an accepted or cancelled task the user reopened goes on again); null when not supervised. */
+/**
+ * Whether its supervisor's acceptance still stands: the latest review accepted it and no review came since. That holds
+ * even when the hub reopened it because its agent was sent more work (#3156): the task is accepted until a new review
+ * says otherwise (docs/assistant/todo-status-sop.md, "Accepted tasks"; web `acceptanceStands`).
+ */
+fun Supervision.acceptanceStands(): Boolean = state == "accepted" && latestReview?.verdict == "accepted"
+
+/** [Supervision.acceptanceStands] for a to-do; false when it is not supervised. */
+val Todo.acceptanceStands: Boolean get() = supervision?.acceptanceStands() == true
+
+/**
+ * The review state that holds now (web `reviewState`): a cancelled task reopened goes on again (""); an accepted one
+ * stays accepted while its acceptance stands. "" when not supervised.
+ */
+val Todo.reviewState: String
+    get() {
+        val st = supervision?.state.orEmpty()
+        if (!isDone && st == "accepted" && !acceptanceStands) return ""
+        if (!isDone && st == "cancelled") return ""
+        return st
+    }
+
+/**
+ * The stage that holds now (a cancelled task the user reopened goes on again; an accepted one reopened stays accepted
+ * while its acceptance stands, #3156); null when not supervised.
+ */
 val Todo.reviewStage: ReviewStage?
     get() {
         val sup = supervision ?: return null
@@ -18,7 +43,7 @@ val Todo.reviewStage: ReviewStage?
             "pending_review" -> ReviewStage.Pending
             "rework" -> ReviewStage.Rework
             "needs_user" -> ReviewStage.NeedsUser
-            "accepted" -> if (isDone) ReviewStage.Accepted else ReviewStage.Ongoing
+            "accepted" -> if (isDone || sup.acceptanceStands()) ReviewStage.Accepted else ReviewStage.Ongoing
             "cancelled" -> if (isDone) ReviewStage.Cancelled else ReviewStage.Ongoing
             else -> ReviewStage.Ongoing
         }
@@ -33,15 +58,18 @@ fun reviewVerdictStage(verdict: String): ReviewStage? = when (verdict) {
     else -> null
 }
 
-enum class CheckMark { Met, Missing, Open }
+/** [Unchecked]: no review judged it after a standing acceptance (a criterion added with more work, #3156): nothing waits on it. */
+enum class CheckMark { Met, Missing, Open, Unchecked }
 
 data class CheckLine(val criterion: String, val mark: CheckMark, val evidence: String?)
 
 /**
  * Each criterion as the latest review that judged it found it: met, missing (with its evidence or gap), or open (not
- * reviewed yet); criteria a review judged that are not in done_when (a task without any) follow.
+ * reviewed yet); criteria a review judged that are not in done_when (a task without any) follow. Once the acceptance
+ * stands, a criterion no review judged is [CheckMark.Unchecked], not open.
  */
 fun Supervision.checklist(): List<CheckLine> {
+    val settled = acceptanceStands()
     val latest = LinkedHashMap<String, persona.core.contracts.ReviewCheck>()
     for (r in reviews) for (c in r.checks) {
         latest.remove(c.criterion)
@@ -49,16 +77,17 @@ fun Supervision.checklist(): List<CheckLine> {
     }
     val out = doneWhen.map { criterion ->
         val c = latest[criterion]
-        CheckLine(criterion, when { c == null -> CheckMark.Open; c.met -> CheckMark.Met; else -> CheckMark.Missing }, c?.evidence?.takeIf { it.isNotBlank() })
+        CheckLine(criterion, when { c == null -> if (settled) CheckMark.Unchecked else CheckMark.Open; c.met -> CheckMark.Met; else -> CheckMark.Missing }, c?.evidence?.takeIf { it.isNotBlank() })
     }
     val more = latest.values.filter { it.criterion !in doneWhen }
         .map { CheckLine(it.criterion, if (it.met) CheckMark.Met else CheckMark.Missing, it.evidence?.takeIf { e -> e.isNotBlank() }) }
     return out + more
 }
 
-/** Criteria met and all of them ("2/3" on a card); null without criteria. */
+/** Criteria met and all of them ("2/3" on a card); null without criteria. Criteria left unchecked by a standing
+ *  acceptance are not counted (an accepted task reads "5/5", not "5/8"). */
 fun Supervision.checkCount(): Pair<Int, Int>? {
-    val list = checklist()
+    val list = checklist().filter { it.mark != CheckMark.Unchecked }
     if (list.isEmpty()) return null
     return list.count { it.mark == CheckMark.Met } to list.size
 }

@@ -14,8 +14,8 @@ import (
 
 // SplitEnv set to 0 keeps on personad what would run a program of its own in its place: the hub's and the built-in
 // manager's systemd units that hub setup and manager install --builtin write (which then keep it), the hub image's
-// supervisor, and the node of the hub's computer (docs/server/server.md "Programs"). A Mac's agents run personad
-// either way.
+// supervisor, and the node of the hub's computer (docs/server/server.md "Programs"). The launchd agents those two
+// write on a Mac keep it too; an agent that ran personad before stays on it either way.
 const SplitEnv = "PERSONA_SPLIT_PROGRAMS"
 
 // SplitOff says SplitEnv is 0 in this process's environment.

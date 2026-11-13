@@ -1,4 +1,4 @@
-{{- /* Cards answered only on the screen (docs/assistant/voice.md「提问和卡片」, decision 5): a plan, a permission, a terminal
+{{- /* Cards answered only on the screen (docs/assistant/voice.md「Questions and cards」, decision 5): a plan, a permission, a terminal
 dialog, a form, a question voice cannot answer. Only their kinds, never a command, a path or what a plan says; voice
 never answers them, and a spoken "approve" is not sent (voice/refused on_screen). Said by itself (a say). .Here: the
 cards show on the screen of this call; else they are on the phone, in the conversation. Data: VoiceNeedsYou. */ -}}

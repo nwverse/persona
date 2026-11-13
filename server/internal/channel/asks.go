@@ -34,12 +34,15 @@ type Ask struct {
 	// Options are a terminal dialog's option keys, in the order they were numbered.
 	Options []string  `json:"options,omitempty"`
 	At      time.Time `json:"at"`
+	// Later: the assistant's ask_user raised with wait false (proto.Interaction.AskedWithoutWaiting). No turn waits on
+	// it, so only a reply that reads as its answer (ReadsAsAnswer) is one; other words are an ordinary message.
+	Later bool `json:"later,omitempty"`
 }
 
 // NewAsk is ix as something to ask in channel.
 func NewAsk(channel string, ix proto.Interaction, now time.Time) *Ask {
 	return &Ask{ID: ix.ID, Channel: channel, MachineID: ix.MachineID, SessionID: ix.SessionID, Kind: ix.Kind, Title: askTitle(ix),
-		Questions: ix.Questions, At: now}
+		Questions: ix.Questions, At: now, Later: ix.AskedWithoutWaiting()}
 }
 
 // askTitle is the bracketed title (full-width lenticular brackets) an ask starts with: its conversation's title without the blocks a first message starts with
@@ -142,7 +145,7 @@ func is(text string, words []string) bool {
 
 // IsApprovalWord says whether text is only a word that approves or refuses a card (yes, no, the plan's approve), in
 // any of the three languages: a voice conversation does not send it on while its conversation waits on such a card,
-// since a card is answered on the screen (docs/assistant/voice.md "Sending, the gate and 409").
+// since a card is answered on the screen (docs/assistant/voice.md "Sending, gates, and 409").
 func IsApprovalWord(text string) bool {
 	return is(text, yes) || is(text, no) || is(text, planApprove)
 }
@@ -325,6 +328,9 @@ func Answered(l i18n.Lang, r proto.Resolution) string {
 }
 
 func toolName(l i18n.Lang, ix proto.Interaction) string {
+	if ix.ToolTitle != "" { // the manager's own tools, by their name for people
+		return ix.ToolTitle
+	}
 	if ix.ToolName != "" {
 		return ix.ToolName
 	}

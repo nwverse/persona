@@ -47,7 +47,7 @@ nonisolated enum Supervision {
     }
 }
 
-/// A message Persona typed into a conversation for the model, as if the user had (docs/protocol/protocol.md「Persona 注入的消息」):
+/// A message Persona typed into a conversation for the model, as if the user had (docs/protocol/protocol.md「Messages injected by Persona」):
 /// a quiet task's notice, a scheduled run, a wake-up, the background tasks a node restart stopped. The model reads its
 /// words; the apps show `line` in their place, never a user bubble or the instructions inside. The hub marks such items
 /// (`Item.injected`); for an older hub, `Injected.parse` reads the exact templates (`prompts.ParseInjected`).

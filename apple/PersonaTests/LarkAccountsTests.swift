@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// Several Feishu accounts on the hub's Lark gateway (docs/extensions/feishu.md「多账号」).
+/// Several Feishu accounts on the hub's Lark gateway (docs/extensions/feishu.md「Multiple accounts」).
 @MainActor struct LarkAccountsTests {
     @Test func aScopedClientNamesItsAccountOnFeishuRequestsOnly() async throws {
         let hub = FakeHub()

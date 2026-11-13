@@ -10,6 +10,10 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   ci_run 'Server vet' 600 bash -c 'cd server && go vet ./...'
   ci_run 'Server build' 600 bash -c 'cd server && go build ./...'
   ci_run 'Windows node build and vet' 600 bash -c 'cd server && GOOS=windows GOARCH=amd64 go build ./... && GOOS=windows GOARCH=amd64 go vet ./...'
+  # The release's tags (server/build-tags.txt, server/internal/buildtags): the programs build with them on Linux and
+  # macOS, and the tunnel works with the tailscale.com subset they leave.
+  ci_run 'Server programs with build-tags.txt' 600 bash -c 'cd server && t="$(cat build-tags.txt)" && go build -tags "$t" ./cmd/... && GOOS=darwin GOARCH=arm64 go build -tags "$t" ./cmd/...'
+  ci_run 'Tunnel tests with build-tags.txt' 300 bash -c 'cd server && go test -tags "$(cat build-tags.txt)" -count=1 -timeout=4m ./internal/buildtags/... ./internal/tunnel/...'
   ci_run 'Extension schema and SDK bundle' 300 bash -c 'python3 scripts/test/test_extension_schema.py && python3 scripts/test/test_sdk_bundle.py'
   ci_run 'Go SDK tests' 300 bash -c 'cd sdk/go && go test -count=1 -timeout=4m ./...'
 fi

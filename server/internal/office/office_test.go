@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -187,6 +188,86 @@ func TestPptx(t *testing.T) {
 	}
 }
 
+// Backslash escapes and entity references read as the characters they stand for (CommonMark 2.4, 2.5) in text,
+// table cells, link targets and picture paths; a code span keeps its words as written, its line ending a space.
+func TestMarkdownEscapesAndReferences(t *testing.T) {
+	dir := t.TempDir()
+	writePNG(t, dir, "q3_chart.png", 40, 30)
+	src := []byte("AT&amp;T &copy; 2026 &#x4E2D; 5 \\* 3 \\_name\\_ &lt;tag&gt;\n\n" +
+		"| a | b |\n| --- | --- |\n| x \\| y | `a\\*b` |\n\n" +
+		"[link \\[1\\]](https://example.com/a\\_b) and `one\ntwo`\n\n---\n\n![c](q3\\_chart.png)\n")
+	want := []string{"AT&T © 2026 中 5 * 3 _name_ <tag>", "x | y", `a\*b`, "link [1]", "one two"}
+
+	data, err := Docx(src, dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := parts(t, data)
+	got := elementTexts(t, p["word/document.xml"], xml.Name{Space: "http://schemas.openxmlformats.org/wordprocessingml/2006/main", Local: "t"})
+	for _, w := range want {
+		if !slices.Contains(got, w) {
+			t.Errorf("document has no w:t %q: %q", w, got)
+		}
+	}
+	if rels := p["word/_rels/document.xml.rels"]; !strings.Contains(rels, `Target="https://example.com/a_b" TargetMode="External"`) {
+		t.Errorf("rels %s", rels)
+	}
+	if _, ok := p["word/media/image1.png"]; !ok {
+		t.Error("no picture")
+	}
+
+	data, err = Pptx(src, dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p = parts(t, data)
+	got = elementTexts(t, p["ppt/slides/slide1.xml"], xml.Name{Space: "http://schemas.openxmlformats.org/drawingml/2006/main", Local: "t"})
+	for _, w := range want {
+		if !slices.Contains(got, w) {
+			t.Errorf("slide has no a:t %q: %q", w, got)
+		}
+	}
+	if rels := p["ppt/slides/_rels/slide1.xml.rels"]; !strings.Contains(rels, `Target="https://example.com/a_b" TargetMode="External"`) {
+		t.Errorf("slide rels %s", rels)
+	}
+	if _, ok := p["ppt/media/image1.png"]; !ok {
+		t.Error("no picture in the deck")
+	}
+}
+
+// elementTexts are the words of each element called name in an XML part, in order.
+func elementTexts(t *testing.T, part string, name xml.Name) []string {
+	t.Helper()
+	var out []string
+	var b strings.Builder
+	inside := false
+	d := xml.NewDecoder(strings.NewReader(part))
+	for {
+		tok, err := d.Token()
+		if errors.Is(err, io.EOF) {
+			return out
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		switch tok := tok.(type) {
+		case xml.StartElement:
+			if tok.Name == name {
+				inside = true
+				b.Reset()
+			}
+		case xml.CharData:
+			if inside {
+				b.Write(tok)
+			}
+		case xml.EndElement:
+			if inside && tok.Name == name {
+				inside = false
+				out = append(out, b.String())
+			}
+		}
+	}
+}
+
 func TestXlsx(t *testing.T) {
 	spec := `{"sheets":[{"name":"销售/汇总","header":["月份","收入","日期","达标"],"rows":[["1月",1200.5,"2026-01-31",true],["2月",1350,"2026-02-28",false],` +
 		`["合计","=SUM(B2:B3)",null,null]],"formats":["","#,##0.00","yyyy-mm-dd",""]},{"name":"销售/汇总","rows":[["无表头",1]]}]}`
@@ -240,6 +321,59 @@ func TestXlsxFromCSV(t *testing.T) {
 	}
 }
 
+// Excel's limits ("Excel specifications and limits"): a cell holds 32,767 characters counted in UTF-16, a formula
+// 8,192 after its =, a sheet A1:XFD1048576. Past them Excel repairs the file and cuts or drops what does not fit, so
+// the workbook is refused instead, naming the sheet and the cell. Text a formula joins past a cell's limit is
+// #VALUE!, as in Excel.
+func TestXlsxRefusesWhatExcelCannotHold(t *testing.T) {
+	sheet := func(header, rows string) []byte {
+		return []byte(`{"sheets":[{"name":"Data","header":` + header + `,"rows":` + rows + `}]}`)
+	}
+	text := func(s string) string {
+		b, _ := json.Marshal(s)
+		return string(b)
+	}
+	full := strings.Repeat("a", 32767)
+	longest := "=" + strings.Repeat("1+", 4095) + "11" // 8,192 characters after the =
+	data, err := Xlsx(sheet(`[]`, `[[`+text(full)+`,`+text(longest)+`,`+text(strings.Repeat("\U0001F600", 16383)+"a")+`,`+text(strings.Repeat("b", 20000))+`,"=A1&D1"]]`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := parts(t, data)["xl/worksheets/sheet1.xml"]
+	for _, want := range []string{`<c r="A1" t="inlineStr"><is><t xml:space="preserve">` + full + `</t>`, `<c r="B1"><f>` + longest[1:] + `</f><v>4106</v></c>`,
+		`<c r="E1" t="e"><f>A1&amp;D1</f><v>#VALUE!</v></c>`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("sheet has no %.80s…", want)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		src  []byte
+		want []string
+	}{
+		{"a cell of 32768 characters", sheet(`[]`, `[[`+text(full+"a")+`]]`), []string{`sheet "Data": A1:`, "32768", "32767"}},
+		{"a header of 32768 characters", sheet(`["x",`+text(full+"a")+`]`, `[]`), []string{"B1", "32767"}},
+		{"16384 characters outside the BMP", sheet(`[]`, `[[1],[2,`+text(strings.Repeat("\U0001F600", 16384))+`]]`), []string{"B2", "32768", "32767"}},
+		{"a formula of 8193 characters", sheet(`[]`, `[[`+text(longest+"1")+`]]`), []string{"A1", "8193", "8192"}},
+		{"16385 cells in a row", sheet(`[]`, `[[`+strings.Repeat("1,", 16384)+`1]]`), []string{"XFE1", "16385", "16384"}},
+		{"1048577 rows", sheet(`["x"]`, `[`+strings.Repeat("[],", 1048575)+`[]]`), []string{"1048577", "1048576"}},
+	} {
+		_, err := Xlsx(c.src, "")
+		if err == nil {
+			t.Errorf("%s: written", c.name)
+			continue
+		}
+		for _, want := range c.want {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: %v has no %s", c.name, err, want)
+			}
+		}
+	}
+	if _, err := XlsxFromCSV([]byte("Name\n"+full+"a\n"), "Data", ""); err == nil || !strings.Contains(err.Error(), `sheet "Data": A2:`) {
+		t.Errorf("a CSV field of 32768 characters: %v", err)
+	}
+}
+
 // The command writes next to its input (or -o), prints the file's absolute path with what check says, and says
 // what went wrong on one line.
 func TestMain(t *testing.T) {
@@ -280,6 +414,53 @@ func TestMain(t *testing.T) {
 	errOut.Reset()
 	if code := Main([]string{"check", in}, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "not an Office file") {
 		t.Errorf("checking Markdown: %d %s", code, errOut.String())
+	}
+}
+
+// The command never writes over its input: `office docx notes.docx`, or -o naming the input (itself, a hard link or a
+// symbolic link), would read the document as Markdown and replace it with what that makes. Into another file, an
+// Office file is no input either.
+func TestMainRefusesToWriteOverItsInput(t *testing.T) {
+	dir := t.TempDir()
+	md := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(md, []byte("# Plan\n\nOne paragraph.\n\n## Next\n\nAnother one.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := Main([]string{"docx", md}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	doc := filepath.Join(dir, "notes.docx")
+	before, err := os.ReadFile(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hard := filepath.Join(dir, "same.docx")
+	if err := os.Link(doc, hard); err != nil {
+		t.Fatal(err)
+	}
+	cases := [][]string{{"docx", doc}, {"docx", doc, "-o", doc}, {"docx", "-o", hard, doc}}
+	if link := filepath.Join(dir, "link.docx"); os.Symlink(doc, link) == nil {
+		cases = append(cases, []string{"docx", doc, "-o", link})
+	}
+	for _, args := range cases {
+		var errOut bytes.Buffer
+		if code := Main(args, io.Discard, &errOut); code != 2 || !strings.Contains(errOut.String(), "would write over its input") {
+			t.Errorf("%q: exit %d: %s", args, code, errOut.String())
+		}
+		if after, err := os.ReadFile(doc); err != nil || !bytes.Equal(after, before) {
+			t.Fatalf("%q changed the document (%d bytes, was %d): %v", args, len(after), len(before), err)
+		}
+	}
+	if info, err := Check(doc); err != nil || fmt.Sprint(info["headings"]) != "[Plan Next]" {
+		t.Errorf("check: %v %v", info, err)
+	}
+	other := filepath.Join(dir, "other.docx")
+	var errOut bytes.Buffer
+	if code := Main([]string{"docx", doc, "-o", other}, io.Discard, &errOut); code != 2 || !strings.Contains(errOut.String(), "is an Office file") {
+		t.Errorf("an Office file as input: exit %d: %s", code, errOut.String())
+	}
+	if _, err := os.Stat(other); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("wrote %s: %v", other, err)
 	}
 }
 

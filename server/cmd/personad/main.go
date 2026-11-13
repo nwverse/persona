@@ -22,6 +22,7 @@ import (
 	"github.com/nwverse/persona/server/internal/hubcli"
 	"github.com/nwverse/persona/server/internal/managercli"
 	"github.com/nwverse/persona/server/internal/relay"
+	"github.com/nwverse/persona/server/internal/shareproxy"
 	"github.com/nwverse/persona/server/internal/supervise"
 	"github.com/nwverse/persona/server/internal/update"
 	"github.com/nwverse/persona/server/internal/voice"
@@ -54,25 +55,29 @@ const usage = `usage:
                            unless hub.json says assistant.external (token: stdin or PERSONA_ASSISTANT_TOKEN)
   personad assistant drop-shared-tables [--yes]  drop the built-in manager's old tables from the hub's database, once
                            its data moved into its own (without --yes: list them)
+  personad assistant north-star [--date YYYY-MM-DD] [--split RFC3339] [--tz Area/City] [--brief en]
+                           read the interruption and availability north star from the databases, read-only
   personad manager join|run|install|uninstall|status
                            another manager made in the app: trade its install code, run it, install it as a service
                            (docs/assistant/managers.md; personad manager for the details)
 ` + nodecmd.NodeUsage + `
 ` + nodecmd.Usage + `
+  personad share-http --listen <address> --upstream <loopback HTTP origin> --public-origin <HTTP sharing origin> --hub-config <private configuration>
+                           isolated anonymous sharing ingress on a separate unprivileged port (docs/server/agent-sharing.md)
   personad relay [config]   run the push relay (config ~/.persona/relay.json): pushes for hubs without the app's APNs
                            key, payloads sealed to the phone (docs/operations/push-relay.md)
   personad supervise [--manager-only [--hub <hub address>]]
                            the hub and the built-in manager side by side in one container, each started again when it
                            stops (the hub image runs it; docs/operations/docker.md)
-  personad voice            the built-in voice extension: the hub runs it (hub.json extensions, docs/extensions/extensions.md「内置语音扩展」)
+  personad voice            the built-in voice extension: the hub runs it (hub.json extensions, docs/extensions/extensions.md "Built-in voice extension")
   personad extension …      extensions on the hub's machine: list, install, upgrade, rollback, enable, disable, config,
-                           secret, uninstall, markets (docs/extensions/extensions.md「命令行」; personad extension for the details;
+                           secret, uninstall, markets (docs/extensions/extensions.md "Command line"; personad extension for the details;
                            also personad ext …, and personad plugin … as before)
 ` + nodecmd.SysmonUsage + `
-  personad release manifest|check-next …
-                           the publisher's release manifest and checks (scripts/release/publish.sh, docs/operations/hub-update.md「发布」)
+  personad release manifest|verify|check-next …
+                           the publisher's release manifest and checks (scripts/release/publish.sh, docs/operations/hub-update.md "Public publishing")
   personad update-watch <pending>
-                           the watchdog the hub starts over its own update (docs/operations/hub-update.md「回滚」)
+                           the watchdog the hub starts over its own update (docs/operations/hub-update.md "Updating")
   personad version [-v]     the version; -v adds the channel and build number`
 
 func main() {
@@ -122,6 +127,8 @@ func main() {
 		err = managercli.Assistant(ctx, buildInfo(), os.Args[2:], os.Stdin)
 	case "manager": // a manager made in the app: join, run, install as a service (docs/assistant/managers.md)
 		err = managercli.Manager(ctx, buildInfo(), os.Args[2:])
+	case "share-http":
+		err = shareproxy.Run(ctx, os.Args[2:], os.Stderr)
 	case "relay":
 		if len(os.Args) > 3 { // only the config path: anything after it would be ignored
 			err = usageError("usage: " + commandName() + " relay [config]")

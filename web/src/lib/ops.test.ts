@@ -27,6 +27,10 @@ beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => "tok" }));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("what counts as a gap", () => {
+  it.each(["kb_disabled", "kb_unavailable", "kb_read_only", "assistant_offline"])("never retries a coded %s as a connection gap", (code) => {
+    expect(isTransient(new ApiError(503, "Request failed", { code }))).toBe(false);
+  });
+
   it("a failed fetch and a proxy's 502/503/504 are gaps; the hub's own answers are not", () => {
     expect(isTransient(new TypeError("Failed to fetch"))).toBe(true);
     expect(isTransient(new ApiError(502, "HTTP 502", { error: "<html>" }, false))).toBe(true);
@@ -119,6 +123,16 @@ describe("a write through a gap", () => {
     await expect(untilDelivered(run, clock)).rejects.toBeInstanceOf(ApiError);
     expect(run).toHaveBeenCalledTimes(1);
     expect(clock.waits).toEqual([]);
+  });
+});
+
+describe("operation owner retirement", () => {
+  it("does not retry a send after its captured login or manager retired", async () => {
+    let current = true;
+    const fetcher = vi.fn(async () => { current = false; throw new TypeError("Failed to fetch"); });
+    vi.stubGlobal("fetch", fetcher);
+    await expect(apiOp("/sessions/m/s/messages", { method: "POST", opId: OP, isAuthContextCurrent: () => current }, fakeClock())).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
 

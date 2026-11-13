@@ -175,6 +175,9 @@ func TestEchoFits(t *testing.T) {
 		{"a command with the arguments its picker chose", "/model", "<command-name>/model</command-name>\n<command-args>opus</command-args>", t0, true},
 		{"a command is not another one", "/mod", "<command-name>/model</command-name>\n<command-args>opus</command-args>", t0, false},
 		{"hook context on the user's line", "部署到测试环境", "<system-reminder>\nhook says hi\n</system-reminder>\n部署到测试环境", t0, true},
+		{"controls pasted inert", "go\x1b[201~\x1b[Z", "go<ESC>[201~<ESC>[Z", t0, true},
+		{"controls a runtime kept", "看看\x03构建", "看看\x03构建", t0, true},
+		{"inert controls are not other words", "go\x1b[201~", "go<ESC>[202~", t0, false},
 	}
 	for _, c := range cases {
 		var l echoLog

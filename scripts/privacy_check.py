@@ -30,8 +30,8 @@ mapping/fixture (only under app_store.provisioning_profiles), a config value mad
 private-words.txt takes back (an ordinary word, a machine id named after a room), the repo's own Go module path (it
 names the GitHub owner),
 CLAUDE.local.md spans that only name repo files, commands or config keys, a listed word of one case run where the text
-spells it only across a camel-case join ("fooBar", only_in_camel_joins), and in site/ the contact address and domain
-the App Store and the OAuth consent screen publish anyway.
+spells it only across a camel-case join ("fooBar", only_in_camel_joins), and in site/ and the public installation docs
+the contact address and domain the App Store and the OAuth consent screen publish anyway.
 """
 import ast, io, ipaddress, json, os, plistlib, re, subprocess, sys
 from functools import lru_cache
@@ -313,6 +313,58 @@ def term_sources():
     return {v: sorted(found[v]) for v in sorted(found, key=len, reverse=True)}, public, waivable
 
 
+# Exact governance references, not a global waiver for an administrator's coincident private first name (#2568).
+# A changed line cannot approve itself: both the owner and each rendered line must already exist on origin/main.
+PUBLIC_ADMIN_LINES = {
+    ".github/CODEOWNERS": ("/docs/SUPER_RULES.md @{login}",),
+    "CLAUDE.md": ("GitHub issue and explicit approval from administrator `{login}` in that issue before editing or opening a PR.",),
+    "docs/README.md": ("file require explicit approval from administrator `{login}` in a GitHub issue before editing or opening a linked PR.",),
+    "docs/SUPER_RULES.md": (
+        "   Wait for administrator `{login}` to explicitly approve the proposed change in that issue. Only after that approval",
+        "   open the issue and wait for `{login}`'s explicit approval before proceeding.",
+    ),
+}
+PUBLIC_ADMIN_SOURCES = frozenset({"config app_store.external.review.first_name", "config app_store.testers.first_name"})
+
+
+def regular_governance_files(head=None):
+    """A symlink's target is not governance prose, even if its text equals an approved reference."""
+    args = ["ls-tree", "-z", head] if head else ["ls-files", "--stage", "-z"]
+    records = subprocess.run(["git", "-C", ROOT, *args, "--", *PUBLIC_ADMIN_LINES],
+                             capture_output=True, check=True, timeout=10).stdout.split(b"\0")
+    return {record.split(b"\t", 1)[1].decode("utf-8") for record in records
+            if b"\t" in record and record.split(b" ", 1)[0] in (b"100644", b"100755")}
+
+
+def public_admin_lines():
+    """Exact published references by path; missing/unreadable evidence grants no exception."""
+    try:
+        base = subprocess.run(["git", "-C", ROOT, "rev-parse", "--verify", "origin/main^{commit}"],
+                              capture_output=True, check=True, text=True, timeout=10).stdout.strip()
+        regular = regular_governance_files(base)
+        published = git_file_data(list(regular), base + ":")
+        owner = re.fullmatch(r"/docs/SUPER_RULES\.md @([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)",
+                             published.get(".github/CODEOWNERS", b"").decode("utf-8").strip())
+        if not owner:
+            return {}
+        login = owner.group(1)
+        return {path: {line: login for template in templates
+                       for line in (template.format(login=login),)
+                       if line in published.get(path, b"").decode("utf-8").splitlines()}
+                for path, templates in PUBLIC_ADMIN_LINES.items()}
+    except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return {}
+
+
+def governance_words(path, line, words, sources, published):
+    """Only the exact published login loses its first-name sources on an exact authorized line."""
+    login = published.get(path, {}).get(line)
+    if login is None:
+        return words
+    return [w for w in words if not (w == login and sources.get(w)
+                                    and set(sources[w]) <= PUBLIC_ADMIN_SOURCES)]
+
+
 def terms():
     """Words to look for, longest first, and those of them allowed in PUBLIC_DIRS."""
     found, public, _ = term_sources()
@@ -353,6 +405,9 @@ REAL_TLDS = {"com", "net", "org", "io", "cn", "dev", "app", "ai", "co", "me", "c
              "gov", "uk", "jp", "us", "de", "fr", "hk", "tw", "sg", "in", "ru", "kr", "tech", "cloud", "site", "work", "biz"}
 # The public site (site/) shows a contact address on purpose: the OAuth consent screen requires one.
 PUBLIC_DIRS = ("site/",)
+# The site's own address is also quoted by the public install and getting-started entry points. Keep its configured
+# value out of the private-word set in exactly these files; other config values and addresses remain private.
+PUBLIC_SITE_DOCS = {"README.md", "README.zh-CN.md", "docs/operations/getting-started.md"}
 
 # Names that are never in the repository, in any spelling (#4967): vendors and internal repositories Persona only
 # reaches through extensions, which bring their own names. Case-insensitive, with a hyphen, underscore, space or
@@ -504,16 +559,32 @@ def git(*args):
     return subprocess.run(["git", "-C", ROOT, *args], capture_output=True, check=True).stdout
 
 
+# Git's exit status for an option it does not know (parse-options' usage error).
+GIT_USAGE_ERROR = 129
+
+
+def git_batch(names, prefix):
+    """`git cat-file --batch` output for prefix + each name, in order (no name holds a line break). Requests are
+    NUL-separated with -z; Git before 2.36 has no -z for cat-file and refuses it as an unknown option (#3224), so
+    they then go one per line, which reads the same objects."""
+    for z in (True, False):
+        end = b"\0" if z else b"\n"
+        requests = b"".join((prefix + name).encode() + end for name in names)
+        try:
+            return subprocess.run(["git", "-C", ROOT, "cat-file", "--batch", *(["-z"] if z else [])],
+                                  input=requests, capture_output=True, check=True, timeout=120).stdout
+        except subprocess.CalledProcessError as e:
+            if not z or e.returncode != GIT_USAGE_ERROR:
+                raise
+
+
 def git_file_data(files, prefix):
     """Read the same index/commit blobs as git show, using one bounded Git process."""
     safe = [name for name in files if "\n" not in name and "\r" not in name]
     data = {}
     fallback = [name for name in files if "\n" in name or "\r" in name]
     if safe:
-        requests = b"".join((prefix + name).encode() + b"\0" for name in safe)
-        output = subprocess.run(["git", "-C", ROOT, "cat-file", "--batch", "-z"],
-                                input=requests, capture_output=True, check=True, timeout=120).stdout
-        stream = io.BytesIO(output)
+        stream = io.BytesIO(git_batch(safe, prefix))
         for name in safe:
             header = stream.readline()
             if header.endswith(b" missing\n"):
@@ -638,6 +709,13 @@ def main():
     span = commit_range(option("--range")) if "--range" in sys.argv else None
     sources, public_words, waivable = term_sources()
     words = list(sources)
+    governance = public_admin_lines() if any(set(where) <= PUBLIC_ADMIN_SOURCES for where in sources.values()) else {}
+    if governance:
+        try:
+            regular = regular_governance_files(span[1] if span and not staged else None)
+            governance = {path: lines for path, lines in governance.items() if path in regular}
+        except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            governance = {}
     modules = module_paths()
     if staged:
         files = git("diff", "--cached", "--name-only", "--diff-filter=ACMRT", "-z").decode().split("\0")
@@ -666,7 +744,8 @@ def main():
 
     for f in files:
         public = f.startswith(PUBLIC_DIRS)
-        allowed = [w for w in words if w not in public_words] if public else words
+        allowed = ([w for w in words if w not in public_words]
+                   if public or f in PUBLIC_SITE_DOCS else words)
         for w in problems(f, words):
             report(f, "path", w)
         if f in SKIP_FILES:
@@ -696,8 +775,10 @@ def main():
                 bad.extend((f, n, kind) for n, kind in npm_lock_problems(lock_text))
         if modules:
             text = modules.sub("", text)
+        published_lines = governance if f in from_git or not os.path.islink(path) else {}
         for n, line in enumerate(text.splitlines(), 1):
-            for w in problems(line, allowed, emails=not public):
+            line_words = governance_words(f, line, allowed, sources, published_lines)
+            for w in problems(line, line_words, emails=not public):
                 report(f, n, w)
     if span:
         try:

@@ -145,7 +145,7 @@ func TestEnsureHerdrLeavesItAlone(t *testing.T) {
 			t.Fatalf("%v, %d starts", err, fl.starts.Load())
 		}
 	})
-	for _, engine := range []string{proto.EngineHerdrCore, proto.EngineOrca, proto.EnginePaseo} {
+	for _, engine := range []string{proto.EngineHerdrCore, proto.EngineOrca, proto.EnginePaseo, proto.EngineCindy} {
 		t.Run(engine, func(t *testing.T) {
 			n, _ := downHerdrNode(t)
 			n.eng.name = engine
@@ -255,47 +255,57 @@ func refusalData(t *testing.T, err error) string {
 	return string(re.Data)
 }
 
-// A start finds herdr down: the node starts it, then goes on to make the workspace in it.
+// A start finds herdr down: the node starts it, then goes on to make the workspace in it — also a start into a
+// workspace it names (a task's worktree, #4754), which goes straight to the tab.
 func TestStartStartsHerdrFirst(t *testing.T) {
-	n, f, home := herdrNode(t)
-	real := f.sock
-	dir, err := os.MkdirTemp("/tmp", "hs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	down := filepath.Join(dir, "herdr.sock")
-	h := n.hosts.Get(host.Herdr).(*herdrHost)
-	h.c.Socket = down // herdr is not running…
-	fl := &fakeLaunch{}
-	withLaunchHerdr(t, fl)
-	launchHerdr = func(_ context.Context, _, sock string) (<-chan error, error) { // …until it is started: the fake
-		fl.starts.Add(1)
-		return make(chan error), os.Symlink(real, sock)
-	}
-	f.reply("workspace.list", map[string]any{"workspaces": []any{}})
-	f.reply("workspace.create", herdrFail{Code: "internal", Message: "stop here"})
-	began := time.Now()
-	_, _ = request(t, n, "session.start", map[string]any{"cwd": home})
-	if fl.starts.Load() != 1 || len(f.trace("workspace.list")) != 1 || time.Since(began) > 2*time.Second {
-		t.Fatalf("%d starts in %s; calls %v", fl.starts.Load(), time.Since(began), f.trace())
+	for _, ws := range []string{"", "w1"} {
+		n, f, home := herdrNode(t)
+		real := f.sock
+		dir, err := os.MkdirTemp("/tmp", "hs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		down := filepath.Join(dir, "herdr.sock")
+		h := n.hosts.Get(host.Herdr).(*herdrHost)
+		h.c.Socket = down // herdr is not running…
+		fl := &fakeLaunch{}
+		withLaunchHerdr(t, fl)
+		launchHerdr = func(_ context.Context, _, sock string) (<-chan error, error) { // …until it is started: the fake
+			fl.starts.Add(1)
+			return make(chan error), os.Symlink(real, sock)
+		}
+		f.reply("workspace.list", map[string]any{"workspaces": []any{}})
+		f.reply("workspace.create", herdrFail{Code: "internal", Message: "stop here"})
+		f.reply("tab.create", herdrFail{Code: "internal", Message: "stop here"})
+		began := time.Now()
+		params := map[string]any{"cwd": home}
+		next := "workspace.list"
+		if ws != "" {
+			params["workspace_id"], next = ws, "tab.create"
+		}
+		_, _ = request(t, n, "session.start", params)
+		if fl.starts.Load() != 1 || len(f.trace(next)) != 1 || time.Since(began) > 2*time.Second {
+			t.Fatalf("workspace %q: %d starts in %s; calls %v", ws, fl.starts.Load(), time.Since(began), f.trace())
+		}
 	}
 }
 
 // The server's environment is the user's login shell's, not the node's: a launcher's ANTHROPIC_*, proxies, the
 // node's PATH and herdr's own pane variables (a node started from a herdr pane) never reach it — the variables that
-// say who and where the user is, and where herdr's socket is, do.
+// say who and where the user is, and where herdr's socket and config file are, do (the config file the server reads is
+// the one herdr.WorktreesDir reads).
 func TestHerdrServerEnvIsClean(t *testing.T) {
 	environ := []string{"HOME=/Users/me", "USER=me", "LOGNAME=me", "TMPDIR=/tmp/me/", "LANG=zh_CN.UTF-8",
 		"XDG_CONFIG_HOME=/Users/me/.config", "HERDR_SOCKET_PATH=/Users/me/.config/herdr/herdr.sock",
-		"ANTHROPIC_API_KEY=sk-test", "ANTHROPIC_BASE_URL=https://gateway.example.com", "ANTHROPIC_MODEL=m",
+		"HERDR_CONFIG_PATH=/Users/me/herdr.toml", "ANTHROPIC_API_KEY=sk-test", "ANTHROPIC_BASE_URL=https://gateway.example.com", "ANTHROPIC_MODEL=m",
 		"CLAUDE_CONFIG_DIR=/Users/me/.claude-work", "HTTPS_PROXY=http://proxy.example.com:8080", "http_proxy=http://p",
 		"ALL_PROXY=socks5://p", "NO_PROXY=localhost", "PATH=/Users/me/.persona/bin:/usr/bin", "HERDR_PANE_ID=w1:p1",
 		"HERDR_ENV=1", "TERM_PROGRAM=herdr", "SHELL=/bin/bash", "NODE_OPTIONS=--x"}
 	got := herdrServerEnv(environ, "/bin/zsh")
 	want := []string{"HOME=/Users/me", "USER=me", "LOGNAME=me", "TMPDIR=/tmp/me/", "LANG=zh_CN.UTF-8",
 		"XDG_CONFIG_HOME=/Users/me/.config", "HERDR_SOCKET_PATH=/Users/me/.config/herdr/herdr.sock",
-		"SHELL=/bin/zsh", "TERM=xterm-256color", "PATH=/usr/bin:/bin:/usr/sbin:/sbin"}
+		"HERDR_CONFIG_PATH=/Users/me/herdr.toml", "SHELL=/bin/zsh", "TERM=xterm-256color", "PATH=/usr/bin:/bin:/usr/sbin:/sbin"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("env\n got %q\nwant %q", got, want)
 	}
@@ -433,7 +443,7 @@ func TestClaudeResumeArgv(t *testing.T) {
 		Model: "opus[1m]", Hooks: "/Users/me/my hooks"}, startID)
 	want := inAgentEnv(n.dir, "HERDR_AGENT=claude /Users/me/.persona/bin/personad launch work_gw --resume "+startID+
 		" --settings /Users/me/.persona/launcher-settings/work_gw.json --mcp-config "+filepath.Join(n.dir, "mcp.json")+
-		` --model "opus[1m]" --plugin-dir "/Users/me/my hooks"`, dquote)
+		" --allowedTools "+ownToolsRule+` --model "opus[1m]" --plugin-dir "/Users/me/my hooks"`, dquote)
 	if !ok || len(argv) != 2 || argv[0] != "eval" || argv[1] != want {
 		t.Fatalf("argv %q\nwant eval %q", argv, want)
 	}
@@ -478,7 +488,7 @@ func TestPersonaClaudeIsNotResumedBare(t *testing.T) {
 	launch := n.hosts.Get(host.Herdr).(*herdrHost)
 	spec := claudeLaunch{Launcher: "work_claude", Settings: filepath.Join(personaDir(home), "claude-settings.json")}
 	n.holdResume(context.Background(), launch, "w1:p2", startID, spec)
-	cmd := func(id string) string { return startCmd("work_claude", "--resume "+id, personaDir(home)) }
+	cmd := func(id string) string { return resumeCmd("work_claude", "--resume "+id, personaDir(home)) }
 	held := resumeHeld("w1:p2", startID, cmd(startID))
 	assertTrace(t, f.trace(), held[:])
 	for _, c := range f.calls() {

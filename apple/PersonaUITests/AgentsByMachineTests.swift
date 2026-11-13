@@ -56,7 +56,8 @@ final class AgentsByMachineTests: XCTestCase {
         app.bringAboveTabBar(weather)
         XCTAssertLessThan(macbook.frame.minY, weather.frame.minY, "weather under MacBook")
         XCTAssertFalse(weather.label.contains("MacBook"), "a repository under its machine does not name it: \(weather.label)")
-        XCTAssertTrue(app.buttons["weather 的更多操作"].exists, "the repository's one space gives it its ⋯")
+        // The repository's one space gives it its actions, in its long-press menu: no ⋯ beside it (#2531).
+        XCTAssertFalse(app.buttons["weather 的更多操作"].exists, "a ⋯ beside the repository")
 
         macbook.tap()
         XCTAssertTrue(heading("MacBook").label.contains("已折叠"), heading("MacBook").label)

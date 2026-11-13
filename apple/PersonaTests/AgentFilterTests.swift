@@ -43,19 +43,23 @@ import Testing
         #expect(AgentFilter.all.state == nil)
     }
 
-    /// Lark Group is a botmux session, Terminal a herdr pane (#2526); other hosts and paneless sessions are neither.
+    /// Lark Group is a botmux session, Terminal a herdr or Tern pane (#2526, #2154); other hosts and paneless sessions are
+    /// neither.
     @Test func sourceFiltersSplitBotmuxFromHerdr() {
         var botmux = session("b", state: "idle"), herdr = session("h", state: "working"), orca = session("o", state: "idle")
+        var tern = session("t", state: "idle")
         let bare = session("n", state: "idle")
         botmux.paneID = "botmux:abc"
         herdr.paneID = "w1:p1"
         orca.paneID = "orca:1"
+        tern.paneID = "tern:201863462919" // a Tern block's number behind its kind
         #expect(botmux.source == .feishu)
         #expect(herdr.source == .terminal)
+        #expect(tern.hostKind == "tern" && tern.source == .terminal)
         #expect(orca.source == nil && bare.source == nil)
-        let all = [botmux, herdr, orca, bare]
+        let all = [botmux, herdr, orca, tern, bare]
         #expect(all.filter { AgentFilter.feishu.matches($0) }.map(\.sessionID) == ["b"])
-        #expect(all.filter { AgentFilter.terminal.matches($0) }.map(\.sessionID) == ["h"])
+        #expect(all.filter { AgentFilter.terminal.matches($0) }.map(\.sessionID) == ["h", "t"])
         #expect(AgentFilter.feishu.state == nil && AgentFilter.feishu.title == "飞书群")
     }
 
@@ -183,7 +187,7 @@ import Testing
     }
 
     /// Views about one session (its chat, its top bar) show neither the ticks nor its last line: a new last line is
-    /// no change for them; what they show is (docs/apple/ios-state.md「第 3 步」).
+    /// no change for them; what they show is (docs/apple/ios-state.md「Step 3」).
     @Test func aNewLastLineIsNoChangeForItsPage() {
         let a = session("a", state: "working", updated: 600)
         var b = a
@@ -204,7 +208,7 @@ import Testing
     }
 
     /// Time changes the list only through the order it puts agents in (rows, and spaces by their agents): a minute
-    /// passing is no change, an agent moving ahead of another is (docs/apple/ios-state.md「第 3 步」).
+    /// passing is no change, an agent moving ahead of another is (docs/apple/ios-state.md「Step 3」).
     @Test func timeIsStructureOnlyThroughTheOrder() {
         let a = session("a", state: "unread", updated: 600), b = session("b", state: "unread", updated: 500)
         var a2 = a

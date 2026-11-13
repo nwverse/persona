@@ -1,4 +1,4 @@
-// 设置 › 模型供应商's list (docs/integrations/launchers.md「同步状态」): the rc-file launchers grouped by the file they came from,
+// 设置 › 模型供应商's list (docs/integrations/launchers.md「Sync state」): the rc-file launchers grouped by the file they came from,
 // the built-in claude as one row per machine, and how each machine's list came in this time. Pure: the page draws it.
 import { t } from "../i18n";
 import { api } from "./api";
@@ -92,11 +92,11 @@ export interface BuiltinRow {
   stale: boolean;
 }
 
-/** The built-in claude, one row per machine that has it. */
+/** The built-in claude, one row per machine that has it; once hidden it is listed with the hidden ones instead (#4384). */
 export function builtinRows(list: ListedLauncher[]): BuiltinRow[] {
   const out: BuiltinRow[] = [];
   for (const l of list) {
-    if (l.source !== "builtin") continue;
+    if (l.source !== "builtin" || l.hidden) continue;
     for (const id of l.machines ?? []) out.push({ name: l.name, machine: id, version: l.versions?.[id], stale: (l.stale ?? []).includes(id) });
   }
   return out;

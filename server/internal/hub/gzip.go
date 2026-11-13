@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +52,17 @@ func gzipResponses(logf func(format string, args ...any), next http.Handler) htt
 
 // gzipWanted: the client takes gzip, and the request is one whose answer may be compressed.
 func gzipWanted(r *http.Request) bool {
+	return encodable(r) && acceptsGzip(r.Header.Values("Accept-Encoding"))
+}
+
+// brotliWanted: the client takes br, and the request is one whose answer may be compressed. Only the web client's
+// stored brotli copies use it (web.go); the hub compresses nothing as brotli itself.
+func brotliWanted(r *http.Request) bool {
+	return encodable(r) && acceptsBrotli(r.Header.Values("Accept-Encoding"))
+}
+
+// encodable: a request whose answer may be sent compressed at all.
+func encodable(r *http.Request) bool {
 	p := r.URL.Path
 	switch {
 	case r.Method == http.MethodHead, r.Method == http.MethodConnect,
@@ -58,12 +70,24 @@ func gzipWanted(r *http.Request) bool {
 		p == "/admin", strings.HasPrefix(p, "/admin/"), strings.HasPrefix(p, "/api/v1/admin/"):
 		return false
 	}
-	return acceptsGzip(r.Header.Values("Accept-Encoding"))
+	return true
 }
 
 // acceptsGzip reads Accept-Encoding: gzip, or *, with a q above 0.
 func acceptsGzip(values []string) bool {
-	star := false
+	return acceptsCoding(values, true, "gzip", "x-gzip")
+}
+
+// acceptsBrotli reads Accept-Encoding: br with a q above 0. A bare * does not count: a client that names no br
+// (Go's, curl's) gets gzip as before, and browsers all name it.
+func acceptsBrotli(values []string) bool {
+	return acceptsCoding(values, false, "br")
+}
+
+// acceptsCoding: Accept-Encoding names one of codings (the first that it names decides) with a q above 0, or, when
+// star counts, has * with a q above 0.
+func acceptsCoding(values []string, star bool, codings ...string) bool {
+	starred := false
 	for _, v := range values {
 		for _, part := range strings.Split(v, ",") {
 			name, params, _ := strings.Cut(part, ";")
@@ -75,15 +99,16 @@ func acceptsGzip(values []string) bool {
 					}
 				}
 			}
-			switch strings.ToLower(strings.TrimSpace(name)) {
-			case "gzip", "x-gzip":
+			name = strings.ToLower(strings.TrimSpace(name))
+			switch {
+			case slices.Contains(codings, name):
 				return q > 0
-			case "*":
-				star = q > 0
+			case star && name == "*":
+				starred = q > 0
 			}
 		}
 	}
-	return star
+	return starred
 }
 
 // gzipWriter holds the start of a response until it knows whether to compress it. That is when gzipMinSize bytes

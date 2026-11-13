@@ -85,7 +85,7 @@ node <Persona repository>/integrations/dsh/companion.mjs --dsh <DSH installation
 
 ### Automatic updates
 
-The plugin has two layers (generic approach in `docs/integrations/runtimes.md`, "Automatic updates"): DSH loads `index.js`, a stable loader; each version of plugin code (`lib/plugin.js`, `lib/dsh.js`… and
+The plugin has two layers (generic approach in `docs/integrations/runtimes.md`, "Auto-update"): DSH loads `index.js`, a stable loader; each version of plugin code (`lib/plugin.js`, `lib/dsh.js`… and
 `runtime-sdk`) lives in `~/.persona/runtime-packages/persona-dsh-runtime/<hash>/`, imported by the loader. personad embeds these files in its binary at build time.
 The plugin reports its hash when connecting to node; if node ships a different hash, it offers the package. The plugin fetches and verifies it, waits until it has no cards on the phone, stops the old version, and loads the new one. DSH sessions and Web GUI are unaffected
 (the plugin is only an observer; the phone list pauses for a few seconds during switching). This bypasses DSH plugin management and hot reload entirely: symlinked plugins are outside the hot-reload watch directory, so file changes do not take effect;
@@ -107,7 +107,7 @@ plugin management inside phone-driven sessions also reports `HMR transactions ca
 | Streaming | `text-delta` from `agent/assistant-stream`; send the first chunk immediately, then at most once every 120 ms (whole text) |
 | Send message | `sessionController.prompt`: `requestId` = app `client_msg_id` (DSH deduplicates, so retries do not duplicate); `queue` when idle (new turn), `steer` while working (insert into the current turn, like Claude queued input). Images carry base64 directly |
 | Interrupt | `sessionController.cancel` |
-| Create | Select launcher `dsh` when creating in the app (available only while DSH is connected) → `sessionController.create {cwd}` |
+| Create | Select launcher `dsh` when creating in the app (available only while DSH is connected). Resolve the selected directory with `workspaceRegistry.resolveByPath`: an exact canonical-path match uses `sessionController.create {workspaceId}` so DSH attaches the session; otherwise use `{cwd}`. The two fields are mutually exclusive. A missing directory (`ENOENT`) or a profile without workspace lookup retains cwd-only creation; DSH creates missing directories. Other lookup failures stop before creating a session. When a model is chosen, DSH's configured model groups are advertised as launchers/models, and the plugin applies it via `sessionController.selectModel` after creation and before the first prompt; unknown models refuse creation. |
 | Rename | Session name → `sessionController.rename`; ignore tab names |
 | Close | `workspaceRegistry.archiveSession(id, {stopActivity: true})`: same as Web GUI archiving; stop the current turn, subagents, background tasks, and scheduled tasks together; then omit from the list. Can be unarchived in DSH |
 | Phone tools | Hub tools (`mcp.tools` forwarded by node) register in DSH as `mcp__persona__<name>`; calls go through node `mcp.call` to the hub with the calling session attached. Result text becomes tool output; error results become tool failures |
@@ -173,7 +173,7 @@ DSH authorization has only "Allow once"; the Lark gate's "Always allow in this c
 ## Subagents and background tasks
 
 DSH Agents often delegate work before ending a turn: background subagents (the `subagent` tool returns results to the parent and wakes it on completion), workflows, and background commands.
-The parent session itself is "Complete" when its turn ends, but the work is not finished. The plugin attaches these to the parent row using the same fields as Claude sessions (`docs/integrations/runtimes.md`, "Subagents and background tasks"):
+The parent session itself is "Complete" when its turn ends, but the work is not finished. The plugin attaches these to the parent row using the same fields as Claude sessions (`docs/integrations/runtimes.md`, "Sub-Agents and background tasks"):
 
 | Persona | DSH |
 | --- | --- |
@@ -187,7 +187,7 @@ The hub sends "Complete" notifications only after those finish and the parent's 
 
 Subagents are read-only, with no sending or renaming (returns `unsupported`): they are controlled by the parent, so give instructions there.
 
-Authorization and questions: when DSH delegates, it pins the child authorization policy to `never` (`captureDelegatedPolicyOverrides` in DSH); operations requiring authorization are rejected directly, and `ask_user_question` fails with
+Authorization and questions: when DSH delegates, it pins the child authorization policy to `never`; operations requiring authorization are rejected directly, and `ask_user_question` fails with
 `DELEGATED_CALLER`. These requests never enter a response chain, reach neither phone nor Web GUI, and do not block waiting for a user. If a child policy is changed back to `ask` in DSH,
 its authorization cards attach to the **parent session** on the phone (which lists the parent), with a `reason` prefix identifying the child ("Subagent ‘<name>’: …"); denial text is not steered (subagents do not accept interjections).
 
@@ -205,6 +205,7 @@ Offline sessions listed by the companion (when DSH is not running) omit subagent
   (the DSH launcher keeps its `dsh` source in the new-chat picker and is not listed under Settings › Models).
 - `cd integrations/dsh && npm test`: mapping, pagination, sending, watch continuity, streaming, authorization / questions / plans / late answers, reconnection; archiving and closing, hello / card ids after renaming,
   phone-tool registration and calls (`dsh.test.js`); companion offline lists, pagination, wakeup and handover, rejection of old nodes (`files.test.js`).
+- Workspace creation contract: `DSH_API_ROOT=<isolated DSH backend package root> node integrations/dsh/e2e/workspace.mjs` loads published DSH registry/controller/session-storage packages and sends Persona runtime RPCs. It checks exact and symlinked directories, normalization, unmatched/child directories, new-directory creation, non-ENOENT lookup failure without partial creation, and durable workspace membership. The Agent factory and node peer are fixtures; no model, browser or existing DSH instance is used. Tested with the DSH backend packages at `0.1.2-alpha.2`; this is not a full DSH application/browser acceptance run. The script removes its fixture by default; `KEEP=1` retains the synthetic storage for inspection.
 - Node: `go test ./internal/node -run 'TestRuntime'` (runtime id conflicts, same-process reconnection, single-owner launchers, three handover outcomes: `runtimes_identity_test.go`;
   subagent/background rows, `<session>@<child>` calls and pushes routed to the parent's runtime: `TestRuntimeSubagentsAndBackground`; daemon prefixes: `TestDaemonSubagentIDs`).
   Plugin: subagent / workflow / background task start and finish, pagination and watch using parent addresses, child authorizations and questions attached to the parent, recovering preexisting children from catalogs and job tables (last three in `dsh.test.js`).

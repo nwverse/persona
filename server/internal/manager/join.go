@@ -130,7 +130,7 @@ func joinAddress(ctx context.Context, o JoinOptions) (hub, code string, err erro
 	}
 	code = strings.TrimSpace(o.Code)
 	if code == "" {
-		return "", "", errors.New("没有安装码：在 App 的「设置 › 管理者 › 新建」里拿一个")
+		return "", "", errors.New("没有安装码：在 App 的「设置 › 助手 › 新建」里拿一个")
 	}
 	if u, err := url.Parse(hub); err == nil && u.Scheme == "http" && !o.AllowPlaintext {
 		public := o.PublicHost
@@ -176,7 +176,7 @@ func redeem(ctx context.Context, o JoinOptions, hub, code string) (joinReply, er
 	case http.StatusUnauthorized:
 		// Trying again with the same code cannot help: a configuration error (manager join exits 2; manager run
 		// --join waits for manager.json instead, as a container would be restarted on any exit).
-		return j, ConfigError{errors.New("hub 不认这个安装码：它不对、过期了（10 分钟）或者已经用过；在 App 里给这个管理者重新拿一个")}
+		return j, ConfigError{errors.New("hub 不认这个安装码：它不对、过期了（10 分钟）或者已经用过；在 App 里给这个助手重新拿一个")}
 	case http.StatusForbidden:
 		var e struct {
 			Code  string `json:"code"`

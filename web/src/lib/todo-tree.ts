@@ -6,6 +6,8 @@ import { buildTodoAgentGroups, interruptedAgent, todoStatus, type SessionLookup,
 import { usageLimitAgent } from "./usage-limit";
 import type { Machine, Session } from "./types";
 import { stateName } from "./state-labels";
+import { sameValue } from "./stable-lines";
+import type { DirectionCounts, DirectionTaskState } from "./direction-tree";
 
 /** The one-word state every node of the tree shows (#2526): "Needs you" before "Working" before "Waiting in the
  *  background" (#6045) before "Done". */
@@ -35,6 +37,8 @@ export interface TreeTodo {
   name: string;
   status?: TodoStatus;
   state: TreeState;
+  /** A task of the direction tree (#4352): its state as the hub decided it, shown in place of `state`'s word. */
+  taskState?: DirectionTaskState;
   agents: TreeAgent[];
   sessions: Session[];
   folded: boolean;
@@ -47,6 +51,8 @@ export interface TreeProject {
   todos: TreeTodo[];
   sessions: Session[];
   folded: boolean;
+  /** A pinned direction of the direction tree (#4352) in place of a project: its counts on the title line. */
+  direction?: { counts: DirectionCounts; secretary: boolean };
 }
 
 export interface LooseGroup {
@@ -86,6 +92,11 @@ export function todoTreeState(status: TodoStatus, agents: readonly Session[] = [
     return states.includes("bg_waiting") && !states.includes("working") ? "bg_waiting" : "working";
   }
   return "done";
+}
+
+/** The most urgent of some states ("Done" for none). */
+export function worstTreeState(states: TreeState[]): TreeState {
+  return worst(states);
 }
 
 function worst(states: TreeState[]): TreeState {
@@ -216,11 +227,54 @@ export function buildTodoTree(all: Session[], machines: Machine[], todos: Todo[]
   return { projects: list, loose: loose.map((g) => looseTree(g, now)) };
 }
 
+/** `next`, with every node (project, to-do, agent) and list that comes out the same as in `prev` (sameValue) replaced
+ *  by `prev`'s object, matched by key; `prev` itself when nothing changed. The tree is built afresh on every push, and
+ *  its rows are memoized: shared nodes keep the rows under them from rendering again (a push of one agent, or of the
+ *  machines' load, re-rendered the whole tree). Sessions are leaves: kept when equal, never merged. */
+export function shareTree(prev: TodoTree | undefined, next: TodoTree): TodoTree {
+  return prev ? shareNode(prev, next) : next;
+}
+
+/** The fields that hold lists of tree nodes (objects with a `key`): shared node by node; any other field is a leaf. */
+const NODE_LISTS = new Set(["projects", "loose", "todos", "agents", "children"]);
+
+function shareNode<T extends object>(prev: T, next: T): T {
+  const before = prev as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  let same = Object.keys(before).length === Object.keys(next).length;
+  for (const [k, v] of Object.entries(next)) {
+    const old = before[k];
+    const had = Object.prototype.hasOwnProperty.call(before, k);
+    const kept = !had
+      ? v
+      : NODE_LISTS.has(k) && Array.isArray(old) && Array.isArray(v)
+        ? shareNodes(old as { key: string }[], v as { key: string }[])
+        : sameValue(old, v) ? old : v;
+    if (!had || kept !== old) same = false;
+    out[k] = kept;
+  }
+  return same ? prev : (out as T);
+}
+
+function shareNodes<T extends { key: string }>(prev: T[], next: T[]): T[] {
+  const byKey = new Map(prev.map((n) => [n.key, n]));
+  let same = prev.length === next.length;
+  const out = next.map((n, i) => {
+    const old = byKey.get(n.key);
+    const kept = old ? shareNode(old, n) : n;
+    if (kept !== prev[i]) same = false;
+    return kept;
+  });
+  return same ? prev : out;
+}
+
 function looseTree(g: AgentGroup, now: number): LooseGroup {
   const byProject = new Map<string, Session[]>();
   for (const s of g.sessions) {
     const key = projectKey(repoOf(s.cwd ?? "").name);
-    byProject.set(key, [...(byProject.get(key) ?? []), s]);
+    const list = byProject.get(key);
+    if (list) list.push(s);
+    else byProject.set(key, [s]);
   }
   const projects: TreeTodo[] = [...byProject.entries()].map(([key, sessions]) => {
     const state = worst(sessions.map(agentTreeState));
@@ -248,6 +302,9 @@ export interface TodoProjectGroup {
   state: TreeState;
   todos: Todo[];
   folded: boolean;
+  /** A knowledge-base project (an area of work, #2581): open to-dos the user keeps there, so it never folds for being
+   *  quiet, and "Done" (no agent at work) is not said of it. */
+  area?: boolean;
 }
 
 /** A todo's agents that are still on it, as the lookup has them. */
@@ -255,24 +312,29 @@ function liveAgents(td: Todo, lookup: SessionLookup): Session[] {
   return (td.agents ?? []).filter((a) => !a.released_at).map((a) => lookup(a.machine_id, a.session_id)).filter((s): s is Session => Boolean(s));
 }
 
-export function groupTodosByProject(todos: Todo[], lookup: SessionLookup, now = Date.now()): TodoProjectGroup[] {
-  const map = new Map<string, Todo[]>();
+/** Open to-dos by project (#2526, #2581): the knowledge-base project a to-do was put in first (named by projectName),
+ *  else the repository its agents work in; those with neither last ("Unsorted"). Groups that need the user come
+ *  first within each of the three; the to-dos keep their order. */
+export function groupTodosByProject(todos: Todo[], lookup: SessionLookup, now = Date.now(), projectName: (slug: string) => string = (slug) => slug): TodoProjectGroup[] {
+  const map = new Map<string, { name: string; tier: number; list: Todo[] }>();
   for (const td of todos) {
-    const name = projectOfTodo(td, lookup);
-    map.set(name, [...(map.get(name) ?? []), td]);
+    const repo = td.project ? "" : projectOfTodo(td, lookup);
+    const [key, name, tier] = td.project
+      ? [`todos-kb:${td.project}`, projectName(td.project), 0]
+      : repo
+        ? [`todos-project:${repo}`, repo, 1]
+        : ["todos-project:\u0000", t("lib-todo-tree.unsorted"), 2];
+    const g = map.get(key) ?? { name, tier, list: [] };
+    g.list.push(td);
+    map.set(key, g);
   }
-  const groups = [...map.entries()].map(([name, list]) => {
+  const groups = [...map.entries()].map(([key, { name, tier, list }]) => {
     const states = list.map((td) => todoTreeState(todoStatus(td, lookup), liveAgents(td, lookup)));
     const state = worst(states);
     const sessions = list.flatMap((td) => (td.agents ?? []).filter((a) => !a.released_at).map((a) => lookup(a.machine_id, a.session_id)).filter((s): s is Session => Boolean(s)));
     const touched = Math.max(latest(sessions), ...list.map((td) => Date.parse(td.updated_at) || 0));
-    return {
-      key: `todos-project:${name || "\u0000"}`,
-      name: name || t("lib-todo-tree.no_agent"),
-      state,
-      todos: list,
-      folded: state === "done" && now - touched > STALE_MS,
-    };
+    const area = tier === 0;
+    return { group: { key, name, state, todos: list, folded: !area && state === "done" && now - touched > STALE_MS, ...(area && { area }) }, tier };
   });
-  return groups.sort((a, b) => Number(a.key.endsWith("\u0000")) - Number(b.key.endsWith("\u0000")) || TREE_RANK[a.state] - TREE_RANK[b.state]);
+  return groups.sort((a, b) => a.tier - b.tier || TREE_RANK[a.group.state] - TREE_RANK[b.group.state]).map((g) => g.group);
 }

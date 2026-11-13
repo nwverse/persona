@@ -79,7 +79,9 @@ class LiveTurnShotsTest {
             }
         }
         rule.mainClock.advanceTimeByFrame()
-        rule.onAllNodesWithText("正在工作", substring = true).assertCountEquals(2)
+        rule.onAllNodesWithText("正在工作", substring = true).assertCountEquals(1) // The empty recap placeholder.
+        // The queued turn's one collapsed summary names its running command (#4339 C5).
+        rule.onAllNodesWithText("./gradlew lint", substring = true).assertCountEquals(1)
         val corners = listOf(false, true).map { d ->
             dark = d
             Snapshot.sendApplyNotifications() // the paused clock recomposes only for changes already applied

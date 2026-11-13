@@ -132,6 +132,26 @@ func TestGoldenInboxDraft(t *testing.T) {
 	}
 }
 
+// A draft uses About me as the user edited it in the app, not the config file's notes it replaced (#5769).
+func TestInboxDraftUsesEditedAboutMe(t *testing.T) {
+	ctx := context.Background()
+	h := goldenInbox(t)
+	model, calls := captureModel(t, "好的")
+	h.in.models[purposeDraft] = model
+	h.f.hello.OwnerNotes = "config file notes"
+	edited := "  notes edited in the app  "
+	setSettings(t, h.Service, func(v *Settings) { v.Notes = &edited })
+	it := goldenItems(t)["dm"]
+	h.inbox.items[it.ID] = it
+	if _, err := h.draftReply(ctx, it.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	system := onlyCall(t, calls()).System
+	if !strings.Contains(system, "notes edited in the app") || strings.Contains(system, "config file notes") {
+		t.Fatalf("the draft should know About me as edited in the app:\n%s", system)
+	}
+}
+
 func TestGoldenInboxJudge(t *testing.T) {
 	ctx := context.Background()
 	items := goldenItems(t)
@@ -200,4 +220,28 @@ func TestGoldenInboxGroup(t *testing.T) {
 	}
 	goldenCall(t, "inbox_group.first", calls[0])
 	golden(t, "inbox_group.after_tool.user", calls[1].User)
+}
+
+func TestGoldenInboxFolders(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"first", "tree"} {
+		h := goldenInbox(t)
+		model, calls := captureModel(t, `{"folders":{}}`)
+		h.in.model = model
+		h.inbox.folderCfg = InboxFolderConfig{Enabled: true}
+		at := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+		h.inbox.items["mail:1"] = &InboxItem{ID: "mail:1", Kind: KindMail, Title: "示例服务告警：5xx 升高", Sender: "alerts@example.com",
+			Summary: "示例服务 5xx 升高，值班请看", Preview: "告警：示例服务 5xx 升高\n详情见面板", Last: "9", UpdatedAt: at}
+		if name == "tree" {
+			h.f.hello.Owner = "示例用户"
+			h.inbox.folderCfg.Rules = "构建机器人的消息放到 work/builds"
+			h.setConfig(func(c *assistantwire.InboxConfig) { c.Rules = "老板的消息一律需要我" })
+			h.inbox.items["lark:f1:1"] = &InboxItem{ID: "lark:f1:1", Kind: KindGroup, Title: "发布群", Last: "1", UpdatedAt: at,
+				Folder: "projects/example/releases", FolderBy: FolderByUser}
+			h.inbox.items["lark:f2:1"] = &InboxItem{ID: "lark:f2:1", Kind: KindBot, Title: "告警机器人", Last: "1", UpdatedAt: at,
+				Folder: "work/alerts", FolderBy: FolderByModel}
+		}
+		h.fileFolders(ctx)
+		goldenCall(t, "inbox_folders."+name, onlyCall(t, calls()))
+	}
 }

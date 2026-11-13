@@ -458,6 +458,29 @@ import Testing
         #expect(await accounts.cached(group: "", base: root) == nil)
     }
 
+    /// A named manager's chat may be signed in as another Lark user: the user it last verified never becomes the one the
+    /// default's chat opens its draft under. The default's account stays in the file it was always kept in.
+    @Test func aNamedManagersAccountIsKeptApartFromTheDefaults() async throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let accounts = LarkOutboxAccounts()
+        let group = LarkOutboxIdentity.groupDirectory("", base: root)
+        try FileManager.default.createDirectory(at: group, withIntermediateDirectories: true)
+        try JSON.encoder.encode("home-user").write(to: group.appending(path: "account.json")) // kept before managers
+        #expect(await accounts.cached(group: "", base: root) == "home-user", "the default's is read where it always was")
+
+        try await accounts.remember("work-user", group: "", manager: "m-2", base: root)
+        #expect(await accounts.cached(group: "", base: root) == "home-user", "a named manager's chat doesn't replace it")
+        #expect(await accounts.cached(group: "", manager: "m-2", base: root) == "work-user")
+        #expect(await accounts.cached(group: "", manager: "m-3", base: root) == nil)
+
+        try await accounts.remember("home-user-2", group: "", base: root)
+        let kept = try JSON.decoder.decode(String.self, from: Data(contentsOf: group.appending(path: "account.json")))
+        #expect(kept == "home-user-2", "the default's still writes its own file")
+        try await accounts.remove(groups: [""], base: root)
+        #expect(await accounts.cached(group: "", manager: "m-2", base: root) == nil, "forgotten with its group")
+    }
+
     @Test func queuedSendUsesCurrentRouteAndCredentialWithinOriginalGroup() async throws {
         let root = try folder()
         defer { try? FileManager.default.removeItem(at: root) }

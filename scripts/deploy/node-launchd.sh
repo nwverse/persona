@@ -1,10 +1,10 @@
 #!/bin/bash
-# Run on a machine (a Mac in its login session, or Linux) to keep a resident personad node there (docs/server/server.md "Resident node"):
+# Run on a machine (a Mac in its login session, or Linux) to keep a resident personad node there (docs/server/server.md "Persistent node"):
 #   ./scripts/deploy/node-launchd.sh install    # Mac: launchd agent com.persona.node; Linux: systemd user service personad-node;
 #                                        # started at login / boot, restarted whenever it exits
 #   ./scripts/deploy/node-launchd.sh restart    # after a new binary, now (ends the assistant's running conversations)
 #   ./scripts/deploy/node-launchd.sh restart-idle  # after a new binary (deploy.sh does this): once no conversation is
-#                                        # busy (SIGHUP to the node only; docs/operations/hub-restart.md "Conversations are not interrupted")
+#                                        # busy (SIGHUP to the node only; docs/operations/hub-restart.md "Chats not interrupted: hosting by the resident node")
 #   ./scripts/deploy/node-launchd.sh uninstall  # back to the hub starting the node over ssh
 # The hub keeps connecting over ssh as before; `personad node --stdio` relays to this node when it's running, so what
 # the node starts runs in the login session and can read the login keychain. Set up for tailcat

@@ -227,12 +227,15 @@ func TestCodexOriginTellsAppChatsFromCLIAndSubagents(t *testing.T) {
 		os.WriteFile(p, []byte(`{"type":"session_meta","payload":`+meta+"}\n"), 0o600)
 		return codexSource{home: home, thread: name, path: p}
 	}
-	os.WriteFile(filepath.Join(home, ".codex-global-state.json"), []byte(`{"projectless-thread-ids":["app"]}`), 0o600)
+	os.WriteFile(filepath.Join(home, ".codex-global-state.json"), []byte(`{"projectless-thread-ids":["app","work"]}`), 0o600)
 	app := write("app", `{"originator":"Codex Desktop","source":"vscode"}`)
+	work := write("work", `{"originator":"codex_work_desktop","source":"vscode"}`)
 	tool := write("tool", `{"originator":"Codex Desktop","source":"vscode"}`)
+	workTool := write("work-tool", `{"originator":"codex_work_desktop","source":"vscode"}`)
 	cli := write("cli", `{"originator":"codex-tui","source":"cli"}`)
 	sub := write("sub", `{"originator":"Codex Desktop","source":{"subagent":{"thread_spawn":{"parent_thread_id":"app","depth":1}}}}`)
-	if !codexDesktopChat(app) || codexDesktopChat(cli) || codexDesktopChat(sub) || codexDesktopChat(tool) {
+	workSub := write("work-sub", `{"originator":"codex_work_desktop","source":{"subagent":{"thread_spawn":{"parent_thread_id":"work","depth":1}}}}`)
+	if !codexDesktopChat(app) || !codexDesktopChat(work) || codexDesktopChat(cli) || codexDesktopChat(sub) || codexDesktopChat(workSub) || codexDesktopChat(tool) || codexDesktopChat(workTool) {
 		t.Fatal("only a chat the App lists goes through its bus")
 	}
 	if o := readCodexOrigin(cli.path); !o.cli || o.desktop {
@@ -240,6 +243,34 @@ func TestCodexOriginTellsAppChatsFromCLIAndSubagents(t *testing.T) {
 	}
 	if o := readCodexOrigin(sub.path); o.parent != "app" || !o.desktop {
 		t.Fatalf("subagent origin = %+v", o)
+	}
+	if o := readCodexOrigin(workSub.path); o.parent != "work" || !o.desktop {
+		t.Fatalf("work subagent origin = %+v", o)
+	}
+}
+
+// A Codex thread's row says when the thread began: its rollout's first line, read once with its origin and shared by
+// every row of it (#5120). A first line with no time says nothing.
+func TestCodexRowStartedAt(t *testing.T) {
+	n, home := testNode(t)
+	write := func(name, line string) codexSource {
+		p := filepath.Join(home, name+".jsonl")
+		os.WriteFile(p, []byte(line+"\n"), 0o600)
+		return codexSource{home: home, thread: name, path: p}
+	}
+	timed := write("timed", `{"timestamp":"2026-11-12T08:30:00.123Z","type":"session_meta","payload":{"originator":"codex-tui","source":"cli"}}`)
+	untimed := write("untimed", `{"type":"session_meta","payload":{"originator":"codex-tui","source":"cli"}}`)
+	row := func(src codexSource) proto.Session {
+		s := proto.Session{SessionID: src.thread, Capabilities: &proto.SessionCapabilities{}}
+		n.decorateCodexSession(&s, src, "", map[string]string{})
+		return s
+	}
+	a, b := row(timed), row(timed)
+	if want := time.Date(2026, 11, 12, 8, 30, 0, 123e6, time.UTC); !a.StartedAt().Equal(want) || a.Hierarchy != b.Hierarchy {
+		t.Fatalf("started %v (shared %v), want %v", a.StartedAt(), a.Hierarchy == b.Hierarchy, want)
+	}
+	if s := row(untimed); s.Hierarchy != nil {
+		t.Fatalf("no time, no hierarchy: %+v", s.Hierarchy)
 	}
 }
 

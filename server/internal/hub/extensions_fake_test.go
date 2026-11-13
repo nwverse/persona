@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -34,6 +35,8 @@ type fakeExt struct {
 	// asked are the extensions.authorize the hub sent; served the escaped paths of the requests it relayed here.
 	asked  []extwire.Authorize
 	served []string
+	// authorizing, when set, runs as the hub asks whose the token of a hash is, before the answer.
+	authorizing func(hash string)
 }
 
 var fakeExts sync.Map // *Hub → *fakeExt
@@ -83,11 +86,15 @@ func (f *fakeExt) Request(_ context.Context, method string, params json.RawMessa
 		f.mu.Lock()
 		f.asked = append(f.asked, a)
 		out, ok := f.tokens[a.Hash]
+		authorizing := f.authorizing
 		f.mu.Unlock()
+		if authorizing != nil {
+			authorizing(a.Hash)
+		}
 		if !ok {
 			return extwire.Authorized{}, true, nil
 		}
-		out.OK, out.Scope = fakeScopeOpens(out.Scopes, a.Pattern, a.Path)
+		out.OK, out.Scope = fakeScopeOpens(out.Scopes, a.Pattern, a.Method, a.Path)
 		return out, true, nil
 	case extwire.MethodHubCall:
 		var c extwire.HubCall
@@ -112,8 +119,21 @@ func inboxTasks(t *testing.T, h *Hub) []prompts.InboxTask {
 	return assistantOf(t, h).svc.ActiveTasks(context.Background())
 }
 
-// fakeScopeOpens is the manager's check (extmgr scopeOpens) on the hub's patterns.
-func fakeScopeOpens(scopes []string, pattern, path string) (bool, string) {
+// fakeScopeOpens is the manager's check (extmgr scopeOpens) on the hub's patterns. On a route the hub relays to the
+// manager it checks the manager's own route for the request (extmgr Manager.authorize): here the RouteScopes one under
+// it that the request matches.
+func fakeScopeOpens(scopes []string, pattern, method, path string) (bool, string) {
+	if slices.Contains(extwire.Routes, pattern) {
+		mux := http.NewServeMux()
+		for p := range extwire.RouteScopes {
+			if _, route, _ := strings.Cut(p, " "); strings.HasPrefix(route, pattern) {
+				mux.HandleFunc(p, func(http.ResponseWriter, *http.Request) {})
+			}
+		}
+		if req, err := http.NewRequest(method, path, nil); err == nil {
+			_, pattern = mux.Handler(req)
+		}
+	}
 	scope, ok := extwire.RouteScopes[pattern]
 	if !ok {
 		return false, ""

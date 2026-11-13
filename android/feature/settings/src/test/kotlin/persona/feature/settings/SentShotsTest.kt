@@ -31,6 +31,8 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -95,6 +97,12 @@ internal class FakeSent(var rows: List<SentItem> = SentSample, private val pageS
         val got = hit.take(pageSize)
         return SentPage(got, next = if (hit.size > pageSize) got.last().id else null)
     }
+
+    override suspend fun recall(id: Long): SentItem? {
+        fail?.let { throw it }
+        rows = rows.map { if (it.id == id) it.copy(recalledAt = "2026-11-05T12:05:00Z", canRecall = false) else it }
+        return rows.firstOrNull { it.id == id }
+    }
 }
 
 /**
@@ -123,7 +131,7 @@ class SentShotsTest {
     }
 
     /** [height] in dp of the picture; null lets it be as tall as what it draws (the sheet's body). */
-    private enum class Shot(val height: Int?) { Settings(2600), List(1100), Detail(null), DetailCut(null), Empty(700), Filtered(700), NoDatabase(700), Failed(700) }
+    private enum class Shot(val height: Int?) { Settings(2600), List(1100), Detail(null), DetailCut(null), Recall(null), Recalled(null), Empty(700), Filtered(700), NoDatabase(700), Failed(700) }
 
     /** A chip, not a row that has the same words: rows are buttons, chips check boxes. */
     private fun chip(text: String) = hasText(text) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox)
@@ -141,19 +149,27 @@ class SentShotsTest {
                     when (shot) {
                         // The real settings list (docs/lessons/android.md: not hand-drawn rows), its Connection section on top.
                         Shot.Settings -> SettingsScreen(services, onOpen = {})
-                        Shot.List -> SentContent(SentLoaded, SentNow, {}, false, {}, {}, {}, {}, {}, onChat = { _, _ -> })
+                        // The review row was recalled: its tag.
+                        Shot.List -> SentContent(SentLoaded.copy(items = SentSample.map { if (it.id == 4L) it.copy(recalledAt = "2026-11-02T08:05:00Z") else it }), SentNow, {}, false, {}, {}, {}, {}, {}, onChat = { _, _ -> })
                         // The sheet's body on the sheet's own surface (JSheet draws it over a scrim in the app).
-                        Shot.Detail, Shot.DetailCut -> Column(Modifier.fillMaxWidth().background(if (style == AppStyle.Brief) palette.background else palette.surfaceOpaque)
+                        Shot.Detail, Shot.DetailCut, Shot.Recall, Shot.Recalled -> Column(Modifier.fillMaxWidth().background(if (style == AppStyle.Brief) palette.background else palette.surfaceOpaque)
                             .padding(horizontal = pagePadding, vertical = Tokens.Space.l)) {
-                            val row = if (shot == Shot.Detail) SentSample[1] else cut
+                            val row = when (shot) {
+                                Shot.Detail -> SentSample[1]
+                                // Recall offered, after a refusal; and a row taken back.
+                                Shot.Recall -> SentSample[0].copy(canRecall = true)
+                                Shot.Recalled -> SentSample[0].copy(recalledAt = "2026-11-05T12:28:00Z")
+                                else -> cut
+                            }
                             androidx.compose.material3.Text(SentText.connectorName(androidx.compose.ui.platform.LocalResources.current, row.connector),
                                 style = PersonaTheme.type.title, color = palette.ink)
                             Spacer(Modifier.height(Tokens.Space.m))
-                            SentDetailBody(row, onChat = { _, _ -> }, onDone = {})
+                            SentDetailBody(row, onChat = { _, _ -> }, onDone = {}, onRecall = {},
+                                recallError = if (shot == Shot.Recall) SentText.recallProblem(HubFailure(HubError.Server, "unknown", 504, "recall_unknown")) else null)
                         }
                         Shot.Empty -> SentContent(SentState(items = emptyList()), SentNow, {}, false, {}, {}, {}, {}, {}, onChat = null)
                         Shot.Filtered -> SentContent(SentState(items = emptyList(), filter = "lark", seen = listOf("mail")), SentNow, {}, false, {}, {}, {}, {}, {}, onChat = null)
-                        Shot.Failed -> SentContent(SentState(problem = SentText.problem(HubFailure(HubError.Server, "boom", 500, "internal"))), SentNow,
+                        Shot.Failed -> SentContent(SentState(problem = SentText.problem(HubFailure(HubError.Server, "boom", 500, "upstream"))), SentNow,
                             {}, false, {}, {}, {}, {}, {}, onChat = null)
                         Shot.NoDatabase -> SentContent(SentState(problem = SentText.problem(HubFailure(HubError.Server, "no database", 503, "no_database"))), SentNow,
                             {}, false, {}, {}, {}, {}, {}, onChat = null)
@@ -169,6 +185,34 @@ class SentShotsTest {
                 capture("sent-${next.name.lowercase()}-$suffix")
             }
         }
+    }
+
+    /** Recall is offered only where the hub says so, asks in a dialog first, and the details then say the row was recalled. */
+    @Test fun recallAsksFirstThenShowsTheRowRecalled() {
+        val hub = FakeSent(SentSample.mapIndexed { i, it -> if (i == 0) it.copy(canRecall = true) else it })
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.width(400.dp).height(2400.dp)) { SentAsYouPage(hub, onBack = {}, onChat = null) }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("ann@example.com · Lunch on Friday").performClick()
+        rule.waitForIdle()
+        rule.onAllNodesWithText("撤回…").assertCountEquals(0)
+        rule.onNode(hasText("完成") and hasClickAction()).performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("example-org/app#12").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("撤回…").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("撤回这条消息？").assertExists()
+        assertTrue(hub.rows[0].recalledAt.isEmpty()) // asked first
+        rule.onNode(hasText("撤回") and hasClickAction()).performClick()
+        rule.waitForIdle()
+        assertTrue(hub.rows[0].recalledAt.isNotEmpty())
+        rule.onAllNodesWithText("撤回…").assertCountEquals(0)
+        rule.onAllNodesWithText("已撤回").assertCountEquals(2) // the row's tag and the details' fact
+        assertEquals(2, hub.asked.size) // the list read again
     }
 
     /** A row opens its details, and the chat it names opens by its ids; a row with no chat has no link. */
@@ -283,7 +327,7 @@ class SentShotsTest {
     /** The hub's refusals are said in their own words before the usual one; only that one has Retry. */
     @Test fun theRefusalsAreSaidInTheirWordsAndOnlyAFailureHasRetry() {
         // A failure of the first read: the usual words with Retry, and Retry reads again.
-        val failing = FakeSent().apply { fail = HubFailure(HubError.Server, "boom", 500, "internal") }
+        val failing = FakeSent().apply { fail = HubFailure(HubError.Server, "boom", 500, "upstream") }
         var current by mutableStateOf<HubSent>(failing)
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
@@ -386,33 +430,78 @@ class SentShotsTest {
             assertEquals("${refusal.status}", 0, red())
             rule.onAllNodesWithText("重试").assertCountEquals(0)
         }
-        state = SentState(problem = SentText.problem(HubFailure(HubError.Server, "boom", 500, "internal")))
+        state = SentState(problem = SentText.problem(HubFailure(HubError.Server, "boom", 500, "upstream")))
         assertTrue("a failure is red", red() > 20)
         rule.onNode(hasText("重试") and hasClickAction()).assertExists()
     }
 
-    /** Sent as you sits right after Connectors, opens its page, and is left out where there is no hub (demo mode). */
+    /** The real Settings home has one Connectors entry; the ledger is a secondary page with Back to Connectors. */
+    @Config(sdk = [35], qualifiers = "zh-w400dp-h900dp-xhdpi")
     @Test fun theSettingsRowSitsAfterTheConnectorsAndOpensThePage() {
-        var opened: SettingsPage? = null
         var services by mutableStateOf(settingsServices(FakeSent()))
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
-                Box(Modifier.width(400.dp).height(3200.dp)) { SettingsScreen(services, onOpen = { opened = it }) }
+                Box(Modifier.testTag("shot").width(400.dp).height(900.dp)) { SettingsScreen(services) }
             }
         }
-        rule.waitForIdle()
-        val row = rule.onNode(hasText("以你的名义发出") and hasClickAction()).fetchSemanticsNode().boundsInRoot
+        rule.onNodeWithText("以你的名义发出的记录").assertDoesNotExist()
+        rule.onNode(hasScrollAction()).performScrollToNode(hasText("连接器") and hasClickAction())
+        rule.onNode(hasText("连接器") and hasClickAction()).performClick()
+        rule.onNodeWithText("以你的名义发出的记录").assertExists()
+        val row = rule.onNode(hasText("以你的名义发出的记录") and hasClickAction()).fetchSemanticsNode().boundsInRoot
         val mail = rule.onNode(hasText("邮箱") and hasClickAction()).fetchSemanticsNode().boundsInRoot
-        val appearance = rule.onNodeWithText("外观").fetchSemanticsNode().boundsInRoot
-        assertTrue(row.top >= mail.bottom && row.bottom <= appearance.top)
-        rule.onNode(hasText("以你的名义发出") and hasClickAction()).performClick()
+        assertTrue(row.top >= mail.bottom)
+        rule.onNodeWithText("以你的名义发出的记录").performClick()
+        rule.onNodeWithText("Persona 通过连接器以你的名义发出的内容，新的在前。点一行看全文。").assertExists()
+        rule.onNodeWithContentDescription("返回").performClick()
+        rule.onNode(hasText("邮箱") and hasClickAction()).assertExists()
+        rule.onNodeWithContentDescription("返回").performClick()
+        rule.onNodeWithText("以你的名义发出的记录").assertDoesNotExist()
+    }
+
+    @Config(sdk = [35], qualifiers = "zh-w400dp-h900dp-xhdpi")
+    @Test fun connectorsEntryKeepsTheNavigationTargetAndCapabilityGate() {
+        var opened: SettingsPage? = null
+        var services by mutableStateOf(settingsServices(FakeSent()))
+        rule.setContent { PersonaTheme(reduceMotion = true) {
+            SettingsScreen(services, initialPage = "connectors", onOpen = { opened = it })
+        } }
+        rule.onNodeWithText("以你的名义发出的记录").performClick()
         assertEquals(SettingsPage.Sent, opened)
         services = services.copy(demo = true)
-        rule.waitForIdle()
-        rule.onAllNodesWithText("以你的名义发出").assertCountEquals(0)
+        rule.onNodeWithText("以你的名义发出的记录").assertDoesNotExist()
         services = services.copy(demo = false, sent = null)
-        rule.waitForIdle()
-        rule.onAllNodesWithText("以你的名义发出").assertCountEquals(0)
+        rule.onNodeWithText("以你的名义发出的记录").assertDoesNotExist()
+    }
+
+    /** JVM native-rendered evidence uses the real connector list and real ledger, not lookalike rows. */
+    @Config(sdk = [35], qualifiers = "zh-w400dp-h900dp-xhdpi")
+    @Test fun nestedPagesInEveryStyleAndAppearance() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var page by mutableStateOf("connectors")
+        val services = settingsServices(FakeSent())
+        rule.setContent { PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
+            Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                SettingsScreen(services, initialPage = page)
+            }
+        } }
+        for (s in AppStyle.entries) {
+            style = s
+            for (d in listOf(false, true)) {
+                dark = d
+                androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+                page = "connectors"
+                rule.onNodeWithText("以你的名义发出的记录").assertExists()
+                capture("nested-connectors-${s.key}-${if (d) "dark" else "light"}")
+                // The legacy standalone page name remains accepted, but Back now reaches Connectors.
+                page = "sent"
+                rule.onNodeWithText("Persona 通过连接器以你的名义发出的内容，新的在前。点一行看全文。").assertExists()
+                capture("nested-ledger-${s.key}-${if (d) "dark" else "light"}")
+                rule.onNodeWithContentDescription("返回").performClick()
+                rule.onNode(hasText("邮箱") and hasClickAction()).assertExists()
+            }
+        }
     }
 
     private fun settingsServices(api: HubSent) = SettingsServices(

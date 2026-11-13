@@ -2,6 +2,7 @@
 
 Pitfalls hit while integrating DSH (`docs/integrations/dsh.md`) and node's runtime support (`server/internal/node/runtimes.go`, `integrations/runtime-sdk`, spec in `docs/integrations/runtimes.md`).
 
+- **A session's directory does not attach it to a DSH workspace** (#5485). `sessionController.create({cwd})` leaves it ungrouped even when a workspace has that path. Use the registry's existing `resolveByPath` (exact canonical path, including symlinks), then pass only `{workspaceId}` for a match: DSH rejects both fields together. Only `ENOENT` keeps the controller's supported new-directory creation path; other lookup failures must not create an ungrouped session as if nothing matched. Verify the actual registry/controller and persisted `sessionIds`, not just a fake controller accepting a directory.
 - **DSH approvals / questions are a responder chain, not a broadcast** (`approval/request` and `user-questions/request` are Cordis waterfalls: they run in registration order and stop at whoever doesn't call `next()`).
   The browser link in the chain only withdraws its card when the request's own `signal` ends; the plugin can't withdraw it on the browser's behalf. So the phone and the Web GUI can't "both pop up, first answer wins". The plugin can only go to the phone first,
   and call `next()` once the phone hands it back to the computer or it expires. The plugin needs `prepend: true` to get ahead of the browser (the browser only registers its listener when it connects).
@@ -56,7 +57,7 @@ Pitfalls hit while integrating DSH (`docs/integrations/dsh.md`) and node's runti
 - **DSH plugin management can't be called from a session driven by the phone** (2026-11-02): when enabling `persona-dsh-runtime` in plugin management, DSH's hot reload uses `AsyncLocalStorage` to mark "inside a transaction",
   and the socket the plugin creates inside the transaction carries that mark into every later callback. Every turn started by a message coming in through the plugin (sent from the phone) is treated as "still inside the transaction", so `plugin_manager`'s
   `set_bundle` always reports `HMR transactions cannot be nested`, and sending a sub-agent to call it fails the same way (it inherits the same context). Messages sent from the DSH web page are unaffected.
-  Plugins installed by link aren't in hot reload's watched directory either, so swapping files doesn't reload them. So the plugin updates itself (`docs/integrations/dsh.md` ("Auto-update")) instead of relying on plugin management.
+  Plugins installed by link aren't in hot reload's watched directory either, so swapping files doesn't reload them. So the plugin updates itself (`docs/integrations/dsh.md` ("Automatic updates")) instead of relying on plugin management.
 - **Re-importing the same path in the same process gets the old code** (same day): Node's ESM cache is keyed by URL, even if the file changed. When the plugin reloads inside DSH (plugin management off and on again),
   the `lib/dsh.js` imported earlier is still the first copy, and the new version is swapped in for nothing. So the loader loads from `<store>/<hash>/`, and the bundled copy is copied there first too: when the content changes, the path changes.
   The loader's unit test found this (change the bundled file, start another loader in the same process, and it still runs the old version).

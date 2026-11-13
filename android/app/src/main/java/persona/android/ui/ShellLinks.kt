@@ -50,11 +50,12 @@ internal fun ShellLinkHost(session: ShellSession, navigator: Navigator, feedback
         { link: ChatAppLink ->
             when (link) {
                 is ChatAppLink.Session -> navigator.navigate(ChatRoute(link.machineId, link.sessionId))
-                is ChatAppLink.Tab -> navigator.selectTab(when (link.tab) {
-                    "agents" -> AppTab.Agents
-                    "inbox" -> AppTab.Inbox
-                    else -> AppTab.Persona
-                })
+                is ChatAppLink.Tab -> when (link.tab) {
+                    "inbox" -> navigator.navigate(persona.core.navigation.InboxRoute)
+                    "settings" -> navigator.navigate(persona.core.navigation.SettingsRoute)
+                    "agents" -> navigator.selectTab(AppTab.Agents)
+                    else -> navigator.selectTab(AppTab.Persona)
+                }
             }
         }
     }

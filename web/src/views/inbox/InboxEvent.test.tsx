@@ -10,6 +10,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
+  // a Feishu item's chat draws under its event (LarkThread): what jsdom lacks
+  Object.assign(globalThis, {
+    ResizeObserver: globalThis.ResizeObserver ?? class { observe() {} unobserve() {} disconnect() {} },
+    IntersectionObserver: globalThis.IntersectionObserver ?? class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
+  });
+  globalThis.CSS ??= { escape: (s: string) => s } as unknown as typeof CSS;
 });
 
 const calls = vi.hoisted(() => ({ list: [] as { path: string; json?: unknown }[], items: [] as unknown[] }));
@@ -19,6 +25,10 @@ vi.mock("../../lib/api", async (orig) => ({
     calls.list.push({ path, json: init?.json });
     if (path.startsWith("/inbox?")) return Promise.resolve({ items: calls.items });
     if (path === "/mail/accounts") return Promise.resolve({ accounts: [] });
+    if (path.startsWith("/mail/messages/")) {
+      const uid = Number(path.split("/").pop()?.split("?")[0]);
+      return Promise.resolve({ message: { uid, text: `mail body ${uid}`, seen: false } });
+    }
     if (path.endsWith("/suggestion")) return Promise.reject(new Error("offline"));
     return Promise.resolve({});
   },
@@ -29,7 +39,7 @@ vi.mock("../../lib/store", async (orig) => {
   return { ...m, useStore: <T,>(sel: (s: ReturnType<typeof m.getState>) => T) => m.useStore((s) => sel({ ...s, loaded: true })) };
 });
 vi.mock("../../lib/extension-slots", () => ({ useInboxItemPlace: () => undefined }));
-vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined }));
+vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined, translatesChat: () => false, translatesMail: () => false, languageName: () => "" }));
 
 import type { InboxItem } from "../../lib/inbox";
 import { resetInboxForTests } from "../../lib/inbox";
@@ -168,6 +178,46 @@ describe("收件箱事件：详情", () => {
     await press("看处理");
     expect(host.querySelector("[data-event-body]")).not.toBeNull();
   });
+  it("a Feishu item: the event above its chat, no 看原文; a chain entry scrolls the chat to its message (#3262)", async () => {
+    const item: InboxItem = { ...reply, lark: { ...reply.lark!, start_position: "102" } };
+    const around = () => calls.list.map((c) => c.path).filter((p) => p.includes("around="));
+    act(() => root.render(<InboxDetail item={item} loaded />));
+    await flush();
+    expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull();
+    expect(buttons()).not.toContain("看原文");
+    expect(around().at(-1)).toContain("around=102"); // the chat, at the first new message
+    await press("展开全部（3）");
+    const received = host.querySelector('[data-chain-entry="received"]')!;
+    await act(async () => received.querySelector("button")!.click());
+    await flush();
+    expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull(); // the page stays
+    expect(around().at(-1)).toContain("around=100");
+  });
+  it("a mail item: the event above its body, no 看原文; a chain entry opens that UID in place (#5471)", async () => {
+    const item: InboxItem = { ...agentSuggestion, mail: { ...agentSuggestion.mail!, uids: [88, 89] } };
+    const reads = () => calls.list.map((c) => c.path).filter((p) => p.startsWith("/mail/messages/") && !p.endsWith("/flags"));
+    const flags = () => calls.list.map((c) => c.path).filter((p) => p.endsWith("/flags"));
+    act(() => root.render(<InboxDetail item={item} loaded />));
+    await flush();
+    expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull();
+    expect(buttons()).not.toContain("看原文");
+    expect(reads()).toEqual(["/mail/messages/a1/89?mailbox=INBOX"]);
+    expect(flags()).toEqual(["/mail/messages/a1/89/flags"]); // an unseen body is really opened, not a seen fixture
+    expect(host.textContent).toContain("mail body 89");
+    await press("展开全部（3）");
+    const received = host.querySelector('[data-chain-entry="received"]')!;
+    await act(async () => received.querySelector("button")!.click());
+    await flush();
+    expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull();
+    expect(reads().at(-1)).toBe("/mail/messages/a1/88?mailbox=INBOX");
+    expect(flags().at(-1)).toBe("/mail/messages/a1/88/flags");
+    expect(host.textContent).toContain("mail body 88");
+    await press("查看最新邮件");
+    await flush();
+    expect(reads().at(-1)).toBe("/mail/messages/a1/89?mailbox=INBOX");
+    expect(host.textContent).toContain("mail body 89");
+    expect(buttons()).not.toContain("查看最新邮件");
+  });
   it("an older hub's item: no event body, no 看原文, the AI 分身's draft as before", () => {
     const old = renderToStaticMarkup(<InboxDetail item={plain(legacy(reply))} loaded />);
     expect(old).not.toContain("data-event-body");
@@ -182,7 +232,7 @@ describe("收件箱事件：详情", () => {
 describe("收件箱事件：已处理", () => {
   it("says the manager filed it, and draws the chain's 已处理 entry with its check, no link", async () => {
     act(() => root.render(<EventBody item={managerDone} onSource={() => {}} />));
-    expect(host.querySelector("[data-event-manager-done]")?.textContent).toBe("管理者处理了");
+    expect(host.querySelector("[data-event-manager-done]")?.textContent).toBe("助手处理了");
     expect(host.querySelector("[data-suggestion]")).toBeNull();
     const done = host.querySelector('[data-chain-entry="done"]')!;
     expect(done.textContent).toContain("管理者看完，不用管");
@@ -208,7 +258,7 @@ describe("收件箱事件：列表", () => {
     expect(row(urgent.id).querySelector('[data-event-mark="preparing"]')?.textContent).toContain("AI 正在准备建议");
     expect(row(waiting.id).querySelector('[data-event-mark="working"]')?.textContent).toBe("等对方回复");
     expect(row(failed.id).querySelector('[data-event-mark="failed"]')).not.toBeNull();
-    expect(row(managerDone.id).querySelector('[data-event-mark="manager-done"]')?.textContent).toBe("管理者处理了");
+    expect(row(managerDone.id).querySelector('[data-event-mark="manager-done"]')?.textContent).toBe("助手处理了");
     expect(row(conclusion.id).closest("[data-section]")?.getAttribute("data-section")).toBe("fyi");
     // In progress never folds: no toggle on its title, its rows always shown
     const working = host.querySelector('[data-section="working"]')!;

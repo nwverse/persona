@@ -1,4 +1,4 @@
-// An extension's sign-in and its command-line tools (#4507, docs/protocol/protocol.md "Extension sign-in"): the hub asks the extension's
+// An extension's sign-in and its command-line tools (#4507, docs/protocol/protocol.md): the hub asks the extension's
 // program (auth.status / auth.step / auth.logout) and keeps its state; the page draws a "Sign in" group on the extension's
 // detail, a sign-in dialog of steps (fields, a device code, a QR code), and lists the tools in "About". Only with a hub
 // that has `extension_auth`; the hub pushes `extension_auth` whenever a sign-in state changes.

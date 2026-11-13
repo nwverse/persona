@@ -1,4 +1,4 @@
-{{- /* A turn of the bound Persona conversation that came from elsewhere is over (docs/assistant/voice.md「一轮跟踪」, voice/runs.go):
+{{- /* A turn of the bound Persona conversation that came from elsewhere is over (docs/assistant/voice.md「Per-round tracking」, voice/runs.go):
 a chat app's bot (.Channel: its name), or Persona's own (a scheduled task, a task reporting back; .Channel ""). Its
 answer went back there: the voice model only mentions it, once per channel a call, and never reads what it said. */ -}}
 {{- if eq .Lang "en" -}}

@@ -137,13 +137,6 @@ func cleanText(s string) string {
 // message ref is not cut but kept whole or not at all (proto.CleanMessageRef).
 func shortValue(s string) string { return cutRunes(strings.TrimSpace(cleanText(s)), sentValueMost) }
 
-func cutRunes(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n])
-	}
-	return s
-}
-
 // sentTarget is where a write went, from the arguments it was given, and the same in a few words. GitHub's comments
 // and reviews: the PR or issue (repo#number); mail: the recipients and the subject; any other connector's, an
 // extension's included: the fields connectors usually name their destination by (chat, reply_to…), and when none of
@@ -484,13 +477,13 @@ func (h *Manager) isUserLarkRule(r *proto.LarkRule) bool {
 		!slices.ContainsFunc(connector.LarkRules(h.cfg.ConnectorGate, h.cfg.LarkGate), same)
 }
 
-// nodeWriteMethods are the methods the gate treats as writes (node/larkgate.go larkRead: all but GET and HEAD).
+// nodeWriteMethods are the methods the gate treats as writes (node/larkgate_rules.go larkRead: all but GET and HEAD).
 var nodeWriteMethods = map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": true, "OPTIONS": true}
 
 // nodeLetThrough is a row's let_through for how a node's gate let a write through: a rule of the gate (written as the
 // connector_gate rule it came from: connector "lark", the action as "<METHOD> <path>" or "*", the body's fields as
 // match), "conversation_always" (the user had allowed that route for the conversation, so no card was shown), or the
-// card with its id and who answered it.
+// card with its id and who answered it, or the conversation's bypass permission mode.
 func nodeLetThrough(t proto.LarkLetThrough) (map[string]any, error) {
 	through := map[string]any{"kind": t.Kind}
 	switch t.Kind {
@@ -512,7 +505,7 @@ func nodeLetThrough(t proto.LarkLetThrough) (map[string]any, error) {
 			rule["match"] = match
 		}
 		through["rule"] = rule
-	case proto.LarkThroughAlways:
+	case proto.LarkThroughAlways, proto.LarkThroughBypass:
 	case proto.LarkThroughCard:
 		if v := cutRunes(strings.TrimSpace(cleanText(t.InteractionID)), sentValueMost); v != "" {
 			through["interaction_id"] = v
@@ -521,7 +514,7 @@ func nodeLetThrough(t proto.LarkLetThrough) (map[string]any, error) {
 			}
 		}
 	default:
-		return nil, fmt.Errorf("let_through: kind %q is not rule, conversation_always or card", t.Kind)
+		return nil, fmt.Errorf("let_through: unsupported kind %q", t.Kind)
 	}
 	return through, nil
 }

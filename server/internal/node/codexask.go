@@ -535,9 +535,9 @@ func codexDraftMessage(draft string) string {
 }
 
 // codexType types text into an empty Codex input box as one paste (a newline or an "@" in it stays text) and submits
-// it once the box shows it. Callers checked the box with codexReady.
+// it once the box shows it. Callers checked the box with codexReady, and match the box against inertControls(text).
 func (n *Node) codexType(ctx context.Context, pane, text string, shows func(draft string) bool) error {
-	if err := n.sendText(ctx, pane, pasteStart+strings.ReplaceAll(text, "\x1b", inertEscape)+pasteEnd); err != nil {
+	if err := n.sendText(ctx, pane, pasteStart+inertControls(text)+pasteEnd); err != nil {
 		return err
 	}
 	var s screen.CodexScreen
@@ -702,7 +702,7 @@ func (n *Node) codexNotes(ctx context.Context, pane string, o *screen.CodexQuest
 	if s.Question == nil || !s.Question.Notes || s.Question.Selected() == nil || s.Question.Selected().Key != other.Key {
 		return fmt.Errorf("没能打开「None of the above」的备注框")
 	}
-	if err := n.sendText(ctx, pane, pasteStart+strings.ReplaceAll(text, "\x1b", inertEscape)+pasteEnd); err != nil {
+	if err := n.sendText(ctx, pane, pasteStart+inertControls(text)+pasteEnd); err != nil {
 		return err
 	}
 	time.Sleep(codexStep)
@@ -806,7 +806,7 @@ func (n *Node) codexApprove(ctx context.Context, card *codexCard, r proto.Resolu
 	var last error
 	for deadline := time.Now().Add(8 * time.Second); time.Now().Before(deadline); time.Sleep(codexPoll) {
 		if last = n.codexReady(ctx, card.pane, true); last == nil {
-			text := strings.TrimSpace(r.Message)
+			text := inertControls(strings.TrimSpace(r.Message))
 			return n.codexType(ctx, card.pane, text, func(draft string) bool { return sameText(draft, text) || pastedRE.MatchString(draft) })
 		}
 	}

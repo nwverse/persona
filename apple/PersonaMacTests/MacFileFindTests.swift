@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// ⌘K's Files (docs/apple/mac.md「快速打开、新建」): the matcher, ported from the web's `file-find.ts` (same cases).
+/// ⌘K's Files (docs/apple/mac.md「Quick Open and New」): the matcher, ported from the web's `file-find.ts` (same cases).
 struct MacFileFindTests {
     private let files = ["src/AppView.tsx", "src/app/index.ts", "src/lib/shapes.ts", "docs/approach.md", "README.md",
                          "web/src/lib/palette.ts", "web/src/views/Palette.tsx", "web/src/views/PaletteFiles.test.tsx"]

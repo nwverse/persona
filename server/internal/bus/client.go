@@ -52,6 +52,10 @@ type Client struct {
 	// tokens were told apart answers a plain 401) is taken for a revoke (the built-in manager's own service, which
 	// must not run next to the child such a hub starts).
 	StopWhenRejected bool
+	// Uncompressed: offer the hub no compression (permessage-deflate) on the bus. For a service on the hub's own
+	// machine, whose bytes never leave it: compressing them only costs CPU, and each end keeps a flate state with its
+	// context (about 0.85 MB) and its largest compressed message. A hub only compresses when it is offered.
+	Uncompressed bool
 
 	mu   sync.Mutex
 	peer *rpc.Peer     // the connection that said its handshake; nil between connections
@@ -114,7 +118,11 @@ func (c *Client) Run(ctx context.Context) error {
 func (c *Client) session(ctx context.Context) (helloed bool, err error) {
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ws, err := Dial(sctx, c.Hub, c.Token, c.HTTPClient)
+	mode := websocket.CompressionContextTakeover
+	if c.Uncompressed {
+		mode = websocket.CompressionDisabled
+	}
+	ws, err := dial(sctx, c.Hub, c.Token, c.HTTPClient, mode)
 	if err != nil {
 		return false, err
 	}

@@ -32,7 +32,7 @@ nonisolated struct SyntaxString: Sendable {
     }
 }
 
-/// A language the file viewer colors (docs/apple/ios.md「文件查看器」): one generic lexer reads them all from these tables;
+/// A language the file viewer colors (docs/apple/ios.md「File viewer」): one generic lexer reads them all from these tables;
 /// `mode` picks the few that are not C-like (markup, YAML, Markdown, diffs…).
 nonisolated struct SyntaxLanguage: Sendable, Identifiable {
     enum Mode: Sendable { case code, shell, yaml, toml, json, markup, css, dockerfile, makefile, markdown, diff }
@@ -367,7 +367,7 @@ nonisolated extension SyntaxLanguage {
         return m
     }()
 
-    /// A language an extension names (docs/extensions/extensions.md「UI 版本 4」 `code.language`): a linguist name ("Go",
+    /// A language an extension names (docs/extensions/extensions.md「UI version 4: code hosting」 `code.language`): a linguist name ("Go",
     /// "TypeScript", "Objective-C"), an extension ("ts", ".py") or one of the lexer's own ids. Nil: plain text.
     static func named(_ name: String) -> SyntaxLanguage? {
         let n = name.trimmingCharacters(in: .whitespaces).lowercased()

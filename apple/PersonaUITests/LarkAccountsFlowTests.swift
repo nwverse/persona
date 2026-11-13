@@ -1,6 +1,6 @@
 import XCTest
 
-/// Several Feishu accounts (docs/extensions/feishu.md「多账号」) against a mock started with MOCK_LARK_ACCOUNTS=1: the Messages page's
+/// Several Feishu accounts (docs/extensions/feishu.md「Multiple accounts」) against a mock started with MOCK_LARK_ACCOUNTS=1: the Messages page's
 /// account chips, a chat of the second account, and its inbox item opening in that account. Never a Feishu account.
 final class LarkAccountsFlowTests: XCTestCase {
     @MainActor private func launch(_ extra: [String] = []) throws -> XCUIApplication {

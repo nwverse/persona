@@ -126,10 +126,11 @@ final class PerfAssistantTests: PerfTestCase {
         }
     }
 
-    /// The task board sheet from the task dock, presented and closed.
+    /// The task board sheet from the action bar's Progress tray (#2879), presented and closed.
     @MainActor func testTaskBoardSheet() throws {
         openMain()
-        let board = see(app.buttons["task-dock.board"], "the task dock's board button", timeout: 15)
+        see(app.buttons["action-bar.running"], "the action bar's In Progress", timeout: 15).tap()
+        let board = see(app.buttons["action-tray.board"], "the In Progress tray's All", timeout: 5)
         measureTransition(navigation: false) {
             board.tap()
             let close = app.buttons["关闭"].firstMatch
@@ -143,7 +144,7 @@ final class PerfAssistantTests: PerfTestCase {
     @MainActor func testWelcomePageIdle() throws {
         launch(["-dev.openChat", "", "-app.tab", "assistant", "-tab", "assistant", "-newAssistant", "YES"])
         see(any("assistant-welcome"), "the welcome page", timeout: 20)
-        measureIdle(push: "churn?n=12&ms=300&inbox=1")
+        measureIdle(push: "churn?n=12&ms=300&inbox=1", assertMainThreadBudget: true)
     }
 
     // MARK: Pages from the conversation

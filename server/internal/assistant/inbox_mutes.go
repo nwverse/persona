@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 )
 
-// Muting (docs/assistant/inbox.md "Mute", docs/extensions/connectors.md "2 · 5"): the user mutes a repository, a chat or a sender from an
+// Muting (docs/assistant/inbox.md "Muting", docs/extensions/connectors.md "Structured Inbox attributes"): the user mutes a repository, a chat or a sender from an
 // item's menu; the inbox keeps the mute (settings "inbox_mutes", only it reads and writes them) and, the same for every source, files
 // the open items it covers as done and the ones that come in later as soon as they do. What an item can be muted by (its `mutes`) is a
 // connector's tags (InboxThing.Tags) or, for Feishu and mail, read off the item.
@@ -275,6 +275,29 @@ func (s *Service) listedMutes() []InboxMute {
 		mutes[i].SourceName = b.sourceName(mutes[i].Source)
 	}
 	return mutes
+}
+
+// InboxSourceMutes is inbox.mutes: the mutes as GET /api/v1/inbox/mutes lists them, only source's when it is set.
+func (s *Service) InboxSourceMutes(ctx context.Context, source string) ([]assistantwire.InboxMute, error) {
+	if err := s.inboxReady(ctx); err != nil { // the mutes kept are not known
+		return nil, err
+	}
+	out := []assistantwire.InboxMute{}
+	for _, m := range s.listedMutes() {
+		if source == "" || m.Source == source {
+			out = append(out, assistantwire.InboxMute{ID: m.ID, Source: m.Source, SourceName: m.SourceName, Tag: m.Tag,
+				Value: m.Value, Name: m.Name, CreatedAt: m.CreatedAt})
+		}
+	}
+	return out, nil
+}
+
+// InboxUnmute is inbox.unmute: the mute goes, as DELETE /api/v1/inbox/mutes/{id}; what it filed stays done.
+func (s *Service) InboxUnmute(ctx context.Context, id string) error {
+	if err := s.inboxReady(ctx); err != nil {
+		return err
+	}
+	return s.removeMutes(ctx, func(m InboxMute) bool { return m.ID == id })
 }
 
 var errNoMuteOption = i18n.ErrEnglish("inbox-errors.cannot_mute")

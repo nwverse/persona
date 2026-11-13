@@ -46,10 +46,19 @@ class Hub(
         mutableConnection.value = ConnState.Offline
     }
 
+    /** Cuts a retry wait short when the app comes to the front; a connection that is up is left alone (#3737). */
     fun kick() {
-        if (connection.state.value != ConnectionState.Online) connection.reconnect()
+        if (needsKick(connection.state.value)) connection.reconnect()
     }
 
     fun send(message: JsonObject): Boolean = connection.send(message)
 
 }
+
+/**
+ * Whether coming to the front should start the connection over. Updating is up too: the socket is open and the first
+ * sync is running, so starting over would only throw that sync away and show Connecting again. The resident service
+ * judges each group the same way (ResidentConnection, #5311).
+ */
+internal fun needsKick(state: ConnectionState): Boolean =
+    state != ConnectionState.Online && state != ConnectionState.Updating

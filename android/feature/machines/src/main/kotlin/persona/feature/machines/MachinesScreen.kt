@@ -12,11 +12,15 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import persona.core.contracts.*
 import persona.core.contracts.api.HubManager
 import persona.core.contracts.api.ManagerRoster
 import persona.core.designsystem.*
+import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.*
 
@@ -39,8 +43,14 @@ internal fun MachinesScreen(
     var renaming by remember(machineId) { mutableStateOf(false) }
     // The hub renames computers (feature machine_rename); a linked hub's computer is renamed on that hub.
     val renames = MachineRenameFeature in LocalHubFeatures.current
-    val machines by model.sessions.machines.collectAsStateWithLifecycle()
+    val allMachines by model.sessions.machines.collectAsStateWithLifecycle()
     val sessions by model.sessions.sessions.collectAsStateWithLifecycle()
+    // The list is the current assistant's computers (docs/assistant/managers.md "Clients"); one computer's page is
+    // that computer's, whichever assistant it belongs to (a link or a notification opens it as it is).
+    val assistant = currentAssistant()
+    val machines = remember(allMachines, assistant, machineId) {
+        if (machineId != null) allMachines else allMachines.filter { assistant.ownsOn(it.id, it.manager) }
+    }
     val machine = machines.firstOrNull { it.id == machineId }
     val acting = actions?.state?.collectAsStateWithLifecycle()?.value ?: MachineActionsState()
     // An offline machine has no launchers; they are read again when it comes online (after "Reconnect").
@@ -53,7 +63,11 @@ internal fun MachinesScreen(
         if (info != null && showsDeploy(info)) MachineDeployLine(info, info.id in acting.deployStarting, actions?.let { { it.deploy(info.id) } })
     }
     var selection by rememberSaveable(machineId, state.range) { mutableStateOf<Long?>(null) }
-    val metrics = state.dashboard?.machines.orEmpty().associateBy { it.machineId }
+    // The dashboard's are every manager's: only the ones of a listed computer, or of one the list doesn't know at all.
+    val known = remember(allMachines) { allMachines.mapTo(HashSet()) { it.id } }
+    val listed = remember(machines) { machines.mapTo(HashSet()) { it.id } }
+    val metrics = state.dashboard?.machines.orEmpty().filter { it.machineId in listed || it.machineId !in known }
+        .associate { it.machineId to it.live(machines.firstOrNull { m -> m.id == it.machineId }) }
     val ids = (machines.map { it.id } + metrics.keys).distinct()
     val online = ids.count { metrics[it]?.online ?: machines.firstOrNull { m -> m.id == it }?.online ?: false }
     val attention = metrics.values.count { alerts(it.current(state.now), it.system?.cores).isNotEmpty() }
@@ -68,7 +82,18 @@ internal fun MachinesScreen(
         // ego lite is asked again when the page opens, and every few seconds while a job runs or its setup is under way.
         LaunchedEffect(health, machineId, machine?.online, enabled) { if (machine?.online == true && enabled) health.refreshBrowser(machineId) }
         val watching = health.watchesBrowser(machine?.online == true)
-        LaunchedEffect(health, machineId, watching) { if (watching) health.watchBrowser(machineId) { health.watchesBrowser(machine?.online == true) } }
+        // Only while the page is shown: a hidden tab, the app in the background or the screen off asks the hub nothing. Back in front it
+        // asks at once (a job may have ended meanwhile); the first start doesn't, the page-open read or the answer that started the job is fresh.
+        val lifecycle = LocalLifecycleOwner.current.lifecycle
+        LaunchedEffect(health, machineId, watching, lifecycle) {
+            if (!watching) return@LaunchedEffect
+            var stale = !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                val readFirst = stale
+                stale = true
+                health.watchBrowser(machineId, readFirst) { health.watchesBrowser(machine?.online == true) }
+            }
+        }
     }
     if (confirmFix && health != null && machineId != null) FixDialog(healthState, { confirmFix = false }) { health.fix(machineId) }
     var addComputerHelp by rememberSaveable { mutableStateOf(false) }
@@ -94,7 +119,9 @@ internal fun MachinesScreen(
         if (state.sessionsFailure) item("sessions-failure") { JNotice(stringResource(R.string.machines_sessions_failure)) }
         if (machineId == null) {
             usageWindows(healthState.usage, java.time.Instant.ofEpochSecond(state.now))
-            if (!state.loading && ids.isEmpty()) item("empty") {
+            // An offline assistant with no computer the hub still keeps: out of reach, not a first run (no Add).
+            if (!state.loading && ids.isEmpty() && assistant.offline != null) item("offline") { JAssistantOffline(assistant) }
+            else if (!state.loading && ids.isEmpty()) item("empty") {
                 JEmptyState(stringResource(if (state.failure == null) R.string.machines_empty_title else R.string.machines_empty_unavailable),
                     stringResource(R.string.machines_empty_body), icon = PhIcons.Desktop,
                     // How to add one (docs/assistant/onboarding.md 4.5), until the phone adds computers itself.
@@ -110,15 +137,9 @@ internal fun MachinesScreen(
                     navigator.navigate(MachineDetailRoute(id))
                 }
             }
-            // Several managers (docs/assistant/managers.md step 4): the computers under the manager they belong to.
-            val byManager = roster?.groups(ids) { id -> machines.firstOrNull { it.id == id }?.manager }
-            if (byManager == null) items(ids, key = { it }, contentType = { "machine" }) { card(it) }
-            else byManager.forEach { group ->
-                item("manager-${group.id}", contentType = "manager") { JManagerHeader(group, count = group.items.size) }
-                items(group.items, key = { "${group.id}:$it" }, contentType = { "machine" }) { card(it) }
-            }
+            items(ids, key = { it }, contentType = { "machine" }) { card(it) }
         } else {
-            val metric = state.history?.metrics ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
+            val metric = state.history?.metrics?.live(machine) ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
             val system = metric.system ?: machine?.system
             val current = metric.current(state.now)
             val agents = machineSessions(sessions, machineId)
@@ -168,7 +189,7 @@ internal fun MachinesScreen(
                 JSegmented(MetricRange.entries.map { JSegment(stringResource(R.string.machines_range_hours, when (it) {
                     MetricRange.Hour -> 1; MetricRange.SixHours -> 6; MetricRange.Day -> 24
                 })) }, MetricRange.entries.indexOf(state.range), { selection = null; model.selectRange(MetricRange.entries[it]) })
-                Text(stringResource(R.string.machines_long_press_hint), Modifier.padding(vertical = 8.dp), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
+                Text(stringResource(R.string.machines_long_press_hint), Modifier.padding(vertical = 8.dp.dense), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
             }
             if (selection != null) item("selection") { JTextButton(stringResource(R.string.machines_back_to_now), { selection = null }) }
             // Disk history is in bytes; the chart reads it against the disk's size, so only when that is known.
@@ -199,7 +220,7 @@ internal fun MachinesScreen(
                     AgentState.Unread -> Status.Unread; AgentState.Idle -> Status.Idle
                     AgentState.Offline -> Status.Offline; AgentState.Unknown -> Status.Unknown
                 }
-                JCard(Modifier.padding(bottom = 12.dp), onClick = { navigator.navigate(ChatRoute(machineId, session.sessionId)) }, status = status) {
+                JCard(Modifier.padding(bottom = 12.dp.dense), onClick = { navigator.navigate(ChatRoute(machineId, session.sessionId)) }, status = status) {
                     JRow(session.displayTitle, leading = { JStatusDot(status) }, trailing = { JTag(status.localizedLabel, status = status) })
                     Text(session.agentLabel, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                     Text(session.cwd, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -227,7 +248,7 @@ internal fun MachinesScreen(
                 JGroupItem(GroupPosition.of(index, systemValues.size)) { JRow(label, value = text?.takeIf { it.isNotBlank() } ?: "—") }
             }
             item("method") { Text(stringResource(R.string.machines_method),
-                Modifier.padding(vertical = 12.dp), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
+                Modifier.padding(vertical = 12.dp.dense), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
             extensionSections?.invoke(this)
         }
     }
@@ -251,8 +272,8 @@ private fun MachineCard(
         pending -> Status.NeedsYou
         !metrics.online -> Status.Offline; alerts.isNotEmpty() || machine?.nodeMismatch == true -> Status.NeedsYou; else -> Status.Unread
     }
-    JCard(Modifier.padding(bottom = 12.dp), onClick = onClick, status = status) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    JCard(Modifier.padding(bottom = 12.dp.dense), onClick = onClick, status = status) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp.dense)) {
             OsBadge(system)
             Column(Modifier.weight(1f)) {
                 Text(machine?.displayName ?: metrics.machineId, style = PersonaTheme.type.title, color = PersonaTheme.palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -294,7 +315,7 @@ private fun MachineCard(
                 sessions.count { it.agentState == AgentState.NeedsYou }),
                 style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
         }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp.dense)) {
             listOfNotNull(machine?.herdrVersion?.let { "herdr $it" }, machine?.claudeVersion?.let { "Claude $it" }).forEach {
                 Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3)
             }
@@ -309,7 +330,7 @@ private fun MachineCard(
                 MetricKind.Memory -> MetricFormat.percent(percent(current?.memUsed, current?.memTotal), locale)
                 else -> "↓ ${MetricFormat.rate(current?.netRx, locale)}  ↑ ${MetricFormat.rate(current?.netTx, locale)}"
             }
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp.dense), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(stringResource(if (kinds.size > 1) R.string.machines_metric_network else kinds.first().label), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink2)
                 Text(value, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink)
             }
@@ -320,7 +341,7 @@ private fun MachineCard(
 
 @Composable
 private fun Warning(text: String) {
-    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(Modifier.padding(top = 8.dp.dense), horizontalArrangement = Arrangement.spacedBy(6.dp.dense)) {
         JIcon(PhIcons.Warning, null, size = 18.dp, tint = PersonaTheme.palette.danger.dot)
         Text(text, color = PersonaTheme.palette.danger.text, style = PersonaTheme.type.caption)
     }
@@ -336,9 +357,9 @@ private fun OsBadge(system: MachineSystem?) {
 @Composable
 private fun CoreBars(cores: List<Double>) {
     val locale = currentLocale
-    JCard(Modifier.padding(bottom = 12.dp)) {
+    JCard(Modifier.padding(bottom = 12.dp.dense)) {
         Text(stringResource(R.string.machines_per_core), style = PersonaTheme.type.title, color = PersonaTheme.palette.ink)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp.dense), verticalArrangement = Arrangement.spacedBy(10.dp.dense)) {
             cores.forEachIndexed { index, usage ->
                 Column(Modifier.width(76.dp)) {
                     Text(stringResource(R.string.machines_core_n, index + 1), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink2)

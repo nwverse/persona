@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The one-time switch to self-updating (docs/integrations/pi.md "Auto-update"): installs this checkout's pi package into the store
+// The one-time switch to self-updating (docs/integrations/pi.md "Automatic updates"): installs this checkout's pi package into the store
 // beside the node's socket as its current version, and says what to run next — pi loads the extension from
 // <store>/current/pi, the companion runs from there, and from then on the node's versions come by themselves.
 //

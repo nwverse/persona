@@ -16,7 +16,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             self.contentHandler = contentHandler
             fallback = request.content
         }
-        // Every group of hubs seals to its own key (docs/protocol/multi-hub.md「推送」): the one that opens it names the group.
+        // Every group of hubs seals to its own key (docs/protocol/multi-hub.md「Push and notifications」): the one that opens it names the group.
         let (content, outcome) = PushCrypto.service(request.content, keys: PushCrypto.allKeys)
         // Why a push stayed 「有新消息」 is the first question when one does (no content in the log).
         switch outcome {

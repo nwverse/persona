@@ -20,6 +20,12 @@ import (
 // stableAfter is how long an upstream session holds before a drop of it no longer counts toward maxReconnects.
 var stableAfter = time.Minute
 
+// upWriteTimeout bounds one write to the upstream session. A session that stays connected but takes no frame this
+// long (a hung service, a stalled jump host, a black-holed connection) counts as dropped: the WebSocket closes itself
+// on the deadline, readUpstream sees it and lost reconnects. Without it a write waits on the call's own context,
+// which only ends with the call, so the app hanging up was never read and the call never ended.
+var upWriteTimeout = 10 * time.Second
+
 const (
 	maxReconnects = 3  // in a row: a session that held stableAfter starts the count over
 	historyLines  = 40 // what a reconnected session is told was said
@@ -53,6 +59,10 @@ type conversation struct {
 	resume  []resumeRun
 	resumed bool // the app picked the call up again: its first session is told what was said
 	wake    chan struct{}
+	// sendsAnyway: the app's start said speech_gate, true or false (#5904): it has Send Anyway for what the
+	// user-speech gate held back, so such a handover with a task is kept for its resend and the model is told the
+	// screen offers that. An app from before it says nothing and has no such button. Set before ready, under mu.
+	sendsAnyway bool
 
 	mu         sync.Mutex
 	closed     bool
@@ -115,6 +125,10 @@ type conversation struct {
 	reply       string
 	replyVoiced bool
 	silent      []string
+	// replying: a reply is under way (evReply until evTurnEnd). A response.create sent then is refused
+	// (conversation_already_has_active_response, realtime dialect): sendUp holds it back as createOwed and sends it once
+	// the reply is over.
+	replying, createOwed bool
 	// sus is the call's pausing of its upstream while its conversation works (suspend.go, protocol 2).
 	sus suspension
 	// log is what the call's log counts, and its id (calllog.go).
@@ -278,6 +292,9 @@ func (c *conversation) begin() error {
 	c.mu.Lock()
 	c.p, c.w, c.model, c.modelID = p, newWire(p.Dialect), model, p.ID+"/"+model
 	c.gate.echoes = start.EchoCancellation != nil && !*start.EchoCancellation
+	// Only a full device's call turns the user-speech gate off: another extension's call is held to it (docs/assistant/voice.md "Permissions").
+	c.gate.off = start.SpeechGate != nil && !*start.SpeechGate && (c.role == "" || c.role == roleFull)
+	c.sendsAnyway = start.SpeechGate != nil
 	if voicePattern.MatchString(start.Voice) && !gone { // a voice of the other upstream's may not exist here
 		c.voice = start.Voice
 	}
@@ -444,6 +461,13 @@ func (c *conversation) shutdown() {
 		cancel()
 		_ = up.Close(websocket.StatusNormalClosure, "bye")
 	}
+}
+
+// writeUp writes v to the upstream session up, waiting at most upWriteTimeout.
+func (c *conversation) writeUp(up upLink, v any) error {
+	ctx, cancel := context.WithTimeout(c.ctx, upWriteTimeout)
+	defer cancel()
+	return writeJSON(ctx, up, v)
 }
 
 func writeJSON(ctx context.Context, c interface {

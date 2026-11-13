@@ -1,4 +1,4 @@
-// Settings › Claude Code › Blocked config directories (iOS ClaudeDirsSection; docs/integrations/claude-integration.md "Blocking config directories"): the
+// Settings › Claude Code › Blocked config directories (iOS ClaudeDirsSection; docs/integrations/claude-integration.md "Blocking configuration directories"): the
 // computer's Claude Code config directories (CLAUDE_CONFIG_DIR), each with "Block" / "Unblock", and rules typed by hand
 // (a path or a glob such as ~/.automation/*). A blocked directory is not scanned or remembered and its sessions leave
 // Agents; the files are not touched. Each change is one PUT of the whole list; the answer is the new state.

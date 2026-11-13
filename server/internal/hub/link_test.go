@@ -38,7 +38,7 @@ func newLinkHubManaged(t *testing.T) (*Hub, *testManager, *httptest.Server) {
 	t.Cleanup(srv.Close)
 	port := srv.Listener.Addr().(*net.TCPAddr).Port
 	h.public.mu.Lock()
-	h.public.port, h.public.fp = port, spkiPin(srv.Certificate())
+	h.public.port, h.public.fp = port, link.Pin(srv.Certificate())
 	h.public.endpoints = []Endpoint{{URL: srv.URL, Kind: "lan", Port: port, Scheme: "https"}}
 	h.public.mu.Unlock()
 	h.cfg.PublicURL = "http://127.0.0.1:" + strconv.Itoa(port)
@@ -133,7 +133,7 @@ func runLink(t *testing.T, cfg link.Config, target string) (statuses chan link.S
 }
 
 func linkConfig(h *Hub, srv *httptest.Server, token string) link.Config {
-	return link.Config{Hub: "hub", Machine: "laptop", FP: spkiPin(srv.Certificate()), Token: token,
+	return link.Config{Hub: "hub", Machine: "laptop", FP: link.Pin(srv.Certificate()), Token: token,
 		Endpoints: []link.Endpoint{{URL: srv.URL, Kind: "lan"}}}
 }
 

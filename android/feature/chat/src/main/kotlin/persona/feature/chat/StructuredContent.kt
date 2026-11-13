@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.designsystem.dense
 import persona.core.domain.isOwnMessage
 import androidx.compose.foundation.background
 import androidx.compose.animation.core.*
@@ -35,16 +36,22 @@ import persona.core.designsystem.icons.PhIcons
  * rest in place (R3).
  */
 @Composable
-internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? = null) {
+internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? = null, boxed: Boolean = false,
+    /** The closeout card above the transcript says this reply's closeout block (#3612): draw the reply without it. */
+    hideCloseout: Boolean = false) {
     var whole by remember(item.id) { mutableStateOf<String?>(null) }
     val cut = item.fullSize != null && whole == null && update?.streaming != true
-    val text = whole ?: update?.text ?: item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it }
+    val text = (whole ?: update?.text ?: item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it })
+        .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it) else it }
     val model = remember(text, item.from, user) { messageModel(text, item.from, user) }
     val uri = LocalUriHandler.current
-    Column(Modifier.fillMaxWidth().messageMenu(MessageTarget(item.id, model.plain, user, model.editText()))) {
+    Column(Modifier.fillMaxWidth().messageMenu(MessageTarget(item.id, model.plain, user, model.editText(), time = item.ts))) {
         MessageContextGroup(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
         AttachedFileCards(model.attached, alignEnd = user)
-        MessageParts(model.parts, user, item.id)
+        // a reply still being written: its quotes do not fold yet (#2984)
+        CompositionLocalProvider(LocalReplyStreaming provides (update?.streaming == true)) {
+            MessageParts(model.parts, user, item.id, boxed = boxed, streaming = update?.streaming == true)
+        }
         if (cut) FullTextButton(item) { whole = it } else ReaderEntry(text)
         if (update?.streaming == true) StreamingCursor()
         // An answer's documents as cards with their first page (iOS #1543), the rest as chips.
@@ -66,7 +73,8 @@ private fun StreamingCursor() {
 }
 
 @Composable
-private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, onLastLine: ((Int) -> Unit)? = null) {
+private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, onLastLine: ((Int) -> Unit)? = null, boxed: Boolean = false,
+    streaming: Boolean? = null) {
     // Bubble padding below the last text line, so the reported extent reaches the bottom of the row.
     val bottomPadding = with(LocalDensity.current) { Tokens.Space.m.roundToPx() }
     // A reply's ```persona-view blocks are numbered across the whole text item: `<item id>/<n>`, the hub's key.
@@ -86,10 +94,12 @@ private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, on
                     if (index == parts.lastIndex && layout.lineCount > 0)
                         onLastLine?.invoke((layout.size.height - layout.getLineTop(layout.lineCount - 1)).toInt() + bottomPadding)
                 })
-                else ChatMarkdown(part.text, "$id/$index", selectable = false,
-                    viewKeys = { n -> persona.core.domain.views.AssistantFences.key(id, firstCard[index] + n) })
+                else AssistantAnswerFrame(boxed) {
+                    ChatMarkdown(part.text, "$id/$index", selectable = false,
+                        viewKeys = { n -> persona.core.domain.views.AssistantFences.key(id, firstCard[index] + n) }, streaming = streaming)
+                }
             is MessagePart.Source -> JGroupItem(GroupPosition.Single) {
-                Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                Column(Modifier.fillMaxWidth().padding(10.dp.dense)) {
                     Text(stringResource(R.string.chat_content_from, part.name.ifBlank { stringResource(R.string.chat_content_other_session) }), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                     // Markdown like an answer: agents write Markdown, and the hub turns a teammate's JSON notes into it.
                     if (part.text.isNotBlank()) ChatMarkdown(keepLineBreaks(part.text), "$id/$index", selectable = false)
@@ -114,7 +124,11 @@ internal fun userBubbleTime(ts: String, locale: java.util.Locale, zone: java.tim
  */
 @Composable
 internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUpdate> = emptyMap(),
-    onLastLine: ((Int) -> Unit)? = null, images: (@Composable () -> Unit)? = null, menu: Boolean = true) {
+    onLastLine: ((Int) -> Unit)? = null, images: (@Composable () -> Unit)? = null, menu: Boolean = true,
+    /** A message only in the outbox, in this state: its menu offers what fits one not sent ([MessageTarget.pending]). */
+    pending: persona.core.contracts.api.DeliveryState? = null,
+    /** An unsent message's look on Glass ([OutboxBubble]): its bubble faded, its state's mark before it. */
+    faded: Boolean = false, leading: (@Composable () -> Unit)? = null) {
     // Keyed on this bubble's own texts: [updates] is the whole chat's, and changes with every streamed chunk of a reply.
     val texts = bubbleTexts(items, updates)
     val models = remember(items, texts) { items.mapIndexed { index, item -> messageModel(texts[index], item.from, user = true) } }
@@ -123,9 +137,9 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     val photos = remember(models) { models.flatMap { it.images }.distinct() }
     val files = remember(models) { models.flatMap { it.files }.distinct().take(6) }
     val attached = remember(models) { models.flatMap { it.attached }.distinctBy { it.path } }
-    val target = remember(models, items) {
+    val target = remember(models, items, pending) {
         MessageTarget(items.firstOrNull()?.id.orEmpty(), models.joinToString("\n\n") { it.plain }.trim(), true,
-            models.joinToString("\n\n") { it.editText() }.trim())
+            models.joinToString("\n\n") { it.editText() }.trim(), pending, items.lastOrNull()?.ts)
     }
     val timestamp = items.lastOrNull()?.ts
     val locale = currentLocale
@@ -155,7 +169,7 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
         AttachedFileCards(attached)
         if (fromCard) Text(stringResource(R.string.chat_from_card), Modifier.align(Alignment.End).padding(bottom = Tokens.Space.xs),
             style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1)
-        if (bubble) UserBubbleFrame(Modifier.messageMenu(target.takeIf { menu }), footer = footer, own = own) {
+        if (bubble) UserBubbleFrame(Modifier.messageMenu(target.takeIf { menu }), footer = footer, own = own, faded = faded, leading = leading) {
             images?.invoke()
             if (photos.isNotEmpty()) {
                 AttachedPhotoRow(photos)
@@ -176,23 +190,23 @@ internal fun ThoughtContent(text: String, id: String, collapsed: Boolean, last: 
         val thought = stringResource(R.string.chat_work_thought)
         TimelineStep(PhIcons.Lightbulb, thought, verb = thought, last = last, onClick = { open = !open })
         if (open) {
-            Column(Modifier.padding(start = Tokens.Space.m)) {
+            Column(Modifier.workDetail(Tokens.Space.m)) {
                 ChatMarkdown(text, id, PersonaTheme.type.callout, PersonaTheme.palette.ink2)
             }
-            ReaderEntry(text, thought)
+            Box(Modifier.workDetail()) { ReaderEntry(text, thought) }
         }
     }
 }
 
 internal fun toolCategory(name: String) = when (val base = persona.core.domain.toolBaseName(name)) {
-    "Read", "LS" -> PhIcons.Eye
+    "Read", "LS", "NotebookRead" -> PhIcons.Eye
     "Edit", "MultiEdit", "NotebookEdit" -> PhIcons.PencilSimple
     "Write" -> PhIcons.File
-    "Bash" -> PhIcons.TerminalWindow
+    "Bash", "PowerShell" -> PhIcons.TerminalWindow
     "Grep", "Glob", "ToolSearch" -> PhIcons.MagnifyingGlass
     "WebFetch", "WebSearch" -> PhIcons.GlobeSimple
     "Task", "Agent" -> PhIcons.Robot
-    "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList" -> PhIcons.ListChecks
+    "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet" -> PhIcons.ListChecks
     "EnterPlanMode", "ExitPlanMode" -> PhIcons.Lightbulb
     // Persona's own tools (iOS ToolPresentation.symbol); PersonaTools knows the rest of the mcp__ ones.
     "conversation_rename" -> PhIcons.PencilSimple
@@ -215,7 +229,7 @@ internal fun ToolCategoryIcon(name: String) {
 @Composable
 internal fun DiffStats(diff: ToolDiff) {
     val palette = PersonaTheme.palette
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp.dense)) {
         Text("+${diff.added}", color = palette.diffAdd, style = PersonaTheme.type.caption, maxLines = 1)
         Text("−${diff.removed}", color = palette.diffDel, style = PersonaTheme.type.caption, maxLines = 1)
     }
@@ -237,14 +251,16 @@ internal fun DiffView(diff: ToolDiff, id: String) {
         Column {
             DiffNavigation(diff, list) { expanded = true }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val codeWidth = maxOf(maxWidth - 84.dp, with(density) { measured.toDp() } + Tokens.Space.s)
+                // The sign column as on iOS: dotXL wide, growing with the font, then sm before the code.
+                val signColumn = Tokens.Size.dotXL * density.fontScale + Tokens.Space.sm
+                val codeWidth = maxOf(maxWidth - 64.dp - signColumn, with(density) { measured.toDp() } + Tokens.Space.s)
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp), state = list) {
                     items(lines) { line ->
                         Row(Modifier.fillMaxWidth().background(palette.sunken), verticalAlignment = Alignment.CenterVertically) {
                             Text("${line.old ?: ""}  ${line.new ?: ""}", Modifier.width(64.dp),
                                 style = style, color = PersonaTheme.palette.ink2, maxLines = 1)
                             // A hunk header or a note of a unified diff ('@') reads quietly, with no sign.
-                            Text(if (line.sign == '@') " " else line.sign.toString(), Modifier.width(Tokens.Space.xl), style = style,
+                            Text(if (line.sign == '@') " " else line.sign.toString(), Modifier.padding(end = Tokens.Space.sm).width(Tokens.Size.dotXL * density.fontScale), style = style,
                                 color = when (line.sign) { '+' -> palette.diffAdd; '-' -> palette.diffDel; else -> PersonaTheme.palette.ink2 })
                             Box(Modifier.weight(1f).horizontalScroll(horizontal)) {
                                 Text(line.text.replace("\t", "    "), Modifier.width(codeWidth), style = style, softWrap = false,
@@ -262,8 +278,8 @@ internal fun DiffView(diff: ToolDiff, id: String) {
 
 @Composable
 internal fun TodoList(todos: List<TodoEntry>, failed: Boolean) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        val progress = stringResource(R.string.chat_todos_progress, todos.count { it.status == "completed" }, todos.size)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp.dense)) {
+        val progress = pluralStringResource(R.plurals.chat_todos_progress, todos.size, todos.count { it.status == "completed" }, todos.size)
         Text(if (failed) stringResource(R.string.chat_todos_progress_failed, progress) else progress,
             style = PersonaTheme.type.caption, color = if (failed) PersonaTheme.palette.danger.text else PersonaTheme.palette.ink2)
         todos.forEach { todo ->

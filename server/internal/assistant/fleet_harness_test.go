@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devices"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -27,6 +29,15 @@ type fleetDevs struct {
 	machines map[string]*fleetNode
 	order    []string
 	usage    assistantwire.UsageSummary
+	capacity proto.CapacitySnapshot // what CapacitySnapshot answers (capacity_test.go)
+	// attention is every Persona Link summary handed over (SetAttention), in order.
+	attention []link.Attention
+	// linkDesktop: the manager has a Persona Link desktop; confirmed: the cards its app confirmed it handed to
+	// Notification Center (confirm; LinkRang).
+	linkDesktop bool
+	confirmed   map[string]bool
+	// watched: the sessions an app has open (Watched), by machine and session.
+	watched map[[2]string]bool
 }
 
 type fleetNode struct {
@@ -128,6 +139,17 @@ func (d *fleetDevs) MachineResources(string) (*proto.Machine, *proto.MetricSampl
 
 func (d *fleetDevs) Canonical(id string) string { return id }
 
+// Summary is List's entry for id, found without the others as the devices do.
+func (d *fleetDevs) Summary(id string) (devices.Summary, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := d.machines[id]
+	if n == nil || !slices.Contains(d.order, id) {
+		return devices.Summary{}, false
+	}
+	return devices.Summary{ID: id, Name: n.name, Home: n.home, Trust: n.trust, Online: true, Reachable: true}, true
+}
+
 func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -191,6 +213,57 @@ func (d *fleetDevs) Usage() assistantwire.UsageSummary {
 	return d.usage
 }
 
+func (d *fleetDevs) CapacitySnapshot(context.Context) proto.CapacitySnapshot {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.capacity
+}
+
+func (d *fleetDevs) SetAttention(a link.Attention) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.attention = append(d.attention, a)
+}
+
+// confirm is the Persona Link desktop's app confirming it handed these cards' notifications to Notification Center.
+func (d *fleetDevs) confirm(cards ...string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.confirmed == nil {
+		d.confirmed = map[string]bool{}
+	}
+	for _, c := range cards {
+		d.confirmed[c] = true
+	}
+}
+
+// LinkRang is the devices' (internal/devices LinkRang): true once the desktop's app confirmed card, false at once
+// without a desktop, and when the time is up or ctx ends.
+func (d *fleetDevs) LinkRang(ctx context.Context, card string, within time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, within)
+	defer cancel()
+	for {
+		d.mu.Lock()
+		on, rang := d.linkDesktop, d.confirmed[card]
+		d.mu.Unlock()
+		if !on || rang {
+			return rang
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// handedAttention is every summary handed over so far.
+func (d *fleetDevs) handedAttention() []link.Attention {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.attention)
+}
+
 // fleetMem is the in-memory store of the fleet's tests: the assistant's settings, the interactions table, "Always Allow in Session",
 // the seen times.
 type fleetMem struct {
@@ -201,6 +274,8 @@ type fleetMem struct {
 	recs   []db.InteractionRecord
 	always map[string]map[string]bool // session → keys
 	seen   map[[2]string]time.Time
+	// insertGate, when set before the cards come, holds each interaction write until it is closed (a slow database).
+	insertGate chan struct{}
 }
 
 func newFleetMem() *fleetMem {
@@ -208,7 +283,14 @@ func newFleetMem() *fleetMem {
 		seen: map[[2]string]time.Time{}}
 }
 
-func (m *fleetMem) InsertInteraction(_ context.Context, ix proto.Interaction) error {
+func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) error {
+	if m.insertGate != nil {
+		select {
+		case <-m.insertGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
 	if _, ok := m.status[ix.ID]; !ok {
@@ -248,6 +330,40 @@ func (m *fleetMem) Interactions(_ context.Context, machine, session string, _ in
 		}
 	}
 	return out, nil
+}
+
+// InteractionsPage is db.InteractionsPage over the kept records, by their interaction's CreatedAt.
+func (m *fleetMem) InteractionsPage(_ context.Context, q db.InteractionQuery) (db.InteractionPage, error) {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if q.Limit <= 0 || q.Limit > 500 {
+		q.Limit = 100
+	}
+	var all []db.InteractionRecord
+	for _, r := range m.recs {
+		ix := r.Interaction
+		if q.Machine != "" && ix.MachineID != q.Machine || q.Session != "" && ix.SessionID != q.Session || q.Kind != "" && ix.Kind != q.Kind ||
+			!q.Since.IsZero() && ix.CreatedAt.Before(q.Since) {
+			continue
+		}
+		if !q.Before.IsZero() && !(ix.CreatedAt.Before(q.Before) || q.BeforeID != "" && ix.CreatedAt.Equal(q.Before) && ix.ID < q.BeforeID) {
+			continue
+		}
+		all = append(all, r)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		a, b := all[i].Interaction, all[j].Interaction
+		if a.CreatedAt.Equal(b.CreatedAt) {
+			return a.ID > b.ID
+		}
+		return a.CreatedAt.After(b.CreatedAt)
+	})
+	page := db.InteractionPage{Records: all[:min(len(all), q.Limit)]}
+	if len(all) >= q.Limit {
+		last := all[q.Limit-1].Interaction
+		page.NextBefore, page.NextBeforeID = &last.CreatedAt, last.ID
+	}
+	return page, nil
 }
 
 func (m *fleetMem) AllowAlways(_ context.Context, session, _ string, keys []string) error {
@@ -410,3 +526,19 @@ var errNode = errors.New("the node refused")
 func init() { _ = apierr.ErrOffline }
 
 func (d *fleetDevs) Follow(context.Context, string, string, bool) error { return nil }
+
+func (d *fleetDevs) Watched(id, session string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.watched[[2]string{id, session}]
+}
+
+// watch has an app open machine id's session (on) or close it.
+func (d *fleetDevs) watch(id, session string, on bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.watched == nil {
+		d.watched = map[[2]string]bool{}
+	}
+	d.watched[[2]string{id, session}] = on
+}

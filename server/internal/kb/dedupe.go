@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-// Project dedupe (docs/assistant/knowledge.md "Project dedupe"). The same work is often discussed in several groups under different
+// Project dedupe (docs/assistant/knowledge.md "Project deduplication"). The same work is often discussed in several groups under different
 // names, and a chat's compression only sees project names: each group grew its own project (2026-11-01: two names
 // for the same work with no word in common, 10 people in common). Pairs of live projects that share people, chats
 // or name words go to the model with both profiles; the ones it calls the same are merged. Each pair's verdict is
@@ -153,7 +153,11 @@ func (e *Engine) DedupeProjects(ctx context.Context, max int) int {
 	verdicts := e.Store.dedupeVerdicts()
 	asked, merged := 0, 0
 	gone := map[string]bool{} // merged away this run: their other pairs are stale
-	for _, c := range dedupeCandidates(e.Store.Projects()) {
+	projects := e.Store.Projects()
+	for _, p := range projects {
+		p.People = e.externalPeople(p.People)
+	}
+	for _, c := range dedupeCandidates(projects) {
 		if asked >= max || ctx.Err() != nil {
 			break
 		}
@@ -220,7 +224,7 @@ func (e *Engine) judgeDuplicate(ctx context.Context, c dedupeCandidate) (same, k
 	}
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	if err := e.modelFor("kb.dedupe").JSONMax(cctx, prompts.RenderKBDedupe(prompts.KBOwner{Owner: e.Owner}), in, 600, &d); err != nil {
+	if err := e.modelFor("kb.dedupe").JSONMax(cctx, prompts.RenderKBDedupe(prompts.KBOwner{Owner: e.ownerName()}), in, 600, &d); err != nil {
 		return false, false, "", err
 	}
 	reason = oneLine(d.Reason)
@@ -421,17 +425,42 @@ func (e *Engine) relinkRefs(p *Project, manual bool, f func(ref string, projects
 		var list *[]string
 		switch kind {
 		case KindChat:
-			c, ok := e.Store.Chat(id)
-			if !ok {
-				continue
+			// Under chatMu (editChatAs): an ingest's pending count and last message time written meanwhile stay.
+			if _, _, err := e.Store.editChatAs(id, manual, func(c *Chat) {
+				if l, changed := f(ref, c.Projects); changed {
+					c.Projects = l
+				}
+			}); err != nil {
+				return err
 			}
-			v, t, list = c, &c.Tagging, &c.Projects
+			continue
+		case KindRecording:
+			// Under recMu, like every other read-compare-write of a recording: an upload or a trim meanwhile stays.
+			e.Store.recMu.Lock()
+			var err error
+			if r, ok := e.Store.Recording(id); ok {
+				if l, changed := f(ref, r.Projects); changed {
+					r.Projects = l
+					err = e.Store.putEntity(KindRecording, r.ID, r, &r.Tagging, manual)
+				}
+			}
+			e.Store.recMu.Unlock()
+			if err != nil {
+				return err
+			}
+			continue
 		case KindPerson:
-			per, ok := e.Store.Person(id)
-			if !ok {
-				continue
+			// Read again under personMu: chats or handles the pipeline links meanwhile stay.
+			if _, _, err := e.Store.updatePerson(id, manual, nil, func(per *Person) bool {
+				l, changed := f(ref, per.Projects)
+				if changed {
+					per.Projects = l
+				}
+				return changed
+			}); err != nil {
+				return err
 			}
-			v, t, list = per, &per.Tagging, &per.Projects
+			continue
 		default:
 			it, ok := e.Store.Item(kind, id)
 			if !ok {

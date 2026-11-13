@@ -164,12 +164,17 @@ type kbHit struct {
 	Line string `json:"line"`
 }
 
-// searchKnowledge: lines of the knowledge base matching every word of the query.
-func (h *hubClient) searchKnowledge(ctx context.Context, query string) ([]kbHit, error) {
+// searchKnowledge: lines of the knowledge base matching every word of the query, of one kind when kind is not ""
+// (GET /api/v1/kb-search's kind, #3862 phase 6: a hub from before searches every kind, an unknown kind is its 400).
+func (h *hubClient) searchKnowledge(ctx context.Context, query, kind string) ([]kbHit, error) {
 	var out struct {
 		Hits []kbHit `json:"hits"`
 	}
-	err := h.call(ctx, "GET", "/api/v1/kb-search?q="+url.QueryEscape(query), nil, &out)
+	q := url.Values{"q": {query}}
+	if kind != "" {
+		q.Set("kind", kind)
+	}
+	err := h.call(ctx, "GET", "/api/v1/kb-search?"+q.Encode(), nil, &out)
 	return out.Hits, err
 }
 
@@ -257,11 +262,22 @@ func (h *hubClient) channels(ctx context.Context) ([]channel.View, error) {
 }
 
 // triageSwitches are the hub's session triage switches (GET /api/v1/agents/triage, docs/assistant/agent-work.md "Switches"): whether
-// it triages an agent's stopped turn at all, and whether it goes on ("Continue") after a transient model error.
+// it triages an agent's stopped turn at all, and whether it goes on ("Continue") after a transient model error
+// (transient_retry, unset: on, also with the triage off) or once a usage limit resets (auto_continue).
 type triageSwitches struct {
-	Enabled      bool `json:"enabled"`
-	AutoContinue bool `json:"auto_continue"`
+	Enabled        bool  `json:"enabled"`
+	AutoContinue   bool  `json:"auto_continue"`
+	TransientRetry *bool `json:"transient_retry,omitempty"`
 }
+
+// triageOff: nothing triages, nothing is continued (the switches unknown).
+func triageOff() triageSwitches {
+	off := false
+	return triageSwitches{TransientRetry: &off}
+}
+
+// transientOn: the hub continues a transient model error by itself.
+func (sw triageSwitches) transientOn() bool { return sw.TransientRetry == nil || *sw.TransientRetry }
 
 func (h *hubClient) triage(ctx context.Context) (triageSwitches, error) {
 	var out triageSwitches
@@ -332,7 +348,7 @@ type sendOpts struct {
 }
 
 // send types text into a conversation as message id (voice-…: the conversation shows it came by voice,
-// docs/extensions/channels.md "Source marks"; the hub sends an id once, and forgets one it refused: the same id goes again).
+// docs/extensions/channels.md "Source markers"; the hub sends an id once, and forgets one it refused: the same id goes again).
 func (h *hubClient) send(ctx context.Context, machine, session, text, id string, opts ...sendOpts) error {
 	body := map[string]any{"text": text, "client_msg_id": id}
 	for _, o := range opts {

@@ -29,19 +29,48 @@ final class WatchRecordingTransfer {
     @ObservationIgnored private var attempts: [String: Int] = [:]
     @ObservationIgnored private var retryAt: [String: Date] = [:]
     @ObservationIgnored private var lastBatch = Date.distantPast
+    @ObservationIgnored private var lastPrune = Date.distantPast
 
     func start() {
         guard ticker == nil else { return }
-        WatchSync.shared.onRecordingEvent = { [weak self] in self?.pump(force: true) }
+        // These slots have one owner, this transfer. All-day recording rides on the same events (activation, reachability,
+        // a saved chunk) through this fan-out instead of taking a slot over, which would silently stop clips and rolling
+        // recordings from being sent (docs/assistant/day-recap.md「Watch to phone」). Its own slots (acknowledgements, the
+        // phone's erase and delete requests) are taken in `WatchDayTransfer.start()`, here before WatchSync activates.
+        WatchSync.shared.onRecordingEvent = { [weak self] in
+            self?.pump(force: true)
+            WatchDayTransfer.shared.pump()
+        }
         WatchSync.shared.onRecordingReceipt = { [weak self] in self?.received($0) }
-        RecordingCapture.shared.onSaved = { [weak self] _ in self?.pump(force: false) }
+        RecordingCapture.shared.onSaved = { [weak self] _ in
+            self?.pump(force: false)
+            WatchDayTransfer.shared.pump()
+        }
+        WatchDayTransfer.shared.start()
         ticker = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                self?.pruneRolling()
                 self?.pump(force: false)
             }
         }
         pump(force: true)
+    }
+
+    /// The watch can't read health data, so it only goes by age (kept is never set here); see `RecordingRolling.expiredOnWatch`.
+    /// Rolling only: an all-day chunk goes once the phone acknowledges it, or as a reported loss past the phone's
+    /// `recordingDayKeepDays` (`WatchDayTransfer`), never by this window.
+    private func pruneRolling() {
+        let now = Date()
+        guard now.timeIntervalSince(lastPrune) >= RecordingRolling.pruneInterval else { return }
+        lastPrune = now
+        let library = RecordingLibrary.shared
+        for entry in library.entries where entry.isRolling {
+            library.prune(entry.id, indexes: RecordingRolling.expiredOnWatch(entry, now: now))
+            if !entry.active, entry.endDelivered, library.entry(entry.id)?.segments.isEmpty ?? true {
+                try? library.remove(entry.id)
+            }
+        }
     }
 
     func pending(_ id: UUID) -> Int {
@@ -52,8 +81,13 @@ final class WatchRecordingTransfer {
         let session = WCSession.default
         guard session.activationState == .activated, session.isCompanionAppInstalled else { return }
         let now = Date()
-        let batchDue = reachable || force || now.timeIntervalSince(lastBatch) >= RecordingAudioSpec.transferBatchSeconds
-        for entry in RecordingLibrary.shared.entries where entry.source == .watch {
+        // Low Power Mode spaces the batches of a recording still under way further apart.
+        let batch = ProcessInfo.processInfo.isLowPowerModeEnabled ? RecordingAudioSpec.lowPowerTransferBatchSeconds
+            : RecordingAudioSpec.transferBatchSeconds
+        let batchDue = reachable || force || now.timeIntervalSince(lastBatch) >= batch
+        // All-day recordings go their own way (`WatchDayTransfer`): chunk by chunk and event by event, acknowledged by
+        // seq and `n`.
+        for entry in RecordingLibrary.shared.entries where entry.source == .watch && !entry.isDay {
             guard !entry.active || batchDue else { continue }
             for segment in entry.segments where !segment.delivered {
                 let key = "\(entry.id)/\(segment.index)"

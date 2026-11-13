@@ -30,13 +30,8 @@ func TestSettingsTextsInEachLanguage(t *testing.T) {
 	if got := unknownDelivery(i18n.Ja, "hub-send.lost_during").Error(); got != "送信中にコンピューターとの接続が切れました：すでにコンピューターに届いている可能性があります。チャットを確認してから再送するか決めてください" {
 		t.Errorf("send ja: %q", got)
 	}
-	if got := clipped(i18n.En, " "); got != "(none)" {
-		t.Errorf("none en: %q", got)
-	}
-	if got := changeSummary(i18n.ZhHans, "规则", "", "新"); got != "改规则：（无） → 新" {
-		t.Errorf("change zh: %q", got)
-	}
-	// (The mail account's and the computer's cards are the manager's: extmgr's TestMailAccountRequestInEnglish.)
+	// (The mail account's and the computer's cards, and a change's before → after line, are the manager's: extmgr's
+	// TestMailAccountRequestInEnglish.)
 }
 
 func TestSelfUpdateWhyNotInEachLanguage(t *testing.T) {

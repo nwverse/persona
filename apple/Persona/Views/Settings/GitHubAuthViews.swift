@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Settings › Connectors › GitHub's sign-in (docs/extensions/connectors.md「二 · 7」): where the token comes from — one of the user's
+// Settings › Connectors › GitHub's sign-in (docs/extensions/connectors.md「Login supports」): where the token comes from — one of the user's
 // computers' gh login, or the device flow with the GitHub CLI's built-in OAuth App — chosen here and kept on the hub (hub.json's
 // github.auth.from_machine is only the default). Choosing one leaves the other, so there is no Sign Out. When the token
 // in use lacks a scope the connector needs, the page says which and what does not work.

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Compacting the main conversation on demand and starting a new one (#1727, docs/assistant/assistant.md「手动压缩」「新建主对话」):
+/// Compacting the main conversation on demand and starting a new one (#1727, docs/assistant/assistant.md「Manual compaction」「新建主对话」):
 /// the hub's features, what the chat shows while a compaction runs, and the words the actions use.
 nonisolated enum MainConversationActions {
     /// The hub can compact an assistant conversation (POST …/compact).

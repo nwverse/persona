@@ -214,12 +214,11 @@ func TestSetupServiceFormerNameKeepsPersonad(t *testing.T) {
 	}
 }
 
-// On a Mac the agent runs `personad hub` even with a persona-hub of its build beside it, and the report says why the
-// hub and the built-in manager stay on personad for now. An agent that ran persona-hub (edited by hand) is moved back
-// and the report says so: loaded, the hub restarts, its child with it. An agent of someone's own that runs this
-// persona-hub is still the hub's, left as it is.
-func TestSetupMacAgentStaysOnPersonad(t *testing.T) {
-	e, cmds, bin := splitSetup(t, "persona 1.0 abc\n")
+// macSetup is splitSetup on a Mac, launchd answering nothing loaded; setup runs launchdService and returns its report,
+// after writing plist to the agent's file first when it is not "".
+func macSetup(t *testing.T, build string) (e *setupEnv, cmds *fakeCommands, bin string, setup func(plist string) string) {
+	t.Helper()
+	e, cmds, bin = splitSetup(t, build)
 	e.goos, e.uid = "darwin", 501
 	cmds.replies["launchctl print"] = fakeReply{err: true}
 	file := e.plistPath()
@@ -227,7 +226,7 @@ func TestSetupMacAgentStaysOnPersonad(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := e.out.(interface{ String() string })
-	setup := func(plist string) string {
+	setup = func(plist string) string {
 		t.Helper()
 		if plist != "" {
 			if err := os.WriteFile(file, []byte(plist), 0o644); err != nil {
@@ -235,41 +234,100 @@ func TestSetupMacAgentStaysOnPersonad(t *testing.T) {
 			}
 		}
 		before := len(out.String())
-		if err := e.launchdService(context.Background(), &Config{Listen: ":18662"}, bin); err != nil {
+		if err := e.launchdService(context.Background(), &Config{Listen: ":1"}, bin); err != nil {
 			t.Fatalf("%v\n%s", err, out.String())
-		}
-		if b, _ := os.ReadFile(file); string(b) != hubPlist(e.home, e.root, bin) {
-			t.Fatalf("plist:\n%s", b)
 		}
 		return strings.TrimSpace(out.String()[before:])
 	}
+	return e, cmds, bin, setup
+}
+
+func agentText(t *testing.T, e *setupEnv) string {
+	t.Helper()
+	b, err := os.ReadFile(e.plistPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// On a Mac as on Linux: a new agent runs `persona-hub run` when it is personad's build, and a rerun leaves it.
+// PERSONA_SPLIT_PROGRAMS=0 moves it to `personad hub` and stays in the agent; a rerun without it moves it back.
+func TestSetupMacAgentRunsPersonaHub(t *testing.T) {
+	e, cmds, bin, setup := macSetup(t, "persona 1.0 abc\n")
 	hub := filepath.Join(e.root, "bin", "persona-hub")
-	personad := hubPlist(e.home, e.root, bin)
-	runsHub := strings.Replace(personad, "<string>"+bin+"</string><string>hub</string>", "<string>"+hub+"</string><string>run</string>", 1)
-	if runsHub == personad {
-		t.Fatal("no ProgramArguments to edit")
+	report := setup("")
+	if got, want := agentText(t, e), hubPlist(e.home, e.root, bin, hub, false); got != want {
+		t.Fatalf("agent:\n%s\nwant:\n%s", got, want)
+	}
+	if !strings.Contains(agentText(t, e), "<string>"+hub+"</string><string>run</string>") || strings.Contains(report, "照旧运行") {
+		t.Fatalf("report: %s", report)
+	}
+	delete(cmds.replies, "launchctl print")
+	cmds.calls = nil
+	if report := setup(""); !strings.Contains(report, "没动它（launchd "+hubLaunchdLabel+"）") || cmds.called("launchctl bootstrap") {
+		t.Fatalf("again: %v\n%s", cmds.calls, report)
 	}
 
-	if report := setup(personad); !strings.HasSuffix(report, macPersonad) || strings.Contains(report, "改成运行") {
+	e.getenv = func(k string) string {
+		if k == "PERSONA_SPLIT_PROGRAMS" {
+			return "0"
+		}
+		return ""
+	}
+	cmds.calls = nil
+	report = setup("")
+	optedOut := hubPlist(e.home, e.root, bin, "", true)
+	if agentText(t, e) != optedOut || !strings.Contains(optedOut, "<key>PERSONA_SPLIT_PROGRAMS</key><string>0</string>") ||
+		!strings.Contains(report, "服务改成运行 personad，重启了 hub") || !strings.Contains(report, macSwitchNote(bin)) {
+		t.Fatalf("opted out:\n%s\n%s", agentText(t, e), report)
+	}
+	for _, c := range cmds.calls {
+		if strings.Contains(c, "version -v") {
+			t.Fatalf("opted out, still asked: %q", c)
+		}
+	}
+	e.getenv = func(string) string { return "" }
+	report = setup("")
+	if agentText(t, e) != hubPlist(e.home, e.root, bin, hub, false) || !strings.Contains(report, "服务改成运行 persona-hub，重启了 hub") ||
+		!strings.Contains(report, "完全磁盘访问权限现在看 persona-hub") {
+		t.Fatalf("without it again:\n%s\n%s", agentText(t, e), report)
+	}
+}
+
+// Another build beside personad (a half-done upgrade): a new agent runs `personad hub`, and the report says why.
+func TestSetupMacAgentKeepsPersonadForAnotherBuild(t *testing.T) {
+	e, _, bin, setup := macSetup(t, "persona 0.9 old\n")
+	report := setup("")
+	if agentText(t, e) != hubPlist(e.home, e.root, bin, "", false) || !strings.Contains(report, "没用 persona-hub（") ||
+		!strings.Contains(report, "another build") {
+		t.Fatalf("%s\n%s", agentText(t, e), report)
+	}
+}
+
+// An installed Mac: an agent that ran personad stays on it with a persona-hub of its build beside it, and the report
+// says why; no program is asked for its build. An agent of someone's own that runs this persona-hub is still the
+// hub's, left as it is.
+func TestSetupMacInstalledAgentStaysOnPersonad(t *testing.T) {
+	e, cmds, bin, setup := macSetup(t, "persona 1.0 abc\n")
+	personad := hubPlist(e.home, e.root, bin, "", false)
+	if report := setup(personad); !strings.HasSuffix(report, macStaysNote) || strings.Contains(report, "改成运行") ||
+		strings.Contains(report, "现在看") || agentText(t, e) != personad {
 		t.Fatalf("report: %s", report)
 	}
 	for _, c := range cmds.calls {
 		if strings.Contains(c, "version -v") {
-			t.Fatalf("on a Mac, asked: %q", c)
+			t.Fatalf("installed Mac, asked: %q", c)
 		}
 	}
-	if report := setup(runsHub); !strings.HasSuffix(report, "；服务改成运行 personad"+macPersonad) {
-		t.Fatalf("not loaded, so not restarted: %s", report)
-	}
 	delete(cmds.replies, "launchctl print")
-	if report := setup(runsHub); !strings.HasSuffix(report, "；服务改成运行 personad，重启了 hub，内置管理者跟着重启"+macPersonad) {
-		t.Fatalf("loaded: %s", report)
-	}
 	cmds.calls = nil
-	if report := setup(""); !strings.HasSuffix(report, "没动它（launchd "+hubLaunchdLabel+"）"+macPersonad) || cmds.called("launchctl kickstart") {
+	if report := setup(""); !strings.HasSuffix(report, "没动它（launchd "+hubLaunchdLabel+"）"+macStaysNote) || cmds.called("launchctl kickstart") {
 		t.Fatalf("as it was: %v\n%s", cmds.calls, report)
 	}
 
+	file := e.plistPath()
+	runsHub := hubPlist(e.home, e.root, bin, filepath.Join(e.root, "bin", "persona-hub"), false)
 	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
@@ -285,10 +343,10 @@ func TestSetupMacAgentStaysOnPersonad(t *testing.T) {
 	}
 
 	// Without a persona-hub there is nothing to say.
-	if err := os.Remove(hub); err != nil {
+	if err := os.Remove(filepath.Join(e.root, "bin", "persona-hub")); err != nil {
 		t.Fatal(err)
 	}
-	if report := setup(personad); strings.Contains(report, "macOS") {
+	if report := setup(personad); strings.Contains(report, "照旧运行") {
 		t.Fatalf("no persona-hub: %s", report)
 	}
 }

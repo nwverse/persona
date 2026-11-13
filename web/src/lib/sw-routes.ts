@@ -3,7 +3,7 @@
 // hub untouched, so nothing live is ever served from a cache.
 
 /** index.html, kept under "/" whatever path loaded it (a `?token=` sign-in link never becomes a cache key). */
-export const SHELL_CACHE = "persona-shell-v1";
+export const SHELL_CACHE = "persona-shell-v2";
 /** Vite's content-hashed files under /assets/: immutable, kept until the newest ASSET_LIMIT. */
 export const ASSET_CACHE = "persona-assets-v1";
 /** About three builds' worth of chunks (a build has ~130), so a redeploy never evicts the running one's. */
@@ -21,7 +21,7 @@ export function strategy(url: URL, origin: string, method: string, mode: string)
   if (method !== "GET" || url.origin !== origin) return "pass";
   const p = url.pathname;
   if (p === "/api" || p.startsWith("/api/") || p === "/admin" || p.startsWith("/admin/")) return "pass";
-  if (p === "/sw.js") return "pass";
+  if (p === "/sw.js" || p === "/share" || p.startsWith("/share/") || p === "/share-assets" || p.startsWith("/share-assets/") || p === "/public-share" || p.startsWith("/public-share/")) return "pass";
   if (mode === "navigate") return "shell";
   if (p.startsWith("/assets/")) return "asset";
   if (/^\/[^/]+\.(png|webmanifest)$/.test(p)) return "static";

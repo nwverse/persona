@@ -117,7 +117,7 @@ func TestRuntimeRunningBeatsOnDisk(t *testing.T) {
 	waitFor(t, "listed by the terminal", func() bool { _, ok := listed(t, n)[id]; return ok })
 	web := dialRuntime(t, n, map[string]any{"runtime": "pi-web", "agent": "pi", "caps": map[string]any{"send": true}}) // newer
 	_ = web.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": id, "status": "offline"}}})
-	waitFor(t, "the web server's list taken", func() bool { return len(n.runtimes.sessions()) == 1 && n.runtimes.ownerOf(id) != nil })
+	waitFor(t, "the web server's list taken", func() bool { return len(n.runtimes.appendSessions(nil)) == 1 && n.runtimes.ownerOf(id) != nil })
 	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": id, "text": "one", "client_msg_id": "m-a"}); err != nil {
 		t.Fatal(err)
 	}

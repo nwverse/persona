@@ -18,6 +18,45 @@ struct InboxTests {
 
     private struct List: Decodable { var items: [InboxItem] }
 
+    @Test func unreadBadgePreservesReadPendingItemsAcrossDecoding() throws {
+        var items = try JSON.decoder.decode(List.self, from: Data(json.utf8)).items
+        var pending = items[0]
+        pending.id = "read-pending"
+        pending.read = true
+        items.append(pending)
+        #expect(items.filter(\.isUnreadAction).count == 1)
+        #expect(!pending.isDone && pending.triage == .action)
+        items[0].read = true
+        #expect(items.filter(\.isUnreadAction).isEmpty)
+        let restored = try JSON.decoder.decode([InboxItem].self, from: JSON.encoder.encode(items))
+        #expect(restored.filter(\.isUnreadAction).isEmpty)
+        #expect(restored.filter { !$0.isDone }.count == 2)
+        var fyi = pending
+        fyi.tier = "fyi"
+        fyi.read = false
+        #expect(!fyi.isUnreadAction)
+        var working = fyi
+        working.tier = "action"
+        working.status = "working"
+        #expect(!working.isUnreadAction)
+        var noise = fyi
+        noise.tier = "noise"
+        #expect(!noise.isUnreadAction)
+        var promoted = fyi
+        promoted.status = "action"
+        #expect(promoted.isUnreadAction)
+        var demoted = promoted
+        demoted.status = "fyi"
+        #expect(!demoted.isUnreadAction)
+        var completed = promoted
+        completed.doneAt = Date()
+        #expect(!completed.isUnreadAction)
+        let mixed = try JSON.decoder.decode([InboxItem].self,
+            from: JSON.encoder.encode([pending, fyi, working, noise, promoted, demoted, completed]))
+        #expect(mixed.filter(\.isUnreadAction).count == 1)
+        #expect(!fyi.isDone && !working.isDone && !noise.isDone)
+    }
+
     @Test func decodesItemsAndOpensThem() throws {
         let items = try JSON.decoder.decode(List.self, from: Data(json.utf8)).items
         #expect(items.count == 2)
@@ -34,6 +73,23 @@ struct InboxTests {
         let m = try #require(mail.mailSummary)
         #expect(m.uid == 7 && m.accountID == "a1" && m.subject == "年假确认" && m.seen)
         #expect(mail.larkConversation == nil && chat.mailSummary == nil)
+    }
+
+    @Test func anItemKeepsItsManagerAndEachManagerGetsItsOwnShare() throws {
+        let items = try JSON.decoder.decode(List.self, from: Data("""
+        {"items":[
+          {"id":"a","source":"mail","kind":"mail","account":"a1","account_name":"me@example.com","title":"A","preview":"","count":1,"manager":"assistant"},
+          {"id":"b","source":"mail","kind":"mail","account":"a1","account_name":"me@example.com","title":"B","preview":"","count":1,"manager":"m-work"},
+          {"id":"c","source":"mail","kind":"mail","account":"a1","account_name":"me@example.com","title":"C","preview":"","count":1,"manager":"assistant"},
+          {"id":"d","source":"mail","kind":"mail","account":"a1","account_name":"me@example.com","title":"D","preview":"","count":1}
+        ]}
+        """.utf8)).items
+        #expect(items.map(\.manager) == ["assistant", "m-work", "assistant", nil])
+        let shares = InboxStore.managers(items)
+        #expect(shares.map(\.key) == ["assistant", "m-work", nil], "in the order the list has them")
+        #expect(shares.map { $0.items.map(\.id) } == [["a", "c"], ["b"], ["d"]])
+        let api = FakeHub().client
+        #expect(api.manager(items[1].manager).managerID == "m-work" && api.manager(items[3].manager).managerID == nil)
     }
 
     @Test func aLarkItemCarriesItsReadPosition() throws {
@@ -68,15 +124,6 @@ struct InboxTests {
         #expect(running.agentDraft == nil && running.agentWorking && running.agent?.sessionKey == nil)
         running.agent = nil
         #expect(running.agentDraft == nil && !running.agentWorking)
-    }
-
-    @Test func feishuLinksOpenNatively() throws {
-        let doc = try #require(URL(string: "https://open.feishu.cn/docx/ExampleDocument"))
-        let post = try #require(URL(string: "https://applink.larkoffice.com/client/moments/detail?postId=7000000000000000001"))
-        let minutes = try #require(URL(string: "https://open.feishu.cn/minutes/ExampleRecording"))
-        #expect(FeishuLinks.route(doc, lark: .all) == .doc(url: doc.absoluteString, title: nil))
-        #expect(FeishuLinks.route(post, lark: .all) == .momentsPost(id: "7000000000000000001"))
-        #expect(FeishuLinks.route(minutes, lark: .all) == nil) // a web page in the link sheet
     }
 
     /// Without the Lark extension (no `lark` in the hub's features) the native readers have nothing to read:

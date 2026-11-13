@@ -52,14 +52,14 @@ class Router(
     private fun resolve(key: NavKey): ResolvedRoute? = when (key) {
         AssistantRoute -> ResolvedRoute(AppTab.Persona, key)
         AgentsRoute -> ResolvedRoute(AppTab.Agents, key)
-        InboxRoute -> ResolvedRoute(AppTab.Inbox, key)
-        SettingsRoute -> ResolvedRoute(AppTab.Settings, key)
+        InboxRoute -> ResolvedRoute(AppTab.Persona, key)
+        SettingsRoute -> ResolvedRoute(AppTab.Persona, key)
         NewTodoRoute -> ResolvedRoute(AppTab.Agents, key)
         ConnectionSettingsRoute -> resolve(SettingsPageRoute(SettingsPage.Diagnostics))
-        PairingRoute, is SettingsPageRoute -> ResolvedRoute(AppTab.Settings, key)
-        is ExtensionUiRoute -> key.takeIf { it.extensionId.isNotBlank() && it.uiId.isNotBlank() }?.let { ResolvedRoute(AppTab.Settings, it) }
-        is InboxItemRoute -> key.takeIf { it.itemId.isNotBlank() }?.let { ResolvedRoute(AppTab.Inbox, it) }
-        is LarkChatRoute -> key.takeIf { it.chatId.isNotBlank() }?.let { ResolvedRoute(AppTab.Inbox, it) }
+        PairingRoute, is SettingsPageRoute -> ResolvedRoute(AppTab.Persona, key)
+        is ExtensionUiRoute -> key.takeIf { it.extensionId.isNotBlank() && it.uiId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
+        is InboxItemRoute -> key.takeIf { it.itemId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
+        is LarkChatRoute -> key.takeIf { it.chatId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
         is ChatRoute -> normalizedChat(key)?.let { ResolvedRoute(it.kind.tab, it) }
         is InteractionRoute -> normalizedChat(key.chat)?.takeIf { key.requestId.isNotBlank() }?.let {
             ResolvedRoute(it.kind.tab, key.copy(chat = it))
@@ -86,7 +86,7 @@ class Router(
             !uri.rawPath.isNullOrEmpty() || uri.rawFragment != null) return null
         if (uri.host == "pair") {
             // PairingInput remains responsible for validating credentials and transport policy.
-            return ResolvedRoute(AppTab.Settings, PairingRoute, url)
+            return ResolvedRoute(AppTab.Persona, PairingRoute, url)
         }
         val parameters = linkedMapOf<String, String>()
         try {
@@ -116,10 +116,11 @@ class Router(
             "inbox" -> InboxItemRoute(parameters["item"] ?: return null)
             "new-todo" -> NewTodoRoute
             "lark" -> LarkChatRoute(parameters["chat"] ?: return null)
-            "settings" -> SettingsPageRoute(SettingsPage.entries.firstOrNull {
-                it.name.equals(parameters["page"], ignoreCase = true)
-            } ?: return null)
-            "tab" -> tabRoot(AppTab.entries.firstOrNull { it.name.equals(ProtocolCompatibility.canonicalTab(parameters["tab"]), ignoreCase = true) } ?: return null)
+            "settings" -> SettingsPageRoute(if (parameters["page"] == "connectors/sent") SettingsPage.Sent
+                else SettingsPage.entries.firstOrNull {
+                    it.name.equals(parameters["page"], ignoreCase = true)
+                } ?: return null)
+            "tab" -> linkedPage(ProtocolCompatibility.canonicalTab(parameters["tab"]) ?: return null) ?: return null
             else -> return null
         }
         val resolved = resolve(key) ?: return null
@@ -144,8 +145,15 @@ private val ConversationKind?.tab: AppTab
 fun tabRoot(tab: AppTab): NavKey = when (tab) {
     AppTab.Persona -> AssistantRoute
     AppTab.Agents -> AgentsRoute
-    AppTab.Inbox -> InboxRoute
-    AppTab.Settings -> SettingsRoute
+}
+
+/** Retired tab links still open their content, now as secondary pages under Persona. */
+internal fun linkedPage(name: String): NavKey? = when (name.lowercase()) {
+    "persona" -> AssistantRoute
+    "agents" -> AgentsRoute
+    "inbox" -> InboxRoute
+    "settings" -> SettingsRoute
+    else -> null
 }
 
 /** Select the returned tab after applying this to the app-owned stacks; "New to-do" also asks [newTodo] for its sheet. */
@@ -155,8 +163,11 @@ fun ResolvedRoute.restore(stacks: Map<AppTab, MutableList<NavKey>>, newTodo: New
     // The card is listed on the tab's root and the composer to focus sits there: pages left open on top are closed first.
     if (card != null || focusComposer) while (stack.size > 1) stack.removeAt(stack.lastIndex)
     if (key == tabRoot(tab)) return tab
-    // Move legacy entries out of the wrong tab, then pop to an existing target.
-    stacks.filterKeys { it != tab }.values.forEach { other -> other.removeAll { sameTarget(it, key) } }
+    // Conversations have one owning tab; secondary pages can legitimately remain open in both stacks.
+    if (key is ChatRoute || key is InteractionRoute) {
+        stacks.filterKeys { it != tab }.values.forEach { other -> other.removeAll { sameTarget(it, key) } }
+    }
+    // Pop to an existing target without replacing its saved UI state.
     val existing = stack.indexOfFirst { sameTarget(it, key) }
     if (existing < 0) stack.add(key)
     else {
@@ -170,9 +181,51 @@ fun ResolvedRoute.restore(stacks: Map<AppTab, MutableList<NavKey>>, newTodo: New
             stack[existing] = key
         }
     }
+    // Keep the serialized Sent key compatible, but make its parent explicit for links and history restores.
+    restoreSecondaryParents(stack)
     // The list kept from an earlier use keeps its state too: its sheet opens on this request, each time.
     if (key == NewTodoRoute) newTodo.request()
     return tab
+}
+
+/** Fill missing secondary-page parents without replacing restored entries or the page they were opened from. */
+fun restoreSecondaryParents(stack: MutableList<NavKey>) {
+    restoreConnectorParents(stack)
+    var index = 0
+    var hasSettings = false
+    var hasInbox = false
+    while (index < stack.size) {
+        val key = stack[index]
+        val parent = when (key) {
+            PairingRoute, ConnectionSettingsRoute, is SettingsPageRoute, is ExtensionUiRoute, is ExtensionRoute,
+            is ModelProviderRoute, is ChannelRoute, is ManagerRoute, is ConnectorRoute,
+            ExtensionMarketRoute, ExtensionMarketsRoute, is ExtensionCatalogRoute -> SettingsRoute.takeUnless { hasSettings }
+            is InboxItemRoute, is InboxItemUiRoute, is LarkChatRoute -> InboxRoute.takeUnless { hasInbox }
+            else -> null
+        }
+        if (parent != null) {
+            stack.add(index, parent)
+            index++
+        }
+        hasSettings = hasSettings || key == SettingsRoute || parent == SettingsRoute
+        hasInbox = hasInbox || key == InboxRoute || parent == InboxRoute
+        index++
+    }
+}
+
+/** Insert the ledger's connector parent without replacing its saved key or affecting other pages. */
+fun restoreConnectorParents(stack: MutableList<NavKey>) {
+    var index = 0
+    val parent = SettingsPageRoute(SettingsPage.Connectors)
+    while (index < stack.size) {
+        val key = stack[index]
+        val child = key == SettingsPageRoute(SettingsPage.Sent)
+        if (child && (index == 0 || stack[index - 1] != parent)) {
+            stack.add(index, parent)
+            index++
+        }
+        index++
+    }
 }
 
 private fun sameTarget(left: NavKey, right: NavKey): Boolean = when {

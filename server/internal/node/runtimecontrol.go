@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // What a runtime that is a machine's engine needs beyond listing and driving its sessions (Paseo, docs/integrations/paseo.md):
@@ -33,8 +35,8 @@ const (
 	maxLauncherText     = 200
 )
 
-// cleanLaunchers keeps the launchers a runtime may offer: names a launcher may have (nameRe, the shell's rule), each
-// once, agents that are ids, text clipped, the lists bounded.
+// cleanLaunchers keeps the launchers a runtime may offer: names a launcher may have (shellcmd.NameRe, the shell's
+// rule), each once, agents that are ids, text clipped, the lists bounded.
 func cleanLaunchers(list []runtimeLauncher) []runtimeLauncher {
 	clip := func(s string) string {
 		if r := []rune(strings.TrimSpace(s)); len(r) > maxLauncherText {
@@ -48,7 +50,7 @@ func cleanLaunchers(list []runtimeLauncher) []runtimeLauncher {
 		if len(out) == maxRuntimeLaunchers {
 			break
 		}
-		if !nameRe.MatchString(l.Name) || seen[l.Name] || l.Agent != "" && !runtimeIDRe.MatchString(l.Agent) {
+		if !shellcmd.NameRe.MatchString(l.Name) || seen[l.Name] || l.Agent != "" && !runtimeIDRe.MatchString(l.Agent) {
 			continue
 		}
 		seen[l.Name] = true
@@ -122,12 +124,19 @@ func (h *runtimeConn) setLaunchers(list []runtimeLauncher) {
 }
 
 // runtimeLauncherModels is launchers.models for a runtime's launcher: the models it said (none: an empty list, the
-// form offers no choice); false for a launcher no runtime offers, or the login shell's of that name.
+// form offers no choice); false for a launcher no runtime runs (runtimeOf).
 func (n *Node) runtimeLauncherModels(name string) (proto.LauncherModels, bool) {
-	if shellLauncherNames()[name] {
-		return proto.LauncherModels{}, false
-	}
-	h := n.runtimes.launcherRuntime(name)
+	return launcherModelsOf(n.runtimeOf(name), name)
+}
+
+// agyRuntimeModels is the Antigravity runtime's own launcher models, which a managed launcher named agy does not hide:
+// what a managed Antigravity launcher starts (startRuntime) and offers.
+func (n *Node) agyRuntimeModels() (proto.LauncherModels, bool) {
+	return launcherModelsOf(n.runtimes.launcherRuntime("agy"), "agy")
+}
+
+// launcherModelsOf is runtime h's advertisement for its launcher name; false without a runtime.
+func launcherModelsOf(h *runtimeConn, name string) (proto.LauncherModels, bool) {
 	if h == nil {
 		return proto.LauncherModels{}, false
 	}
@@ -154,7 +163,10 @@ type runtimeStartParams struct {
 }
 
 // engineRuntimes maps the engines that are a runtime to that runtime's id (engine.go).
-var engineRuntimes = map[string]string{proto.EnginePaseo: proto.EnginePaseo}
+var engineRuntimes = map[string]string{
+	proto.EnginePaseo: proto.EnginePaseo,
+	proto.EngineCindy: proto.EngineCindy,
+}
 
 // engineRuntime is the runtime that is the host of a start in ctx (Paseo: the one the start named, else the machine's
 // default host), when it is connected and starts sessions; nil when that host is a terminal (herdr, Orca…).
@@ -196,6 +208,9 @@ func (n *Node) startOnEngineRuntime(ctx context.Context, p runtimeStartParams) (
 	if p.Resume != "" {
 		return n.takeOverInRuntime(ctx, h, p)
 	}
+	// The engine runs every start with a provider of its own: one it has by the launcher's name (a managed launcher made
+	// from it carries the same configuration), else its default (shell_launcher). A managed launcher's own settings
+	// apply only where personad launch runs it (runtimeStart), never inside the engine.
 	if _, own := h.launcherNamed(p.Launcher); !own && p.Launcher != "" {
 		p.Shell = true
 	}
@@ -260,4 +275,60 @@ func (n *Node) continueInRuntime(ctx context.Context, id, text string, images []
 		err = fmt.Errorf("%s: %w", h.label(), err)
 	}
 	return err
+}
+
+// liveRuntimeModels asks opt-in runtimes for their current native catalog. Older runtimes keep their advertised list.
+func (n *Node) liveRuntimeModels(ctx context.Context, name string, refresh bool, fallback proto.LauncherModels) (proto.LauncherModels, error) {
+	h := n.runtimes.launcherRuntime(name)
+	if h == nil {
+		return fallback, nil
+	}
+	h.mu.Lock()
+	supported := h.hello.Caps.Models
+	h.mu.Unlock()
+	if !supported {
+		return fallback, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
+	defer cancel()
+	var out proto.LauncherModels
+	if err := h.peer.Call(ctx, "launchers.models", map[string]any{"launcher": name, "refresh": refresh}, &out); err != nil {
+		return proto.LauncherModels{}, err
+	}
+	// Apply the same bounds as runtime.launchers before exposing a native response.
+	clean := cleanLaunchers([]runtimeLauncher{{Name: name, Agent: fallback.Agent, Models: out.Models}})
+	out.Agent, out.Models = fallback.Agent, clean[0].Models
+	if out.Models == nil {
+		out.Models = []proto.AgentModel{}
+	}
+	return out, nil
+}
+
+// runtimeLauncherCheck opts into the runtime's authenticated availability probe. A refused probe never falls back to
+// the login shell, whose credentials may be different. Older runtimes keep the existing shell check.
+func (n *Node) runtimeLauncherCheck(ctx context.Context, name, cwd, prompt string) (proto.LauncherCheck, bool) {
+	h := n.runtimes.launcherRuntime(name)
+	if h == nil {
+		return proto.LauncherCheck{}, false
+	}
+	h.mu.Lock()
+	supported := h.hello.Caps.Check
+	h.mu.Unlock()
+	if !supported {
+		return proto.LauncherCheck{}, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, launcherCheckTimeout)
+	defer cancel()
+	start := time.Now()
+	var result proto.LauncherCheck
+	if err := h.peer.Call(ctx, "launchers.check", map[string]any{"launcher": name, "cwd": cwd, "prompt": prompt}, &result); err != nil {
+		result = proto.LauncherCheck{Error: err.Error()}
+	}
+	launcher, _ := h.launcherNamed(name)
+	result.Agent = launcher.Agent
+	if result.Agent == "" {
+		result.Agent = h.agent()
+	}
+	result.Millis = int(time.Since(start).Milliseconds())
+	return result, true
 }

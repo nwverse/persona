@@ -1,4 +1,4 @@
-// Feishu chat Pins (docs/extensions/lark-migration.md "Pinned messages in a chat", iOS LarkChatPins.swift): the list of a chat's pinned
+// Feishu chat Pins (docs/extensions/lark-migration.md "Pinned messages in chats", iOS LarkChatPins.swift): the list of a chat's pinned
 // messages, jumping to one in the chat, adding and removing. The Lark gateway marks Pins read when the list is read, so it is
 // read only when the list is opened or a Pin was changed, never ahead of time. The list lives in memory while it is
 // open (the hub answers no-store). An unknown write result is never retried: the list is read again to see.

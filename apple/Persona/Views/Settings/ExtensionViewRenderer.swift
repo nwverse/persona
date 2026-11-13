@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// An extension's View drawn with the app's design system (docs/extensions/extensions.md「声明式 UI」「UI 版本 3」): each section a
+/// An extension's View drawn with the app's design system (docs/extensions/extensions.md「Declarative UI」「UI 版本 3」): each section a
 /// section of the form (a divider starts another one), each component a row: text, Markdown, a number with what it is,
 /// a bar, a list row (with an icon, an avatar or a thumbnail), a table, a button, a link opened in the app, a field to
 /// fill in, an empty state, a spinner. Tones are the app's role colors. Controls that ask first ask; the ones that
 /// submit take the page's fields along; a section's `more` loads the next part when it is scrolled to. The page's
 /// search field is the hosting page's (`ExtensionPageView`), its filter is drawn here.
 ///
-/// Without a model (the assistant's cards, docs/extensions/extensions.md「助手的卡片」) nothing can be used: rows and buttons do
+/// Without a model (the assistant's cards, docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」) nothing can be used: rows and buttons do
 /// nothing, fields, search, filter and more are not drawn; links open as usual.
 struct ExtensionViewRenderer: View {
     @Environment(\.assistantHTMLRendering) private var htmlContext
@@ -128,11 +128,41 @@ enum ExtensionUIStyle {
         case "secondary": Theme.Font.secondary
         case "caption": Theme.Font.caption
         case "code": Theme.Font.code
+        // UI version 6: a section's big title and a small heading.
+        case "title": Theme.Font.title
+        case "headline": Theme.Font.heading
         default: Theme.Font.body
         }
     }
 
-    /// The icon set's names (docs/extensions/extensions.md「新组件」: a row's `icon`, an empty state's, a nav_page's) as the app's
+    /// A named color (UI version 6, schema `Color`) as the app's own hue, right in light and dark; nil for a name this
+    /// app does not know (the quiet ink then). Marks only: icons, badges' tints, tiles, chart series, never text.
+    static func color(_ name: String?) -> Color? {
+        switch name {
+        case "red": Theme.Hue.red
+        case "orange": Theme.Hue.orange
+        case "amber": Theme.Hue.amber
+        case "yellow": Theme.Hue.yellow
+        case "green": Theme.Hue.green
+        case "teal": Theme.Hue.teal
+        case "blue": Theme.Hue.blue
+        case "indigo": Theme.Hue.indigo
+        case "purple": Theme.Hue.purple
+        case "pink": Theme.Hue.pink
+        case "gray": Theme.Hue.gray
+        default: nil
+        }
+    }
+
+    /// A badge's look: its tone (words and fill in the role color); else its named color as a soft tint behind words
+    /// in the text's own color (UI version 6: a color is never on text); else neutral.
+    static func badge(_ b: ExtensionBadge) -> Chip.Look {
+        if let t = b.tone, t != "neutral" { return .tint(tone(t)) }
+        if let c = color(b.color) { return .tint(c.opacity(0.14), text: .primary) }
+        return .neutral
+    }
+
+    /// The icon set's names (docs/extensions/extensions.md「New components」: a row's `icon`, an empty state's, a nav_page's) as the app's
     /// symbols: one meaning each; anything else (and `extension`, `plugin`) is the extensions' own.
     static func icon(_ name: String?) -> String {
         switch name {
@@ -155,6 +185,60 @@ enum ExtensionUIStyle {
         case "tag": Theme.Icon.label
         case "search": Theme.Icon.search
         case "settings": Theme.Icon.settings
+        // UI version 4's code hosting.
+        case "branch": Theme.Icon.gitBranch
+        case "commit": Theme.Icon.pluginCommit
+        case "code": Theme.Icon.code
+        case "pull_request": Theme.Icon.pullRequest
+        case "merge": Theme.Icon.merged
+        case "file": Theme.Icon.file
+        // UI version 6: homes and markets; meanings the app has draw its own.
+        case "home": Theme.Icon.home
+        case "sofa": Theme.Icon.pluginSofa
+        case "light": Theme.Icon.pluginLight
+        case "power": Theme.Icon.pluginPower
+        case "fan": Theme.Icon.pluginFan
+        case "thermometer": Theme.Icon.pluginThermometer
+        case "droplet": Theme.Icon.pluginDroplet
+        case "lock": Theme.Icon.locked
+        case "unlock": Theme.Icon.pluginUnlock
+        case "door": Theme.Icon.pluginDoor
+        case "window": Theme.Icon.pluginWindow
+        case "camera": Theme.Icon.camera
+        case "video": Theme.Icon.video
+        case "play": Theme.Icon.run
+        case "pause": Theme.Icon.pause
+        case "stop": Theme.Icon.interrupt
+        case "speaker": Theme.Icon.voiceSpeaking
+        case "music": Theme.Icon.music
+        case "tv": Theme.Icon.pluginTV
+        case "plug": Theme.Icon.pluginPlug
+        case "battery": Theme.Icon.pluginBattery
+        case "bolt": Theme.Icon.pluginBolt
+        case "sun": Theme.Icon.lightMode
+        case "moon": Theme.Icon.darkMode
+        case "cloud": Theme.Icon.pluginCloud
+        case "rain": Theme.Icon.pluginRain
+        case "snow": Theme.Icon.pluginSnow
+        case "wind": Theme.Icon.pluginWind
+        case "leaf": Theme.Icon.pluginLeaf
+        case "car": Theme.Icon.pluginCar
+        case "location": Theme.Icon.currentLocation
+        case "robot": Theme.Icon.pluginRobot
+        case "wifi": Theme.Icon.pluginWifi
+        case "shield": Theme.Icon.protection
+        case "trend_up": Theme.Icon.pluginTrendUp
+        case "trend_down": Theme.Icon.pluginTrendDown
+        case "wallet": Theme.Icon.pluginWallet
+        case "bank": Theme.Icon.pluginBank
+        case "heart": Theme.Icon.health
+        case "plus": Theme.Icon.add
+        case "minus": Theme.Icon.pluginMinus
+        case "trash": Theme.Icon.delete
+        case "edit": Theme.Icon.edit
+        case "refresh": Theme.Icon.retry
+        case "share": Theme.Icon.share
+        case "info": Theme.Icon.info
         default: Theme.Icon.plugins
         }
     }
@@ -174,16 +258,24 @@ struct ExtensionItemRow: View {
                 .font(ExtensionUIStyle.font(t.style))
                 .foregroundStyle(t.style == "secondary" || t.style == "caption" ? Color.secondary : Color.primary)
                 .textSelection(.enabled)
+                .accessibilityAddTraits(t.style == "title" || t.style == "headline" ? .isHeader : [])
         case .markdown(let m): ExtensionMarkdown(text: m.text, link: $link)
         case .metric(let m): metric(m)
         case .progress(let p): progress(p)
         case .row(let r):
-            if let action = r.action, let model {
-                ExtensionActionButton(action: action, title: r.title, model: model, link: $link) { ExtensionComponentRowLabel(row: r, model: model, chevron: true) }
-                    .foregroundStyle(Color.primary)
-            } else {
-                ExtensionComponentRowLabel(row: r, model: model, chevron: false)
+            Group {
+                if let control = r.control, control.drawable {
+                    // UI version 6: a switch, a slider or a stepper in the row (`ExtensionControlRow`).
+                    ExtensionControlRow(row: r, control: control, model: model, link: $link)
+                } else if let action = r.action, let model {
+                    ExtensionActionButton(action: action, title: r.title, model: model, link: $link) { ExtensionComponentRowLabel(row: r, model: model, chevron: true) }
+                        .foregroundStyle(Color.primary)
+                } else {
+                    ExtensionComponentRowLabel(row: r, model: model, chevron: false)
+                }
             }
+            // UI version 6: its extra actions (`ExtensionRowActions.swift`).
+            .extensionRowActions(r.actions, model: model, link: $link)
         case .button(let b):
             if let model {
                 ExtensionActionButton(action: b.action, title: b.title, destructive: b.role == "destructive", model: model, link: $link) {
@@ -226,8 +318,8 @@ struct ExtensionItemRow: View {
                         return await context.onRequest(request, key, version)
                     })
             }
-        // UI version 6's picture, grid and carousel are drawn in #5473; the app still asks for version 5, so the hub
-        // turns them into version 5 components before they get here.
+        // UI version 6's picture, grid and carousel are not drawn yet (#827). Until all of version 6 is, the app asks
+        // for an older version, so the hub turns them into older components before they get here.
         case .divider, .unknown, .image, .grid, .carousel: EmptyView()
         // UI version 4's code-hosting components: a View with them is drawn by the code page (`ExtensionCodePage`, #2961).
         case .header, .breadcrumb, .fileTree, .code, .diff, .commentThread, .composer: EmptyView()
@@ -236,9 +328,19 @@ struct ExtensionItemRow: View {
 
     private func metric(_ m: ExtensionMetricComponent) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-            Text(m.label).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: Theme.Space.xs) {
+                // UI version 6: an icon before the label, in its named color (else the quiet ink).
+                if let i = m.icon, !i.isEmpty {
+                    ThemedIcon(ExtensionUIStyle.icon(i)).foregroundStyle(ExtensionUIStyle.color(m.iconColor) ?? Color.secondary)
+                        .accessibilityHidden(true)
+                }
+                Text(m.label).lineLimit(1)
+            }
+            .font(Theme.Font.label).foregroundStyle(.secondary)
             ExtensionChangingText(m.value).font(Theme.Font.title.monospacedDigit()).foregroundStyle(ExtensionUIStyle.ink(m.tone)).lineLimit(1)
                 .minimumScaleFactor(0.6)
+            // UI version 6: its trend under the number, as wide as the metric.
+            if let spark = m.spark { ExtensionSparkLine(spark: spark, width: nil).frame(maxWidth: .infinity) }
             if let d = m.detail, !d.isEmpty { Text(d).font(Theme.Font.label).foregroundStyle(.secondary) }
         }
         .padding(.vertical, Theme.Space.xxs)
@@ -349,7 +451,7 @@ extension View {
         #endif
     }
 
-    /// The pages `models` ask to push (docs/extensions/extensions.md「页面跳转」), on the navigation stack this page is on; the one
+    /// The pages `models` ask to push (docs/extensions/extensions.md「Page navigation」), on the navigation stack this page is on; the one
     /// that asked draws again when its page closes. Put on the page itself, not a row: a list's rows cannot push.
     func extensionPushes(_ models: [ExtensionViewModel]) -> some View { modifier(ExtensionPushes(models: models)) }
 }
@@ -510,7 +612,9 @@ struct ExtensionPageView: View {
                 let outcome = await initial.start(page)
                 if let error = outcome.error { app.toast = Toast(error, style: .error) }
                 else if let toast = outcome.toast { app.toast = Toast(toast) }
-                if let url = outcome.url, !app.openIfExtensionSettings(url) { link = LinkTarget(url: url) }
+                if let url = outcome.url, !app.openIfExtensionSettings(url, from: outcome.settingsOwner), !app.openIfAsk(url), !app.openIfSourcesGraph(url) {
+                    link = LinkTarget(url: url)
+                }
             } else { await page.load() }
         }
         .pluginRefresh(page)

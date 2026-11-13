@@ -62,6 +62,7 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 	sawClaude := false      // herdr has named claude in the pane
 	var goneSince time.Time // since when herdr has named no agent there after sawClaude, with only a shell in front
 	shellSaid := ""         // a not-found line the tab's shell printed after the command, of something else than it
+	gone := 0               // looks in a row at which the pane's host listed no such pane (errNoOrcaTerminal)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -69,6 +70,9 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 		case <-time.After(500 * time.Millisecond):
 		}
 		screen, err := n.readPane(ctx, pane, "visible", 60)
+		if gone = goneLooks(gone, err); gone >= paneGoneLooks && !running {
+			return nil, errPaneGone()
+		}
 		if err != nil {
 			continue
 		}
@@ -92,14 +96,21 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 			return nil, errors.New(reason)
 		}
 		a, err := n.paneAgent(ctx, pane)
+		if gone = goneLooks(gone, err); gone >= paneGoneLooks && !running {
+			return nil, errPaneGone()
+		}
 		if err != nil || a.Agent != "claude" {
 			// The tab's shell could not run the command (a launcher its rc files do not define, a claude not on its
 			// PATH): it said so right after it and is back at its prompt, and claude will not come (#1642).
-			if probe != nil && !sawClaude && !running && mayHaveShellMiss(screen) {
+			// Or it did not take the typed line at all: a startup question ate its head (#2570). The start types it again.
+			if probe != nil && !sawClaude && !running && (mayHaveShellMiss(screen) || mayBeRejected(screen)) {
 				if full, rerr := n.readPane(ctx, pane, "recent-unwrapped", 60); rerr == nil {
 					refused, other := probe.verdict(full, func() bool { return n.shellBackOrUnknown(ctx, pane) })
 					if refused != nil {
 						return nil, refused
+					}
+					if line := probe.rejectedLine(full); line != "" {
+						return nil, &startLineRejected{line: line}
 					}
 					shellSaid = other
 				}
@@ -126,7 +137,11 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 		if a.AgentStatus == proto.StatusBlocked {
 			return a, nil // some other dialog; the phone shows it as a screen interaction
 		}
-		if (a.AgentStatus == proto.StatusIdle || a.AgentStatus == proto.StatusDone) && inputBoxVisible(screen) {
+		// An Orca fork that cannot read claude's title once the tab is renamed reports no state until claude's first hook
+		// (#4438): with claude in front, the screen decides, as long as it does not show a turn running.
+		quiet := a.AgentStatus == proto.StatusIdle || a.AgentStatus == proto.StatusDone ||
+			a.AgentStatus == proto.StatusUnknown && !strings.Contains(screen, "esc to interrupt")
+		if quiet && inputBoxVisible(screen) {
 			readyStreak++
 			if readyStreak >= 2 {
 				return a, nil
@@ -145,16 +160,27 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 	if !running && shellSaid != "" {
 		return nil, fmt.Errorf("claude did not start within %s: after the command the tab's shell printed %q", startWait, shellSaid)
 	}
+	if !running && gone > 0 {
+		return nil, errPaneGone()
+	}
 	if !running {
 		return nil, fmt.Errorf("claude did not start within %s: the tab's shell had not run it yet (is the machine busy?)", startWait)
 	}
 	// A start stuck on first-run screens the screen matching does not name: say so from the onboarding flag instead
 	// of leaving only the generic timeout (claudeonboarding.go).
 	if hint := n.onboardingBlockHint(ctx); hint != "" {
-		return nil, fmt.Errorf("claude did not become ready within %s of starting: %s", readyWait, hint)
+		return nil, &claudeStalled{fmt.Errorf("claude did not become ready within %s of starting: %s", readyWait, hint)}
 	}
-	return nil, fmt.Errorf("claude did not become ready within %s of starting", readyWait)
+	return nil, &claudeStalled{fmt.Errorf("claude did not become ready within %s of starting", readyWait)}
 }
+
+// claudeStalled is the error of a start whose claude ran but never showed its input box: its own screen stopped
+// somewhere (a first-run screen, a dialog the node does not know). The start ends with agent_start_stalled and keeps
+// the tab (control.go), as a Codex start does (#2558, #2570).
+type claudeStalled struct{ err error }
+
+func (e *claudeStalled) Error() string { return e.err.Error() }
+func (e *claudeStalled) Unwrap() error { return e.err }
 
 // unrecognisedClaude is why a start in a herdr pane failed whose claude showed its input box while herdr never
 // reported it, with the programs herdr sees in front of the pane: herdr knows Claude by the program's name or by
@@ -338,6 +364,9 @@ func styleChoice(line string) string {
 // These wait for a person, so the caller reports them at once instead of polling until the timeout.
 func firstRunScreen(screen string) string {
 	switch {
+	case strings.Contains(screen, "WARNING: Claude Code running in Bypass Permissions mode") && strings.Contains(screen, "Yes, I accept"):
+		return "Claude Code is waiting for its first Bypass Permissions confirmation: choose default permission mode, " +
+			"or review and confirm that mode in a terminal on this machine before retrying"
 	case strings.Contains(screen, "Select login method:"):
 		return "this machine's Claude Code has not been set up yet: it is showing the sign-in screen, run claude once in a terminal there"
 	case strings.Contains(screen, "Welcome to Claude Code") && strings.Contains(screen, "Select"):
@@ -352,4 +381,23 @@ func lastLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// paneGoneLooks: this many looks in a row (500 ms apart) at which the pane's host lists no such pane end a start
+// whose claude has not come: a pane that is gone does not come back.
+const paneGoneLooks = 6
+
+// goneLooks counts the looks in a row whose error says the pane's host lists no such pane (Orca's errNoOrcaTerminal),
+// rather than failing to answer: n+1 then, else 0.
+func goneLooks(n int, err error) int {
+	if errors.Is(err, errNoOrcaTerminal) {
+		return n + 1
+	}
+	return 0
+}
+
+// errPaneGone: not a slow shell, the node lost the pane (closed, or its engine moved it where the node does not find
+// it, #5547).
+func errPaneGone() error {
+	return errors.New("claude did not start: the new tab's pane could not be found any more")
 }

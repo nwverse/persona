@@ -181,25 +181,62 @@ func TestCSVOfficeCommandPreservesTextAndFormulas(t *testing.T) {
 	}
 	p := parts(t, data)
 	sheet, cells := csvWorksheet(t, p["xl/worksheets/sheet1.xml"])
-	for ref, want := range map[string]string{"A2": "123456789012345678", "A3": "007", "A4": "-1234567890123456", "D2": "sample, & <text>"} {
-		if cells[ref].Type != "inlineStr" || cells[ref].Text != want {
+	for ref, want := range map[string]string{"A2": "123456789012345678", "A3": "007", "A4": "-1234567890123456", "D2": "sample, & <text>",
+		"C2": "=B2*2", "C4": "=SUM(B2:B3)"} { // formula text stays text: formulas come only from JSON
+		if cells[ref].Type != "inlineStr" || cells[ref].Text != want || cells[ref].Formula != "" {
 			t.Errorf("%s lost text: %+v", ref, cells[ref])
 		}
 	}
-	for ref, want := range map[string]string{"B2": "42", "B3": "3.5", "C2": "84", "C4": "45.5"} {
+	for ref, want := range map[string]string{"B2": "42", "B3": "3.5"} {
 		if cells[ref].Type != "" || cells[ref].Number != want {
 			t.Errorf("%s lost numeric value: %+v", ref, cells[ref])
 		}
-	}
-	if cells["C2"].Formula != "B2*2" || cells["C4"].Formula != "SUM(B2:B3)" {
-		t.Error("CSV formulas changed")
 	}
 	if _, present := cells["C3"]; present || sheet.Dimension.Ref != "A1:D4" || len(cells) != 14 {
 		t.Errorf("ragged row or worksheet dimension changed: %+v", sheet)
 	}
 	info := check(t, data, ".xlsx")
 	first := info["sheets"].([]any)[0].(map[string]any)
-	if first["range"] != "A1:D4" || first["formulas"] != 2.0 || fmt.Sprint(first["first_row"]) != "[Identifier Count Formula Note]" {
+	if first["range"] != "A1:D4" || first["formulas"] != 0.0 || fmt.Sprint(first["first_row"]) != "[Identifier Count Formula Note]" {
 		t.Errorf("workbook check = %v", info)
+	}
+}
+
+// A CSV field is data: one that starts with = stays the text it was (ECMA-376 Part 1: c 18.3.1.4 with t="inlineStr",
+// is 18.3.1.53, t 18.4.12) instead of becoming a formula Excel may not parse or that runs on open (CSV injection).
+// Formulas come only from the JSON form.
+func TestXlsxFromCSVKeepsTextThatLooksLikeAFormula(t *testing.T) {
+	src := "=total,Note\n=== Results ===,\"=HYPERLINK(\"\"http://example.com\"\",\"\"x\"\")\"\n=1+2,@SUM(1)\n+x,-x\n"
+	data, err := XlsxFromCSV([]byte(src), "Data", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := parts(t, data)["xl/worksheets/sheet1.xml"]
+	if strings.Contains(ws, "<f>") {
+		t.Errorf("a CSV field became a formula: %s", ws)
+	}
+	_, cells := csvWorksheet(t, ws)
+	for ref, want := range map[string]string{
+		"A1": "=total", "B1": "Note", "A2": "=== Results ===", "B2": `=HYPERLINK("http://example.com","x")`,
+		"A3": "=1+2", "B3": "@SUM(1)", "A4": "+x", "B4": "-x",
+	} {
+		if c := cells[ref]; c.Type != "inlineStr" || c.Text != want || c.Formula != "" || c.Number != "" {
+			t.Errorf("%s = %+v, want the text %q", ref, c, want)
+		}
+	}
+	if cells["A1"].Style != "1" {
+		t.Errorf("header style changed: %+v", cells["A1"])
+	}
+	first := check(t, data, ".xlsx")["sheets"].([]any)[0].(map[string]any)
+	if first["formulas"] != 0.0 || first["range"] != "A1:B4" || fmt.Sprint(first["first_row"]) != "[=total Note]" {
+		t.Errorf("workbook check = %v", first)
+	}
+	// The JSON form still writes formulas, with their values.
+	data, err = Xlsx([]byte(`{"sheets":[{"rows":[["=1+2"]]}]}`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws := parts(t, data)["xl/worksheets/sheet1.xml"]; !strings.Contains(ws, `<c r="A1"><f>1+2</f><v>3</v></c>`) {
+		t.Errorf("a JSON formula changed: %s", ws)
 	}
 }

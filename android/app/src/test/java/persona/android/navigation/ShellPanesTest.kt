@@ -14,7 +14,6 @@ import org.junit.Test
 class ShellPanesTest {
     private val stacks = mapOf<AppTab, MutableList<NavKey>>(
         AppTab.Persona to mutableListOf(AssistantRoute), AppTab.Agents to mutableListOf(AgentsRoute),
-        AppTab.Inbox to mutableListOf(InboxRoute), AppTab.Settings to mutableListOf(SettingsRoute),
     )
     private var selected = AppTab.Persona
     private val navigator = AppNavigator(stacks, { selected }, { selected = it })
@@ -22,33 +21,33 @@ class ShellPanesTest {
 
     @Test fun deepLinkedSettingsPagesAreMarkedInTheList() {
         for (page in SettingsPage.entries) {
-            stacks.getValue(AppTab.Settings).retainAll { it == SettingsRoute }
+            stacks.getValue(AppTab.Persona).retainAll { it == AssistantRoute }
             val link = "persona://open?target=settings&page=" + page.name.lowercase()
             selected = Router().parse(RouteInput.DeepLink(link))!!.open(stacks)
-            assertEquals(AppTab.Settings, selected)
+            assertEquals(AppTab.Persona, selected)
             // The settings list compares its rows with exactly this key.
-            assertEquals(link, SettingsPageRoute(page), marked(AppTab.Settings))
+            assertEquals(link, SettingsPageRoute(page), marked(AppTab.Persona))
         }
     }
 
     @Test fun theMarkFollowsTapsBackAndOtherTabs() {
-        assertNull("nothing open beside the list", marked(AppTab.Settings))
+        assertNull("nothing open beside the list", marked(AppTab.Persona))
         navigator.navigate(SettingsPageRoute(SettingsPage.About))
-        assertEquals(SettingsPageRoute(SettingsPage.About), marked(AppTab.Settings))
+        assertEquals(SettingsPageRoute(SettingsPage.About), marked(AppTab.Persona))
         navigator.navigate(SettingsPageRoute(SettingsPage.Devices))
-        assertEquals(SettingsPageRoute(SettingsPage.Devices), marked(AppTab.Settings))
+        assertEquals(SettingsPageRoute(SettingsPage.Devices), marked(AppTab.Persona))
         navigator.back()
-        assertEquals(SettingsPageRoute(SettingsPage.About), marked(AppTab.Settings))
+        assertEquals(SettingsPageRoute(SettingsPage.About), marked(AppTab.Persona))
         navigator.back()
-        assertNull(marked(AppTab.Settings))
+        assertNull(marked(AppTab.Persona))
 
-        // A notification opens a conversation in Agents; the settings tab keeps its own mark.
+        // A notification opens a conversation in Agents; the originating settings page keeps its own mark.
         navigator.navigate(SettingsPageRoute(SettingsPage.Notifications))
         val chat = ChatRoute("machine", "session", ConversationKind.Agent)
         navigator.navigate(chat)
         assertEquals(AppTab.Agents, selected)
         assertEquals(chat, marked(AppTab.Agents))
-        assertEquals(SettingsPageRoute(SettingsPage.Notifications), marked(AppTab.Settings))
+        assertEquals(SettingsPageRoute(SettingsPage.Notifications), marked(AppTab.Persona))
     }
 
     @Test fun pagesOpenedUnderAnotherKeyMarkTheirSettingsRow() {
@@ -56,7 +55,7 @@ class ShellPanesTest {
         assertEquals(SettingsPageRoute(SettingsPage.Pairing), detailOf(listOf(SettingsRoute, PairingRoute)))
         assertEquals(SettingsPageRoute(SettingsPage.PhoneData), detailOf(listOf(SettingsRoute, PhoneToolsRoute)))
         selected = Router().parse(RouteInput.Internal(ConnectionSettingsRoute))!!.open(stacks)
-        assertEquals(SettingsPageRoute(SettingsPage.Diagnostics), marked(AppTab.Settings))
+        assertEquals(SettingsPageRoute(SettingsPage.Diagnostics), marked(AppTab.Persona))
     }
 
     @Test fun onlyDetailsAreMarked() {
@@ -72,6 +71,13 @@ class ShellPanesTest {
         assertNull(detailOf(listOf(AssistantRoute, ConnectionSettingsRoute)))
     }
 
+    @Test fun settingsPagesTheListMarksOpenBesideIt() {
+        // Settings › Assistant and a provider from Settings › Providers: the list's rows compare with these keys.
+        listOf(AssistantSettingsRoute, ModelProviderRoute("example")).forEach { key ->
+            assertEquals(key.toString(), key, detailOf(listOf(SettingsRoute, key)))
+        }
+    }
+
     @Test fun aSpacePageOpensBesideTheListAndChatsGoOnTopOfIt() {
         val space = SpaceRoute("machine/space")
         selected = AppTab.Agents
@@ -82,5 +88,25 @@ class ShellPanesTest {
         assertEquals(ChatRoute("machine", "session", ConversationKind.Agent), marked(AppTab.Agents))
         navigator.back()
         assertEquals("back returns to the space page", space, marked(AppTab.Agents))
+    }
+
+    @Test fun aComputersProjectsOpenBesideTheListAndItsSpacesAndAgentsGoOnTopOfIt() {
+        val projects = MachineSpacesRoute("machine")
+        selected = AppTab.Agents
+        // From a space page's computer: the projects replace the space as the detail, and back returns to the space.
+        val space = SpaceRoute("machine/space")
+        navigator.navigate(space)
+        navigator.navigate(projects)
+        assertEquals(listOf(AgentsRoute, space, projects), stacks.getValue(AppTab.Agents))
+        assertEquals(projects, marked(AppTab.Agents))
+        navigator.navigate(SpaceRoute("machine/other"))
+        assertEquals(SpaceRoute("machine/other"), marked(AppTab.Agents))
+        navigator.back()
+        assertEquals("back returns to the projects", projects, marked(AppTab.Agents))
+        navigator.navigate(MachineDetailRoute("machine"))
+        assertEquals(MachineDetailRoute("machine"), marked(AppTab.Agents))
+        navigator.back()
+        navigator.back()
+        assertEquals(space, marked(AppTab.Agents))
     }
 }

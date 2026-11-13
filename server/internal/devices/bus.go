@@ -67,6 +67,22 @@ func (d *Devices) Request(ctx context.Context, method string, params json.RawMes
 			return nil, true, err
 		}
 		return devicewire.MachineEntry{Entry: entry}, true, nil
+	case devicewire.MethodEngineGet:
+		var p devicewire.MachineRef
+		if err := decode(&p); err != nil {
+			return nil, true, err
+		}
+		c, err := d.engineChoiceToMove(p.MachineID)
+		return devicewire.MachineEngine{MachineID: p.MachineID, Choice: c}, true, err
+	case devicewire.MethodEnginePut:
+		var p devicewire.MachineEngine
+		if err := decode(&p); err != nil {
+			return nil, true, err
+		}
+		if p.MachineID == "" || p.Choice == nil {
+			return nil, true, &rpc.Error{Code: "invalid_params", Message: method + ": machine_id and choice are required"}
+		}
+		return map[string]any{}, true, d.setEngineHosts(ctx, p.MachineID, p.Choice.Hosts, p.Choice.Default)
 	case devicewire.MethodUpdateNodes:
 		go d.updateNodes(context.WithoutCancel(ctx))
 		return map[string]any{}, true, nil
@@ -261,10 +277,18 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 	route("GET /api/v1/machines/{mid}/claude-dirs", d.getClaudeDirs)
 	route("GET /api/v1/machines/{mid}/claude-live-replies", d.getLiveReplies)
 	route("PUT /api/v1/machines/{mid}/claude-live-replies", d.putLiveReplies)
+	route("GET /api/v1/machines/{mid}/clipboard", d.getClipboard)
+	route("PUT /api/v1/machines/{mid}/clipboard", d.putClipboard)
+	route("GET /api/v1/machines/{mid}/clipboard/settings", d.getClipboardSettings)
+	route("PUT /api/v1/machines/{mid}/clipboard/settings", d.putClipboardSettings)
+	route("GET /api/v1/machines/{mid}/file-transfer/settings", d.getFileTransferSettings)
+	route("PUT /api/v1/machines/{mid}/file-transfer/settings", d.putFileTransferSettings)
+	d.transferRoutes(mux)
 	d.metricsRoutes(mux)
 	d.usageRoutes(mux)
 	d.usageWindowRoutes(mux)
 	d.adminUsageRoutes(mux)
+	d.shareRoutes(mux)
 	route("PUT /api/v1/machines/{mid}/claude-dirs/blocked", d.putClaudeDirsBlocked)
 	mux.Handle("/", next)
 	return mux

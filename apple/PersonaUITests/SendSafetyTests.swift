@@ -1,6 +1,6 @@
 import XCTest
 
-/// Answers and sends that must not land in a terminal that changed (docs/protocol/protocol.md「发消息」「终端对话框」), against
+/// Answers and sends that must not land in a terminal that changed (docs/protocol/protocol.md「Sending messages」「终端对话框」), against
 /// scripts/mock/mock_hub.py started with MOCK_SCREEN_DIALOG=1 MOCK_PROMPT_CHANGED=1 MOCK_SEND_REFUSE=input_draft MOCK_RESTART=1
 /// (TEST_RUNNER_PERSONA_SAFETY_HUB=http://127.0.0.1:<port>). MOCK_RESTART=1 keeps receipts: a repeated op id gets its first
 /// answer, nothing done again (the hub also answers op_id_reused when the words changed; the mock replays either way).

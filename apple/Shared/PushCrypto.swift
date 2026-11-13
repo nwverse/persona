@@ -24,7 +24,7 @@ nonisolated enum PushCrypto {
     private static let service = "persona.push"
     private static let account = "push-key"
 
-    /// Each group of hubs seals to a key of its own (docs/protocol/multi-hub.md「推送」): the default group's is the one the
+    /// Each group of hubs seals to a key of its own (docs/protocol/multi-hub.md「Push and notifications」): the default group's is the one the
     /// phone always had, another group's has the group's id after it. The key that opens a push says whose it is.
     static func account(group: String) -> String { group.isEmpty ? account : account + "." + group }
 

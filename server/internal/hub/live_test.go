@@ -25,7 +25,7 @@ func TestSessionLiveGoesToSubscribersWithTheFeature(t *testing.T) {
 	newClient := func(sub bool, url bool) *client {
 		c := &client{out: make(chan []byte, 8), subs: map[[2]string]bool{key: sub},
 			urlFeatures: map[string]bool{proto.FeatureSessionLive: url}}
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 		return c
 	}
 	viaURL, legacy, other := newClient(true, true), newClient(true, false), newClient(false, true)

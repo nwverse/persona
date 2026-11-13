@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Live Files / Git for the web panels (#2439, docs/web/web.md "Auto-refresh of Files and Git"). A browser tells the hub, over its
+// Live Files / Git for the web panels (#2439, docs/web/web.md "Live refresh"). A browser tells the hub, over its
 // WebSocket, which folders of one machine it has open: {type: "fs_watch", machine_id, cwd, paths, git}. Each call
 // replaces that browser's set for the machine and session folder (cwd); no paths and git false (or the socket
 // closing) releases it. The hub

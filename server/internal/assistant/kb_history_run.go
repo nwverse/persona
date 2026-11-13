@@ -251,7 +251,7 @@ func (d *historyDriver) answered(ctx context.Context, e *kb.Engine, w historyWor
 // historySourceStop is the stop a source asked for (Pace.Stop), with its own words.
 func historySourceStop(p *connectorwire.Pace) *historyHalt {
 	h := halt(true, "source_stop")
-	h.why.Text = clipRunes(strings.TrimSpace(p.Reason), 200)
+	h.why.Text = clip(strings.TrimSpace(p.Reason), 200)
 	return h
 }
 

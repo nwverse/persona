@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assistantInfoText, conversationKey, effectiveLauncher, NEW_CONVERSATION, pickedLauncher, pickLauncher, runsAssistant, shortModel } from "./assistant-chat";
+import { assistantInfoText, conversationKey, effectiveLauncher, launcherOffered, NEW_CONVERSATION, pickedLauncher, pickLauncher, runsAssistant, shortModel } from "./assistant-chat";
 
 describe("the assistant's launchers", () => {
   it("runs on Claude Code or Codex, not TRAEX or other agents", () => {
@@ -9,6 +9,24 @@ describe("the assistant's launchers", () => {
     expect(runsAssistant({ name: "agy", agent: "agy", assistant: true })).toBe(true);
     expect(runsAssistant({ name: "traex", base_url: "(traex)" })).toBe(false);
     expect(runsAssistant({ name: "dsh", agent: "dsh" })).toBe(false);
+  });
+
+  it("leaves out a runtime's provider that doesn't run the assistant and a managed Codex launcher", () => {
+    expect(runsAssistant({ name: "cc-relay", source: "paseo" })).toBe(false);
+    expect(runsAssistant({ name: "agy-rt", source: "agy", agent: "agy", assistant: true })).toBe(true);
+    expect(runsAssistant({ name: "codex-gw", source: "jarvis", agent: "codex" })).toBe(false);
+    expect(runsAssistant({ name: "codex-gw", source: "persona", agent: "codex" })).toBe(false);
+    expect(runsAssistant({ name: "gw-claude", source: "jarvis" })).toBe(true);
+    expect(runsAssistant({ name: "codex", source: "zshrc", agent: "codex" })).toBe(true);
+    expect(runsAssistant({ name: "claude", source: "builtin" })).toBe(true);
+  });
+
+  it("drops picks only against a loaded list, an empty one included", () => {
+    expect(launcherOffered(null, "codex-gw")).toBe(true);
+    expect(launcherOffered([], "codex-gw")).toBe(false);
+    expect(launcherOffered([], "claude")).toBe(true);
+    expect(launcherOffered([{ name: "gw" }], "gw")).toBe(true);
+    expect(launcherOffered([{ name: "gw" }], "codex-gw")).toBe(false);
   });
 
   it("follows 设置 on the main conversation, the conversation's own elsewhere, a pick over both", () => {

@@ -211,7 +211,7 @@ func (b *boundTarget) logName() string {
 func (c *conversation) logStart(s *startFrame, p *Provider) {
 	c.mu.Lock()
 	lines, runs := len(c.history), len(c.resume)
-	resumed, echoes, modelID, voice := c.resumed, c.gate.echoes, c.modelID, c.voice
+	resumed, echoes, gateOff, modelID, voice := c.resumed, c.gate.echoes, c.gate.off, c.modelID, c.voice
 	c.mu.Unlock()
 	protocol := fmt.Sprintf("protocol %d", c.version)
 	if c.asked > c.version {
@@ -227,6 +227,12 @@ func (c *conversation) logStart(s *startFrame, p *Provider) {
 	}
 	if echoes {
 		more = append(more, "no echo cancellation")
+	}
+	switch {
+	case gateOff:
+		more = append(more, "speech gate off")
+	case s.SpeechGate != nil && !*s.SpeechGate:
+		more = append(more, "speech gate off asked: not for another extension's call")
 	}
 	if resumed {
 		more = append(more, fmt.Sprintf("picked up again with %d lines and %d runs", lines, runs))
@@ -245,7 +251,7 @@ func (c *conversation) toolsLog(p *Provider, tools []string) string {
 	}
 	declare, _ := p.toolsMode()
 	switch {
-	case p.Dialect != DialectLive:
+	case p.Dialect != DialectLive && p.Dialect != DialectRealtime:
 		return "none (the " + p.Dialect + " dialect takes none)"
 	case !declare:
 		return "none (the provider is set to declare none)"

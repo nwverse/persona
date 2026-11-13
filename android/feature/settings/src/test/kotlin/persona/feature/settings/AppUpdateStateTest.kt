@@ -32,6 +32,15 @@ class AppUpdateStateTest {
             return latest
         }
     }
+    @Test fun cancellingPendingInstallationClearsThePreviousInstallFailure() = runTest {
+        val state = AppUpdateState(Api(release), 100, initialLatest = release)
+        state.install { throw IllegalStateException("fixture installer failure") }
+        assertEquals(R.string.settings_update_install_failed, state.state.value.message)
+        state.pendingInstallationCancelled()
+        assertNull(state.state.value.message)
+        assertEquals(release, state.state.value.latest)
+    }
+
     private class Saved {
         var now = 1_000_000L
         var attempt = 0L

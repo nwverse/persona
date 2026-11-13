@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Repairing launchers (docs/server/launcher-health.md "Auto repair"): one round at a time per machine, since its launchers
+// Repairing launchers (docs/server/launcher-health.md "Automatic repair"): one round at a time per machine, since its launchers
 // usually broke together. A CLI too old is the node's to update (launchers.repair); the rest go to an agent told to
 // use manager.json's repair skill, on a quiet todo so nothing is pushed. What a round does not fix is blocked.
 

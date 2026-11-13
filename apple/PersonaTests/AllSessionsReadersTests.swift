@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-/// Only lists of agents read `AppModel.allSessions` (docs/apple/ios-state.md「第 5 步」): a view that reads it is drawn
+/// Only lists of agents read `AppModel.allSessions` (docs/apple/ios-state.md「Step 5」): a view that reads it is drawn
 /// again by every push about any agent on any machine, which is what steps 1–3 took out of the chat pages, the tab
 /// badges and the top bars. A view about one session reads its cell (`model.session(_:)`); an action that needs every
 /// agent when it is tapped (the @ menu, the next agent) reads `model.sessionsNow`, which nothing watches. Reads the
@@ -17,7 +17,7 @@ struct AllSessionsReadersTests {
         "MachineDetailView.swift": (1, "机器: each machine's agents for its card, through allSessions(inFront:) (behind another section, as they are now)"),
         "InboxActions.swift": (1, "交给 Agent: the agents to pick from"),
         "MacAgentCommands.swift": (1, "Agent › 下一个需要你的 is enabled while one needs you"),
-        "MacAttention.swift": (3, "the Dock badge and notifications follow every agent (not a view)"),
+        "MacAttention.swift": (2, "notifications follow every agent (not a view)"),
         "MacDockMenu.swift": (1, "the Dock menu lists the agents"),
         "MacMenuBar.swift": (1, "the menu bar extra lists the agents (MacMenuBarState, not a view: the label and the menu read its snapshot)"),
         "MacQuickOpenPanel.swift": (1, "快速打开 searches every agent"),
@@ -25,6 +25,7 @@ struct AllSessionsReadersTests {
         "TodosView.swift": (2, "the todo list shows each Agent's progress (its latest line), so it follows every Agent, like the Dock and the menu bar"),
         "MacTodosPage.swift": (2, "the Mac todo list shows each Agent's progress (its latest line), like the Dock and the menu bar"),
         "TodoDetailView.swift": (1, "the Agent rows show each Agent's latest line, the same way the todo list does"),
+        "TodoCalendarView.swift": (1, "the calendar colors each to-do by its Agents' state, the same way the todo list does (#2029)"),
     ]
 
     private static func reads(_ text: String) -> Int {
