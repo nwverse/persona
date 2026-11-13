@@ -138,6 +138,7 @@ struct InboxBackNavigationTests {
             let handOff = InboxHandOffModel(itemID: item.id, deps: .init(
                 load: { _ in item },
                 handOff: { _, _, _ in agent },
+                record: { _, _, _, _, _ in },
                 showMain: { _, _, _ in },
                 plainToMain: { _ in agent },
                 startNew: { _ in agent },
