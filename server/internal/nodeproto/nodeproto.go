@@ -107,8 +107,8 @@ const (
 	PaneCwd = "pane_cwd"
 	// NodeUpdateIdle: node.update.commit waits only for what the restart would interrupt, the conversations the node
 	// runs headless and launches still starting; terminal Agents and their background work do not hold it back
-	// (docs/operations/node-update.md "Usage"). The hub waits on the old rule for a node without it, which refuses
-	// while any Agent works.
+	// (docs/operations/node-update.md "Usage"). sessions.list answers update_busy, that check, and the hub waits on it;
+	// for a node without it (or a list without the field) it waits on the old rule, every Agent idle.
 	NodeUpdateIdle = "node_update_idle"
 )
 

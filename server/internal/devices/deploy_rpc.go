@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -189,7 +190,8 @@ func (m *Machine) performRPCDeployment(ctx context.Context, bin string, record *
 func (m *Machine) waitNodeIdle(ctx context.Context) error {
 	for {
 		var list struct {
-			Sessions []proto.Session `json:"sessions"`
+			Sessions   []proto.Session `json:"sessions"`
+			UpdateBusy *bool           `json:"update_busy"` // the node's own commit check (node_update_idle)
 		}
 		check, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err := m.call(check, "sessions.list", map[string]any{}, &list)
@@ -199,16 +201,16 @@ func (m *Machine) waitNodeIdle(ctx context.Context) error {
 		}
 		m.setSessions(list.Sessions)
 		m.mu.Lock()
-		onlyCut := nodeHas(m.info, nodeproto.NodeUpdateIdle)
+		ownCheck := nodeHas(m.info, nodeproto.NodeUpdateIdle) && list.UpdateBusy != nil
 		m.mu.Unlock()
-		// A node that commits on the old rule refuses while anything works: wait for that here too, rather than
-		// transfer the whole build again on every refusal.
-		busy := !onlyCut && m.machinePending() // a question of its agents waits on the phone
-		for _, s := range list.Sessions {
-			if updateWouldCut(s, onlyCut) {
-				busy = true
-				break
-			}
+		var busy bool
+		if ownCheck {
+			// Only the node knows whether a conversation it runs headless is busy: its rows do not say so (#6364).
+			busy = *list.UpdateBusy
+		} else {
+			// A node that commits on the old rule refuses while anything works: wait for that here too, rather than
+			// transfer the whole build again on every refusal.
+			busy = m.machinePending() || slices.ContainsFunc(list.Sessions, sessionAtWork) // a question of its agents waits on the phone
 		}
 		if !busy {
 			return nil
@@ -221,26 +223,12 @@ func (m *Machine) waitNodeIdle(ctx context.Context) error {
 	}
 }
 
-// updateWouldCut: the node's restart would interrupt s (docs/operations/node-update.md "Usage"). The restart execs in
-// place after stopping only the conversations the node runs headless, so with onlyCut terminal Agents and their
-// background work go on through it; a launch still starting does not. Without onlyCut (a node before
-// node_update_idle), every Agent at work counts.
-func updateWouldCut(s proto.Session, onlyCut bool) bool {
-	if s.Starting {
+// sessionAtWork: the old commit check (nodes before node_update_idle) refuses while s is at work.
+func sessionAtWork(s proto.Session) bool {
+	if s.Starting || s.State == proto.StateWorking || s.State == proto.StateNeedsYou || s.Status == proto.StatusWorking || s.PendingInteractions > 0 || len(s.Background) > 0 {
 		return true
 	}
-	if onlyCut && (!s.Assistant || s.Host != "") {
-		return false
-	}
-	if s.State == proto.StateWorking || s.State == proto.StateNeedsYou || s.Status == proto.StatusWorking || s.PendingInteractions > 0 || len(s.Background) > 0 {
-		return true
-	}
-	for _, sub := range s.Subagents {
-		if sub.Running {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(s.Subagents, func(sub proto.Subagent) bool { return sub.Running })
 }
 
 func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDeployRecord) error {
