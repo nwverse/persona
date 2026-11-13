@@ -12508,7 +12508,10 @@ def fs_get(h, p, q):
             rows = [row for row in rows if row["unread"] or row.get("marked_unread")]
         cursor, limit = int(q.get("cursor", ["0"])[0] or "0"), int(q.get("limit", ["60"])[0])
         if cursor:
-            time.sleep(max(0, min(3, float(os.environ.get("MOCK_LARK_UNREAD_PAGE_DELAY", "0")))))
+            delay = max(0, min(3, float(os.environ.get("MOCK_LARK_UNREAD_PAGE_DELAY", "0"))))
+            if delay:
+                print(f"lark-unread-page-start cursor={cursor}", flush=True)
+                time.sleep(delay)
         h.send_json({"conversations": rows[cursor:cursor + limit], "account_id": LARK_ACCOUNT_ID,
                      "next_cursor": str(cursor + limit) if cursor + limit < len(rows) else ""})
         return True
