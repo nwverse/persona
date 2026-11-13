@@ -35,6 +35,8 @@ struct MeetingPage: View {
     @State private var sync = RecordingSync.shared
     @State private var live = MeetingLive.shared
     @State private var speaker = MeetingSpeaker.shared
+    /// The meeting call (#3862 phase 4): Stop Speaking while its voice speaks.
+    @State private var meetingCall = MeetingCall.shared
     /// This page's hold on the meeting's state (`MeetingConversation.watch`): the live page fading out and the after page
     /// fading in each hold their own, so neither ends the other's.
     @State private var owner = UUID()
@@ -78,8 +80,12 @@ struct MeetingPage: View {
         .themedGroupedPage()
         .navigationTitle(close == nil ? String(localized: "Meeting") : "")
         .navigationBarTitleDisplayMode(.inline)
-        // `meeting_live` and reconnects read the meeting again only while a page shows it (or it records here).
-        .onTabVisibility(appear: { watch(id) }, disappear: { unwatch() })
+        // `meeting_live` and reconnects read the meeting again only while a page shows it (or it records here). A Talk
+        // held on it ends as it goes (#3862 phase 4): nothing else would let it go.
+        .onTabVisibility(appear: { watch(id) }, disappear: {
+            unwatch()
+            meetingCall.endHold(id)
+        })
         .onChange(of: id) { _, new in
             guard watching != nil else { return }
             unwatch()
@@ -133,6 +139,7 @@ struct MeetingPage: View {
                             subtitle(entry)
                         }
                         problems(entry)
+                        topics(entry)
                         MeetingLiveBox(entry: entry, exchanges: exchanges, folded: false)
                         threadHeader(entry)
                         thread(entry)
@@ -155,6 +162,7 @@ struct MeetingPage: View {
                 .padding(.horizontal, Theme.Space.page)
                 .padding(.top, Theme.Space.s)
                 problems(entry)
+                if !writing { topics(entry) }
                 MeetingLiveBox(entry: entry, exchanges: exchanges, folded: writing)
                     .padding(.horizontal, Theme.Space.page)
                 threadHeader(entry)
@@ -286,6 +294,17 @@ struct MeetingPage: View {
         }
     }
 
+    // MARK: Topics
+
+    /// The room's topics (#3862 phase 2), for a meeting started with the live view, once the room set any: a row of chips
+    /// under the header, above the Live box. It steps aside while the field has the keyboard, as the subtitle does.
+    @ViewBuilder private func topics(_ entry: RecordingEntry) -> some View {
+        let topics = conversation.meeting(id).topics
+        if entry.attendance?.liveView == true, !topics.isEmpty {
+            MeetingTopicsRow(topics: topics, inset: size.isAccessibilitySize ? Theme.Space.flush : Theme.Space.page)
+        }
+    }
+
     // MARK: Problems
 
     /// Why Persona can't take part right now (the room, or an older manager), and why its live lines stopped.
@@ -406,14 +425,19 @@ struct MeetingPage: View {
             .animation(reduceMotion ? nil : (following ? Theme.Motion.conceal : Theme.Motion.reveal), value: following)
     }
 
-    /// Stop Speaking for an answer the thread draws as a room message (one drawn as an exchange card has its own).
+    /// Stop Speaking for an answer the thread draws as a room message (one drawn as an exchange card has its own), and
+    /// while the meeting call's voice speaks (#3862 phase 4).
     private var showsStopSpeaking: Bool {
+        if mode == .live, meetingCall.call(for: id)?.speaking == true { return true }
         guard let speaking = speaker.speaking else { return false }
         return !shown.exchangeRows.contains(speaking)
     }
 
     private var stopSpeaking: some View {
-        Button { MeetingAsk.shared.stopSpeaking() } label: {
+        Button {
+            MeetingAsk.shared.stopSpeaking()
+            meetingCall.interruptVoice(id)
+        } label: {
             Label("Stop Speaking", systemImage: Theme.Icon.interrupt)
                 .font(Theme.Font.bodyStrong)
                 .lineLimit(1)
@@ -794,6 +818,83 @@ private struct MeetingLiveBox: View {
                 }
             }
             .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+}
+
+/// The meeting's topics as the room set them (#3862 phase 2; docs/design/DESIGN_SYSTEM.md「Meeting page (#3862)」): "Topics"
+/// and a horizontal row of chips in the room's order, the current one scrolled into view. The state is said in words,
+/// never by color alone: "Done: …" on the neutral fill, "Now: …" in the accent, an open topic its title alone in an
+/// outline; VoiceOver reads each with its state ("Not yet: …" for an open one).
+struct MeetingTopicsRow: View {
+    /// The room's topics with a stable identity each (`MeetingTopic.listed`): the room replaces the list as a whole,
+    /// inserting and reordering, so a chip keeps its identity by its title, not its place.
+    private let listed: [MeetingTopic.Listed]
+    /// The row's side margin (the page's; none where the page's content scrolls inside its own margin).
+    var inset: CGFloat
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(topics: [MeetingTopic], inset: CGFloat) {
+        listed = MeetingTopic.listed(topics)
+        self.inset = inset
+    }
+
+    private var current: String? { listed.first { $0.topic.known == .current }?.id }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text("Topics [Meeting]").font(Theme.Font.captionStrong).foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.horizontal, inset)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    HStack(spacing: Theme.Space.s) {
+                        ForEach(listed) { item in
+                            chip(item.topic).id(item.id)
+                        }
+                    }
+                    .padding(.horizontal, inset)
+                    .padding(.vertical, Theme.Space.xxs)
+                }
+                .scrollIndicators(.hidden)
+                .onChange(of: current, initial: true) { _, id in
+                    guard let id else { return }
+                    withAnimation(reduceMotion ? nil : Theme.Motion.state) { proxy.scrollTo(id, anchor: .center) }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("meeting-topics")
+    }
+
+    private func chip(_ topic: MeetingTopic) -> some View {
+        Chip(text: Self.words(topic), look: Self.look(topic.known), shrinks: true)
+            .scaledFrame(maxWidth: Theme.Size.meetingTopicChip)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(Self.spoken(topic)))
+            .accessibilityIdentifier("meeting-topic-\(topic.known.rawValue)")
+    }
+
+    /// What a chip says: its state in words before the title, except an open topic's, which its outline tells apart.
+    static func words(_ topic: MeetingTopic) -> String {
+        switch topic.known {
+        case .done: String(localized: "Done: \(topic.title) [Meeting Topic]")
+        case .current: String(localized: "Now: \(topic.title) [Meeting Topic]")
+        case .open: topic.title
+        }
+    }
+
+    /// What VoiceOver says for it: the state in words for every topic.
+    static func spoken(_ topic: MeetingTopic) -> String {
+        topic.known == .open ? String(localized: "Not yet: \(topic.title) [Meeting Topic]") : words(topic)
+    }
+
+    private static func look(_ state: MeetingTopic.State) -> Chip.Look {
+        switch state {
+        case .done: .neutral
+        case .current: .tint(Theme.accent)
+        case .open: .outline
         }
     }
 }

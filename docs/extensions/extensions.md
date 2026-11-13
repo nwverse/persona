@@ -107,6 +107,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | --- | --- | --- | --- | --- |
 | `connectors` (version 2) | `connector.` | The manifest fields of the connector protocol: `id` (`^[a-z][a-z0-9]*$`), `name`, `capabilities`, `hosts`, `agent_tools`, `unlisted`, `confirm_always?` (globs of write-operation names; `connector_gate`'s `allow` is also always clamped to confirm-on-phone, `deny` unchanged), `poll_seconds`, `kinds`, plus `kind_descriptions?` (kind → one line "Type: …" shown to the model, used by Inbox triage, drafting and the AI twin), `archive_sources?` (other names the archive may also go under), `cli?` (a command line on the assistant's PATH, see `docs/protocol/connector-protocol.md` ("Command line")), `sends_as_user?` (the connector sends messages in the user's name by itself, outside the write gate; see "Sent as the user: `sent.record`" below) | Process speaks the protocol | The connector registry (**Settings › Connectors**, Inbox, knowledge base, the assistant's tools); methods in `docs/protocol/connector-protocol.md`, including optional `catalog` source discovery/read calls and recipes (`docs/extensions/subscriptions.md`) |
 | `voice` (version 1) | — | `id`, `name?` | `runtime.http` | The App's voice chat; contract under "Voice" below |
+| `transcription` (version 1) | — | `id`, `name?` | `runtime.http` | Meeting transcription on the hub, for the manager only (#3862 phase 5); contract under "Transcription" below |
 | `computer` (version 1) | — | `id`, `name?` | — | The assistant's computer-control tools and the toggle on the machine page (only the built-in `cua`), see [computer-use.md](computer-use.md) |
 | `browser` (version 1) | — | `id`, `name?` | — | The assistant's browser tools (`browser_run` / `browser_look`) and **Browser** on the machine page (only the built-in `ego`), see [plan-ego-browser.md](../plans/plan-ego-browser.md) |
 | `iphone` (version 1) | — | `id`, `name?` | — | The assistant's phone-control tools (`iphone_status` / `iphone_look` / `iphone_do`), **Phone Control** on a computer's page and **Control of This iPhone** on the iPhone (only the built-in `iphone`), see [iphone.md](iphone.md) |
@@ -120,8 +121,8 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `channel` (version 1) | `channel.` | `id` (`^[a-z][a-z0-9_]{0,31}$`, cannot be 8 hex digits), `name`, `kind` (`im`), `connector?` (binding and status come from this connector of the same extension), `bind?` (`qr` / `code` / `fields`), `description?`, `capabilities` (receive images / files / voice, `format`, `max_text`, `asks`, `push`, `typing`, `progress`, `threads`) | Process speaks the protocol; `on_startup` when there is no `connector` | A channel for talking to Persona: the hub runs the shared pipeline (into the chat, tracking the turn, sending the answer back, questions), and the extension only talks to the IM; see [channels.md](channels.md) |
 | `events` (version 1) | `event.` | `id`, `subscribe` (a list of event names, see "Events") | Process speaks the protocol, `on_startup` | Only tells the extension what happened on the hub, see "Events" below |
 | `shortcuts` (version 1) | `shortcut.` | `id`, `title` (1–40 characters), `description?` (≤ 200 characters), `params?` (≤ 8 `{name, title, kind: text / number / toggle / choice, choices?, required?}`), `ui?` (a full page from the same extension) | Process speaks the protocol | Actions in Shortcuts and Siri (iPhone, Mac, Apple Watch), see "System-level placements" below |
-| `skills` (version 1) | — | `id`, `dir` (a directory in the package with `SKILL.md`) | Declarative is enough | The assistant's skills, delivered the same way as `assistant.skills`, see "Declarative contributions" below |
-| `prompts` (version 1) | — | `id`, `kind`: `instructions` (`file`: an `.md` in the package) / `quick` (`title`, `text`) | Declarative is enough | Instructions appended to the assistant's CLAUDE.md; quick prompts in the App's input box; see "Declarative contributions" |
+| `skills` (version 1) | — | `id`, `dir` (a directory in the package with `SKILL.md`), `source?` (`package` / `data`: with `data`, `dir` is in the extension's data directory and holds one skill per subdirectory) | Declarative is enough | The assistant's skills, delivered the same way as `assistant.skills`, see "Declarative contributions" and "Assistant content from the data directory" below |
+| `prompts` (version 1) | — | `id`, `kind`: `instructions` (`file`: an `.md` in the package, or in the data directory with `source: "data"`) / `quick` (`title`, `text`) / `project_context` (`dir` in the data directory) / `inbox_context` (`file` in the data directory, `never_quote?`); `source?` (`package` / `data`, not for `quick`; the two context kinds are always `data`) | Declarative is enough | Instructions appended to the assistant's CLAUDE.md; quick prompts in the App's input box; a new Agent's project background; the Inbox's triage and draft prompts; see "Declarative contributions" and "Assistant content from the data directory" |
 | `themes` (version 1) | — | `id`, `name`, `light` / `dark`: `#RRGGBB` for the role colors `accent` (required), `positive`, `caution`, `danger`, `ai` | Declarative is enough | One more option in **Settings › Appearance › Theme Color**, see "Declarative contributions" |
 | `looks` (version 1) | — | `id` (`^[a-z0-9][a-z0-9-]{0,31}$`), `name`, `names?`, `subtitle?`, `subtitles?`, `avatar` (`sizes`: PNG, `svg?`, `safe?`, `dark?`), `colors?`, `dot?`, `app_icon_fallback` (id of a built-in avatar) | Declarative is enough; the package has the images it names | One more **Avatar** in settings: Persona's name, picture, colors and status dot, plus the App icon where it can be changed; see "Avatars" below |
 | `triage_templates` (version 1) | — | `id`, `title` (≤ 40 characters), `text` (≤ 4000 characters) | Declarative is enough | Templates to pick from when filling in Inbox triage rules (`triage_rules`), see "Declarative contributions" |
@@ -428,7 +429,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `kb.write` | Change entries in the knowledge base | `PUT /api/v1/kb/{kind}/{id}`, not with terminal control characters (see below) |
 | `inbox.read` | Read the Inbox | `GET /api/v1/inbox`, `/inbox/{id}`, `/inbox/mutes`, `/inbox/policies` |
 | `inbox.write` | Handle the Inbox | Mark as handled, draft, reply (text only: replies with `changes` or `/agent` still require full access), document status, mute, set policies, refresh |
-| `agents.read` | See the Agents and chats on your computers | `GET /api/v1/sessions…` (list, info, items, images, screen), `/interactions`, `/agents…` (personal Agents), `/workspaces`, `/workspace-board` |
+| `agents.read` | See the Agents and chats on your computers | `GET /api/v1/sessions…` (list, info, items, images, screen), `/interactions`, `/interactions/history` (paged by time, see "Question history"), `/agents…` (personal Agents), `/workspaces`, `/workspace-board`; never the health space's chats or a private card (see "Never shown to extensions") |
 | `agents.control` | Drive Agents | `POST /api/v1/sessions` (create), a chat's `messages` / `interrupt` / `queue` / `queue/send-now` / `seen` / `rename`, `POST /api/v1/interactions/{id}/resolve` (approving a plan, or answering a terminal card with anything but a bare `dismiss`, also needs `agents.permission_mode`), `/choose` and `/reanswer`, sending messages to and marking read for personal Agents; with no terminal control characters in the text it sends (messages, prompts, notes, titles, answers; see below) |
 | `agents.permission_mode` | Change the permission mode of the chats it started itself | A chat's `modes` with `permission_mode` only, `POST /api/v1/sessions` resuming a chat with a `permission_mode`, approving a plan (`POST /api/v1/interactions/{id}/resolve` with `approve: true`, which sets the chat's mode) and answering a terminal card (`kind: "screen"`, whose keys can change it): only of a chat its extension opened (see below) |
 | `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
@@ -438,6 +439,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `leaders.read` | See leader conversations (directions) and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events") |
 | `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
+| `assistant.memory.read` | Read what Persona remembers about you (read-only, never the health space) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `extensions.call:<extension id>` | Call the API of extension "…" | That extension's own HTTP: `/api/v1/extensions/<id>/…` (excluding the hub's `/-/` endpoints) |
 
@@ -493,7 +495,7 @@ so the extension does not need to read the hub's or the manager's data directory
 | `kb.get` | `{kind,id,recent_chars?}` | `{detail}` | `kb.read` |
 | `kb.day` | `{id,day}`, day is `YYYY-MM-DD` | `{day,messages,prev,next,sent_origin}`; `messages[].n` is the 1-based line number in the source file | `kb.read`; `sent.read` adds origin marks |
 | `kb.search` | `{query,messages?,limit?}` | `{hits}` | `kb.read` |
-| `kb.update` | `{kind,id,...fields to update,evidence?,unlock?}` | `{id,before?}` | `kb.write` |
+| `kb.update` | `{kind,id,...fields to update,evidence?,unlock?}` | `{id,before?,ignored?}` | `kb.write` |
 | `kb.owner` | `{}` | `{name,aliases,handles:[{kind,value}]}` | `kb.read` |
 
 The params, answers, error codes and events are described in `schema/extension/kb.schema.json`; the Go SDK has them as `ext.Hub`'s `KBList`, `KBRecent`, `KBGet`, `KBDay`, `KBSearch`, `KBUpdate` and `KBOwner`.
@@ -528,6 +530,19 @@ The locked fields it writes become its own with `evidence` (`[{chat, day, n?, no
 `before` is each written field's previous value (`null` when unset, the old `summary` text), for the extension's undo. Rules and how this sits with the built-in pipeline: [Knowledge base](../assistant/knowledge.md#who-holds-a-field-6100).
 
 The update fields follow the existing knowledge base update API, plus `pinned`, `lock` and `remove_people/remove_chats/remove_aliases/remove_projects`.
+Each kind takes only the fields it uses ("Fields each kind takes" in `docs/assistant/knowledge.md`); the others are not applied, and the answer names them in `ignored: [{field, reason}]`, so nothing is dropped silently (a person's `summary` and `log`, for one).
+
+**A person's profile** (`profile`, people only): what the extension knows of the person, in four parts kept apart: `facts`, the user's own words about them (`views`), `inferences` (each with its `basis`, shown as only a hint), and `commitments` either way (`owes: user | them`, `due?`, `done?`). Every item needs `sources`.
+It is the extension's own: a write replaces the profile it wrote before as a whole (one with no items removes it) and touches no other extension's, nor the user's, nor the person's `pinned` and `note`, so it never conflicts. `before.profile` is the one replaced.
+The person's summary.md shows it under its own headings, every line labelled with its part, which is what `kb_get` / `kb_search` and `kb.get` / `kb.search` read; `kb.get` also gives `profiles` by writer, as written. Rules and bounds are in "Person profiles" (`docs/assistant/knowledge.md`).
+
+```json
+{"kind":"people","id":"<person id>","profile":{
+  "facts":[{"text":"Leads the example project","sources":["chats/<dm id>/messages/2026-11-03.md"]}],
+  "views":[{"text":"explains things clearly","sources":["user"]}],
+  "inferences":[{"text":"Prefers written updates","basis":"asked for a written summary after three of four calls","sources":["chats/<dm id>"]}],
+  "commitments":[{"text":"Send the review notes","owes":"user","due":"2026-11-20","sources":["chats/<dm id>/messages/2026-11-04.md"]}]}}
+```
 Protection rules, which entities they apply to, encryption of the owner's identity and history limits are in [Knowledge base](../assistant/knowledge.md#扩展整理知识库1908). The owner's aliases are edited by the user in the assistant settings;
 there is no separate RPC for extensions to write the owner's identity.
 
@@ -610,6 +625,109 @@ The schema is `schema/extension/assistant.schema.json`; the Go SDK has them as `
 {"permissions":{"hub":["kb.read","assistant.read"]}}
 ```
 
+### Assistant memory
+
+The assistant keeps a memory of what it learned about the user, one Markdown file per entry (`docs/assistant/assistant.md`). An
+extension that builds on it (to avoid relearning what is already there, or to compare with what it found) reads it with
+`assistant.memory`, declaring `assistant.memory.read` in `permissions.hub`; the hub checks the grant as for `assistant.read`, which does
+not include it. Read-only: writing and deleting entries stay with full credentials (`PUT` / `DELETE /api/v1/assistant/memory/{name}`
+answer an extension's token 403). The manager answers it from the assistant's computer.
+
+| Method | Parameters | Returns | Scope |
+| --- | --- | --- | --- |
+| `assistant.memory` | `{include_content?}` | `{entries: [{name, description?, type?, size, created?, modified, content?, truncated?}]}` | `assistant.memory.read` |
+
+The schema is `schema/extension/assistant.schema.json`; the Go SDK has it as `ext.Hub.AssistantMemory`.
+
+- **Which memory**: the assistant's own space only. The health space keeps a memory of its own (`docs/assistant/health.md`), which is
+  never read here; the params are strict, so there is no space to ask for. The index file `MEMORY.md` is not an entry.
+- **What each entry says**: `name` is the file name; `description` and `type` come from the file's YAML frontmatter (`type` also from
+  `metadata.type`), empty when it has none, as entries may be in any language or shape. `created` is when the file was made where the
+  computer's file system keeps it (macOS, Windows, and Linux file systems that report a birth time), absent otherwise and from older
+  nodes; `modified` is its last change; `size` is in bytes.
+- **Content**: only with `include_content`. Each entry's text is cut at 16 KB, and once a call has returned 512 KB of text the
+  remaining entries come without it; `truncated` marks either. Read the metadata first and ask for content when it changed.
+- **No memory**: none written yet, or the feature off, is an empty list, not an error.
+- **Errors**: `permission_denied` (`{scope: "assistant.memory.read"}`), `invalid_params`, `assistant_offline`, `machine_offline` (the
+  assistant's computer is not connected or not set up).
+
+```json
+{"permissions":{"hub":["assistant.memory.read"]}}
+```
+
+### Question history
+
+An extension granted `agents.read` reads the cards Agents and the assistant raised (questions, plans, permissions) and how each ended
+with `GET /api/v1/interactions/history`. Without `since`, `before` or `kind` it answers the newest cards (`limit`, at most 500) as it
+always did. With any of them it pages back through the whole history by time:
+
+| Parameter | Meaning |
+| --- | --- |
+| `since` | RFC 3339: cards raised at or after it |
+| `before`, `before_id` | The cursor: cards raised before it. Pass a page's `next_before` and `next_before_id` to read the next older page |
+| `kind` | One kind: `question`, `plan`, `permission`, `screen`… |
+| `machine_id`, `session_id`, `limit` | As before; `limit` is 100 by default, at most 500 |
+
+The answer is `{"interactions": [{interaction, status, resolution?, resolved_at?, reanswerable?}], next_before?, next_before_id?}`,
+newest first; the cursor is there while a page came back full. `interaction` carries the questions, their options and descriptions,
+and the plan or the permission asked for; `resolution` the answers (`answers`, keyed by question), who answered when it was not the
+user in an app (`answered_by`, with `reason`), and how a permission or plan ended. `reanswerable` marks an answer the assistant gave
+on the user's behalf that the user may still change ("Change answer"). A daily reader passes `since`; a first read walks back with the
+cursor.
+
+An extension's token is never shown a private card, one of the health space, or one whose space cannot be told, and a card's
+`resolution.values` (what was filled into its fields on the phone, such as a password) is left out (see "Never shown to
+extensions"). A page may then hold fewer cards than `limit` while the cursor still says there is more.
+
+#### Recommendations and who decided
+
+To learn how the user usually decides, and how often they take what was recommended, read these on the assistant's own questions
+(`tool_name: "ask_user"`; `docs/protocol/protocol.md` "Decision fields" and "Who answered a card"):
+
+| Where | Field | Meaning |
+| --- | --- | --- |
+| `interaction` | `deadline` | When an unanswered question takes its recommendation by default (or is reminded, when it cannot be undone) |
+| `interaction` | `reversible` | Whether going ahead can be undone, as the assistant said it; absent when it did not say |
+| `interaction.questions[]` | `recommend` | The recommended option's label; absent when there was none |
+| `resolution` | `answered_by` | Absent: the user. `assistant`: the assistant answered for the user. `default`: nobody answered; the recommendation was taken at the deadline |
+| `resolution` | `late` | The answer came after the card expired (on the to-do it became, or at its deadline); the card's `status` stays `expired` |
+
+None of them is filled in for cards from before they were kept: a missing field is unknown, not `false` or "no recommendation".
+Taken-or-not is `resolution.answers[q] == questions[].recommend` for the user's answers (`answered_by` absent); a `default` answer
+was not the user's choice.
+
+A finished task's decision for the owner (a supervised task's `needs_user` review) is not a card. While it waits, `GET /api/v1/todos`
+(`todos.read`) lists it on its to-do as `ask`: `recommend`, `options` (the recommended first), `deadline`, and `default` (`taken`: the
+recommendation is taken at the deadline, which only a reversible decision does; `never`: it never is). The review itself stays on the
+to-do, decided or not (`supervision.reviews[]`, the last 20, with `verdict: "needs_user"`, `recommend`, `options`, and `deadline` and
+`reversible` as the supervisor gave them, absent when it gave none or on reviews from before they were kept). Once decided,
+`GET /api/v1/todos/{id}/decisions` has the outcome: `source: "manual"` for the user's choice, `source: "agent"` with the deadline's
+`reason` for the default.
+
+#### Folded work
+
+The other half of "where did it go wrong" is a chat's own items, read with `agents.read` too: `GET
+/api/v1/sessions/{mid}/{sid}/items?fold_work=1` folds each run of tool calls and thinking into one `fold` item
+(`docs/protocol/protocol.md` "Folded work"). Besides the counts and the changed files, a fold says how many of the run's tool results
+were errors (`errors`) and which tools it called (`tool_names`, each once in the order first called, at most 10), so a reader finds
+the run that went wrong without reading any tool output, then opens only that run with `from_seq` and `through_seq`. A fold without
+`tool_names` comes from an older node and says neither.
+
+### Never shown to extensions
+
+Whatever scopes it was granted, an extension's token never sees:
+
+- **The health space's conversations** (`docs/assistant/health.md`): not in `GET /api/v1/sessions` (the full list, the paged list, its
+  totals and counts) or `/sessions/archived`, and their items, images, info and screen answer 404 as for a chat that does not exist.
+  A chat the hub does not list answers 404 too, as its space cannot be told. `assistant.conversations` and `assistant.messages` leave
+  them out the same way, and `assistant.memory` reads only the assistant's own memory.
+- **Private and health cards**: a card a Just me turn raised (`private`, `docs/assistant/meeting-minutes.md` "Just me"), a card of
+  the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
+  are left out of `GET /api/v1/interactions` and `/interactions/history`.
+- **Values typed into a card's fields** (`resolution.values` in the history).
+
+The apps' and devices' credentials are not affected.
+
 ### Sent as the user: `sent.record` (#5278)
 
 The hub's write gate (`docs/extensions/connectors.md` "Sent as the user") sees only the writes that go through it. An extension's connector can also send in the user's name by itself, from inside a tool that reads (a reply the connector decides on, say), and the gate never sees that. A connector that does this says so in its manifest, and tells the hub about each send, so it shows in the same ledger:
@@ -679,6 +797,7 @@ The hub has an **egress proxy** (`server/internal/extension/egress`), started th
     Extensions with the sandbox off don't go through the proxy (see above) and still connect to `127.0.0.1` directly.
 - **Who it recognizes**: on the local TCP port, extensions are identified by proxy credentials (`HTTP(S)_PROXY=http://ext:<credential>@127.0.0.1:<port>`, renewed at every start, invalid once disabled or uninstalled); the Linux sandbox also has one unix socket per extension
   (`~/.persona/extensions/run/<id>/proxy.sock`), and the socket itself says who it is.
+- **Hosts the owner allowed** (#5697): in the admin UI (an installed extension's details › Network and isolation), and only there (the admin session; device credentials have no route), the owner can allow a sandboxed extension more hosts than its `permissions.network` lists: a self-hosted RSSHub, Sentry or GitHub Enterprise, a proxy. Each is one specific host, as typed or taken from an http(s) URL: `rss.example.org` (any port, like `permissions.network`) or `rss.example.org:8443` (that port only); no wildcard, path or account. The proxy reaches them the way it reaches a `config:` settings address: no subdomain, https or plain http, the name resolved by the proxy and **every** answer checked on each connection, only checked addresses dialled. Private LAN addresses (10/8, 172.16/12, 192.168/16, fc00::/7) pass, which is the usual case for a service at home; loopback, link-local, unspecified, multicast and metadata addresses refuse the name, so a name that later resolves to loopback (DNS rebinding) is refused. This machine's own services are not allowed here (`127.0.0.1`, `localhost` and the like are refused with the hint to use `host.persona.internal`, which the manifest asks for). Allowing is immediate with no question (the toast offers Undo); revoking closes the extension's open proxy connections. Each change is audited (`egress_allow` / `egress_revoke`, actor `admin UI`). They are stored in the hub setting `extension_egress_allow` by extension, at most 32 each, and dropped when the extension is uninstalled. Endpoints: `POST /api/v1/admin/extensions/{id}/egress/allow` `{"host": "…"}` and `DELETE /api/v1/admin/extensions/{id}/egress/allow?host=…`, both answering with the extension (400 `invalid_host` with the reason). The proxy also keeps, in memory, the last 5 different hosts it refused each extension (`sandbox.egress.recent_denied`: `target`, `count`, `at`), which the admin UI lists with **Allow**.
 - **The hub's own upstream proxy**: when the hub's environment has `HTTPS_PROXY` / `HTTP_PROXY` (`NO_PROXY` honored), the proxy goes out through it (CONNECT); extensions don't need to know.
 - **Several addresses** (#1181): when a name resolves to several addresses, the proxy checks every one first (the rules above), then races only those
   (`dialRace` in `extension/egress/race.go`, after RFC 8305 Happy Eyeballs v2): IPv4 and IPv6 alternate starting with the resolver's first family, the next address starts 250 ms after
@@ -745,7 +864,7 @@ only the proxy's port is reachable, direct connections to the internet fail, and
 **This machine has no sandbox** (bwrap not installed, the kernel doesn't allow user namespaces, other systems): extensions with the sandbox on still run, only pointed at the egress proxy; the extension's `sandbox.active` is `false`, and `sandbox.why`
 and the list's `warnings` say "No sandbox: bwrap (bubblewrap) is not installed on this machine". To install bwrap: Debian / Ubuntu `apt install bubblewrap`; without root you can put a statically built bwrap on the hub's `PATH`.
 
-**API**: the `ExtensionView` of installed extensions (list and details) has an extra `sandbox`: `{enabled, default, chosen, active, why?, trusted?, egress: {allowed, denied, last_denied?, denied_at?}}`.
+**API**: the `ExtensionView` of installed extensions (list and details) has an extra `sandbox`: `{enabled, default, chosen, active, why?, trusted?, egress: {allowed, denied, last_denied?, denied_at?, recent_denied?}, owner_allowed?}` (`owner_allowed`: `[{host, port?, at}]`, see "Egress").
 
 **Permission summary**: the sha256 of `permissions` (normalized) plus "whether it runs a program"; with `node`, also its systems, node-side permissions and the names of secrets sent to computers (for extensions without `node` the summary is the same as before, so installed ones need no new consent). Installing must send back the summary given by the preview; so must an upgrade with more permissions (if they didn't grow, no new consent is needed, but the upgrade still has to be carried out explicitly).
 The accepted one is stored in `plugins.granted`.
@@ -1633,6 +1752,85 @@ An extension contributes `assistant`:
   - **Space** (#6003): every assistant process has `PERSONA_SPACE` in its environment: `health` in the health space (`docs/assistant/health.md`), `main` everywhere else, decided by the conversation's directory when the node starts the process (`assistantSpace` in `node/larkgate_env.go`). An extension's skills and commands reach every space; a command meant for one space checks this rather than its working directory, which a `cd` in front of the command changes without a confirmation. Overriding it takes `PERSONA_SPACE=… <command>`, which the gate does not let through unless the gate lists the variable in `allowed_env`, so it goes to the normal permission prompt.
   - The gate file is read in strict mode and checked at install time (the script must be inside a skill); credentials cannot start with `PERSONA_` / `PERSONA_` or be `PATH`.
 
+### Assistant content from the data directory (#5770)
+
+Package files are fixed at install, but an extension that learns from the user's work produces its content at run time. It writes
+that content into its own **data directory** (`<hub data>/extensions/data/<key>/`, writable in the sandbox and kept across upgrades)
+and declares it with `source: "data"`; the hub reads it when it renders the assistant's instructions and skills. Nothing to call:
+writing the file is the whole interface.
+
+```json
+"contributes": {
+  "prompts": [{"id": "about-me", "kind": "instructions", "source": "data", "file": "assistant/instructions.md"}],
+  "skills": [{"id": "manuals", "source": "data", "dir": "assistant/skills"}]
+}
+```
+
+| | Instructions (`prompts`, `kind: instructions`) | Skills (`skills`) |
+| --- | --- | --- |
+| Where | `file`, an `.md` relative to the data directory | `dir` relative to the data directory; each subdirectory named `^[a-z0-9][a-z0-9_-]{0,63}$` with a `SKILL.md` is one skill, its name the subdirectory's |
+| Goes to | The assistant's CLAUDE.md / AGENTS.md after the package instructions, under `<!-- plugin <id> (data) -->`; never the health space's | The computer running the assistant, like package skills (`assistant.prepare`); in the skill list their source is `plugin` |
+| Limit | 6 KB per file; a larger file is **not adopted** (the text adopted before stays) and the status says `too_large` | 256 KB and 32 skills per extension, Markdown files only (anything else in the directory is left out); past a limit that contribution sends none |
+| Checked | Valid UTF-8 (else `invalid`); control characters except tab and newline, byte order marks, bidirectional embedding / isolate marks and line / paragraph separators removed; every `<!--` removed, so no part can pose as another extension's header | Valid UTF-8; a name another extension's skill has already is left out |
+| When it changes | Adopted **at most once every 24 hours** per contribution (below) | Read on every render (every minute): a skill change restarts nothing |
+
+- **Paths stay inside the data directory**: files are opened through an `os.Root`, so neither `..` nor a symbolic link leads out of it;
+  a link out is `not_regular`. A missing file or directory is simply nothing.
+- **Why the instructions are rate-limited**: the node resumes the main conversation in a fresh process on its next idle message once
+  its CLAUDE.md changes (Claude; `instructionsStale`), and the long conversation loses its prompt cache. So the hub keeps the
+  **adopted** text (with its time) in its database and serves it until one of: 24 hours have passed since the last adoption; the hub's
+  own part of the CLAUDE.md changes anyway (a hub upgrade, the user editing About me: the new text **rides along** at no extra
+  restart); the user applies it (`POST /api/v1/extensions/{id}/-/assistant-data/apply`, full credentials). A first version is adopted at
+  once. A restart of the hub does not open the window again. Keep the always-read block small and put the bulk into skills.
+  Extensions should write a file only when its content changed (same bytes, same digest: nothing happens).
+- **Runtimes**: Claude reads the new CLAUDE.md on the main conversation's next idle message, in a fresh process. Codex reads AGENTS.md (the
+  same text) only when a conversation or its process starts, so an adopted change reaches it with the next new conversation or restart.
+  Data skills reach any runtime that reads the assistant directory's skills. Other launchers get what they read of CLAUDE.md, AGENTS.md
+  and the skills directory (`docs/integrations/runtimes.md`).
+- **Switched off, removed**: an extension switched off, or the single contribution switched off, adds nothing from the next render on;
+  removing the extension also forgets what was adopted.
+- **Install screen**: an extension with any `source: "data"` contribution shows the line "Add what it writes to what your assistant reads"
+  (`assistant_data`). It is shown, not part of the permissions digest: package instructions and skills are not either.
+- **Project and Inbox context** (#5771): two more `prompts` kinds, always from the data directory (`source` may be left out), go into
+  prompts the manager builds itself. They are read whenever such a prompt is built, so they restart nothing, need no rate limit and
+  reach every runtime alike. A file over its limit is cleaned like instructions and then **cut at a line end** (the status says
+  `truncated`), as there is no older version to keep; a file over 256 KB is not read at all (`too_large`).
+
+  ```json
+  "prompts": [{"id": "projects", "kind": "project_context", "dir": "agent/projects"},
+              {"id": "inbox", "kind": "inbox_context", "file": "inbox/context.md", "never_quote": "inbox/never_quote.txt"}]
+  ```
+
+  | Kind | Files | Goes to | Limit |
+  | --- | --- | --- | --- |
+  | `project_context` | `<dir>/<project slug>.md`, the slug as the knowledge base names the project's directory (letters and digits of any script, hyphens) | The `<persona-context>` project background a new Agent gets before its first prompt (`docs/assistant/todos.md`), after the conclusions, under "扩展「<name>」为这个项目整理的背景"; enough alone for a block | 1.5 KB per project per extension |
+  | `inbox_context` | `file`, one `.md` | The Inbox's triage and draft prompts (`docs/assistant/inbox.md` "Extension context"), read at most once a minute | 1 KB per extension |
+  | `inbox_context.never_quote` | A text file, one sentence a line (empty lines and repeats dropped) | **Never a prompt**: a draft repeating one (at least 6 letters or digits; compared without case, width, spaces and punctuation) is written again once, then withheld (`422 draft_withheld`) | 64 KB |
+
+- **Read-back** (`schema/extension/assistant_data.schema.json`), so an extension can tell the user truthfully whether its content
+  reached the assistant and warn when it did not: it asks `assistant.data_status` (no parameters, no permission: only its own
+  contributions, every one its manifest declares) → `{items: [{contribution, kind, path, limit, bytes, state, reason?, detail?, hash?, adopted_hash?, adopted_at?, next_adopt_at?, skills?, files?, truncated?, never_quote?}]}`.
+  `kind` is `instructions`, `skills`, `project_context` or `inbox_context`. For the two context kinds `adopted` means the next prompt
+  built gets it: `files` lists the projects with a file in use, `truncated` says something is cut at its limit (`detail` says which),
+  `never_quote` counts the sentences drafts are checked against.
+
+  | `state` | Meaning |
+  | --- | --- |
+  | `adopted` | The assistant reads the content as it is now (skills: sent) |
+  | `pending` | Instructions: an older version is read, the new one waits (`reason: rate_limited`) until `next_adopt_at` at the latest |
+  | `kept` | Instructions: an older version is read, the new one cannot be used (`reason` says why) |
+  | `none` | Nothing is read: none written yet, none usable, or `reason` `disabled` (the extension is switched off or cannot run) / `switched_off` (this contribution is) |
+
+  `reason` is one of `too_large`, `invalid`, `not_regular`, `unreadable`, `rate_limited`, `disabled`, `switched_off`; `detail` adds the
+  file's problem for logs. `hash` is the digest of the content now (instructions: the cleaned text, first 16 hex digits of its sha256;
+  skills: of every skill's name and digest), `adopted_hash` and `adopted_at` of the instructions the assistant reads (or read last, when
+  switched off). Adopted means the hub puts it into the CLAUDE.md it writes on the assistant's computer within a minute while that
+  computer is online; the conversation reads it as "Runtimes" says. An extension switched off has no process to ask, so `disabled` is
+  for full-credential devices, which read the same at `GET /api/v1/extensions/{id}/-/assistant-data`; `POST …/assistant-data/apply`
+  answers it after adopting. Reading the status adopts what is due, as a render would. The hub logs each adoption ("adopted (first
+  version | after the wait | with the hub's own instructions | applied by the user, <digest>, <bytes>)") and, once per problem, why a
+  file is not used. A data skill whose name another extension's skill already has is left out and logged (not in the status).
+
 ## MCP servers
 
 An extension contributes `mcp_servers`: when the computer running the assistant has a certain command-line tool (usually the MCP server bundled with the upstream tool the extension corresponds to), the node attaches it as
@@ -1667,6 +1865,9 @@ Quota extensions contribute `quota` and answer a launcher's quota (`docs/integra
    methods are GET / POST / PUT / DELETE / HEAD only, request body at most 1 MB, response at most 4 MB, and redirects are only followed to the same origin.
 3. The extension returns `{report}` (`Report` in `server/internal/quota`: `key_name`, `usage`, `budget`, `pools`, `note`…; when `gateway` / `gateway_name` are omitted, the contribution's id / name are used; the app shows `gateway_name`);
    if it is not its gateway, it returns the error code `unsupported` and the hub asks the next one.
+   Each `usage` entry may say what its `label` covers in `period`: `day`, `week` or `month`, in the user's `tz`. Clients
+   add up only entries that say (the iPhone's Usage widget takes the `cost_usd` of the `day` ones); an entry without it
+   is shown by its label alone.
 
 **Outside the launcher page** (#2846): sidebar pages (`nav_page`), cards and widgets have no launcher context, so extensions that accepted `launcher_keys` can look up launchers themselves:
 
@@ -2313,8 +2514,8 @@ A hub picture that fails to load may have outlived its token, so the page is dra
 A row's extra actions open from a right click, a half-second press on a touch screen and the … button at its end (no swipe on the web).
 The component showcase's version 6 pages are `web/src/showcase/v6` (with their pictures in `web/src/showcase/images`) until the showcase extension's own snapshots have them.
 
-**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls
-(see "App: Settings › Extensions" below). One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, the styles
+(the 45 icons, named colors, `title` / `headline`), row actions, charts and sparks, tiles (grid, carousel), the new fields and pictures, that is all of it; reporting 6 is the last step; see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)
 
@@ -2581,7 +2782,7 @@ What extensions with only a manifest and a few files, no program, can do (model 
 | Extension point | Form | Destination |
 | --- | --- | --- |
 | `skills` | `{"id": "weekly-review", "dir": "skills/weekly-review"}`: directory in the package containing `SKILL.md` | Same path as `assistant`'s `skills`: sent with `assistant.prepare` to the computer running the assistant and placed in the assistant directory (see "Assistant") |
-| `prompts` | `{"id": "tone", "kind": "instructions", "file": "assistant/tone.md"}` | Appended to the assistant's CLAUDE.md (like `assistant.instructions`) |
+| `prompts` | `{"id": "tone", "kind": "instructions", "file": "assistant/tone.md"}` | Appended to the assistant's CLAUDE.md (like `assistant.instructions`); with `"source": "data"` the file is in the data directory, see "Assistant content from the data directory" |
 | | `{"id": "today", "kind": "quick", "title": "What did I do today?", "text": "…"}` | Quick prompts in the app input: `GET /api/v1/extensions/-/prompts` → `{prompts: [{extension, extension_name, id, title, text}]}` |
 | `themes` | `{"id": "forest", "name": "Forest", "light": {"accent": "#2E7D32", …}, "dark": {"accent": "#81C784"}}`: only design-system role colors (`accent` required, `positive`, `caution`, `danger`, `ai` optional), not fonts, icons or other colors | `GET /api/v1/extensions/-/themes` → `{themes: [{extension, extension_name, id, name, light, dark, problems?}]}` |
 | `triage_templates` | `{"id": "quiet-groups", "title": "Only mentions in large groups", "text": "…"}` | Selectable when filling a source's triage rules (`triage_rules`): `GET /api/v1/extensions/-/triage-templates` → `{templates: [{extension, extension_name, id, title, text}]}` |
@@ -2755,6 +2956,50 @@ Views, components, actions, responses, placements and context all use schema-gen
   `GET /mock/invalidate` syncs one note and sends `ui.invalidate`; UI test `ExtensionV3Tests` (list, filters, more, search to empty state, push note page, edit/save/pop, invalidate),
   unit tests `ExtensionUIv3Tests`, `PersonaCardTests`. `MOCK_EXTENSION_CARDS=1` with `ExtensionAssistantCardTests` checks in a real assistant chat that
   `persona-view` and old `persona-card` share the renderer, actions are not tappable, links remain, and saves light/dark screenshots. Four-client showcase comparison depends on #1852, not replaceable by notes screenshots.
+- UI version 6's styles (#827): every name of the icon set (UI version 4's code hosting and version 6's 45 for homes and markets) is drawn as the app's own symbol
+  (`ExtensionUIStyle.icon`; meanings the app already has, such as home, lock, camera, play, use its own); the 11 named colors are `Theme.Hue`'s (`ExtensionUIStyle.color`), on marks only:
+  a row's icon in its color on the design system's `IconTile`, a metric's icon before its label, an empty state's mark, and a badge as a soft tint of the color behind words in the text's
+  own color (a tone, when it has one, wins). `text` takes `title` and `headline` (heading levels for VoiceOver). Unit tests `ExtensionStylesTests` read the schema's names; screenshots of
+  `showcase › styles` with `ExtensionShowcaseShotsUITests`.
+- UI version 6's row actions (#827, `ExtensionRowActions.swift`): a row's `actions` in a long press's menu (a right click on the Mac), usual ones first and destructive ones red and last,
+  with their icons; those with `swipe` also under a swipe from the trailing edge (the destructive one at the edge, a full swipe runs none); one with `confirm` asks in an alert with **Cancel**
+  (a stream page asks in its own way); VoiceOver has them as the row's actions; on a card without a page they are left out. Screenshots of `showcase › row-actions`.
+- UI version 6's charts (#827): `area` (`DataChart`'s areas: overlapping and see-through with their lines, or stacked), `candlestick` (`CandleChart`: one series of open / high / low /
+  close, volume bars under it when every point has one, rising green unless `rising` is red, the falling one the other color; holding a candle reads its prices), a series' named `color`
+  (after its tone); `spark` (`TrendLine`) before a row's value, under a metric's number and a stat's, in its named color, else its tone's, else the quiet ink. Unit tests
+  `ExtensionChartsTests`; screenshots of `showcase › chart-v6` and `showcase › spark`.
+- UI version 6's tiles (#827, `ExtensionTiles.swift`): a `grid` in as many columns as fit (two on a phone, at most `max_columns`, 4 when absent), a `carousel` in one line that scrolls
+  sideways and snaps to a tile (narrow, regular, or wide: most of the width), both on the page's background as wide as the sections. A tile has its picture across the top (https; a hub one
+  comes with pictures) or its icon in its color, the title, a state line, a value and a spark, a badge and a switch in its corner (the controls' model: shown at once, confirm asks); `active`,
+  or its switch on, lays its color under and around it, the text staying in the ink. Tapping does its action, a long press shows its `actions`; VoiceOver reads it as one element. Unit tests
+  `ExtensionTilesTests`; screenshots of `showcase › grid`, `carousel` and `home-demo`.
+- UI version 6's fields (#827, `ExtensionFields.swift`, `ExtensionFieldValues.swift`): `date`, `time` and `datetime` with the system's picker, held to `earliest`…`latest` (a pair the wrong
+  way round allows any), written as the wire writes them in the page's time zone (this device's, `context.tz`); empty, the row says **Not Set** and a tap sets it to now (held to the range)
+  rather than showing a date nobody chose, and a set one has a clear button. `multichoice`: a menu of toggles that stays open while picking, the chosen ones named beside the label, sent as a
+  JSON array in the choices' order (anything else reads as none chosen). `multiline`: a field that grows from 3 to 8 lines. A field's `detail` is a line of help under it. Unit tests
+  `ExtensionFieldValuesTests`; screenshots of `showcase › inputs-v6`.
+- UI version 6's pictures (#827, `ExtensionMedia.swift`): an `image` in its shape (`aspect`; `auto` from `width` / `height`), cropped or fitted (`fit`), its caption under it, VoiceOver
+  reading its `alt`; a tap opens the app's `ImageViewer` unless `no_zoom`. A tile's picture, a row's thumbnail and avatar likewise. A `url` loads without the app's credentials; a `path`
+  only when it is the hub's image route for the page's own extension (`ExtensionViewModel.isHubPicture`), through the page with the device's credentials and `w` about as many pixels as it
+  is drawn; when a hub picture fails (its token may have run out) the page is drawn again, at most once a minute. Not loaded: the plain fill; failed: the alt text over a broken-picture mark.
+  Mock: `showcase` pages get a `path` beside every `ref` and the route answers a made-up picture of its shape (`missing`: 404). Unit tests `ExtensionMediaTests`; screenshots of `showcase › image`.
+  A section whose every component this app leaves out (one it doesn't know) is not drawn, rather than its title alone over
+  nothing; a section sent with no components keeps its title (`ExtensionParts.of`).
+- UI version 5's code review (#827, "UI version 5: code review"), drawn in parts (pages send 4 until all of version 6 is drawn too, so the hub strips these fields for iOS meanwhile).
+  Reading (`ExtensionCodeReview.swift`, the code page): the words that changed in a removed and added pair on a stronger fill (PersonaKit's `LineDiff` word comparison, worked out once per hunk);
+  generated files and lockfiles (by the extension's `generated` or the web's path list), changes over 400 lines and viewed files start folded with a line saying why and **Show**; a generated
+  file without hunks is not loaded by itself. Each diff's header has a **Viewed** tick box (`.toggleStyle(.tickBox)`): checked, the file folds; unchecked, it stays as it is. With `mark_viewed`
+  the mark changes at once and is sent quietly (`ExtensionViewModel.quiet`: nothing waits, an empty answer draws nothing, a failure puts the mark back); without it the mark is kept on the
+  device by `path` + `revision` (or a digest of the lines), at most 5,000 (`CodeViewedMarks`). The tree ticks viewed files. Over the diffs: "Viewed x / y", "N unresolved" (each tap unfolds
+  and scrolls to the next open thread; drafts don't count) and a ⋯ menu with **Ignore Whitespace** (kept for every page). A rename shows its similarity. An action's `items` replace their
+  components without drawing the page again, and a page drawn again keeps diffs loaded since. Hidden lines (`context`): between hunks a bar says how many lines are hidden, with the next hunk's
+  header, and shows 20 more down or up, or all (a few: all at once; the first gap only up, the last only down, to the end of the file once its length is known); the lines are asked quietly for the
+  new side (`to` "end" when the length is not known yet), kept per file so showing more of a gap that came needs no request, and `expand` is not used then. `code.line_url` adds **Copy Link to
+  Line** to the code viewer's line menu (https only). Commenting: a second line number on the same side picks the lines between (`start_line`, the picked lines tinted, the box under the
+  last one, what is typed kept); the box sends alone (**Comment**) or as a draft of the pending review (`draft`, **Add to Review**, first once a review is under way), its ✕ closes it, and
+  **Suggest Change** (`suggestions`, new side) starts a ```suggestion block from the lines as they are. A comment's suggestion is drawn as a small diff of the lines it is on; **Resolve** /
+  **Reopen** send `resolve`; a resolved thread is folded to its first comment. Unit tests `ExtensionCodeReviewTests`, UI test `ExtensionCodeReviewUITests` (`showcase › snapshots › code-review-v5`; the mock answers
+  `context` with made-up lines of a 90-line file).
 - UI version 6 (#827, "UI version 6"), drawn in parts; pages keep sending 4 and cards 3 until all of it is drawn, so the hub still downgrades it for iOS meanwhile.
   Row controls (`ExtensionControls.swift`, `ExtensionControlRow`): a switch or a stepper at the row's end, a slider on a line under it, all system controls labeled by the row's title and read out with
   their value as written (`display` for the value the extension drew, else the number in the user's locale and the unit); a row with its own action does it from its words, the control beside them.
@@ -3310,6 +3555,24 @@ Closing the WebSocket ends this conversation.
   Recording uses `VOICE_COMMUNICATION` plus system echo cancellation (so the model does not hear itself on speaker), see `docs/android/android.md`.
 - iOS: duplex voice chat in CarPlay (`docs/apple/carplay.md`), using the plugin's default model and voice.
 
+## Transcription
+
+The `transcription` point (#3862 phase 5) turns a meeting's audio into text on the hub, for the manager, which writes the live log and the hub's transcript from it;
+the program stores nothing. The contract (the job's frames both ways, which contribution transcribes, the built-in one's sessions) is
+[meeting-minutes.md](../assistant/meeting-minutes.md) "The `transcription` extension point"; this is the extension's side in short.
+
+- **Endpoints**, on the program's own socket under the contribution's id, apart from the voice point's `GET /info` and `GET /ws`:
+  `GET /transcription/{cid}/info` → `{"protocol": 1, "features": ["live", "replay", "interim"], "setup"?: …}` (`extwire.TranscriptionInfo`), and
+  `GET /transcription/{cid}/ws`, one job per connection (`extwire.TranscriptionFrame` both ways, PCM16 little-endian mono 16 kHz in binary frames). A `cid` the program does not contribute is `404`.
+- **Only the manager dials them** (`extmgr` `TranscriptionInfo` and `TranscriptionDial`), straight to the socket, with no credential and no `X-Persona-*` headers.
+  The apps' forward to an extension (`/api/v1/extensions/<id>/…`, the old `/api/v1/plugins/<id>/…`, and a computer's `…/-/machines/<mid>/…`) answers `404 not_found` for every path under
+  `/transcription/`, however it is spelled (escaped, another case, dot segments) and whatever the credential, `extensions.call:<id>` included.
+- **Which one transcribes**: the built-in voice extension's `gpt-live`, unless the owner names another in the assistant's `meeting_transcription_extension`
+  (`"<extension id>/<contribution id>"`): installing an extension never sends it meeting audio. A contribution is used only while its extension is enabled and running and
+  the contribution is not switched off ("Turning contributions on and off"); an extension started by requests is started for `/info`, as for any relayed request.
+- **A job is a request**: it holds the program's open request (`host.Proc.BeginHTTP`) until it ends, so an extension started by requests is not stopped mid-meeting.
+  The phone's audio socket to the manager, by contrast, does not count in the manager's open requests (`Manager.Serving`): a meeting never holds a redeploy, and the phone sends again from where the hub's audio ends.
+
 ## Built-in voice extension (`personad voice`)
 
 personad includes a kind = `voice` extension, using a real-time service speaking the **GPT-Live protocol** (code `server/internal/voice`, prompts
@@ -3386,8 +3649,12 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
   - **Prefer deletion on failure**: delete whether or not key-presence can be read (idempotent); unreadable presence still returns `secrets_cleared`. If deletion fails, save nothing, return 500 `secret_not_cleared`;
     if config save fails after deletion (database write failure, 409), the error also includes `secrets_cleared` and the old address remains. Invalid form config (400) changes nothing and keeps the key.
 - **Model fallback**: if the selected model's upstream disappears (address cleared, manager.json changed), no error/disconnect: use default model and voice, then send nonfatal `error{code: "model_unavailable"}` after connecting.
-- **`GET /info`**: `{"protocol": 2, "features": ["target", "runs", "asks", "resume", "suspend", "speak"], "setup"?: "…", "warnings"?: ["…"]}`, without keys or upstream list. `protocol` is the highest voice-frame version this extension speaks (2 since #3502; clients not sending `protocol: 2` in `start` still use protocol 1 from this section); `features` lists only implemented capabilities (`docs/assistant/voice.md` ("Version negotiation")).
+- **`GET /info`**: `{"protocol": 2, "features": ["target", "runs", "asks", "resume", "suspend", "speak", "meeting"], "setup"?: "…", "warnings"?: ["…"]}`, without keys or upstream list. `protocol` is the highest voice-frame version this extension speaks (2 since #3502; clients not sending `protocol: 2` in `start` still use protocol 1 from this section); `features` lists only implemented capabilities (`docs/assistant/voice.md` ("Version negotiation")).
 - **`POST /speak`** (#5004, feature `speak`): `{"text", "model"?, "voice"?, "lang"?}` read aloud in its own upstream session (no tools, instructions to say the text exactly as written); answers `200` `audio/pcm` with `X-Persona-Audio-Rate` and the reply's PCM16 as it comes, or, before any audio, `{"error", "code"}` with `400 bad_request`, `403 forbidden` (not a full device), `503 no_upstream`, `502 upstream_forbidden`, `503 upstream_unavailable`, `502 upstream_failed` or `504 no_audio`. The iPhone says meeting answers with it outside a call; details in `docs/assistant/voice.md` ("Reading a text aloud").
+- **Meeting calls** (#3862 phase 4, feature `meeting`): a protocol 2 `start` with `mode: "meeting"` and `recording_id`, bound to a recorded meeting's room, that hears only what the owner says while holding Talk (`talk` frames) and hands every question to the room; a room takes no other call (`meeting_room`). Details in `docs/assistant/voice.md` ("Meeting calls").
+- **Meeting transcription** (#3862 phase 5): the manifest also contributes `transcription: [{"id": "gpt-live", "name": "GPT-Live"}]` beside its voice (its kind stays `voice`), with the same upstreams and key.
+  It transcribes only through a GPT-Live (`live` dialect) upstream: the default model's when its upstream is one, else the first `live` upstream's default; with none,
+  `GET /transcription/gpt-live/info` says `setup: "live_upstream"`. See "Transcription" above and [meeting-minutes.md](../assistant/meeting-minutes.md) "The built-in adapter".
 - **Extension env vars**: `PERSONA_EXTENSION_CONFIG` (form values with defaults), `PERSONA_EXTENSION_SECRETS` (`{"key": "…"}`, decrypted only in process environment),
   `PERSONA_VOICE_HUB_CONFIG` (original `config` of the taken-over entry), entry `env`, and `PERSONA_HUB_URL` / `PERSONA_HUB_TOKEN` (manifest `hub_api`, as before);
   legacy `PERSONA_PLUGIN_*` names are also supplied and accepted.
