@@ -31,6 +31,7 @@ struct InboxHandOffNewAgentTests {
                 return try Self.decoded()
             },
             handOff: { _, _, _ in calls.sent += 1; return SessionKey(machineID: "server", sessionID: "main") },
+            record: { _, _, _, _, _ in },
             showMain: { _, _, _ in },
             plainToMain: { _ in calls.sent += 1; return SessionKey(machineID: "server", sessionID: "main") },
             startNew: { _ in calls.sent += 1; return SessionKey(machineID: "server", sessionID: "new") },

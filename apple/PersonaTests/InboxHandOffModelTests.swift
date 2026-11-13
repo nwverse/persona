@@ -55,6 +55,7 @@ struct InboxHandOffModelTests {
                 if !calls.failures.isEmpty { throw calls.failures.removeFirst() }
                 return Self.main
             },
+            record: { _, _, _, _, _ in },
             showMain: { calls.opened.append(($0, $1, $2)) },
             plainToMain: {
                 calls.asked.append($0)
