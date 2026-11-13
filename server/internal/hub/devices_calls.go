@@ -25,10 +25,8 @@ func (b *busNode) Call(ctx context.Context, method string, params, out any) erro
 	if caller, ok := callerOf(ctx); ok && caller != owner { // a manager's device.call, the machine moved since its check
 		return &rpc.Error{Code: devicewire.CodeNoDevice, Message: fmt.Sprintf("%s on machine %q: another manager's now", clip(method, 64), clip(b.id, 64))}
 	}
-	if owner == devicesOwner {
-		if err := b.h.waitDevices(ctx); err != nil {
-			return fmt.Errorf("%s: %w", b.id, err)
-		}
+	if err := b.h.waitDevicesFor(ctx, owner); err != nil { // the hub just started: its manager is on its way (bounded)
+		return fmt.Errorf("%s: %w", b.id, err)
 	}
 	raw, err := json.Marshal(params)
 	if err != nil {
