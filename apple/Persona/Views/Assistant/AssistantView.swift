@@ -205,7 +205,12 @@ struct AssistantView: View {
     }
 
     /// The drawer the page slides with: the shell's, or its own.
-    private var activeDrawer: AssistantDrawer { shell?.drawer ?? drawer }
+    private var activeDrawer: AssistantDrawer {
+        #if os(iOS)
+        if drawerPage, let unified { return unified.drawer } // the Sidebar layout's on a phone (#6332)
+        #endif
+        return shell?.drawer ?? drawer
+    }
 
     /// The stack's root page. Its own property so the stack's modifier chain stays within what Xcode 26.0 can
     /// type-check in time (#5333).
