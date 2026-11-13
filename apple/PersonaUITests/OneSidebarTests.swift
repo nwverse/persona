@@ -28,9 +28,8 @@ final class OneSidebarTests: XCTestCase {
         self.hub = hub
         XCUIDevice.shared.orientation = ProcessInfo.processInfo.environment["PERSONA_ORIENTATION"] == "landscape" ? .landscapeLeft : .portrait
         app = XCUIApplication()
-        // `agents.list.width` 0: the column at its default width, not one SplitDividerTests left dragged.
         app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-app.tab", "assistant", "-dev.openChat", "",
-                               "-dev.grouping", "repo", "-agents.list.closed", "NO", "-agents.list.width", "0"]
+                               "-dev.grouping", "repo", "-agents.list.closed", "NO"]
     }
 
     override func tearDown() {
@@ -80,7 +79,7 @@ final class OneSidebarTests: XCTestCase {
 
     @MainActor private func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
 
-    /// The column's width: its list, the collection view at the window's leading edge (as SplitDividerTests reads it).
+    /// The column's width: its list, the collection view at the window's leading edge (as SplitListTests reads it).
     @MainActor private func columnWidth() -> CGFloat {
         let window = app.windows.firstMatch.frame
         let list = app.collectionViews.allElementsBoundByIndex.first { $0.frame.minX < window.minX + 40 && $0.frame.width < window.width * 0.7 }

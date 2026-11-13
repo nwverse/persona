@@ -1002,3 +1002,13 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - `testhome` now resolves `GOENV`, `GOPATH`, `GOMODCACHE` and `GOCACHE` with the real home before swapping it and pins
   them. Anything else that reads the home directory for its own config (git, ssh, a CLI's login) has the same problem
   under testhome: pin what the child needs, or give the test its own config.
+- XCTest's own screenshots of an iPad held on its side come out wrong on the Xcode 27 simulator (2026-11-13, #4206):
+  `XCUIApplication.screenshot()` after `XCUIDevice.shared.orientation = .landscapeLeft` returns a landscape-sized image
+  with a black band across the top and the right edge cut off (`IPadLayoutTests`' landscape captures too). For evidence,
+  hold the state in the test and take `xcrun simctl io <udid> screenshot` from the host: the test writes a marker file
+  under `/tmp` and waits for a `.done` file that the host loop writes after capturing. In zsh, list the markers with
+  `find`, not a bare glob, which aborts the loop while the directory is still empty.
+- The performance mock keeps every `frames?name=` run of a test name until it restarts (2026-11-13, #4206): `PerfTestCase`'s
+  `reset` does not clear them, so a second run of the same test against the same mock reports the first run's frames
+  as well (`runs=11` for 5 iterations). Before comparing two builds, restart the mock (stop it by its port), or give each
+  build its own.

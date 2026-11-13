@@ -54,20 +54,6 @@ nonisolated enum Theme {
     }
     #endif
 
-    /// The handle on the line between a split's list and its page (#2624, `SplitDividerHandle`).
-    enum Split {
-        static let handle = Color.secondary.opacity(0.45)
-        static let handleHeld = Color.secondary.opacity(0.8)
-        /// Its touch area: narrow (what it takes from the list's and the page's edges), tall.
-        static let handleWidth: CGFloat = 28
-        static let handleHeight: CGFloat = 88
-        /// How far it moves before it is a drag; past the least width, how far until letting go closes the list; from
-        /// the page's edge, how far to the right brings the list back; a step of VoiceOver's adjust.
-        static let slop: CGFloat = 6
-        static let closesPast: CGFloat = 80
-        static let opensPast: CGFloat = 40
-        static let step: CGFloat = 40
-    }
 
     /// Orca-compatible workspace cards. Scoped to repository browsing, including nested selection surfaces.
     enum WorkspaceSidebar {
@@ -603,14 +589,13 @@ nonisolated enum Theme {
         static let headerTitle: CGFloat = 480
         /// The list column of a split on iPad: wide enough for the agents' cards and the inbox rows.
         static let sidebarMin: CGFloat = 340
-        /// The least an iPhone Duo's list column is dragged to (#2624): its open display is narrower than an iPad.
+        /// Narrower than any list column a split gives: one this narrow is still laying itself out (`SplitNavigation.notePosture`).
         static let sidebarMinPhone: CGFloat = 200
-        /// The open iPhone Duo's list column until one is dragged (#4206), upright over the page and on its side beside it:
-        /// as wide as ChatGPT's sidebar on the open Duo (320 of its 669 pt upright). The system's own was about 199 pt
-        /// upright and 239 on its side, too narrow for the one sidebar's rows.
+        /// The open iPhone Duo's list column, its one width (#4206), upright over the page and on its side beside it: as
+        /// wide as ChatGPT's sidebar on the open Duo (320 of its 669 pt upright, leaving the page most of its 951 pt on its
+        /// side). The system's own was about 199 pt upright and 239 on its side, too narrow for the one sidebar's rows.
         static let sidebarPhone: CGFloat = 320
-        /// What a split's page keeps beside its list column when the list is dragged wider (#2624).
-        static let splitDetailMin: CGFloat = 300
+        /// The iPad's list column, its one width (#4206); a Mac window's ideal.
         static let sidebar: CGFloat = 400
         static let sidebarMax: CGFloat = 480
         /// The narrowest column of a card grid (Machines' cards): two side by side in an iPad's detail column.
