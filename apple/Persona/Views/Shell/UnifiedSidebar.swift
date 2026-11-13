@@ -12,10 +12,14 @@ import SwiftUI
     var atRoot = true
     /// The place shown beside the sidebar (Inbox, To-dos, Machines…), its row shaded; nil for a conversation or an Agent.
     var shownPlace: ShellPage?
-    /// The Agents' Needs You section is on screen in the list, and, when it is not, whether it was scrolled past
-    /// (above) or not reached yet (below): the jump's arrow (`SidebarNeedsJump`).
-    var needsShown = false
+    /// How much of the Agents' Needs You section is on screen in the list (its heading and its rows, `NeedsAnchor`), and,
+    /// when none is, whether it was scrolled past (above) or not reached yet (below): the jump's arrow (`SidebarNeedsJump`).
+    private(set) var needsOnScreen = 0
     var needsAbove = false
+    var needsShown: Bool { needsOnScreen > 0 }
+
+    func needsAppeared() { needsOnScreen += 1 }
+    func needsGone() { needsOnScreen = max(0, needsOnScreen - 1) }
     #if os(iOS)
     /// The phone's drawer the column slides in from (#6332's iPhone layout; the iPad's column has none). Lazy (P3).
     @ObservationIgnored lazy var drawer = AssistantDrawer()
