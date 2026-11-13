@@ -27,10 +27,10 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
     val translated = rememberItemTranslation(record)
     var menu by remember { mutableStateOf(false) }
     val res = LocalResources.current
-    val nowText = inboxNowForRow(record, res, currentLocale)
-    val metaText = inboxRowMeta(record, res)
-    val oldPreview = item.summary?.takeIf { it.isNotBlank() } ?: translated?.preview?.ifBlank { null }
-        ?: record.doc?.let { listOf(docTypeName(res, it.type), item.preview).filter { s -> s.isNotBlank() }.joinToString(" · ") } ?: item.preview
+    val clock = LocalInboxClock.current
+    val zone = LocalInboxZone.current
+    val nowText = inboxNowForRow(record, res, currentLocale, now = clock(), zone = zone)
+    val metaText = inboxRowThirdLine(record, res, translated?.preview?.ifBlank { null })
     val oldMark = if (!done) eventMark(record) else null
     val nowMark = nowText?.let {
         EventMark.Now(it, inboxNowStatus(record.event.now), problem = record.event.now == "failed", accent = oldMark is EventMark.Suggests)
@@ -45,23 +45,30 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
     })
     val selecting = selection?.selecting == true
     JSwipeActions(end = inboxRowSwipe(doneLabel, done, busy, selecting, onDone)) {
-        MessageItem(sender = item.sender.orEmpty().ifBlank { item.title }, title = if (groupEvent) record.groupName ?: stringResource(R.string.inbox_kind_group)
-                else translated?.subject?.ifBlank { null } ?: item.title,
+        MessageItem(sender = item.sender.orEmpty().ifBlank { item.title }, title = translated?.subject?.ifBlank { null } ?: item.title,
             heading = item.title.takeIf { groupEvent },
             titleIcon = translated?.let { PhIcons.Translate }, titleIconLabel = translated?.let { stringResource(R.string.inbox_translated) },
             selected = isInboxItemSelected(LocalDetailKey.current, item.id, record.feedId),
             position = position, avatar = rememberLarkAvatar(record.avatar.takeIf { record.doc == null }, onlineSince), avatarIcon = record.doc?.let { docIcon(it.type) },
             // A hub connector's item is any connector's (#2726): a neutral mark and the hub's name for it, never a brand.
-            source = when { record.isConnector -> MessageSource.Other; record.feedId != null || record.source == "lark" -> MessageSource.Lark; else -> MessageSource.Mail },
-            sourceLabel = if (record.isConnector) record.sourceLabel
-                else stringResource(if (record.feedId != null || record.source == "lark") R.string.inbox_source_lark else R.string.inbox_source_mail),
-            group = record.groupName.takeIf { groupEvent },
-            time = item.updatedAt?.let { displayTime(it, currentLocale) },
-            // With where, this is only the AI summary; the meta line carries who and the latest words below it.
-            preview = if (metaText != null) item.summary?.takeIf { it.isNotBlank() } else oldPreview,
-            meta = metaText?.let {
-                MessageItemMeta(it, nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed", accent = oldMark is EventMark.Suggests)
+            source = when {
+                record.isConnector -> MessageSource.Other
+                record.feedId != null || record.source == "lark" -> MessageSource.Lark
+                record.isMail -> MessageSource.Mail
+                else -> MessageSource.Other
             },
+            sourceLabel = when {
+                record.isConnector -> record.sourceLabel
+                record.feedId != null || record.source == "lark" -> stringResource(R.string.inbox_source_lark)
+                record.isMail -> stringResource(R.string.inbox_source_mail)
+                else -> record.sourceLabel
+            },
+            group = record.groupName.takeIf { groupEvent },
+            time = item.updatedAt?.let { displayTime(it, currentLocale, zone) },
+            // Every row keeps title / AI summary / source-specific latest line, with or without where.
+            preview = item.summary?.takeIf { it.isNotBlank() },
+            meta = MessageItemMeta(metaText, nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
+                accent = oldMark is EventMark.Suggests),
             status = when { done -> null; item.isWorking || record.agent?.state in setOf("running", "queued") -> Status.Working
                 item.section == InboxTier.Action.wire -> Status.NeedsYou; else -> null },
             // The hub names its own sources Lark and Mail; the row already shows those as its source.
@@ -76,7 +83,7 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
                 record.localDelivery?.pendingStatus()?.let { PendingBadge(it) }
                     ?: record.localStatus?.let { InboxLocalStatus(it) }
                 // Meta carries a recognized shared state; without one, the old mark still has its own place below it.
-                if (metaText == null || nowMark == null) (nowMark ?: oldMark)?.let { EventRowMark(it) }
+                if (nowMark == null) oldMark?.let { EventRowMark(it) }
                 if (!done) AgentDraftCard(record, composers, navigator, repository = repository)
             })
     }

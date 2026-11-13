@@ -2,11 +2,16 @@ package persona.feature.inbox
 
 import android.content.res.Resources
 import androidx.annotation.StringRes
+import androidx.compose.runtime.compositionLocalOf
 import persona.core.contracts.InboxEventFields
 import persona.core.designsystem.Status
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
+
+/** The page's clock and zone, injectable for the shared showcase without changing production defaults. */
+internal val LocalInboxClock = compositionLocalOf<() -> Instant> { { Instant.now() } }
+internal val LocalInboxZone = compositionLocalOf<ZoneId> { ZoneId.systemDefault() }
 
 /**
  * The words for the hub's `now` key, from the shared table in spec/fixtures/inbox/now.json. An old hub or a key this
@@ -102,3 +107,36 @@ internal fun inboxRowMeta(where: String?, sender: String?, preview: String, res:
 internal fun inboxRowMeta(record: InboxRecord, res: Resources): String? =
     // The domain item mirrors event.where for search; the event fallback also supports records built from wire fields alone.
     inboxRowMeta(record.event.where ?: record.item.where, record.item.sender, record.item.preview, res)
+
+private fun senderPreview(sender: String, preview: String, res: Resources) =
+    if (preview.isBlank()) sender else res.getString(R.string.inbox_row_sender, sender, preview)
+
+/** The source-specific third line used before `where` existed (iOS InboxRow.from / web fromLine). */
+internal fun inboxLegacyRowMeta(record: InboxRecord, res: Resources, translatedPreview: String? = null): String {
+    val item = record.item
+    val sender = item.sender.orEmpty()
+    return when {
+        record.source == "assistant" -> item.preview
+        record.doc != null -> listOf(docTypeName(res, record.doc.type), item.preview).filter { it.isNotBlank() }.joinToString(" · ")
+        record.moment != null -> senderPreview(sender, item.preview, res)
+        record.connector != null -> {
+            val reference = record.connector.thread.takeIf { it.contains('#') }
+            val who = if (sender.isBlank()) item.preview else senderPreview(sender, item.preview, res)
+            listOfNotNull(reference, who.takeIf { it.isNotBlank() }).joinToString(" · ")
+        }
+        !translatedPreview.isNullOrBlank() && sender.isNotBlank() -> senderPreview(sender, translatedPreview, res)
+        sender.isBlank() || record.isLark && record.isGroup == false -> item.preview
+        else -> senderPreview(sender, item.preview, res)
+    }
+}
+
+private fun repeatsSummary(record: InboxRecord): Boolean {
+    val summary = record.item.summary?.trim().orEmpty()
+    val preview = record.item.preview.trim()
+    if (summary.isEmpty()) return false
+    return preview == summary || record.source == "assistant" && preview.startsWith(summary)
+}
+
+/** Every row's third line, including an older hub. Empty only when it would repeat the summary above it. */
+internal fun inboxRowThirdLine(record: InboxRecord, res: Resources, translatedPreview: String? = null): String =
+    if (repeatsSummary(record)) "" else inboxRowMeta(record, res) ?: inboxLegacyRowMeta(record, res, translatedPreview)

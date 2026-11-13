@@ -106,6 +106,24 @@ class InboxFollowTest {
         assertEquals(EventMark.Working(R.string.inbox_handling_looking), eventMark(future))
     }
 
+    @Test fun legacyThirdLinesKeepEachSourcesOwnShape() {
+        val res = languages.first().resources
+        val item = InboxItem("x", kind = "group", sender = "Alex", preview = "Can we move it?")
+        val group = InboxRecord(item, source = "lark", isGroup = true)
+        assertEquals("Alex: Can we move it?", inboxRowThirdLine(group, res))
+        assertEquals("Can we move it?", inboxRowThirdLine(group.copy(isGroup = false), res))
+        assertEquals("Alex: Translated", inboxRowThirdLine(group.copy(source = "mail"), res, translatedPreview = "Translated"))
+        val document = group.copy(doc = InboxDocRef("https://example.com/doc", type = "docx"))
+        assertEquals("${docTypeName(res, "docx")} · Can we move it?", inboxRowThirdLine(document, res))
+        assertEquals("Alex: Can we move it?", inboxRowThirdLine(group.copy(moment = InboxMomentRef("post")), res))
+        val connector = group.copy(source = "code", connector = InboxConnectorRef("example-org/example-repo#12"))
+        assertEquals("example-org/example-repo#12 · Alex: Can we move it?", inboxRowThirdLine(connector, res))
+        assertEquals("Alex: Can we move it?", inboxRowThirdLine(connector.copy(connector = InboxConnectorRef("opaque-id")), res))
+        val assistant = InboxRecord(item.copy(summary = "Summary", preview = "Summary and more"), source = "assistant")
+        assertEquals("", inboxRowThirdLine(assistant, res))
+        assertEquals("", inboxRowThirdLine(group.copy(item = item.copy(summary = item.preview)), res))
+    }
+
     @Test fun doneWordsOnlyAppearOnADoneItemAndKeepTheirTone() {
         val language = languages.first()
         val open = InboxRecord(InboxItem("open"), event = InboxEventFields(now = "done_user"))

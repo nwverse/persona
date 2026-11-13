@@ -172,15 +172,18 @@ fun MessageItem(
                     }
                 }
                 meta?.let { line ->
-                    if (preview != null) Spacer(Modifier.height(Tokens.Space.xs))
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                        Text(line.text, Modifier.weight(1f), style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        line.state?.let {
-                            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    if (line.text.isNotBlank() || line.state != null) {
+                        if (preview != null) Spacer(Modifier.height(Tokens.Space.xs))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                            if (line.text.isNotBlank()) Text(line.text, Modifier.weight(1f),
+                                style = if (preview == null) type.callout else type.caption, color = palette.ink2,
+                                maxLines = if (preview == null && line.state == null) 2 else 1, overflow = TextOverflow.Ellipsis)
+                            else Spacer(Modifier.weight(1f))
+                            line.state?.let {
                                 if (line.accent) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                                     JIcon(PhIcons.Sparkle, null, size = Tokens.Space.m, tint = palette.accent, decorative = true)
-                                    Text(it, style = type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
-                                } else JStateLabel(it, line.status, problem = line.problem)
+                                    Text(it, style = type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
+                                } else JStateLabel(it, line.status, problem = line.problem, overflow = TextOverflow.Clip)
                             }
                         }
                     }
