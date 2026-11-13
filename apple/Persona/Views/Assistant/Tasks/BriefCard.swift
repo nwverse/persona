@@ -194,12 +194,6 @@ private struct BriefSetupRow: View {
         HStack(spacing: Theme.Space.m) {
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(line.text).font(Theme.Font.secondary)
-                if line.isOnTheWebOnly {
-                    Text("That page is in the web app's settings for Persona.")
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("brief.setup.web.\(line.id)")
-                }
             }
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)

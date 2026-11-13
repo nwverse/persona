@@ -627,6 +627,10 @@ extension Theme {
         static let addedReminder = "checklist.checked"
         /// Kinds of tasks that start without asking first (Start These Directly).
         static let taskTrust = "bolt.shield"
+        /// A go-ahead the owner gave for future tasks on one computer and folder (Standing Authorizations, #7002).
+        static let standingAuthorization = "shield.lefthalf.filled.badge.checkmark"
+        /// Taking such a go-ahead back (Revoke).
+        static let revoke = "xmark.shield"
         /// A plan the assistant handed the user (the plan card).
         static let taskPlan = "list.clipboard"
         /// Saying something straight to a task (Message, and Message “xx”).

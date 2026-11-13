@@ -3037,7 +3037,28 @@ RULE_SUGGESTIONS = {
         "scope": {}, "creates": "", "setting": "agents.delegate", "count": 3},
 } if os.environ.get("MOCK_RULE_SUGGESTIONS") == "1" else {}
 RULE_SUGGESTIONS_ANSWERED = set()  # answered with Always or Not now
-RULE_GRANTS = []  # the standing authorizations Always granted, as GET /api/v1/assistant/standing-authorizations lists them
+# MOCK_STANDING_AUTHORIZATIONS=1: two synthetic standing authorizations to list and revoke (#7002); =forbidden: this
+# device has no full access (403); =fail: every revoke fails (503), so the apps put the row back.
+STANDING_MODE = os.environ.get("MOCK_STANDING_AUTHORIZATIONS", "")
+
+
+def standing_seed():
+    """The standing authorizations a fresh mock hub has: none, or MOCK_STANDING_AUTHORIZATIONS' two."""
+    if STANDING_MODE not in ("1", "fail"):
+        return []
+    return [
+        {"id": "sa_mock_weather", "machine_id": "macbook", "directory": "/Users/me/code/weather",
+         "actions": ["merge", "deploy-test"], "conditions": ["ci_green", "no_conflicts"],
+         "quote": "Merge the weather app and put it on the test site when the checks pass. No need to ask me.",
+         "source": "Main conversation", "granted_at": ago(days=3), "reversible": True},
+        {"id": "sa_mock_blog", "machine_id": "server", "directory": "/home/me/projects/blog",
+         "actions": ["push"], "conditions": ["Only the branch I reviewed"],
+         "quote": "Push the blog changes yourself once I've looked at them.",
+         "source": "Main conversation", "granted_at": ago(days=12), "reversible": False},
+    ]
+
+
+RULE_GRANTS = standing_seed()  # the standing authorizations, as GET /api/v1/assistant/standing-authorizations lists them; Always adds one
 RULE_GRANTS_REVISION = [1]
 RULE_TRUST_ADDED = set()  # the tasks.trust keys Always added, which /mock/reset takes away again
 RULE_SUGGESTION_ON = {"todo_review": "rs_mock_merge", "ix_tests": "rs_mock_delegate", "plan_mock_3": "rs_mock_start"}
@@ -3058,17 +3079,23 @@ def suggested_plan(plan):
 def rule_suggestions_area(h, method, p):
     """POST /api/v1/assistant/rule-suggestions/{id}/always | not-now (MOCK_RULE_SUGGESTIONS=1), and the standing
     authorizations Always granted: GET /api/v1/assistant/standing-authorizations lists them, DELETE …/{id} revokes one."""
-    if RULE_SUGGESTIONS and p == "/api/v1/assistant/standing-authorizations" and method == "GET":
+    standing = RULE_SUGGESTIONS or STANDING_MODE
+    if standing and p.startswith("/api/v1/assistant/standing-authorizations") and STANDING_MODE == "forbidden":
+        h.send_json({"error": "Full access is required.", "code": "forbidden"}, 403)  # as the hub, for a device without the full role
+        return True
+    if standing and p == "/api/v1/assistant/standing-authorizations" and method == "GET":
         h.send_json({"revision": RULE_GRANTS_REVISION[0], "authorizations": RULE_GRANTS})
         return True
-    if RULE_SUGGESTIONS and p.startswith("/api/v1/assistant/standing-authorizations/") and method == "DELETE":
-        kept = [g for g in RULE_GRANTS if g["id"] != unquote(p.rsplit("/", 1)[1])]
-        if len(kept) == len(RULE_GRANTS):
-            h.send_json({"error": "not found", "code": "not_found"}, 404)
+    if standing and p.startswith("/api/v1/assistant/standing-authorizations/") and method == "DELETE":
+        if STANDING_MODE == "fail":
+            h.send_json({"error": "Synthetic storage failure"}, 503)
             return True
-        RULE_GRANTS[:] = kept
-        RULE_GRANTS_REVISION[0] += 1
-        h.send_json({"revision": RULE_GRANTS_REVISION[0], "authorizations": RULE_GRANTS})
+        # As the hub: ok with the revision, also for one that is gone already (the revision moves only on a removal).
+        kept = [g for g in RULE_GRANTS if g["id"] != unquote(p.rsplit("/", 1)[1])]
+        if len(kept) != len(RULE_GRANTS):
+            RULE_GRANTS[:] = kept
+            RULE_GRANTS_REVISION[0] += 1
+        h.send_json({"ok": True, "revision": RULE_GRANTS_REVISION[0]})
         return True
     m = re.fullmatch(r"/api/v1/assistant/rule-suggestions/([^/]+)/(always|not-now)", p)
     if not m or method != "POST":
@@ -23244,7 +23271,7 @@ class H(BaseHTTPRequestHandler):
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
             COOKIES_FAILED[0] = False  # MOCK_COOKIES_FAIL: the next read fails again
             # MOCK_RULE_SUGGESTIONS: every suggestion is offered again, and what Always made is gone (web/e2e/rule-suggestions.mjs)
-            RULE_SUGGESTIONS_ANSWERED.clear(); del RULE_GRANTS[:]; RULE_GRANTS_REVISION[0] = 1
+            RULE_SUGGESTIONS_ANSWERED.clear(); RULE_GRANTS[:] = standing_seed(); RULE_GRANTS_REVISION[0] = 1
             if MOCK_TASKS and RULE_TRUST_ADDED:
                 TASK_TRUST[:] = [k for k in TASK_TRUST if k["key"] not in RULE_TRUST_ADDED]
                 RULE_TRUST_ADDED.clear()
@@ -26231,6 +26258,8 @@ MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feat
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
 MOCK_HELP.append("MOCK_RULE_SUGGESTIONS=1  A standing rule suggested after the same answer three times (#5802): on the PR check's decision "
                  "(with MOCK_TODO_ASKS=1), on the network tests' question card and, with MOCK_TASKS=1, on the open plan; Always and Not now answer it")
+MOCK_HELP.append("MOCK_STANDING_AUTHORIZATIONS=1  Two synthetic standing authorizations to list and revoke (#7002); "
+                 "=forbidden answers 403 (no full access), =fail makes every revoke fail (503)")
 MOCK_HELP.append("MOCK_ASK_HELD=1  With MOCK_TODO_ASKS=1: the PR check's decision is held for the next briefing (for_briefing, #5803)")
 MOCK_HELP.append("MOCK_BRIEF_SETUP=1  With MOCK_TASKS=1: the morning briefing carries the week's recommended setup lines (#5804)")
 MOCK_HELP.append("MOCK_SUPERVISE_LISTED=1  The model catalog lists assistant.supervise itself and every built-in purpose has a description (#5806)")

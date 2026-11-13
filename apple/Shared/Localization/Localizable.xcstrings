@@ -18984,6 +18984,29 @@
       },
       "extractionState" : "manual"
     },
+    "All checks pass [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All checks pass"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのチェックに合格"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有检查通过"
+          }
+        }
+      }
+    },
     "All commands in this conversation" : {
       "localizations" : {
         "en" : {
@@ -24634,6 +24657,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "认证没通过"
+          }
+        }
+      }
+    },
+    "Authorization revoked" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authorization revoked"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "承認を取り消しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已撤销授权"
           }
         }
       }
@@ -38840,6 +38886,29 @@
         }
       }
     },
+    "Computer [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Computer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピューター"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑"
+          }
+        }
+      }
+    },
     "Computer confirmed" : {
       "localizations" : {
         "en" : {
@@ -44960,6 +45029,29 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't load standing authorizations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't load standing authorizations"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "継続的な承認を読み込めませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载长期授权"
+          }
+        }
+      }
+    },
     "Couldn't load the Outlook sign-in settings: %@" : {
       "localizations" : {
         "en" : {
@@ -46615,6 +46707,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Couldn't revoke this authorization. It's still in effect. Check the connection and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't revoke this authorization. It's still in effect. Check the connection and try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この承認を取り消せませんでした。承認はまだ有効です。接続を確認して、もう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能撤销这条授权，它仍然有效。检查网络后再试一次。"
+          }
+        }
+      }
     },
     "Couldn't run on %@; nothing was executed" : {
       "localizations" : {
@@ -50683,6 +50798,29 @@
       },
       "extractionState" : "manual"
     },
+    "Delete data [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete data"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "データを削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除数据"
+          }
+        }
+      }
+    },
     "Delete data saved from %@?" : {
       "localizations" : {
         "en" : {
@@ -51785,6 +51923,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Deploy to a test environment [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deploy to a test environment"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "テスト環境にデプロイ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部署到测试环境"
+          }
+        }
+      }
+    },
+    "Deploy to production [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deploy to production"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本番環境にデプロイ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部署到生产环境"
+          }
+        }
+      }
     },
     "Deployed [Closeout]" : {
       "extractionState" : "manual",
@@ -62347,6 +62531,29 @@
       },
       "extractionState" : "manual"
     },
+    "Folder [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Folder"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件夹"
+          }
+        }
+      }
+    },
     "Folder [Task Views 52daa7]" : {
       "localizations" : {
         "en" : {
@@ -63539,6 +63746,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "開始"
+          }
+        }
+      }
+    },
+    "From [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出典"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来源"
           }
         }
       }
@@ -65127,6 +65357,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Granted [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Granted"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "承認日時"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "授予时间"
+          }
+        }
+      }
     },
     "Green" : {
       "extractionState" : "manual",
@@ -69399,6 +69652,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "目录：%@"
+          }
+        }
+      }
+    },
+    "In %@ on %@ [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In %1$@ on %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@ の %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@ 上的 %1$@"
           }
         }
       }
@@ -75989,6 +76265,29 @@
       },
       "extractionState" : "manual"
     },
+    "Lasts [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lasts"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有効期間"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有效期"
+          }
+        }
+      }
+    },
     "Latency %@ ms" : {
       "localizations" : {
         "en" : {
@@ -82480,6 +82779,29 @@
         }
       }
     },
+    "Merge changes [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merge changes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更をマージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合入改动"
+          }
+        }
+      }
+    },
     "Merge into %@" : {
       "localizations" : {
         "en" : {
@@ -86923,6 +87245,29 @@
       },
       "extractionState" : "manual"
     },
+    "Needs full access [Standing Authorizations]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needs full access"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フルアクセスが必要です"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要完整访问权限"
+          }
+        }
+      }
+    },
     "Needs manual cleanup" : {
       "localizations" : {
         "en" : {
@@ -90324,6 +90669,29 @@
       },
       "extractionState" : "manual"
     },
+    "No [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "いいえ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "否"
+          }
+        }
+      }
+    },
     "No access to Photos. In Settings › Persona › Photos, allow “Add Photos Only”." : {
       "localizations" : {
         "en" : {
@@ -90369,6 +90737,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "No actions recorded [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No actions recorded"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "操作の記録なし"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有登记动作"
+          }
+        }
+      }
     },
     "No activity yet" : {
       "localizations" : {
@@ -91054,6 +91445,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "コンピューターはまだありません"
+          }
+        }
+      }
+    },
+    "No conditions [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No conditions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "条件なし"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有条件"
           }
         }
       }
@@ -91860,6 +92274,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "No merge conflicts [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No merge conflicts"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マージの競合なし"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有合并冲突"
+          }
+        }
+      }
     },
     "No message is resent; the same request may be refused again." : {
       "extractionState" : "manual",
@@ -100742,6 +101179,29 @@
         }
       }
     },
+    "Only a device with full access can see and revoke standing authorizations." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only a device with full access can see and revoke standing authorizations."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "継続的な承認の確認と取り消しは、フルアクセスのあるデバイスでのみ行えます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有拥有完整访问权限的设备才能查看和撤销长期授权。"
+          }
+        }
+      }
+    },
     "Only applies to Lark /agent, not other Agents. Empty fields follow Agents. Changing the provider clears the previous model and thinking effort. Choose Follow Agents and save to clear the independent settings." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -101381,6 +101841,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "只保存“提及你”和“你发出的消息”两条规则留下的内容，不管其他规则怎么设。"
+          }
+        }
+      }
+    },
+    "Only when [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only when"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次の場合のみ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅在以下情况"
+          }
+        }
+      }
+    },
+    "Only when: %@ [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only when: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "条件：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅当：%1$@"
           }
         }
       }
@@ -106963,6 +107469,29 @@
         }
       }
     },
+    "Persona asks you before it merges, pushes, deploys, sends messages, deletes data or spends money. When you tell it in a chat to always go ahead somewhere, that go-ahead is listed here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona asks you before it merges, pushes, deploys, sends messages, deletes data or spends money. When you tell it in a chat to always go ahead somewhere, that go-ahead is listed here."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona は、マージ、プッシュ、デプロイ、メッセージの送信、データの削除、支払いの前にあなたに確認します。チャットで「今後はそのまま進めてよい」と伝えると、その承認がここに表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 在合入、推送、部署、发消息、删除数据或花钱之前，都会先问你。你在对话里让它以后在某处直接做，这条授权就会列在这里。"
+          }
+        }
+      }
+    },
     "Persona assistant (Claude on the hub)" : {
       "localizations" : {
         "en" : {
@@ -107261,6 +107790,29 @@
         }
       }
     },
+    "Persona checks these itself each time. If it can't, it asks you as usual." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona checks these itself each time. If it can't, it asks you as usual."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona は毎回これらを自分で確認します。確認できないときは、いつもどおりあなたに尋ねます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 每次都会自己检查这些条件；检查不了时，照常先问你。"
+          }
+        }
+      }
+    },
     "Persona couldn't answer in time. Try again." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -107395,6 +107947,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Persona には何も聞こえませんでした。話している間は「話す」を押し続けてください。"
+          }
+        }
+      }
+    },
+    "Persona does these without asking you first, until you revoke them. Swipe left on one to revoke it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona does these without asking you first, until you revoke them. Swipe left on one to revoke it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り消すまで、Persona はこれらを確認せずに行います。取り消すには左にスワイプします。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在你撤销之前，Persona 做这些事不会先问你。向左轻扫一条即可撤销。"
           }
         }
       }
@@ -108056,6 +108631,29 @@
         }
       }
     },
+    "Persona may do this without asking" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona may do this without asking"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が確認なしで行えること"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 可以不问你直接做"
+          }
+        }
+      }
+    },
     "Persona needs a working model to answer. Pick one of two ways:" : {
       "localizations" : {
         "en" : {
@@ -108491,6 +109089,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Persona will ask you again before it does this in %@ on %@: %@. Work already done isn't affected. To grant it again, ask Persona in the main chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona will ask you again before it does this in %1$@ on %2$@: %3$@. Work already done isn't affected. To grant it again, ask Persona in the main chat."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今後 %2$@ の %1$@ で%3$@を行う前に、Persona はもう一度あなたに確認します。すでに完了した作業には影響しません。もう一度承認するには、メインチャットで Persona に頼んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以后在 %2$@ 上的 %1$@ 里%3$@之前，Persona 会重新先问你。已经做完的工作不受影响。想再次授权，在主对话里告诉 Persona。"
+          }
+        }
+      }
     },
     "Persona will use %@ from the next message" : {
       "localizations" : {
@@ -112104,6 +112725,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Push changes [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Push changes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更をプッシュ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送改动"
+          }
+        }
+      }
     },
     "Push the fix to beta?" : {
       "extractionState" : "manual",
@@ -121305,6 +121949,75 @@
         }
       }
     },
+    "Revoke Authorization" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revoke Authorization"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "承認を取り消す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销授权"
+          }
+        }
+      }
+    },
+    "Revoke Authorization…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revoke Authorization…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "承認を取り消す…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销授权…"
+          }
+        }
+      }
+    },
+    "Revoke [Standing Authorizations]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revoke"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り消す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销"
+          }
+        }
+      }
+    },
     "Revoke and Unpair" : {
       "localizations" : {
         "en" : {
@@ -121327,6 +122040,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Revoke this authorization?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revoke this authorization?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この承認を取り消しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销这条授权？"
+          }
+        }
+      }
     },
     "Revoke this permission?" : {
       "localizations" : {
@@ -121395,6 +122131,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Revoke… [Standing Authorizations]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revoke…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り消す…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销…"
+          }
+        }
+      }
     },
     "Revoking stops the current response to clear its permissions. Send another message to continue." : {
       "localizations" : {
@@ -127828,6 +128587,29 @@
       },
       "extractionState" : "manual"
     },
+    "Send messages [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send messages"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージを送信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送消息"
+          }
+        }
+      }
+    },
     "Send or clear the current draft before restoring the older one." : {
       "localizations" : {
         "en" : {
@@ -133566,6 +134348,29 @@
         }
       }
     },
+    "Since %@ [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Since %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ から"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 起"
+          }
+        }
+      }
+    },
     "Since a Commit" : {
       "localizations" : {
         "en" : {
@@ -134968,6 +135773,29 @@
       },
       "extractionState" : "manual"
     },
+    "Spend money [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spend money"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "支払い"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "花钱"
+          }
+        }
+      }
+    },
     "Spent Today [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -135303,25 +136131,71 @@
       },
       "extractionState" : "manual"
     },
-    "Standing authorization added. It is listed, and removed, in the web app's settings for Persona, under Standing authorizations." : {
+    "Standing Authorization" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Standing authorization added. It is listed, and removed, in the web app's settings for Persona, under Standing authorizations."
+            "value" : "Standing Authorization"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "継続的な承認を追加しました。Web 版の設定の Persona ページにある「継続的な承認」で確認・削除できます。"
+            "value" : "継続的な承認"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "长期授权已添加。可以在网页版「设置」的 Persona 页的「长期授权」里查看和移除。"
+            "value" : "长期授权"
+          }
+        }
+      }
+    },
+    "Standing Authorizations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standing Authorizations"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "継続的な承認"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "长期授权"
+          }
+        }
+      }
+    },
+    "Standing authorization added. It is listed, and revoked, in the assistant's profile under Standing Authorizations." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standing authorization added. It is listed, and revoked, in the assistant's profile under Standing Authorizations."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "継続的な承認を追加しました。アシスタントのプロフィールの「継続的な承認」で確認・取り消しできます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "长期授权已添加。可以在助手资料的「长期授权」里查看和撤销。"
           }
         }
       }
@@ -143837,29 +144711,6 @@
         }
       },
       "extractionState" : "manual"
-    },
-    "That page is in the web app's settings for Persona." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "That page is in the web app's settings for Persona."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "このページは Web 版の Persona の設定にあります。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "这一页在网页版「设置」的 Persona 页里。"
-          }
-        }
-      }
     },
     "That setting isn't valid, so nothing was saved." : {
       "extractionState" : "manual",
@@ -164704,6 +165555,29 @@
         }
       }
     },
+    "Until you revoke it" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Until you revoke it"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り消すまで"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直到你撤销"
+          }
+        }
+      }
+    },
     "Untitled To-do" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -173199,6 +174073,29 @@
         }
       }
     },
+    "Where [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Where"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "場所"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在哪里"
+          }
+        }
+      }
+    },
     "Where each source comes from, how it's read and where it goes. Tap one to see its whole path." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -173336,6 +174233,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Whether what Persona does with this can be undone. The authorization itself can always be revoked." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Whether what Persona does with this can be undone. The authorization itself can always be revoked."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この承認で Persona が行った作業を元に戻せるかどうかです。承認そのものはいつでも取り消せます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "指 Persona 据此做的事能不能撤回。授权本身随时都能撤销。"
+          }
+        }
+      }
     },
     "Which computers can run it and get its key." : {
       "extractionState" : "manual",
@@ -174291,6 +175211,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Work Can Be Undone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Work Can Be Undone"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作業を元に戻せる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作能撤回"
+          }
+        }
+      }
     },
     "Work Computers" : {
       "extractionState" : "manual",
@@ -175486,6 +176429,29 @@
       }
     },
     "Yes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "はい"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是"
+          }
+        }
+      }
+    },
+    "Yes [Standing Authorization]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -176769,6 +177735,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Your words [Standing Authorization]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your words"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "承認時の発言"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的原话"
+          }
+        }
+      }
     },
     "Zipping on the computer…" : {
       "extractionState" : "manual",
@@ -178337,6 +179326,75 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "delete data [Standing Authorization phrase]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "delete data"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "データの削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除数据"
+          }
+        }
+      }
+    },
+    "deploy to a test environment [Standing Authorization phrase]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "deploy to a test environment"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "テスト環境へのデプロイ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部署到测试环境"
+          }
+        }
+      }
+    },
+    "deploy to production [Standing Authorization phrase]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "deploy to production"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本番環境へのデプロイ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部署到生产环境"
+          }
+        }
+      }
     },
     "deployed [Closeout]" : {
       "extractionState" : "manual",
@@ -179963,6 +181021,29 @@
         }
       }
     },
+    "merge changes [Standing Authorization phrase]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "merge changes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更のマージ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合入改动"
+          }
+        }
+      }
+    },
     "merged [Closeout]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -180490,6 +181571,29 @@
       },
       "extractionState" : "manual"
     },
+    "push changes [Standing Authorization phrase]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "push changes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更のプッシュ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送改动"
+          }
+        }
+      }
+    },
     "push.unavailable" : {
       "comment" : "Background push status",
       "extractionState" : "manual",
@@ -180787,6 +181891,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "取り消し済み"
+          }
+        }
+      }
+    },
+    "send messages [Standing Authorization phrase]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "send messages"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージの送信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送消息"
           }
         }
       }
@@ -181320,6 +182447,29 @@
         }
       }
     },
+    "settings.search.standing_authorizations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "standing authorizations permissions go-ahead always allowed revoke merge push deploy"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "継続的な承認 承認 権限 常に許可 取り消し マージ プッシュ デプロイ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "长期授权 授权 权限 一直允许 撤销 合并 推送 部署"
+          }
+        }
+      }
+    },
     "settings.search.storage" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -181455,6 +182605,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "チャット"
+          }
+        }
+      }
+    },
+    "spend money [Standing Authorization phrase]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "spend money"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "支払い"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "花钱"
           }
         }
       }

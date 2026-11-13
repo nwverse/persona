@@ -1579,7 +1579,7 @@ and can wait and in progress when there are any.
   | `triage_decide`, `triage_auto_continue`, `triage_wake` | Settings › Session Triage (`SettingsPage.triage`) |
   | `supervisor_tier` | Settings › Models › the background supervisor's use (`ModelPurposeRoute`) |
   | `task_trust` | no button: a kind of task is remembered with a plan card's own checkbox, as the line says; Auto-Start Tasks only lists and removes them |
-  | `standing_authorizations` | no button: the line names a page of Settings that only the web app has, so the row adds "That page is in the web app's settings for Persona." (`BriefBody.Setup.isOnTheWebOnly`) |
+  | `standing_authorizations` | Assistant Profile › Standing Authorizations (`SettingsPage.standingAuthorizations`, after `SettingsPage.assistant`, so Back goes to the profile; #7002) |
   | `leaders`, `review_sample`, `delegate`, `independent_review`, a newer one | no button: the app has no page for it, and the line itself says where it is turned on |
 
   The hub's `link` is the web app's page and is not used. A hub from before sends no `setup` and the card is as it was.
@@ -1761,6 +1761,35 @@ switch and the model use are there without it, and `MOCK_LEGACY_HUB=1` has none 
 `MOCK_SUPERVISE_LISTED=1` is a hub since #5806: the catalog lists the use and every built-in use has a description.
 Tests: `BackgroundSupervisorTests`, and `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` against the mock hub.
 
+## Standing authorizations (#7002)
+
+The web's Settings › Assistant › Standing authorizations (`docs/web/web.md`, "Standing authorizations") on iPhone and
+iPad, in the assistant's profile: **Assistant Profile › On Its Own › Standing Authorizations**, after Auto-Start Tasks,
+with how many there are. Settings search finds it (`SettingsPage.standingAuthorizations`), and the briefing's setup line
+for `standing_authorizations` opens it. The frozen Mac app compiles the same views.
+
+- **Who it is for**: anyone who said "always go ahead" to an Agent's merge, push, deploy, send, delete or spend. A row
+  reads as a sentence: the actions in the web's words ("Merge changes and deploy to a test environment"), "In
+  weather on MacBook" (the folder's name and the computer's), then the conditions and the day it was granted. The full
+  folder, the owner's own words, the source and whether the authorized work can be undone are on the grant's page,
+  with **Lasts: Until you revoke it** (grants have no expiry). Unknown actions and conditions show as the hub wrote
+  them (`StandingAuthorizationText`).
+- **Requests**: `GET /api/v1/assistant/standing-authorizations` and `DELETE …/{id}` through the client of the assistant
+  the page first read for (`StandingAuthorizationsModel`, `currentAssistantSettings`). A 403 says only a device with
+  full access can see them; any other failure shows Retry, and a failed refresh with the list on screen is a toast.
+- **Revoke**: a trailing swipe, the row's menu or the grant's page, always behind a confirmation dialog that names the
+  scope, says done work is unaffected and that a new grant is asked for in the main chat (destructive **Revoke
+  Authorization** and Cancel; section 4.4 of `docs/design/DESIGN_SYSTEM.md`). Confirmed, the row leaves the list at
+  once (the grant's page closes first); a failed DELETE puts it back where it was with a toast saying it is still in
+  effect, and a read while the DELETE is out leaves it out. There is no Undo: the hub has no route to restore a grant,
+  and an old id can't be added again.
+- **Mock hub**: `MOCK_STANDING_AUTHORIZATIONS=1` seeds two synthetic grants (`MOCK_STANDING_AUTHORIZATIONS=forbidden`
+  answers 403, `=fail` makes every DELETE fail); with `MOCK_RULE_SUGGESTIONS=1`, Always adds one. DELETE answers as the
+  hub does, `{"ok":true,"revision"}`. Debug launch: `-openAssistantPage standing`.
+- **Tests**: `StandingAuthorizationsTests` (decoding, words, the model's read, revoke and rollback with `FakeHub`) and
+  `StandingAuthorizationsUITests` against the mock hub (list, page, confirmation, revoke; light / dark shots with
+  `TEST_RUNNER_PERSONA_SHOTS`).
+
 ## Suggested standing rule and held decisions (#5802, #5803)
 
 The Apple part of two follow-ups of `docs/design/proposals/main-chat-availability.md`, on iPhone, iPad, Mac and Vision
@@ -1786,8 +1815,7 @@ question a supervisor passed up. `RuleSuggestionLine` draws it as one quiet line
 - **Two buttons**, single-line: **Not Now** and **Always**
   (`POST /api/v1/assistant/rule-suggestions/{id}/not-now` / `always`). While one is out, neither takes a tap.
 - **After Always** the line becomes what was made and where it is listed and removed: Auto-Start Tasks in the
-  assistant's profile; for a standing authorization, the web app's settings for Persona (the Apple apps have no list
-  of them); for `delegate`, that nothing was stored or turned on and that it is turned on in the assistant's
+  assistant's profile; for a standing authorization, Standing Authorizations in the assistant's profile (#7002); for `delegate`, that nothing was stored or turned on and that it is turned on in the assistant's
   configuration file on the hub's computer, with the key in brackets, as the hub's recommended-setup line for the
   same mechanism words it. The result is kept by card with the suggestion it answered
   (`RuleSuggestions.made`), so it stays when the hub sends the card again without the line. A to-do's card is its
