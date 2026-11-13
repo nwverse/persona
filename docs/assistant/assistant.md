@@ -801,7 +801,7 @@ Why archive and not delete or hide in place: the old conversation's id is what o
 `former` keeps the last 10 main conversations put away, by New main chat and Clear context alike: someone who clears often pushes older ones out sooner, and those are then ordinary archived conversations (still listed while their machine lists them, still found by id).
 Why no confirmation: nothing is lost (`docs/design/DESIGN_SYSTEM.md` 4.4, the reversible rung), and Cindy's `/clear` asks nothing either. "New main chat…" stays for carrying a summary over.
 
-iOS and Android do not offer it yet (#5100).
+Android offers it in the main chat's title menu and as `/clear` in its composer (#5100, `docs/android/android.md`); iOS does not yet.
 ## Scheduled tasks
 
 Previously two systems: routines (daily time) and follow-ups (one-shot wakeups from `schedule_followup`), in separate settings;

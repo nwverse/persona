@@ -357,6 +357,7 @@ export function docTypeName(type?: string): string {
 /** Who wrote what: the row's line under the summary (or its second line before triage); `preview` is the hub's
  * translation of a foreign mail's when it is shown. */
 export function fromLine(it: InboxItem, preview?: string): string {
+  if (it.source === "assistant") return it.preview; // the assistant's own row: the tag already says who, so no "Assistant:" prefix
   if (it.doc) return `${docTypeName(it.doc.type)} · ${it.preview}`; // the preview names who: "<name> mentioned you"
   if (it.moment) return t("lib-inbox.sender_line", { sender: it.sender ?? "", text: it.preview });
   if (it.connector) {
@@ -368,6 +369,13 @@ export function fromLine(it: InboxItem, preview?: string): string {
   // a Feishu direct chat's title already is the sender
   if (!it.sender || (isLark(it) && it.lark && !it.lark.is_group)) return it.preview;
   return t("lib-inbox.sender_line", { sender: it.sender, text: it.preview });
+}
+
+/** The row's text under the summary says what the summary already says (the assistant's own rows: its text is the summary), so it is not drawn twice. */
+export function repeatsSummary(it: InboxItem): boolean {
+  const summary = it.summary?.trim();
+  const text = it.preview?.trim();
+  return it.source === "assistant" && !!summary && !!text && (text === summary || text.startsWith(summary));
 }
 
 /** Where it came from, for the detail page's subtitle. */
