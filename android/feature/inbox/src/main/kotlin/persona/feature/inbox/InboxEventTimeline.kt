@@ -79,7 +79,7 @@ internal fun chainAgentSession(entry: InboxChainEntry, sessions: List<AgentSessi
 /** Whether this is the last agent step for its session in hub order, and its live state can be shown. */
 internal fun showsAgentState(chain: List<InboxChainEntry>, entry: InboxChainEntry, sessions: List<AgentSession>): Boolean {
     val session = chainAgentSession(entry, sessions) ?: return false
-    return chain.lastOrNull { chainAgentSession(it, sessions) === session }?.id == entry.id
+    return chain.indexOfLast { chainAgentSession(it, sessions) === session } == chain.indexOf(entry)
 }
 
 /** A reported row shows the original words, not the old app's "Assistant says:" prefix a second time. */

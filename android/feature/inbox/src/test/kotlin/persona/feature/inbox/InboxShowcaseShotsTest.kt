@@ -43,8 +43,10 @@ import persona.core.contracts.api.InboxEntry
 import persona.core.contracts.inboxEventFields
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.resolve
 import persona.core.domain.inbox.InboxItem
 import persona.core.domain.sort.AgentSession
+import persona.core.domain.sort.stateWord
 import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
 import java.io.File
@@ -218,7 +220,10 @@ class InboxShowcaseShotsTest {
             rule.onNodeWithText("收到 2 条消息 · 张三", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("开了 Agent：核对报价单", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("Agent 停了：报价单第 3 行税率错了", useUnmergedTree = true).assertExists()
-            rule.onAllNodesWithText(if (english) "Needs you" else "需要你", useUnmergedTree = true).assertCountEquals(2)
+            // Empty sessions means no state words; once supplied, only the newest Agent entry carries its stateWord.
+            val expectedState = liveSessions.firstOrNull()?.stateWord(false)?.resolve(resourcesFor(language, night))
+            rule.onAllNodesWithText(expectedState ?: if (english) "Needs you" else "需要你", useUnmergedTree = true)
+                .assertCountEquals(if (liveSessions.isEmpty()) 0 else 1)
             saveShot("detail-expanded-${if (english) "en" else "zh-Hans"}-${appearance.name.lowercase()}-${if (night) "dark" else "light"}", "showcase-detail")
         }
     }
