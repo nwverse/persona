@@ -934,7 +934,7 @@ belong to the workspace preparation service.
 
 ## Backend workspace naming
 
-People configuring coding tasks can open **Backend workspace naming** in advanced
+People configuring coding tasks can open **Workspace naming** in advanced
 Assistant settings or a to-do's details. It applies only to explicitly selected
 backend preparation. It does not change Engine creation, legacy `new`, `existing`
 or `none`, existing preferences, task progress or cleanup.

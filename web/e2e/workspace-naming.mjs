@@ -40,12 +40,12 @@ try {
       assert.equal(await group.locator("dt").first().innerText(), ".", "root layout uses internal dot mapping");
       await group.scrollIntoViewIfNeeded();
       assert(await group.evaluate((el) => el.scrollWidth <= el.clientWidth), "no horizontal overflow");
-      await group.screenshot({ path: join(shots, `settings-${scheme}-${width}.png`) });
+      await group.screenshot({ type: "jpeg", quality: 80, path: join(shots, `settings-${scheme}-${width}.jpg`) });
       await task.fill("../unsafe");
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
       await group.getByRole("alert").waitFor();
       assert.equal(await task.inputValue(), "../unsafe", "failed preview preserves draft");
-      await group.screenshot({ path: join(shots, `invalid-${scheme}-${width}.png`) });
+      await group.screenshot({ type: "jpeg", quality: 80, path: join(shots, `invalid-${scheme}-${width}.jpg`) });
 
       // Direct API state is supplied by the real fixture, not browser interception.
       const todo = await (await page.request.get(origin + "/api/v1/_qa/todo")).json();
@@ -64,7 +64,12 @@ try {
       assert.equal(await editor.locator("dl").count(), 2, "both repository names previewed");
       if (width === 390) await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
       assert(await editor.evaluate((el) => el.scrollWidth <= el.clientWidth), "task editor fits at enlarged text");
-      await editor.screenshot({ path: join(shots, `task-${scheme}-${width}.png`) });
+      if (width === 390) {
+        await editor.getByRole("button", { name: "Workspace naming", exact: true }).scrollIntoViewIfNeeded();
+        await page.screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}-controls.jpg`) });
+        await editor.locator("[data-naming-root]").scrollIntoViewIfNeeded();
+        await page.screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}-preview.jpg`) });
+      } else await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}.jpg`) });
       await context.close();
       console.log(`PASS workspace naming ${scheme} ${width}px: real settings/override reload, root/container preview, invalid draft, overflow`);
     }
@@ -74,6 +79,6 @@ try {
   await fetch(origin + "/api/v1/_qa/stop");
   await new Promise((resolve) => setTimeout(resolve, 500));
 } catch (error) {
-  if (activePage && !activePage.isClosed()) { await activePage.screenshot({ path: join(shots, "failure.png"), fullPage: true }); await writeFile(join(shots, "failure.txt"), await activePage.locator("body").innerText()); }
+  if (activePage && !activePage.isClosed()) { await activePage.screenshot({ type: "jpeg", quality: 80, path: join(shots, "failure.jpg"), fullPage: true }); await writeFile(join(shots, "failure.txt"), await activePage.locator("body").innerText()); }
   throw error;
 } finally { clearTimeout(deadline); await browser.close(); }

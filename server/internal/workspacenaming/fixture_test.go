@@ -16,6 +16,9 @@ func TestWorkspaceNamingSharedFixture(t *testing.T) {
 		s := source()
 		s.Rules.TaskDirectoryTemplate = "{yyyy}{mmdd}/{task-id}-{task-slug}"
 		row := s.Repositories.Repositories[0]
+		row.SourceSnapshot.CloneURL = row.SourceSnapshot.Identity.CanonicalURL
+		row.SourceSnapshot.TransportOrigin = "canonical_default"
+		row.SourceSnapshot.CatalogRevision = 1
 		s.Repositories, _ = repository.Snapshot(s.Manager, s.TodoID, 1, []repository.TaskRepository{{RepoID: row.RepoID, RequestedRef: row.RequestedRef, SourceSnapshot: row.SourceSnapshot}}, []string{row.RepoID})
 		p := Resolve(s, NodeContext{Home: "/home/example", PersonaHome: "/home/example/.persona"})
 		if p.Plan == nil {
