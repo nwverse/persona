@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math/rand/v2"
@@ -21,6 +22,8 @@ const (
 	benchLines  = 12 // lines per day file (~60 bytes each, Chinese and ASCII mixed)
 	benchPeople = 300
 	benchDocs   = 200
+	// benchProjects is how many projects it has.
+	benchProjects = 20
 )
 
 var (
@@ -77,6 +80,8 @@ type archiveShape struct {
 	chats, days, stride, lines int
 	start                      time.Time
 	varied                     bool
+	// How many people, docs and projects; zero: the bench archive's (benchPeople, benchDocs, benchProjects).
+	people, docs, projects int
 }
 
 // variedText writes message texts of about the repeated line's length out of skewed vocabularies: a few characters
@@ -156,17 +161,17 @@ func fillArchive(dir string, shape archiveShape) error {
 			}
 		}
 	}
-	for p := range benchPeople {
+	for p := range cmp.Or(shape.people, benchPeople) {
 		if err := st.PutPerson(&Person{ID: fmt.Sprintf("lark-u%03d", p), Name: fmt.Sprintf("同事 %03d", p), Note: "负责后端"}); err != nil {
 			return err
 		}
 	}
-	for i := range benchDocs {
+	for i := range cmp.Or(shape.docs, benchDocs) {
 		if err := st.PutItem(&Item{Kind: KindDoc, ID: fmt.Sprintf("d%03d", i), Title: fmt.Sprintf("设计文档 %03d", i), At: start}); err != nil {
 			return err
 		}
 	}
-	for i := range 20 {
+	for i := range cmp.Or(shape.projects, benchProjects) {
 		if err := st.PutProject(&Project{Slug: fmt.Sprintf("p%02d", i), Name: fmt.Sprintf("项目 %02d", i), Kind: "short", Status: "active"}); err != nil {
 			return err
 		}
