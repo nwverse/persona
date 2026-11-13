@@ -22,10 +22,12 @@ import { formatDate, t } from "../../i18n";
 
 /** Brings an inline confirmation into view once, when it appears (stable, so not on every render). */
 const reveal = (el: HTMLElement | null) => el?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
-const hintClass = "mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3";
-const shortcutClass = "h-6 whitespace-nowrap rounded-full px-2.5 text-[11.5px] font-medium transition-colors";
 
 const everyOk = (m?: number) => Number.isInteger(m) && (m ?? 0) >= MIN_EVERY && (m ?? 0) <= MAX_EVERY;
+
+// The note under a field, and a quick-pick chip (a weekday shortcut, an interval, a cron example), as every one writes them.
+const HINT = "mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3";
+const CHIP = "h-6 whitespace-nowrap rounded-full px-2.5 text-[11.5px] font-medium transition-colors";
 
 export function TaskEditor({
   task,
@@ -231,7 +233,7 @@ export function TaskEditor({
               {draft.repeat === "cron" && <CronWhen cron={draft.cron ?? ""} onChange={(cron) => set({ cron })} onProblem={setCronProblem} />}
               {draft.repeat !== "once" && <UntilWhen draft={draft} now={now} onChange={(until) => set({ until })} />}
             </div>
-            <p className={hintClass}>
+            <p className={HINT}>
               {draft.enabled && next && saved && !changed
                 ? t("assistant-taskeditor.next_run", { when: momentLabel(next, now), until: untilLabel(next, now) })
                 : draft.repeat === "once"
@@ -245,7 +247,7 @@ export function TaskEditor({
                       : t("assistant-taskeditor.interval_hint_blank")}
             </p>
             {draft.repeat !== "once" && (
-              <p className={hintClass}>{t("assistant-taskeditor.until_hint")}</p>
+              <p className={HINT}>{t("assistant-taskeditor.until_hint")}</p>
             )}
           </section>
 
@@ -259,7 +261,7 @@ export function TaskEditor({
               aria-label={t("assistant-taskeditor.prompt_placeholder")}
               onChange={(e) => set({ prompt: e.target.value })}
             />
-            <p className={hintClass}>{t("assistant-taskeditor.prompt_hint")}</p>
+            <p className={HINT}>{t("assistant-taskeditor.prompt_hint")}</p>
           </section>
 
           <section>
@@ -313,7 +315,7 @@ export function TaskEditor({
                 {t("assistant-taskeditor.bypass_on")}
               </p>
             ) : (
-              <p className={hintClass}>
+              <p className={HINT}>
                 {t("assistant-taskeditor.permission_hint")}
                 {draft.session_id ? t("assistant-taskeditor.permission_hint_resume") : ""}
               </p>
@@ -345,7 +347,7 @@ export function TaskEditor({
                   { v: "asked", label: t("assistant-taskeditor.push_asked") },
                 ]}
               />
-              <p className={hintClass}>
+              <p className={HINT}>
                 {draft.push === "asked" ? t("assistant-taskeditor.push_hint_asked") : t("assistant-taskeditor.push_hint_every")}
               </p>
             </section>
@@ -364,7 +366,7 @@ export function TaskEditor({
                   { v: "every", label: t("assistant-taskeditor.inbox_every") },
                 ]}
               />
-              <p className={hintClass}>
+              <p className={HINT}>
                 {draft.inbox === "every"
                   ? t("assistant-taskeditor.inbox_hint_every")
                   : draft.inbox === "worthy"
@@ -396,7 +398,7 @@ export function TaskEditor({
                   </div>
                 ))}
             </div>
-            <p className={hintClass}>
+            <p className={HINT}>
               {draft.session_id
                 ? t("assistant-taskeditor.chat_hint_resume")
                 : own
@@ -540,7 +542,7 @@ function DailyWhen({ draft, onChange }: { draft: Task; onChange: (p: Partial<Tas
         type="button"
         aria-pressed={on}
         onClick={() => onChange({ weekdays: value })}
-        className={cx(shortcutClass, on ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
+        className={cx(CHIP, on ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
       >
         {label}
       </button>
@@ -616,7 +618,7 @@ function IntervalWhen({ minutes, onChange }: { minutes: number; onChange: (m: nu
             type="button"
             aria-pressed={m === minutes}
             onClick={() => onChange(m)}
-            className={cx(shortcutClass, m === minutes ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
+            className={cx(CHIP, m === minutes ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
           >
             {m < 60 ? t("assistant-taskeditor.minutes", { count: m }) : m % 1440 === 0 ? t("assistant-taskeditor.days", { count: m / 1440 }) : t("assistant-taskeditor.hours", { count: m / 60 })}
           </button>
@@ -689,7 +691,7 @@ function CronWhen({ cron, onChange, onProblem }: { cron: string; onChange: (cron
             aria-pressed={x.cron === cron.trim()}
             title={x.cron}
             onClick={() => onChange(x.cron)}
-            className={cx(shortcutClass, x.cron === cron.trim() ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
+            className={cx(CHIP, x.cron === cron.trim() ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
           >
             {x.label}
           </button>
