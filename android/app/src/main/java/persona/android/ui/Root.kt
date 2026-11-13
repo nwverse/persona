@@ -631,8 +631,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                                         if (assistantRoot && currentRegular.value) sidebarColumnShown.value = !sidebarColumnShown.value
                                         else sidebar.opened.value = true
                                     })
-                                    // Something waits at another assistant: the switcher's badges say where.
-                                    if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs))
+                                    // Something waits at another assistant: the switcher's badges say where. Still, as iOS's `AssistantWaitingDot`.
+                                    if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs), breathes = false)
                                 }
                             }) else null) {
                         if (primary) Box(Modifier.fillMaxSize()) {
