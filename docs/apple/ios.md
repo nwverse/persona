@@ -332,18 +332,23 @@ Chat page:
   (/clear uses existing confirmation); an exact inserted command such as /context does not reopen the list until draft changes. Beyond 5½ rows scroll internally.
   Assistant chats have none, like web. In `Composer` VStack, not overlay, because the composer's own hosting controller makes out-of-bounds overlays untappable (#518).
   + Shortcuts unchanged; `-openSlashMenu YES` screenshots, `PersonaUITests/SlashMenuTests` both layouts.
-- **Typing @ offers files, folders and sessions** (#2319, matches web `ComposerPanel` / `lib/mentions.ts`): in `ShellComposerBar` (Agent and assistant chats, and the shell's
+- **Typing @ offers files, folders, workspaces and sessions** (#2319, workspaces #2599; matches web `ComposerPanel` / `lib/mentions.ts`): in `ShellComposerBar` (Agent and assistant chats, and the shell's
   new conversation, `StarterComposer`), an `@word` before the caret, at the start or after whitespace (an e-mail address opens nothing) and not while the keyboard still
   has marked text (Pinyin; `TypedText.composingFocused`), shows `ComposerMentionMenu` above the input where `SlashMenu` sits: the files this chat's tools read or wrote
   (at most 12, newest first, read once per opening), the session folder's entries (at most 12, folders first; `listDir`, the web's `/fs`, cached while the list is open),
-  then other agents' sessions (at most 8, most recently active first), 40 rows at most, scrolling past 5½. Typing filters: names that start with it first, hidden
-  entries only for a query starting with ".". A query with a slash browses that folder on the session's computer (`@src/`; absolute and `~/` paths too).
-  A file types `@path ` (relative to the session's folder) with the caret after it; a folder types `@dir/` and keeps browsing; a session takes the token out and adds its
-  quote over the box (`PromptItems.quote`, sent as `<persona-context>` like any quote). The + menu's Mention a File or Session types `@` at the caret (the web's @
-  button beside +; the iOS row has no room for another button). A new conversation has no files or folder: it offers sessions, and what a typed absolute or `~/` path
-  lists on the assistant's machine, as the web's does. Workspaces in Persona's conversations are not offered yet (#2599). Logic in `Views/Chat/MentionMenu.swift`
-  (`MentionToken`, `MentionRows`, `PersonaTests/MentionMenuTests`); `-openMentionMenu YES` (or a draft such as `@Sources/`) screenshots;
-  `PersonaUITests/MentionMenuTests` against the mock hub (the weather agent's files and folder).
+  then Persona's workspaces (at most 8), then other agents' sessions (at most 8, most recently active first), 40 rows at most, scrolling past 5½. Typing filters: names that start with it first, hidden
+  entries only for a query starting with ".". A query with a slash browses that folder on the session's computer (`@src/`; absolute and `~/` paths too), with no workspace or session rows.
+  A file types `@path ` (relative to the session's folder) with the caret after it; a folder types `@dir/` and keeps browsing; a workspace or session takes the token out and adds its
+  context over the box. A workspace goes as `<persona-context kind="workspace" machine="…" cwd="…" branch="…">` (`branch` when known), a session as a `<persona-context>` quote like any quote.
+  On iPhone and iPad, Persona's conversations and the ordinary new conversation read `GET /api/v1/workspaces` once each time this list opens; Agent chats, Health, Mac and visionOS don't offer them.
+  Each `HubLink` keeps its last good workspace snapshot in memory: a later opening projects it immediately, a different answer replaces it, and a 404, 503 or another failed read keeps it.
+  Only the first opening after launch has no snapshot and can add rows when the answer arrives; there is no prefetch. Removing a hub group drops its link and cached snapshot. Workspaces match by title, folder, computer or branch,
+  one per computer and folder (trailing `/` ignored, folderless rows omitted),
+  title prefixes first and available before unavailable, stable in the hub's order. Their row's second line is computer · shortened folder (· branch). A new conversation has no files or folder: it offers
+  workspaces and sessions, and what a typed absolute or `~/` path lists on the assistant's machine, as the web's does. The + menu's Mention a File or Session types `@` at the caret (the web's @
+  button beside +; the iOS row has no room for another button). Logic in `Views/Chat/MentionMenu.swift`
+  (`MentionToken`, `MentionRows`, `MentionWorkspaces`, `PersonaTests/MentionMenuTests`); `-openMentionMenu YES` (or a draft such as `@Sources/`) screenshots;
+  `PersonaUITests/MentionMenuTests` against the mock hub (the weather agent's files and folder, and the mock workspace catalog). BeautifulUI's separate legacy `PromptComposer` @ menu is not this list.
 - **iPad regular width (also open Duo) shares `ShellComposerBar`** (#2779): outside new shell (`RootView.usesShell` compact-only),
   no `shell` environment previously fell back to `ComposerRow`, differing from iPhone. `ChatComposerKind.padCard` (regular-width iOS) now makes Agent, assistant chats
   (`shellChat`) and assistant new chats (`AssistantHome` → `StarterComposer(shell:)` on the iPad, mode chips in model menu; the open Duo's is `ShellHome`, #3680) use it, centered within `ChatView.readableWidth`.
