@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import Synchronization
 
 /// Where the small window's source goes (#6333). The system's Picture in Picture transition starts from that layer's
 /// frame and, on Restore, ends there: it used to sit in the bottom-left corner of the main window, so a small copy of
@@ -16,23 +17,41 @@ nonisolated enum VNCPiPPlacement {
 }
 
 /// Restore's completion (#6333): the system grows the small window back into the source once it is called, so it waits
-/// until the page has come back and the source lies over its picture, or `wait` at the latest. Called once.
-@MainActor final class VNCPiPRestore {
+/// until the page has come back and the source lies over its picture, or `wait` at the latest. Answered once, by
+/// whichever comes first; the wait runs on a timer of its own, so a main thread kept busy (the page opening on a loaded
+/// device) never holds the system's restore. A wait left over from an earlier restore leaves a newer one alone.
+nonisolated final class VNCPiPRestore: Sendable {
     static let wait: Duration = .milliseconds(600)
-    private var done: ((Bool) -> Void)?
+    private let state = Mutex<(turn: Int, done: (@Sendable (Bool) -> Void)?)>((0, nil))
 
-    var pending: Bool { done != nil }
+    var pending: Bool { state.withLock { $0.done != nil } }
 
     /// A restore began; one still waiting (it cannot, but) is answered first.
-    func arm(_ done: @escaping (Bool) -> Void) {
+    func arm(after wait: Duration = VNCPiPRestore.wait, _ done: @escaping @Sendable (Bool) -> Void) {
         finish()
-        self.done = done
+        let turn = state.withLock { s in
+            s.turn += 1
+            s.done = done
+            return s.turn
+        }
+        let (seconds, attoseconds) = wait.components
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + Double(seconds) + Double(attoseconds) / 1e18) { [self] in
+            answer(state.withLock { s in s.turn == turn ? take(&s) : nil })
+        }
     }
 
-    /// The page's picture is in place, or the wait is over: the system may animate.
+    /// The page's picture is in place, or the restore is over: the system may animate.
     func finish() {
-        let d = done
-        done = nil
-        d?(true)
+        answer(state.withLock { s in take(&s) })
+    }
+
+    private func take(_ s: inout (turn: Int, done: (@Sendable (Bool) -> Void)?)) -> (@Sendable (Bool) -> Void)? {
+        let d = s.done
+        s.done = nil
+        return d
+    }
+
+    private func answer(_ done: (@Sendable (Bool) -> Void)?) {
+        done?(true)
     }
 }
