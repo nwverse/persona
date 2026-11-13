@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// The one set of names for an agent's and a task's state on iOS, Mac, the watch and the widgets (#3960; docs/protocol/i18n.md
 /// "Agent states", docs/protocol/agent-states.md), as the web has in `web/src/lib/state-labels.ts` (#3415): every screen takes
@@ -47,14 +48,35 @@ nonisolated enum StateName: String, CaseIterable, Sendable {
 
     /// A to-do's state in the hub's direction tree (#4352, `DirectionTree.TaskState`): the owner's own words for the
     /// work a direction supervises (working / needs you / stuck / to verify), on every platform; an Agent's state keeps
-    /// the names above.
-    static var taskWorking: String { interfaceText("Task Working [State Names]") }
-    static var taskNeedsYou: String { interfaceText("Task Needs You [State Names]") }
-    static var taskStuck: String { interfaceText("Stuck [State Names]") }
+    /// the names above. Rows draw them on every redraw, so each is resolved once per locale (#6263).
+    static var taskWorking: String {
+        kept("taskWorking") { interfaceText("Task Working [State Names]") } // perf-ok: resolved once per locale
+    }
+    static var taskNeedsYou: String {
+        kept("taskNeedsYou") { interfaceText("Task Needs You [State Names]") } // perf-ok: resolved once per locale
+    }
+    static var taskStuck: String {
+        kept("taskStuck") { interfaceText("Stuck [State Names]") } // perf-ok: resolved once per locale
+    }
     /// A piece of a direction no Agent has started yet, the hub's `planned` (#5860).
-    static var taskNotStarted: String { interfaceText("Task Not Started [State Names]") }
+    static var taskNotStarted: String {
+        kept("taskNotStarted") { interfaceText("Task Not Started [State Names]") } // perf-ok: resolved once per locale
+    }
     /// The same words as a supervised task awaiting review (`ReviewState.pendingReview`).
-    static var taskToVerify: String { interfaceText("Awaiting review") }
+    static var taskToVerify: String {
+        kept("taskToVerify") { interfaceText("Awaiting review") } // perf-ok: resolved once per locale
+    }
+
+    /// Words resolved once per interface locale (docs/apple/performance.md P4): a dictionary read after the first.
+    private static let resolved = OSAllocatedUnfairLock<[String: String]>(initialState: [:])
+
+    private static func kept(_ name: String, _ resolve: () -> String) -> String {
+        let key = interfaceTextLocale.identifier + "|" + name
+        if let known = resolved.withLock({ $0[key] }) { return known }
+        let text = resolve()
+        resolved.withLock { $0[key] = text }
+        return text
+    }
 
     /// The button that marks every finished, unseen agent as seen, with how many when given.
     static func markAllSeen(_ n: Int? = nil) -> String {
