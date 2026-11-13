@@ -277,9 +277,13 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 		created, err = w.CreateWorktreeUnder(ctx, workspace, branch, dest, parent)
 	} else if w, ok := h.(host.Worktreer); ok && w.CanWorktree() {
 		if main, ok := h.(interface {
-			CreateWorktreeFromMain(context.Context, string, string, string, string) (*host.Created, error)
+			CreateWorktreeFromMain(context.Context, string, string, string, string, string) (*host.Created, error)
 		}); ok && repo.mainRoot != "" {
-			created, err = main.CreateWorktreeFromMain(ctx, workspace, repo.mainRoot, branch, dest)
+			base, baseErr := git(ctx, repo.root, "rev-parse", "HEAD")
+			if baseErr != nil {
+				return res, baseErr
+			}
+			created, err = main.CreateWorktreeFromMain(ctx, workspace, repo.mainRoot, strings.TrimSpace(base), branch, dest)
 		} else {
 			created, err = w.CreateWorktree(ctx, workspace, branch, dest)
 		}

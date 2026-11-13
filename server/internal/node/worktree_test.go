@@ -89,6 +89,8 @@ func worktreeNode(t *testing.T) worktreeFixture {
 		args := []string{"worktree", "add", "-b", branch, "--", path}
 		if _, err := git(t.Context(), repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
 			args = []string{"worktree", "add", "--", path, branch}
+		} else if base := str(p["base"]); base != "" {
+			args = append(args, base)
 		}
 		if out, err := gitRun(t.Context(), repo, gitOpTimeout, args...); err != nil {
 			return herdrFail{Code: "worktree_create_failed", Message: "Preparing worktree\n" + out}
@@ -317,6 +319,15 @@ func TestWorktreeCreateFromLinkedCheckoutUsesMainRepository(t *testing.T) {
 			w := worktreeNode(t)
 			linked := filepath.Join(w.home, "elsewhere", "feature-checkout")
 			runPullGit(t, w.repo, "worktree", "add", "-b", "feature", linked)
+			if err := os.WriteFile(filepath.Join(linked, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runPullGit(t, linked, "add", "feature.txt")
+			runPullGit(t, linked, "commit", "-m", "feature")
+			base := runPullGit(t, linked, "rev-parse", "HEAD")
+			if base == runPullGit(t, w.repo, "rev-parse", "HEAD") {
+				t.Fatal("the fixture does not distinguish the linked and main HEADs")
+			}
 			spaces := []any{
 				map[string]any{"workspace_id": "w-linked", "label": "linked", "number": 2, "cwd": linked},
 			}
@@ -345,13 +356,16 @@ func TestWorktreeCreateFromLinkedCheckoutUsesMainRepository(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := map[string]any{"branch": "task/from-linked", "path": dest, "focus": false}
+			want := map[string]any{"branch": "task/from-linked", "path": dest, "focus": false, "base": base}
 			if tc.mainWorkspace == "checkout" {
 				want["workspace_id"] = "w-main"
 			} else {
 				want["cwd"] = resolved(t, w.repo)
 			}
 			assertTrace(t, w.f.trace("worktree.create"), []string{call("worktree.create", want)})
+			if got := runPullGit(t, dest, "rev-parse", "HEAD"); got != base {
+				t.Fatalf("the new worktree started at %s, want linked HEAD %s", got, base)
+			}
 		})
 	}
 }

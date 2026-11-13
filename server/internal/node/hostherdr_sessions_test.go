@@ -330,11 +330,11 @@ func TestHerdrHostCreateWorktreeFromMainUsesFreshSessionLayout(t *testing.T) {
 			}
 			fs.build.reply("worktree.create", map[string]any{"workspace": map[string]any{"workspace_id": "w9"},
 				"tab": map[string]any{"tab_id": "w9:t1"}, "root_pane": map[string]any{"pane_id": "w9:p1"}})
-			created, err := h.CreateWorktreeFromMain(t.Context(), "@build:w4", "/srv/proj", "b", "/tmp/wt")
+			created, err := h.CreateWorktreeFromMain(t.Context(), "@build:w4", "/srv/proj", "c2", "b", "/tmp/wt")
 			if err != nil || created.SpaceID != "@build:w9" || created.SlotID != "@build:w9:t1" || created.Pane.ID != "@build:w9:p1" {
 				t.Fatalf("worktree from main: %+v %v", created, err)
 			}
-			want := map[string]any{"cwd": "/srv/proj", "branch": "b", "path": "/tmp/wt", "focus": false}
+			want := map[string]any{"cwd": "/srv/proj", "base": "c2", "branch": "b", "path": "/tmp/wt", "focus": false}
 			if tc.mainDir == "/srv/proj" {
 				delete(want, "cwd")
 				want["workspace_id"] = "w-main"
