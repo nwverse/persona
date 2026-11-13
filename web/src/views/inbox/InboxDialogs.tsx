@@ -8,7 +8,7 @@ import { startConversation } from "../../lib/assistant-start";
 import { adoptConversation, askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { sessionTitle, stateOf, uuid } from "../../lib/format";
 import {
-  agentDraft, connectorReference, conversationRoute, docChangeKey, docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges,
+  agentDraft, connectorReference, conversationRoute, docChangeKey, docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, recordHandOff, sendReply, useDroppedChanges,
   setDone, unsentReplies, type InboxItem,
 } from "../../lib/inbox";
 import { isTransient } from "../../lib/ops";
@@ -260,6 +260,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
         prompt: ask.trim() || HANDOFF_PRESETS[0],
         onStarted: (s) => {
           if (memoryKey) rememberHandOff(memoryKey, agentTarget(s.machine_id, s.session_id));
+          void recordHandOff(item, s, "agent", s.title);
           if (markDone) void setDone(item, true);
           onClose();
         },
@@ -315,13 +316,16 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
         onClose();
         navigate({ name: "session", mid: target.machine_id, sid: target.session_id });
         void sendToSession(target.machine_id, target.session_id, { text }).then((ok) => {
-          if (ok && markDone) void setDone(item, true);
+          if (!ok) return;
+          void recordHandOff(item, target, "agent", target.title);
+          if (markDone) void setDone(item, true);
         });
         return;
       }
       // Persona here is the item's own manager's (docs/assistant/managers.md "Clients"), whatever assistant is current;
       // the conversation opens as itself and the current assistant stays
       const r = await startConversation({ prompt: text }, ownerHeaders(item.manager));
+      void recordHandOff(item, r.session, "conversation", r.session.title);
       // its requests (feed, stop…) go to that manager whatever the page shows later
       adoptConversation(item.manager, r.session.session_id, r.session.machine_id);
       noteSent(r.session.machine_id, r.session.session_id, { text });
