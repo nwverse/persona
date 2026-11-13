@@ -510,6 +510,8 @@ A pane with no Agent carries `foreground`, the program in front as the host name
 `POST /api/v1/machines/{mid}/panes {workspace_id, kind?}` → node calls host `CreateSlot` (herdr `tab create --no-focus`, computer view doesn't jump) to open a tab in that space,
 named `shell` (`-2` suffix on collision), at **the space's own directory** (host-reported, otherwise home). Returns `{pane, terminal, tab_id}`, then web opens it. Called when the user clicks + beside a space, or Open Terminal Here in the file page.
 
+**No workspace yet**: a computer whose engine opens tabs (`new_tab`) but has no workspace still gets a terminal. Where the hub has the `pane_new_space` feature, clients show "No terminals open on this computer." with **New Terminal** (and a home-folder entry in the computer's menu), which sends `{kind, cwd: "~", new_space: true}`. The node finds no workspace to put the tab in and calls the host's `CreateSpace` in that folder (the home folder for `~`), the way an Agent start does, and names its first tab `shell`; Open Terminal Here on such a computer takes the same path. A node without the `pane_new_space` capability would answer "no workspace", so the hub answers 409 `node_outdated` ("update this computer") to `new_space` instead. With no host that opens tabs, or a hub without `pane_new_space`, clients say terminals appear when an Agent starts there.
+
 **Open Terminal Here** (#5832; hub feature and node capability `pane_cwd`): the request may carry `cwd`, a folder (`~/…` or absolute). The node checks it with the read guard (a key folder or iCloud Drive is refused) and that it is a folder, and gives it to the host as the new tab's starting directory; with `cwd` and no `workspace_id` the tab opens in the first workspace of a host that opens tabs. The folder is never typed into the shell, so a request still cannot run a command (the rule below). The hub answers 409 `node_outdated` for `cwd` to a node without the capability rather than open the terminal elsewhere. The earlier rule that a request could not name a directory is relaxed for this: a full device can `cd` anywhere in the shell it opens, so starting there gives nothing more.
 
 ### Permissions
@@ -588,7 +590,7 @@ Correct implementation needs node to include herdr scroll offset in frames or a 
 - Output URLs: `@xterm/addon-web-links`, http(s) only, click through `openLink`; no simultaneous `terminal_click` (`linkHit`).
 - Context menu: Copy / Paste / Select All / Find… / Clear Selection, existing `Menu` in `ui/atoms.tsx` unchanged. Since `Menu` anchors only to elements, a zero-size fixed element is placed at the mouse position. Blur xterm while menu is open (focused xterm swallows keys; Esc goes to program instead of closing menu).
 - Mac line-editing keys: ⌘⌫ → `\x15`, ⌘← → `\x01`, ⌘→ → `\x05`, only while controlling and with ⌘ alone (`lineEditBytes`).
-- Options: cursor style, blink, WebGL rendering (`@xterm/addon-webgl`, dynamically loaded on first enable; disable/context loss/no WebGL disposes and falls back to DOM); `persona.terminal.cursorStyle / cursorBlink / webgl`, defaults don't write keys.
+- Options: cursor style, blink, WebGL rendering (`@xterm/addon-webgl`, dynamically loaded on first enable; disable/context loss/no WebGL disposes and falls back to DOM); `persona.terminal.cursorStyle / cursorBlink / webgl`, defaults don't write keys. Appearance (light / dark apart from the page) is section 29.
 - Focus: under control, clicking panel or refocusing window returns keyboard to terminal unless text is selected, a dialog/menu/popover is open, focus is in another input (including Find) or outside-panel control, or terminal is hidden beneath another retained terminal (`inert`).
 
 ### Verification
@@ -637,6 +639,11 @@ Moshi switches Term/Chat in the same session page's center (top segmented contro
 
 Workspace context/⋯ menu New Worktree… (W), same command in palette. Dialog has **Branch** and **Checkout Path**; Create and Open adds a worktree on the computer, opens it as a herdr workspace grouped under the original, and navigates web to its first terminal.
 Same shape as Moshi `worktree/prepare` + `worktree/create`.
+
+The Agents space menu also offers **New child worktree…**. A native space uses its catalog identity. A runtime-only
+space can suggest supported native workspaces at its verified Git worktree directory, with the source shown in the
+creation dialog. Several matches open a source submenu. An unavailable source leaves the entry disabled with guidance.
+These suggestions apply only to creation and do not establish ownership for closing or deleting runtime spaces.
 
 - **Routes** (`nodeActions` in `hub/panes.go`, **`full` devices only** like other menu actions, `answer`/extension tokens 403, `route_scopes.txt` `-`):
   - `POST /machines/{mid}/worktree/prepare {workspace_id, kind?}` → `{root, repoName, branch, path}`: `root` Git top-level, `repoName` repo name (main repo name even from linked worktree), `branch` workspace branch (empty for detached HEAD), `path` herdr checkout directory `<worktrees directory>/<repo name>`.
@@ -764,6 +771,7 @@ hub → browser: `herdr_state {id, state: "open", cols, rows}`, `herdr_data {id,
   Shares key bar, Find (⌘F / Ctrl+Shift+F), context menu (Copy / Paste / Select All / Find… / Clear Selection), saved commands with Single pane. With herdr mouse reporting on, right-click belongs to herdr; Persona menu via Shift+right-click (section 26, old "web menu only with selection" removed). Shift-drag uses xterm selection.
 - **Answer herdr queries** (same as Moshi): at startup herdr asks `CSI ? 996 n` (color scheme), enables DEC 2031 (scheme notifications), asks `OSC 10;? / 11;?` (foreground/background), `CSI ? u` (kitty keyboard), DA1, `CSI 16 t`. Web answers `CSI ? 997 ; 1|2 n` (dark/light), `CSI ? 2031 ; 1|2 $ y`;
   appearance changes proactively report colors/scheme if herdr enabled 2031; xterm answers OSC 10/11 and DA1 itself. (Section 18's unreachable color queries refer to Single pane; they reach the browser here.)
+  The scheme and colors are the terminal's, which are the page's unless Terminal settings › Appearance says Light or Dark (section 29).
 - **Flow control**: after each xterm `write` callback, accumulate parsed bytes; send `herdr_ack` at 64 KB or 250ms since last ack (same Moshi thresholds).
 - **State**: header dot + Connecting / Connected / Disconnected / Error / Unsupported / No Permission, plus grid size; reason on hover. On end, muted reason line in terminal (like Moshi `close.reason`), Reconnect floating at bottom.
   Hub WebSocket reconnect: old view died with connection; clear screen and open new view automatically.
@@ -1049,3 +1057,34 @@ herdr sidebar/tab pane changes didn't change Persona page/sidebar; choosing anot
 - Exact client attribution: herdr doesn't provide the field, so heuristic; if client ids appear in events later, replace `focusSource` with exact attribution.
 - Chat-view pages following herdr (Moshi also follows only in terminal view).
 - When a tab has several panes but Persona session page shows one Agent, switching between them in herdr navigates pages (one page per Agent pane); non-Agent panes use terminal page.
+
+## 29. Appearance: the web terminal's light / dark apart from the page's (web, #6260)
+
+Both surfaces took their colors from the page (`terminalPalette` over `<html>`'s tokens), and Full view answered herdr's color questions with the page's scheme, so the page's theme decided which scheme herdr heard from the browser.
+The herdr server is the one the computer's own herdr window uses too. iOS keeps its terminal's colors apart from the app's (Ink and Midnight always dark, Persona and Solarized follow the system; section 5); the web now has the light / dark part of that.
+
+### Setting
+
+- Terminal settings › **Appearance**: Match page (the default, no key stored) / Light / Dark, `persona.terminal.appearance`, kept in this browser (`web/src/lib/terminal-appearance.ts`). One setting for both surfaces.
+- Single pane's gear menu has it with the other options. Full view's header has a gear with only this row: Full view is the default surface and the one herdr hears the answer from.
+- The row is the menu's segmented control with the icons Settings uses for the same choices (app window, sun, moon): the three words do not fit beside the label in the 280 px menu. Each choice is named for screen readers and on hover, and the line under the label says the one chosen.
+
+### Colors: the page's tokens of the terminal's scheme
+
+- Match page reads `<html>`'s tokens, as before.
+- Light / Dark: `[data-terminal-scheme="light"]` / `[data-terminal-scheme="dark"]` is in the selector lists of `web/src/styles.css`'s light and dark token blocks (the main pair and the pair with `--term-magenta` / `--term-cyan`), so an element with it has that scheme's values whatever the page's.
+  A theme color adds its tokens on the same scope (`accentCSS` in `web/src/ui/look.ts`, `[data-accent] [data-terminal-scheme=…]`) and an extension theme adds its own above that (`scopedThemeCSS` in `web/src/ui/extension-theme.ts`, `:root[data-extension-theme] [data-terminal-scheme=…]`), the order they have on `<html>`. No palette of its own.
+- The feeds read the palette and the find marks off a hidden element with the attribute (`terminal/colors.ts`): a custom property is read where it is declared, and the result does not wait for React to have rendered the attribute.
+  The screen box (Single pane's viewport, Full view's) carries the attribute and `bg-page`, so its padding, the find marks of the rows the page draws and xterm's IME box are in the terminal's scheme; the header, the overlays and the key bar keep the page's.
+- The attribute goes before `:root` / `.dark` in those selector lists. `web/page-tokens.ts` and the contrast tests find the blocks with a regular expression that ends at the brace, and it matches inside comments too: a comment quoting a selector and its brace is found first.
+
+### What herdr is told (Full view)
+
+- `CSI ? 996 n` → `CSI ? 997 ; 1|2 n` with the terminal's scheme; xterm answers `OSC 10;?` / `OSC 11;?` from its theme, which is the terminal's palette.
+- With DEC 2031 on: a page switch under Match page sends OSC 10/11 and `CSI ? 997` as before; under Light or Dark it sends nothing, since the terminal did not change. Changing Appearance sends them when what herdr would hear changes (Match page on a light page → Light sends nothing).
+- herdr keeps what each client reports and applies the **foreground (most recently active) client's** report to the panes and, with `[theme] auto_switch = true`, to its own theme. Read in herdr v0.9.3's source (its theme sync, and the headless server test `client_shell_host_theme_follows_foreground_client`), not measured.
+  So with the computer's herdr window in a light terminal and Full view dark, herdr follows whichever client was used last; giving the web terminal the computer terminal's scheme stops that.
+
+### Tests
+
+- `cd web && npm test`: `lib/terminal-appearance.test.ts` (default, stored values, notifications), `terminal/colors.test.ts` (`styles.css` scopes every token the terminal reads; a dark terminal on a light page is Match page on a dark page, with a theme color and with an extension theme), `terminal/appearance.test.ts` (both feeds: palette; Full view's 996 answers and 2031 reports on page and setting changes), `terminal/TerminalOptions.test.tsx` (the row), `terminal/FullTerminal.test.tsx` (Full view's gear: only Appearance).

@@ -101,7 +101,7 @@ A component with a composable slot ends with a function-typed parameter, so a ca
 | `JSwitch` / `JCheckbox` / `JRadio` | Switch, checkbox, radio |
 | `JBadge` / `JTag` | Count of things waiting for you, small static tags (draft, demo) |
 | `JChangingText` | Values that change on redraw: numbers count to the new value, other text fades in (numbers in extension Views, row values) |
-| `JStatusDot` / `JStatusMark` / `StatusLabel` / `StatusLine` / `PendingBadge` | State: small dot, the mark before a session row (glowing in Glass, spinner and check mark in Brief, square in Board), status text, the status line in a chat. In Glass a Needs You dot or mark breathes as on iOS: a ring leaves it and fades every second (`Tokens.Motion.NeedsYouBreath`), still when motion is reduced |
+| `JStatusDot` / `JStatusMark` / `StatusLabel` / `StatusLine` / `PendingBadge` | State: small dot, the mark before a session row (glowing in Glass, spinner and check mark in Brief, square in Board), status text, the status line in a chat. In Glass a Needs You dot or mark breathes as on iOS: a ring leaves it and fades every second (`Tokens.Motion.NeedsYouBreath`), still when motion is reduced. Where iOS draws Needs You still (the quick filters, a heading's counts, the badges on an avatar or a button, a request's card and panel, the sidebar's rows) the dot is still too (`breathes = false`). `JSpinner` reads its angle only while drawing: a turn draws it again without recomposing it |
 | `JAvatar` | People, groups, sources; a corner badge marks Lark / mail |
 | `JManagerAvatar`, `JAssistantSwitcherHeader`, `JAssistantSwitcherRow` | The sidebar's assistant switcher: an assistant's monogram on its colour (`managerHue`) with its presence dot (`managerPresenceColor`), the head with the current one, a roster row (faded as a whole when offline) |
 | `JAssistantOffline` | A list's empty state while the current assistant is offline (`CurrentAssistant.offline`, several assistants): its faded monogram with the offline mark, "<name> is offline", when it last synced |
@@ -232,9 +232,13 @@ Components live in `Agents.kt` in `core:designsystem` (`MachineChip`, `AgentTree
 - Status light motion (requested 2026-11-03, #959): the single active state-color light slowly drifts near its resting position (12% of the short edge), with slight changes in size and brightness,
   and its color leaning a little toward a neighboring state color (blue ↔ mint; routine amber never blends toward error red). Roughly every two minutes a small blob splits off, swims toward the screen center, and later swims back to merge with the main light;
   the backdrop uses only one active state-color family, keeping the whole page subdued. Periods range from tens of seconds to minutes and are not multiples of each other, so no loop is apparent. Unit tests (`AmbientLightTest`) bound the speed
-  (no more than 5% of the short edge per second) and the small blobs' fades. The implementation is a pure function of absolute frame time (`Pool.blobs`), so adjacent panes, scroll edges and nested pages stay aligned even when each draws a copy;
+  (no more than 5% of the short edge per second) and the small blobs' fades. The implementation is a pure function of the light's time (`Pool.blobs`), and every copy reads one shared clock (`AmbientClock`), so adjacent panes, scroll edges and nested pages stay aligned even when each draws a copy;
   it redraws only 12 times per second (the light is too slow for visible steps, and each background change requires the glass above to blur again). With system animations disabled (reduced motion) or battery saver on, the light stays at its resting position,
   matching the pre-change behavior; `android.sh shots` sets animation scale to 0, so batch screenshots remain static.
+- The light holds still when nobody is using the app (like the iPhone, whose background does not move): five seconds after the last input it stops where it is, not at its resting position, and stops asking for frames, so an untouched page draws nothing for it;
+  the next input carries on from that position without a jump (the clock counts only the time the light was moving). Input is what reaches `MainActivity`: touches, keys, mouse wheels and touchpads (`dispatchGenericMotionEvent`), and the app coming to the front or opening a link (`onResume`, `onNewIntent`).
+  Dialogs and bottom sheets are windows of their own, so the light behind their scrim stops five seconds after the input that opened them; a reply that is still streaming and typing on the on-screen keyboard do not count as input either (a fling ends well within the five seconds after the finger lifts).
+  While someone is using the app the light moves exactly as before (same steps, same path). `AmbientClockTest` covers the clock and the loop: still for good after five seconds, no jump on resuming, no frames requested while still, every copy at the same time.
 
 ## 3.1 Tablets and foldables
 
@@ -279,14 +283,25 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
 - In landscape, the shell leaves space for left/right safe areas (camera cutout, side navigation bar); the background still fills the window.
 - Reading width: `pagePadding` includes `LocalReadingInset`; content in wide panes is centered and capped at `ReadingWidth` (760dp), for chats, the Assistant home, long articles and lists alike;
   bottom overlays such as input fields and key bars share that limit. Images and tables lay out within the content width. This is the Duo's 760pt readable width.
+- Machines is an adaptive card grid inside the same `JListPage` `LazyColumn`, not a nested `LazyVerticalGrid`. `MachineGridWidth` measures the actual pane and subtracts the same page / reading insets; `machineGridColumns` then uses `floor((contentWidth + Tokens.Space.m) / (Tokens.Size.cardColumn + Tokens.Space.m))`, at least one column. `cardColumn` is 330dp and the row gap is `Space.m`. A narrow compact pane therefore stays single-column; wide-phone, regular, book and tabletop use the same width rule with no device-model branch. Each lazy item is one row with a key made from its machine ids. Cards share the row's maximum intrinsic height and fill it, with a flexible gap keeping the chart bottoms aligned; a short final row reserves empty weighted slots. Resizing changes rows without resetting the list state, and no device or posture probe is duplicated here—the shell already confines the pane to its hinge-safe area.
 - Foldable book posture (vertical half-fold): the hinge separates panes, and content and buttons do not sit over it (the list-detail scene handles it through `HingePolicy`);
   the sidebar column ends at the fold and the Assistant page starts past it (`sidebarSplit`), as the half-folded Duo keeps both columns clear of its crease.
-- Tabletop posture (horizontal half-fold): pages with bottom overlays (chat, terminal) place content above the hinge and the input field / key bar below (`PageFrame`); the sidebar column runs the full height.
+- Tabletop posture (horizontal half-fold): every page avoids the hinge. Pages with bottom overlays (chat, terminal) keep content above the hinge and the input field / key bar below it; pages without one keep all interactive content above it (`PageFrame`, section 3.1.1). The sidebar column runs the full height.
 - Not taken from iOS, because Android has no matching system behavior: the Duo's vertical side bars and the shell's side rail (`ShellSideRail`; the system moves iOS bars to the screen's edge on the outer screen and inner landscape,
   Android never does), the cross-fade between pages under those bars, and the iPad's page-sized Settings card (`presentationSizing(.page)`): Android's sheet spans the window like the Duo's.
   The Agents page gets no sidebar column: the Duo's Agents tab has none either, and on an open foldable a third column would take the room the Agents list and its chat need.
 - Keyboard, mouse, trackpad: session, message and settings-row long-press menus also respond to right-click; hover has feedback; lists support the wheel; the software keyboard does not open by itself on launch.
 - Glass blurs a larger area on large screens (each pane's top bar and scroll edges); performance has not been measured.
+
+### 3.1.1 Tabletop pages
+
+Tabletop layout is selected only from the window's horizontal separating hinge, never from a device model. Glass, Brief and Board all measure the actual top bar and bottom dock before choosing their geometry in one `SubcomposeLayout` pass; there is no second-frame size correction.
+
+- **With a bottom dock:** reading and scrolling stay above `hingeTop`; the composer, terminal key bar or page actions start at or after `hingeBottom`. The dock keeps `ReadingWidth`, does not receive another ordinary navigation-bar padding, and is centred in the measured lower safe area. Content leaves `Tokens.Space.m` before the hinge.
+- **Without a bottom dock:** the top bar and all content end at `hingeTop`. The hinge and everything below it draw only the same page background: no content slot, focusable node or clickable control is placed there.
+- **Fallback:** a missing or zero-height hinge, an upper side that cannot hold the measured top bar plus `Tokens.MinTouch.android` of content, or a lower side that cannot hold the measured dock uses the ordinary flat single-page layout and its system insets. A short lower side is allowed when there is no dock because it is only background. Returning between flat and tabletop reuses the same content slot, scroll state, draft, selection and focus; it does not navigate or recreate a ViewModel.
+
+Acceptance covers Glass in light and dark and samples Brief and Board in both appearances. Generic Fold's real book posture can provide real `FoldingFeature` evidence. A fake tabletop supplied through `debug.posture` is visual and layout evidence only; the real tabletop posture still needs device verification. No frame-rate, memory or power improvement is claimed without measurement.
 
 ## 4. Screenshots and verification
 

@@ -1,8 +1,11 @@
 package kb
 
 import (
+	"cmp"
 	"encoding/json"
 	"math"
+	"slices"
+	"strings"
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
@@ -176,4 +179,92 @@ func echoNormal(text string) []rune {
 		}
 	}
 	return out
+}
+
+// ---- hub transcription (#3862 phase 5) ----
+
+// The hub's own sentences in hub mode are judged by the same rule, against the timeline's speaking spans
+// (Timeline.Speaking: the spans the phone reports on the audio socket and in an upload's timeline, each with the
+// answer said in it, as an upload's spoken has them; docs/assistant/meeting-minutes.md "No echo goes out first", "The
+// timeline"). Persona's echo is marked there too, never dropped: it goes into the hub's transcript with Echo, and never
+// into the live log, a line frame or the room. Everything outside this file that judges a sentence against the
+// speaking spans calls EchoOf, EchoHeld and EchoSpanClosed (TestEchoRuleIsOneFunction keeps it so), so a refinement of
+// the rule changes this file and no caller.
+
+// EchoOf: the sentence start–end saying text is Persona's echo (isEcho) by timeline t's speaking spans, or by extra (a
+// span the hub assumes closed for the sentences it held, never written to the timeline).
+func EchoOf(t Timeline, start, end float64, text string, extra ...SpokenSpan) bool {
+	spans := t.Speaking
+	if len(extra) > 0 {
+		spans = append(slices.Clone(spans), extra...)
+	}
+	return isEcho(start, end, text, spans)
+}
+
+// EchoHeld: a sentence that ends at end, after an open speaking span began at openFrom (less echoMargin), waits for the
+// span to close before EchoOf judges it ("No echo goes out first"): until then the span's end is unknown.
+func EchoHeld(end, openFrom float64) bool {
+	return end > openFrom-echoMargin
+}
+
+// EchoSpanClosed is the end of the timeline's speaking span that closes a span open since openFrom: one that begins at
+// or before it (to a sample) and ends after it (the speaking off a dropped socket lost, repaired by a socket's
+// start.timeline or an upload's timeline; a span still open is never in them). False when the timeline has none.
+func EchoSpanClosed(t Timeline, openFrom float64) (to float64, ok bool) {
+	const slack = 1.0 / AudioRate // times are rounded to a sample
+	for _, sp := range t.Speaking {
+		if sp.Start <= openFrom+slack && sp.End > openFrom+slack {
+			return sp.End, true
+		}
+	}
+	return 0, false
+}
+
+// SpokenText is a speaking span's text as the hub keeps it (a speaking frame's, the timeline's): cut at maxSpokenText
+// bytes, at a character boundary, as an upload's spoken.
+func SpokenText(text string) string {
+	return cutBytes(text, maxSpokenText)
+}
+
+// spokenUnion is the union of spans (Timeline.Merge): sorted by start, overlapping and touching spans made one, their
+// texts joined in time order (spokenJoin: a span received again counts once). A span that is not one (a number that
+// is not finite, end before start) is left out.
+func spokenUnion(spans []SpokenSpan) []SpokenSpan {
+	var out []SpokenSpan
+	for _, sp := range spans {
+		if finite(sp.Start) && finite(sp.End) && sp.Start <= sp.End {
+			out = append(out, sp)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b SpokenSpan) int {
+		if c := cmp.Compare(a.Start, b.Start); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.End, b.End)
+	})
+	merged := out[:0]
+	for _, sp := range out {
+		if n := len(merged); n > 0 && sp.Start <= merged[n-1].End {
+			merged[n-1].End = max(merged[n-1].End, sp.End)
+			merged[n-1].Text = spokenJoin(merged[n-1].Text, sp.Text)
+			continue
+		}
+		merged = append(merged, sp)
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
+// spokenJoin is the text of two spans made one, a's first: a text the other already holds counts once (every upload
+// and every socket's start sends the whole timeline again), and the whole is cut at maxSpokenText bytes like a span's.
+func spokenJoin(a, b string) string {
+	switch {
+	case b == "" || strings.Contains(a, b):
+		return a
+	case a == "" || strings.Contains(b, a):
+		return cutBytes(b, maxSpokenText)
+	}
+	return cutBytes(a+" "+b, maxSpokenText)
 }

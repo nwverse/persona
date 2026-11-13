@@ -662,8 +662,8 @@ struct ChatView: View {
             guard let r, r.key == key, r.window == nil || r.window == macWindow else { return }
             switch r.kind {
             case .inspector: showInfo.toggle()
-            case .rename: if session?.canTerminal == true { renaming = session }
-            case .close: if session?.status.isLive == true && session?.canTerminal == true { closing = session }
+            case .rename: if session?.canRename == true { renaming = session }
+            case .close: if session?.status.isLive == true && session?.canClose == true { closing = session }
             case .delete: if session?.canDelete == true { deleting = session }
             case .clear: break // the composer's
             case .terminal:
@@ -1933,9 +1933,12 @@ struct ChatView: View {
 
     /// Messages sent from here that the transcript does not have yet, minus those Claude holds in its queue (the queue
     /// strip shows them).
-    private var shownPending: [PendingMessage] {
-        let queued = session?.queued ?? []
-        return (store.arriving + store.pending).filter { p in !queued.contains { PendingMessage.same($0, p.text) } }
+    private var shownPending: [PendingMessage] { pendingPlacement.chat }
+
+    /// What was sent from here and is not in the transcript yet, split between the chat and the queue strip (#1461).
+    private var pendingPlacement: (strip: [PendingMessage], chat: [PendingMessage]) {
+        QueuePlacement.split(store.arriving + store.pending, working: session?.status.isActive == true, queued: session?.queued ?? [],
+                             stripShown: (style == .dev || session?.assistant == true))
     }
 
     /// The wait between a send and the hub's working (`ChatAwaitingTurn`); not for a subagent being viewed.
@@ -2582,16 +2585,17 @@ struct ChatView: View {
                 }
                 // The last card was answered: one low-key entry to the next conversation that needs you (#4348).
                 if let next = nextNeedsYouSession {
-                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.persona.name : next.title) : next.displayTitle) {
+                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.assistantShownName : next.title) : next.displayTitle) {
                         openNext(next)
                     }
                 }
-                if let queued = session?.queued, !queued.isEmpty,
-                   style == .dev || session?.assistant == true {
-                    QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count,
+                let queued = session?.queued ?? []
+                let sending = pendingPlacement.strip
+                if !queued.isEmpty || !sending.isEmpty, style == .dev || session?.assistant == true {
+                    QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
                                photoMarks: model.chat(key).queuePhotoMarks,
                                steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
-                               persona: session?.assistant == true ? model.persona.name : nil)
+                               persona: session?.assistant == true ? model.assistantShownName : nil)
                 }
                 // The newest plan while its line is out of view (#5602): which step of how many; tap, the whole plan.
                 // Folded while a card asks something (#2970): it sat over the card's buttons.
@@ -2609,11 +2613,14 @@ struct ChatView: View {
                 if let s = session, s.isStopped {
                     // read-only: its terminal page has the shell it left and Resume (#4754), which Resume here opens (#5521)
                     StoppedAgentBar(openTerminal: openTerminal, resume: resumeHere)
+                } else if session?.isTerminalOnly == true {
+                    // No reader for its conversation here: the terminal is the view, one tap instead of title › ⋯ › Terminal (#6170).
+                    TerminalOnlyBar(openTerminal: openTerminal)
                 } else if let s = session, !s.canSend, let reason = s.sourceSubtitle {
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
-                    Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.persona.name)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
+                    Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
                              covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) })
                         // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                         // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
@@ -2728,7 +2735,7 @@ struct ChatView: View {
                     .onChange(of: phase) { _, phase in store.traceSendFeedback(phase) }
                     #endif
             } else if frozen == nil, startingTurn(pending) {
-                TypingIndicator(text: String(localized: "\(style == .assistant ? model.persona.name : (session?.agentLabel ?? "Claude")) is getting ready…"))
+                TypingIndicator(text: String(localized: "\(style == .assistant ? model.assistantShownName : (session?.agentLabel ?? "Claude")) is getting ready…"))
                     .flippedBack()
                     .id("starting-turn")
             }
@@ -3343,7 +3350,8 @@ struct ChatView: View {
             if status.isActive, session?.canInterrupt == true {
                 Button { Task { await model.interrupt(key) } } label: { Label("Interrupt [Composer Buttons f9d193]", systemImage: Theme.Icon.interrupt) }
             }
-            if style == .dev, let s = session, s.canTerminal {
+            // By `capabilities.rename` where the node says (a runtime's session, #6294), else a terminal's.
+            if style == .dev, let s = session, s.canRename {
                 Button { renaming = s } label: { Label("Rename… [Assistant Sidebar ec4cd0]", systemImage: Theme.Icon.edit) }
             }
             if style == .dev {
@@ -3363,7 +3371,7 @@ struct ChatView: View {
                 if host == nil, let space = s.spaceKey, let openSpace {
                     Button { openSpace(space) } label: { Label("All Agents in Space", systemImage: Theme.Icon.space) }
                 }
-                if s.status.isLive && s.canTerminal {
+                if s.status.isLive && s.canClose { // `capabilities.close` where the node says (#6294), else a terminal's
                     Button(role: .destructive) { closing = s } label: {
                         Label("Stop and Close Agent…", systemImage: Theme.Icon.end).lineLimit(1)
                     }
@@ -4437,6 +4445,7 @@ struct ChatView: View {
         menu.rewindBlock = { [model, key] in
             model.rewinding.contains(key) ? String(localized: "Rewinding") : Rewind.block(model.session(key))
         }
+        menu.rewindOffer = { [model, key] in Rewind.offer(model.session(key)) }
         menu.agent = { [model, key] in model.session(key)?.agentLabel ?? "Claude" }
         menu.source = { [model, key] in
             let s = model.session(key)
@@ -5054,8 +5063,10 @@ struct Composer: View, Equatable {
     /// The launcher's list behind this session's model menus once read (#3754); nil: the fixed aliases.
     private var runningModels: [AgentModel]? { RunningModelLists.shared.models(key, model.session(key)) }
 
+    /// A session whose node takes the model (#6294, `capabilities.model`) picks from its launcher's list once read.
     private var canPickModel: Bool {
         guard let s = model.session(key) else { return false }
+        if s.capabilities?.model != nil { return SessionModes.offersModels(s, list: runningModels) }
         return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex && !s.assistant
     }
 
@@ -5305,7 +5316,7 @@ struct Composer: View, Equatable {
             } else if usesShellComposer {
                 // The shell's composer (docs/apple/ios.md「New shell」), whatever the style: the assistant's and an agent's (#1091).
                 ShellComposerBar(placeholder: status.isActive ? String(localized: "Add a note (queued)")
-                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.persona.name)") : placeholder ?? String(localized: "Message Claude"))),
+                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.assistantShownName)") : placeholder ?? String(localized: "Message Claude"))),
                                  text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                                  hasAttachments: hasAttachments,
                                  stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
@@ -5363,6 +5374,8 @@ struct Composer: View, Equatable {
                                    switch PromptItems.modelPick(id, running: model.session(key)?.model, list: runningModels) {
                                    case .typeID: typingModel = true // #1644: through …/modes
                                    case .keep: break
+                                   // a session whose node takes the model (#6294): through …/modes, never as a message
+                                   case .send where model.session(key)?.picksModelByModes == true: Task { await model.setModes(key, model: id) }
                                    case .send(let text): model.sendNow(key, text: text, images: []) // photos and quotes stay for the message
                                    }
                                },
@@ -5595,8 +5608,7 @@ struct Composer: View, Equatable {
         #endif
     }
 
-    /// The iPhone's 「+」 opens the panel (iPad and the Mac keep the menu). The keyboard goes down first and the panel
-    /// follows a moment later, the two moving together (Telegram's).
+    /// The iPhone's 「+」 opens the panel (iPad and the Mac keep the menu); the keyboard goes down as the sheet comes up.
     private var attachOpener: ((CGRect) -> Void)? {
         #if os(iOS)
         attachPanel.opener(focused: $focused)
@@ -5993,6 +6005,26 @@ private struct StoppedAgentBar: View {
     }
 }
 
+/// The line over the composer of an Agent whose chat Persona cannot draw (`Session.isTerminalOnly`, #6170): what it is and
+/// the terminal, which is its view.
+private struct TerminalOnlyBar: View {
+    var openTerminal: () -> Void
+
+    var body: some View {
+        HStack(spacing: Theme.Space.s) {
+            Text("Persona can't show it as a chat. Its terminal shows what it is doing.")
+                .font(Theme.Font.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: openTerminal) {
+                Label("Terminal", systemImage: Theme.Icon.terminal).font(Theme.Font.labelStrong).lineLimit(1)
+            }
+            .themedButton(prominent: true)
+            .accessibilityIdentifier("chat.terminalOnly.terminal")
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// A queued message moved one place (#6088): the `keep` of `/queue` that re-queues them in the new order.
 nonisolated enum QueueOrder {
     /// The original indexes in their new order with the one at `index` moved `step` places (-1 up, 1 down); nil when
@@ -6018,6 +6050,10 @@ struct QueueStrip: View {
     var queued: [String]
     /// The user's own messages come first; relayed ones are only shown and copied.
     var own: Int
+    /// Messages sent from this phone while the agent worked that Claude has not reported queued yet (#1461): drawn
+    /// after the queued ones as sending, waiting for the network or failed, with the actions each state has.
+    var sending: [PendingMessage] = []
+    private var total: Int { queued.count + sending.count }
     /// Local photo counts derived by `ChatStore` for the own rows; Agent attachment marks come from `QueuedDraft`.
     var photoMarks: [Int] = []
     var steers = false
@@ -6040,7 +6076,7 @@ struct QueueStrip: View {
             .scrollBounceBehavior(.basedOnSize)
             // Its rows' own height until one is measured, not what it is offered: the footer is laid out first (#3703).
             .fixedSize(horizontal: false, vertical: rowHeight == 0)
-            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(queued.count), Self.visibleRows) : nil)
+            .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(total), Self.visibleRows) : nil)
             .padding(.top, Theme.Space.sm)
         } label: {
             Group {
@@ -6085,7 +6121,7 @@ struct QueueStrip: View {
     }
 
     private var tray: some View { ThemedIcon("tray.and.arrow.down").accessibilityHidden(true) }
-    private var title: Text { Text("\(queued.count) queued · \(agent) will handle them in order [Queue Strip]") }
+    private var title: Text { Text("\(total) queued · \(agent) will handle them in order [Queue Strip]") }
 
     /// Send Now when a Claude in a terminal has the user's own messages queued, or the spinner while the queue is being
     /// handed over.
@@ -6100,6 +6136,66 @@ struct QueueStrip: View {
             .foregroundStyle(Theme.accent)
             .accessibilityIdentifier("queue-send-now")
         }
+    }
+
+    /// A message of this phone's not yet reported queued (#1461): its words, and what became of the send.
+    private func sendingRow(_ msg: PendingMessage, number: Int) -> some View {
+        let draft = QueuedDraft(msg.text, photoCount: msg.images.count)
+        return Menu {
+            switch msg.state {
+            case .failed:
+                Button { model.retry(key, msg) } label: { Label("Resend", systemImage: Theme.Icon.retry) }
+            case .waiting:
+                Button { model.retry(key, msg) } label: { Label("Retry Now [Message Views f40f4f]", systemImage: Theme.Icon.retry) }
+            case .sending, .sent:
+                EmptyView()
+            }
+            Button { UIPasteboard.general.string = draft.text.isEmpty ? msg.text : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
+            if msg.onlyHere {
+                if msg.state == .waiting {
+                    Button(role: .destructive) { model.discard(key, msg) } label: { Label("Don't Send", systemImage: Theme.Icon.delete) }
+                } else {
+                    Button(role: .destructive) { model.discard(key, msg) } label: { Label("Delete", systemImage: Theme.Icon.delete) }
+                }
+            }
+        } label: {
+            HStack(alignment: .top, spacing: Theme.Space.s) {
+                Text("\(number)")
+                    .font(Theme.Font.labelHeavy.monospacedDigit())
+                    .foregroundStyle(Theme.accent)
+                    .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
+                    .background(Theme.accent.opacity(0.14), in: .circle)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    QueuedWords(draft: draft)
+                    if !msg.images.isEmpty {
+                        HStack(spacing: Theme.Space.xs) {
+                            ThemedIcon(Theme.Icon.photo)
+                            Text("\(msg.images.count) images")
+                        }
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    }
+                    switch msg.state {
+                    case .sending:
+                        Text("Sending… [Queue Strip]").font(Theme.Font.caption).foregroundStyle(.secondary)
+                    case .waiting:
+                        Text("Sends when connected").font(Theme.Font.caption).foregroundStyle(.secondary)
+                    case .failed:
+                        Text("Not sent. Tap to resend [Queue Strip]").font(Theme.Font.caption).foregroundStyle(Theme.danger)
+                    case .sent:
+                        EmptyView()
+                    }
+                }
+                Spacer(minLength: 0)
+                ThemedIcon(msg.state == .failed ? Theme.Icon.errorFilled : Theme.Icon.more).font(Theme.Font.label)
+                    .foregroundStyle(msg.state == .failed ? Theme.danger : .secondary).padding(.top, Theme.Space.xs)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            .opacity(msg.state == .failed || msg.state == .waiting ? 0.8 : 1)
+        }
+        .accessibilityLabel(Text("Item \(number): \(QueuedWords.spoken(draft))"))
+        .accessibilityIdentifier("queue-sending-item")
     }
 
     private var rows: some View {
@@ -6157,9 +6253,12 @@ struct QueueStrip: View {
                 .accessibilityHint(i < own ? Text("Edit, copy or delete") : Text("Copy [Readiness Views d37380]"))
                 .accessibilityValue(photos > 0 ? Text("\(photos) images") : Text(""))
             }
+            ForEach(Array(sending.enumerated()), id: \.element.id) { j, msg in
+                sendingRow(msg, number: queued.count + j + 1)
+            }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-            if !queued.isEmpty { rowHeight = h / CGFloat(queued.count) }
+            if total > 0 { rowHeight = h / CGFloat(total) }
         }
     }
 

@@ -2,6 +2,38 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Selecting the words of a long lifted answer (#5291)
+
+- A `LazyVStack` opened at item N in a scroll view still lays out items 0 and 1 first, then walks the items between
+  them and N, all in the first frame. To lift item N without that cost, give the items above it fixed-height
+  placeholders on the first frame and swap in the real ones on a later frame (`AnswerPartsLift`), keeping the pressed
+  item where it is on screen while they arrive.
+- `.task` and `onAppear` run inside the frame that shows the view, not after it. To defer work to a later frame, use a
+  display link and skip one tick (`LiftFrames`).
+- A text view that doesn't scroll sets its text container's height to its own frame height whenever its frame is set,
+  so its last line is dropped when that line's spacing hangs below the frame. Keep the container unbounded in
+  `layoutSubviews` (`LiftUITextView.keepsAllLaidOut`). A UI test comparing its lines to the chat's catches the missing line.
+- Making a UIKit view inside SwiftUI the first responder costs tens of milliseconds whatever the view holds: SwiftUI's
+  focus bridge walks the hosting view's whole responder tree. The first text selection after launch also loads
+  TextInputUI (the cursor glow), and the first edit menu loads the Translate service. Measured in the simulator, the
+  two loads were about 30 ms each. Start the selection in a later frame than heavy text layout, and show the edit
+  menu one frame after that, so the costs don't add up in one frame.
+- To see what fills a long main-thread block, read the watchdog's backtraces in the frame report the UI test
+  attaches. They show which step of the frame the block was in before you add any tracing.
+- TextKit 1 can keep a stale end for a line it laid out once and then breaks elsewhere (here: wrapped on its own,
+  then where the chat's lines break, through `shouldBreakLineByWordBeforeCharacterAt`). The glyphs are drawn in the
+  right places, but `boundingRect(forGlyphRange:)` of the line's new last glyph is a zero-wide box at the line's right
+  edge. Set the breaks before anything lays the words out, and remember that setting a `UITextView`'s
+  `attributedText` can lay it out then and there: work the breaks out from the new string and set them before
+  assigning it (`LiftUITextView.render`). When the breaks still change after a layout, invalidate all of the glyphs
+  (`resnap`); it costs no more than the relayout. On macOS the stale box appears only after something measured the
+  old layout, and only invalidating every glyph clears it. A command-line repro built with `swiftc` for the iOS
+  simulator and run with `simctl spawn` did not show it there, so check the fix in the app.
+- A selection handle's knob hangs past the selected lines: over the first, under the last. When a text view is
+  exactly as large as its words inside a SwiftUI view, a touch on the knob lands outside it and the handle can't be
+  dragged. Make the text view reach past the words (`Theme.Lift.handleReach`), with a matching
+  `textContainerInset` that keeps the words where they are.
+
 ## Tab selection and targeted opens are different navigation intents (#5641)
 
 - An Agent pushed on Assistant's stack still uses the dev chat view, which writes the shared last-opened Agent marker.
@@ -170,8 +202,8 @@ The table and red lines are in `docs/apple/ios.md` ("Design language", Motion); 
   there. The two exceptions are measured ones: a glyph swapped inside the same round button (Telegram's send) and the quote bar fading in
   quicker than out (Telegram's input panel), kept as measured.
 - **No easing under the finger.** An animation on a drag makes the content trail the finger, which reads as lag. Track the gesture with
-  `transaction.animation = nil` / plain state writes and hand the finger's speed to the release animation (`drawer(velocity:)`,
-  `attachOpen(velocity:)`), so the motion carries on instead of starting over.
+  `transaction.animation = nil` / plain state writes and hand the finger's speed to the release animation (`drawer(velocity:)`),
+  so the motion carries on instead of starting over.
 - **Continuous motion is registered.** Each loop costs battery and attention, and a loop nobody asked about is how a pulsing avatar or a
   spinning gear ships. `ContinuousMotionTests` scans the app targets for `repeatForever`, `TimelineView(.animation…)`, `phaseAnimator`,
   `repeatCount = .infinity` and `startAnimating()`; a new one fails until it is registered with its reason and the file that reads Reduce
@@ -242,7 +274,10 @@ from colliding with its buttons.
   CJK punctuation, and TextKit 2 matches SwiftUI glyph for glyph. TextKit 1 draws a line-ending 」 or ） about 3 pt narrower and starts the next
   line half an em in (a little in, before an opening bracket). Lines ending in ，。、”： match. `LiftUITextView.wrappedStart` measures how
   far a wrapped line starts past its indent and `LineSnap` moves it back; the narrower bracket stays (the highlight of a whole line
-  reaches the words' edge anyway).
+  reaches the words' edge anyway). A line that starts with an opening bracket (「) gets that bracket narrower too (6.1 pt of its 8.6 at
+  17 pt, iOS 27.2): it starts where the chat's does, and the rest of the line is 2.5 pt to the left, its end handle short of the last
+  word. `narrowedBracket` moves such a line right by what the bracket lost, so only the bracket starts in (#5982). A kern after the
+  bracket did the same but made the line too long for TextKit 1, which measures a line-ending 。 at full width: it wrapped the 。.
 - **Over lines a layout manager's delegate moved, find the line yourself.** `LineSnap` puts each line on the chat's
   (`shouldSetLineFragmentRect`); the highlight (`selectionRects`) and the paragraphs' accessibility frames follow. The text view's own
   lookups did not (#6099). In the mock's long answer, `closestPosition(to:)` found the table for a point on the line under it and the
@@ -257,7 +292,9 @@ from colliding with its buttons.
   SwiftUI `ScrollView`, the handle reaches the edge and the outer scroll view stays put. `LiftUITextView` follows the finger with a
   recognizer that never recognizes and cannot be prevented (`canBePrevented(by:)` false), treats a touch that changes the selection as a
   handle's drag, and scrolls the first enclosing `UIScrollView` from a display link, moving the dragged end of the selection with the words
-  under the finger, since a finger held still sends no touches.
+  under the finger, since a finger held still sends no touches. Since iOS 27 a dragged handle changes the selection only when the finger
+  lifts, so nothing changed while it was held at the edge and the lift never scrolled (#5982): the handle is told by where the finger went
+  down (`LiftLayout.handle`), and it scrolls once it has moved (`LiftLayout.moved`), not as soon as it is touched at an edge.
 - **XCUITest sees no child of a `.combine` element.** A lifted message combined into one element has no static texts to find; the long
   one is `.contain` (VoiceOver can then go through its parts, which scrolls it), and `isHittable` on its first line is what tells whether
   something else is drawn over it.
@@ -1661,6 +1698,9 @@ no initial Working row so the message shifted by one row, and pending local remo
 
 ## A view that places itself over the whole screen gets no keyboard avoidance (2026-11-10, #3004)
 
+Superseded for the + panel by #4312: it is a system sheet now, its bar a `safeAreaInset` that the system's keyboard
+avoidance moves; the points on `Keyboard.dismiss()` and XCUITest's `typeText` below still hold.
+
 - The + panel (`AttachSheet`) measures the screen in a `GeometryReader` (size plus safe-area insets, which with the keyboard
   up include it) and places the sheet with `.position` under `ignoresSafeArea(.container)`. The keyboard only shrank the
   space it was placed in, the sheet kept its full height, and the caption bar at its bottom sat under the keyboard.
@@ -2210,3 +2250,12 @@ toasted and ended the hold, while the tap's dictation went on. The TLA+ model in
   passed ends without a word. Make `stop()` pass the turn, and call it unconditionally rather than behind `isListening`.
 - A newer start of the same owner takes over from an older one already holding the resource instead of failing as "in
   use". Test the orderings with the wait held open (`Dictation.permission`, `DictationTurnTests`) and rerun the model.
+
+## MapKit speaks WGS-84 in mainland China too (2026-11-13, #6386)
+
+Apple draws its mainland China map in GCJ-02, but MapKit's public API never shows it: `MKLocalSearch` and `CLGeocoder`
+return WGS-84, `MKMapSnapshotter`'s `point(for:)` and `MKDirections` take WGS-84 and give their route lines back in it,
+the same frame as Core Location. Converting to GCJ-02, as older posts advise, moves every mark about 500 m. Checked from
+a Mac (macOS 14, region China): Tiananmen Gate searched by name came back at (39.90919, 116.39746) and sat on the gate in
+a snapshot, the same point shifted to GCJ-02 (39.91059, 116.40371) landed in an alley 550 m east, and a walking route
+drawn from MapKit's own points followed the streets. Check on a phone in the mainland before adding any conversion.

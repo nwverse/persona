@@ -244,6 +244,8 @@ func recipeFormat() map[string]any {
 			"sender_id": "the sender's stable id, as the source writes it: muting the sender matches it (without it, the lowercased name)",
 			"chat":      "the conversation's stable id: the row can then be muted by chat",
 			"chat_name": "the conversation's name, which the chat mute shows",
+			"seen":      "whether it was already seen in the source (true, a non-zero number, or true / yes / read / seen): the Inbox row is then read",
+			"reply_to":  "where a reply goes and who sees it, in a line for people: with it, an item with an id can be replied to through the connector",
 		},
 		"paths":      "relative to one item: $, .key (letters, digits, _ and -) and [index]; no wildcards, filters or expressions",
 		"items_path": "where the list of items is in the result ($ by default); leave it empty to have the dry run find the result's one top-level list",
@@ -256,6 +258,7 @@ func recipeFormat() map[string]any {
 		"modes": map[string]string{
 			wire.ConnectorSubscriptionModeItems:    "new items, each kept once (a JSON result with a list)",
 			wire.ConnectorSubscriptionModeSnapshot: "the result as one state kept when it changes (any result; text can only be a snapshot); at most hourly, daily by default",
+			wire.ConnectorSubscriptionModeThings:   "a tool that answers Inbox rows ready-made (a connector's own inbox_things): kept and handed to the Inbox as they are; group_by thread, no fields, Inbox only",
 		},
 		"kinds": wire.ConnectorSubscriptionKinds,
 		"group_by": map[string]string{

@@ -1,4 +1,5 @@
 {
+  "skills_changed": "Execution environment changed. Your draft is kept; remove selected skills and select them again.",
   "cmd_continue_word": "/continue",
   "cmd_continue_desc": "Keep going",
   "cmd_continue_text": "Continue",

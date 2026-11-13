@@ -1,5 +1,20 @@
 # Lessons: hub / node and networking
 
+## An update waits only for what its restart interrupts (2026-11-13, #6364)
+
+A node update counted every session on the computer as busy: working, background tasks, running subagents, questions on the phone. On a computer whose terminal Agents always run a background workflow it never went through, and the queued update survived hub restarts. The resident node restarts by exec in place and stops only its own headless conversations (`ResidentReload.Prepare`); terminal Agents are other processes and keep running. Before adding a wait in front of a restart, list what that restart actually stops and wait for that, as the hub self-update's `updateBusy` does. When the rule lives on both sides of a connection, gate the new rule on a capability: the hub's lighter wait in front of an old node's strict commit check would re-send the whole build on every refusal. And let the side that enforces the rule report its verdict rather than have the other side rebuild it from rows: the hub first rebuilt the node's check from `sessions.list` rows, but a node never marks its headless rows `Assistant` (the hub's assistant manager adds that later), so the hub saw a busy main chat as idle and re-sent the build until it settled. The node now answers `update_busy`.
+
+## A saved position that fails must be able to expire (2026-11-13, #6310)
+
+Paginated source subscriptions (#5990) commit the next page's cursor with each page, and a failed run kept it, so every
+retry asked for the same page. A page token that expired between pages (a manager restart, a connector outage, a long
+backoff) is refused every time: the subscription failed for days while a call without the cursor answered fine, and
+only editing the recipe got it out. Before pagination a failed run simply pulled again. Any resumable position (a
+cursor, an offset, an upload id) needs a way back to a fresh start that does not depend on the user: here a page
+that fails in two runs in a row is dropped and the pull starts again from the window's start, the dedup keys holding
+back what was delivered, while one transient failure still resumes. Test a position that goes bad between runs, not
+only one that stays good across a restart.
+
 ## A name taken from a counter of attempts is not a free name (2026-11-13, #6024)
 
 The hub edge named each new slot by alternating on a counter of slots started (`'a' + slots%2`), assuming every
@@ -1970,6 +1985,12 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 - Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.
 - The same happens to a type built as one slice per pass (2026-11-12, #5188). #5150 added three fold fields to `sessionlist.Item` (208 to 240 bytes); the hub reads a machine's 150 items as one `[]Item` each pass, and 36,000 B is past the largest size class (32 KiB), so it took whole pages, 40 KiB, 8 KB more a pass. Moving the fields behind one pointer (`Item.Fold`, nil for a row without a hierarchy) brought it back to 216 bytes. Then allocate the pointer only where it is new: `return &fold` moves `fold` to the heap where it is declared, for every row, even on the paths that return nil; copy it in the branch that returns it (`go build -gcflags=-m` says `moved to heap`).
 
+## A fact about a directory does not go on every row in it (2026-11-13, #994)
+
+- #4637 put a project identity on each session (`inventory` on `proto.Session`, more attributes on `sessionlist.Item`) so the paged list could group a repository across computers. `Item` went from 200 to 328 bytes, a 150-row reindex allocated 17% more, two allocation guards failed, and it was reverted the same day (#4744). `proto.Session` is at 1,528 bytes with one spare byte, so a new string there costs every row copied anywhere 256 bytes.
+- A repository's remote is the same for every row in a directory and changes about never. The catalog (`server/internal/hub/sessions_catalog.go`) keeps it per directory instead: the index counts the filtered rows by machine and project in one scan when a client asks, and the hub asks each directory's computer what it holds (`git.status` with `identity_only`, which the nodes already answer), remembering the answer for 30 minutes. No row, item, push or page changed, and the allocation guards did not move.
+- Before adding a per-row attribute, ask what it is a fact about. If many rows share it through something they already carry (a directory, a machine, a space), keep it beside that key and look it up where it is shown.
+
 ## What the port relay costs, hop by hop (2026-11-10, #3067)
 
 `server/cmd/vncbench relay` puts an echo server behind `…/ports/{port}/connect`. With everything on the hub machine
@@ -2003,6 +2024,11 @@ same spread, and the Mac's `sshd-session` already has TCP_NODELAY (lsof `-T f`: 
 - The manager ran the hub machine's node (`node --stdio`) with `exec.CommandContext` and the default `Cancel`, a SIGKILL. The node puts each assistant process in its own group (`Setpgid`, so `stop()` can end its background tasks), and nothing ties that group to the node: a SIGKILLed node leaves its conversations running. Before blue-green switching, the systemd restart's cgroup kill hid this; a switch keeps the unit, so the old Claude processes went on beside the ones the next node resumed for the same conversations, and the next node rightly refused them the assistant's tools.
 - A child that must not outlive its parent needs the parent to stop it, and the parent needs time to: end such a process the way its peer going away ends it (EOF on stdin) with a bounded grace before the kill (`cmd.Cancel`, `cmd.WaitDelay`), and have it stop its own children and wait for them before it exits. Stopping them in a goroutine is not enough: `Serve` returned and the process exited before the goroutine's SIGKILL fallback ran (`stopAndWait`).
 - A test that kills the parent and looks for the child catches both halves; one that only checks the parent's exit status does not.
+
+## Killing ssh must include its ProxyCommand (2026-11-13, #6251)
+
+- `exec.CommandContext`'s default `Cancel` kills only ssh. Its ProxyCommand stays alive and is adopted by the service manager; when that command holds a relay connection, it can compete with the replacement ssh connection for replies. `WaitDelay` only bounds pipe draining and does not kill the surviving child.
+- Start ssh in its own process group (`osproc.GroupAttr`) and override `cmd.Cancel` to stop its descendants, not only its own pid. On Unix stop the process group and, after `Wait` reaps ssh, call `osproc.SweepGroup` so a child forked concurrently with the signal cannot survive. On Windows `taskkill /T` loses the tree once its root has exited, so walk the remaining descendants in a process snapshot instead. Do not apply this to the hub machine's local node: that one still needs stdin EOF and its graceful-stop grace period. The regression test abandons a real `Machine.connect` handshake with ssh both running and already exited, and checks the ProxyCommand child's pid, not just ssh's exit.
 
 ## A field in `proto.Session` is paid on every copy (#4342)
 
@@ -2117,6 +2143,13 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - The node sent an assistant chat's messages to its agent runtime under a `client_msg_id` of its own, new on every call. The runtime protocol lets a runtime put the id it was sent with on the message's item, and the node forwards an item a runtime tied as it is (`echo.go`). So the line carried an id no app had, the app's pending bubble stayed beside it, and the message showed twice: the same failure as #5200, in another place.
 - Hand a message on with the id it came with, or with none. A made-up id deduplicates nothing either: it is new on every retry. A message without an id leaves its line without one, and the apps match it by its words.
 - In-repo runtimes (DSH, Antigravity) did not tie their lines, so nothing showed it. The test that does is a fake runtime that ties its line as the protocol allows (`TestAssistantOnARuntimeSendsTheMessagesOwnID`).
+
+## The hub tree's GOMAXPROCS: the hub's own children start capped (2026-11-12, #3533)
+
+- The edge, the slot and the built-in manager each kept a P per core: 25 to 30 threads each on a 64-core host, although they are I/O-bound like the node, which caps itself at 4 (#2590 above). A cap set with `runtime.GOMAXPROCS` at a process's entry comes too late for what its start-up already did with every P: the edge, capped at its entry, keeps 25 to 28 threads and about 10 MB anonymous, against 10 threads and 8 MB when it starts with `GOMAXPROCS=4`. Only a process started with the variable gets the whole saving.
+- So the edge caps itself in place (it holds the ports and is never run again) and starts the slot with `GOMAXPROCS=4` and a marker, `PERSONA_GOMAXPROCS_CAP=4`; the slot starts the manager the same way (`procs.ChildEnv`, `server/internal/procs/procs.go`). The marker says the variable is the hub's, not the user's: `procs.AtStart` takes both out, so the node, Agents and tools they start keep their own default, and keeps the cap for its own `ChildEnv`. A `GOMAXPROCS` the user sets has no marker: it wins and passes on unchanged.
+- Measured on a 64-core host, a fresh hub with one local node, 5 alternating rounds against main, paired differences (median [min..max]): tree anonymous memory -8,396 kB [-9,552..-7,620] (slot -3,628, manager -4,396, edge and node within noise), threads -33 [-36..-26] (slot 27 to 11, manager 28 to 11).
+- `/proc/<pid>/environ` is the environment a process started with, not what `os.Unsetenv` left: the slot and the manager still show the cap there. Check what a process hands on in its children's environ (the node's has neither variable).
 
 ## A wait for a person takes its deadline from the card, not from the bus default (2026-11-13, #5907)
 
