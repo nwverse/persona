@@ -225,14 +225,26 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * shares with the stopped line's Resume, Codex threads counted as stopped Agents, and a stable Terminal handler so the
  * header still draws only when it changes). And 31 B because #5579 and #5860 landed together (#5879): #5579 was measured
  * on main at 9223f7f92 (+228 B) and #5860 merged before it, on whose main at bae989cf42 (ja 474,213 B) it costs +262 B;
- * ja 474,475 B on main at 624f81dde, with 0 B of room.
- * And 243 B for the explicit task-decision chat address (#5929): ja 474,611 B against 474,368 B on clean 549191b9e.
- * This is the round-aware route and its visible, localized explanation, retaining the baseline's 107 B of room;
- * no unrelated first-screen imports are added.
- * And 151 B for the same issue's completed-task ownership menu and its localized label: ja 474,762 B; active task
- * membership remains separate from the display-only reference, and the same 107 B of room remains.
+ * ja 474,475 B on main at 624f81dde, with 0 B of room. And 79 B for the GitHub star prompts (#5761: ja 474,554 B against
+ * 474,421 B on main at 47c38a3466, +133 B, of which 54 B fit the room main had: the readiness answer and an Agent this
+ * browser started share one on-demand import of the rule, lib/star-prompt-load.ts, which a failed load only skips, and
+ * the sidebar's milestone line is a lazy component; the rule, the pill, the line and their strings stay off the first
+ * screen). And 128 B for recent main changes (#6346: ja 474,617 B on main at 2010e8229f, 63 B over the old budget,
+ * with 65 B of room). And 377 B for opening a Persona chat at a message, with main's own growth (#6283: main at
+ * 0821d1acca measured ja 474,717 B, 35 B over the old budget; this change takes it to 475,028 B, +311 B: the `?at=` of a
+ * search hit's address and the chat's landing on it, which pages back for one further up, waiting while the chat still
+ * fills the screen, and its one line when the message is not reached; the search itself stays in ⌘K's on-intent load
+ * and All chats' page; 31 B of room so the next main does not tip it). And 1,501 B for the paged Agents list by group
+ * (#6348: ja 476,530 B against 475,029 B on main at 098af3327a: the Browse by kept in this browser, the groups read from
+ * the hub's catalog or the count maps (lib/session-groups.ts, views/agents/use-session-groups.ts) while the sections'
+ * code loads, the pill's menu from them with a project's remote and directories, the place and space filters and a
+ * list that reads rows only (lib/session-list.ts), and a row's computer under a project on several; the sections
+ * themselves, views/agents/GroupedSessions.tsx, load when a Browse by is chosen, which took 407 B back off; the same
+ * code measured +1,396 B and +1,510 B on the two mains before, docs/lessons/web.md; the 30 B of room main had stay).
+ * And the same 394 B allocation for explicit, round-aware task-decision chat routing and completed-task ownership
+ * (#5929: 243 B and 151 B measured on the original feature base), retaining main's budget margin on synchronization.
  */
-export const FIRST_SCREEN_BUDGET = 474_869;
+export const FIRST_SCREEN_BUDGET = 476_954;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
@@ -402,9 +414,13 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * And 35 B of minifier drift (2026-11-13): #5534 left no room, and by bdbfabd69 the idle tier sent 43,969 B with none
  * of its pages (ComposerPanel, QueuePanel, SlashPalette, ImageEditor, ViewBody, ExtensionChart, Palette) changed since,
  * only the code they share with other chunks (#5760); 31 B of room so the next main does not tip it.
+ * And 475 B for finding a Persona chat by what was said in it in ⌘K (#6283, 2026-11-13: 43,846 B on main at 39b5b57403,
+ * 44,444 B after, +598 B, of which 154 B fit the room main had: the merge of the manager's results into the palette's
+ * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
+ * query typed, off the idle tier; 31 B of room so the next main does not tip it).
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 44_000;
+export const IDLE_TIER_BUDGET = 44_475;
 
 const gzip = promisify(gzipCompress);
 

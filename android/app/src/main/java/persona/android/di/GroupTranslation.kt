@@ -315,7 +315,8 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
     return object : AssistantConversations {
         override val assistant = source.assistant.mapIn(scope) { snapshot ->
             AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager, snapshot.managerId,
-                snapshot.leaders, snapshot.directionNames, leaderCounts = snapshot.leaderCounts,
+                snapshot.leaders, snapshot.directionNames,
+                directionTree = snapshot.directionTree?.mapMachines(names::machineId),
                 backgroundSupervisor = snapshot.backgroundSupervisor)
         }
         override val pinned = source.pinned.mapIn(scope) { keys -> keys.mapTo(LinkedHashSet(), names::key) }
@@ -421,6 +422,11 @@ internal fun SessionFiles.inGroup(names: GroupNames): SessionFiles {
         override suspend fun thumbnail(machineId: String, cwd: String, path: String, size: Int) =
             source.thumbnail(names.rawMachine(machineId), cwd, path, size)
         override suspend fun convertToPdf(machineId: String, cwd: String, path: String) = source.convertToPdf(names.rawMachine(machineId), cwd, path)
+        override fun editsFiles(machineId: String) = source.editsFiles(names.rawMachine(machineId))
+        override suspend fun rename(machineId: String, cwd: String, path: String, name: String) =
+            source.rename(names.rawMachine(machineId), cwd, path, name)
+        override suspend fun trash(machineId: String, cwd: String, paths: List<String>) = source.trash(names.rawMachine(machineId), cwd, paths)
+        override suspend fun restore(machineId: String, trashIds: List<String>) = source.restore(names.rawMachine(machineId), trashIds)
     }
 }
 

@@ -11,6 +11,10 @@ var (
 	PermissionModes = []string{"default", "acceptEdits", "plan", "auto", "bypassPermissions"}
 )
 
+// CodexEffortLevels are Codex's reasoning efforts, weakest first: a codex launcher's model catalog advertises ultra,
+// so a start on one takes it too (node/codex_effort.go). Claude Code's list stops at max.
+var CodexEffortLevels = []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
 
@@ -482,6 +486,10 @@ const (
 	// CodeSwitchFailedStopped: the agent did not come up on the new launcher and could not be brought back on its own
 	// one: it has stopped (Resume on its terminal page).
 	CodeSwitchFailedStopped = "switch_failed_stopped"
+	// CodeSwitchBusy: the assistant's switch (session.send with switch_now, #5973) could not be carried out now: the
+	// agent works, waits for the user, is starting or has background work a quit would end. Nothing was typed and the
+	// switch was dropped.
+	CodeSwitchBusy = "switch_busy"
 )
 
 // TodoRef names a session's associated todo; Session.Todo is active, CompletedTodo() is display-only history.
