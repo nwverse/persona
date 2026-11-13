@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## An update waits only for what its restart interrupts (2026-11-13, #6364)
+
+A node update counted every session on the computer as busy: working, background tasks, running subagents, questions on the phone. On a computer whose terminal Agents always run a background workflow it never went through, and the queued update survived hub restarts. The resident node restarts by exec in place and stops only its own headless conversations (`ResidentReload.Prepare`); terminal Agents are other processes and keep running. Before adding a wait in front of a restart, list what that restart actually stops and wait for that, as the hub self-update's `updateBusy` does. When the rule lives on both sides of a connection, gate the new rule on a capability: the hub's lighter wait in front of an old node's strict commit check would re-send the whole build on every refusal. And let the side that enforces the rule report its verdict rather than have the other side rebuild it from rows: the hub first rebuilt the node's check from `sessions.list` rows, but a node never marks its headless rows `Assistant` (the hub's assistant manager adds that later), so the hub saw a busy main chat as idle and re-sent the build until it settled. The node now answers `update_busy`.
+
 ## A saved position that fails must be able to expire (2026-11-13, #6310)
 
 Paginated source subscriptions (#5990) commit the next page's cursor with each page, and a failed run kept it, so every
@@ -1480,6 +1484,14 @@ allowing concurrent "set key" to pair a key with an unintended address; and only
 checking/deleting under the same operation lock in `SetConfig` / `SetSecret`. Address changes delete unconditionally (idempotent); `SecretsSet` only decides response wording.
 For future safety-driven delete/reject decisions, don't rely on error-swallowing read APIs or split check-then-write in handlers.
 
+## One large message on the bus holds up everything behind it (2026-11-13, #6574)
+
+- The bus between the hub and a manager is one WebSocket: `rpc.Peer` writes one message at a time, coder/websocket writes a message as one frame (it even compresses the whole message into a buffer first), and the reader decodes a whole line before it looks at the next. A 22 MB attachment inside `http.request` became a 30 MB line, and every other call to that manager (cards, to-dos, session lists, phone tools) waited until it was written. Compression makes the blocker smaller, not shorter-lived, and photos, PDFs and audio barely compress anyway.
+- On a slow link the same frame breaks the connection: the keepalive's ping waits at most 5 s for the frame lock (`writeControl`, hard-coded), so a frame that takes longer to drain drops the bus with every call on it, the upload included ("Heartbeat timeouts on slow links" below).
+- Move the bytes, not the request: `http.request_streamed` keeps the whole envelope (auth, caller, receipts, the answer) on the bus and sends only a large body on a relay of its own, in 256 KiB messages, read whole before the route runs. Nothing about the request's meaning changes, so there is nothing to keep in step but the body. A stream that fails is refused before anything ran, so the hub can send the request inline after it without running it twice.
+- Separate HTTP requests were never ordered by the bus (the hub reads each body before calling, the manager runs each call in its own goroutine), so a side stream breaks no order anyone relied on: a flow that needs one request after another waits for the first's answer.
+- Prove a stall with a control: `TestLargeBodyDoesNotHoldUpTheBus` throttles the manager's reads and measures a small call during a large upload both ways (3 ms streamed, 2.5 s inline). Without the inline run failing its own bound, a too-fast test link would pass for a fix.
+
 ## Heartbeat timeouts on slow links (2026-11-06, #3452)
 
 At about 30 KB/s from hub to a computer, its link repeatedly disconnected with "no pong within 5s", failing every message. Ping doesn't jump the queue: it follows bytes already given to TCP,
@@ -1981,6 +1993,12 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 - Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.
 - The same happens to a type built as one slice per pass (2026-11-12, #5188). #5150 added three fold fields to `sessionlist.Item` (208 to 240 bytes); the hub reads a machine's 150 items as one `[]Item` each pass, and 36,000 B is past the largest size class (32 KiB), so it took whole pages, 40 KiB, 8 KB more a pass. Moving the fields behind one pointer (`Item.Fold`, nil for a row without a hierarchy) brought it back to 216 bytes. Then allocate the pointer only where it is new: `return &fold` moves `fold` to the heap where it is declared, for every row, even on the paths that return nil; copy it in the branch that returns it (`go build -gcflags=-m` says `moved to heap`).
 
+## A fact about a directory does not go on every row in it (2026-11-13, #994)
+
+- #4637 put a project identity on each session (`inventory` on `proto.Session`, more attributes on `sessionlist.Item`) so the paged list could group a repository across computers. `Item` went from 200 to 328 bytes, a 150-row reindex allocated 17% more, two allocation guards failed, and it was reverted the same day (#4744). `proto.Session` is at 1,528 bytes with one spare byte, so a new string there costs every row copied anywhere 256 bytes.
+- A repository's remote is the same for every row in a directory and changes about never. The catalog (`server/internal/hub/sessions_catalog.go`) keeps it per directory instead: the index counts the filtered rows by machine and project in one scan when a client asks, and the hub asks each directory's computer what it holds (`git.status` with `identity_only`, which the nodes already answer), remembering the answer for 30 minutes. No row, item, push or page changed, and the allocation guards did not move.
+- Before adding a per-row attribute, ask what it is a fact about. If many rows share it through something they already carry (a directory, a machine, a space), keep it beside that key and look it up where it is shown.
+
 ## What the port relay costs, hop by hop (2026-11-10, #3067)
 
 `server/cmd/vncbench relay` puts an echo server behind `…/ports/{port}/connect`. With everything on the hub machine
@@ -2133,6 +2151,13 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - The node sent an assistant chat's messages to its agent runtime under a `client_msg_id` of its own, new on every call. The runtime protocol lets a runtime put the id it was sent with on the message's item, and the node forwards an item a runtime tied as it is (`echo.go`). So the line carried an id no app had, the app's pending bubble stayed beside it, and the message showed twice: the same failure as #5200, in another place.
 - Hand a message on with the id it came with, or with none. A made-up id deduplicates nothing either: it is new on every retry. A message without an id leaves its line without one, and the apps match it by its words.
 - In-repo runtimes (DSH, Antigravity) did not tie their lines, so nothing showed it. The test that does is a fake runtime that ties its line as the protocol allows (`TestAssistantOnARuntimeSendsTheMessagesOwnID`).
+
+## The hub tree's GOMAXPROCS: the hub's own children start capped (2026-11-12, #3533)
+
+- The edge, the slot and the built-in manager each kept a P per core: 25 to 30 threads each on a 64-core host, although they are I/O-bound like the node, which caps itself at 4 (#2590 above). A cap set with `runtime.GOMAXPROCS` at a process's entry comes too late for what its start-up already did with every P: the edge, capped at its entry, keeps 25 to 28 threads and about 10 MB anonymous, against 10 threads and 8 MB when it starts with `GOMAXPROCS=4`. Only a process started with the variable gets the whole saving.
+- So the edge caps itself in place (it holds the ports and is never run again) and starts the slot with `GOMAXPROCS=4` and a marker, `PERSONA_GOMAXPROCS_CAP=4`; the slot starts the manager the same way (`procs.ChildEnv`, `server/internal/procs/procs.go`). The marker says the variable is the hub's, not the user's: `procs.AtStart` takes both out, so the node, Agents and tools they start keep their own default, and keeps the cap for its own `ChildEnv`. A `GOMAXPROCS` the user sets has no marker: it wins and passes on unchanged.
+- Measured on a 64-core host, a fresh hub with one local node, 5 alternating rounds against main, paired differences (median [min..max]): tree anonymous memory -8,396 kB [-9,552..-7,620] (slot -3,628, manager -4,396, edge and node within noise), threads -33 [-36..-26] (slot 27 to 11, manager 28 to 11).
+- `/proc/<pid>/environ` is the environment a process started with, not what `os.Unsetenv` left: the slot and the manager still show the cap there. Check what a process hands on in its children's environ (the node's has neither variable).
 
 ## A wait for a person takes its deadline from the card, not from the bus default (2026-11-13, #5907)
 

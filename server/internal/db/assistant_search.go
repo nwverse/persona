@@ -110,6 +110,31 @@ func (d *DB) PurgeSearch(ctx context.Context) error {
 	})
 }
 
+// searchResetKey is the manager setting that counts the index's resets (ResetSearch).
+const searchResetKey = "assistant_search.reset"
+
+// ResetSearch empties the index (`assistant search-reindex`, #6340) and counts one more reset, in one transaction. A
+// manager that runs meanwhile still holds the cursors it read before: seeing the count move (SearchReset), it lets
+// go of them and reads every conversation again from the start (assistant/search_index.go).
+func (d *DB) ResetSearch(ctx context.Context) error {
+	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		b := &pgx.Batch{}
+		b.Queue(`DELETE FROM assistant_search_items`)
+		b.Queue(`DELETE FROM assistant_search_cursors`)
+		b.Queue(`INSERT INTO settings (key, value, updated_at) VALUES ($1, '1', now())
+			ON CONFLICT (key) DO UPDATE SET value = to_jsonb(COALESCE((settings.value #>> '{}')::bigint, 0) + 1), updated_at = now()`,
+			searchResetKey)
+		return tx.SendBatch(ctx, b).Close()
+	})
+}
+
+// SearchReset is how many times the index was reset (ResetSearch): 0 before the first.
+func (d *DB) SearchReset(ctx context.Context) (int64, error) {
+	var n int64
+	_, err := d.Setting(ctx, searchResetKey, &n)
+	return n, err
+}
+
 // SearchAssistantItems returns the messages of the given conversations (machines[i]/sessions[i]) whose folded text
 // holds every one of words (already folded), at most perConversation of each conversation (its newest), newest
 // first. A substring scan of the text (no trigram index: docs/design/proposals/assistant-search.md "The index").

@@ -122,7 +122,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     },
   }
   const rt = createRuntime({
-    listSessions, unlistedTranscripts, items, cursor, item, send, interrupt, start, rename, close, modes, rewind, check, models, watchChanged,
+    listSessions, unlistedTranscripts, items, cursor, item, send, interrupt, start, rename, close, modes, rewind, check, models, seen, watchChanged,
   }, meta)
 
   // ---- Paseo's state ----
@@ -928,6 +928,27 @@ export function createPaseoBridge(deps = {}, options = {}) {
     // name from here.
     const u = agent.archivedAt ? archived.get(agent.id) : undefined
     if (u) u.agent = { ...u.agent, title }
+  }
+
+  /**
+   * The user saw a session in Persona (#6299): Paseo's own unread mark (requiresAttention) is cleared too, so the session
+   * is not unread in Paseo's app as well. A loaded agent's with clear_agent_attention; one Paseo has not loaded through
+   * its workspace (workspace.clear_attention, which edits the stored record), and only when no other agent there is
+   * flagged: clear_agent_attention would load, so start, a stored agent. Never one waiting for an answer, which Paseo
+   * keeps flagged until it is answered.
+   */
+  async function seen(params) {
+    const agent = agents.get(bySession.get(params.session_id))?.agent
+    if (!agent || agent.requiresAttention !== true || agent.archivedAt || (agent.pendingPermissions?.length ?? 0) > 0) return
+    if (agent.status !== 'closed') {
+      // Paseo answers only a request that has an id, and says nothing when it fails: a short wait.
+      await paseo.request('clear_agent_attention', { agentId: agent.id }, { timeoutMs: 10_000 })
+      return
+    }
+    const ws = agent.workspaceId
+    if (!ws || [...agents.values()].some(({ agent: a }) => a.id !== agent.id && a.workspaceId === ws && a.requiresAttention === true)) return
+    const res = await paseo.request('workspace.clear_attention.request', { workspaceId: ws }, { timeoutMs: 10_000 })
+    if (res?.success === false) throw new RpcError(`Paseo did not clear it: ${res.error ?? 'no reason given'}`, 'paseo')
   }
 
   /**
