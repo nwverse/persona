@@ -25,7 +25,6 @@ credential or arbitrary path:
 {
   "update": {
     "development": {
-      "node_platforms": ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"],
       "backup": {
         "quiesce": ["/absolute/path/to/pause-persona-writers"],
         "resume": ["/absolute/path/to/resume-persona-writers"],
@@ -57,9 +56,20 @@ Settings shows `main` and the installed/target commits. A detached private check
 exact object even if the remote advances while building. There are no repository/branch overrides
 or default-branch mappings.
 
+Ordinary automatic/manual updates wait for the shared Hub idle check before backup and switching:
+working turns, conversations needing user action, and active redeploys can hold the update.
+A manual attempt stops waiting after two hours; it does not force a restart at that deadline.
+Choosing **Update now** explicitly bypasses this Hub wait and can interrupt local or connection-owned
+conversations. Independent remote resident-node conversations can survive a Hub reconnection.
+The idle check is not a lock against new turns: a turn starting during the subsequent backup/switch
+can still overlap the restart. This path does not guarantee interruption-free session execution.
+Link/connector node updates retain their own idle and commit checks; direct SSH deployment instead
+replaces the program and restarts the node, so it can interrupt work. See [node-update.md](node-update.md).
+
 The compile gate runs `npm ci` and `npm run build:development` for Web, builds the Agent SDK bridge as a
-runtime asset, generates runtime packages, then runs tagged `go build` for `personad` on each
-configured node platform and `persona-hub`/`persona-manager` on the Hub's platform. Web assets
+runtime asset, generates runtime packages, then runs tagged `go build` for `personad` on the
+Hub's platform and each registered computer's last-reported OS/architecture, deduplicated, plus
+`persona-hub`/`persona-manager` on the Hub's platform. Web assets
 are embedded and precompressed. No full tests, vet, mobile builds, release publication or hosted
 CI are required. The development command retains TypeScript, Vite, WebAssembly, localization
 and asset-graph checks, but skips the release's first-screen/idle performance budgets. The
@@ -108,7 +118,12 @@ Hub confirmation, compiled node packages are installed locally even with automat
 off, so **Redeploy** can use the matching build. Fleet installation still requires the separate
 `auto_update_nodes` choice. Online/offline Link nodes, SSH/tailcat, busy checks, old capabilities,
 fresh ownership and guardian rollback retain their original behavior in [node-update.md](node-update.md).
-Only configured platforms are available; the default is the existing four Linux/macOS platforms.
+There is no platform configuration or fixed platform matrix. Offline computers with a known
+platform are included. A computer that has never reported its platform supplies no build target;
+once it connects, the next development update includes its platform. With no known remote
+platforms, only the Hub's platform is built. Old unversioned packages are set aside before the
+new packages are installed, so an omitted platform is never mistaken for the new version.
+If an old package cannot be set aside, package preparation fails and fleet deployment does not start.
 Independent/remote managers have their own binaries, data and package sources: this local build
 path refuses their machine ownership instead of claiming those computers were upgraded. Use
 their original update channel. A publisher-owned `bin/nodes` symlink is likewise an explicit

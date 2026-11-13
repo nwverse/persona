@@ -78,7 +78,7 @@ def resolve():
 
 
 def build(request):
-    config, root = request["config"], Path(request["work"])
+    root = Path(request["work"])
     source, artifacts = root / "source", root / "artifacts"
     source.mkdir()
     artifacts.mkdir()
@@ -104,7 +104,7 @@ def build(request):
     if request.get("release_url"):
         flags += " -X " + shlex.quote("main.updateURL=" + request["release_url"])
     tags = (server / "build-tags.txt").read_text().strip()
-    platforms = sorted(set((config.get("node_platforms") or ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"]) + [request["platform"]]))
+    platforms = request["platforms"]
     if not set(platforms) <= PLATFORMS:
         raise ValueError("unsupported node platform")
     for platform in platforms:

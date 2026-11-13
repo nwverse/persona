@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -82,12 +83,16 @@ var nodeBuildName = lazyre.New(`^(?:personad|` + regexp.QuoteMeta(compat.DaemonB
 // put the old build back on every computer (#1825). Set aside as <name>.prev, the manager fetches the hub's own build
 // from the release instead. A build with a version file says what it is and stays; the directory is never created. It
 // returns the names it moved.
-func setAsideOldNodes(dir string) []string {
+func setAsideOldNodes(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	var moved []string
+	var first error
 	for _, e := range entries {
 		name := e.Name()
 		if !e.Type().IsRegular() || !nodeBuildName.MatchString(name) {
@@ -96,11 +101,15 @@ func setAsideOldNodes(dir string) []string {
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path + ".version"); err == nil {
 			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			first = errors.Join(first, err)
+			continue
 		}
 		if err := os.Rename(path, path+".prev"); err != nil {
+			first = errors.Join(first, err)
 			continue
 		}
 		moved = append(moved, name)
 	}
-	return moved
+	return moved, first
 }

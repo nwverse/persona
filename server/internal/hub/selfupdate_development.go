@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -115,6 +116,22 @@ func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, erro
 	return r, nil
 }
 
+// Build only this Hub and the platforms its registered computers last reported.
+// Offline computers keep their platform; never-seen computers supply none yet.
+func (u *updater) developmentPlatforms() []string {
+	platforms := []string{runtime.GOOS + "-" + runtime.GOARCH}
+	for _, mc := range u.h.knownEntries() {
+		if m := u.h.machineByID(mc.ID); m != nil {
+			s := m.snapshot()
+			if s.OS != "" && s.Arch != "" {
+				platforms = append(platforms, s.OS+"-"+s.Arch)
+			}
+		}
+	}
+	slices.Sort(platforms)
+	return slices.Compact(platforms)
+}
+
 func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) error {
 	u.set("building", "web/hub/node", "")
 	var built struct {
@@ -123,7 +140,7 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 	}
 	err := u.runDevelopment(ctx, "build", map[string]any{
 		"candidate": r.Development, "version": r.Manifest.Version, "build": r.Manifest.Build,
-		"platform": runtime.GOOS + "-" + runtime.GOARCH, "release_url": u.h.updateURL()}, &built)
+		"platform": runtime.GOOS + "-" + runtime.GOARCH, "platforms": u.developmentPlatforms(), "release_url": u.h.updateURL()}, &built)
 	if err != nil {
 		return err
 	}

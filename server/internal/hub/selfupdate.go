@@ -532,12 +532,19 @@ func (u *updater) updateNodes(ctx context.Context, staged, from string, developm
 	}
 	if !u.nodesEnabled() && !dev {
 		if !managed && from != "" && from != u.h.version {
-			if moved := setAsideOldNodes(identity.NodeBinaryDir()); len(moved) > 0 {
+			if moved, _ := setAsideOldNodes(identity.NodeBinaryDir()); len(moved) > 0 {
 				u.h.logf("update: node builds of %s set aside (node updates are off, Redeploy fetches %s): %s",
 					from, u.h.version, strings.Join(moved, ", "))
 			}
 		}
 		return nil
+	}
+	if dev && from != "" && from != u.h.version {
+		// A smaller platform set must not leave unrebuilt packages labelled as
+		// this Hub's new version. The staged platforms replace these below.
+		if _, err := setAsideOldNodes(dir); err != nil {
+			return err
+		}
 	}
 	var first error
 	if staged != "" && !managed {

@@ -9,11 +9,67 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
+
+func TestDevelopmentPlatformsFollowRegisteredMachines(t *testing.T) {
+	h := newTestHub(t)
+	own := runtime.GOOS + "-" + runtime.GOARCH
+	if got := h.upd.developmentPlatforms(); !slices.Equal(got, []string{own}) {
+		t.Fatalf("Hub-only platforms: %v", got)
+	}
+	for _, c := range []struct {
+		id, os, arch string
+		offline      bool
+		registered   bool
+	}{
+		{"mac", "darwin", "arm64", false, true},
+		{"same-platform", "darwin", "arm64", false, true},
+		{"offline", "linux", "arm64", true, true},
+		{"never-seen", "", "", true, true},
+		{"partial", "linux", "", true, true},
+		{"other-hub", "windows", "amd64", false, false},
+	} {
+		mc := MachineConfig{ID: c.id, Kind: "ssh"}
+		if c.registered {
+			h.cfg.Machines = append(h.cfg.Machines, mc)
+		}
+		m := newMachine(h, mc)
+		m.online = !c.offline
+		if c.offline {
+			m.snap = &proto.Machine{OS: c.os, Arch: c.arch}
+		} else {
+			m.info = proto.NodeInfo{OS: c.os, Arch: c.arch}
+		}
+		h.machines, h.byID[c.id] = append(h.machines, m), m
+	}
+	want := []string{own, "darwin-arm64", "linux-arm64"}
+	slices.Sort(want)
+	if got := h.upd.developmentPlatforms(); !slices.Equal(got, slices.Compact(want)) {
+		t.Fatalf("platforms %v, want %v", got, want)
+	}
+}
+
+func TestDevelopmentRejectsUnrebuiltPackagesThatCannotBeSetAside(t *testing.T) {
+	h := newTestHub(t)
+	nodes := t.TempDir()
+	t.Setenv("PERSONA_NODE_BINARIES", nodes)
+	stale := filepath.Join(nodes, "personad-windows-amd64")
+	if err := os.WriteFile(stale, []byte("old package"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(stale+".prev", 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.upd.updateNodes(context.Background(), t.TempDir(), "previous-version", true); err == nil {
+		t.Fatal("accepted stale packages that still claim the new version")
+	}
+}
 
 func TestDevelopmentSettingsOptInAndActiveChannelGuard(t *testing.T) {
 	u, _, _ := updaterWithStoredSettings(t)
@@ -68,6 +124,9 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			u.client = newUpdater(h).client
 			nodes := filepath.Join(t.TempDir(), "nodes")
 			t.Setenv("PERSONA_NODE_BINARIES", nodes)
+			os.MkdirAll(nodes, 0755)
+			stale := filepath.Join(nodes, "personad-windows-amd64")
+			os.WriteFile(stale, []byte("older unused platform"), 0600)
 			u.settings.Source = "web-dev"
 			u.loaded = true
 			u.h.build.Commit = strings.Repeat("a", 40)
@@ -87,6 +146,9 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 				case "resolve":
 					response = update.DevelopmentCandidate{Branch: "main", Commit: strings.Repeat("b", 40)}
 				case "build":
+					if got := input["platforms"].([]string); !slices.Equal(got, []string{runtime.GOOS + "-" + runtime.GOARCH}) {
+						t.Fatalf("unexpected build platforms: %v", got)
+					}
 					artifacts := t.TempDir()
 					script := []byte(fmt.Sprintf("#!/bin/sh\necho %s\necho 'channel release, build %d'\n", input["version"], input["build"]))
 					os.WriteFile(filepath.Join(artifacts, "personad-"+runtime.GOOS+"-"+runtime.GOARCH+".gz"), gz(script), 0600)
@@ -153,6 +215,12 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			u.confirm(context.Background(), pending)
 			if _, err := os.Stat(filepath.Join(nodes, "personad-"+runtime.GOOS+"-"+runtime.GOARCH)); err != nil {
 				t.Fatal("manual node package missing with automatic fleet updates off", err)
+			}
+			if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("unrebuilt package would claim the new Hub version", err)
+			}
+			if data, err := os.ReadFile(stale + ".prev"); err != nil || string(data) != "older unused platform" {
+				t.Fatal("unrebuilt package was not preserved", err)
 			}
 			if u.view().State != "updated" {
 				t.Fatal(u.view().State)

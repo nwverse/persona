@@ -52,7 +52,6 @@ class DevelopmentFixtures(unittest.TestCase):
         repository = patch.object(webdev, "REPOSITORY", self.repo.as_uri())
         repository.start()
         self.addCleanup(repository.stop)
-        config = {"node_platforms": ["linux-amd64", "darwin-arm64"]}
         selected = webdev.resolve()
         self.assertEqual(selected["branch"], "main")
         (self.repo / "newer").write_text("remote advanced after checking")
@@ -73,11 +72,13 @@ if pathlib.Path(sys.argv[0]).name == 'go' and args[0] == 'build':
         self.tool("npm", fixture)
         work = self.root / "build"
         work.mkdir()
-        built = webdev.build({"config":config, "work":str(work), "candidate":selected,
+        built = webdev.build({"platforms":["linux-amd64", "darwin-arm64"], "work":str(work), "candidate":selected,
                               "version":"web-dev-fixture", "build":202611130001, "platform":"linux-amd64"})
         self.assertEqual((work / "personad-linux-amd64").read_text().strip(), selected["commit"])
         self.assertNotEqual(selected["commit"], self.git("rev-parse", "HEAD"))
-        self.assertEqual(len(list(Path(built["artifacts"]).glob("*.gz"))), 4)
+        self.assertEqual({p.name for p in Path(built["artifacts"]).glob("*.gz")}, {
+            "personad-linux-amd64.gz", "personad-darwin-arm64.gz",
+            "persona-hub-linux-amd64.gz", "persona-manager-linux-amd64.gz"})
         commands = [json.loads(line) for line in trace.read_text().splitlines()]
         self.assertFalse(any("test" in args or "vet" in args for _, args in commands))
         self.git("branch", "-m", "other")

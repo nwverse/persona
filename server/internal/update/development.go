@@ -18,8 +18,7 @@ import (
 // DevelopmentConfig is trusted installation configuration, never supplied by an
 // HTTP request. The source is always this project's main branch.
 type DevelopmentConfig struct {
-	NodePlatforms []string                `json:"node_platforms,omitempty"`
-	Backup        DevelopmentBackupConfig `json:"backup"`
+	Backup DevelopmentBackupConfig `json:"backup"`
 }
 
 type DevelopmentBackupConfig struct {
