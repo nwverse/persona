@@ -18,6 +18,7 @@ import { t } from "../../i18n";
 import { Button, cx, Shimmer, Spinner } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { useFoldScroll } from "../chat/fold-scroll";
+import { useInboxView } from "../../lib/inbox-view-memory";
 import { InboxLine } from "./InboxLine";
 import { Glyph, Spark } from "./InboxParts";
 
@@ -283,7 +284,10 @@ function ChainIcon({ kind }: { kind: string }) {
 
 /** The handling chain: folded to the newest entry, "Show all (N)" shows them all, oldest first. */
 export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: SourceAt) => void }) {
-  const [open, setOpen] = useState(false);
+  const view = useInboxView();
+  const key = itemKey(item);
+  const [open, setOpen] = useState(() => view.chainOpen(key));
+  useEffect(() => view.setChainOpen(key, open), [view, key, open]);
   const conversation = useConversation();
   const all = item.chain ?? [];
   if (!all.length) return null;
