@@ -1,6 +1,22 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "This File Is Empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This file is empty" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "このファイルは空です" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这个文件是空的" } }
+      }
+    },
+    "Reload to check for new content." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Reload to check for new content." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "再読み込みして新しい内容を確認できます。" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "点右上角菜单里的“刷新”，查看是否有新内容。" } }
+      }
+    },
     "Always adds this kind of task to Auto-Start Tasks: it starts without asking first." : {
       "extractionState" : "manual",
       "localizations" : {
