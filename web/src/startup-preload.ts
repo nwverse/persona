@@ -256,14 +256,16 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * open a list folded under its title, no button where there is nothing to fold to), its two icons (corners in for
  * Collapse all, out for Expand all) and its name as the tooltip, less the two list-menu items it replaces and the
  * Recent row's ⓘ words, and the decisions' words in the to-dos' catalog; main's 11 B of room stay).
+ * And 394 B for the existing round-aware task-decision route and completed-task ownership (#5929),
+ * retaining that feature allocation when merging the latest main.
  */
 // #6575: verified runtime checkout display membership adds 79 B to the first screen on main at 2e57ac117
 // (ja 478,119 B to 478,198 B). Carry that measured feature allowance onto the current main budget.
 // #6589: the Agents list's Filter on its title row with its count, the chips with the query ⌘K put on the list (its text
-// reopens ⌘K) and the small store the palette sets it through, the phone page's search button: ja 478,536 B against
-// 478,286 B on main at 29c9a780e, +250 B (the list's field and its strings went; ⌘K's matcher, lib/agent-search.ts, loads
-// with the first query typed, not here; the idle tier, 41,104 B with it, stays under its ceiling). main's 95 B of room stay.
-export const FIRST_SCREEN_BUDGET = 478_631;
+// reopens ⌘K) and the small store the palette sets it through, the phone page's search button: ja 478,793 B against
+// 478,505 B on main at cf0bc3e57, +288 B (the list's field and its strings went; ⌘K's matcher, lib/agent-search.ts, loads
+// with the first query typed, not here; the idle tier, 41,080 B with it, stays under its ceiling). main's 270 B of room stay.
+export const FIRST_SCREEN_BUDGET = 479_063;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -446,7 +448,8 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * ceiling, so the budget is held here at 44,583 B — not raised to cover the drift, which the move removes instead.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
  */
-export const IDLE_TIER_BUDGET = 44_583;
+// Preserve the 7 B feature allowance while retaining main's queue-panel idle reduction.
+export const IDLE_TIER_BUDGET = 44_590;
 
 const gzip = promisify(gzipCompress);
 
