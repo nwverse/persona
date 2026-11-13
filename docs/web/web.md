@@ -1818,7 +1818,18 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   lives on this page and goes with each message (`launcher`, `model`) and the effort with `POST …/modes`, as the old
   chips did, and a pick of a launcher the list no longer offers goes back to the default with a word. The new-chat page
   keeps its pick for the start (`POST /assistant/conversations` `{launcher, model?, effort?}`), which the new chat keeps
-  as its own pick on a hub with `assistant_model_pick` (an older hub ignores the model and keeps nothing).
+  as its own pick on a hub with `assistant_model_pick` (an older hub ignores the model and keeps nothing). While the
+  roster's default manager is in use and the hub lists `assistant_start_service_tier` from that manager's hello, a new
+  chat whose selected model natively advertises `priority` in `service_tiers` also offers Fast in the same Customize
+  flyout: its independent local choice adds `service_tier: "priority"` to the first request, and the node acknowledges
+  it before the first turn. Effort changes preserve Fast and Fast changes preserve effort; enabling Fast pins every
+  displayed start option (launcher, model and effort), so a cleared main cannot revive a carried value. Model or provider
+  switches keep Fast only with the destination row's own setup and advertised support. A manager change disarms the
+  draft before the destination catalog answers, even while the panel is closed; the always-mounted pill also clears it
+  after a hub downgrade or a native catalog change. An untouched start omits the tier, a refused start retains it for
+  retry, and success, Follow default or a dropped pick clears it. An older hub or a non-default manager gets no pre-start
+  Fast control or tier field; an older manager gets 501 `assistant_service_tier_manager_outdated` for an explicit tier,
+  and an older node refuses it rather than running Standard. New Agent has no start speed setting.
 - **Tests**: `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
   sends, the lists kept and read again), `lib/session-panel.test.ts` (the switch to another launcher: with and without the
   feature, another engine, the pending setup and note, what a switch or its cancel sends, the pill's pending setup, which
@@ -1834,7 +1845,9 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   `ContextMeter.test.tsx`, `Composer.test.tsx` (the trailing slot). Screenshots: the mock's `MOCK_MODEL_PANEL_USAGE=1`
   scenario supplies synthetic weekly windows without reading a real account; `MOCK_LAUNCHER_SWITCH=1` supplies a second
   Claude Code launcher, `work`, on every computer (`=pending` has the PR review waiting to switch to it; `=refuse` refuses
-  the message that carries a switch out); a Persona chat's: `MOCK_MODEL_PICK=1` (`=picked`: the second chat has a pick of its own).
+  the message that carries a switch out); a Persona chat's: `MOCK_MODEL_PICK=1` (`=picked`: the second chat has a pick of its own;
+  its `gpt-5.5-codex` catalog row advertises Fast for the new-chat checks, while `gpt-5.5` is the negative control; a
+  capable start acknowledges the requested tier in both the returned session and the sessions push).
 
 ## Switching an Agent between Claude Code and Codex (#5054)
 
