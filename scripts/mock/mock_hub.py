@@ -18798,6 +18798,21 @@ FAKE_DIGITS = {1: [".#.", "##.", ".#.", ".#.", "###"], 2: ["###", "..#", "###", 
                3: ["###", "..#", "###", "..#", "###"], 4: ["#.#", "#.#", "###", "..#", "..#"]}
 
 
+# MOCK_SCREEN_SCROLL=1 (#6196): the first window holds lines of made-up text that the Mac's wheel scrolls, a notch
+# FAKE_SCROLL_STEP pixels (up: what is above), so a screen recording shows a two-finger scroll reaching the Mac.
+FAKE_SCROLL = {"on": os.environ.get("MOCK_SCREEN_SCROLL") == "1", "y": 0}
+FAKE_SCROLL_STEP = 6
+
+
+def fake_text_line(lx, y):
+    """Inside the first window's body, scrolled: a gray bar every 12 pixels, its length from its line number."""
+    row = y - 74 + FAKE_SCROLL["y"]
+    line, dy = divmod(row, 12)
+    if not 3 <= dy < 9 or not 76 <= lx: return False
+    if line % 10 == 0: return lx < 76 + 160 and dy >= 2  # a heading every ten lines
+    return lx < 76 + 120 + (line * 37) % 200
+
+
 def fake_frame(t=0):
     """The mock Mac's desktop as rows of (r, g, b): a gradient, a window, and a box that moves with t (animated). With
     several displays, each its own gradient and window with its number; the box stays on the first."""
@@ -18806,11 +18821,12 @@ def fake_frame(t=0):
     for y in range(FAKE_H):
         for x in range(FAKE_W):
             d, lx = divmod(x, 480)
-            if bx <= x < bx + 40 and by <= y < by + 40: px.append((255, 159, 10))
+            if bx <= x < bx + 40 and by <= y < by + 40 and not FAKE_SCROLL["on"]: px.append((255, 159, 10))
             elif 60 <= lx < 420 and 50 <= y < 250:
                 digit = FAKE_DIGITS.get(d + 1) if FAKE_DISPLAYS > 1 else None
                 cx, cy = (lx - 222) // 12, (y - 120) // 12
                 if digit and 222 <= lx and 120 <= y and cx < 3 and cy < 5 and digit[cy][cx] == "#": px.append((60, 60, 67))
+                elif FAKE_SCROLL["on"] and d == 0 and y >= 74 and fake_text_line(lx, y): px.append((120, 120, 128))
                 else: px.append((236, 236, 238) if y < 74 else (250, 250, 252))
             elif d == 0: px.append((40 + y // 6, 90 + y // 8, 160))
             else: px.append((40 + y // 8, 150 + y // 6 % 60, 90))
@@ -18939,7 +18955,11 @@ def fake_screen_sharing():
                 elif kind == 3:
                     exact(c, 9)
                     conn["waiting"] = sent
-                    if not sent:
+                    if conn.pop("scrolled", False):  # MOCK_SCREEN_SCROLL: the window's lines moved since the last update
+                        conn["waiting"] = False
+                        frame = fake_frame(t)
+                        update([(60, 74, 360, 176)])
+                    elif not sent:
                         sent = True
                         update([(0, 0, FAKE_W, FAKE_H)], extended=FAKE_EXTENDED and -308 in encodings)
                     elif os.environ.get("MOCK_SCREEN_ANIMATE") == "1" and not FAKE_BG["kind"]:  # a box moving at ~30 frames a second
@@ -18968,6 +18988,13 @@ def fake_screen_sharing():
                     if (last[2] & 1) != (mask & 1): FAKE_SCREEN["clicks"].append({"down": bool(mask & 1), "x": x, "y": y})
                     if mask & 4 and not last[2] & 4: FAKE_SCREEN["clicks"].append({"right": True, "x": x, "y": y})
                     if mask & 24: FAKE_SCREEN["clicks"].append({"scroll": "up" if mask & 8 else "down", "x": x, "y": y})
+                    if FAKE_SCROLL["on"] and mask & 24 and not last[2] & 24:  # a notch: the lines move, drawn now or on the next request
+                        FAKE_SCROLL["y"] = max(0, FAKE_SCROLL["y"] + (-FAKE_SCROLL_STEP if mask & 8 else FAKE_SCROLL_STEP))
+                        if conn.pop("waiting", False):
+                            frame = fake_frame(t)
+                            update([(60, 74, 360, 176)])
+                        else:
+                            conn["scrolled"] = True
                     FAKE_SCREEN["pointer"] = (x, y, mask)
                 elif kind == 6:  # the client's clipboard
                     exact(c, 3); n = struct.unpack(">I", exact(c, 4))[0]
