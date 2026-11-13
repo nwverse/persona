@@ -59,8 +59,8 @@ Replying, the twin and read state go through the connector that the subscription
 
 ### 3a. A migrated subscription keeps the built-in's identity
 
-A built-in's default subscription is marked `migrates: <connector id>` (one per connector, one per mail account). Its
-Inbox items use the built-in's source id and item ids, not `sub_<hex>`. Existing mutes, policies, done threads,
+A built-in's default subscription has a fixed id, `sub_m_<connector id>` (one per connector, one per mail account; P5a,
+#6265). Its Inbox items use the built-in's source id and item ids, not `sub_<hex>`. Existing mutes, policies, done threads,
 `read_error` keys and knowledge-base chats then match without rewriting state, as `MigratableConnectors` does. Only the
 manager can create such a subscription. It can't be duplicated, and deleting it means switching the migration back (3g).
 
@@ -112,22 +112,26 @@ either way.
 
 ### 3g. Switching, compatibility and rollback
 
-- **Per source**, a manager setting `inbox.migrated: [<connector id>…]`, changed from Inbox Sources with one
-  confirmation:
+- **Per source**, the default subscription's `migrated` mark (P5a, #6265; it takes the place of a separate
+  `inbox.migrated` setting), changed from Inbox Sources with one confirmation:
   - **On**: the built-in's Inbox feed goes off and its default subscription on, in one step. The subscription's
-    catch-up starts from the built-in's last delivered item, not from `catchupBack`'s day before, so nothing comes in
-    twice.
+    catch-up reaches `catchupBack`'s day before and comes as rows, never a digest: the rows the built-in already
+    brought are known by their item ids (3a), so nothing is missed and nothing comes in twice (as built in P5a).
   - **Off**: the reverse. The subscription stays, off, with its seen keys, so switching on again re-delivers nothing.
 - **Defaults**: an existing install keeps the built-in until the owner switches it. A new install gets a source's
   default subscription instead of its built-in once that source has run switched on, on the owner's hub, for a week
   without a difference (decision 6).
-- **Mixed versions**:
-  - The manager reports `inbox_sources_migrated`, and the clients show the switch only with it.
+- **Mixed versions** (as built in P5a: `docs/extensions/subscriptions.md` "Built-in sources switched to their default
+  subscription"):
+  - The default subscription's own destination switches stay off in storage, so a manager that does not know the mark
+    never pulls it, and the built-in's feed, never switched off, comes back on a rollback. The switch is on the
+    manager-drawn pages, so no client feature flag is needed.
   - An assistant without the new reply routing must not get `CanReply` for those items. The assistant reports that it
     routes them (part of P2), and the manager sets `CanReply` only then, so nothing offers a reply that fails.
   - An older manager ignores `migrates` and the new recipe fields. Without the setting it never switches, so rolling
     back the hub restores the built-ins.
-- **Docs**: the rows go into `docs/protocol/rolling-upgrade-compatibility.md`, which today covers only the rename.
+- **Docs**: `docs/extensions/subscriptions.md` "Built-in sources switched to their default subscription" holds the
+  mixed-version behavior (`docs/protocol/rolling-upgrade-compatibility.md` stays the rename's checklist).
 
 ## 4. Order
 
@@ -139,7 +143,7 @@ Smallest gap first, so each step proves part of the design before the harder sou
 | P2 | The `reply_to` field; reply through the subscription's connector (#6198). The apps already offer Draft only with `CanReply` | 3b, 3c |
 | P3 | The twin's source info and knowledge-base chat for subscription items (#6222) | 3d |
 | P4 | P4a `changed` starts runs (#6247); P4b extension-owned push sources | 3e |
-| P5 | `migrates`, the switch, catch-up from the last item, rollback, `inbox_sources_migrated` | 3a, 3g |
+| P5 | P5a the default subscription's fixed id and `migrated` mark, delivery under the built-in's id, catch-up as rows, rollback (#6265); P5b the switch on the Inbox Sources pages, with M1 | 3a, 3g |
 | M1 | **iMessage**: no reply to carry over; needs `seen`, `sender_id`, `chat` and the `changed` kick | P1, P4, P5 |
 | M2 | **GitHub**: comments as replies, inferred read, repo mutes. Its read tools first need a notifications tool | P1–P5 |
 | M3 | **Lark**: JSON read tools for `larkcli` first, then its events through a push source, replies | P1–P5 |
