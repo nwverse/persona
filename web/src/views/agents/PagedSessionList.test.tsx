@@ -20,6 +20,7 @@ vi.mock("../../lib/store", () => ({
   },
 }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 
 type Row = { id: string };
 const identity = (row: Row) => row.id;
@@ -47,6 +48,7 @@ const expected = (state: Record<string, number>) => [t("paged-agents.all"), ...O
 
 beforeEach(() => {
   vi.useFakeTimers();
+  localStorage.clear(); // the chosen Browse by is kept in this browser
   rootCounts.mockReset().mockResolvedValue(counts());
   scopedCounts.mockReset().mockResolvedValue(counts());
   vi.mocked(api).mockImplementation((path) => {
@@ -215,8 +217,16 @@ describe("paged grouping controls", () => {
     expect(host.querySelector("select, datalist")).toBeNull();
     const project = [...host.querySelectorAll<HTMLButtonElement>(`[aria-label="${t("paged-agents.group_by")}"] [role="radio"]`)]
       .find((b) => b.textContent === t("paged-agents.project"))!;
+    vi.mocked(api).mockClear();
     await act(async () => project.click());
     expect(project.getAttribute("aria-checked")).toBe("true");
+    // the list is drawn by project at once, each under its folder's name. The counts it already has name the groups:
+    // what is read is the groups' sessions that need the user (one does) and a page for each open section
+    expect([...host.querySelectorAll<HTMLElement>("[data-session-group]")].map((g) => g.dataset.sessionGroup)).toEqual(["/work/beta", "/work/alpha"]);
+    expect(host.querySelector("[data-virtual-sessions]")).toBeNull();
+    expect(vi.mocked(api).mock.calls.map(([path]) => path).sort()).toEqual([
+      "/sessions?counts=1&state=needs_you", "/sessions?project=%2Fwork%2Falpha&summary=1&limit=50", "/sessions?project=%2Fwork%2Fbeta&summary=1&limit=50",
+    ]);
 
     const pick = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("paged-agents.group_filter")}"]`)!;
     expect(pick.textContent).toBe(t("paged-agents.all_projects"));
@@ -229,6 +239,9 @@ describe("paged grouping controls", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(vi.mocked(api).mock.calls.some(([path]) => new URL(path as string, "https://example.com").searchParams.get("project") === "/work/beta")).toBe(true);
     expect(host.querySelector<HTMLButtonElement>(`button[aria-label="${t("paged-agents.group_filter")}"]`)!.textContent).toBe("beta");
+    // one project picked: its sessions are the one list again
+    expect(host.querySelector("[data-session-group]")).toBeNull();
+    expect(host.querySelector("[data-virtual-sessions]")).not.toBeNull();
   });
 
   it("opens a value menu as wide as its pill, and never narrower than a menu is elsewhere", async () => {
