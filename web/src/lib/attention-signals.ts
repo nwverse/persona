@@ -5,13 +5,14 @@ import { attentionReason, interactionCanAnswer, sessionTitle, stateOf } from "./
 import { agentKey } from "./pins";
 import { homeKey } from "./folded-rows";
 import { useCounts, useAgentSessions } from "./sessions";
-import { getState, useStore } from "./store";
+import { getState, useStore, onHello, send, appSocketReady } from "./store";
 import { answeredTags, attentionSoundEnabled, badgeText, batchDue, finishedBatch, detectNewCards, detectTransitions, pickEvent, rateLimiter, SETTLE_MS, settledTags, suppressed, tabTitle, trackTurns, type Turn } from "./attention";
-import { claimNotification, closeNotification, dismissNotification, releaseClaim, FRONT_BEAT_MS, inQuietHours, loadNotifyPrefs, markFront, notificationText, notifyPrefs, waitingCard, otherTabInFront, postNotification, systemNotifyAllowed, wants, managerMuted } from "./notify";
+import { claimNotification, closeNotification, dismissNotification, releaseClaim, FRONT_BEAT_MS, inQuietHours, loadNotifyPrefs, markFront, notificationText, notifyPrefs, waitingCard, otherTabInFront, postNotification, systemNotifyAllowed, systemNotifyActive, wants, managerMuted } from "./notify";
 import { defaultManager } from "./manager-choice";
 import { failedTagsOver, listenForNotificationClicks } from "./notification-answer";
 import { isMuted } from "./session-actions";
 import { href, navigate } from "./router";
+import { stripBase } from "./base";
 import { needsFieldValues } from "./quick-answers";
 import { t } from "../i18n";
 import { requestRoute } from "./card-focus";
@@ -235,7 +236,26 @@ export function useAttentionSignals(label: string, pane: { mid: string; sid: str
   useEffect(() => {
     document.title = tabTitle(label, needs);
   }, [label, needs]);
-  useEffect(() => setFaviconBadge(needs), [needs]);
+  useEffect(() => {
+    setFaviconBadge(needs);
+    window.personaDesktop?.setBadge(needs);
+  }, [needs]);
+
+  useEffect(() => {
+    const desktop = window.personaDesktop;
+    if (!desktop) return;
+    const offHello = onHello(() => {
+      if (desktop.desktopPresence().active && systemNotifyActive() && appSocketReady()) send({ type: "register_desktop", device_name: desktop.deviceName });
+      else send({ type: "unregister_desktop" });
+    });
+    const offPresence = desktop.onPresenceChange(({ active }) => {
+      if (!active && appSocketReady()) send({ type: "unregister_desktop" });
+    });
+    const offNotification = desktop.onOpenNotification((route) => {
+      if (route.startsWith("/") && !route.startsWith("//") && !route.includes("\\")) navigate(stripBase(route));
+    });
+    return () => { offHello(); offPresence(); offNotification(); };
+  }, []);
 
   useEffect(armAudio, []);
   // Allow / Deny clicked on a permission card's notification: the service worker hands it to this page (#4464)

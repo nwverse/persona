@@ -257,7 +257,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #6480: a to-do suggestion kind (its title, button and toast in lib-inbox-events, which the first screen's suggestion
 // rows and toasts name) and a merged row's list of sources raise the first screen to ja 479,163 B (en 475,454 B, zh-Hans 476,439 B), 184 B over the
 // old budget, which moves by 215 B. Merge and to-do texts are in lib-inbox-actions, outside the first screen. The 31 B room stays.
-export const FIRST_SCREEN_BUDGET = 479_194;
+// #6770's Electron bridge adds 126 B to ja (479,320 B; en 475,611 B, zh-Hans 476,596 B): fixed native notification/badge
+// calls, authenticated register/unregister presence, and clearing notifications on sign-out. The browser has no desktop
+// chunk or eager import. The existing 31 B room covers the hub's small build-environment difference.
+export const FIRST_SCREEN_BUDGET = 479_320;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
