@@ -30,7 +30,8 @@ import (
 // set up, held, failing, too slow, or an answer that does not hold up) the connector groups the batch by structure
 // itself (group.fallback). Its title, rule tier, "By rule" and triaged_by "rules" describe only events it opens; an
 // existing event takes the new messages but keeps its title, summary, tier, reason, urgency and triager. The one exception is
-// a rewritten direct-chat join: its tier may rise to the rewritten entries' rule floor, but never out of noise. That version is final.
+// a rewritten direct-chat join: its tier may rise to the rewritten entries' rule floor, but never out of noise or while a
+// processing conversation is handling the event. That version is final.
 
 const (
 	groupCalls        = 4                  // call allowances per batch (tools and a possible correction)
@@ -652,7 +653,8 @@ func keepsWords(it *InboxItem) bool {
 // putEvent keeps an event the connector wrote (or the hub composed), under the item's id: the model's title, summary
 // and tier, or under the fallback a new event's title and rule tier with "By rule". Ordinary fallback messages joining an
 // existing event leave its title, summary, tier, reason, urgency and triager unchanged; a rewritten direct-chat join may
-// only raise the tier, except that noise stays noise. Titles, summaries, urgency and triager still stay unchanged.
+// only raise the tier, except that noise stays noise and a processing conversation keeps deciding its event's tier.
+// Titles, summaries, urgency and triager still stay unchanged.
 // A done existing event reopens by default; reopen:false or a matching mute keeps it done while its messages advance.
 // It is triaged at this version either way. Its count is the hub's (the messages it put in it; extra.count is not read
 // for an event) and its start is set when it is made. An answer at the version the item has already is a repeat:
@@ -730,9 +732,9 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		it.DoneAt, it.DoneBy = doneAt, doneBy
 		tierBefore = tier
 		raiseDMFloor()
-	case prev.last != "" && it.handled() && !reopened && !e.dmJoined:
-		// Ordinary messages that join an event being handled follow it: its tier, words and urgency stay; its processing
-		// conversation is told (inbox_handle.go). A rewritten direct-chat join below may still raise the tier.
+	case prev.last != "" && it.handled() && !reopened:
+		// Messages that join an event being handled follow it: its tier, words and urgency stay, even for a rewritten
+		// direct-chat join; its processing conversation decides (inbox_handle.go).
 		it.Title, it.Summary, it.Tier, it.Reason = title, summary, tier, reason
 		it.TriagedBy = cmp.Or(it.TriagedBy, "model")
 		it.Urgent = urgent

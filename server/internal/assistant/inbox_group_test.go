@@ -1915,3 +1915,29 @@ func TestInboxGroupDMFallbackNewNeverDowngradesTier(t *testing.T) {
 		})
 	}
 }
+
+// A rewritten join still leaves an event's tier to the processing conversation already handling it. The messages join
+// that event, but the rule floor does not retriage it or replace its reason.
+func TestInboxGroupDMFallbackNewHandledKeepsTier(t *testing.T) {
+	g, h, it, _ := groupDMJoinFixture(t, connector.GroupFallbackResult{
+		New: []connector.GroupNew{{Key: "k1", Messages: []string{"m1060", "m1061"}, RuleTier: connector.TierAction}},
+	})
+	it.Tier, it.Reason = TierFYI, "示例原理由"
+	it.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingWaiting}
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+
+	if len(g.appends) != 1 || g.appends[0].Event != it.ID {
+		t.Fatalf("appends %+v", g.appends)
+	}
+	if it.Tier != TierFYI || it.Reason != "示例原理由" || it.TriagedBy != "model" ||
+		it.Title != "示例 A 方案评审" || it.Summary != "等你定时间" || it.Count != 3 || it.Last != "1061" {
+		t.Fatalf("handled event %+v", it)
+	}
+	if kinds := chainKinds(it); slices.Contains(kinds, ChainTriaged) {
+		t.Fatalf("the rule floor retriaged a handled event: %v", kinds)
+	}
+	if len(h.inbox.items) != 2 || h.inbox.items["lark:F1:1060"] != nil {
+		t.Fatalf("the rewrite opened another event: %v", h.inbox.items)
+	}
+}
