@@ -259,6 +259,38 @@ describe("the fold-all button keeps the Agents controls", () => {
   });
 });
 
+describe("按待办's 最近（未运行）", () => {
+  it("has no ⓘ, its name saying what it holds, and is listed only with something in it (#6447)", async () => {
+    localStorage.setItem("persona.agentGrouping", "todo");
+    const gone: Session = { ...agent, session_id: "s2", title: "旧的发布检查", status: "offline", state: "offline" };
+    let sessions = [agent, gone];
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/todos")) return json({ todos: [todo] });
+      if (url.endsWith("/api/v1/sessions")) return json({ sessions });
+      if (url.endsWith("/api/v1/machines")) return json({ machines: [mac] });
+      return json({});
+    }));
+    await refresh();
+    await render();
+    const about = (branch: string) => agentsBlock().querySelector(`[data-tree-branch="${branch}"] [data-tree-branch-row] [aria-label^="${t("ui-atoms.about", { name: "" }).slice(0, 2)}"]`);
+    const recent = () => agentsBlock().querySelector('[data-tree-branch="recent"] [data-tree-branch-row]');
+    expect(recent()?.textContent).toContain(t("sidebar.recent"));
+    expect(about("recent")).toBeNull();
+    // the groups whose names do not say it keep theirs
+    expect(about("todo:none")).not.toBeNull();
+
+    // the same hub with nothing stopped: no 最近（未运行） row at all
+    act(() => root.unmount());
+    reset();
+    root = createRoot(host);
+    sessions = [agent];
+    await refresh();
+    await render();
+    expect(recent()).toBeNull();
+    expect(agentsBlock().querySelector('[data-tree-branch="todo:none"]')).not.toBeNull();
+  });
+});
+
 describe("a hub without todos (GET /todos 404)", () => {
   it("hides 待办 and shows 按机器 for a browser that never chose", async () => {
     vi.stubGlobal("fetch", hub(() => json({ error: "not found" }, 404)));

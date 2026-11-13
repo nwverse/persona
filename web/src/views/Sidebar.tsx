@@ -950,9 +950,10 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       ) : todosPending ? (
         <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>
       ) : todoTree ? (
-        <TodoTreeView tree={todoTree} machines={machines} showHost={mixedHosts} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} onNavigate={onNavigate} after={(recent.length > 0 || keepEmptyGroups) && (
-          // "By to-do" draws "Recent (not running)" as a row like its to-dos' and groups' (#6458)
-          <GroupBranch branch="recent" name={t("sidebar.recent")} hint={t("sidebar.recent_hint")} icon="history" n={recent.length} state={worstTreeState(recent.map(agentTreeState))} folded={recentFolded} onToggle={toggleRecent}>
+        <TodoTreeView tree={todoTree} machines={machines} showHost={mixedHosts} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} onNavigate={onNavigate} after={recent.length > 0 && (
+          // "By to-do" draws "Recent (not running)" as a row like its to-dos' and groups' (#6458); its name says what it
+          // holds, so no ⓘ, and like under the other groupings it is listed only with something in it (#6447, the owner)
+          <GroupBranch branch="recent" name={t("sidebar.recent")} icon="history" n={recent.length} state={worstTreeState(recent.map(agentTreeState))} folded={recentFolded} onToggle={toggleRecent}>
             {recentRows}
           </GroupBranch>
         )} />

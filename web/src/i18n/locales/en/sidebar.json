@@ -34,7 +34,6 @@
   "launch_background": "Starting in background",
   "idle_spaces": "Idle spaces {count}",
   "recent": "Recent (not running)",
-  "recent_hint": "Agents that stopped, or whose computer is offline, newest first. Open one to read what it did.",
   "show_less": "Show less",
   "show_more": "Show {count} more",
   "quick_filters": "Quick filters",
