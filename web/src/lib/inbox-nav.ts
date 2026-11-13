@@ -2,7 +2,7 @@
 // category page is (views/settings/nav.ts). An item opened from the list, or from an item opened that way (a row beside
 // it on a wide screen, a related item, its line), carries how many; ‹ and Done go back that far instead of pushing
 // another /inbox. An item reached any other way (a link, a notification, ⌘K) has no list under it.
-import { takeOverlayEntry } from "./back-close";
+import { overlayDepth, takeOverlayEntry } from "./back-close";
 import { navigate, parse, routeAt, routePath, type Route } from "./router";
 
 const STEPS = "personaInboxSteps";
@@ -44,9 +44,10 @@ export function inboxReturnTo(state: unknown): { id: string; manager?: string } 
 export function backToInboxList(): void {
   const n = stepsToInbox(history.state);
   if (!n) return navigate({ name: "inbox" }, true);
-  // An overlay open over the item (a menu) has an entry of its own on top, carrying the item's state: off with it too,
-  // its marker taken first so its close does not go back once more.
+  // Overlays open over the item (the original, then a menu) each have an entry on top, carrying the item's state:
+  // off with all of them too, their markers taken first so their closes do not go back once more.
+  const depth = overlayDepth();
   if (!takeOverlayEntry()) return history.go(-n);
   history.replaceState(null, "", location.href);
-  history.go(-n - 1);
+  history.go(-n - depth);
 }
