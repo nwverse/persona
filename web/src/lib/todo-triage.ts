@@ -6,16 +6,18 @@ import { acceptanceStands, latestReview, reviewState } from "./supervision";
 import { isCancelled, openAsk, todoDueBy, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { todoStageIndex } from "./todo-stage";
 
-/** Where a to-do shows, in the page's order (#5707), with cancelled separate from Done (#5732). */
-export type TriageSection = "waiting" | "working" | "just_done" | "pr" | "other" | "shelved" | "done" | "cancelled";
+/** Where a to-do shows, in the page's order (#5707): explicit parked work stays open (#5929), cancelled apart from Done (#5732). */
+export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "pr" | "other" | "shelved" | "done" | "cancelled";
 
-export const TRIAGE_SECTIONS: readonly TriageSection[] = ["waiting", "working", "pr", "other", "just_done", "shelved", "done", "cancelled"];
+export const TRIAGE_SECTIONS: readonly TriageSection[] = ["waiting", "working", "pr", "parked", "other", "just_done", "shelved", "done", "cancelled"];
 
 /** Sections that start folded: unfinished to-dos stay open (#5707); cancelled folds apart from Done (#5732). */
 export const FOLDED_SECTIONS: ReadonlySet<TriageSection> = new Set(["shelved", "done", "cancelled"]);
 
 /** No activity for this long, nothing of it running: shelved (SOP rule 11). */
 export const SHELVE_AFTER_MS = 48 * 3600_000;
+/** A fresh closed or accepted result stays visible for a day unless seen first; unaccepted live work has no such timeout. */
+export const JUST_DONE_MS = 24 * 3600_000;
 
 /** Which SOP rule placed a to-do (for tests and the SOP's wording); the section follows from it. */
 export type TriageRule =
@@ -25,6 +27,7 @@ export type TriageRule =
   | "agent_asks"
   | "owner_decides"
   | "agent_running"
+  | "parked"
   | "closed"
   | "accepted"
   | "deployed"
@@ -101,9 +104,10 @@ export function seenCanFile(todo: Todo): boolean {
  *  2. agent_asks      an agent asks (question, approval) or was cut off → Waiting on you
  *  3. owner_decides   review says needs_user, or a decision / "cannot" ask → Waiting on you
  *  4. agent_running   an agent is working or starting                   → Working
- *  5. closed          done_at set                                       → Done
- *  6. accepted        the latest review accepted it (even reopened)     → Done
- *  7. deployed        its delivery is live, not accepted                → Delivered · awaiting review
+ *  5. closed          done_at set                                       → Just finished for 24 h, then Done
+ *  5a. parked         an explicit unexpired wait                         → Parked; expired → Other open
+ *  6. accepted        the latest review accepted it (even reopened)     → Just finished for 24 h, then Done
+ *  7. finished_unseen its delivery is live, not accepted                → Delivered · awaiting review, with no timeout
  *  8. finished_unseen an agent finished unseen, awaits review, or a done ask → Delivered · awaiting review
  *  9. pr_open         its PR is open, nothing running                   → PR to merge (however old)
  *  9a. seen           rule 8 without supervision, seen since it last moved, no PR open → Done
@@ -117,23 +121,30 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   const last = lastActivity(todo, lookup, restoredAt);
   const status: TodoStatus = todoStatus(todo, lookup);
   // Seen files an unsupervised finished turn (#5707), never a task that still needs acceptance (#5732).
+  // A fresh closed or accepted result is awaiting a read receipt, not still open work (#5929).
   const seenAt = ms(todo.seen_at);
   const seen = (at: number) => seenAt > 0 && seenAt >= at;
+  const fresh = (at: number) => now - at < JUST_DONE_MS && !seen(at);
   const ask = openAsk(todo);
   const at = (section: TriageSection, rule: TriageRule): Triage => ({ section, rule, last });
 
   if (isCancelled(todo)) return at("cancelled", "cancelled");
   if (status === "failed") {
     // the same piece of work finished in a related to-do (`supersededFailedStarts`): history, nothing left to retry
-    if (superseded) return at("done", "superseded");
+    if (superseded) return at(fresh(ms(todo.done_at) || last) ? "just_done" : "done", "superseded");
     return at(now - last < SHELVE_AFTER_MS ? "waiting" : "done", "failed_start");
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
   if (!todo.done_at && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
   if (status === "working" || status === "waiting") return at("working", "agent_running");
-  if (todo.done_at) return at("done", "closed");
-  if (acceptanceStands(todo)) return at("done", "accepted");
-  // Live is delivery, not acceptance: an unreviewed live task stays open and awaiting review, however old (#5732).
+  if (todo.done_at) return at(fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
+  // A stopped turn is not a completed task. When the wait expires it needs review, not filing as done.
+  if (reviewState(todo) === "parked") {
+    const until = ms(todo.supervision?.parked?.until);
+    return at(until && until <= now ? "other" : "parked", "parked");
+  }
+  if (acceptanceStands(todo)) return at(fresh(ms(latestReview(todo.supervision)?.at)) ? "just_done" : "done", "accepted");
+  // Live is delivery, not acceptance: an unreviewed live task stays open and awaiting review, however old or seen (#5732).
   if (todo.delivery?.state === "live") return at("just_done", "finished_unseen");
   const finished = status === "unread" || reviewState(todo) === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
   const acceptanceRequired = !seenCanFile(todo);
@@ -156,7 +167,7 @@ export function countsAsOpen(todo: Todo, t: Triage): boolean {
 
 /** Where a to-do stands for every count of open work (#3331): the To-dos page's "Not done" and the conversation's
  *  Progress entry read this one rule, so the two numbers agree. `open` counts, `shelved` folds (no activity for 48 h,
- *  nothing running), `closed` is finished (done, accepted, deployed, an old failed start). */
+ *  nothing running), `closed` is finished (done, accepted, an old failed start). */
 export type TodoBucket = "open" | "shelved" | "closed";
 
 export function todoBucket(todo: Todo, lookup: SessionLookup | undefined, now: number, restoredAt = 0, superseded = false): TodoBucket {
@@ -243,7 +254,7 @@ export interface TriageResult {
   sections: Record<TriageSection, TriageGroup[]>;
   /** To-dos (not rows) per section. */
   todoCounts: Record<TriageSection, number>;
-  /** To-dos the header calls open (countsAsOpen), shelved, and finished (closed, accepted or deployed). */
+  /** To-dos the header calls open (countsAsOpen), shelved, and finished (closed or accepted). */
   open: number;
   shelved: number;
   finished: number;

@@ -230,7 +230,7 @@
   "ask_failed": "Not done: {error}",
   "ask_held": "With the next briefing",
   "ask_held_hint": "This decision can wait, so nothing was pushed for it. It comes with your next briefing, and you can answer it here any time.",
-  "summary_triage": "{open} open · {shelved} shelved · {done} done · {cancelled} cancelled",
+  "summary_triage": "{open} open · {parked} parked · {shelved} inactive · {done} done · {cancelled} cancelled",
   "grouping_label": "Group to-dos by",
   "grouping_status": "Status",
   "grouping_folder": "Folder",
@@ -240,7 +240,7 @@
   "section_just_done": "Delivered · awaiting review",
   "section_pr": "PR to merge",
   "section_other": "Other open",
-  "section_shelved": "Shelved",
+  "section_shelved": "Inactive",
   "section_done": "Done",
   "shelved_hint": "No progress for 48 hours and nothing running. Not counted as open; nothing was deleted.",
   "related": "{count} related",
@@ -268,9 +268,12 @@
   "filter_empty_week": "Nothing due this week",
   "filter_empty_month": "Nothing due this month",
   "filter_empty_body": "Try another filter.",
-  "summary_filtered": "{filter}: {open} open · {shelved} shelved · {done} done · {cancelled} cancelled",
+  "summary_filtered": "{filter}: {open} open · {parked} parked · {shelved} inactive · {done} done · {cancelled} cancelled",
   "cancelled_reason": "Cancelled: {reason}",
   "cancelled_section": "Cancelled · {count}",
   "section_cancelled": "Cancelled",
-  "section_waiting": "Waiting for you"
+  "section_waiting": "Waiting for you",
+  "section_parked": "Parked",
+  "ask_chat_route": "Answer decision: {title}",
+  "ask_chat_hint": "Your next message answers this decision and is saved on the task. Cancel this address to discuss it without deciding."
 }

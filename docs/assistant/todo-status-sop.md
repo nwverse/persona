@@ -28,10 +28,11 @@ then the folded ones, Done and Cancelled last. The same order decides which memb
 | Waiting for you | open | Something only the owner can move: an answer, an approval, a decision, a retry |
 | Working | open | An agent is running on it now |
 | PR to merge | open | Its work stopped at a pull request that is still open and nothing runs: however old, it stays here, with the PR link and how long since it moved |
+| Parked (web) | open | An explicitly parked task whose wait has not expired; it is unfinished, even if its last agent turn was seen |
 | Other open | open | Open, recently active, none of the above (an agent stopped and seen, a reminder of the user's own) |
-| Delivered · awaiting review | open | Worth a look: an unaccepted delivery, unseen turn, pending review or done / please-verify ask. An unaccepted `live` delivery stays here and open indefinitely; it never ages into Done or Shelved. Supervised delivery stays here even after being seen |
-| Shelved | folded | No activity for 48 hours and nothing running (see "Shelving") |
-| Done | folded | Non-cancelled closed or accepted work, however recently it closed; an ordinary unsupervised finished turn seen since it last moved |
+| Delivered · awaiting review | open | Worth a look: a fresh closed or accepted result, an unaccepted delivery, unseen turn, pending review or done / please-verify ask. An unaccepted `live` delivery stays here and open indefinitely, even after being seen; it never ages into Done or Shelved |
+| Inactive (web; Shelved on native clients) | folded | No activity for 48 hours and nothing running (see "Shelving"); not an explicit parked verdict |
+| Done | folded | Non-cancelled closed or accepted work after its fresh result has been seen or is 24 hours old; an ordinary unsupervised finished turn seen since it last moved. Unaccepted `live` work never enters this section merely through age or Seen |
 | Cancelled | folded | Cancelled work, with its cancellation reason; never counted as Done |
 
 ## Decision table
@@ -42,18 +43,25 @@ The first rule that holds wins.
 | :--- | :--- | :--- | :--- |
 | 0 | `cancelled` | The API cancellation projection or a legacy cancelled supervision state | Cancelled, with its reason; this wins over closed, accepted and agent states |
 | 1 | `failed_start` | The task's agent never started (`start_error`) | Waiting for you; Done once 48 hours passed |
-| 1a | `superseded` | Rule 1, and its row (see "Related to-dos") has a to-do that really finished: closed without a start error (#3713) | Done, behind that to-do in the row, never leading it |
+| 1a | `superseded` | Rule 1, and its row (see "Related to-dos") has a to-do that really finished: closed without a start error (#3713) | Delivered · awaiting review for 24 hours or until seen, then Done; behind that to-do in the row, never leading it |
 | 2 | `agent_asks` | An agent waits on the owner (question, approval, plan) or was cut off by a model error | Waiting for you |
 | 3 | `owner_decides` | Open, and the review says `needs_user`, or its ask is a decision or "cannot be done" | Waiting for you |
 | 4 | `agent_running` | An agent is working or starting | Working |
-| 5 | `closed` | `done_at` is set | Done; explicit completion is never awaiting review |
-| 6 | `accepted` | The latest review accepted it and no review came since, even when the hub reopened it (see "Accepted tasks") | Done; acceptance is never awaiting review |
-| 7 | `finished_unseen` | `delivery.state` is `live`, but the task has not been accepted | Delivered · awaiting review, open until main-chat acceptance or explicit user completion; no 24-hour or 48-hour timeout |
+| 5 | `closed` | `done_at` is set | Delivered · awaiting review for 24 hours or until seen, then Done; explicit completion is never left open |
+| 5a | `parked` (web) | Open and the current review is parked | Parked until its `until`; after that, Other open while awaiting review, never Done just because its agent stopped |
+| 6 | `accepted` | The latest review accepted it and no review came since, even when the hub reopened it (see "Accepted tasks") | Delivered · awaiting review for 24 hours after the review or until seen, then Done; acceptance is never left open |
+| 7 | `finished_unseen` | `delivery.state` is `live`, but the task has not been accepted | Delivered · awaiting review, open until main-chat acceptance or explicit user completion; no 24-hour or 48-hour timeout, including after Seen |
 | 8 | `finished_unseen` | An agent finished a turn nobody has seen, the review is pending, or its ask says done / please verify; either not seen or acceptance is still required | Delivered · awaiting review |
 | 9 | `pr_open` | Its PR is open (rule "PR / delivery" above); a `pr_url` whose stage is Merge or later is a merged PR, never this (#3205) | PR to merge |
 | 9a | `seen` | Rule 8's signals, seen by the owner since it last moved (see "Seen"), with no supervisor and no pending acceptance; an open PR takes precedence | Done |
 | 10 | `stale` | Shelvable (see "Shelving") and no activity for 48 hours | Shelved |
 | 11 | `rest` | Anything else | Other open |
+
+On the web, the header's Parked count is the number of to-dos in the Parked section (included in open).
+Inactive counts only automatic 48-hour shelving. Cancelled has its own count and is never included in Done / completed.
+The Parked section and review badge use the same localized name.
+Apple (`apple/Shared/TodoTriage.swift`) and Android (`TodoTriage.kt` in `android/core/domain`) still need this
+parked rule and naming alignment; #5929 records the parity gap. This web fix does not claim native-client delivery.
 
 **A failed start whose work got done another way is not the owner's**: the hub closes a to-do whose agent never started
 (`done_at` with its `start_error`), and rule 1 keeps it in Waiting for you so the owner can retry or remove it. When the
@@ -167,11 +175,11 @@ receipt, not delivery acceptance:
 
 ## Header count
 
-The web's header reads "N open · N shelved · N done · N cancelled" beside the title on wider screens (a phone leaves it out); it counts what the list's filter shows, whatever is searched (#3740). The iOS and
+The web's header reads "N open · N parked · N inactive · N done · N cancelled" beside the title on wider screens (a phone leaves it out); it counts what the list's filter shows, whatever is searched (#3740). The iOS and
 Android lists have no such line (#3712): it said again what the sections say, so each section's title carries the number of
 to-dos its rows list (a merged row's related ones too), in the section's state color, and the counts follow a search and the
 list's filter (#3740). **Open** counts to-dos that are not closed, not accepted and not shelved: Waiting for you, Working,
-PR to merge, Other open, and every unaccepted Delivered · awaiting review row, including `live` (a finished turn or delivery
+PR to merge, Parked, Other open, and every unaccepted Delivered · awaiting review row, including `live` (a finished turn or delivery
 is not acceptance; only a review or the user closes it). An ordinary unsupervised finished turn files under Done once seen.
 **Done** counts non-cancelled closed and accepted ones plus those seen ordinary turns; **Cancelled** is a separate count.
 The sidebar's To-dos badge shows the same open count without quiet tasks (#1731), as before; the page lists and counts them.
@@ -183,7 +191,7 @@ A to-do is shelvable when it is a task (an agent was ever linked, or a conversat
 ahead. The user's own to-dos without agents (reminders, errands), ones due later, and unaccepted `live` deliveries never
 shelve themselves. The last case remains open under Delivered · awaiting review until it is accepted or explicitly closed.
 
-- Shelved to-dos are folded under **Shelved**, not counted as open, and not changed on the hub: nothing is deleted, closed
+- Shelved to-dos are folded under **Inactive** on web (**Shelved** on native clients), not counted as open, and not changed on the hub: nothing is deleted, closed
   or released. Any new activity (an agent working, a report, a review, an edit) takes it out again at once.
 - **Restore** on a shelved row counts as activity now: the to-do goes back to its section and shelves again only after
   another 48 hours without a move. The restore is kept in this browser (`localStorage`, `persona.todos.restored`), not

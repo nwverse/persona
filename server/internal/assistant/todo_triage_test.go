@@ -196,7 +196,7 @@ func TestTriageNeverShelvesAConcern(t *testing.T) {
 	reported := concern
 	at := now.Add(-time.Minute)
 	reported.DoneAt = &at
-	if got := triageTodo(listedTodo{Todo: reported}, none, now, time.Time{}, time.UTC, false); got.Section != triageDone {
+	if got := triageTodo(listedTodo{Todo: reported}, none, now, time.Time{}, time.UTC, false); got.Section != triageJustDone {
 		t.Fatalf("a reported concern: %+v", got)
 	}
 }

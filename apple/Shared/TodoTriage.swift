@@ -16,11 +16,11 @@ nonisolated enum TodoSection: String, CaseIterable, Sendable {
     case pr
     /// Open, recently active, none of the above.
     case other
-    /// Delivered work still waiting to be seen or accepted; age and Seen never accept it (#5732).
+    /// Fresh closed or accepted results, delivered work still waiting to be seen or accepted; unaccepted live has no timeout.
     case justDone = "just_done"
     /// A task with no activity for 48 hours and nothing running.
     case shelved
-    /// Explicitly completed or accepted, regardless of age; unsupervised finished turns can also be filed by Seen.
+    /// Closed or accepted after its fresh result was seen or is 24 hours old; an unsupervised finished turn seen since it moved.
     case done
     /// Cancelled, with its reason; never mixed into Done (#5732).
     case cancelled
@@ -96,6 +96,8 @@ nonisolated struct TodoTriageResult: Sendable {
 nonisolated enum TodoTriageLogic {
     /// No activity for this long, nothing of it running: shelved.
     static let shelveAfter: TimeInterval = 48 * 3600
+    /// A fresh closed or accepted result stays visible for a day unless seen first; unaccepted live work has no timeout.
+    static let justDone: TimeInterval = 24 * 3600
 
     /// How a to-do's linked agents stand, the way the web's `todoStatus` reads them: an open ask does not count here
     /// (rules 3 and 8 read it), unlike `TaskState(todo:agents:)`.
@@ -177,13 +179,13 @@ nonisolated enum TodoTriageLogic {
     /// A to-do's section by the SOP's decision table, first match wins:
     ///
     ///  1. failedStart    the task's agent never started                    → Waiting on you, Done after 48 h;
-    ///     superseded     … and a related to-do (its row) really finished   → Done (#3713)
+    ///     superseded     … and a related to-do (its row) really finished   → Just finished (24 h), then Done (#3713)
     ///  2. agentAsks      an agent asks (question, approval) or was cut off → Waiting on you
     ///  3. ownerDecides   review says needs_user, or a decision / "cannot" ask → Waiting on you
     ///  4. agentRunning   an agent is working or starting                   → Working
-    ///  5. closed         done_at set                                       → Done
-    ///  6. accepted       the latest review accepted it (even reopened)     → Done
-    ///  7. deployed       its delivery is live, not accepted                → Delivered · awaiting review
+    ///  5. closed         done_at set                                       → Just finished (24 h), then Done
+    ///  6. accepted       the latest review accepted it (even reopened)     → Just finished (24 h), then Done
+    ///  7. finishedUnseen its delivery is live, not accepted                → Delivered · awaiting review, no timeout
     ///  8. finishedUnseen an agent finished unseen, awaits review, or a done ask → Delivered · awaiting review
     ///  9. prOpen         its PR is open, nothing running                   → PR to merge (however old)
     ///  9a. seen          rule 8 without supervision, seen since it last moved, no PR open → Done
@@ -197,7 +199,9 @@ nonisolated enum TodoTriageLogic {
         let last = lastActivity(todo, lookup: lookup, restoredAt: restoredAt)
         let status = agentsStatus(todo, lookup: lookup)
         // Seen files an unsupervised finished turn (#5707), never a task that still needs acceptance (#5732).
+        // A fresh closed or accepted result awaits a read receipt, not still-open work (#5929).
         let seen = { (at: Date) in todo.seenAt.map { $0 >= at } ?? false }
+        let fresh = { (at: Date) in now.timeIntervalSince(at) < justDone && !seen(at) }
         let ask = openAsk(todo)
         let review = todo.reviewState
         func at(_ s: TodoSection, _ r: TodoTriageRule) -> TodoTriage { TodoTriage(section: s, rule: r, last: last) }
@@ -205,7 +209,7 @@ nonisolated enum TodoTriageLogic {
         if todo.isCancelled { return at(.cancelled, .cancelled) }
         if status == .failed {
             // the same piece of work finished in a related to-do (`supersededFailedStarts`): history, nothing to retry
-            if superseded { return at(.done, .superseded) }
+            if superseded { return at(fresh(todo.doneAt ?? last) ? .justDone : .done, .superseded) }
             return at(now.timeIntervalSince(last) < shelveAfter ? .waiting : .done, .failedStart)
         }
         if status == .needsYou || status == .interrupted { return at(.waiting, .agentAsks) }
@@ -213,8 +217,10 @@ nonisolated enum TodoTriageLogic {
             return at(.waiting, .ownerDecides)
         }
         if status == .working || status == .waiting { return at(.working, .agentRunning) }
-        if todo.doneAt != nil { return at(.done, .closed) }
-        if todo.acceptanceStands { return at(.done, .accepted) }
+        if let done = todo.doneAt { return at(fresh(done) ? .justDone : .done, .closed) }
+        if todo.acceptanceStands {
+            return at(fresh(todo.supervision?.latestReview?.at ?? .distantPast) ? .justDone : .done, .accepted)
+        }
         // Live is delivery, not acceptance: an unreviewed live task stays open and awaiting review, however old (#5732).
         if todo.delivery?.state == "live" { return at(.justDone, .finishedUnseen) }
         let finished = status == .unread || review == .pendingReview || (ask != nil && (ask?.outcome ?? "").isEmpty)

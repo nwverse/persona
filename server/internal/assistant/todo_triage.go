@@ -54,6 +54,8 @@ const (
 const (
 	// triageShelveAfter: no activity for this long, nothing of it running: shelved.
 	triageShelveAfter = 48 * time.Hour
+	// triageJustDoneFor: a fresh closed or accepted result stays visible for a day unless seen first; live has no timeout.
+	triageJustDoneFor = 24 * time.Hour
 	// triageLimitGrace: how long past its reset a usage-limit wait still counts (limitResumeGrace, the web's GRACE_MS).
 	triageLimitGrace = 10 * time.Minute
 )
@@ -333,7 +335,9 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 	last := triageLastActivity(t, look, restoredAt)
 	status := triageStatus(t.Todo, look, now)
 	// Seen files an unsupervised finished turn (#5707), never a task that still needs its supervisor's acceptance (#5732).
+	// A fresh closed or accepted result awaits a read receipt, not still-open work (#5929).
 	seen := func(at time.Time) bool { return t.SeenAt != nil && !t.SeenAt.Before(at) }
+	fresh := func(at time.Time) bool { return now.Sub(at) < triageJustDoneFor && !seen(at) }
 	ask := triageOpenAsk(t.Ask)
 	at := func(section, rule string) todoTriage { return todoTriage{Section: section, Rule: rule, Last: last} }
 	review := triageReviewState(t.Todo)
@@ -348,7 +352,7 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 		return at(triageCancelled, ruleCancelled)
 	case status == "failed":
 		if superseded { // the same piece of work finished in a related to-do: history, nothing left to retry
-			return at(triageDone, ruleSuperseded)
+			return at(cond(fresh(cmp.Or(derefTime(t.DoneAt), last)), triageJustDone, triageDone), ruleSuperseded)
 		}
 		if now.Sub(last) < triageShelveAfter {
 			return at(triageWaiting, ruleFailedStart)
@@ -364,10 +368,10 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 	case status == "working" || status == "waiting":
 		return at(triageWorking, ruleAgentRunning)
 	case t.DoneAt != nil:
-		// Completion and acceptance are never "Delivered · awaiting review", even just now (#5732).
-		return at(triageDone, ruleClosed)
+		// A fresh explicit close is a delivered result to look at, but the task is already closed (#5929, #5732).
+		return at(cond(fresh(*t.DoneAt), triageJustDone, triageDone), ruleClosed)
 	case !concern && acceptanceStands(t.Todo):
-		return at(triageDone, ruleAccepted)
+		return at(cond(fresh(triageLatestReview(t.Supervision).At), triageJustDone, triageDone), ruleAccepted)
 	case !concern && t.Delivery != nil && t.Delivery.State == deliveryLive:
 		// Live is delivery, not acceptance. Until a review or the owner closes it, it stays open and awaiting review (#5732).
 		return at(triageJustDone, ruleFinishedUnseen)
@@ -381,6 +385,14 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 		return at(triageShelved, ruleStale)
 	}
 	return at(triageOther, ruleRest)
+}
+
+// derefTime is *at, or the zero time.
+func derefTime(at *time.Time) time.Time {
+	if at == nil {
+		return time.Time{}
+	}
+	return *at
 }
 
 func cond[T any](c bool, a, b T) T {

@@ -195,7 +195,7 @@
               "a"
             ]
           ],
-          "done": [
+          "just_done": [
             [
               "b"
             ]
@@ -269,7 +269,7 @@
     },
     {
       "name": "failed_start_superseded_by_finished_work",
-      "description": "没开起来的那条，同一行里已经有真正做完的（同一计划）：跟着去「已完成」，不算开着，排在做完的那条后面；同一行里只有别的没开起来的：照旧等你重试。",
+      "description": "没开起来的那条，同一行里已经有真正做完的（同一计划）：新鲜结果先待看，不算开着，排在做完的那条后面；同一行里只有别的没开起来的：照旧等你重试。",
       "source": [
         "docs/assistant/todo-status-sop.md \"Decision table\"",
         "web/src/lib/todo-triage.ts supersededFailedStarts"
@@ -354,7 +354,7 @@
               "f3"
             ]
           ],
-          "done": [
+          "just_done": [
             [
               "done1",
               "f1"
@@ -635,7 +635,7 @@
               "stale"
             ]
           ],
-          "done": [
+          "just_done": [
             [
               "accepted"
             ],
@@ -760,12 +760,14 @@
               "fix"
             ]
           ],
+          "just_done": [
+            [
+              "logs"
+            ]
+          ],
           "done": [
             [
               "speed"
-            ],
-            [
-              "logs"
             ],
             [
               "notes"
@@ -894,7 +896,7 @@
               "open"
             ]
           ],
-          "done": [
+          "just_done": [
             [
               "completed"
             ]

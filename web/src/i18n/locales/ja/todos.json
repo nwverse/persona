@@ -230,7 +230,7 @@
   "ask_failed": "できませんでした：{error}",
   "ask_held": "次のブリーフィングで届きます",
   "ask_held_hint": "この決定は急がないため、通知は送っていません。次のブリーフィングで届き、ここでいつでも回答できます。",
-  "summary_triage": "未完了{open} · 保留{shelved} · 完了{done} · キャンセル{cancelled}",
+  "summary_triage": "未完了{open} · 保留中{parked} · 動きなし{shelved} · 完了{done} · キャンセル{cancelled}",
   "grouping_label": "ToDoのグループ分け",
   "grouping_status": "状態",
   "grouping_folder": "フォルダ",
@@ -239,7 +239,7 @@
   "section_just_done": "交付済み・レビュー待ち",
   "section_pr": "マージ待ちのPR",
   "section_other": "その他の未完了",
-  "section_shelved": "保留",
+  "section_shelved": "動きなし",
   "section_done": "完了",
   "shelved_hint": "48時間進展がなく、動いているエージェントもありません。未完了には数えません。データは削除されていません。",
   "related": "関連 {count} 件",
@@ -267,9 +267,12 @@
   "filter_empty_week": "今週が期限のToDoはありません",
   "filter_empty_month": "今月が期限のToDoはありません",
   "filter_empty_body": "別の絞り込みを試してください。",
-  "summary_filtered": "{filter}：未完了{open} · 保留{shelved} · 完了{done} · キャンセル{cancelled}",
+  "summary_filtered": "{filter}：未完了{open} · 保留中{parked} · 動きなし{shelved} · 完了{done} · キャンセル{cancelled}",
   "cancelled_reason": "キャンセル理由：{reason}",
   "cancelled_section": "キャンセル · {count}",
   "section_cancelled": "キャンセル",
-  "section_waiting": "あなたの対応待ち"
+  "section_waiting": "あなたの対応待ち",
+  "section_parked": "保留中",
+  "ask_chat_route": "判断への回答：{title}",
+  "ask_chat_hint": "次のメッセージをこの判断への回答としてタスクに保存します。判断せず相談する場合は、この宛先を解除してください。"
 }

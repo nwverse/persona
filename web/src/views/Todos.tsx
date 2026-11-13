@@ -553,8 +553,8 @@ export function TodosView({
               <span className="text-[12px] whitespace-nowrap text-ink-3 max-sm:hidden">
                 {byStatus
                   ? listFilter === "all"
-                    ? t("todos.summary_triage", { open: triageAll.open, shelved: triageAll.shelved, done: triageAll.finished, cancelled: triageAll.cancelled })
-                    : t("todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, shelved: triageAll.shelved, done: triageAll.finished, cancelled: triageAll.cancelled })
+                    ? t("todos.summary_triage", { open: triageAll.open, parked: triageAll.todoCounts.parked, shelved: triageAll.shelved, done: triageAll.finished, cancelled: triageAll.cancelled })
+                    : t("todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: triageAll.todoCounts.parked, shelved: triageAll.shelved, done: triageAll.finished, cancelled: triageAll.cancelled })
                   : t("todos.summary", { open: uncompleted.length, done: completed.length, cancelled: cancelled.length })}
               </span>
             )}
@@ -1158,6 +1158,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
 const SECTION_TONE: Record<TriageSection, string> = {
   waiting: "text-attention",
   working: "text-orange",
+  parked: "text-ink-2",
   just_done: "text-green",
   pr: "text-accent-ink",
   other: "text-ink-2",

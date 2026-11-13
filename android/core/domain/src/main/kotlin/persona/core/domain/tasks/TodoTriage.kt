@@ -30,6 +30,8 @@ data class Triage(val section: TriageSection, val rule: TriageRule, val last: Lo
 
 /** No activity for this long, nothing of it running: shelved. */
 const val SHELVE_AFTER_MS: Long = 48 * 3_600_000L
+/** A fresh closed or accepted result stays visible for a day unless seen first; unaccepted live work has no timeout. */
+const val JUST_DONE_MS: Long = 24 * 3_600_000L
 
 private fun ms(at: String?): Long = parseTime(at)?.toEpochMilli() ?: 0L
 
@@ -124,13 +126,13 @@ val Todo.seenCanFile: Boolean
  * A to-do's section by the SOP's decision table, first match wins:
  *
  *  1. FailedStart    the task's agent never started                     → Waiting (retry or remove), Done after 48 h;
- *     Superseded     … and a related to-do (its row) really finished    → Done (#3713)
+ *     Superseded     … and a related to-do (its row) really finished    → Just finished (24 h), then Done (#3713)
  *  2. AgentAsks      an agent asks (question, approval) or was cut off  → Waiting
  *  3. OwnerDecides   review says needs_user, or a decision / "cannot" ask → Waiting
  *  4. AgentRunning   an agent is working or starting                    → Working
- *  5. Closed         done_at set                                        → Done
- *  6. Accepted       the latest review accepted it (even reopened)      → Done
- *  7. Deployed       its delivery is live, not accepted                 → Delivered · awaiting review
+ *  5. Closed         done_at set                                        → Just finished (24 h), then Done
+ *  6. Accepted       the latest review accepted it (even reopened)      → Just finished (24 h), then Done
+ *  7. FinishedUnseen its delivery is live, not accepted                 → Delivered · awaiting review, no timeout
  *  8. FinishedUnseen an agent finished unseen, awaits review, or a done ask → Delivered · awaiting review
  *  9. PrOpen         its PR is open, nothing running                    → PR to merge (however old)
  *  9a. Seen          rule 8 without supervision, seen since it last moved, no PR open → Done
@@ -147,8 +149,10 @@ fun Todo.triage(
     val last = lastActivity(lookup, restoredAt)
     val status = triageStatus(lookup)
     // Seen files an unsupervised finished turn (#5707), never a task that still needs acceptance (#5732).
+    // A fresh closed or accepted result awaits a read receipt, not still-open work (#5929).
     val seenMs = ms(this.seenAt)
     fun seen(at: Long) = seenMs > 0 && seenMs >= at
+    fun fresh(at: Long) = now - at < JUST_DONE_MS && !seen(at)
     val ask = openAsk
     fun at(section: TriageSection, rule: TriageRule) = Triage(section, rule, last)
     val review = reviewState
@@ -156,14 +160,14 @@ fun Todo.triage(
     if (isCancelled) return at(TriageSection.Cancelled, TriageRule.Cancelled)
     if (status == TriageStatus.Failed) {
         // the same piece of work finished in a related to-do ([supersededFailedStarts]): history, nothing to retry
-        if (superseded) return at(TriageSection.Done, TriageRule.Superseded)
+        if (superseded) return at(if (fresh(ms(doneAt).takeIf { it > 0 } ?: last)) TriageSection.JustDone else TriageSection.Done, TriageRule.Superseded)
         return at(if (now - last < SHELVE_AFTER_MS) TriageSection.Waiting else TriageSection.Done, TriageRule.FailedStart)
     }
     if (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted) return at(TriageSection.Waiting, TriageRule.AgentAsks)
     if (!isDone && (review == "needs_user" || ask?.outcome == "decide" || ask?.outcome == "cannot")) return at(TriageSection.Waiting, TriageRule.OwnerDecides)
     if (status == TriageStatus.Working || status == TriageStatus.Waiting) return at(TriageSection.Working, TriageRule.AgentRunning)
-    if (isDone) return at(TriageSection.Done, TriageRule.Closed)
-    if (acceptanceStands) return at(TriageSection.Done, TriageRule.Accepted)
+    if (isDone) return at(if (fresh(ms(doneAt))) TriageSection.JustDone else TriageSection.Done, TriageRule.Closed)
+    if (acceptanceStands) return at(if (fresh(ms(supervision?.latestReview?.at))) TriageSection.JustDone else TriageSection.Done, TriageRule.Accepted)
     // Live is delivery, not acceptance: an unreviewed live task stays open and awaiting review, however old (#5732).
     if (delivery?.state == "live") return at(TriageSection.JustDone, TriageRule.FinishedUnseen)
     val finished = status == TriageStatus.Unread || review == "pending_review" || (ask != null && ask.outcome.isNullOrEmpty()) || ask?.outcome == "done"
