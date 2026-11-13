@@ -310,7 +310,6 @@
  "web/src/views/settings/SettingsParts.tsx": 10,
  "web/src/views/settings/ShortcutSettings.tsx": 2,
  "web/src/views/settings/SidebarPages.tsx": 3,
- "web/src/views/settings/Skills.tsx": 3,
  "web/src/views/settings/TranslationSettings.tsx": 7,
  "web/src/views/settings/TriageSettings.tsx": 2,
  "web/src/views/subscriptions/SourcesGraph.tsx": 28,

@@ -19,6 +19,9 @@ const migrationPrefix = "sub_m_"
 // MigrationID is the id of the built-in connector's default subscription.
 func MigrationID(connector string) string { return migrationPrefix + connector }
 
+// IsMigration says whether id is a built-in's default subscription, which the pages show on its built-in (#6345).
+func IsMigration(id string) bool { return strings.HasPrefix(id, migrationPrefix) }
+
 // MigratedFrom is the built-in connector whose Inbox feed sub is now; false while it is none's.
 func MigratedFrom(sub Subscription) (string, bool) {
 	if sub.Migrated == nil {
@@ -73,7 +76,7 @@ func (s *Service) Migrate(ctx context.Context, m Migration, on bool, by Actor) (
 				return Subscription{}, notFound("subscription")
 			}
 			sub := Subscription{ID: id, Connector: m.Connector, Source: m.Source, SourceName: m.SourceName, Label: m.Label,
-				Icon: m.Icon, Recipe: m.Recipe, RecipeOrigin: OriginExtension, RecipeAt: now, Tool: m.Recipe.Tool,
+				Icon: m.Icon, Recipe: m.Recipe, RecipeOrigin: OriginPersona, RecipeAt: now, Tool: m.Recipe.Tool,
 				IntervalSeconds: defaultIntervalOf(m.Recipe.Mode, 0), RunState: StateOK, Revision: 1, CreatedAt: now, UpdatedAt: now}
 			if err := s.o.Store.CreateSubscription(ctx, sub); err != nil {
 				return Subscription{}, err

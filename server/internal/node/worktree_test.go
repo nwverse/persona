@@ -89,6 +89,8 @@ func worktreeNode(t *testing.T) worktreeFixture {
 		args := []string{"worktree", "add", "-b", branch, "--", path}
 		if _, err := git(t.Context(), repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
 			args = []string{"worktree", "add", "--", path, branch}
+		} else if base := str(p["base"]); base != "" {
+			args = append(args, base)
 		}
 		if out, err := gitRun(t.Context(), repo, gitOpTimeout, args...); err != nil {
 			return herdrFail{Code: "worktree_create_failed", Message: "Preparing worktree\n" + out}
@@ -301,6 +303,70 @@ func TestWorktreeCreateThroughHerdr(t *testing.T) {
 	}
 	if got := branchOf(t, spare); got != "spare" {
 		t.Errorf("an existing branch checked out as %q", got)
+	}
+}
+
+func TestWorktreeCreateFromLinkedCheckoutUsesMainRepository(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		mainWorkspace string
+	}{
+		{name: "main checkout workspace is open", mainWorkspace: "checkout"},
+		{name: "only an ancestor workspace is open", mainWorkspace: "ancestor"},
+		{name: "main checkout workspace is not open"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := worktreeNode(t)
+			linked := filepath.Join(w.home, "elsewhere", "feature-checkout")
+			runPullGit(t, w.repo, "worktree", "add", "-b", "feature", linked)
+			if err := os.WriteFile(filepath.Join(linked, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runPullGit(t, linked, "add", "feature.txt")
+			runPullGit(t, linked, "commit", "-m", "feature")
+			base := runPullGit(t, linked, "rev-parse", "HEAD")
+			if base == runPullGit(t, w.repo, "rev-parse", "HEAD") {
+				t.Fatal("the fixture does not distinguish the linked and main HEADs")
+			}
+			spaces := []any{
+				map[string]any{"workspace_id": "w-linked", "label": "linked", "number": 2, "cwd": linked},
+			}
+			panes := []any{
+				map[string]any{"pane_id": "w-linked:p1", "tab_id": "w-linked:t1", "workspace_id": "w-linked", "cwd": linked},
+			}
+			mainDir := ""
+			switch tc.mainWorkspace {
+			case "checkout":
+				mainDir = w.repo
+			case "ancestor":
+				mainDir = filepath.Dir(w.repo)
+			}
+			if mainDir != "" {
+				spaces = append(spaces, map[string]any{"workspace_id": "w-main", "label": "proj", "number": 1, "cwd": mainDir})
+				panes = append(panes, map[string]any{"pane_id": "w-main:p1", "tab_id": "w-main:t1", "workspace_id": "w-main", "cwd": mainDir})
+			}
+			w.f.reply("session.snapshot", snapshot(spaces, nil, nil, panes))
+			listSessions(t, w.n)
+			w.f.reset()
+
+			dest := filepath.Join(w.home, "trees", "from-linked")
+			_, err := request(t, w.n, "worktree.create", map[string]any{
+				"cwd": linked, "branch": "task/from-linked", "path": dest,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{"branch": "task/from-linked", "path": dest, "focus": false, "base": base}
+			if tc.mainWorkspace == "checkout" {
+				want["workspace_id"] = "w-main"
+			} else {
+				want["cwd"] = resolved(t, w.repo)
+			}
+			assertTrace(t, w.f.trace("worktree.create"), []string{call("worktree.create", want)})
+			if got := runPullGit(t, dest, "rev-parse", "HEAD"); got != base {
+				t.Fatalf("the new worktree started at %s, want linked HEAD %s", got, base)
+			}
+		})
 	}
 }
 

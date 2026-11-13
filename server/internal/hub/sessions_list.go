@@ -32,6 +32,12 @@ const (
 	// with machine_id (the children folded under that session), docs/protocol/protocol.md "Session hierarchy" (#5120).
 	// An older hub reads neither key, so an app sends them only to a hub that says this.
 	featureSessionsHierarchy = "sessions_hierarchy"
+	// featureSessionsCatalog: a paged GET /api/v1/sessions takes catalog=1 (the projects and spaces of the filtered
+	// list, a repository's directories on every computer as one project: sessions_catalog.go), and
+	// place=["<machine>","<project>"] and space=["<machine>","<group>"], both repeatable (the sessions at those
+	// directories, in those spaces), docs/protocol/protocol.md "Projects and spaces". An older hub reads none of the
+	// keys, so an app sends them only to a hub that says this.
+	featureSessionsCatalog = "sessions_catalog"
 )
 
 // pageWithCounts is a page with its view's current counts (with_counts=1): what a separate ?counts=1 read with the
@@ -498,6 +504,15 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		sessionListErr(w, errors.New("pane_source requires machine_id for a manager-scoped aggregate"))
 		return
 	}
+	if catalogAsked(r) {
+		catalog, err := h.sessionCatalogOf(r.Context(), index, opts, own, limited, !extensionToken(r))
+		if err != nil {
+			sessionListErr(w, err)
+			return
+		}
+		writeJSON(w, catalog)
+		return
+	}
 	if counts := r.URL.Query().Get("counts"); counts == "1" || counts == "true" {
 		var counts sessionlist.Counts
 		var err error
@@ -596,7 +611,7 @@ func ownPage(index *sessionlist.Index, opts sessionlist.Options, own []string, p
 		return json.Unmarshal([]byte(id), &k) != nil || !keep(k[0])
 	})
 	counts, err := ownCounts(index, sessionlist.Options{Since: opts.Since, State: opts.State, Project: opts.Project, Group: opts.Group,
-		Source: opts.Source, Provider: opts.Provider, Q: opts.Q, Manager: opts.Manager, Roots: opts.Roots}, own)
+		Source: opts.Source, Provider: opts.Provider, Q: opts.Q, Manager: opts.Manager, Roots: opts.Roots, Places: opts.Places, Spaces: opts.Spaces}, own)
 	if err != nil {
 		return sessionlist.Page{}, err
 	}

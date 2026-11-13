@@ -1118,7 +1118,10 @@ if os.environ.get("MOCK_PASEO"):
                    slot_index=None, pane_id=None, tab_id=None, workspace_id=None, host="paseo",
                    source_kind="runtime", source_instance_id="paseo", repo_root=_paseo_root, worktree=cwd, workspace_cwd=cwd,
                    branch=branch, launcher="claude" if agent == "claude" else "codex", started_by_persona=False,
-                   capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False})
+                   # Paseo declares rename and close: the node lists both, rename not on an agent another one started (#6294),
+                   # one that waits for the user included (listed without its parent meanwhile)
+                   capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False,
+                                 "close": True, "rename": not (kw.get("is_subagent") or kw.get("asking_parent_session_id"))})
         row.update(kw)
         return sess("server", sid, title, cwd, status, state, "", 0, "", 0, minutes, last, agent=agent, **row)
     SESSIONS += [
@@ -9425,6 +9428,7 @@ def cell_width(ch):
 # workspaces, tabs and panes of the machines (agents of the mock sessions and plain shells, GET /api/v1/machines/{mid}/panes);
 # POST there opens a new shell tab. A terminal addressed "pane:<id>" is a made-up shell, not the Claude screen.
 # MOCK_PANES_DELAY=<seconds>: GET .../panes answers that late (the Terminals page's "hasn't answered yet" with Retry, #6153).
+# MOCK_PANES_NO_WORKSPACE=1: the engine runs and opens tabs but has no workspace yet, until a "New Terminal" opens one.
 PANES_NEW = {}  # machine id -> [(workspace id, pane)] opened by POST
 # The menu actions (close / split / rename / run an agent / git), recorded at GET /mock/node_actions and applied to the
 # layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell, an agent run in a
@@ -9441,6 +9445,8 @@ def mock_panes(mid):
     sessions = [s for s in SESSIONS if s.get("machine_id") == mid and s.get("pane_id")][:2]
     if mid == "studio":
         return {"hosts": []}
+    if os.environ.get("MOCK_PANES_NO_WORKSPACE") and not PANES_NEW.get(mid):
+        return {"hosts": [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "workspaces": [], "tabs": [], "panes": []}]}
     ws = [{"id": "w1", "label": "persona", "number": 1, "cwd": "/home/me/persona", "branch": "main"},
           {"id": "w2", "label": "notes", "number": 2, "cwd": "/home/me/notes"}]
     tabs = [{"id": "w1:t1", "workspace_id": "w1", "label": "agent-1", "number": 1},
@@ -26225,6 +26231,8 @@ def plugins_route(handler, p, body):
         return True
     if PLUGINS_MODE and p.startswith("/api/v1/extensions/showcase/-/ui/"):
         return mock_showcase(handler, p.rsplit("/", 1)[-1], body)
+    if PLUGINS_MODE and p.startswith("/api/v1/extensions/showcase/-/image/"):
+        return _showcase_image(handler, p.rsplit("/", 1)[-1])
     if p == "/mock/invalidate" and PLUGINS_MODE:
         return mock_invalidate(handler)
     if p == "/mock/controls/reset" and PLUGINS_MODE:
@@ -26259,6 +26267,7 @@ def mock_showcase(handler, ui, body):
     request = json.loads(body) if body else {}
     if ui == "controls":
         return _showcase_controls(handler, view, request)
+    _sign_refs(view)
     if request.get("action") == "context":
         return _showcase_context(handler, request.get("values") or {})
     if request.get("action"):
@@ -26303,6 +26312,38 @@ def _showcase_controls(handler, view, request):
             c["action"]["confirm"] = words
     handler.send_json({"items": [changed]} if changed else {"view": view})
     return True
+
+
+# Pictures through the hub (UI version 6's `ui.image`, #827): as the hub does for an app of version 6, every `ref` gets a
+# `path` of the hub's image route (here the token is the ref itself, nothing signed), and the route answers a made-up
+# picture of the ref's shape; `missing` and unknown refs answer 404, to show a picture that does not load.
+_SHOWCASE_PICTURES = {"garden": (320, 240, (86, 150, 92)), "camera.front_door": (480, 270, (88, 104, 128)),
+                      "plant": (240, 240, (64, 160, 110)), "map": (480, 200, (226, 222, 210))}
+
+
+def _sign_refs(obj):
+    if isinstance(obj, list):
+        for x in obj: _sign_refs(x)
+    elif isinstance(obj, dict):
+        ref = obj.get("ref")
+        if isinstance(ref, str) and "path" not in obj and re.fullmatch(r"[A-Za-z0-9_.-]+", ref):
+            obj["path"] = "/api/v1/extensions/showcase/-/image/" + ref
+        for v in obj.values(): _sign_refs(v)
+
+
+def _showcase_image(handler, ref):
+    shape = _SHOWCASE_PICTURES.get(ref)
+    if not shape:
+        handler.send_json({"error": "没有这张图", "code": "not_found"}, 404)
+        return True
+    w, h, (r, g, b) = shape
+    # A soft diagonal light over the ref's color, so cropping and fitting show.
+    lift = lambda c, x, y: min(255, c + (x + y) * 60 // (w + h))
+    data = _png_rgba(w, h, lambda x, y: (lift(r, x, y), lift(g, x, y), lift(b, x, y), 255))
+    handler.send_response(200)
+    handler.send_header("Content-Type", "image/png"); handler.send_header("Content-Length", str(len(data)))
+    handler.send_header("Cache-Control", "private, max-age=600")
+    handler.end_headers(); handler.wfile.write(data)
 
 
 def _showcase_context(handler, values):
