@@ -104,7 +104,7 @@ class InboxHandOffBarModel internal constructor(
     fun restoreTarget(key: String?) {
         if (key == null || mutableState.value.phase !is HandOffBarPhase.Idle) return
         val target = liveTargets().firstOrNull { it.key == key } ?: return
-        mutableState.update { it.copy(target = target, markDone = if (doneChosen) it.markDone else true) }
+        mutableState.update { it.copy(target = target, markDone = handOffMarkDone(target, if (doneChosen) it.markDone else null)) }
     }
 
     @Synchronized
@@ -119,7 +119,7 @@ class InboxHandOffBarModel internal constructor(
         val agent = resolved.target.removePrefix("agent:").takeIf { resolved.target.startsWith("agent:") }
         val target = agent?.let { path -> targets.firstOrNull { it.key == path } }
         mutableState.update {
-            it.copy(target = target, markDone = if (doneChosen) it.markDone else target != null,
+            it.copy(target = target, markDone = handOffMarkDone(target, if (doneChosen) it.markDone else null),
                 lastTime = resolved.lastTime, lastGone = resolved.gone)
         }
     }
@@ -133,7 +133,7 @@ class InboxHandOffBarModel internal constructor(
     fun selectTarget(target: HandOffTarget?) {
         if (mutableState.value.phase !is HandOffBarPhase.Idle && mutableState.value.phase !is HandOffBarPhase.Sent) return
         mutableState.update {
-            it.copy(target = target, markDone = if (doneChosen) it.markDone else target != null, lastTime = false, lastGone = false)
+            it.copy(target = target, markDone = handOffMarkDone(target, if (doneChosen) it.markDone else null), lastTime = false, lastGone = false)
         }
     }
 

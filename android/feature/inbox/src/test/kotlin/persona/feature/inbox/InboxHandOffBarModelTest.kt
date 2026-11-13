@@ -148,7 +148,7 @@ class InboxHandOffBarModelTest {
         val model = model(repository, backgroundScope)
         model.preselect(repository.handOffMemory.value)
         assertEquals("machine/agent-1", model.state.value.target?.key)
-        assertTrue(model.state.value.markDone)
+        assertFalse(model.state.value.markDone)
         assertTrue(model.state.value.lastTime)
         assertEquals(12, model.liveTargets().size)
         assertEquals(3, model.liveTargets().take(INBOX_HAND_OFF_MENU_TARGETS).size)
@@ -162,10 +162,28 @@ class InboxHandOffBarModelTest {
         assertFalse(goneModel.state.value.lastGone)
     }
 
+    @Test fun markDoneStartsOffForEveryTargetAndAChoiceSurvivesTargetChanges() = runTest {
+        val repository = HandOffBarTestRepository(agentCount = 2)
+        val model = model(repository, backgroundScope)
+        val agent = model.liveTargets().first()
+        model.selectTarget(agent)
+        assertFalse(model.state.value.markDone)
+        model.setMarkDone(true)
+        model.selectTarget(null)
+        assertTrue(model.state.value.markDone)
+        model.selectTarget(agent)
+        assertTrue(model.state.value.markDone)
+
+        val restored = model(HandOffBarTestRepository(agentCount = 2), backgroundScope)
+        restored.restoreTarget(restored.liveTargets().first().key)
+        assertFalse(restored.state.value.markDone)
+    }
+
     @Test fun markDoneSuccessAndFailureNeverRepeatAnAcceptedHandOff() = runTest {
         val successRepository = HandOffBarTestRepository()
         val success = model(successRepository, backgroundScope)
         success.selectTarget(success.liveTargets().single())
+        success.setMarkDone(true)
         success.queue("Ask", typed = false)
         advanceTimeBy(INBOX_HAND_OFF_UNDO_MILLIS)
         runCurrent()
@@ -176,6 +194,7 @@ class InboxHandOffBarModelTest {
         failedRepository.doneFailure = IOException("done failed")
         val failed = model(failedRepository, backgroundScope)
         failed.selectTarget(failed.liveTargets().single())
+        failed.setMarkDone(true)
         failed.queue("Ask", typed = false)
         advanceTimeBy(INBOX_HAND_OFF_UNDO_MILLIS)
         runCurrent()
