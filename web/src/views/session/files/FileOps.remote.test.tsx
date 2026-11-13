@@ -7,6 +7,7 @@ import { handleUnauthorized, setToken } from "../../../lib/api";
 import { chooseManager, resetManagerChoice, setRosterDefault } from "../../../lib/manager-choice";
 import { getState } from "../../../lib/store";
 import { t } from "../../../i18n";
+import { shortPath } from "../../../lib/format";
 import { useFileOps, type FileOps, type OpTarget } from "./FileOps";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -174,7 +175,7 @@ describe("remote file operations", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 
-  it("does not abort or keep polling the original directory after path navigation", async () => {
+  it("restores a running operation and Cancel after leaving and returning", async () => {
     vi.useFakeTimers();
     pendingRemote = true;
     await act(async () => ops.duplicate([target])); await flush();
@@ -186,8 +187,39 @@ describe("remote file operations", () => {
     expect(byRoute("copy")[0].signal?.aborted).toBe(false);
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); }); await flush();
     expect(operationReads()).toHaveLength(before);
+    await act(async () => root.render(<Harness path="/work/from" />)); await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); }); await flush();
+    expect(operationReads().length).toBeGreaterThan(before);
+    expect(host.querySelector('[role="progressbar"][aria-label="sample.txt"]')).not.toBeNull();
+    await click(t("files-ops.copy_cancel", { name: target.name }));
+    expect(byRoute("copy")[0].signal?.aborted).toBe(true);
+  });
+
+  it("keeps workspace completion feedback when the operation finishes away and the user returns", async () => {
+    vi.useFakeTimers();
+    pendingRemote = true;
+    await act(async () => ops.duplicate([target])); await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100); }); await flush();
+    await act(async () => root.render(<Harness path="/work/elsewhere" />)); await flush();
     await answer(byRoute("copy")[0], { copied: [{ from: target.path, to: "/work/from/sample 2.txt" }] });
+    const completed = t("files-ops.duplicated", { count: 1, dir: shortPath("/work/from") });
+    expect(changed).toHaveBeenCalledExactlyOnceWith(["/work/from"]);
+    expect(host.textContent).toContain(completed);
+    await act(async () => root.render(<Harness path="/work/from" />)); await flush();
+    expect(host.textContent).toContain(completed);
+  });
+
+  it("keeps workspace failure feedback when the operation fails away and the user returns", async () => {
+    vi.useFakeTimers();
+    pendingRemote = true;
+    await act(async () => ops.duplicate([target])); await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100); }); await flush();
+    await act(async () => root.render(<Harness path="/work/elsewhere" />)); await flush();
+    await answer(byRoute("copy")[0], { error: "synthetic copy failed" }, 500);
     expect(changed).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("synthetic copy failed");
+    await act(async () => root.render(<Harness path="/work/from" />)); await flush();
+    expect(host.textContent).toContain("synthetic copy failed");
   });
 
   it("closes Copy To on start and retries a conflict with a fresh operation", async () => {

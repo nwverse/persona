@@ -83,7 +83,7 @@ interface ActiveRemoteOperation {
 }
 
 // The authoritative POST outlives a panel, but not its credential. Keep only the opaque owner and controller outside
-// React: navigation can drop every visible handle without making a later sign-out unable to retire the request.
+// React: navigation can hide every visible row without making a later sign-out unable to retire the request.
 const remotePostCredentials = new Map<AbortController, string>();
 onCredentialChange((nextOwner) => {
   remotePostCredentials.forEach((owner, ac) => {
@@ -202,7 +202,7 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
   const [remoteOperations, setRemoteOperations] = useState<RemoteOperation[]>([]);
   const activeRemote = useRef(new Map<number, ActiveRemoteOperation>());
   const ownedUploads = uploads.filter((u) => u.credential.owner === owner);
-  const ownedRemoteOperations = remoteOperations.filter((op) => op.owner === mutationOwner);
+  const ownedRemoteOperations = remoteOperations.filter((op) => op.owner.workspaceOwner === workspaceOwner && op.owner.path === path);
   const active = useRef(new Map<number, AbortController>());
   const nextId = useRef(0);
   const patch = useCallback((id: number, p: Partial<Upload>) => setUploads((us) => us.map((u) => (u.id === id ? { ...u, ...p } : u))), []);
@@ -220,14 +220,14 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
   }, [owner]);
   useEffect(() => {
     activeRemote.current.forEach((operation, id) => {
-      if (operation.owner === mutationOwner) return;
+      if (operation.owner.workspaceOwner === workspaceOwner) return;
       const credential = operation.owner.credential;
       if (credential.owner !== credentialOwner() || credential.token !== getToken()) operation.ac.abort();
-      // Navigation only hides the row and stops polling. The authoritative POST continues unless credentials died.
+      // A different workspace hides the row and drops its handle. The authoritative POST continues unless credentials died.
       activeRemote.current.delete(id);
     });
-    setRemoteOperations((ops) => ops.filter((op) => op.owner === mutationOwner));
-  }, [mutationOwner]);
+    setRemoteOperations((ops) => ops.filter((op) => op.owner.workspaceOwner === workspaceOwner));
+  }, [workspaceOwner]);
   const sending = ownedUploads.find((u) => u.state === "sending");
   const next = ownedUploads.find((u) => u.state === "queued");
   useEffect(() => {
@@ -298,6 +298,7 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
   }, [currentWorkspace]);
 
   // ── remote copies and zips: the long POST is authoritative; polling only paints its progress ──
+  // Requests live at workspace scope. The current path controls only row visibility and polling, so a return restores Cancel.
   const executeRemote = useCallback(async (op: RemoteOperation, conflict?: Conflict) => {
     const previous = activeRemote.current.get(op.id);
     const ac = new AbortController();
@@ -310,23 +311,26 @@ export function useFileOps({ mid, cwd, path = cwd, workspace = cwd, onChanged }:
     let settled = false;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
     const current = () => !settled && !ac.signal.aborted && activeRemote.current.get(op.id)?.operationId === operationId;
+    const visible = () => currentWorkspace(candidate.workspaceOwner) && liveOwner.current?.path === candidate.path;
     const poll = async () => {
       if (!current()) return;
-      try {
-        const status = await fileOperation(candidate.mid, operationId, auth, ac.signal);
-        if (current()) {
-          const active = activeRemote.current.get(op.id);
-          if (active) active.shown = true;
-          patchRemote(op.id, {
-            shown: true,
-            bytesDone: status.bytes_done,
-            bytesTotal: status.bytes_total,
-            filesDone: status.files_done,
-            filesTotal: status.files_total,
-          });
+      if (visible()) {
+        try {
+          const status = await fileOperation(candidate.mid, operationId, auth, ac.signal);
+          if (current() && visible()) {
+            const active = activeRemote.current.get(op.id);
+            if (active) active.shown = true;
+            patchRemote(op.id, {
+              shown: true,
+              bytesDone: status.bytes_done,
+              bytesTotal: status.bytes_total,
+              filesDone: status.files_done,
+              filesTotal: status.files_total,
+            });
+          }
+        } catch {
+          // The POST remains authoritative; an old node or a transient read failure only leaves progress unknown.
         }
-      } catch {
-        // The POST remains authoritative; an old node or a transient read failure only leaves progress unknown.
       }
       if (current()) pollTimer = setTimeout(() => void poll(), 250);
     };

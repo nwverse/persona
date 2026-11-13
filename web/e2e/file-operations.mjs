@@ -50,18 +50,19 @@ const waitFor = async (predicate, what) => {
 };
 const names = async () => new Set((await mock("/api/v1/machines/macbook/fs?path=~")).entries.map((entry) => entry.name));
 
-async function open(browser, colorScheme) {
+async function open(browser, colorScheme, drill = false) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2, colorScheme, locale: "zh-CN" });
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
   await page.goto(`${base}/?token=mock`);
   await page.waitForFunction(() => localStorage.getItem("persona.token"), null, { timeout: 15_000 });
-  await page.evaluate(({ theme, large }) => {
+  await page.evaluate(({ theme, large, drill }) => {
     localStorage.setItem("persona.theme", theme);
     localStorage.setItem("persona.language", "zh-Hans");
     if (large) localStorage.setItem("persona.text-size", "large");
-  }, { theme: colorScheme, large: largeText });
+    if (drill) localStorage.setItem("persona.files.view", "drill");
+  }, { theme: colorScheme, large: largeText, drill });
   await page.goto(`${base}/machines/macbook`);
   const files = page.getByRole("button", { name: "文件", exact: true });
   await files.waitFor({ state: "visible", timeout: 20_000 });
@@ -104,10 +105,66 @@ async function run(browser, colorScheme, kind) {
   }
 }
 
+async function runReturn(browser, colorScheme) {
+  const { ctx, page, errors } = await open(browser, colorScheme, true);
+  try {
+    await page.getByText("创建副本", { exact: true }).click();
+    const progress = page.locator('[role="progressbar"][aria-label="notes.txt"]');
+    await progress.waitFor({ state: "visible", timeout: 12_000 });
+    await page.locator('button[title="/Users/me/code"]').click();
+    await progress.waitFor({ state: "detached", timeout: 5000 });
+    await page.getByRole("button", { name: "后退", exact: true }).click();
+    await progress.waitFor({ state: "visible", timeout: 5000 });
+    const cancel = page.getByRole("button", { name: "取消复制「notes.txt」", exact: true });
+    await cancel.waitFor({ state: "visible" });
+    await page.screenshot({ path: join(shots, `web-copy-returned-${colorScheme}${largeText ? "-large" : ""}.png`) });
+    await cancel.click();
+    await progress.waitFor({ state: "detached", timeout: 5000 });
+    await waitFor(async () => {
+      const operations = (await mock("/mock/file-operations")).operations;
+      return operations.find((op) => op.kind === "copy" && op.state === "cancelled");
+    }, `${colorScheme} return: the mock did not see Cancel after directory restoration`);
+    if ((await names()).has("notes 2.txt")) fail(`${colorScheme} return: a partial copy remained after Cancel`);
+    if (errors.length) fail(`${colorScheme} return: browser errors ${errors.join("; ")}`);
+    results.push({ colorScheme, kind: "copy", scenario: "leave-return-cancel", outputRemoved: true });
+    console.log(`ok  ${colorScheme} return: live progress and Cancel restored after directory navigation`);
+  } finally {
+    await ctx.close();
+  }
+}
+
+async function runCompletionAway(browser, colorScheme) {
+  const { ctx, page, errors } = await open(browser, colorScheme, true);
+  try {
+    await page.getByText("创建副本", { exact: true }).click();
+    const progress = page.locator('[role="progressbar"][aria-label="notes.txt"]');
+    await progress.waitFor({ state: "visible", timeout: 12_000 });
+    await page.locator('button[title="/Users/me/code"]').click();
+    await progress.waitFor({ state: "detached", timeout: 5000 });
+    await waitFor(async () => {
+      const operations = (await mock("/mock/file-operations")).operations;
+      return operations.find((op) => op.kind === "copy" && op.state === "done");
+    }, `${colorScheme} completion: the mock operation did not finish while away`);
+    const notice = page.getByText("已为 1 项创建副本", { exact: true });
+    await notice.waitFor({ state: "visible", timeout: 5000 });
+    await page.getByRole("button", { name: "后退", exact: true }).click();
+    await notice.waitFor({ state: "visible", timeout: 5000 });
+    await page.screenshot({ path: join(shots, `web-copy-completed-return-${colorScheme}${largeText ? "-large" : ""}.png`) });
+    if (!(await names()).has("notes 2.txt")) fail(`${colorScheme} completion: the completed copy is missing`);
+    if (errors.length) fail(`${colorScheme} completion: browser errors ${errors.join("; ")}`);
+    results.push({ colorScheme, kind: "copy", scenario: "leave-complete-return", completionNotice: true });
+    console.log(`ok  ${colorScheme} completion: workspace notice survives completion away and return`);
+  } finally {
+    await ctx.close();
+  }
+}
+
 const browser = await chromium.launch(executable ? { executablePath: executable, headless: true } : { channel: "chrome", headless: true });
 try {
   await run(browser, "light", "copy");
   await run(browser, "dark", "zip");
+  await runReturn(browser, "light");
+  await runCompletionAway(browser, "dark");
   writeFileSync(join(shots, "results.json"), JSON.stringify(results, null, 2) + "\n");
   console.log("PASS web remote file operations");
 } finally {
