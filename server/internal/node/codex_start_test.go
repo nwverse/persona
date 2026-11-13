@@ -595,6 +595,10 @@ func TestCodexStartRestoresShellContextAfterRC(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	physicalDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name, shell, prompt string
 	}{
@@ -674,7 +678,7 @@ alias codex='codex --alias-already-expanded'
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "cwd=" + dir + "\nPWD=" + dir + "\nCODEX_HOME=/from-launcher\nPERSONA_TEST_LITERAL=" + literal + "\nHERDR_AGENT=codex\nPERSONA_TEST_FUNCTION=from-function\ncarrier=clear\n"
+			want := "cwd=" + physicalDir + "\nPWD=" + dir + "\nCODEX_HOME=/from-launcher\nPERSONA_TEST_LITERAL=" + literal + "\nHERDR_AGENT=codex\nPERSONA_TEST_FUNCTION=from-function\ncarrier=clear\n"
 			want += "arg=--function-flag\narg=--launcher-flag\narg=argument with spaces\n"
 			if tc.prompt != "" {
 				want += "arg=--\narg=" + tc.prompt + "\n"
