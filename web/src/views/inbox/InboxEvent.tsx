@@ -172,7 +172,7 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
     }
   };
   const open = to && (
-    <button type="button" onClick={() => openFromInbox(to)} className="-mx-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1 text-[12px] font-medium whitespace-nowrap text-accent-ink transition-colors hover:bg-hover">
+    <button type="button" onClick={() => openFromInbox(to)} className="-mx-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1 text-label font-medium whitespace-nowrap text-accent-ink transition-colors hover:bg-hover">
       {t("inbox-inboxevent.open_conversation")}
       <Icon name="chevronRight" size={11} stroke={2.4} />
     </button>
@@ -373,7 +373,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
               <span className="truncate">{docChangeLine(c, item.doc)}</span>
             </p>
           ))}
-          {s.note && <p className="mt-1.5 text-[12px] leading-relaxed text-ink-3">{s.note}</p>}
+          {s.note && <p className="mt-1.5 text-label leading-relaxed text-ink-3">{s.note}</p>}
           <div className="mt-3 flex flex-wrap justify-end gap-2">
             <Button tone="quiet" disabled={busy && acting !== "reject"} busy={acting === "reject"} onClick={() => void act("reject")}>{t("inbox-inboxevent.reject")}</Button>
             {b.edit && <Button tone="secondary" icon="pencil" disabled={busy} onClick={() => setEditing(true)}>{t("inbox-inboxevent.edit")}</Button>}
