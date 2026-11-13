@@ -33,6 +33,11 @@ const featureMeetingHighlights = assistantwire.CapabilityMeetingHighlights
 // docs/assistant/meeting-minutes.md "Persona's echo"); only with meeting_attendance.
 const featureMeetingEcho = assistantwire.CapabilityMeetingEcho
 
+// featureMeetingTranscription: the default manager transcribes meetings on the hub (phase 5,
+// docs/assistant/meeting-minutes.md "Phase 5: hub transcription"); only with meeting_conversation and
+// meeting_live_view, whose lines it writes.
+const featureMeetingTranscription = assistantwire.CapabilityMeetingTranscription
+
 // meetingAttendanceFeatures is the feature while the default manager is connected and named the capability in its
 // hello; nothing otherwise, so a phone offers no role to an older manager, which would ignore it.
 func (h *Hub) meetingAttendanceFeatures() []string {
@@ -88,6 +93,17 @@ func (h *Hub) meetingEchoFeatures() []string {
 		return nil
 	}
 	return []string{featureMeetingEcho}
+}
+
+// meetingTranscriptionFeatures is meeting_transcription while the default manager names it beside meeting_live_view
+// (and so meeting_conversation and meeting_attendance); nothing otherwise, so a phone opens no audio socket to, and
+// asks no hub mode of, a manager that has none. Whether a contribution is ready to transcribe is the manager's to say
+// (meeting_transcription_ready), not the hub's.
+func (h *Hub) meetingTranscriptionFeatures() []string {
+	if len(h.meetingLiveViewFeatures()) == 0 || !h.defaultManagerNames(assistantwire.CapabilityMeetingTranscription) {
+		return nil
+	}
+	return []string{featureMeetingTranscription}
 }
 
 // defaultManagerNames: the default manager (the one the recordings' routes go to) is connected and named capability

@@ -1342,6 +1342,7 @@ func weekdayText(ds []int) string {
 // knowledge base.
 func (s *Service) Run(ctx context.Context) {
 	s.running.Store(&ctx)
+	go s.transcriptionReadyLoop(ctx)
 	recoverCtx, cancel := context.WithTimeout(ctx, taskFailTimeout)
 	if err := s.recoverTaskStarts(recoverCtx, s.tasks.recoverBefore); err != nil {
 		s.logf("recover interrupted task starts: %v", err)

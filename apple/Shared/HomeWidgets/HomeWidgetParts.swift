@@ -216,4 +216,8 @@ func homeAgo(_ since: Double, now: Date) -> String {
 func homeShort(_ n: Int) -> String {
     n.formatted(.number.notation(.compactName).precision(.significantDigits(2)))
 }
+
+/// Steps in a small place: whole under ten thousand (6,842, never 6800 or 6.8K: a day's steps are counted to the step),
+/// short above.
+func homeSteps(_ n: Int) -> String { n < 10_000 ? n.formatted() : homeShort(n) }
 #endif

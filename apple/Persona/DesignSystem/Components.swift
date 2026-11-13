@@ -71,6 +71,9 @@ struct WorkingIndicator: View {
 /// the spinner turns; the row's own label says the state in words.
 struct RowStateMark: View {
     var state: AgentState
+    /// A lead row whose Agents work while its own conversation is idle spins the same mark (#6230). A row that itself
+    /// needs the user or is unread keeps its dot, so the quiet activity never hides something that asks for attention.
+    var working = false
 
     /// The dot's color; nil where the mark is the spinner or nothing.
     nonisolated static func dot(_ state: AgentState) -> Color? {
@@ -81,8 +84,15 @@ struct RowStateMark: View {
         }
     }
 
+    /// Whether this row carries the working spinner (#6230): its own turn at work, or a lead whose Agents work while the
+    /// conversation itself is idle. A row that needs the user or is unread keeps its dot, so quiet activity never hides
+    /// something that asks for attention.
+    var spins: Bool {
+        state == .working || (working && Self.dot(state) == nil)
+    }
+
     var body: some View {
-        if state == .working {
+        if spins {
             WorkingIndicator()
         } else if let color = Self.dot(state) {
             Circle().fill(color).scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
