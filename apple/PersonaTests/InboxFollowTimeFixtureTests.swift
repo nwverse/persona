@@ -8,7 +8,7 @@ struct InboxFollowTimeFixtureTests {
     private static let languages = ["en", "zh-Hans", "ja"]
 
     private struct Fixture: Decodable {
-        var op: String
+        var operation: String
         var time_zone: String
         var cases: [Case]
 
@@ -27,7 +27,7 @@ struct InboxFollowTimeFixtureTests {
     @Test func everySharedFollowTimeCaseMatchesInEveryLanguage() throws {
         let data = try Data(contentsOf: Self.repo.appending(path: "spec/fixtures/inbox/time.json"))
         let fixture = try JSON.decoder.decode(Fixture.self, from: data)
-        #expect(fixture.op == "inbox_follow_time")
+        #expect(fixture.operation == "inbox_follow_time")
         #expect(fixture.time_zone == "UTC")
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(identifier: fixture.time_zone))
