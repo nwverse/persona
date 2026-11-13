@@ -522,9 +522,23 @@ struct InboxPage: View {
             Button("Done") { withAnimation(Theme.Motion.standard) { self.picked = nil } }
                 .accessibilityIdentifier("inbox.selectDone")
         }
-        ToolbarItemGroup(placement: .bottomBar) {
-            // Merge: the picked rows become one row (undoable); Add to To-Dos asks the due time. Each ends selecting when it went
-            // through. Merge needs two rows of one manager.
+        // One item across the bar, so the three actions are measured together: the words where they fit, and where they do not
+        // (large text, a long language) Add to To-Dos is an icon, still named for VoiceOver. Separate toolbar items would fold
+        // Mark as Done into an overflow menu instead.
+        ToolbarItem(placement: .bottomBar) {
+            ViewThatFits(in: .horizontal) {
+                pickedBar(words: true)
+                pickedBar(words: false)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// The bar's three actions. Merge: the picked rows become one row (undoable); Add to To-Dos asks the due time; Mark as Done is
+    /// one request with Undo on the toast (`InboxStore.setDone`). Each ends selecting when it went through.
+    private func pickedBar(words: Bool) -> some View {
+        let chosen = chosen(picked ?? [])
+        return HStack(spacing: Theme.Space.l) {
             Button("Merge Rows") {
                 store.merge(chosen) { withAnimation(Theme.Motion.standard) { self.picked = nil } }
             }
@@ -533,13 +547,16 @@ struct InboxPage: View {
             Menu {
                 InboxDueButtons(add: { due in addTodos(chosen, due) }, pick: { todoRequest = InboxTodoRequest(items: chosen) { self.picked = nil } })
             } label: {
-                Label("Add to To-Dos", systemImage: Theme.Icon.todo).labelStyle(.iconOnly)
+                if words {
+                    Text("Add to To-Dos")
+                } else {
+                    Label("Add to To-Dos", systemImage: Theme.Icon.todo).labelStyle(.iconOnly)
+                }
             }
             .disabled(chosen.isEmpty)
             .accessibilityLabel("Add to To-Dos")
             .accessibilityIdentifier("inbox.todoPicked")
-            Spacer()
-            // One request, versions checked, Undo on the toast (InboxStore.setDone); selecting ends.
+            Spacer(minLength: 0)
             Button("Mark as Done") {
                 withAnimation(Theme.Motion.standard) {
                     store.setDone(chosen, true)
@@ -549,6 +566,8 @@ struct InboxPage: View {
             .disabled(chosen.isEmpty)
             .accessibilityIdentifier("inbox.markPickedDone")
         }
+        .lineLimit(1)
+        .buttonStyle(.borderless)
     }
 
     /// Add to To-Dos with a due: one to-do per row; selecting ends once they were added.
