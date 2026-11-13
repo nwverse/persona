@@ -63,12 +63,30 @@ type portState struct {
 	roots map[string]paneRoots
 }
 
-// paneRoots is a pane's foreground processes and what the process table said of the first one (claude / codex
-// itself) then. They are used again while that process is still there unchanged: the rest of what the scan walks (its
-// children, the processes on its terminal) comes from the process table, which every scan reads anyway.
+// paneRoots is a pane's foreground processes and what the process table said of each then (seen[0] is the first
+// one: claude / codex itself). They are used again while the first is still there unchanged, each other one only while
+// its own entry is (a pid that exited may be reused by an unrelated process); the rest of what the scan walks (their
+// children, the processes on their terminals) comes from the process table, which every scan reads anyway.
 type paneRoots struct {
 	pids []int
-	lead proc
+	seen []proc
+}
+
+// reuse is r's pids still in procs as they were, or ok false when the first is not (ask the host again). Dropping a
+// changed one loses nothing: the foreground processes are on the first one's terminal or under it.
+func (r paneRoots) reuse(procs map[int]proc) (kept paneRoots, ok bool) {
+	if len(r.pids) == 0 {
+		return paneRoots{}, false
+	}
+	if p, in := procs[r.pids[0]]; !in || p != r.seen[0] {
+		return paneRoots{}, false
+	}
+	for i, pid := range r.pids {
+		if p, in := procs[pid]; in && p == r.seen[i] {
+			kept.pids, kept.seen = append(kept.pids, pid), append(kept.seen, p)
+		}
+	}
+	return kept, true
 }
 
 type portProbe struct {
@@ -152,7 +170,7 @@ func (n *Node) scanPorts(ctx context.Context) (changed bool) {
 	roots := map[string][]int{}
 	kept := map[string]paneRoots{}
 	for pane := range panes {
-		if r, ok := n.ports.roots[pane]; ok && procs[r.pids[0]] == r.lead {
+		if r, ok := n.ports.roots[pane].reuse(procs); ok {
 			roots[pane], kept[pane] = r.pids, r
 			continue
 		}
@@ -167,7 +185,11 @@ func (n *Node) scanPorts(ctx context.Context) (changed bool) {
 		// claude's own sockets would then count as the pane's servers. A process not in the table (it started after
 		// the table was read, or a host's pid from elsewhere) is asked for again next scan.
 		if lead, ok := procs[pids[0]]; ok && !shellProgram(lead.cmd) {
-			kept[pane] = paneRoots{pids: pids, lead: lead}
+			r := paneRoots{pids: pids, seen: make([]proc, len(pids))}
+			for i, pid := range pids {
+				r.seen[i] = procs[pid] // one not in the table is zero, so it is dropped on reuse
+			}
+			kept[pane] = r
 		}
 	}
 	n.ports.roots = kept

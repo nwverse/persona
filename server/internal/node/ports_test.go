@@ -544,3 +544,42 @@ func TestScanPortsAsksForAPanesProcessesOnce(t *testing.T) {
 		t.Fatalf("roots kept for a gone pane: %+v", n.ports.roots)
 	}
 }
+
+// A pane's other foreground processes are reused only while each is unchanged: one that exited, or whose pid now
+// belongs to another process, is dropped rather than walked as a root (its children and its terminal could be another
+// pane's), while the first process keeps the pane's roots without asking the host again.
+func TestScanPortsDropsAChangedCachedProcess(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("ports are scanned on Linux and macOS")
+	}
+	lead := startProc(t, "sleep", "300")
+	other := startProc(t, "sleep", "300")
+	h := &countingProcHost{bareHost: bareHost{kind: host.Herdr}}
+	h.set(lead.Process.Pid, other.Process.Pid, os.Getpid())
+	n := &Node{hosts: host.NewRegistry(h), agents: map[string]host.Agent{"s1": {Agent: "claude", PaneID: "w1:p1"}},
+		logger: log.New(os.Stderr, "", 0)}
+	ctx := context.Background()
+	n.scanPorts(ctx)
+	if got := n.ports.roots["w1:p1"].pids; len(got) != 3 {
+		t.Fatalf("kept %v, want all 3 pids", got)
+	}
+
+	// The second exits: dropped.
+	_ = other.Process.Kill()
+	_ = other.Wait()
+	n.scanPorts(ctx)
+	if got, want := n.ports.roots["w1:p1"].pids, []int{lead.Process.Pid, os.Getpid()}; !slices.Equal(got, want) {
+		t.Fatalf("after the second exited: kept %v, want %v", got, want)
+	}
+
+	// The test process's pid stood for another process when it was cached (a reused pid): dropped.
+	r := n.ports.roots["w1:p1"]
+	r.seen[1].cmd = "not-" + r.seen[1].cmd
+	n.scanPorts(ctx)
+	if got, want := n.ports.roots["w1:p1"].pids, []int{lead.Process.Pid}; !slices.Equal(got, want) {
+		t.Fatalf("after a reused pid: kept %v, want %v", got, want)
+	}
+	if got := h.asks(); got != 1 {
+		t.Fatalf("the host was asked %d times, want 1 (the first process never changed)", got)
+	}
+}
