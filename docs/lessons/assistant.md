@@ -21,6 +21,13 @@
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
   `DeviceAssistantSend` text. This proves literal deduplication, not a stable-policy refactor or provider-context savings.
 
+
+- Rechecking an Inbox task link must not replay event handling (#5680). Existing processing conversations and saved
+  drafts skip the initial task judge; resetting their processing fields to force another pass can duplicate work.
+  Use the task-link maintenance action instead: validate the message and candidate after judgment, persist through
+  Inbox rollback-aware writes, then publish the draft's task card and supervisor signal. A model failure is distinct
+  from a successful no-match result.
+
 - Proven `prompt` source can describe either a terminal tool label or a first-message fallback (#5269).
   Ordinary Claude inventory falls back to the first message for a bare tool label but not its spinner-prefixed
   form, so spinner normalization alone still lets a generated name disappear. Accept recognizable bad fallback
@@ -419,6 +426,7 @@ tree shows pieces no Agent has worked on as `planned`. Two traps found on the wa
 To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves the tree; the leader touching it keeps it),
 and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.
 
+- Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions.
 ## A source read by pages must settle what left the page (#5993)
 
 The Inbox's mail rounds read each account's newest 40 INBOX messages, and every rule that files a mail item (read
@@ -447,3 +455,7 @@ the candidates. Given seven unrelated tasks, it linked a GitHub bug report to a 
 words with it, and the link stuck. A selection model needs two guards: narrow the candidates by something exact first
 (the repository, the thread), skipping the call when none is left, and accept an answer only with evidence the code can
 check, such as a verbatim quote from the chosen candidate.
+
+- A legacy `bot` Inbox kind is not enough to reject a human Lark conversation (#5680). Check its explicit sender
+  identity, keep forwarded notification text as content, and apply one eligibility predicate before both URL routing
+  and the model judge. Correct old excluded links through the bounded maintenance write, with rollback on save failure.
