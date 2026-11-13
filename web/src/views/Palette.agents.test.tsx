@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // ⌘K is the Agents list's search too (#6589): the list's operators narrow it to Agent sessions, plain words never filter
 // (#4397), a match on the name comes first, then the project or computer, then what is inside a session (that line as
-// the row's second line, the match marked); "Filter Agents list" (⇧↵) puts what was typed on the list in place.
+// the row's second line, the match marked); "Filter Agents list" (⇧↵) puts what was typed on the list in place, and the
+// Filter beside the field writes the list's filter choices into the query as its operators.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,12 +16,14 @@ vi.hoisted(() => {
   (g.Element as { prototype: { scrollIntoView?: () => void } }).prototype.scrollIntoView = () => {};
 });
 const { getState, reset } = await import("../lib/store");
-const { closePalette, openPalette, setPaletteQuery } = await import("../lib/palette");
+const { closePalette, getPalette, openPalette, setPaletteQuery } = await import("../lib/palette");
+const { t } = await import("../i18n");
 const { getAgentListFilters, resetAgentListFilters } = await import("../lib/agent-list-filters");
 const { Palette } = await import("./Palette");
-// the palette imports lib/agent-search.ts with the first query typed: loaded here first, so that import is answered from
-// the module cache however busy the test run is
+// the palette imports lib/agent-search.ts with the first query typed, and the Filter's menu with its first click: loaded
+// here first, so those imports are answered from the module cache however busy the test run is
 await import("../lib/agent-search");
+await import("./palette/AgentConditionsMenu");
 
 const machines: Machine[] = [
   { id: "mac", name: "Mac Studio", online: true },
@@ -47,7 +50,8 @@ beforeEach(() => {
   resetAgentListFilters();
   localStorage.clear();
   closed = 0;
-  Object.assign(getState(), { loaded: true, machines, sessions: { mac: sessions.filter((s) => s.machine_id === "mac"), box: sessions.filter((s) => s.machine_id === "box") } });
+  // reset() keeps the hub's features: the paged case's are its own
+  Object.assign(getState(), { loaded: true, features: [], machines, sessions: { mac: sessions.filter((s) => s.machine_id === "mac"), box: sessions.filter((s) => s.machine_id === "box") } });
   history.replaceState(null, "", "/");
   host = document.createElement("div");
   document.body.append(host);
@@ -65,9 +69,12 @@ async function search(query: string, listShown = true) {
   openPalette("jump");
   setPaletteQuery(query);
   act(() => root.render(<Palette open onClose={() => closed++} onNewAgent={() => {}} listShown={listShown} />));
-  // lib/agent-search.ts loads with the first query typed
-  for (let i = 0; i < 10; i++) await act(async () => { await new Promise((ok) => setTimeout(ok, 0)); });
+  await ticks();
   return document.body;
+}
+/** lib/agent-search.ts loads with the first query typed, or the Filter's first click. */
+async function ticks() {
+  for (let i = 0; i < 10; i++) await act(async () => { await new Promise((ok) => setTimeout(ok, 0)); });
 }
 /** The Agent rows' titles, top to bottom. */
 const titles = () =>
@@ -129,7 +136,7 @@ describe("⌘K as the Agents list's search", () => {
     expect(location.pathname).toBe("/agents");
   });
 
-  it("offers no Filter Agents list without an Agent found, or where the hub's paged list keeps its own search", async () => {
+  it("offers no Filter Agents list without an Agent found, nor operators to the hub's paged list, which matches text", async () => {
     await search("nothing-like-this");
     expect(document.body.querySelector("[data-testid=palette-filter-list]")).toBeNull();
     act(() => root.unmount());
@@ -138,6 +145,57 @@ describe("⌘K as the Agents list's search", () => {
     Object.assign(getState(), { features: ["sessions_list", "sessions_todo"], sessionSummaries: sessions });
     await search("parser");
     expect(titles()).toContain("parser rewrite");
+    const row = document.body.querySelector<HTMLButtonElement>("[data-testid=palette-filter-list]")!;
+    await act(async () => row.click());
+    expect(getAgentListFilters().query).toBe("parser");
+    await search("machine:box");
+    expect(titles()).toEqual(["Fix login", "write pinned notes doc"]);
     expect(document.body.querySelector("[data-testid=palette-filter-list]")).toBeNull();
+  });
+});
+
+const menuRow = (label: string) =>
+  [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]')].find((el) => el.textContent?.includes(label));
+async function choose(label: string) {
+  const row = menuRow(label);
+  expect(row, `menu row ${label}`).toBeTruthy();
+  await act(async () => row!.click());
+}
+const filterButton = () => document.body.querySelector<HTMLButtonElement>("[data-testid=palette-agent-filter]")!;
+
+describe("the Filter beside ⌘K's field", () => {
+  it("writes a choice into the query as the list's operator, counts it, and takes it out again", async () => {
+    await search("");
+    expect(filterButton().textContent).toBe("");
+    await act(async () => filterButton().click());
+    await ticks();
+    await choose(t("lib-agent-filter.filter_machine"));
+    await choose("Build Box");
+    expect(getPalette().query).toBe("machine:box ");
+    expect(titles()).toEqual(["Fix login", "write pinned notes doc"]);
+    expect(filterButton().textContent).toBe("1");
+    // the menu stays open on its page: a second computer is either of them, choosing one again takes it out
+    await choose("Mac Studio");
+    expect(getPalette().query).toBe("machine:box machine:mac ");
+    expect(filterButton().textContent).toBe("2");
+    await choose("Build Box");
+    expect(getPalette().query).toBe("machine:mac ");
+  });
+
+  it("keeps the words typed, Pinned and the time window as operators, and Reset leaves the words alone", async () => {
+    await search("parser");
+    await act(async () => filterButton().click());
+    await ticks();
+    await choose(t("lib-agent-filter.filter_pinned"));
+    expect(getPalette().query).toBe("parser is:pinned ");
+    await choose(t("palette.cond_since"));
+    await choose(t("palette.since_7d"));
+    expect(getPalette().query).toBe("parser is:pinned since:7d ");
+    // one window at a time
+    await choose(t("palette.since_24h"));
+    expect(getPalette().query).toBe("parser is:pinned since:24h ");
+    await choose(t("sidebar.back"));
+    await choose(t("lib-agent-filter.reset_filters"));
+    expect(getPalette().query).toBe("parser ");
   });
 });

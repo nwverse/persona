@@ -187,7 +187,8 @@ export function AgentFilterChips({
   filters: AgentDimensionFilters;
   onChange: (next: AgentDimensionFilters) => void;
   facets: AgentFacetCounts;
-  plan: SearchPlan;
+  /** Search as Code's plan, for its bar: a list without it (the hub's paged list) shows none. */
+  plan?: SearchPlan;
 }) {
   const [editingPlan, setEditingPlan] = useState(false);
   const activeScope = SEARCH_SCOPES.find((s) => s.key === filters.scope) ?? SEARCH_SCOPES[0];
@@ -261,7 +262,7 @@ export function AgentFilterChips({
         </div>
       )}
 
-      {filters.searchAsCode && (
+      {filters.searchAsCode && plan && (
         <div
           data-testid="search-as-code-plan"
           className="flex items-center gap-1.5 rounded-control bg-inset px-2 py-1 text-[11px] shadow-hairline ring-1 ring-accent/25"

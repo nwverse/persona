@@ -7,22 +7,47 @@ import {
   buildEvidenceSnippet,
   compileSearchAsCode,
   DEFAULT_DIMENSION_FILTERS,
+  NO_FACETS,
   parseSearchQuery,
   scopeHaystacks,
   sessionProjectName,
-  type AgentFacetCounts,
   type EvalContext,
   type EvidenceSnippet,
 } from "./agent-chatlist-filter";
 import type { Session } from "./types";
 
-/** Whether a query has an operator (`machine:`, `project:`, `is:pinned`, `since:`…): it then speaks of Agent sessions. */
-export function hasSearchOperators(query: string): boolean {
-  const parsed = parseSearchQuery(query);
-  return parsed.terms.length < query.trim().split(/\s+/).filter(Boolean).length;
+const words = (query: string) => query.trim().split(/\s+/).filter(Boolean);
+
+/** How many operators a query has (`machine:`, `project:`, `is:pinned`, `since:`…): with one it speaks of Agent sessions. */
+export function conditionCount(query: string): number {
+  return words(query).length - parseSearchQuery(query).terms.length;
+}
+export const hasSearchOperators = (query: string): boolean => conditionCount(query) > 0;
+
+// ⌘K's Filter menu (#6589) writes its choices into the query as these operators, so what is chosen stays text to read
+// and change, and "Filter Agents list" carries it to the list. A value with a space has no operator spelling.
+export { buildAgentFacets } from "./agent-chatlist-filter";
+export const conditionValue = (value: string): boolean => value !== "" && !/\s/.test(value);
+
+/** The values the query holds for an operator, as typed (`machine:box` → "box" for "machine"). */
+export function conditionValues(query: string, key: string): string[] {
+  const prefix = `${key}:`;
+  return words(query).filter((w) => w.toLowerCase().startsWith(prefix) && w.length > prefix.length).map((w) => w.slice(prefix.length));
 }
 
-const NO_FACETS: AgentFacetCounts = { harnesses: [], projects: [], models: [], machines: [], pinned: 0 };
+/** The query with `key:value` added, or taken out where it was; `only`: the one value its operator has (`since:`). */
+export function toggleCondition(query: string, key: string, value: string, only = false): string {
+  const token = `${key}:${value}`.toLowerCase();
+  const had = words(query).some((w) => w.toLowerCase() === token);
+  const kept = words(query).filter((w) => w.toLowerCase() !== token && !(only && w.toLowerCase().startsWith(`${key}:`)));
+  return [...kept, ...(had ? [] : [`${key}:${value}`])].join(" ");
+}
+
+/** The query without an operator's values, or without every operator (the words stay). */
+export function dropConditions(query: string, key?: string): string {
+  if (!key) return parseSearchQuery(query).terms.join(" ");
+  return words(query).filter((w) => !w.toLowerCase().startsWith(`${key}:`)).join(" ");
+}
 
 /** How ⌘K ranks an Agent session (#6589). */
 export interface AgentSearchHit {
@@ -38,7 +63,7 @@ export interface AgentSearchHit {
  *  ranks the name first, then the project and computer, then the rest (`AgentSearchHit.score`). */
 export function agentSearchHit(s: Session, query: string, ctx: EvalContext): AgentSearchHit {
   const parsed = parseSearchQuery(query);
-  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  const tokens = words(query);
   const operators = tokens.filter((w) => !parsed.terms.includes(w)).join(" ");
   if (operators) {
     const plan = compileSearchAsCode(operators, { ...DEFAULT_DIMENSION_FILTERS, query: operators }, NO_FACETS);

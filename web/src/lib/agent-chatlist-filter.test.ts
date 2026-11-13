@@ -18,7 +18,7 @@ import {
   type AgentDimensionFilters,
   type EvalContext,
 } from "./agent-chatlist-filter";
-import { agentSearchHit, hasSearchOperators } from "./agent-search";
+import { agentSearchHit, conditionCount, conditionValue, conditionValues, dropConditions, hasSearchOperators, toggleCondition } from "./agent-search";
 import type { Machine, Session } from "./types";
 
 const NOW = Date.parse("2026-11-09T12:00:00Z");
@@ -306,5 +306,32 @@ describe("agentSearchHit", () => {
     expect(hasSearchOperators("error handling")).toBe(false);
     expect(hasSearchOperators("state:bogus")).toBe(false);
     expect(hasSearchOperators("")).toBe(false);
+  });
+});
+
+describe("⌘K's Filter writes the list's operators into the query (#6589)", () => {
+  it("adds a condition after the words, takes it out when chosen again, any case", () => {
+    expect(toggleCondition("parser", "machine", "box")).toBe("parser machine:box");
+    expect(toggleCondition("parser machine:box", "machine", "mac")).toBe("parser machine:box machine:mac");
+    expect(toggleCondition("parser Machine:BOX", "machine", "box")).toBe("parser");
+    expect(toggleCondition("", "is", "pinned")).toBe("is:pinned");
+  });
+  it("keeps one time window", () => {
+    expect(toggleCondition("since:24h parser", "since", "7d", true)).toBe("parser since:7d");
+  });
+  it("reads an operator's values and counts the operators, the words apart", () => {
+    expect(conditionValues("parser machine:box project:blog machine:mac machine:", "machine")).toEqual(["box", "mac"]);
+    expect(conditionCount("parser machine:box is:pinned")).toBe(2);
+    expect(conditionCount("ratio 3:2")).toBe(0);
+    expect(hasSearchOperators("since:7d")).toBe(true);
+  });
+  it("drops one operator's values, or every operator and leaves the words", () => {
+    expect(dropConditions("parser machine:box project:blog machine:mac", "machine")).toBe("parser project:blog");
+    expect(dropConditions("parser machine:box is:pinned since:7d crash")).toBe("parser crash");
+  });
+  it("offers only values an operator can spell", () => {
+    expect(conditionValue("persona")).toBe(true);
+    expect(conditionValue("My Project")).toBe(false);
+    expect(conditionValue("")).toBe(false);
   });
 });

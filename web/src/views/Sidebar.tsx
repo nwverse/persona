@@ -5,8 +5,8 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { t } from "../i18n";
 import { NARROW, useMedia } from "../lib/viewport";
 import { AGENT_FILTERS, agentFilter, applyFilter, arrangeSpaces, BOTMUX_HIDDEN_KEY, botmuxAndFilter, filterCounts, isBotmux, isSpaceMuted, matchingKeys, shownFilters, unreadOf, withoutBotmux, type AgentFilter, type FilterCounts } from "../lib/agent-filter";
-import { applyDimensionFilters, buildAgentFacets, DEFAULT_DIMENSION_FILTERS, hasActiveDimensionFilters } from "../lib/agent-chatlist-filter";
-import { setAgentListFilters, useAgentListFilters } from "../lib/agent-list-filters";
+import { applyDimensionFilters, buildAgentFacets, DEFAULT_DIMENSION_FILTERS, hasActiveDimensionFilters, NO_FACETS, type AgentDimensionFilters } from "../lib/agent-chatlist-filter";
+import { getAgentListFilters, setAgentListFilters, useAgentListFilters } from "../lib/agent-list-filters";
 import { AGENT_SORT_KEY, AGENT_SORTS, agentSort, byUpdated, machineTreeByUpdate, projectsByUpdate, repoMachinesByUpdate, todoTreeByUpdate, type AgentSort } from "../lib/agent-sort";
 import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, hostsOf, isQuiet, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
@@ -674,6 +674,11 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     bar: (counts) => <FilterBar selection={filter} counts={counts ?? NO_COUNTS} onChoose={chooseFilter} botmux={(counts?.feishu ?? 0) > 0 || botmuxHidden ? { hidden: botmuxHidden, onToggle: toggleBotmux } : undefined} />,
   } : undefined, [quickFilters, filter, botmuxHidden, chooseFilter, toggleBotmux]);
   const groupsRef = useRef<HTMLDivElement>(null);
+  // the words ⌘K's "Filter Agents list" put on the list, its search (#6589): only its words, which the hub matches as
+  // text; the Filter menu's choices are the complete list's, so a chip shows here only what this list is narrowed by
+  const listQuery = useAgentListFilters().query;
+  const queryOnly = useMemo(() => ({ ...DEFAULT_DIMENSION_FILTERS, query: listQuery }), [listQuery]);
+  const setQuery = useCallback((next: AgentDimensionFilters) => setAgentListFilters({ ...getAgentListFilters(), query: next.query }), []);
   // the complete list's ⋯: its sorts order the sections here (the hub pages the rows newest first either way)
   const listMenu = useMenu();
   const [sortChoice, chooseSort] = useAgentSort();
@@ -688,7 +693,9 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     foldScope: AGENTS_FOLD,
     byUpdate,
     bar: <GroupingBar groupings={groupings} selection={grouping} onChoose={chooseGrouping} />,
-  }), [grouping, todoNames, groupings, chooseGrouping, quick, byUpdate]);
+    query: listQuery,
+    chips: <AgentFilterChips filters={queryOnly} onChange={setQuery} facets={NO_FACETS} />,
+  }), [grouping, todoNames, groupings, chooseGrouping, quick, byUpdate, listQuery, queryOnly, setQuery]);
   return <div data-sidebar-agents ref={groupsRef}>
     {/* the complete list's title row (#6662): fold all, the ⋯ with its sorts and the archived Agents, and "+" */}
     <div className={SESSION_LIST_STYLE.heading}>

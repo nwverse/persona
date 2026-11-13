@@ -31,6 +31,7 @@ import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
 import { useModalFocus } from "../ui/overlay";
 import { copyFileMention, FilesHeading, FilesNotice, FileResultRow, openFileHit, usePaletteFiles, type FileRow } from "./palette/FilesSection";
+import { AgentConditions } from "./palette/AgentConditions";
 import { t } from "../i18n";
 import { byTime } from "../lib/times";
 import { STATE_LABEL } from "../lib/state-labels";
@@ -175,7 +176,9 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   // the Agents list's matcher (#6589), loaded with the first query typed as the manager's chat search is: the palette is
   // idle-tier (src/startup-preload.ts IDLE_TIER_BUDGET); until then an Agent matches as a Persona chat does
   const [agentSearch, setAgentSearch] = useState<typeof import("../lib/agent-search") | null>(null);
-  const wantsAgentSearch = open && mode === "jump" && text !== "" && !agentSearch;
+  // the Filter beside the field asks for it too, its first click before anything is typed
+  const [conditions, wantConditions] = useState(false);
+  const wantsAgentSearch = open && mode === "jump" && (text !== "" || conditions) && !agentSearch;
   useEffect(() => {
     if (wantsAgentSearch) void import("../lib/agent-search").then(setAgentSearch, () => {}); // a failed load keeps the titles
   }, [wantsAgentSearch]);
@@ -191,7 +194,8 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const pins = useStore((s) => s.pins);
   const interactions = useStore((s) => s.interactions);
   const bySession = useStore((s) => s.sessions);
-  // "Filter Agents list" narrows the complete list; the hub's paged list keeps its own search field
+  // "Filter Agents list" narrows the complete list with what was typed, the hub's paged list with its words alone (the
+  // hub matches the query as text; its operators are the complete list's)
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   const byTodo = useStore((s) => s.features.includes(SESSIONS_TODO_FEATURE));
   const todosSupported = useStore((s) => s.todosSupported);
@@ -375,7 +379,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const label = command ? t("palette.command_palette") : t("palette.search_sessions");
   // "Filter Agents list" (#6589): what was typed narrows the Agents list in place, as its own field did, while it finds an
   // Agent; on a narrow screen or beside the rail the list is the Agents page
-  const listable = !command && text !== "" && completeList && hits.some((r) => r.kind === "session" && !r.hit.assistant);
+  const listable = !command && text !== "" && (completeList || (Boolean(agentSearch) && !operators)) && hits.some((r) => r.kind === "session" && !r.hit.assistant);
   const filterList = () => {
     onClose();
     filterAgentList(text);
@@ -419,6 +423,8 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
             placeholder={command ? t("palette.command_placeholder") : files.ctx ? t("files-find.searching_placeholder") : t("palette.search_placeholder")}
             className="min-w-0 flex-1 bg-transparent text-[14px] text-ink outline-none placeholder:text-ink-3"
           />
+          {/* the Agents list's filter choices, written into the query as its operators (#6589) */}
+          {!command && <AgentConditions query={text} onQuery={(next) => setQ(next && `${next} `)} search={agentSearch} want={() => wantConditions(true)} sessions={sessions} onDone={() => input.current?.focus({ preventScroll: true })} />}
           {/* the key hints are for a keyboard: a touch screen has none (#1996) */}
           <span className="contents [@media(pointer:coarse)]:hidden">
             <Kbd>Esc</Kbd>
@@ -609,13 +615,6 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
           {!command && (
             <span className="flex items-center gap-1">
               <Kbd>&gt;</Kbd> {t("palette.commands")}
-            </span>
-          )}
-          {/* the Agents list's operators, which its own field's placeholder used to name (#6589) */}
-          {!command && (
-            <span className="flex min-w-0 items-center gap-1">
-              <Kbd>machine:</Kbd>
-              <Kbd>project:</Kbd> <span className="truncate">{t("palette.agent_conditions")}</span>
             </span>
           )}
         </div>

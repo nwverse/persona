@@ -59,6 +59,9 @@ export interface AgentFacetCounts {
   pinned: number;
 }
 
+/** No facet values: a filter's chips then name its values by their ids. */
+export const NO_FACETS: AgentFacetCounts = { harnesses: [], projects: [], models: [], machines: [], pinned: 0 };
+
 export interface ParsedSearchQuery {
   text: string;
   terms: string[];
