@@ -142,6 +142,9 @@ final class TerminalsRenameUITests: XCTestCase {
         XCTAssertTrue(alert.waitForExistence(timeout: 5), "no 重命名终端 prompt")
         let field = alert.textFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3))
+        // A fresh simulator's keyboard first shows its tip about sliding to type, and takes no keys until it goes.
+        let tip = app.buttons.matching(NSPredicate(format: "label IN %@", ["Continue", "继续"])).firstMatch
+        if tip.waitForExistence(timeout: 1) { tip.tap() }
         return field
     }
 
