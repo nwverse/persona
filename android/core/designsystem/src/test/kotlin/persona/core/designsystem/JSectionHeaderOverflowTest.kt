@@ -43,6 +43,20 @@ class JSectionHeaderOverflowTest {
         }
     }
 
+    @Test fun defaultHeaderKeepsTheLegacyRowAndTitle() {
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                Box(Modifier.width(400.dp)) {
+                    JSectionHeader("Needs you", count = 2, trailing = "Collapse", open = true, onClick = {})
+                }
+            }
+        }
+        rule.onNodeWithText("Needs you").assertExists()
+        rule.onNodeWithText("2").assertExists()
+        rule.onNodeWithText("Collapse").assertExists()
+        rule.onNodeWithContentDescription("More").assertDoesNotExist()
+    }
+
     @Test fun fittingHeaderKeepsItsOrdinaryActions() {
         show(1f)
         rule.onNodeWithText("Needs you").assertExists()

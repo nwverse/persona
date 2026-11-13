@@ -91,6 +91,54 @@ fun JSectionHeader(
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val fold = if (onClick != null && open != null) foldLabels(open) else null
+    if (overflowActions.isEmpty()) {
+        Row(
+            modifier.fillMaxWidth().then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClickLabel = fold?.action, onClick = onClick) else Modifier)
+                .padding(top = if (sub) Tokens.Space.s else if (style == AppStyle.Board) 18.dp.dense else 26.dp.dense, bottom = if (sub) Tokens.Space.xs else 10.dp.dense,
+                    start = if (style == AppStyle.Brief) 0.dp else 4.dp.dense, end = if (style == AppStyle.Brief) 0.dp else 4.dp.dense)
+                .heightIn(min = if (leading != null) 48.dp else 0.dp)
+                .semantics { heading(); fold?.let { stateDescription = it.state } },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            leading?.let { it(); Spacer(Modifier.width(Tokens.Space.xs)) }
+            if (sub && open != null) {
+                JIcon(PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3, modifier = Modifier.rotate(if (open) 90f else 0f))
+                Spacer(Modifier.width(Tokens.Space.xs))
+            }
+            if (status != null && style == AppStyle.Board) {
+                Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(palette.status(status).dot))
+                Spacer(Modifier.width(8.dp.dense))
+            }
+            // The title and its count take the free width, so the trailing text and the action sit at the end of the row.
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    style = if (sub) PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
+                    else if (style == AppStyle.Glass) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp))
+                    else PersonaTheme.type.headline.copy(fontSize = androidx.compose.ui.unit.TextUnit(15f, androidx.compose.ui.unit.TextUnitType.Sp)),
+                    color = if (muted) palette.ink3 else if (sub || style == AppStyle.Glass) palette.ink2 else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                count?.let {
+                    Spacer(Modifier.width(6.dp.dense))
+                    if (countTone == null) Text("$it", style = PersonaTheme.type.micro, color = palette.ink3)
+                    else {
+                        val tone = palette.status(countTone)
+                        Text("$it", style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold), color = tone.text, maxLines = 1,
+                            modifier = Modifier.clip(CircleShape).background(tone.tint)
+                                .padding(horizontal = SectionHeaderTokens.countPadding, vertical = SectionHeaderTokens.countPaddingVertical))
+                    }
+                }
+            }
+            if (trailing != null || action != null) Spacer(Modifier.width(8.dp.dense))
+            trailing?.let {
+                Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1,
+                    modifier = if (trailingIsFoldAction && fold != null) Modifier.clearAndSetSemantics {} else Modifier)
+            }
+            action?.invoke(this)
+        }
+        return
+    }
     var menu by remember { mutableStateOf(false) }
     SubcomposeLayout(
         modifier.fillMaxWidth().then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClickLabel = fold?.action, onClick = onClick) else Modifier)
