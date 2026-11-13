@@ -9,6 +9,8 @@ import XCTest
 ///   is the most common color, the label the 2 % of pixels farthest from it. The glass fill is the system's, not a token
 ///   `StyleSpecTests` could check.
 /// - Every label must reach 3:1, `StyleSpecTests`' floor for the accent read as a link.
+/// - The destructive-role button's label must be nearer the danger button's than the accent one's in the same place: red
+///   in every style (#7042).
 ///
 /// Against scripts/mock/mock_hub.py (`PERSONA_MOCK_HUB`), so no pairing screen covers the page.
 /// - `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps the screenshots and `contrast.tsv`.
@@ -28,7 +30,7 @@ final class ButtonContrastUITests: XCTestCase {
         let styles = list("PERSONA_CONTRAST_STYLES") ?? ["glass", "beautiful", "lark", "clay", "island"]
         let colors = list("PERSONA_CONTRAST_COLORS") ?? ["default", "coral", "teal"]
         let measureOnly = env["PERSONA_PHASE"] == "before"
-        var rows = ["look\tstyle\tcolor\tplace\ttint\tfill\tlabel\tratio"], low: [String] = []
+        var rows = ["look\tstyle\tcolor\tplace\ttint\tfill\tlabel\tratio"], low: [String] = [], unlike: [String] = []
         var first = true, lastLook = ""
         // The look outermost: the app icon follows it, and the system's alert about that comes only when it changes.
         for look in ["light", "dark"] {
@@ -54,11 +56,11 @@ final class ButtonContrastUITests: XCTestCase {
                     let opener = app.buttons["contrast.openSheet"]
                     XCTAssertTrue(app.buttons["contrast.page.accent"].waitForExistence(timeout: 20), "\(name): no lab:\n\(app.debugDescription)")
                     sleep(2) // the page settles
-                    measure(app, places: Self.firstPlaces, shot: "\(name)-page", into: &rows, low: &low)
+                    measure(app, places: Self.firstPlaces, shot: "\(name)-page", into: &rows, low: &low, unlike: &unlike)
                     app.buttons["contrast.next"].tap()
                     XCTAssertTrue(app.buttons["contrast.list.accent"].waitForExistence(timeout: 10), "\(name): no second screen")
                     sleep(1)
-                    measure(app, places: Self.secondPlaces, shot: "\(name)-more", into: &rows, low: &low)
+                    measure(app, places: Self.secondPlaces, shot: "\(name)-more", into: &rows, low: &low, unlike: &unlike)
                     // The sheet over the first screen, as over a page.
                     app.buttons["contrast.next"].tap()
                     XCTAssertTrue(app.buttons["contrast.page.accent"].waitForExistence(timeout: 10), "\(name): no first screen")
@@ -67,10 +69,10 @@ final class ButtonContrastUITests: XCTestCase {
                     XCTAssertTrue(app.buttons["contrast.sheet.accent"].waitForExistence(timeout: 10), "\(name): no sheet")
                     sleep(2) // the sheet is up
                     // At half height the lower places may be below the screen's edge: measured at full height only.
-                    measure(app, places: Self.sheetPlaces, shot: "\(name)-half", suffix: "@half", partly: true, into: &rows, low: &low)
+                    measure(app, places: Self.sheetPlaces, shot: "\(name)-half", suffix: "@half", partly: true, into: &rows, low: &low, unlike: &unlike)
                     app.buttons["contrast.expand"].tap()
                     sleep(2)
-                    measure(app, places: Self.sheetPlaces, shot: "\(name)-full", suffix: "@full", into: &rows, low: &low)
+                    measure(app, places: Self.sheetPlaces, shot: "\(name)-full", suffix: "@full", into: &rows, low: &low, unlike: &unlike)
                     app.terminate()
                 }
             }
@@ -82,6 +84,7 @@ final class ButtonContrastUITests: XCTestCase {
         }
         if !measureOnly {
             XCTAssertTrue(low.isEmpty, "secondary buttons under \(Self.floor):1 against their own fill:\n\(low.joined(separator: "\n"))")
+            XCTAssertTrue(unlike.isEmpty, "destructive-role buttons not drawn in Theme.danger:\n\(unlike.joined(separator: "\n"))")
         }
     }
 
@@ -94,7 +97,8 @@ final class ButtonContrastUITests: XCTestCase {
 
     /// One screenshot: every place's buttons that are on screen, each label against its own fill.
     @MainActor private func measure(_ app: XCUIApplication, places: [String], shot: String, suffix: String = "",
-                                    partly: Bool = false, into rows: inout [String], low: inout [String]) {
+                                    partly: Bool = false, into rows: inout [String], low: inout [String],
+                                    unlike: inout [String]) {
         let screenshot = app.screenshot()
         let window = app.windows.firstMatch.frame
         guard let pixels = Pixels(screenshot.pngRepresentation, pointWidth: window.width) else {
@@ -105,6 +109,7 @@ final class ButtonContrastUITests: XCTestCase {
         }
         let parts = shot.split(separator: "-").map(String.init) // look, style, color, page|more|half|full
         for place in places {
+            var labels: [String: String] = [:]
             for tint in Self.tints {
                 let button = app.buttons["contrast.\(place).\(tint)"]
                 guard button.exists, window.contains(button.frame) else {
@@ -112,11 +117,16 @@ final class ButtonContrastUITests: XCTestCase {
                     continue
                 }
                 let m = pixels.contrast(in: button.frame)
+                labels[tint] = m.label
                 rows.append([parts[0], parts[1], parts[2], place + suffix, tint, m.fill, m.label, String(format: "%.2f", m.ratio)]
                     .joined(separator: "\t"))
                 if m.ratio < Self.floor {
                     low.append("\(parts[0]) \(parts[1]) \(parts[2]) \(place + suffix) \(tint): \(m.label) on \(m.fill), \(String(format: "%.2f", m.ratio)):1")
                 }
+            }
+            if let accent = labels["accent"], let danger = labels["danger"], let destructive = labels["destructive"],
+               Pixels.distance(destructive, danger) >= Pixels.distance(destructive, accent) {
+                unlike.append("\(parts[0]) \(parts[1]) \(parts[2]) \(place + suffix): destructive \(destructive), danger \(danger), accent \(accent)")
             }
         }
     }
@@ -151,6 +161,15 @@ private struct Pixels {
     private static func luminance(_ c: (Double, Double, Double)) -> Double {
         func l(_ v: Double) -> Double { let s = v / 255; return s <= 0.04045 ? s / 12.92 : pow((s + 0.055) / 1.055, 2.4) }
         return 0.2126 * l(c.0) + 0.7152 * l(c.1) + 0.0722 * l(c.2)
+    }
+
+    /// The distance between two `#RRGGBB` colors in sRGB.
+    static func distance(_ a: String, _ b: String) -> Double {
+        func rgb(_ hex: String) -> [Double] {
+            let v = Int(hex.dropFirst(), radix: 16) ?? 0
+            return [Double(v >> 16 & 0xFF), Double(v >> 8 & 0xFF), Double(v & 0xFF)]
+        }
+        return zip(rgb(a), rgb(b)).map { ($0 - $1) * ($0 - $1) }.reduce(0, +).squareRoot()
     }
 
     private static func hex(_ c: (Double, Double, Double)) -> String {
