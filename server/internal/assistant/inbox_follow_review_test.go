@@ -15,8 +15,10 @@ import (
 const nowFixturePath = "../../../spec/fixtures/inbox/now.json"
 
 type nowFixtureCase struct {
-	Name     string `json:"name"`
-	Input    struct{ Item json.RawMessage `json:"item"` } `json:"input"`
+	Name  string `json:"name"`
+	Input struct {
+		Item json.RawMessage `json:"item"`
+	} `json:"input"`
 	Expected struct {
 		Now     string `json:"now"`
 		Section string `json:"section"`
