@@ -121,13 +121,15 @@ func (n *Node) copyOne(ctx context.Context, real string, info os.FileInfo, dir, 
 	if err := n.writable(to); err != nil {
 		return "", err
 	}
+	var replaced string // the trash id of an existing destination, put back if this copy fails
 	if st, err := os.Lstat(to); err == nil {
 		switch conflict {
 		case proto.UploadConflictReplace:
 			if st.IsDir() || info.IsDir() || to == real {
 				return "", errExists(name)
 			}
-			if _, err := n.toTrash(to, to); err != nil {
+			replaced, err = n.toTrash(to, to)
+			if err != nil {
 				return "", err
 			}
 		case proto.UploadConflictKeep:
@@ -151,6 +153,12 @@ func (n *Node) copyOne(ctx context.Context, real string, info os.FileInfo, dir, 
 	}
 	if err := n.copyTree(ctx, real, to, report); err != nil {
 		_ = os.RemoveAll(to) // what this copy made (the name was free: made with O_EXCL / Mkdir)
+		if replaced != "" {
+			// A failed or cancelled replace must not lose the file that was already there (#6113).
+			if _, rerr := n.restoreFiles([]string{replaced}); rerr != nil {
+				return "", fmt.Errorf("%w; %s is in the trash and could not be put back: %v", err, name, rerr)
+			}
+		}
 		if errors.Is(err, fs.ErrExist) {
 			return "", errExists(name)
 		}

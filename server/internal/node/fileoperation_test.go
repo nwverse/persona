@@ -96,6 +96,61 @@ func TestFileCopyOperationCancelRemovesPartialFile(t *testing.T) {
 	}
 }
 
+func TestFileCopyOperationCancelRestoresReplacedFile(t *testing.T) {
+	f := newUploadRPCFixture(t)
+	f.peer.Cancels = map[string]bool{"file.copy": true}
+	home := f.n.home
+	data := bytes.Repeat([]byte("x"), 4<<20)
+	if err := os.WriteFile(filepath.Join(home, "a.txt"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(home, "dest"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "dest", "a.txt"), []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	var startedOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	fileOperationAfterWrite = func() {
+		startedOnce.Do(func() { close(started) })
+		<-release
+	}
+	t.Cleanup(func() { fileOperationAfterWrite = nil; unblock() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- f.peer.Call(ctx, "file.copy", map[string]any{"operation_id": "op-copy-replace-cancel", "paths": []string{"~/a.txt"}, "dir": "~/dest", "conflict": "replace"}, nil)
+	}()
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("copy ended before its first write: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("copy did not reach its first write")
+	}
+	cancel()
+	unblock()
+	if err := awaitUpload(t, done); err == nil {
+		t.Fatal("cancelled replacement succeeded")
+	}
+	var op proto.FileOperation
+	statusCtx, statusCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer statusCancel()
+	waitFor(t, "cancelled replacement operation", func() bool {
+		return f.peer.Call(statusCtx, "file.operation", map[string]any{"operation_id": "op-copy-replace-cancel"}, &op) == nil && op.State == proto.FileOperationCancelled
+	})
+	got, err := os.ReadFile(filepath.Join(home, "dest", "a.txt"))
+	if err != nil {
+		t.Fatalf("replaced destination was not restored: %v", err)
+	}
+	if string(got) != "original" {
+		t.Fatalf("replaced destination was not restored: got %d bytes, want the 8 original bytes", len(got))
+	}
+}
+
 func TestFileZipOperationReportsCompletion(t *testing.T) {
 	n, home := testNode(t)
 	makeFile(t, filepath.Join(home, "proj", "a.txt"), "abcd")
