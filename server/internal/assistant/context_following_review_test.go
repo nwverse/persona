@@ -50,6 +50,9 @@ func TestSnapshotFollowingThroughTheSnapshot(t *testing.T) {
 	if strings.Contains(text, "标题 lark:f1:2") {
 		t.Errorf("a matter that is not being followed is in the section:\n%s", text)
 	}
+	if strings.Contains(text, "- 在跟的事：没有") {
+		t.Errorf("a snapshot with a followed matter still says there are none:\n%s", text)
+	}
 	// The section sits with the snapshot's other lines: before the scheduled follow-ups, one top-level line.
 	if i, j := strings.Index(text, "- 在跟的事（1 件）："), strings.Index(text, "- 已安排的跟进："); i < 0 || j < 0 || i > j {
 		t.Errorf("the section is not before the scheduled follow-ups:\n%s", text)
@@ -228,5 +231,40 @@ func TestSnapshotFollowingRowWithoutFollow(t *testing.T) {
 		if !strings.Contains(line, want) {
 			t.Errorf("following line lacks %q: %s", want, line)
 		}
+	}
+}
+
+// The section never goes missing: once the last followed matter ends, the snapshot says there are none, so a message
+// carrying only changed sections tells the model the rows are gone instead of leaving the old ones standing.
+func TestSnapshotFollowingSaysNoneWhenTheLastMatterEnds(t *testing.T) {
+	h := newInboxHub(t)
+	setSettings(t, h.Service, func(v *Settings) { v.Timezone = "Asia/Shanghai" })
+	at := time.Date(2026, 11, 14, 3, 30, 0, 0, time.UTC)
+	it := followingReviewItem("lark:f1:1", &InboxFollow{Who: "张工", Next: "再问一次", CheckAt: &at},
+		&InboxHandling{State: HandlingWaiting}, TierAction)
+	h.inbox.mu.Lock()
+	h.inbox.items[it.ID] = it
+	h.inbox.mu.Unlock()
+
+	done := make(chan struct{})
+	h.Service.takeSnapshot(done)
+	<-done
+	if text := fitSnapshot(*h.Service.live.snap); !strings.Contains(text, "- 在跟的事（1 件）：") {
+		t.Fatalf("the followed matter is not in the section:\n%s", text)
+	}
+
+	filedAt := time.Now()
+	h.inbox.mu.Lock()
+	it.DoneAt, it.DoneBy = &filedAt, "user"
+	h.inbox.mu.Unlock()
+	done = make(chan struct{})
+	h.Service.takeSnapshot(done)
+	<-done
+	text := fitSnapshot(*h.Service.live.snap)
+	if !strings.Contains(text, "- 在跟的事：没有") {
+		t.Fatalf("an empty section is missing once the matter ended:\n%s", text)
+	}
+	if strings.Contains(text, "标题 lark:f1:1") || strings.Contains(text, "在跟的事（0 件）") {
+		t.Fatalf("the ended matter is still in the section, or the empty state has a count:\n%s", text)
 	}
 }
