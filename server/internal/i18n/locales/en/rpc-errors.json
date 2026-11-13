@@ -1,4 +1,5 @@
 {
+  "skill_unavailable": "This skill is unavailable or the execution environment changed. Remove it and select it again. Nothing was sent.",
   "readonly_unsupported": "Cannot apply read-only mode on this launch path. Choose a compatible terminal launcher without conflicting permission options.",
   "timeout": "The request timed out. The computer may be busy or the network unstable. Check whether it went through, then try again later.",
   "unreachable": "The connection to this computer dropped. Reconnect it, check whether your last action went through, then try again.",
@@ -62,5 +63,6 @@
   "rewind_unsupported": "This session does not support the requested rewind.",
   "rewind_mismatch": "The selected message moved. Reload the conversation before rewinding.",
   "rewind_nothing": "There is no message to rewind to.",
-  "rewind_failed": "Rewind could not be confirmed. Reload the conversation to check its current history."
+  "rewind_failed": "Rewind could not be confirmed. Reload the conversation to check its current history.",
+  "preview_no_terminal": "This computer has no terminal engine to run the server in. Turn one on in this computer’s settings, then try again."
 }

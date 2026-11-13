@@ -1,19 +1,21 @@
 // One item opened: what it is and where from, "Done" on the right; the AI's summary, its "Trail" (InboxLine), "AI draft reply" / "Hand to AI"; then
-// the thing itself — the Feishu chat at its first new message, the mail, the document's rows, the Moments post — or,
-// when the extension whose connector brought the item in draws its page (inbox_item), the extension's View.
+// the thing itself — the chat at its first new message, the mail, the document's rows, the Moments post. An item without
+// event fields can instead have its body drawn by the extension whose connector brought it in (inbox_item).
 // An event (a hub that sends this phase's fields, lib/inbox-events.ts) opens on its event body instead (InboxEvent.tsx:
 // summary, recap, the suggestion, the handling chain); "Original" and the chain's source entries open the thing itself,
-// "Handling" goes back. A Feishu item's event sits above its chat and a mail event above its message instead,
-// the chain's entries focusing that source in place (#3262, #5471).
+// "Handling" goes back, and browser Back follows the same step. A chat item's event sits above its chat and a mail event
+// above its message instead, the chain's entries focusing that source in place (#3262, #5471).
 import { useEffect, useState } from "react";
 import { ItemManager, useKnownDefault } from "../../lib/manager-choice";
 import { hasEvent, itemAtUid } from "../../lib/inbox-events";
 import { agentDraft, agentWorking, canDraft, isDone, itemKey, kindLabel, labelIsUrgent, muteItem, muteShortName, muteTitle, openTitle, policyMenuTitle, openURL, setDone, shortTime, sourceLine, useInbox, type InboxItem } from "../../lib/inbox";
+import { rowMeta } from "../../lib/inbox-now";
 import { openFolderDialog, useFoldersShown } from "./InboxFolders";
 import { openPolicyDialog } from "./PolicyDialog";
 import { useInboxItemPlace } from "../../lib/extension-slots";
 import { PHONE, useMedia } from "../../lib/viewport";
 import { backToInboxList } from "../../lib/inbox-nav";
+import { useCloseOnBack } from "../../lib/back-close";
 import { hubTranslation, useTranslatePrefs } from "../../lib/translate";
 import { t } from "../../i18n";
 import { Button, cx, IconButton, Loading, Menu, useMenu, type MenuItem } from "../../ui/atoms";
@@ -25,8 +27,12 @@ import { markFromRow } from "./InboxList";
 import { AgentWorking, ItemAvatar, Spark, Tag } from "./InboxParts";
 import { InboxExtensionBody } from "./InboxExtensionBody";
 import { InboxLine } from "./InboxLine";
+import { InboxTaskLinks } from "./InboxTaskLinks";
 import { EventBody, type SourceAt } from "./InboxEvent";
 import { chatOfItem, LarkThread } from "./LarkThread";
+import { lazyDialog } from "../LazyOverlay";
+
+const SameMatterDialog = lazyDialog(() => import("./InboxSameMatter").then((m) => m.InboxSameMatter));
 
 export function InboxDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
   // Whether an item's requests name its manager goes by the roster's default (docs/assistant/managers.md "Clients"): the page
@@ -43,7 +49,7 @@ export function InboxDetail({ item, loaded }: { item?: InboxItem; loaded: boolea
 }
 
 function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
-  const [dialog, setDialog] = useState<"" | "draft" | "handoff">("");
+  const [dialog, setDialog] = useState<"" | "draft" | "handoff" | "same">("");
   const [pins, setPins] = useState(false);
   // an event's own page (the chat, the mail) when "Original" or a source entry opened it; null: the event body
   const [source, setSource] = useState<SourceAt | null>(null);
@@ -59,8 +65,15 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
   const [ownShown, setOwnShown] = useState(false); // under an extension's page: it fell back to the item's own body
   const muteMenu = useMenu();
   const moreMenu = useMenu();
-  // on a phone the title comes first: Pin and Mute fold into one ⋯ menu when both are there (#4144)
+  // on a phone the title comes first: Pin, Mute, Folder and Same matter fold into one ⋯ menu
   const phone = useMedia(PHONE);
+  const event = Boolean(item && (item.now || hasEvent(item)));
+  // A chat item's event sits above its chat (#3262), and a mail event above its message (#5471), whether an extension
+  // offers a page for the source or not. A chain entry focuses the chat or mail in place instead of switching the page.
+  const embed = event && Boolean(item?.lark || item?.mail);
+  // Other events replace their body with the original. Give that page its own same-address entry so Back returns to
+  // the event; "Handling" closes it and takes the entry back off. Item navigation takes the entry with it instead.
+  useCloseOnBack(event && !embed && source !== null, () => setSource(null));
   if (!item) {
     return (
       <div className="flex h-full items-center justify-center p-6">
@@ -70,17 +83,13 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
   }
   const done = isDone(item);
   const label = kindLabel(item);
-  const event = hasEvent(item);
-  // A Feishu item's event sits above its chat (#3262), and a mail event above its message (#5471): with no summary
-  // or suggestion the event alone was a folded chain row with the source a click away. A chain entry focuses the
-  // chat or mail in place instead of switching the page.
-  const embed = event && Boolean(item.lark || item.mail) && !place;
   const showEvent = event && (embed || !source);
   // a suggestion takes the AI twin's draft's place (the hub mirrors a reply suggestion into the draft for older apps)
   const draft = item.suggestion ? undefined : agentDraft(item);
   const translated = hubTranslation(item, prefs);
   const time = shortTime(item.updated_at);
-  const canPin = Boolean(item.lark) && (!place || ownShown) && (!showEvent || embed);
+  const detailMeta = item.where ? rowMeta(item) : sourceLine(item);
+  const canPin = Boolean(item.lark) && (embed || !place || ownShown) && (!showEvent || embed);
   const muteRows: MenuItem[] = [
     ...(item.mutes ?? []).map((m): MenuItem => ({ key: `${m.tag}:${m.value}`, label: muteTitle(m), detail: muteShortName(m), icon: "bellOff", onSelect: () => void muteItem(item, m) })),
     // and a rule for each (docs/assistant/inbox.md "Policies"), under a divider
@@ -111,18 +120,19 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                   {label && <Tag urgent={labelIsUrgent(item)}>{label}</Tag>}
                 </h2>
                 {/* the source line gives way first, so the time stays whole */}
-                <p className="mt-0.5 flex min-w-0 text-[12px] text-ink-3">
-                  <span className="truncate">{sourceLine(item)}</span>
-                  {time && <span className="shrink-0 whitespace-pre">{sourceLine(item) ? ` · ${time}` : time}</span>}
+                <p className="mt-0.5 flex min-w-0 text-[12px] text-ink-3" data-detail-meta>
+                  <span className="truncate">{detailMeta}</span>
+                  {time && <span className="shrink-0 whitespace-pre">{detailMeta ? ` · ${time}` : time}</span>}
                 </p>
               </div>
-              {phone && canPin && muteRows.length > 0 ? (
+              {phone ? (
                 <IconButton icon="more" label={t("inbox-inboxdetail.more")} onClick={moreMenu.open} active={Boolean(moreMenu.anchor)} size={32} />
               ) : (
                 <>
                   {canPin && <IconButton icon="pin" label={t("inbox-inboxdetail.pin_messages")} onClick={() => setPins(true)} size={32} />}
                   {muteRows.length > 0 && <IconButton icon="bellOff" label={t("inbox-inboxdetail.mute")} onClick={muteMenu.open} active={Boolean(muteMenu.anchor)} size={32} />}
                   {foldersShown && <IconButton icon="folder" label={item.folder ? t("inbox-folders.move_from", { folder: item.folder }) : t("inbox-folders.move_menu")} onClick={() => openFolderDialog(item)} size={32} />}
+                  <IconButton icon="link" label={t("inbox-inboxline.same")} onClick={() => setDialog("same")} size={32} />
                 </>
               )}
               {muteMenu.anchor && <Menu anchor={muteMenu.anchor} onClose={muteMenu.close} align="right" width={224} items={muteRows} />}
@@ -132,6 +142,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                     ...(canPin ? [{ key: "pins", label: t("inbox-inboxdetail.pin_messages"), icon: "pin" as const, onSelect: () => setPins(true) }] : []),
                     ...muteRows.map((r, i) => (i === 0 && canPin ? { ...r, divider: true } : r)),
                     ...(foldersShown ? [{ key: "folder", label: t("inbox-folders.move_menu"), hint: item.folder, icon: "folder" as const, divider: true, onSelect: () => openFolderDialog(item) }] : []),
+                    { key: "same", label: t("inbox-inboxline.same"), icon: "link" as const, divider: canPin || muteRows.length > 0 || foldersShown, onSelect: () => setDialog("same") },
                   ]} />
               )}
               {done ? (
@@ -150,6 +161,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                 </Button>
               )}
             </div>
+            <InboxTaskLinks item={item} />
             {item.summary && !showEvent && (
               <p className="mt-3 text-[13px] leading-relaxed text-ink">
                 <Spark />
@@ -170,7 +182,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                   {openURL(item)!.startsWith("https://applink.larksuite.com/") ? t("inbox-inboxdetail.open_in_lark") : t("inbox-inboxdetail.open_in_feishu")}
                 </Button>
               )}
-              <Button tone="secondary" icon="spark" onClick={() => setDialog("handoff")}>{t("inbox-inboxdetail.hand_to_ai")}</Button>
+              {item.source !== "assistant" && <Button tone="secondary" icon="spark" onClick={() => setDialog("handoff")}>{t("inbox-inboxdetail.hand_to_ai")}</Button>}
               {event && !embed && (showEvent ? (
                 <Button tone="quiet" icon={item.mail ? "mail" : "chat"} onClick={() => setSource({})}>{t("inbox-inboxdetail.view_source")}</Button>
               ) : (
@@ -184,9 +196,10 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
             <EventBody item={item} onSource={setSource} embedded />
             {own()}
           </>
-        ) : showEvent ? <EventBody item={item} onSource={setSource} /> : place ? <InboxExtensionBody key={`${itemKey(item)}/${place.extension}/${place.id}`} item={item} place={place} own={own} onOwn={setOwnShown} /> : own()}
+        ) : showEvent ? <EventBody item={item} onSource={setSource} /> : !event && place ? <InboxExtensionBody key={`${itemKey(item)}/${place.extension}/${place.id}`} item={item} place={place} own={own} onOwn={setOwnShown} /> : own()}
         {dialog === "draft" && <DraftDialog item={item} onClose={() => setDialog("")} />}
         {dialog === "handoff" && <HandOffDialog item={item} onClose={() => setDialog("")} />}
+        <SameMatterDialog open={dialog === "same"} item={item} onClose={() => setDialog("")} />
       </div>
     </ItemManager.Provider>
   );

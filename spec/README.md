@@ -28,6 +28,7 @@ spec/
     star-prompt/      when the GitHub star prompts show (empty Agents pill, milestone card, onboarding toast)
     meeting-echo/     Persona's echo in a meeting: a line is one only when its time and its words match, checked by the hub and iOS
     tool-names/       tool names, subjects and arguments in words, checked by Android (iOS later)
+    chat-search/      what search in chat and the assistant's chat index find of each item, checked by web (Go and Android later)
     tokens/           设计 token 的校验夹具（如该领域提供）
   tokens/             设计 token 的来源文件，见 D7
 ```
@@ -36,7 +37,7 @@ spec/
 
 | 领域 | 规则与用例索引 |
 | --- | --- |
-| continuity | [连续性 README](fixtures/continuity/README.md)：连续位置、丢批补洞、历史变化、分页三态、重连、fold 替换与展开 |
+| continuity | [连续性 README](fixtures/continuity/README.md)：连续位置、丢批补洞、历史变化、分页三态、重连、fold 替换与展开. Also replayed by the shared Rust core (`native/app-core`, `cargo test`) and through its Android binding (`:core:rustcore`), #6871 |
 | lines | 见各自 [README](fixtures/lines/README.md) |
 | sort | 见各自 [README](fixtures/sort/README.md) |
 | answer | 见各自 [README](fixtures/answer/README.md) |

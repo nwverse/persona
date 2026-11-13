@@ -109,6 +109,10 @@ type Engine struct {
 	HandleKey []byte
 	// TopicsOn says whether the knowledge points curation runs (topics.go; assistant.kb_topics). nil: it does.
 	TopicsOn func() bool
+	// TranscriptionReady says whether the manager can transcribe on the hub now (meeting_transcription_ready): asked
+	// only when the first upload naming a mode names hub, so it must answer at once (a cached value). nil: never
+	// ready, and such an upload is device mode with TranscriptionUnavailable.
+	TranscriptionReady func() bool
 
 	// Limits (zero: defaults).
 	ChatsPerRun  int // how many recently active chats an archive run looks at (100)

@@ -101,6 +101,7 @@ struct PersonaApp: App {
                 }
                 #if os(iOS)
                 ClipboardOfferWatcher.shared.returned(model) // copied something elsewhere: offer to send it to a computer
+                RemindersImporter.shared.activate(model) // Reminders imported as to-dos, when that is on (#4009)
                 #endif
             } else if new == .background {
                 #if os(iOS)
@@ -200,6 +201,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             ScreenCredentials.forgetAll()
             ScreenUnlock.forgetAll()
         }
+        #if DEBUG
+        // `-openScreenDemo YES`: open the live-screen page on a placeholder Mac (no hub needed) for screenshots of the
+        // picture switcher and the connection-stats overlay; pair with -showScreenStatsDemo / -showScreenFallbackDemo (#3954).
+        if d.bool(forKey: "openScreenDemo") {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(600))
+                AppModel.shared.screenOpen = ScreenOpen(machine: MachineRef(id: "Studio"))
+            }
+        }
+        #endif
         // `-showLarkSendFresh YES`: no Feishu draft and no outbox (unsent, failed messages) from an earlier run:
         // LarkSendTests found earlier runs' failed messages and drafts in the chat (#1627).
         if d.bool(forKey: "showLarkSendFresh") {
@@ -277,9 +288,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
         }
         #if os(iOS)
-        // `-showHomeWidgetSample YES`: the widgets draw the gallery's made-up snapshot, written at once (Home Screen
-        // screenshots without a hub, docs/apple/home-widgets.md「Screenshots」).
-        if d.bool(forKey: "showHomeWidgetSample") { HomeWidgetWriter.shared.showSample() }
+        // `-showHomeWidgetSample YES` (or `ticked`): the widgets draw the gallery's made-up snapshot, written at once
+        // (Home Screen screenshots without a hub, docs/apple/home-widgets.md「Screenshots」).
+        if let sample = d.string(forKey: "showHomeWidgetSample"), sample != "NO" { HomeWidgetWriter.shared.showSample(sample) }
         #endif
         if let phase = d.string(forKey: "showFleetSample") {
             LiveActivityController.shared.showSample(phase, details: d.bool(forKey: "fleetDetails"), island: d.string(forKey: "fleetIsland"),
@@ -374,6 +385,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // That group's hub (`hub_id`, the key); unknown: every group.
         let group = AppModel.shared.pushGroup(info)
         AppModel.shared.wakeLinks(group)
+        #if os(iOS)
+        HomeWidgetData.shared.refresh() // the calendar, Health and the usage the widgets show, when due
+        #endif
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
             #if os(iOS)
