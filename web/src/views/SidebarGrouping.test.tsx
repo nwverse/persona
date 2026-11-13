@@ -3,6 +3,7 @@
 // agent under No to-do and moving it, and a hub without todos hides To-dos and shows By machine while keeping the choice.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // jsdom has no matchMedia (the sidebar's modules read it when they load) and no ResizeObserver (its highlight)
 vi.hoisted(() => {
@@ -13,6 +14,7 @@ import { t } from "../i18n";
 import { connect, refresh, reset } from "../lib/store";
 import type { Todo } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
+import { Icon, type IconName } from "../ui/icons";
 import { Sidebar } from "./Sidebar";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -208,6 +210,9 @@ describe("the fold-all button keeps the Agents controls", () => {
   const headings = () => [...agentsBlock().querySelectorAll<HTMLButtonElement>("[data-sidebar-group-heading] button[aria-expanded]")]
     .filter((b) => !b.closest("[data-sidebar-agents-controls]") && onScreen(b));
   const foldAll = () => host.querySelector<HTMLButtonElement>("[data-sidebar-agents-controls] [data-testid=agents-fold-all]");
+  /** The glyph an icon draws, and the one the button shows: corners in (Collapse all) or out (Expand all). */
+  const glyph = (name: IconName) => renderToStaticMarkup(<Icon name={name} />).match(/ d="([^"]+)"/)?.[1];
+  const shows = () => foldAll()?.querySelector("path")?.getAttribute("d");
   const press = async () => {
     await act(async () => { foldAll()!.click(); await Promise.resolve(); });
     await flush();
@@ -221,6 +226,7 @@ describe("the fold-all button keeps the Agents controls", () => {
     expect(controls()).toEqual(everyControl);
     expect(agentShown()).toBe(true);
     expect(foldAll()!.getAttribute("aria-label")).toBe("全部折叠");
+    expect(shows()).toBe(glyph("foldToggle"));
 
     await press();
     expect(controls()).toEqual(everyControl);
@@ -231,11 +237,13 @@ describe("the fold-all button keeps the Agents controls", () => {
     if (mode === "todo") expect(agentsBlock().querySelector('[data-tree-branch="todo:td1"] [data-tree-branch-row]')?.textContent).toContain(todo.title);
     if (mode === "todo") expect(onScreen(agentsBlock().querySelector('[data-tree-branch="todo:td1"] [data-tree-branch-row]'))).toBe(true);
     expect(foldAll()!.getAttribute("aria-label")).toBe("全部展开");
+    expect(shows()).toBe(glyph("unfoldToggle"));
 
     await press();
     expect(controls()).toEqual(everyControl);
     expect(headings().every((b) => b.getAttribute("aria-expanded") === "true")).toBe(true);
     expect(agentShown()).toBe(true);
+    expect(shows()).toBe(glyph("foldToggle"));
   });
 
   it("has no button in the chat-list view, whose rows stay under the controls", async () => {

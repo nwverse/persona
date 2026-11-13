@@ -6,10 +6,12 @@
 // driven by useFolded; SidebarFoldAll.test.tsx clicks the real one.
 import { act, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { t } from "../i18n";
 import { AGENTS_FOLD } from "../lib/sidebar-api";
 import { FoldScope, useFolded } from "../lib/use-folded";
+import { Icon, type IconName } from "../ui/icons";
 import { GroupFoldButton } from "./SidebarParts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -46,6 +48,9 @@ const render = async (el: React.ReactElement) => {
   await flush();
 };
 const button = () => host.querySelector<HTMLButtonElement>("[data-testid=agents-fold-all]");
+/** The glyph an icon draws, and the one a button shows: corners in (Collapse all) or out (Expand all). */
+const glyph = (name: IconName) => renderToStaticMarkup(<Icon name={name} />).match(/ d="([^"]+)"/)?.[1];
+const shows = (b: Element | null | undefined) => b?.querySelector("path")?.getAttribute("d");
 const hint = () => document.getElementById(button()!.getAttribute("aria-describedby")!)?.textContent;
 const block = () => host.querySelector("[data-block]")!.getAttribute("data-block");
 const opened = () => [...host.querySelectorAll("[data-sidebar-group-heading] button")].map((b) => b.getAttribute("aria-expanded"));
@@ -70,12 +75,16 @@ describe("the Agents fold-all button", () => {
     await render(<Block groups={[{ k: "machine:a" }, { k: "machine:b", folded: true }]} />);
     expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.fold_all"));
     expect(hint()).toBe(t("sidebar.fold_all_hint"));
+    expect(shows(button())).toBe(glyph("foldToggle"));
     await press();
     expect(opened()).toEqual(["false", "false"]);
     expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.open_all"));
     expect(hint()).toBe(t("sidebar.open_all_hint"));
+    // folded, its corners point out: the next click opens
+    expect(shows(button())).toBe(glyph("unfoldToggle"));
     await press();
     expect(opened()).toEqual(["true", "true"]);
+    expect(shows(button())).toBe(glyph("foldToggle"));
     expect(block()).toBe("open");
   });
 
@@ -97,6 +106,7 @@ describe("the Agents fold-all button", () => {
     // before #6447 the click opened the groups inside the hidden list, and the list stayed folded
     await render(<Block blockFolded groups={[{ k: "machine:a", folded: true }, { k: "machine:b", folded: true }]} />);
     expect(button()?.getAttribute("aria-label")).toBe(t("sidebar.open_all"));
+    expect(shows(button())).toBe(glyph("unfoldToggle"));
     expect(hint()).toBe(t("sidebar.open_list_hint"));
     await press();
     expect(block()).toBe("open");

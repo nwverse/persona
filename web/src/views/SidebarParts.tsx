@@ -170,7 +170,7 @@ export function GroupFoldButton({ groups, onAction, block, flat }: { groups: Rea
     setAgentsFolded(action === "fold-groups");
     onAction();
   };
-  return <FoldAllButton label={t(FOLD_LABEL[action])} hint={t(FOLD_HINT[action])} onClick={run} className={SESSION_LIST_STYLE.foldButton} testId="agents-fold-all" />;
+  return <FoldAllButton label={t(FOLD_LABEL[action])} hint={t(FOLD_HINT[action])} expand={action !== "fold-groups"} onClick={run} className={SESSION_LIST_STYLE.foldButton} testId="agents-fold-all" />;
 }
 
 

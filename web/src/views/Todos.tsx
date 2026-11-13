@@ -2381,6 +2381,7 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
           {all !== null && listed.length > 0 && (
             <FoldAllButton
               label={folded ? t("todos.decisions_expand") : t("todos.decisions_fold")}
+              expand={folded}
               hint={folded ? t("todos.decisions_expand_hint", { count: listed.length }) : t("todos.decisions_fold_hint")}
               onClick={() => setView(folded ? "all" : "folded")}
               className={SESSION_LIST_STYLE.foldButton}

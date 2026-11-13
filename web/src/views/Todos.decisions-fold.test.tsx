@@ -4,8 +4,10 @@
 // unchanged, nothing asked of the hub, and each to-do opening at the first five again. The hub is faked; the data made up.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Todo, TodoDecision } from "../lib/todos";
+import { Icon, type IconName } from "../ui/icons";
 
 vi.hoisted(() => {
   window.matchMedia = ((query: string) => ({
@@ -45,6 +47,9 @@ const click = async (el: Element | undefined | null) => {
 const section = () => document.querySelector<HTMLElement>("[data-testid=todo-decisions]")!;
 const rows = () => section().querySelectorAll("ol > li").length;
 const fold = () => section().querySelector<HTMLButtonElement>("[data-testid=todo-decisions-fold]");
+/** The glyph an icon draws, and the one a button shows: corners in (Collapse all) or out (Expand all). */
+const glyph = (name: IconName) => renderToStaticMarkup(<Icon name={name} />).match(/ d="([^"]+)"/)?.[1];
+const shows = (b: Element | null | undefined) => b?.querySelector("path")?.getAttribute("d");
 const more = () => section().querySelector<HTMLButtonElement>("[data-testid=todo-decisions-more]");
 const hint = () => document.getElementById(fold()!.getAttribute("aria-describedby")!)?.textContent;
 const decisionReads = () => api.mock.calls.filter(([path]) => path.includes("/decisions")).length;
@@ -122,7 +127,7 @@ describe("a to-do's decisions", () => {
     const reads = decisionReads();
     expect(fold()?.getAttribute("aria-label")).toBe(t("todos.decisions_fold"));
     expect(hint()).toBe(t("todos.decisions_fold_hint"));
-    expect(fold()?.querySelector("svg")).toBeTruthy();
+    expect(shows(fold())).toBe(glyph("foldToggle"));
 
     await click(fold());
     expect(rows()).toBe(0);
@@ -131,10 +136,12 @@ describe("a to-do's decisions", () => {
     expect(section().textContent).toContain(t("todos.decisions_section", { count: 11 }));
     expect(fold()?.getAttribute("aria-label")).toBe(t("todos.decisions_expand"));
     expect(hint()).toBe(t("todos.decisions_expand_hint", { count: 11 }));
+    expect(shows(fold())).toBe(glyph("unfoldToggle"));
 
     await click(fold());
     expect(rows()).toBe(11);
     expect(fold()?.getAttribute("aria-label")).toBe(t("todos.decisions_fold"));
+    expect(shows(fold())).toBe(glyph("foldToggle"));
     expect(decisionReads()).toBe(reads);
   });
 
