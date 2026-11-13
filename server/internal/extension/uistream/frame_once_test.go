@@ -55,6 +55,7 @@ func managerFrame(t testing.TB, view string) []byte {
 	}
 	return raw
 }
+
 // BenchmarkDecodeSnapshot decodes a page frame as the manager builds it.
 func BenchmarkDecodeSnapshot(b *testing.B) {
 	for _, size := range []struct{ sections, items int }{{4, 8}, {10, 25}} {
