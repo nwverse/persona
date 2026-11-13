@@ -107,6 +107,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | --- | --- | --- | --- | --- |
 | `connectors` (version 2) | `connector.` | The manifest fields of the connector protocol: `id` (`^[a-z][a-z0-9]*$`), `name`, `capabilities`, `hosts`, `agent_tools`, `unlisted`, `confirm_always?` (globs of write-operation names; `connector_gate`'s `allow` is also always clamped to confirm-on-phone, `deny` unchanged), `poll_seconds`, `kinds`, plus `kind_descriptions?` (kind → one line "Type: …" shown to the model, used by Inbox triage, drafting and the AI twin), `archive_sources?` (other names the archive may also go under), `cli?` (a command line on the assistant's PATH, see `docs/protocol/connector-protocol.md` ("Command line")), `sends_as_user?` (the connector sends messages in the user's name by itself, outside the write gate; see "Sent as the user: `sent.record`" below) | Process speaks the protocol | The connector registry (**Settings › Connectors**, Inbox, knowledge base, the assistant's tools); methods in `docs/protocol/connector-protocol.md`, including optional `catalog` source discovery/read calls and recipes (`docs/extensions/subscriptions.md`) |
 | `voice` (version 1) | — | `id`, `name?` | `runtime.http` | The App's voice chat; contract under "Voice" below |
+| `transcription` (version 1) | — | `id`, `name?` | `runtime.http` | Meeting transcription on the hub, for the manager only (#3862 phase 5); contract under "Transcription" below |
 | `computer` (version 1) | — | `id`, `name?` | — | The assistant's computer-control tools and the toggle on the machine page (only the built-in `cua`), see [computer-use.md](computer-use.md) |
 | `browser` (version 1) | — | `id`, `name?` | — | The assistant's browser tools (`browser_run` / `browser_look`) and **Browser** on the machine page (only the built-in `ego`), see [plan-ego-browser.md](../plans/plan-ego-browser.md) |
 | `iphone` (version 1) | — | `id`, `name?` | — | The assistant's phone-control tools (`iphone_status` / `iphone_look` / `iphone_do`), **Phone Control** on a computer's page and **Control of This iPhone** on the iPhone (only the built-in `iphone`), see [iphone.md](iphone.md) |
@@ -3544,6 +3545,24 @@ Closing the WebSocket ends this conversation.
   Recording uses `VOICE_COMMUNICATION` plus system echo cancellation (so the model does not hear itself on speaker), see `docs/android/android.md`.
 - iOS: duplex voice chat in CarPlay (`docs/apple/carplay.md`), using the plugin's default model and voice.
 
+## Transcription
+
+The `transcription` point (#3862 phase 5) turns a meeting's audio into text on the hub, for the manager, which writes the live log and the hub's transcript from it;
+the program stores nothing. The contract (the job's frames both ways, which contribution transcribes, the built-in one's sessions) is
+[meeting-minutes.md](../assistant/meeting-minutes.md) "The `transcription` extension point"; this is the extension's side in short.
+
+- **Endpoints**, on the program's own socket under the contribution's id, apart from the voice point's `GET /info` and `GET /ws`:
+  `GET /transcription/{cid}/info` → `{"protocol": 1, "features": ["live", "replay", "interim"], "setup"?: …}` (`extwire.TranscriptionInfo`), and
+  `GET /transcription/{cid}/ws`, one job per connection (`extwire.TranscriptionFrame` both ways, PCM16 little-endian mono 16 kHz in binary frames). A `cid` the program does not contribute is `404`.
+- **Only the manager dials them** (`extmgr` `TranscriptionInfo` and `TranscriptionDial`), straight to the socket, with no credential and no `X-Persona-*` headers.
+  The apps' forward to an extension (`/api/v1/extensions/<id>/…`, the old `/api/v1/plugins/<id>/…`, and a computer's `…/-/machines/<mid>/…`) answers `404 not_found` for every path under
+  `/transcription/`, however it is spelled (escaped, another case, dot segments) and whatever the credential, `extensions.call:<id>` included.
+- **Which one transcribes**: the built-in voice extension's `gpt-live`, unless the owner names another in the assistant's `meeting_transcription_extension`
+  (`"<extension id>/<contribution id>"`): installing an extension never sends it meeting audio. A contribution is used only while its extension is enabled and running and
+  the contribution is not switched off ("Turning contributions on and off"); an extension started by requests is started for `/info`, as for any relayed request.
+- **A job is a request**: it holds the program's open request (`host.Proc.BeginHTTP`) until it ends, so an extension started by requests is not stopped mid-meeting.
+  The phone's audio socket to the manager, by contrast, does not count in the manager's open requests (`Manager.Serving`): a meeting never holds a redeploy, and the phone sends again from where the hub's audio ends.
+
 ## Built-in voice extension (`personad voice`)
 
 personad includes a kind = `voice` extension, using a real-time service speaking the **GPT-Live protocol** (code `server/internal/voice`, prompts
@@ -3622,6 +3641,9 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
 - **Model fallback**: if the selected model's upstream disappears (address cleared, manager.json changed), no error/disconnect: use default model and voice, then send nonfatal `error{code: "model_unavailable"}` after connecting.
 - **`GET /info`**: `{"protocol": 2, "features": ["target", "runs", "asks", "resume", "suspend", "speak"], "setup"?: "…", "warnings"?: ["…"]}`, without keys or upstream list. `protocol` is the highest voice-frame version this extension speaks (2 since #3502; clients not sending `protocol: 2` in `start` still use protocol 1 from this section); `features` lists only implemented capabilities (`docs/assistant/voice.md` ("Version negotiation")).
 - **`POST /speak`** (#5004, feature `speak`): `{"text", "model"?, "voice"?, "lang"?}` read aloud in its own upstream session (no tools, instructions to say the text exactly as written); answers `200` `audio/pcm` with `X-Persona-Audio-Rate` and the reply's PCM16 as it comes, or, before any audio, `{"error", "code"}` with `400 bad_request`, `403 forbidden` (not a full device), `503 no_upstream`, `502 upstream_forbidden`, `503 upstream_unavailable`, `502 upstream_failed` or `504 no_audio`. The iPhone says meeting answers with it outside a call; details in `docs/assistant/voice.md` ("Reading a text aloud").
+- **Meeting transcription** (#3862 phase 5): the manifest also contributes `transcription: [{"id": "gpt-live", "name": "GPT-Live"}]` beside its voice (its kind stays `voice`), with the same upstreams and key.
+  It transcribes only through a GPT-Live (`live` dialect) upstream: the default model's when its upstream is one, else the first `live` upstream's default; with none,
+  `GET /transcription/gpt-live/info` says `setup: "live_upstream"`. See "Transcription" above and [meeting-minutes.md](../assistant/meeting-minutes.md) "The built-in adapter".
 - **Extension env vars**: `PERSONA_EXTENSION_CONFIG` (form values with defaults), `PERSONA_EXTENSION_SECRETS` (`{"key": "…"}`, decrypted only in process environment),
   `PERSONA_VOICE_HUB_CONFIG` (original `config` of the taken-over entry), entry `env`, and `PERSONA_HUB_URL` / `PERSONA_HUB_TOKEN` (manifest `hub_api`, as before);
   legacy `PERSONA_PLUGIN_*` names are also supplied and accepted.

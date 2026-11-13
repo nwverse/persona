@@ -216,7 +216,8 @@ extension Theme {
         static let avatar = "person.crop.artframe"
         /// Settings › Appearance › Avatar › New from Photo: make an avatar from an image of your own (#2405).
         static let newAvatar = "photo.badge.plus"
-        /// Zoom in and out of a picture with a slider beside it (the avatar crop on the Mac).
+        /// Zoom in and out of a picture: with a slider beside it (the avatar crop on the Mac), and VNC's ⋯ › Zoom In and
+        /// Zoom to Fit (#6196).
         static let zoomIn = "plus.magnifyingglass"
         static let zoomOut = "minus.magnifyingglass"
         /// Settings › Appearance › Interface Style.
@@ -437,6 +438,10 @@ extension Theme {
         static let trackpad = "rectangle.and.hand.point.up.left"
         /// Center Pointer: the pointer back to the middle.
         static let pointerCenter = "scope"
+        /// The live screen's rotate button on an iPhone (#6196): the page on its side, and back upright. Each shows where
+        /// the tap turns it.
+        static let rotateToLandscape = "rectangle.landscape.rotate"
+        static let rotateToPortrait = "rectangle.portrait.rotate"
         /// The Mac's clipboard and the phone's, both ways.
         static let clipboard = "clipboard"
         /// Send Clipboard: the phone's clipboard to a computer (#3064).

@@ -87,6 +87,8 @@ describe("To-dos grouped by 常驻", () => {
     expect(product.querySelector("button")!.textContent).toContain(countsLabel({ working: 1, needs_you: 1 }, t));
     // the sidebar's shape: only the parts above zero
     expect(infra.querySelector("[data-direction-counts]")!.getAttribute("title")).toBe(t("sidebar.leader_working", { count: 1 }));
+    // a direction with a task running carries the same working arc as a conversation running its own turn (#6230)
+    expect(infra.querySelector("[data-direction-counts] [data-shape=\"arc\"][data-state=\"working\"]")).not.toBeNull();
     const text = product.textContent ?? "";
     expect(text.indexOf("Ask")).toBeGreaterThan(-1);
     expect(text.indexOf("Ask")).toBeLessThan(text.indexOf("Card"));

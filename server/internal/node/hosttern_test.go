@@ -364,7 +364,7 @@ func TestTernClaudeTakesItsOwnStatus(t *testing.T) {
 	f.mu.Lock()
 	f.capture = screenFixture(t, "claude-2.1.309-auto-mode-notice-120.txt")
 	f.mu.Unlock()
-	waitFor(t, "a dialog on a resting Claude's screen", func() bool {
+	waitWithin(t, 2*time.Second, "a dialog on a resting Claude's screen, with no status of its own, to block it", func() bool {
 		s := byID(listSessions(t, n))[sidA]
 		return s.Status == proto.StatusBlocked && strings.HasPrefix(s.AttentionReason, "We're changing auto mode")
 	})

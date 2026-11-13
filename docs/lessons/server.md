@@ -2015,6 +2015,11 @@ same spread, and the Mac's `sshd-session` already has TCP_NODELAY (lsof `-T f`: 
 - A child that must not outlive its parent needs the parent to stop it, and the parent needs time to: end such a process the way its peer going away ends it (EOF on stdin) with a bounded grace before the kill (`cmd.Cancel`, `cmd.WaitDelay`), and have it stop its own children and wait for them before it exits. Stopping them in a goroutine is not enough: `Serve` returned and the process exited before the goroutine's SIGKILL fallback ran (`stopAndWait`).
 - A test that kills the parent and looks for the child catches both halves; one that only checks the parent's exit status does not.
 
+## Killing ssh must include its ProxyCommand (2026-11-13, #6251)
+
+- `exec.CommandContext`'s default `Cancel` kills only ssh. Its ProxyCommand stays alive and is adopted by the service manager; when that command holds a relay connection, it can compete with the replacement ssh connection for replies. `WaitDelay` only bounds pipe draining and does not kill the surviving child.
+- Start ssh in its own process group (`osproc.GroupAttr`) and override `cmd.Cancel` to stop its descendants, not only its own pid. On Unix stop the process group and, after `Wait` reaps ssh, call `osproc.SweepGroup` so a child forked concurrently with the signal cannot survive. On Windows `taskkill /T` loses the tree once its root has exited, so walk the remaining descendants in a process snapshot instead. Do not apply this to the hub machine's local node: that one still needs stdin EOF and its graceful-stop grace period. The regression test abandons a real `Machine.connect` handshake with ssh both running and already exited, and checks the ProxyCommand child's pid, not just ssh's exit.
+
 ## A field in `proto.Session` is paid on every copy (#4342)
 
 The hub copies sessions by value (decorated lists, readers that keep rows), and its allocation budgets
