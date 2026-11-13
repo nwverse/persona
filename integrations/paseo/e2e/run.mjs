@@ -157,6 +157,12 @@ check('listed as Claude Code, done, with its space', listed()?.agent === 'claude
   JSON.stringify(listed()))
 check('no second row for its transcript (未运行)', node.sessions().filter((s) => s.cwd === work).length === 1, node.sessions().map((s) => s.session_id).join(','))
 
+// Seen in Persona (#6299): Paseo's own unread mark is cleared too, so it is not unread in Paseo's app either.
+const wasUnread = listed()?.status === 'done'
+await tryCall('session.seen', { session_id: sid })
+await until('seen in Paseo too', () => listed()?.status === 'idle', 20_000).catch(() => {})
+check('seen in Persona: no longer unread in Paseo either', wasUnread && listed()?.status === 'idle', `${wasUnread} ${listed()?.status}`)
+
 // Live text while it writes, the message's own echo.
 await node.call('session.send', { session_id: sid, text: 'Now E2E_HELLO again', client_msg_id: 'cm-e2e-1' })
 await until('the second answer', async () => (await texts()).filter((i) => i.text === 'Hello from the mock model, step by step.').length >= 2, 60_000).catch(() => {})
