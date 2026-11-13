@@ -38,9 +38,6 @@ func fileEditHub(t *testing.T, answer func(method string, params map[string]any)
 	for _, op := range []string{"rename", "move", "trash", "restore", "mkdir", "write", "zip", "copy", "chmod"} {
 		mux.HandleFunc("POST /api/v1/machines/{mid}/files/"+op, h.fileEdit(op))
 	}
-	mux.HandleFunc("GET /api/v1/machines/{mid}/files/operations/{oid}", h.proxy("file.operation", func(r *http.Request) any {
-		return map[string]any{"operation_id": r.PathValue("oid")}
-	}))
 	return mux
 }
 
@@ -203,7 +200,7 @@ func TestFileChmodRoute(t *testing.T) {
 	}
 }
 
-func TestFileOperationRoutes(t *testing.T) {
+func TestFileCopyPassesOperationID(t *testing.T) {
 	var methods []string
 	mux := fileEditHub(t, func(method string, p map[string]any) (any, error) {
 		methods = append(methods, method)
@@ -213,16 +210,7 @@ func TestFileOperationRoutes(t *testing.T) {
 	if code != 200 || out["id"] != "op-1" {
 		t.Fatalf("copy operation_id: %d %v", code, out)
 	}
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/machines/m1/files/operations/op-1", nil))
-	if rec.Code != 200 {
-		t.Fatalf("operation status: %d %s", rec.Code, rec.Body)
-	}
-	var status map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil || status["id"] != "op-1" || status["state"] != "running" {
-		t.Fatalf("operation status: %v, %v", status, err)
-	}
-	if len(methods) != 2 || methods[0] != "file.copy" || methods[1] != "file.operation" {
+	if len(methods) != 1 || methods[0] != "file.copy" {
 		t.Fatalf("methods = %v", methods)
 	}
 }

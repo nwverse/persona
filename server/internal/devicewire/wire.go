@@ -405,6 +405,8 @@ var Routes = []string{
 	// The file transfer switch (#3065, internal/devices transfer_settings.go).
 	"GET /api/v1/machines/{mid}/file-transfer/settings",
 	"PUT /api/v1/machines/{mid}/file-transfer/settings",
+	// Pollable copy / zip progress (#6113, internal/devices fileoperation.go).
+	"GET /api/v1/machines/{mid}/files/operations/{oid}",
 }
 
 // TransferRoutes are computer to computer file transfers (internal/devices transfer.go, docs/protocol/file-transfer.md),
