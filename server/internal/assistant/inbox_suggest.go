@@ -231,18 +231,10 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	return id, nil, from, titleIgnored, nil
 }
 
-// suggestWritesTitle is whether the processing conversation may name the matter. Mail, document and company-feed
-// titles come from the source. GitHub's mention kind is still a PR / issue, whose own title likewise stays.
+// suggestWritesTitle is whether the processing conversation may name a chat event. Grouped events keep their
+// connector block too, so Group / Lark identify the chat; connector threads and source-titled items keep their title.
 func suggestWritesTitle(it *InboxItem) bool {
-	if it.Source == "github" || it.Mail != nil || it.Doc != nil || it.Moment != nil {
-		return false
-	}
-	switch it.Kind {
-	case KindDM, KindMention, KindGroup, KindBot:
-		return true
-	default:
-		return false
-	}
+	return (it.Group != nil || it.Lark != nil) && it.Mail == nil && it.Doc == nil && it.Moment == nil
 }
 
 // inboxDraft keeps the reply drafted in conversation sessionID (inbox_draft, the older name): suggest with kind reply.
