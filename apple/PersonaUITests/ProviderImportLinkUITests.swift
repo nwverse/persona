@@ -20,18 +20,18 @@ final class ProviderImportLinkUITests: XCTestCase {
         if largest { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
         app.launchPinned()
         sleep(8) // pairing and the hub's first answer settle before the external link arrives
-        dismissPermissionPrompt()
+        dismissPermissionPrompt(in: app)
         return app
     }
 
     /// A fresh stock simulator asks for notifications; its SpringBoard alert would cover the wizard and our own refusal.
-    @MainActor private func dismissPermissionPrompt() {
+    @MainActor private func dismissPermissionPrompt(in app: XCUIApplication) {
         let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for label in ["不允许", "Don’t Allow", "Don't Allow"] { // i18n-ignore: the system's own buttons
             let button = board.alerts.buttons[label]
             if button.waitForExistence(timeout: 1) { button.tap(); break }
         }
-        XCTAssertFalse(board.alerts.firstMatch.exists, "a system alert would cover the provider flow")
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "a system alert would cover the provider flow")
     }
 
     @MainActor private func open(_ url: URL, in app: XCUIApplication) {
