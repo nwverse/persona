@@ -13,6 +13,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -189,7 +190,10 @@ class InboxOneRowTest {
         screen(inbox)
         row("Busy event").performTouchInput { longClick() }
         rule.waitForIdle()
-        rule.onNodeWithText(res.getString(R.string.inbox_mark_done)).performClick()
+        // The row's menu files with the row's own word ("Done"), as its swipe does; the Done chip's own count shares the
+        // word, so the action in the sheet is the one to tap. The top bar's "Mark as done" is for a selection.
+        // The Done chip's label shares the word, so the sheet's action (drawn last, over the page) is the one tapped.
+        rule.onAllNodes(hasText(res.getString(R.string.inbox_done)) and hasClickAction()).onLast().performClick()
         rule.waitForIdle()
         rule.runOnIdle {
             assertEquals(listOf("busy" to true), inbox.singles)
@@ -236,9 +240,10 @@ class InboxOneRowTest {
     private fun historyInbox() = FakeInbox(listOf(InboxRecord(InboxItem("recent", kind = "dm", title = "Handled yesterday",
         doneAt = "2026-11-12T09:00:00Z", updatedAt = "2026-11-12T09:00:00Z", version = "v-recent"))),
         expanded = listOf("action", "fyi", "done")).also { inbox ->
+        // Done "just now", so it sits in the group Done opens by default; it comes from the history page, not the list.
         inbox.history = listOf(item("old", "Handled long ago", "Old preview",
             event = InboxEventFields(chain = listOf(InboxChainEntry("e-old", kind = "received", text = "Hi"))),
-            doneAt = "2026-11-01T10:00:00Z", feedId = null))
+            doneAt = java.time.Instant.now().toString(), feedId = null))
     }
 
     @Test fun aDoneHistoryItemOpensItsEventPageAsBefore() {
