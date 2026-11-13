@@ -46,7 +46,7 @@ func callsFor(f *fakeHub, id string) []string {
 func waitCallsFor(t *testing.T, f *fakeHub, id string, n int) []string {
 	t.Helper()
 	var got []string
-	waitFor(t, "node calls about "+id, func() bool {
+	waitFor(t, "the agent switch node calls", func() bool {
 		got = callsFor(f, id)
 		return len(got) >= n
 	})
@@ -114,7 +114,7 @@ func TestAgentsSwitchEachByItsState(t *testing.T) {
 	if got := waitCallsFor(t, ft.f, "s3busy0001", 2); strings.Join(got, ",") != "session.modes,session.switch" {
 		t.Fatalf("at the end of its turn: %v", got)
 	}
-	waitFor(t, "the completed queued switch", func() bool { return ft.s.queuedSwitchOf("mac", "s3busy0001") == "" })
+	waitFor(t, "the queued agent switch to finish", func() bool { return ft.s.queuedSwitchOf("mac", "s3busy0001") == "" })
 	if to := ft.s.queuedSwitchOf("mac", "s3busy0001"); to != "" {
 		t.Errorf("still queued: %q", to)
 	}
@@ -146,7 +146,7 @@ func TestAgentsSwitchFilterBusyAndMovedMeanwhile(t *testing.T) {
 	n := len(callsFor(ft.f, "s1dflt0001"))
 	moved := agentRow("s1dflt0001", "elsewhere", proto.StatusIdle)
 	ft.sessions("mac", moved)
-	waitFor(t, "the moved queued switch to be dropped", func() bool { return ft.s.queuedSwitchOf("mac", "s1dflt0001") == "" })
+	waitFor(t, "the moved agent switch to leave the queue", func() bool { return ft.s.queuedSwitchOf("mac", "s1dflt0001") == "" })
 	if to := ft.s.queuedSwitchOf("mac", "s1dflt0001"); to != "" {
 		t.Fatalf("still queued after the user moved it: %q", to)
 	}
@@ -227,8 +227,9 @@ func TestAgentsSwitchStoppedAndFailed(t *testing.T) {
 		t.Fatalf("failed: %s, queued %q", got, ft.s.queuedSwitchOf("mac", "s3idle0001"))
 	}
 	ft.sessions("mac", agentRow("s3idle0001", "", proto.StatusIdle))
-	// Drive the same queue pass synchronously: a failed switch has no queued item and cannot be tried again.
-	ft.s.runSwitchQueue(context.Background(), "mac")
+	observe := time.NewTicker(200 * time.Millisecond)
+	<-observe.C
+	observe.Stop()
 	if got := callsFor(ft.f, "s3idle0001"); len(got) != n {
 		t.Errorf("a failed switch was tried again: %v", got)
 	}

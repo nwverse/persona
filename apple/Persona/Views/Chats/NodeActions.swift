@@ -259,14 +259,16 @@ nonisolated enum NodeMenu {
     /// Claude Code, and a launcher the computer says it starts in a pane the user picked, keeping that pane when the
     /// start fails (`runHere`: its Codex launchers, #5504), as the web's `launchableHere`. An older computer's failed
     /// Codex start closes its pane, here the user's own shell (#5275): there Codex starts from New Session in a tab of its own.
+    /// Not the one that starts the session in Claude's desktop app (#5480): it never runs in this terminal.
     static func launchableHere(_ l: Launcher) -> Bool {
-        l.runHere == true || (l.agent ?? "").isEmpty || l.agent == "claude"
+        !l.startsInDesktopApp && (l.runHere == true || (l.agent ?? "").isEmpty || l.agent == "claude")
     }
 
     /// Run Agent Here's footer: the agent starts in the picked shell; where the computer has a Codex launcher it doesn't
-    /// offer here, also that Codex starts from New Session (#5275). Codex is not mentioned where it is offered or absent.
+    /// offer here, also that Codex starts from New Session (#5275). Codex is not mentioned where it is offered or absent,
+    /// nor for the Codex App's launcher: its chat starts in the App, not in a tab.
     static func runHereFooter(_ launchers: [Launcher]) -> String {
-        launchers.contains(where: { $0.isCodex && !launchableHere($0) })
+        launchers.contains(where: { $0.isCodex && !$0.startsInDesktopApp && !launchableHere($0) })
             ? String(localized: "Starts in the selected shell without opening a new tab. Codex starts in a tab of its own: use New Session.")
             : String(localized: "Starts in the selected shell without opening a new tab.")
     }

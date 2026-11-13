@@ -1159,7 +1159,7 @@ function ModelList({ f, setF, opening }: { f: ProviderForm; setF: React.Dispatch
       {f.models.length === 0 ? (
         <p className="rounded-card bg-inset px-3 py-4 text-center text-[12px] text-ink-3 shadow-hairline">{t("settings-providerwizard.no_models")}</p>
       ) : shown.length === 0 ? (
-        <p className="rounded-card bg-inset px-3 py-4 text-center text-xs text-ink-3 shadow-hairline">{t("settings-providerwizard.filter_none")}</p>
+        <p className="rounded-card bg-inset px-3 py-4 text-center text-[12px] text-ink-3 shadow-hairline">{t("settings-providerwizard.filter_none")}</p>
       ) : (
         <ul aria-label={t("settings-providerwizard.models")} className="overflow-hidden rounded-card bg-surface shadow-btn">
           {shown.map(({ m, i }) => (
@@ -1177,6 +1177,8 @@ function ModelList({ f, setF, opening }: { f: ProviderForm; setF: React.Dispatch
     </div>
   );
 }
+
+const MODEL_DEFAULT = "touch-hit shrink-0 whitespace-nowrap rounded-chip px-2 py-0.5 text-[11px]";
 
 function ModelRow({ m, showEffort, isDefault, onChange, onDefault }: { m: FormModel; showEffort: boolean; isDefault: boolean; onChange: (p: Partial<FormModel>) => void; onDefault: () => void }) {
   const toggleEffort = (e: string) => {
@@ -1196,12 +1198,12 @@ function ModelRow({ m, showEffort, isDefault, onChange, onDefault }: { m: FormMo
           {m.name && <span className="block truncate text-[11px] text-ink-3">{m.name}</span>}
         </span>
         {isDefault ? (
-          <span className="shrink-0 whitespace-nowrap rounded-chip bg-accent-tint px-2 py-0.5 text-xs font-medium text-accent">{t("settings-providerwizard.default")}</span>
+          <span className={cx(MODEL_DEFAULT, "bg-accent-tint font-medium text-accent")}>{t("settings-providerwizard.default")}</span>
         ) : (
           // on an unchecked row it also checks it; there it shows on hover and focus (always on touch), so a long list
           // stays quiet, like the row actions of the other lists
           <button type="button" onClick={onDefault}
-            className={cx("touch-hit shrink-0 whitespace-nowrap rounded-chip px-2 py-0.5 text-xs text-ink-3 hover:bg-hover hover:text-ink",
+            className={cx(MODEL_DEFAULT, "text-ink-3 hover:bg-hover hover:text-ink",
               !m.checked && "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100")}>
             {t("settings-providerwizard.set_default")}
           </button>

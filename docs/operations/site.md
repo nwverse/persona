@@ -36,7 +36,8 @@ own `site/public/style.css`.
 - **Motion** only starts with JavaScript; without it every section is visible and static, and with reduced motion
   the page shows its finished state (the switches on, the underline drawn, no moving packets).
 - **The version in the top bar** is `/dl/VERSION`, written by `scripts/release/publish.sh`; the badge stays hidden
-  when the file is missing.
+  when the file is missing. It links to `/releases/`, whose latest stable GitHub release may appear before this
+  separately published hub version.
 - **Light only.** The previous page also had a dark variant; this one follows the app icon's paper in both schemes.
 
 ## Legal pages and support
@@ -53,7 +54,7 @@ description, version and downloads, most downloaded first, with search (name, id
 uses the home page's palette, type and footer; the home page's top bar, extensions section and footer link to it.
 Unlike the home page it follows the system's dark scheme (#4810): every color is a variable at the top of its CSS, and
 `prefers-color-scheme: dark` swaps paper and ink for a warm night set; text on orange and amber and the install card
-keep their colors in both. Add a color as a variable with both values, never as a literal in a rule, or one scheme breaks. Its h1 and h2 are set in the serif too: `make_site_assets.py serif` reads both pages.
+keep their colors in both. Add a color as a variable with both values, never as a literal in a rule, or one scheme breaks. Its h1 and h2 are set in the serif too: `make_site_assets.py serif` reads the home, extensions and releases pages.
 
 - **Data**: the page reads `/extensions/catalog.json`, which `site/extensions.mjs` builds from the market's signed
   index (`persona-extensions.json` on the market repository's `main`; `EXTENSIONS_CATALOG_URL` overrides it). It keeps
@@ -87,6 +88,36 @@ keep their colors in both. Add a color as a variable with both values, never as 
   only (at most 512 KB), and sends `nosniff` and a sandboxing CSP so an SVG opened on its own runs nothing here.
 - Both routes are in `run_worker_first` in `site/wrangler.jsonc`: with `not_found_handling` set, a path that is not a
   static file never reaches the Worker otherwise.
+
+## Releases page
+
+`/releases/` (`site/public/releases/index.html`, #6225) shows the latest stable published version, its public packages,
+and a chronological, expandable version history with release notes on GitHub. Its audience includes people installing
+Persona who do not know GitHub's release paths: common Android / macOS / Linux / Windows packages have plain system,
+architecture and size labels, while individual hub / manager / node / CLI artifacts sit under a disclosure. The page
+reuses the site's palette, type, navigation and footer and follows the system's light / dark scheme. Dynamic content
+is built with DOM text nodes rather than HTML interpolation, and the no-JavaScript and failure states link directly
+to the GitHub releases page. A cached copy is clearly marked when GitHub cannot be refreshed.
+
+- **Only published product versions**: `site/releases.mjs` accepts semver `v*` tags, rejects drafts, and excludes media
+  releases such as `promo-v1`. The latest stable release is the highest semantic version, not the most recently created
+  tag. The history is newest published first and identifies prereleases. The GitHub metadata endpoint, repository and
+  permitted download origin are fixed; no URL or token configuration is accepted.
+- **Metadata only**: `/releases/data.json` fetches the public GitHub API (at most 100 releases), validates every field,
+  and keeps only tag, publication time, release URL, a short feature / fix summary and asset name / size / download
+  URL. The summary takes at most three feature and two other change titles, strips contributor handles and links, and
+  renders as plain text; full release notes remain on GitHub. The edge cache is fresh for
+  10 minutes, then serves its previous copy for up to 30 days when GitHub is unavailable, marked `stale`. With no copy
+  the endpoint answers 503 and the page offers Retry and GitHub. Releases appear without a site rebuild; an already
+  open page refreshes only on reload or Retry.
+- **No package bandwidth on the website**: each asset URL must exactly match
+  `https://github.com/nwverse/persona/releases/download/<tag>/<name>`, and the browser follows it directly. There is
+  no `/releases/download/` or other proxy / redirect route for packages, and no release package goes through the Hong
+  Kong entry, Worker or R2. Only the small JSON metadata route is registered in `run_worker_first`. Existing `/dl/`
+  routes remain unchanged for hub / node updates; this page does not replace or redirect them.
+- **Tests**: `node --test site/worker.test.mjs site/releases.test.mjs` covers version filtering / ordering, hostile or
+  malformed asset URLs, caching, fallback, direct-download presentation and homepage / extension navigation. After
+  changing page headlines, regenerate the shared font with `python3 scripts/assets/make_site_assets.py serif`.
 
 ## Current routing (since 2026-11-04, #1134)
 
