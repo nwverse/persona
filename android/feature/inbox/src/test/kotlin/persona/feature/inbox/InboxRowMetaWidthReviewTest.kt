@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -66,7 +67,18 @@ class InboxRowMetaWidthReviewTest {
         event = InboxEventFields(where = "Launch group", now = "confirm_reply"),
     )
 
-    @Test fun aLongStateLeavesTheLineSomeRoomRatherThanNothing() {
+    /** The drawn layout of the one node holding [text]. */
+    private fun layout(text: String, context: String): androidx.compose.ui.text.TextLayoutResult {
+        val nodes = rule.onAllNodesWithText(text, useUnmergedTree = true).fetchSemanticsNodes()
+        assertEquals("$context: one node holds $text", 1, nodes.size)
+        val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        nodes.single().config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
+        return layouts.single()
+    }
+
+    @Test fun aLongStateStaysWholeAndTheLineBesideItGivesWay() {
+        // F-7: the state word may never be clipped or ellipsized; the third line on its left is what gives way.
+        val longState = "Waiting for Alex to confirm the date with the whole launch group: ask whether Friday works for everyone"
         var style by mutableStateOf(AppStyle.Board)
         val longWait = record().let {
             it.copy(item = it.item.copy(status = InboxItem.WORKING), event = it.event.copy(
@@ -86,12 +98,12 @@ class InboxRowMetaWidthReviewTest {
             }
         }
         rule.waitForIdle()
-        // The required third line wins as much as it can; whatever it loses is only what the long state needs.
-        val node = rule.onAllNodesWithText(meta, useUnmergedTree = true).fetchSemanticsNodes().single()
-        val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
-        node.config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
-        assertEquals(1, layouts.single().lineCount)
-        assertTrue("the third line must keep visible width", layouts.single().getBoundingBox(0).width > 0f)
+        // The state is whole: its last glyph sits inside the drawn width, with no ellipsis.
+        val state = layout(longState, "long state")
+        assertFalse("the state word must not be cut", state.hasVisualOverflow)
+        assertTrue("the state word must end inside its own width", state.getBoundingBox(longState.lastIndex).right <= state.size.width)
+        // The line beside it is still drawn, on as much width as is left.
+        assertEquals(1, layout(meta, "third line").lineCount)
     }
 }
 
