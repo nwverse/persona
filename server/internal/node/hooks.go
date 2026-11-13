@@ -365,10 +365,10 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	if !req.Resume { // the event was reported on the first attempt
 		n.notifyHookEvent(in, stopSig, false)
 	}
-	// Every Bash call of every agent waits on this hook, and only the assistant's are gated: the others go on before
-	// the card's title is looked up (a re-read of the transcript's tail) and their claude is watched.
-	bashGate := in.HookEventName == "PreToolUse" && in.ToolName == "Bash"
-	if bashGate && !n.isAssistantSession(in.SessionID) {
+	// Every Bash call of every agent waits on this hook. Only the assistant's go to larkGate, and another agent's
+	// needs only the cua-driver check below: one that does not name cua-driver goes on here, before the card's
+	// title is looked up (a re-read of the transcript's tail) and its claude is watched (#2474).
+	if in.HookEventName == "PreToolUse" && in.ToolName == "Bash" && !bashNamesCua(in.ToolInput) && !n.isAssistantSession(in.SessionID) {
 		return nil, nil
 	}
 
@@ -713,6 +713,15 @@ var agentWatch = 2 * time.Second
 var agentGone = procGone
 
 // asksPhone: the hook events that may wait on the phone (the cases of handleHook that call ask).
+// bashNamesCua is whether a Bash call's input may hold a cua-driver call for cuaBashVerdict to check: its command
+// names cua-driver (cuaCalls finds none otherwise). An input not read as a command is not checked there either.
+func bashNamesCua(input json.RawMessage) bool {
+	var c struct {
+		Command string `json:"command"`
+	}
+	return json.Unmarshal(input, &c) == nil && strings.Contains(c.Command, "cua-driver")
+}
+
 func asksPhone(in hookInput) bool {
 	switch in.HookEventName {
 	case "Elicitation":
