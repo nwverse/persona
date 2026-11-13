@@ -1,4 +1,5 @@
 {
+  "skills_route": "所选技能属于当前助手，请先取消任务转发再发送。",
   "share": "分享…",
   "forked": "已分支到新聊天",
   "fork_failed": "分支失败：{error}",

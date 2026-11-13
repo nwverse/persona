@@ -111,7 +111,12 @@ describe("the leader conversations in the sidebar", () => {
     expect(row("lead-a").textContent).toContain("在做 2 · 等你 1");
     expect(row("lead-b").textContent).toContain("Infrastructure");
     expect(row("lead-b").textContent).not.toContain("在做");
-    // the pin icon on each, no other group, and none of the old words
+    // 常驻 is marked only by its heading and counts (#6214): a lead's leading icon is the ordinary chat icon, the same
+    // one a 最近 row draws — no pin glyph that could read as a tappable button.
+    const leadIcon = row("lead-a").querySelector("svg")!.outerHTML;
+    const recentIcon = row("newest").querySelector("svg")!.outerHTML;
+    expect(leadIcon).toBe(recentIcon);
+    // 常驻 is marked only by its heading and counts (#6214): no pin glyph on the row that could read as a button
     const allChats = host.querySelector<HTMLAnchorElement>('a[href="/history"]')!;
     expect(allChats.textContent).toContain(t("sidebar.all_chats"));
     expect(headings().join()).not.toMatch(/置顶|其他对话|方向/);
@@ -210,13 +215,24 @@ describe("the leader conversations in the sidebar", () => {
     expect(link!.parentElement!.textContent).toContain(t("sidebar.persona_chats"));
   });
 
-  it("are made and ended from the menu through the hub: 取消常驻 on one, never 置顶", async () => {
+  it("are made and ended from the menu through the hub: 取消常驻 asks again, never 置顶 (#6214)", async () => {
     await renderSidebar();
     act(() => row("lead-a").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 })));
     await flush();
-    const items = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')];
-    expect(items.some((el) => el.textContent?.includes("置顶"))).toBe(false);
-    act(() => items.find((el) => el.textContent?.includes("取消常驻"))!.click());
+    const unpin = () => [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
+      .find((el) => el.textContent?.includes("取消常驻"));
+    expect([...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
+      .some((el) => el.textContent?.includes("置顶"))).toBe(false);
+    // the first tap only arms the row and says what moves; nothing has reached the hub
+    act(() => unpin()!.click());
+    await flush();
+    const asking = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
+      .find((el) => el.textContent?.includes("确认取消常驻"));
+    expect(asking).toBeTruthy();
+    expect(asking!.textContent).toContain("最近");
+    expect(posts).toEqual([]);
+    // the second tap runs the end call
+    act(() => asking!.click());
     await flush();
     expect(posts).toEqual(["/api/v1/assistant/directions/lead-a/end"]);
   });
