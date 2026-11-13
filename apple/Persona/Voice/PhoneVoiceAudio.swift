@@ -3,16 +3,18 @@ import AudioToolbox
 import AVFoundation
 import Foundation
 import os
+import PersonaKit
 
 // The call's audio on an iPhone and in CarPlay (docs/assistant/voice.md 6.4). Adapted from the audio half of the earlier
 // CarPlay `DuplexVoiceSession` in PR #1931 (coordination in #1951); #1931 now calls through `VoiceConversation`
 // with this engine. Play-and-record / voice-chat with voice processing, AVAudioConverter down to the extension's
-// PCM16, an AVAudioPlayerNode at its output rate, dropping what `clear` cancels by generation, and ending on a call
-// or a media services reset. The microphone goes into a `VoiceUplink` (held until `ready`, muted as silence, measured
-// for the orb); a route change rebuilds the tap and converter instead of ending the call; voice processing that will
-// not run falls back to plain capture. Nothing reads `engine.inputNode` before `VoiceCapture.plan` says there is an input
-// that starts (#5029): the simulator records without voice processing, after a short AudioQueue recording proved the
-// Mac lets it. Only APIs in the Xcode 26.0 SDK.
+// PCM16, an AVAudioPlayerNode at its output rate behind a short jitter buffer (`VoicePlayout`, #4430), dropping what
+// `clear` cancels by generation, and ending on a call or a media services reset. The microphone goes into a
+// `VoiceUplink` (held until `ready`, muted as silence, measured for the orb). The route follows `VoiceRoute` (#3015): a connected headset plays and records, else the loudspeaker,
+// and a device coming or going during the call is followed; a route change rebuilds the tap and converter (or the whole
+// engine) instead of ending the call; voice processing that will not run falls back to plain capture. Nothing reads
+// `engine.inputNode` before `VoiceCapture.plan` says there is an input that starts (#5029): the simulator records
+// without voice processing, after a short AudioQueue recording proved the Mac lets it. Only APIs in the Xcode 26.0 SDK.
 
 /// Turns the microphone's buffers into PCM16 at the extension's input rate and hands them to the uplink. The tap calls
 /// `feed` on the audio thread, one buffer at a time (the converter's one-buffer handoff is #1931's).
@@ -149,8 +151,27 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
     private var generation = 0
     /// The loudness of the voice's buffers still queued, in order: the first is the one playing.
     private var queued: [Float] = []
+    /// The voice held back until enough of it has gathered (#4430), and the wait that plays it anyway.
+    private var playout = VoicePlayout<Piece>(rate: VoiceFrame.defaultOutputRate)
+    private var holdTimer: Task<Void, Never>?
     private var activated = false
     private var observers: [NSObjectProtocol] = []
+    /// The engine's configuration-change observer: a rebuilt engine gets its own.
+    private var engineObserver: NSObjectProtocol?
+    /// How the microphone was opened at the start: a rebuilt engine opens it the same way.
+    private var capture = VoiceCapture.voiceProcessing
+    private var route = VoiceRoute.Follower(startedAt: .now)
+    /// The call asked for a microphone or the loudspeaker: taken back at the end, so a recording or dictation after it
+    /// starts from the system's own route.
+    private var preferredInput = false
+    private var overrodeOutput = false
+
+    /// Bluetooth explicitly (#3015): hands-free first, so a headset's microphone records too (`.voiceChat` implies it,
+    /// said here so nothing depends on that); A2DP only so a device that can only listen (a speaker, headphones without
+    /// hands-free) still plays the voice, with the phone's microphone. A device with both is routed over hands-free (the
+    /// SDK: HFP ports get the higher priority). The loudspeaker, not the earpiece, when nothing is connected. No AirPlay:
+    /// its delay is too long for a conversation.
+    static let sessionOptions: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP]
 
     func start(_ format: VoiceAudioFormat, uplink: VoiceUplink, events: @escaping @MainActor (VoiceAudioEvent) -> Void) throws {
         stop()
@@ -159,17 +180,20 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         self.events = events
         let session = AVAudioSession.sharedInstance()
         do {
-            // voiceChat also allows Bluetooth hands-free; defaultToSpeaker keeps the voice off the earpiece.
-            try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker])
+            try session.setCategory(.playAndRecord, mode: .voiceChat, options: Self.sessionOptions)
             try session.setActive(true)
         } catch {
             Self.log.error("voice: audio session failed: \(error.localizedDescription, privacy: .public)")
             throw VoiceAudioError.session
         }
         activated = true
+        // The route before the engine, so it is built for the device that plays.
+        route = VoiceRoute.Follower(startedAt: .now)
+        follow(route.starting(Self.snapshot(session)), why: "start")
         let capture = VoiceCapture.plan(recordingAllowed: AVAudioApplication.shared.recordPermission == .granted,
                                         inputAvailable: session.isInputAvailable, simulator: VoiceCapture.simulator,
                                         probe: { VoiceInputProbe.shared.run() })
+        self.capture = capture
         do {
             switch capture {
             case .unavailable(let problem):
@@ -183,6 +207,8 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
             throw error
         }
         observe()
+        // Once more with the engine running: voice processing can move the route as it starts.
+        follow(route.starting(Self.snapshot(session)), why: "engine")
     }
 
     func reconfigure(_ format: VoiceAudioFormat) throws {
@@ -199,6 +225,7 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
 
     func clear() {
         generation += 1
+        dropHeld()
         let was = !queued.isEmpty
         queued = []
         if let player {
@@ -214,6 +241,8 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
     func stop() {
         for token in observers { NotificationCenter.default.removeObserver(token) }
         observers = []
+        if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
+        engineObserver = nil
         input?.removeTap(onBus: 0)
         engine?.stop()
         player?.stop()
@@ -223,11 +252,17 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         playFormat = nil
         pump = nil
         generation += 1
+        dropHeld()
         queued = []
         if activated {
             activated = false
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            let session = AVAudioSession.sharedInstance()
+            if preferredInput { try? session.setPreferredInput(nil) }
+            if overrodeOutput { try? session.overrideOutputAudioPort(.none) }
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
         }
+        preferredInput = false
+        overrodeOutput = false
         events = nil
         uplink = nil
     }
@@ -291,6 +326,7 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         self.player = player
         self.playFormat = playFormat
         self.pump = pump
+        playout = VoicePlayout(rate: format.outputRate)
     }
 
     /// Takes the engine apart and puts it together again for the input as it is now (a new route or new rates). What
@@ -301,18 +337,43 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         if let player { engine.detach(player) }
         player = nil
         pump = nil
-        let was = !queued.isEmpty
-        generation += 1
-        queued = []
-        if was {
-            events?(.outputLevel(0))
-            events?(.playing(false))
-        }
+        dropQueued()
         // The new route may have no input (#5029): reading the input node then would set up an I/O unit that cannot start.
         guard AVAudioSession.sharedInstance().isInputAvailable else { throw VoiceAudioError.noInput }
         try wire(engine)
         engine.prepare()
         do { try engine.start() } catch { throw VoiceAudioError.engine }
+    }
+
+    /// A new engine for the route as it is now, opened the way the call started (voice processing, plain capture if it
+    /// will not run): the old one would not start again there (voice processing on a route it does not run on, a
+    /// headset still coming up).
+    private func rebuild() throws {
+        if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
+        engineObserver = nil
+        input?.removeTap(onBus: 0)
+        engine?.stop()
+        engine = nil
+        input = nil
+        player = nil
+        playFormat = nil
+        pump = nil
+        dropQueued()
+        guard AVAudioSession.sharedInstance().isInputAvailable else { throw VoiceAudioError.noInput }
+        try build(voiceProcessing: capture == .voiceProcessing)
+        watchEngine()
+    }
+
+    /// What was queued to play is gone with the old player.
+    private func dropQueued() {
+        let was = !queued.isEmpty
+        generation += 1
+        dropHeld()
+        queued = []
+        if was {
+            events?(.outputLevel(0))
+            events?(.playing(false))
+        }
     }
 
     // The tap runs on the audio thread: its closure is made here, outside the main actor.
@@ -324,6 +385,12 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
 
     // MARK: Playback
 
+    /// A piece of the voice and its loudness, held until it goes to the player.
+    private struct Piece {
+        let buffer: AVAudioPCMBuffer
+        let level: Float
+    }
+
     private func schedule(_ pcm: Data, voice: Bool) {
         guard let player, let playFormat, engine?.isRunning == true else { return }
         let samples = VoicePCM.floats(pcm)
@@ -333,9 +400,41 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         else { return }
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { channel.update(from: $0.baseAddress!, count: samples.count) }
+        guard voice else { return enqueue(buffer, level: nil, on: player) }
+        let ready = playout.add(Piece(buffer: buffer, level: VoicePCM.rms(samples)), frames: samples.count, playing: !queued.isEmpty)
+        if playout.isHolding {
+            waitForLead()
+        } else {
+            holdTimer?.cancel()
+            holdTimer = nil
+        }
+        for piece in ready { enqueue(piece.buffer, level: piece.level, on: player) }
+    }
+
+    /// Plays what is held once the first of it has waited `VoicePlayout.wait`, lead or not.
+    private func waitForLead() {
+        guard holdTimer == nil else { return }
         let generation = generation
-        if voice {
-            let level = VoicePCM.rms(samples)
+        holdTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(VoicePlayout<Piece>.wait))
+            guard !Task.isCancelled, let self else { return }
+            holdTimer = nil
+            guard generation == self.generation, let player, engine?.isRunning == true else { return playout.clear() }
+            for piece in playout.release() { enqueue(piece.buffer, level: piece.level, on: player) }
+        }
+    }
+
+    private func dropHeld() {
+        holdTimer?.cancel()
+        holdTimer = nil
+        playout.clear()
+    }
+
+    /// Onto the player: the voice with its loudness, a cue without.
+    private func enqueue(_ buffer: AVAudioPCMBuffer, level: Float?, on player: AVAudioPlayerNode) {
+        let generation = generation
+        let voice = level != nil
+        if let level {
             if queued.isEmpty {
                 events?(.playing(true))
                 events?(.outputLevel(level))
@@ -374,23 +473,127 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
                                             queue: .main) { @Sendable [weak self] _ in
             MainActor.assumeIsolated { self?.events?(.reset) }
         })
-        // A route change (headphones in or out, Bluetooth) stops the engine and can change the input's format: set the
-        // tap and the converter up again and go on; only when that fails does the call end.
-        guard let engine else { return }
-        observers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
-                                            queue: .main) { @Sendable [weak self] _ in
-            MainActor.assumeIsolated { self?.routeChanged() }
+        // Headphones in or out, Bluetooth connected or gone: choose the route again (`VoiceRoute`).
+        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil,
+                                            queue: .main) { @Sendable [weak self] note in
+            let reason = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+                .flatMap(AVAudioSession.RouteChangeReason.init)
+            MainActor.assumeIsolated { self?.routeMoved(reason) }
         })
+        watchEngine()
+    }
+
+    /// A route change stops the engine when it changes the I/O (and can change the input's format): set the tap and the
+    /// converter up again and go on, else a new engine; only when that fails too does the call end.
+    private func watchEngine() {
+        if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
+        engineObserver = nil
+        guard let engine else { return }
+        engineObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
+                                                                queue: .main) { @Sendable [weak self] _ in
+            MainActor.assumeIsolated { self?.routeChanged() }
+        }
+    }
+
+    private func routeMoved(_ reason: AVAudioSession.RouteChangeReason?) {
+        guard engine != nil else { return }
+        let change: VoiceRoute.Change = switch reason {
+        case .newDeviceAvailable: .deviceArrived
+        case .oldDeviceUnavailable: .deviceLeft
+        default: .other
+        }
+        let session = AVAudioSession.sharedInstance()
+        follow(route.changed(Self.snapshot(session), change, at: .now), why: Self.describe(reason))
+        // An engine the change stopped without telling (the configuration change normally does).
+        routeChanged()
     }
 
     private func routeChanged() {
         guard let engine, !engine.isRunning else { return }
         do {
             try rewire(engine)
-            Self.log.notice("voice: audio route changed, microphone set up again")
+            Self.log.notice("voice: audio route changed, microphone set up again (\(Self.describe(AVAudioSession.sharedInstance().currentRoute), privacy: .public))")
         } catch {
-            Self.log.error("voice: audio route changed and the microphone could not be set up again")
-            events?(.failed)
+            Self.log.notice("voice: the engine would not start again on the new route, building a new one")
+            do {
+                try rebuild()
+                Self.log.notice("voice: new engine on the new route (echo cancellation \(self.cancelsEcho, privacy: .public))")
+            } catch {
+                Self.log.error("voice: audio route changed and the microphone could not be set up again")
+                events?(.failed)
+            }
+        }
+    }
+
+    // MARK: Route
+
+    /// Applies what `VoiceRoute` decided. Failing to move the route never ends the call: it goes on where it is.
+    private func follow(_ plan: VoiceRoute.Plan, why: String) {
+        let session = AVAudioSession.sharedInstance()
+        if let id = plan.input {
+            if let port = session.availableInputs?.first(where: { $0.uid == id }) {
+                do {
+                    try session.setPreferredInput(port)
+                    preferredInput = true
+                } catch {
+                    Self.log.notice("voice: could not prefer the \(port.portType.rawValue, privacy: .public) microphone: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
+        if plan.speaker {
+            do {
+                try session.overrideOutputAudioPort(.speaker)
+                overrodeOutput = true
+            } catch {
+                Self.log.notice("voice: could not move the voice to the speaker: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        // Port kinds only, never device names (they can carry a person's name).
+        Self.log.notice("voice: route after \(why, privacy: .public): \(Self.describe(session.currentRoute), privacy: .public)\(plan == .keep ? "" : " (moved)", privacy: .public)")
+    }
+
+    /// The session as `VoiceRoute` sees it (also the meeting's spoken answers, `MeetingSpeaker`).
+    static func snapshot(_ session: AVAudioSession) -> VoiceRoute.Snapshot {
+        let route = session.currentRoute
+        return VoiceRoute.Snapshot(outputs: route.outputs.map(device), inputs: route.inputs.map(device),
+                                   available: (session.availableInputs ?? []).map(device))
+    }
+
+    private static func device(_ port: AVAudioSessionPortDescription) -> VoiceRoute.Device {
+        VoiceRoute.Device(port: kind(port.portType), id: port.uid, name: port.portName)
+    }
+
+    static func kind(_ port: AVAudioSession.Port) -> VoiceRoute.Port {
+        switch port {
+        case .builtInMic: .builtInMic
+        case .builtInReceiver: .builtInReceiver
+        case .builtInSpeaker: .builtInSpeaker
+        case .headphones: .headphones
+        case .headsetMic: .headsetMic
+        case .bluetoothHFP: .bluetoothHFP
+        case .bluetoothA2DP: .bluetoothA2DP
+        case .bluetoothLE: .bluetoothLE
+        case .usbAudio: .usbAudio
+        case .carAudio: .carAudio
+        default: .other
+        }
+    }
+
+    private static func describe(_ route: AVAudioSessionRouteDescription) -> String {
+        "out " + route.outputs.map(\.portType.rawValue).joined(separator: "+")
+            + ", in " + route.inputs.map(\.portType.rawValue).joined(separator: "+")
+    }
+
+    private static func describe(_ reason: AVAudioSession.RouteChangeReason?) -> String {
+        switch reason {
+        case .newDeviceAvailable: "a new device"
+        case .oldDeviceUnavailable: "a device gone"
+        case .categoryChange: "a category change"
+        case .override: "an override"
+        case .wakeFromSleep: "waking"
+        case .noSuitableRouteForCategory: "no suitable route"
+        case .routeConfigurationChange: "a configuration change"
+        default: "a route change"
         }
     }
 }

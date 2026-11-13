@@ -20,7 +20,10 @@ import (
 
 func agentHub(t *testing.T) *inboxHub {
 	h := newInboxHub(t)
-	h.inboxReady(context.Background())
+	if err := h.inboxReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitNeedsYouIdle(t, h.Service)
 	return h
 }
 
@@ -434,7 +437,7 @@ func TestInboxItemAboutATask(t *testing.T) {
 	h := &inboxHub{Service: s, f: f, in: in}
 	h.inboxReady(ctx)
 	todo := startedTask(t, s, f)
-	model, calls := captureModel(t, `{"handle":true,"task":"回复修复进度","reason":"问进度","task_id":"`+todo.ID+`"}`)
+	model, calls := captureModel(t, `{"handle":true,"task":"回复修复进度","reason":"问进度","task_id":"`+todo.ID+`","evidence":"修登录崩溃"}`)
 	in.setModel(model)
 	it := actionItem("lark:f1:12", time.Now())
 	it.Title, it.Sender, it.Preview, it.Source, it.AccountName = "客户端发版群", "陈晓", "登录那个崩溃今天能修好吗？", "lark", "飞书"
@@ -497,7 +500,10 @@ func TestInboxItemAboutATask(t *testing.T) {
 func TestInboxAgentPromptNamesTheKnowledgeDir(t *testing.T) {
 	ctx := context.Background()
 	h, e := newInboxHubKB(t)
-	h.inboxReady(ctx)
+	if err := h.inboxReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitNeedsYouIdle(t, h.Service)
 	goldenKB(t, e)
 	dir := h.kb.dir
 	if dir == "" || strings.Contains(dir, ".persona") {

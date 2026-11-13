@@ -13,13 +13,13 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.*
-import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Owns continuity for one pairing. Retains at most 64 session entries in access-order LRU;
- * observed entries are protected, idle entries lose their jobs on eviction. A 65th simultaneous
- * observer is rejected. These are unmeasured policy limits, not performance measurements.
+ * Owns continuity for one pairing. Message bodies synchronize only for observed chats, chats closed within
+ * [releaseAfterMillis] (still subscribed, so switching back is warm) and chats whose sent messages
+ * [awaitingTranscript] still waits to see. Four other idle entries stay for warm navigation, the most recently closed
+ * kept; at most 64 entries exist and a 65th simultaneous observer is rejected. These are policy limits, not measurements.
  */
 class HubChatRepository(
     private val transport: ChatTransport,
@@ -28,10 +28,13 @@ class HubChatRepository(
     private val sessions: SessionsRepository,
     private val scope: CoroutineScope,
     private val foreground: StateFlow<Boolean> = MutableStateFlow(true),
-    private val now: () -> Instant = Instant::now,
     private val seen: (suspend (SessionKey) -> Unit)? = null,
     /** Told the session's transcript whenever it gains items (the outbox finds the messages sent from here in it). */
     private val transcript: (suspend (SessionKey, List<Item>) -> Unit)? = null,
+    /** Sessions with a sent message not yet seen in their transcript: they keep syncing while closed. */
+    private val awaitingTranscript: Flow<Set<SessionKey>> = emptyFlow(),
+    /** How long a closed chat stays subscribed; 0 unsubscribes at once. */
+    private val releaseAfterMillis: Long = 0,
 ) : ChatRepository {
     private class Entry(val key: SessionKey, val scope: CoroutineScope) {
         val reducer = ContinuityReducer()
@@ -45,8 +48,15 @@ class HubChatRepository(
         val ready = CompletableDeferred<Unit>()
         val state = MutableStateFlow(ChatSnapshot(verified = false))
         var subscribed = false
+        var subscriptionReady = CompletableDeferred<Unit>()
         var seenHistory: String? = null
         var references = 0
+        /** Closed, but still subscribed until [release] runs. */
+        var lingering = false
+        var release: Job? = null
+        /** Order of the last close; the most recently closed idle entries are kept. */
+        var closedAt = 0L
+        var awaited = false
         var opening: Job? = null
         var timer: Job? = null
         var lastSeen: Item? = null
@@ -61,6 +71,9 @@ class HubChatRepository(
         var lastUserId: String? = null
         var eventError: String? = null
         var observedTranscript: List<Item>? = null
+        var durationItems: List<Item>? = null
+        var durations: Map<String, RecordedDuration> = emptyMap()
+        var durationSeconds: Map<String, Long> = emptyMap()
         /** Back online or reopened and no live delta since: the empty delta that ends a turn may have been missed. */
         var reconnected = false
     }
@@ -68,6 +81,7 @@ class HubChatRepository(
     private val entries = LinkedHashMap<SessionKey, Entry>(64, 0.75f, true)
     private val images = ImageBytesCache()
     private val backgroundSlots = Semaphore(3)
+    private var closes = 0L
 
     init {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -75,6 +89,7 @@ class HubChatRepository(
                 when (event) {
                     is ItemsEvent -> existing(SessionKey(event.machineId, event.sessionId))?.let { entry ->
                         entry.ready.await()
+                        synchronized(entries) { if (entry.subscribed) entry.subscriptionReady.complete(Unit) }
                         val actions = entry.lock.withLock {
                             val gap = entry.reducer.apply(event.items, event.history, event.fromSeq, event.toSeq,
                                 event.backlog, event.hasMore, event.moreAfter)
@@ -133,7 +148,7 @@ class HubChatRepository(
         }
         scope.launch {
             connection.state.collect { state ->
-                val active = synchronized(entries) { entries.values.filter { it.references > 0 } }
+                val active = synchronized(entries) { entries.values.filter { it.references > 0 || it.lingering } }
                 if (state == ConnectionState.Online) {
                     active.forEach { entry -> entry.scope.launch {
                         entry.ready.await()
@@ -141,7 +156,7 @@ class HubChatRepository(
                         catchUp(entry)
                     } }
                 } else retainedEntries().forEach { entry ->
-                    synchronized(entries) { entry.subscribed = false }
+                    synchronized(entries) { entry.subscribed = false; entry.subscriptionReady = CompletableDeferred() }
                     entry.lock.withLock {
                         entry.currentSessions = null
                         entry.machineOnline = null
@@ -165,8 +180,19 @@ class HubChatRepository(
         }
         scope.launch {
             foreground.collect { if (it && connection.state.value == ConnectionState.Online) {
-                backgroundCandidates().forEach(::requestSync)
+                retainedEntries().forEach { requestSync(it.key) }
             } }
+        }
+        scope.launch {
+            awaitingTranscript.distinctUntilChanged().collect { keys ->
+                synchronized(entries) {
+                    entries.values.forEach { it.awaited = it.key in keys }
+                    keys.filter { it !in entries && (entries.size < 64 || entries.values.any { e -> e.references == 0 }) }
+                        .forEach { entry(it).awaited = true }
+                    trimIdleEntries()
+                }
+                keys.forEach(::requestSync)
+            }
         }
     }
 
@@ -203,7 +229,11 @@ class HubChatRepository(
             return result
         }
         override suspend fun editQueue(session: Session, keep: List<Int>) = delegate.editQueue(session, keep)
+        override suspend fun sendQueuedNow(session: Session) = delegate.sendQueuedNow(session)
         override suspend fun info(session: Session) = delegate.info(session)
+        override suspend fun completeRow(session: Session) = delegate.completeRow(session)
+        override suspend fun interactionHistory(session: Session) = delegate.interactionHistory(session)
+        override suspend fun restoreModel(session: Session) = delegate.restoreModel(session)
         override suspend fun fork(session: Session, atItemId: String): String {
             // A finished streamed reply keeps showing its draft id; the node only knows the transcript one (#5305).
             val entry = existing(session.key)
@@ -244,7 +274,12 @@ class HubChatRepository(
                 val entry = entry(session)
                 entry.references++
                 if (entry.references == 1) {
-                    entry.opening = entry.scope.launch {
+                    // Reopened while still subscribed: live events kept it current, no cold open needed.
+                    val warm = entry.lingering && entry.subscribed
+                    entry.release?.cancel()
+                    entry.release = null
+                    entry.lingering = false
+                    if (!warm) entry.opening = entry.scope.launch {
                         entry.ready.await()
                         // Cold opens always verify against a folded latest page, including when cache exists.
                         entry.lock.withLock { entry.reconnected = true }
@@ -259,14 +294,40 @@ class HubChatRepository(
                 synchronized(entries) {
                     entry.references--
                     if (entry.references == 0) {
-                        entry.opening?.cancel()
-                        entry.timer?.cancel()
-                        entry.subscribed = false
-                        connection.send(envelope("unsubscribe", session))
+                        entry.closedAt = ++closes
+                        if (releaseAfterMillis > 0) {
+                            entry.lingering = true
+                            entry.release = entry.scope.launch {
+                                delay(releaseAfterMillis)
+                                synchronized(entries) { if (entry.references == 0) release(entry) }
+                            }
+                        } else release(entry)
                     }
                 }
             }
         } finally { withContext(NonCancellable) { cache.release(session) } }
+    }
+
+    /** Keep this send subscribed before POST, including while the main queue is binding its first conversation. */
+    suspend fun withSendSubscription(session: SessionKey, send: suspend () -> persona.core.contracts.api.MessageTransportResult): persona.core.contracts.api.MessageTransportResult = coroutineScope {
+        val mounted = CompletableDeferred<Unit>()
+        val observer = launch(start = CoroutineStart.UNDISPATCHED) { observe(session).collect { mounted.complete(Unit) } }
+        try {
+            // Older hubs may send no initial items event. Bound this barrier and retain the legacy HTTP/outbox fallback.
+            withTimeoutOrNull(3_000) {
+                mounted.await()
+                val ready = synchronized(entries) {
+                    val entry = entries[session] ?: return@synchronized null
+                    if (!entry.subscribed) entry.subscribed = connection.send(buildJsonObject {
+                        envelope("subscribe", session).forEach { (key, value) -> put(key, value) }
+                        put("lazy_images", true); put("fold_work", true)
+                    })
+                    entry.subscriptionReady
+                }
+                ready?.await()
+            }
+            send()
+        } finally { observer.cancelAndJoin() }
     }
 
     override suspend fun loadOlder(session: SessionKey) {
@@ -385,25 +446,37 @@ class HubChatRepository(
 
     private fun retainedEntries(): List<Entry> = synchronized(entries) { entries.values.toList() }
 
+    /** Called holding [entries]: stops a closed chat's live updates. */
+    private fun release(entry: Entry) {
+        entry.lingering = false
+        entry.release = null
+        entry.opening?.cancel()
+        entry.timer?.cancel()
+        entry.subscribed = false
+        connection.send(envelope("unsubscribe", entry.key))
+        trimIdleEntries()
+    }
+
+    /** Metadata and unread counts come from the session list; closed chats need no message-body prefetch. */
+    private fun trimIdleEntries() = synchronized(entries) {
+        val idle = entries.values.filter { it.references == 0 && !it.lingering && !it.awaited }.sortedBy { it.closedAt }
+        idle.dropLast(4).forEach { victim ->
+            entries.remove(victim.key)
+            victim.ready.complete(Unit)
+            victim.scope.cancel()
+        }
+    }
+
     private suspend fun update(key: SessionKey, change: (Entry) -> Unit) {
         val entry = existing(key) ?: return
         entry.ready.await()
         entry.lock.withLock { change(entry); publish(entry) }
     }
 
-    private fun backgroundCandidates(): List<SessionKey> = sessions.sessions.value
-        .filter { it.isLive || it.updated?.isAfter(now().minusSeconds(24 * 60 * 60)) == true }
-        .map { it to it.updated } // each time parsed once, not on every comparison
-        .sortedWith(compareByDescending<Pair<Session, java.time.Instant?>> { it.first.isLive }.thenByDescending { it.second }.thenBy { it.first.key.path })
-        .take(40).map { it.first.key }
-
     private fun requestSync(key: SessionKey) {
-        val active = existing(key)?.let { synchronized(entries) { it.references > 0 } } == true
-        if (!active && (!foreground.value || key !in backgroundCandidates())) return
         if (connection.state.value != ConnectionState.Online) return
         val entry = synchronized(entries) {
-            if (key !in entries && entries.size >= 64 && entries.values.none { it.references == 0 }) return
-            entry(key)
+            entries[key]?.takeIf { it.references > 0 || it.lingering || it.awaited } ?: return
         }
         entry.scope.launch {
             entry.ready.await()
@@ -421,11 +494,11 @@ class HubChatRepository(
                     action.sinceSeq?.let { put("since_seq", it) }
                 })
             }
-            is Action.ScheduleFill -> synchronized(entries) {
-                if (entry.timer?.isActive != true) entry.timer = entry.scope.launch {
-                    delay(action.delayMillis)
-                    backgroundSlots.withPermit { catchUp(entry) }
-                }
+            is Action.FetchAfter -> entry.scope.launch {
+                // Match iOS: no settling delay on a real gap. `requests` and the in-flight gate collapse duplicates.
+                do {
+                    catchUp(entry)
+                } while (entry.lock.withLock { entry.sync.behind })
             }
             is Action.FetchLatest -> entry.scope.launch { latest(entry) }
             else -> error("Unexpected standalone continuity action: $action")
@@ -446,7 +519,7 @@ class HubChatRepository(
                 val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
                 entry.eventError = null
                 publish(entry, verified = !overtaken)
-                if (overtaken) dispatch(entry, entry.sync.settle(ContinuityReducer.Gap.Fill))
+                if (overtaken || entry.sync.behind) dispatch(entry, entry.sync.settle(ContinuityReducer.Gap.Fill))
             }
             persist(entry)
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -457,7 +530,7 @@ class HubChatRepository(
     }
 
     private suspend fun catchUp(entry: Entry) = entry.requests.withLock {
-        var actions = entry.lock.withLock { entry.sync.fillTimer() }
+        var actions = entry.lock.withLock { entry.sync.continueFill() }
         try {
             while (actions.isNotEmpty()) {
                 actions = when (val action = actions.single()) {
@@ -472,7 +545,7 @@ class HubChatRepository(
                             val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
                             entry.eventError = null
                             publish(entry, verified = result.gap == ContinuityReducer.Gap.None && !overtaken)
-                            if (result.actions.isEmpty() && overtaken) entry.sync.fillTimer() else result.actions
+                            if (result.actions.isEmpty() && overtaken) entry.sync.continueFill() else result.actions
                         }
                     }
                     is Action.FetchLatest -> {
@@ -486,7 +559,7 @@ class HubChatRepository(
                             val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
                             entry.eventError = null
                             publish(entry, verified = !overtaken)
-                            if (overtaken) entry.sync.fillTimer() else emptyList()
+                            if (overtaken || entry.sync.behind) entry.sync.continueFill() else emptyList()
                         }
                     }
                     else -> error("Unexpected catch-up action: $action")
@@ -527,12 +600,18 @@ class HubChatRepository(
         val metadata = entry.currentSessions?.firstOrNull { it.key == entry.key }
             ?: sessions.sessions.value.firstOrNull { it.key == entry.key }
         val previous = metadata ?: entry.previousSession
-        val userId = entry.reducer.items.lastOrNull { it.startsRecordedTurn }?.id
+        val recorded = entry.reducer.items
+        val userId = recorded.lastOrNull { it.startsRecordedTurn }?.id
         if (entry.lastUserId != userId) {
             if (entry.lastUserId != null) entry.turnDurationSeconds = null
             entry.lastUserId = userId
         }
-        val durations = recordedTurnDurations(entry.reducer.items)
+        if (entry.durationItems !== recorded) {
+            entry.durationItems = recorded
+            entry.durations = recordedTurnDurations(recorded)
+            entry.durationSeconds = entry.durations.mapValues { it.value.seconds }
+        }
+        val durations = entry.durations
         durations[userId]?.takeIf { it.seq > entry.durationAfterSeq }?.let { entry.turnDurationSeconds = it.seconds }
         if (metadata != null) entry.previousSession = metadata
         val machineOnline = entry.machineOnline.takeIf { connection.state.value == ConnectionState.Online }
@@ -555,7 +634,7 @@ class HubChatRepository(
         } ?: SessionRuntimeState(turnDurationSeconds = entry.turnDurationSeconds)
         if (runtime.ended || metadata?.status in listOf("idle", "done", "offline", "blocked")) entry.stopRequested = false
         val seenAt = parseTime(metadata?.seenAt)
-        val lastSeen = entry.lastSeen?.id ?: entry.reducer.items.lastOrNull {
+        val lastSeen = entry.lastSeen?.id ?: recorded.lastOrNull {
             seenAt != null && parseTime(it.ts)?.let { time -> time <= seenAt } == true
         }?.id
         // Only the hub's fresh list counts (cleared while offline); a session missing from it is left alone. While it
@@ -565,7 +644,7 @@ class HubChatRepository(
             entry.realtime.finish()
             entry.reconnected = false
         }
-        val items = entry.realtime.items(entry.reducer.items)
+        val items = entry.realtime.items(recorded)
         entry.state.update { it.copy(items = items, loading = false,
             history = entry.reducer.history,
             streamingItemIds = entry.realtime.streamingItemIds(),
@@ -573,9 +652,9 @@ class HubChatRepository(
             lastSeenMessageId = lastSeen?.let(entry.realtime::displayId),
             ended = runtime.ended || (it.ended && !relisted), replaced = runtime.replaced || (it.replaced && !relisted),
             stopping = runtime.stopping, turnDurationSeconds = runtime.turnDurationSeconds,
-            recordedTurnDurations = durations.mapValues { it.value.seconds }) }
+            recordedTurnDurations = entry.durationSeconds) }
         // However the items came (an event, a page, a catch-up), a message sent from here that is in them is shown.
-        val observed = entry.reducer.items
+        val observed = recorded
         if (transcript != null && observed.isNotEmpty() && observed != entry.observedTranscript) {
             entry.observedTranscript = observed
             entry.scope.launch {

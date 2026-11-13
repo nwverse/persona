@@ -31,7 +31,7 @@ func TestWorkoutValidation(t *testing.T) {
 		"duplicate minute":  func(v *WorkoutReport) { v.HeartRate = []WorkoutHeartRate{{1, 100}, {1, 120}} },
 		"negative minute":   func(v *WorkoutReport) { v.HeartRate = []WorkoutHeartRate{{-1, 100}} },
 		"outside workout":   func(v *WorkoutReport) { v.HeartRate = []WorkoutHeartRate{{61, 100}} },
-		"future":            func(v *WorkoutReport) { v.End = time.Now().Add(time.Hour) },
+		"future":            func(v *WorkoutReport) { v.End = time.Now().Add(workoutClockSkew + time.Hour) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := v
@@ -40,6 +40,16 @@ func TestWorkoutValidation(t *testing.T) {
 				t.Fatal("accepted invalid workout")
 			}
 		})
+	}
+}
+
+// A phone clock running ahead of the hub's must not turn a finished workout into a permanent rejection.
+func TestWorkoutValidationToleratesClockDrift(t *testing.T) {
+	v := sampleWorkout()
+	for _, ahead := range []time.Duration{time.Minute + time.Second, 10 * time.Minute, 6 * time.Hour} {
+		if err := v.validate(time.Now().Add(-ahead)); err != nil {
+			t.Fatalf("phone %v ahead: %v", ahead, err)
+		}
 	}
 }
 func TestWorkoutReceiptSurvivesRestartAndDeletion(t *testing.T) {

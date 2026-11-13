@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -17,6 +18,51 @@ import java.nio.file.Files
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class InboxRepositoryTest {
+    /** Real-dispatcher tests: wait until the startup refreshes stop reaching the hub, rather than for a fixed time. */
+    private suspend fun FakeTransport.quiet(window: Long) = withTimeout(5_000) {
+        while (true) {
+            val calls = inboxCalls.get()
+            delay(window)
+            if (inboxCalls.get() == calls) break
+        }
+    }
+
+    @Test fun persistentSnapshotSubscribersDoNotPollAHubButInboxEventsStillRefresh() = runTest {
+        val directory = Files.createTempDirectory("inbox-no-poll-test").toFile()
+        try {
+            val transport = FakeTransport()
+            val hub = FakeHub()
+            val repository = repository(transport, directory, backgroundScope, hub)
+            repeat(5) { backgroundScope.launch { repository.snapshot.collect() } }
+            val initial = settledCalls(transport)
+            assertTrue(initial > 0)
+            advanceTimeBy(60_000); runCurrent()
+            assertEquals("shell and capsule subscribers must not start fast full-list polling", initial, transport.inboxCalls.get())
+            hub.events.emit(InboxEvent())
+            runCurrent()
+            advanceTimeBy(1_001)
+            assertEquals(initial + 1, settledCalls(transport))
+            advanceTimeBy(300_000)
+            assertEquals("a slow poll still covers a missed event", initial + 2, settledCalls(transport))
+        } finally { directory.deleteRecursively() }
+    }
+
+    /**
+     * Refreshes cross real IO threads; waiting for them with a suspending `first` lets virtual time jump ahead to the
+     * slow poll. Wait in real time instead, until the hub stops being called.
+     */
+    private fun TestScope.settledCalls(transport: FakeTransport): Int {
+        val deadline = System.currentTimeMillis() + 5_000
+        var calls = -1
+        while (System.currentTimeMillis() < deadline) {
+            runCurrent(); Thread.sleep(50); runCurrent()
+            val now = transport.inboxCalls.get()
+            if (now == calls && now > 0) return now
+            calls = now
+        }
+        error("refreshes did not settle")
+    }
+
     @Test fun updatingWaitsForEveryLarkPageAndPreservesVerifiedWindowOnOnline() = runBlocking {
         val directory = Files.createTempDirectory("window-reconcile-test").toFile()
         val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -363,6 +409,41 @@ class InboxRepositoryTest {
         }
     }
 
+    @Test fun aWindowOfLargeMessagesIsSavedSmallEnoughToRestore() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-large-window-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val snapshots = ListSnapshotStore(directory.resolve("snapshots"))
+        try {
+            val transport = FakeTransport()
+            val repository = repository(transport, directory, owner, FakeHub(), snapshots)
+            val text = "消".repeat(15_000)
+            transport.onMessages = { _, _, _ -> page(*(1..20).map { row("m$it", it * 10L, text) }.toTypedArray()) }
+            val observed = MutableStateFlow(LarkConversation())
+            owner.launch { repository.conversation("feed", null).collect { observed.value = it } }
+            awaitState(observed) { it.verified && it.messages.size == 20 }
+            val key = "${transport.scope}:lark:feed:null"
+            val saved = withTimeout(5_000) {
+                var saved: JsonObject? = null
+                while (saved == null) { saved = snapshots.restore<JsonObject>(key, WINDOW_SNAPSHOT_MAX_BYTES); if (saved == null) delay(5) }
+                saved
+            }
+            val ids = saved.array("messages").map { it.jsonObject["id"]!!.jsonPrimitive.content }
+            assertTrue("trimmed from the oldest side, was ${ids.size}", ids.size in 1..19)
+            assertEquals("m20", ids.last())
+            assertTrue(saved.flag("has_older"))
+            val restoredOwner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            try {
+                val offline = FakeHub().apply { state.value = ConnectionState.WaitingForNetwork }
+                val restored = repository(transport, directory, restoredOwner, offline, snapshots)
+                val cached = withTimeout(5_000) { restored.conversation("feed", null).first { it.messages.isNotEmpty() } }
+                assertEquals(ids, cached.messages.map { it.id })
+            } finally { restoredOwner.coroutineContext[Job]!!.cancelAndJoin() }
+        } finally {
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun restartRecoversReplyWithSameIdAndUnknownReceiptNeedsEcho() = runBlocking {
         val directory = Files.createTempDirectory("inbox-recovery-test").toFile()
         val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -598,7 +679,8 @@ class InboxRepositoryTest {
             }
             val transport = FakeTransport().apply { items = JsonArray(listOf(item("a"), item("b"), item("c"))) }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            // Account for the Online-triggered initial refresh before taking the bulk request baseline.
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null && it.refreshes > 0 } }
             repository.refresh()
             // Before the answer: b was filed on another device, c is gone from the hub. The refresh after the
             // answer fails (offline), so what the list shows is what bulk() itself made of the answer.
@@ -618,6 +700,42 @@ class InboxRepositoryTest {
             assertEquals(calls + 1, transport.inboxCalls.get())
             // Already done elsewhere stays done; one the hub no longer has leaves the list; neither comes back open.
             assertEquals(mapOf("a" to true, "b" to true), repository.snapshot.value.records.associate { it.item.id to it.item.isDone })
+        } finally {
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    /** Done's counts per day (#3016): asked in the phone's zone, per manager; an old hub (404) or a zone it doesn't know (400) has none. */
+    @Test fun doneDaysPerManagerAndNoneFromAnOldHub() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-done-days-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val transport = FakeTransport()
+            val asked = mutableListOf<Pair<String?, String>>()
+            transport.onDoneDays = { manager, tz ->
+                asked += manager to tz
+                buildJsonObject {
+                    put("tz", tz)
+                    put("days", JsonArray(listOf(
+                        buildJsonObject { put("day", "2026-11-10"); put("count", 120) },
+                        buildJsonObject { put("day", "2026-11-03"); put("count", 4) },
+                        buildJsonObject { put("day", "not a day"); put("count", 1) })))
+                }
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            val zone = java.time.ZoneId.of("Asia/Shanghai")
+            assertEquals(listOf(persona.feature.inbox.InboxDoneDay(java.time.LocalDate.of(2026, 11, 10), 120),
+                persona.feature.inbox.InboxDoneDay(java.time.LocalDate.of(2026, 11, 3), 4)), repository.doneDays("m-3fa21c", zone))
+            assertEquals(listOf<Pair<String?, String>>("m-3fa21c" to "Asia/Shanghai"), asked)
+            fun refused(code: Int) = object : IOException("hub $code"), persona.core.contracts.api.HubCodedFailure {
+                override val status: Int = code
+                override val code: String? = null
+            }
+            transport.onDoneDays = { _, _ -> throw refused(404) }
+            assertEquals(null, repository.doneDays(null, zone))
+            transport.onDoneDays = { _, _ -> throw refused(400) }
+            assertEquals(null, repository.doneDays(null, zone))
         } finally {
             owner.coroutineContext[Job]!!.cancelAndJoin()
             directory.deleteRecursively()
@@ -684,6 +802,46 @@ class InboxRepositoryTest {
             assertEquals(mapOf("a" to null, "b" to "m-3", "c" to "assistant", "d" to "m-3"),
                 repository.snapshot.value.records.associate { it.hubItemId to it.manager })
             assertEquals(targets.map { it.id }, repository.snapshot.value.records.map { it.item.id })
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    /**
+     * An item paged back into Done (the done history, #2576) is in no list: Move back, alone or with others, goes to its own
+     * manager by the hub's id, not to the default manager by the app's id (#2974); the default's own goes to the default.
+     */
+    @Test fun aPagedBackItemMovesBackThroughItsOwnManager() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-managers-history-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            fun item(id: String, done: Boolean = true) = buildJsonObject {
+                put("id", id); put("source", "mail"); put("kind", "mail"); put("title", id); put("version", "v$id")
+                if (done) { put("done_at", "2026-11-04T08:00:00Z"); put("done_by", "user") }
+            }
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val transport = FakeTransport().apply {
+                items = JsonArray(emptyList())
+                // each manager's page is its own, unstamped
+                onDoneHistory = { manager -> buildJsonObject { put("items", JsonArray(listOf(item(if (manager == "m-3") "h" else "g")))) } }
+                onSetDone = { id, done -> buildJsonObject { put("item", item(id, done)) } }
+                onBulk = { asked, done -> buildJsonObject { put("changed", JsonArray(asked.map { item(it.id, done) })) } }
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            repository.refresh()
+            val theirs = repository.doneHistory("m-3", null).records.single()
+            val mine = repository.doneHistory(null, null).records.single()
+            assertEquals(InboxItemKey.of("h", "m-3") to "m-3", theirs.item.id to theirs.manager)
+
+            repository.setDone(theirs.item.id, false)
+            repository.setDone(mine.item.id, false)
+            assertEquals(listOf("h" to "m-3", "g" to ""), transport.doneCalls)
+
+            repository.bulk(listOf(InboxDoneTarget(theirs.item.id, "vh"), InboxDoneTarget(mine.item.id, "vg")), InboxBulkAction.Reopen)
+            assertEquals(setOf(listOf("h") to "m-3", listOf("g") to ""), transport.bulkManagers.toSet())
         } finally {
             AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
             owner.coroutineContext[Job]!!.cancelAndJoin()
@@ -886,7 +1044,8 @@ class InboxRepositoryTest {
             }
             val transport = FakeTransport().apply { items = JsonArray(listOf(item("a"), item("b", "2026-11-06T07:00:00Z"))) }
             val repository = repository(transport, directory, owner, FakeHub())
-            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            // Account for the Online-triggered initial refresh before taking the bulk request baseline.
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null && it.refreshes > 0 } }
             repository.refresh()
             // The hub's store write failed for both: they were never filed (or reopened), and the refresh after it fails
             // (offline), so what the list shows is what bulk() itself made of the answer.
@@ -1208,8 +1367,7 @@ class InboxRepositoryTest {
             assertEquals(1, repository.snapshot.value.records.size)
             val loading = java.util.Collections.synchronizedList(mutableListOf<Boolean>())
             owner.launch { repository.snapshot.collect { loading += it.loading } }
-            // The page being shown starts the polling fallback with one refresh of its own; let it finish.
-            withTimeout(5_000) { repository.snapshot.first { it.refreshes >= 2 } }
+            transport.quiet(window)
             loading.clear()
             suspend fun settled(): Int { delay(window * 4); return transport.inboxCalls.get() }
             val before = settled()
@@ -1260,7 +1418,7 @@ class InboxRepositoryTest {
             repository.refresh()
             val seen = java.util.Collections.synchronizedList(mutableListOf<InboxSnapshot>())
             owner.launch { repository.snapshot.collect { seen += it } }
-            withTimeout(5_000) { repository.snapshot.first { it.refreshes >= 2 } }
+            transport.quiet(200)
             seen.clear()
 
             repeat(2) {
@@ -1312,6 +1470,176 @@ class InboxRepositoryTest {
     private suspend fun awaitState(state: StateFlow<LarkConversation>, predicate: (LarkConversation) -> Boolean) =
         withTimeout(5_000) { state.first(predicate) }
 
+    private fun singleItem(id: String, manager: String? = null) = buildJsonObject {
+        put("id", id); put("source", "lark"); put("kind", "group"); put("title", "Recorded $id")
+        put("preview", "Historical preview"); put("summary", "Historical summary"); put("version", "v-$id")
+        put("status", "action"); put("done_at", "2026-11-01T00:00:00Z"); put("done_by", "user")
+        put("lark", buildJsonObject { put("feed_id", "room"); put("start_position", 42) })
+        put("chain", buildJsonArray { add(buildJsonObject {
+            put("id", "c1"); put("kind", "received"); put("at", "2026-11-01T00:00:00Z"); put("text", "Received")
+        }) })
+        if (manager != null) put("manager", manager)
+    }
+
+    @Test fun listedAndPagedBackRecordsNeedNoSingleRead() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-item-listed-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val transport = FakeTransport().apply {
+                items = JsonArray(listOf(singleItem("current")))
+                onDoneHistory = { manager -> buildJsonObject { put("items", JsonArray(listOf(singleItem("history")))) } }
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            repository.refresh()
+            assertEquals("current", repository.item("current")?.item?.id)
+            repository.doneHistory(null, null)
+            assertEquals("history", repository.item("history")?.item?.id)
+            assertTrue(transport.itemCalls.isEmpty())
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun aSingleReadCachesTheWholeRecordAndDoneKeepsItsManager() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-item-single-read-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val transport = FakeTransport().apply {
+                onItem = { id -> singleItem(id) }
+                onSetDone = { id, _ -> buildJsonObject { put("item", singleItem(id)) } }
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            val appId = InboxItemKey.of("history", "m-2")
+            val record = repository.item(appId)!!
+            assertEquals(appId, record.item.id)
+            assertEquals("m-2", record.manager)
+            assertEquals("room", record.feedId)
+            assertEquals(42L, record.startPosition)
+            assertTrue(record.event.present)
+            assertEquals(listOf("history" to "m-2"), transport.itemCalls)
+
+            assertEquals(record, repository.item("history"))
+            assertEquals(1, transport.itemCalls.size)
+            repository.setDone(record.item.id, false)
+            assertEquals(listOf("history" to "m-2"), transport.doneCalls)
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun aHubManagerStampWinsOverTheRequestedManager() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-item-manager-stamp-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val transport = FakeTransport().apply { onItem = { id -> singleItem(id, "m-3") } }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            val record = repository.item(InboxItemKey.of("history", "m-2"))!!
+            assertEquals("m-3", record.manager)
+            assertEquals(InboxItemKey.of("history", "m-3"), record.item.id)
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun aBareIdMissingAndAKnownManagerFailureAreDifferent() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-item-missing-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val missing = object : IOException("missing"), HubCodedFailure {
+                override val status = 404
+                override val code: String? = null
+            }
+            val transport = FakeTransport().apply { onItem = { _ ->
+                val manager = currentCoroutineContext()[RequestManager]?.id
+                if (manager == null) throw missing else throw IOException("manager offline")
+            } }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            assertNull(repository.item("history"))
+            assertEquals(listOf("history" to null), transport.itemCalls)
+            assertThrows(IOException::class.java) { runBlocking { repository.item(InboxItemKey.of("history", "m-2")) } }
+            assertEquals(listOf("history" to null, "history" to "m-2"), transport.itemCalls)
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun aBareIdUsesTheCachedManagerOnlyWhenItsOwnershipIsKnown() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-item-manager-cache-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val missing = object : IOException("missing"), HubCodedFailure {
+                override val status = 404
+                override val code: String? = null
+            }
+            val transport = FakeTransport().apply { onItem = { _ ->
+                if (currentCoroutineContext()[RequestManager]?.id == "m-2") singleItem("history") else throw missing
+            } }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            val appId = InboxItemKey.of("history", "m-2")
+            assertEquals("m-2", repository.item(appId)?.manager)
+            assertEquals(1, transport.itemCalls.size)
+
+            // Without the list's note, a bare id must not borrow the other manager's cached record.
+            AssistantManagerChoice.forgetItems()
+            assertNull(repository.item("history"))
+            assertEquals(2, transport.itemCalls.size)
+
+            // A list that showed this manager makes its app-id cache discoverable by the bare id, without another read.
+            AssistantManagerChoice.noteItem(listOf("inbox", "history"), "m-2")
+            assertEquals(appId, repository.item("history")?.item?.id)
+            assertEquals(2, transport.itemCalls.size)
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun concurrentSingleReadersShareOneRequest() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-item-concurrent-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val transport = FakeTransport().apply { onItem = { id ->
+                started.complete(Unit)
+                release.await()
+                singleItem(id)
+            } }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            val first = async { repository.item("history") }
+            val second = async { repository.item("history") }
+            withTimeout(5_000) { started.await() }
+            release.complete(Unit)
+            assertEquals(first.await(), second.await())
+            assertEquals(1, transport.itemCalls.size)
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
     private fun repository(transport: FakeTransport, directory: java.io.File, owner: CoroutineScope,
         hub: FakeHub, snapshots: ListSnapshotStore? = null, sender: MainConversationSender? = null,
         refreshWindowMillis: Long = 1_000): RealInboxRepository = RealInboxRepository(
@@ -1357,9 +1685,20 @@ class InboxRepositoryTest {
             put("messages", JsonArray(emptyList())); put("sync_state", "complete")
         } }
         override suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String) = onReply(clientId)
+        var onDoneDays: suspend (String?, String) -> JsonObject = { _, _ -> throw UnsupportedOperationException() }
+        override suspend fun doneDays(manager: String?, tz: String) = onDoneDays(manager, tz)
+        var onDoneHistory: suspend (String?) -> JsonObject = { throw UnsupportedOperationException() }
+        override suspend fun doneHistory(manager: String?, before: String?, beforeId: String?, limit: Int) = onDoneHistory(manager)
         val inboxCalls = java.util.concurrent.atomic.AtomicInteger()
         var onInbox: suspend () -> Unit = {}
         override suspend fun inbox(): JsonObject { inboxCalls.incrementAndGet(); onInbox(); return buildJsonObject { put("items", items) } }
+        /** Each single-item read: the hub id and the manager its request named (RequestManager). */
+        val itemCalls = mutableListOf<Pair<String, String?>>()
+        var onItem: suspend (String) -> JsonObject = { throw UnsupportedOperationException() }
+        override suspend fun item(itemId: String): JsonObject {
+            itemCalls += itemId to currentCoroutineContext()[RequestManager]?.id
+            return onItem(itemId)
+        }
         /** Each single-item done request: the item id it named and the manager its request named (RequestManager). */
         val doneCalls = mutableListOf<Pair<String, String?>>()
         var onSetDone: suspend (String, Boolean) -> JsonObject = { _, _ -> JsonObject(emptyMap()) }

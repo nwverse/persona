@@ -28,9 +28,15 @@ type runtimeRegistry struct {
 	known map[string]knownSession
 	// unclaimed: ids no connected runtime had when asked, and until when not to ask again.
 	unclaimed map[string]time.Time
+	// unlisted: runtime id -> the Claude transcripts it names as sessions of its own that it does not list, kept a
+	// while after it left (runtimeunlisted.go).
+	unlisted map[string]unlistedOf
 	// logf reports what an operator should fix (a launcher two runtimes offer); nil: nowhere. warned: said once each.
 	logf   func(format string, args ...any)
 	warned map[string]bool
+	// hostOff says a runtime is an engine host the serving node does not enable (Node.engineHostOff, set by attach):
+	// its launchers are neither listed nor started. nil: every runtime may offer launchers.
+	hostOff func(runtime string) bool
 }
 
 // knownSession is the runtime a session belongs to, by the runtime's id (a reconnect is the same runtime).
@@ -45,6 +51,13 @@ const maxKnown = 8192
 func newRuntimeRegistry() *runtimeRegistry {
 	return &runtimeRegistry{conns: map[int]*runtimeConn{}, owner: map[string]*runtimeConn{}, watching: map[string]int{},
 		known: map[string]knownSession{}, unclaimed: map[string]time.Time{}, warned: map[string]bool{}}
+}
+
+// setHostOff replaces how launcher ownership excludes engine runtimes the serving node does not enable.
+func (b *runtimeRegistry) setHostOff(off func(runtime string) bool) {
+	b.mu.Lock()
+	b.hostOff = off
+	b.mu.Unlock()
 }
 
 // warnOnce logs a message once per key. Callers hold b.mu.
@@ -305,9 +318,11 @@ func (b *runtimeRegistry) add(peer *rpc.Peer) *runtimeConn {
 }
 
 func (b *runtimeRegistry) remove(h *runtimeConn) {
+	id := h.id()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.conns, h.serial)
+	b.leftUnlisted(id)
 	b.recomputeOwners()
 }
 
@@ -402,7 +417,8 @@ func (b *runtimeRegistry) appendSessions(dst []proto.Session) []proto.Session {
 
 // launcherOwners maps each launcher name the runtimes offer to the one connection that answers for it: the one
 // connected first, so the form and session.start agree and do not change while both stay connected. The others'
-// launcher of that name is not offered (logged once). Callers hold b.mu.
+// launcher of that name is not offered (logged once). A disabled engine runtime (b.hostOff) is left out before it can
+// claim a name, so it never hides an enabled runtime's launcher of the same name. Callers hold b.mu.
 func (b *runtimeRegistry) launcherOwners() map[string]*runtimeConn {
 	conns := make([]*runtimeConn, 0, len(b.conns))
 	for _, h := range b.conns {
@@ -415,7 +431,7 @@ func (b *runtimeRegistry) launcherOwners() map[string]*runtimeConn {
 		h.mu.Lock()
 		rt, ok := h.hello.Runtime, h.ready && h.hello.Caps.Start
 		h.mu.Unlock()
-		if !ok {
+		if !ok || b.hostOff != nil && b.hostOff(rt) {
 			continue
 		}
 		for _, l := range h.launcherList() {

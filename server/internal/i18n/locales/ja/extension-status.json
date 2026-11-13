@@ -59,7 +59,7 @@
   "protocol_version": "プロトコルのバージョンは{current}ですが、ハブには{required}が必要です",
   "wrong_id": "プログラムのIDは「{current}」ですが、「{required}」ではありません",
   "wrong_version": "プログラムのバージョンは「{current}」ですが、「{required}」ではありません",
-  "attached_version": "単独で動いているプログラムはバージョン {current} ですが、このマネージャーが承認したのは {approved} です。ハブのマシン上（personad extension upgrade {id} <その remote: ソース>）でそのバージョンを承認するまで使われません",
+  "attached_version": "単独で動いているプログラムはバージョン {current} ですが、このアシスタントが承認したのは {approved} です。ハブのマシン上（personad extension upgrade {id} <その remote: ソース>）でそのバージョンを承認するまで使われません",
   "attached_package_version": "単独で動いているプログラムはバージョン {current} ですが、インストール済みのパッケージは {approved} です。一致するまで使われません。バージョン {approved} を動かすか、切り離して（personad extension detach {id}）パッケージをアップグレードし、もう一度接続してください",
   "attach_source": "接続にはプログラムのソケットが必要です：remote:rpc=<socket>,http=<socket>",
   "attach_not_installed": "拡張機能{id}はインストールされたパッケージではありません（内蔵のものとmanager.jsonのものは接続できません）",
@@ -107,5 +107,10 @@
   "sandbox_unavailable": "サンドボックスを利用できません",
   "settings_moved": "確認中に設定が変わったため保存していません。もう一度お試しください",
   "translation_skipped": "{file} は使われません：{err}。マニフェスト自体のテキストを表示します",
-  "entry_translation_skipped": "{id}：インデックスエントリの l10n は使われません：{err}。マニフェスト自体のテキストを表示します"
+  "entry_translation_skipped": "{id}：インデックスエントリの l10n は使われません：{err}。マニフェスト自体のテキストを表示します",
+  "missing_secret_provider": "シークレット「{title}」：{scheme} 参照の値を提供するオンの拡張機能がありません",
+  "secret_not_reference": "参照ではありません（scheme://… の形式）",
+  "secret_own_scheme": "拡張機能は自分の {scheme} 参照を自分のシークレットにできません",
+  "secret_no_provider": "{scheme} 参照の値を提供するオンの拡張機能がありません。先にインストールするかオンにしてください",
+  "secret_value_or_reference": "値か参照のどちらか一方を指定してください"
 }

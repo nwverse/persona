@@ -7,9 +7,11 @@ import {
 } from "../../lib/inbox";
 import { connectorBrand } from "../../lib/connectors";
 import { hubMediaURL } from "../../lib/lark-summary";
-import { useItemManager, withManager } from "../../lib/manager-choice";
+import { useItemManager, useShownManager, withManager } from "../../lib/manager-choice";
+import { managerOf, useRoster } from "../../lib/managers";
 import { t } from "../../i18n";
 import { Button, cx, Menu, Spinner, useMenu } from "../../ui/atoms";
+import { AssistantAvatar } from "../../ui/AssistantAvatar";
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon } from "../../ui/icons";
 import { useClamped } from "../../ui/use-clamped";
@@ -84,7 +86,21 @@ export function Monogram({ name, size = 40, square, neutral, src, manager }: { n
 
 /** The 40px avatar of a row: chat / sender, or a tinted square for a document or a Moments post; a small mark of
  * where it came from in the corner (Feishu's own, mail a neutral gray). */
+/** The assistant's own row wears the assistant's avatar (the one at the sidebar's head), with no source badge. */
+function AssistantItemAvatar({ it, size }: { it: InboxItem; size: number }) {
+  const roster = useRoster();
+  const shown = useShownManager();
+  const id = it.manager ?? shown ?? "";
+  const m = managerOf(roster, id);
+  return (
+    <span className="shrink-0" style={{ opacity: isDone(it) ? 0.6 : 1 }}>
+      <AssistantAvatar id={m?.id ?? id} name={m?.name ?? it.account_name} isDefault={(m?.id ?? id) === roster?.default} size={size} />
+    </span>
+  );
+}
+
 export function ItemAvatar({ it, size = 40 }: { it: InboxItem; size?: number }) {
+  if (it.source === "assistant") return <AssistantItemAvatar it={it} size={size} />;
   const icon = Math.round(size * 0.45);
   let face: ReactNode;
   if (it.doc) {
@@ -157,7 +173,9 @@ export function MessageBar({ className, children }: { className: string; childre
   );
 }
 
-/** A filter or choice that turns on and off: the inbox's sources and kinds, the "Messages" page's Feishu accounts. */
+/** A filter or choice that turns on and off: the inbox's sources and kinds, the "Messages" page's Feishu accounts.
+ *  One line: a source's name is the connector's own and may be long, so it truncates inside the column rather than
+ *  widening the list's scroller (#3262). */
 export function Chip({ on, onClick, children, title }: { on: boolean; onClick: () => void; children: ReactNode; title?: string }) {
   return (
     <button
@@ -165,7 +183,7 @@ export function Chip({ on, onClick, children, title }: { on: boolean; onClick: (
       title={title}
       aria-pressed={on}
       onClick={onClick}
-      className={cx("h-7 rounded-control px-2.5 text-[12px] whitespace-nowrap transition-colors duration-150", on ? "bg-ink font-medium text-surface" : "bg-surface text-ink-2 shadow-btn hover:bg-hover hover:text-ink")}
+      className={cx("h-7 min-w-0 max-w-full overflow-hidden text-ellipsis rounded-control px-2.5 text-[12px] whitespace-nowrap transition-colors duration-150", on ? "bg-ink font-medium text-surface" : "bg-surface text-ink-2 shadow-btn hover:bg-hover hover:text-ink")}
     >
       {children}
     </button>

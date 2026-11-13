@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/runtimepkg"
@@ -166,8 +168,12 @@ func isNodeBinary(path string) bool {
 // commonNodePaths are where Node.js installers put node, newest nvm version first.
 func commonNodePaths() []string {
 	home := userHome()
-	out := []string{"/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node",
-		filepath.Join(home, ".volta", "bin", "node"), filepath.Join(home, ".local", "bin", "node")}
+	var out []string
+	for _, dir := range agentSystemDirs { // Homebrew, /usr/local
+		out = append(out, filepath.Join(dir, "node"))
+	}
+	out = append(out, filepath.Join(distroNodeDir, "node"), filepath.Join(home, ".volta", "bin", "node"),
+		filepath.Join(home, ".local", "bin", "node"))
 	nvm, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", "node"))
 	sort.Sort(sort.Reverse(sort.StringSlice(nvm)))
 	return append(out, nvm...)
@@ -373,10 +379,19 @@ var paseoBridgeCommand = func(ctx context.Context, rh *RuntimeHost) (*exec.Cmd, 
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(js.Path, filepath.Join(dir, "paseo", "bridge.mjs"), "--socket", rh.path, "--paseo-home", home)
+	cmd := exec.Command(js.Path, paseoBridgeArgs(dir, rh.path, home)...)
 	cmd.Env = js.env(append(os.Environ(), "PERSONA_RUNTIME_SOCKET="+rh.path))
 	cmd.Dir = dir
 	return cmd, nil
+}
+
+// paseoBridgeArgs is the bridge's command line after the JavaScript runtime. The node's mcp.json (beside the runtime
+// socket) is what the bridge gives each new Agent as its Persona tools, and of those the Agent's own run without a card
+// (--allow-tools: agentAllowedTools without the office rule, which the bridge's Agents do not get).
+func paseoBridgeArgs(dir, socket, home string) []string {
+	return []string{filepath.Join(dir, "paseo", "bridge.mjs"), "--socket", socket, "--paseo-home", home,
+		"--mcp-config", filepath.Join(filepath.Dir(socket), "mcp.json"),
+		"--allow-tools", strings.Join(compat.MCPAllowedToolNames(assistantwire.AgentOwnTools, true), ",")}
 }
 
 // runPaseoBridge runs the bridge once, until it exits or ctx ends (then it is stopped: SIGTERM to its group, SIGKILL

@@ -296,6 +296,15 @@ class RepositoryTests(unittest.TestCase):
                 self.assertEqual(self.catalog.values[f"status.{mode}.{state}.text"], base)
                 for part, opacity in (("dot", dot_alpha), ("tint", tint_alpha)):
                     self.assertEqual(self.catalog.values[f"status.{mode}.{state}.{part}"], {**base, "alpha": base["alpha"] * opacity})
+        # Waiting in the background: Working's dot made lighter, its words the secondary gray.
+        waiting = re.search(r'static let backgroundWaiting = StatusTone\(dot: working.dot.opacity\(([0-9.]+)\), text: .secondary, tint: working.dot.opacity\(([0-9.]+)\)\)', swift)
+        self.assertIsNotNone(waiting, "StatusPalette.backgroundWaiting not found")
+        dot_alpha, tint_alpha = map(float, waiting.groups())
+        for mode in gen.MODES:
+            working = self.catalog.values[f"status.{mode}.working.dot"]
+            self.assertEqual(self.catalog.values[f"status.{mode}.backgroundWaiting.text"], self.catalog.values[f"system.{mode}.secondary"])
+            for part, opacity in (("dot", dot_alpha), ("tint", tint_alpha)):
+                self.assertEqual(self.catalog.values[f"status.{mode}.backgroundWaiting.{part}"], {**working, "alpha": working["alpha"] * opacity})
 
     def test_ios_theme_explicit_colors_match(self):
         # Since 2026-11-01 iOS keeps a look as UI style × theme color (apple/Shared/Design): each catalog style is its component
@@ -343,6 +352,157 @@ class RepositoryTests(unittest.TestCase):
                 self.assertEqual(self.catalog.values[f"common.{mode}.{name}"], color(h), f"{name} {mode}")
                 self.assertEqual(self.catalog.values[f"status.{mode}.waiting.text"], self.catalog.values[f"common.{mode}.loop"])
                 self.assertEqual(self.catalog.values[f"status.{mode}.muted.text"], self.catalog.values[f"status.{mode}.idle.text"])
+
+    KOTLIN = gen.ROOT / "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt"
+
+    def test_committed_kotlin_matches_the_generator(self):
+        self.assertEqual(self.KOTLIN.read_text(), gen.render_kotlin(self.catalog, "persona.core.designsystem"),
+                         f"Tokens.kt is stale: run python3 scripts/assets/gen_tokens.py --kotlin {self.KOTLIN.relative_to(gen.ROOT)}")
+
+    def test_repository_tokens_pass_the_check(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = gen.main(["--check", "--kotlin", str(self.KOTLIN)])
+        self.assertEqual(code, 0, output.getvalue())
+
+    # iOS values the JSON doesn't carry, as (iOS, JSON); None is a missing side. Spacing is aligned (T2); motion and type have
+    # their own tests below. A Swift change outside this table fails.
+    KNOWN_DRIFT = {
+        "radius": {"thumbnail": (3, None), "page": (55, None)},
+        "space": {},
+    }
+
+    def swift_enum(self, name):
+        theme = (gen.ROOT / "apple/Shared/Design/Theme.swift").read_text()
+        found = re.search(rf'\n    enum {name} \{{\n(.*?)\n    \}}\n', theme, re.S)
+        self.assertIsNotNone(found, f"Theme.{name} not found in Theme.swift")
+        return found[1]
+
+    def assert_drift(self, group, ios):
+        tokens = {key.removeprefix(f"{group}."): value["value"] for key, value in self.catalog.values.items() if key.startswith(f"{group}.")}
+        drift = {name: (ios.get(name), tokens.get(name)) for name in ios.keys() | tokens.keys() if ios.get(name) != tokens.get(name)}
+        self.assertEqual(drift, self.KNOWN_DRIFT[group], f"Theme.swift and spec/tokens differ in {group}")
+
+    def test_ios_radius_and_spacing_match(self):
+        # A number, or another value of the same enum (Theme.Space.lines = xs).
+        value = r'static let (\w+): CGFloat = ([0-9.]+|[a-z]\w*)$'
+        for group, enum in (("radius", "Radius"), ("space", "Space")):
+            found = dict(re.findall(value, self.swift_enum(enum), re.M))
+            ios = {name: float(found.get(v, v)) for name, v in found.items()}
+            self.assertTrue(ios, f"no Theme.{enum} values found")
+            self.assert_drift(group, ios)
+
+    def test_ios_sizes_match(self):
+        # spec/tokens carries the sizes Android uses, each as Theme.Size has it; the rest of Theme.Size isn't ported.
+        ios = {name: float(value) for name, value in re.findall(r'static let (\w+): CGFloat = ([0-9.]+)$', self.swift_enum("Size"), re.M)}
+        tokens = {key.removeprefix("size."): value["value"] for key, value in self.catalog.values.items() if key.startswith("size.")}
+        self.assertTrue(tokens)
+        self.assertEqual({name: ios.get(name) for name in tokens}, tokens, "a size in spec/tokens differs from Theme.Size")
+
+    def test_ios_type_levels_match(self):
+        # Theme.Font on the iPhone (the #else branch): each name is a Dynamic Type style, maybe with a weight or monospaced,
+        # and Theme.Level gives its size and line height. sectionHeader is the caption level in semibold.
+        font = self.swift_enum("Font")
+        iphone = font[font.index("#else"):font.index("#endif")]
+        styles = dict(re.findall(r'static let (\w+) = SwiftUI\.Font\.(\w+(?:\.[\w(.)]*)?)$', iphone, re.M))
+        theme = (gen.ROOT / "apple/Shared/Design/Theme.swift").read_text()
+        level = theme[theme.index("    enum Level {"):theme.index("var extraLeading")]
+        sizes_block = level[level.index("#else"):level.index("#endif")]
+        heights_block = level[level.index("var lineHeight"):]
+
+        def cases(block):
+            out = {}
+            for names, value in re.findall(r'case ([.\w, ]+): ([0-9.]+)', block):
+                for name in re.findall(r'\.(\w+)', names):
+                    out[name] = float(value)
+            return out
+
+        sizes, heights = cases(sizes_block), cases(heights_block)
+        weights = {"bold()": 700, "weight(.semibold)": 600, "weight(.medium)": 500}
+        expected = {}
+        for name, expr in styles.items():
+            if name in ("scale",) or name.endswith(("Strong", "Heavy", "Medium")):
+                continue
+            style, _, rest = expr.partition(".")
+            weight = weights.get(rest, 600 if style == "headline" else 400)
+            lvl = "caption" if name == "sectionHeader" else name
+            expected[name] = {"size": sizes[lvl], "weight": weight, "lineHeight": heights[lvl], "iosTextStyle": style,
+                              "family": "monospace" if rest == "monospaced()" else "system"}
+        tokens = {}
+        for key, value in self.catalog.values.items():
+            if key.startswith("type."):
+                _, name, part = key.split(".")
+                tokens.setdefault(name, {})[part] = value["value"] if isinstance(value, dict) and "value" in value else value
+        self.assertEqual(len(expected), 9)
+        self.assertEqual(expected, tokens)
+
+    def test_android_glass_reading_sizes_use_font_units(self):
+        # Android's intentional reading-size difference (#5780) does not enter the shared iOS levels above.
+        self.assertEqual(self.catalog.values["type.body.size"], {"value": 17, "unit": "px"})
+        self.assertEqual(self.catalog.values["typeGlass.body.size"], {"value": 16, "unit": "px"})
+        self.assertEqual(self.catalog.values["typeGlass.secondary.size"], {"value": 14, "unit": "px"})
+        block = gen.render_kotlin(self.catalog, "persona.core.designsystem").split("object TypeGlass {", 1)[1]
+        self.assertIn("val size: TextUnit = 16.sp", block)
+        self.assertIn("val size: TextUnit = 14.sp", block)
+        for path, expected in (("typeGlass.body.size", "1rem"), ("typeGlass.secondary.size", "0.875rem")):
+            self.assertEqual(gen.css_value(self.catalog.tokens[path]["$type"], self.catalog.values[path], path), expected)
+
+    def test_ios_motion_matches(self):
+        # The shared motions (phase 1 R3) as Theme.Motion writes them; the rest of Theme.Motion belongs to single components
+        # (the composer's quote bar and growth, holding the mic, attaching, blinks). SwiftUI's snappy has a bounce of 0.15,
+        # smooth none.
+        motion = self.swift_enum("Motion")
+
+        def seconds(pattern):
+            found = re.search(pattern, motion)
+            self.assertIsNotNone(found, pattern)
+            return [float(value) for value in found.groups()]
+
+        bounce = {"snappy": 0.15, "smooth": 0}
+        expected = {}
+        for name in ("state", "layout", "expand"):
+            kind, duration = re.search(rf'static let {name} = Animation\.(snappy|smooth)\(duration: ([0-9.]+)\)', motion).groups()
+            expected[name] = {"duration": round(float(duration) * 1000), "bounce": bounce[kind]}
+        for name, curve in (("reveal", "easeOut"), ("conceal", "easeIn")):
+            self.assertIn(f"static let {name} = Animation.{curve}(duration: {name}Time)", motion)
+            expected[name] = {"duration": round(seconds(rf'static let {name}Time = ([0-9.]+)\n')[0] * 1000), "curve": curve}
+        duration, drawer_bounce = seconds(r'\.interpolatingSpring\(duration: ([0-9.]+), bounce: ([0-9.]+), initialVelocity: velocity\)')
+        expected["drawer"] = {"duration": round(duration * 1000), "bounce": drawer_bounce}
+        duration, back_bounce = seconds(r'static let springBack = Animation\.spring\(duration: ([0-9.]+), bounce: ([0-9.]+)\)')
+        expected["springBack"] = {"duration": round(duration * 1000), "bounce": back_bounce}
+        mass, stiffness, damping = seconds(r'static let keyboard = Animation\.interpolatingSpring\(mass: ([0-9.]+), stiffness: ([0-9.]+), damping: ([0-9.]+)\)')
+        self.assertEqual(mass, 1)
+        expected["keyboard"] = {"stiffness": stiffness, "damping": damping}
+        breath = {part: seconds(rf'static let needsYou{part}(?:: \w+)? = ([0-9.]+)\n')[0] for part in ("BreathDuration", "BreathScale", "RingOpacity")}
+        expected["needsYouBreath"] = {"duration": round(breath["BreathDuration"] * 1000), "scale": breath["BreathScale"], "ringOpacity": breath["RingOpacity"]}
+        # The composer's send swap and press (#4210 T3). Theme.Motion writes each as a line of its own; the JSON groups them by
+        # what moves. composerRelease is on composerSwap's curve, which the JSON holds once.
+        bezier = r'Animation\.timingCurve\(([0-9.]+), ([0-9.]+), ([0-9.]+), ([0-9.]+), duration: ([0-9.]+)\)'
+        swap = seconds(rf'static let composerSwap = {bezier}')
+        release = seconds(rf'static let composerRelease = {bezier}')
+        self.assertEqual(release[:4], swap[:4], "composerRelease and composerSwap share one curve")
+        fade = re.search(r'static let composerSwapFade = Animation\.(\w+)\(duration: ([0-9.]+)\)', motion)
+        press = re.search(r'static let composerPress = Animation\.(\w+)\(duration: ([0-9.]+)\)', motion)
+        self.assertIsNotNone(fade)
+        self.assertIsNotNone(press)
+        expected["composerSwap"] = {
+            "duration": round(swap[4] * 1000), "curveX1": swap[0], "curveY1": swap[1], "curveX2": swap[2], "curveY2": swap[3],
+            "fadeDuration": round(float(fade[2]) * 1000), "fadeCurve": fade[1],
+            "blur": seconds(r'static let composerSwapBlur: CGFloat = ([0-9.]+)\n')[0],
+            "from": seconds(r'static let composerSwapFrom: CGFloat = ([0-9.]+)\n')[0],
+            "scale": seconds(r'static let composerSwapScale: CGFloat = ([0-9.]+)\n')[0],
+        }
+        expected["composerPress"] = {
+            "scale": seconds(r'static let composerPressScale: CGFloat = ([0-9.]+)\n')[0],
+            "duration": round(float(press[2]) * 1000), "curve": press[1], "releaseDuration": round(release[4] * 1000),
+        }
+        tokens = {}
+        for key, value in self.catalog.values.items():
+            parts = key.split(".")
+            if parts[0] == "motion" and len(parts) == 3:
+                tokens.setdefault(parts[1], {})[parts[2]] = value["value"] if isinstance(value, dict) else value
+        self.assertEqual(expected, tokens)
+        self.assertEqual(self.catalog.values["motion.reduced"], {"value": 0, "unit": "ms"})
 
     def test_existing_contrast_conflicts_are_not_silenced(self):
         failures = {(r.style, r.mode, r.rule) for r in self.catalog.contrast_results() if not r.passed}

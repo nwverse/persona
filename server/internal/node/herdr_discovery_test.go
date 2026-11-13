@@ -325,7 +325,12 @@ func TestHerdrTraexPanesAreMergedIntoTheList(t *testing.T) {
 	f.reply("session.snapshot", snapshot(
 		[]any{map[string]any{"workspace_id": "w3", "label": "tools", "number": 3}},
 		[]any{map[string]any{"tab_id": "w3:t2", "workspace_id": "w3", "label": "traex", "number": 2}},
-		[]any{claudeAgent(sidA, proto.StatusIdle, "w3:p1", "w3:t1", "w3", "/tmp/tools", "claude here")},
+		[]any{
+			claudeAgent(sidA, proto.StatusIdle, "w3:p1", "w3:t1", "w3", "/tmp/tools", "claude here"),
+			// PaneReportResume's fallback claims the pane as traex without a session id (#4657): traexAgents still
+			// supplies its session id and screen/title status instead of dropping the pane.
+			agentOf(traexAgent, "", proto.StatusIdle, "w3:p2", "w3:t2", "w3", "/tmp/tools/sub", "build the thing"),
+		},
 		[]any{
 			map[string]any{"pane_id": "w3:p1", "tab_id": "w3:t1", "workspace_id": "w3", "cwd": "/tmp/tools"},
 			map[string]any{"pane_id": "w3:p2", "tab_id": "w3:t2", "workspace_id": "w3", "cwd": "/tmp/tools/sub",
@@ -426,9 +431,10 @@ func TestHerdrTraexStatusFromScreen(t *testing.T) {
 // shows changed, and only sessions.revs when just a transcript grew.
 func TestHerdrPollPushesChangedThenRevs(t *testing.T) {
 	n, f, home := herdrNode(t)
-	cwd := "/tmp/poll"
+	cwd := pollRepo(t)
+	cwdJSON, _ := json.Marshal(cwd)
 	p := writeTranscript(t, home, cwd, sidA, time.Now(),
-		`{"type":"user","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp/poll","message":{"role":"user","content":"hello"}}`)
+		`{"type":"user","timestamp":"2026-01-01T00:00:00Z","cwd":`+string(cwdJSON)+`,"message":{"role":"user","content":"hello"}}`)
 	f.reply("session.snapshot", snapshot(nil, nil,
 		[]any{claudeAgent(sidA, proto.StatusIdle, "w5:p1", "w5:t1", "w5", cwd, "poll")}, nil))
 	pushes, stop := pollNode(t, n)

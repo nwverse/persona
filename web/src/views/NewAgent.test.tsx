@@ -6,6 +6,11 @@ import type { Machine } from "../lib/types";
 
 const TWO: Machine[] = [{ id: "first", name: "First computer", online: true }, { id: "second", name: "Second computer", online: true }];
 const state = vi.hoisted(() => ({ loaded: true, features: [] as string[], machines: [] as Machine[] }));
+// one assistant: its computers are the store's (lib/current-assistant.ts reads the roster, which this store stand-in has none of)
+vi.mock("../lib/current-assistant", async () => {
+  const store = (await import("../lib/store")) as unknown as { useStore: <T>(select: (s: { machines: unknown[] }) => T) => T };
+  return { useScopedMachines: () => store.useStore((s) => s.machines) };
+});
 vi.mock("../lib/store", () => ({ useStore: (selector: (value: { machines: Machine[] }) => unknown) => selector(state), hubHas: () => false }));
 vi.mock("react-dom", async (original) => ({ ...(await original<typeof import("react-dom")>()), createPortal: (children: React.ReactNode) => children }));
 
@@ -91,5 +96,18 @@ describe("NewAgent with no computer", () => {
     expect(empty?.textContent).toContain("还没有电脑");
     expect([...empty!.querySelectorAll("button")].map((b) => b.textContent?.trim())).toContain("添加电脑");
     expect(document.body.textContent).not.toContain("选一个目录");
+  });
+});
+
+describe("NewAgent with an Inbox item (#5933)", () => {
+  it("shows the item's card, forwarded from where it came, over the first message, and the ask in the box", async () => {
+    const forward = { id: "inbox:lark:f1:1", kind: "context" as const, title: "Lark · Example", url: "", text: "Example: is it merged?" };
+    act(() => root.render(<NewAgent open onClose={() => {}} preset={{ forwards: [forward], prompt: "Look into it" }} key="inbox" />));
+    await flush();
+    const card = document.body.querySelector("[data-new-agent-forward]");
+    expect(card?.textContent).toContain("Lark · Example");
+    expect(card?.textContent).toContain("Example: is it merged?");
+    expect(card?.textContent).toContain("转发自 Lark · Example");
+    expect([...document.body.querySelectorAll("textarea")].some((t) => t.value.startsWith("Look into it"))).toBe(true);
   });
 });

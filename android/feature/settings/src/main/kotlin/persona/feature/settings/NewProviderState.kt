@@ -2,7 +2,10 @@ package persona.feature.settings
 
 import android.content.res.Resources
 import persona.core.contracts.api.AssignPurposes
+import persona.core.contracts.Machine
 import persona.core.contracts.api.AssistantReadiness
+import persona.core.contracts.api.HubLauncher
+import persona.core.contracts.api.PresetModel
 import persona.core.contracts.api.NewProvider
 import persona.core.contracts.api.ProviderAdded
 import persona.core.contracts.api.ProviderDiscovery
@@ -26,6 +29,7 @@ import kotlinx.coroutines.flow.update
 internal data class NewProviderDraft(
     val fromPreset: Boolean = false,
     val name: String = "",
+    val displayName: String? = null,
     val apiKey: String = "",
     /** launcher | api */
     val kind: String = "launcher",
@@ -38,9 +42,41 @@ internal data class NewProviderDraft(
     val smallModel: String = "",
     val subagentModel: String = "",
     val args: String = "",
+    /** Exact arguments from a parsed draft; used while the displayed argument text is unchanged. */
+    val parsedArgs: List<String>? = null,
     /** The picked preset's id and the model picked from it (its default when untouched). */
     val preset: String = "",
     val presetModel: String = "",
+    // "Advanced" (docs/integrations/launchers.md "Provider model and gateway parameters"); an existing provider opens with its own.
+    /** The harness a launcher runs in: claude | codex | agy | omp (kept as it is; the form does not change it). */
+    val agent: String = "claude",
+    /** The models picked, in order; the default is [model] (put first when not among them). */
+    val models: List<PresetModel> = emptyList(),
+    val opusModel: String = "",
+    val sonnetModel: String = "",
+    val haikuModel: String = "",
+    val fableModel: String = "",
+    val subagentForce: Boolean = false,
+    /** Default thinking level; "" is the model's. */
+    val effort: String = "",
+    /** Numbers as typed; empty or 0 is the default. */
+    val timeoutMs: String = "",
+    val compactWindow: String = "",
+    val maxContext: String = "",
+    val proxyMode: ProxyMode = ProxyMode.Follow,
+    /** "Send through" (an existing direct API connection, #4775): a computer's id, "" the hub itself. */
+    val viaMachine: String = "",
+    val proxy: String = "",
+    val noProxy: String = "",
+    /** Typed headers, "Name: value" a line; never the stored ones. Empty keeps them unless [clearHeaders]. */
+    val headers: String = "",
+    val clearHeaders: Boolean = false,
+    /** Typed environment, NAME=value a line; never the stored one. Empty keeps it unless [clearEnv]. */
+    val env: String = "",
+    val clearEnv: Boolean = false,
+    val customModel: String = "",
+    val customModelName: String = "",
+    val customModelDescription: String = "",
 )
 
 /**
@@ -48,7 +84,7 @@ internal data class NewProviderDraft(
  * [Key] (tested by itself) and see what now runs on it ([Done]); a gateway typed in is the [Form]. An older hub opens on the
  * [Form] with its "Fill in" / "From extension" switch.
  */
-internal enum class WizardStep { Pick, Key, Done, Form }
+internal enum class WizardStep { Pick, Key, Done, Form, Paste }
 
 /** A preset key's test: running, or what the hub answered. */
 internal data class KeyTest(val running: Boolean, val result: ProviderTest? = null, val failure: UiText? = null)
@@ -68,7 +104,7 @@ internal data class NewProviderState(
     /** Why the presets could not be read (the pick list still offers the gateway typed in). */
     val presetsError: ResText? = null,
     val keyTest: KeyTest? = null,
-    /** "Use it for the main conversation and new Agents"; null: not touched, so it follows the readiness (off while Claude Code already answers). */
+    /** "Use it for the main conversation and new agents"; null: not touched, so it follows the readiness (off while Claude Code already answers). */
     val assignSet: Boolean? = null,
     /** The main conversation's readiness, asked when the page opens and again after saving; null without it. */
     val readiness: AssistantReadiness? = null,
@@ -83,14 +119,60 @@ internal data class NewProviderState(
     val discovering: Boolean = false,
     val found: ProviderDiscovery? = null,
     val foundFailure: UiText? = null,
+    /** The provider being edited (Persona-managed); null while adding one. */
+    val existing: HubLauncher? = null,
+    /** The "Computers" page's form; null on a hub without device scopes ([persona.core.contracts.api.LauncherScopeFeature]). */
+    val scope: ScopeForm? = null,
+    /** The machines the scope is chosen from (this hub's). */
+    val machines: List<Machine> = emptyList(),
+    /** The form and the scope as editing opened, to ask before throwing changes away. */
+    val opened: Pair<NewProviderDraft, ScopeForm?>? = null,
+    /** Saved: the page closes. */
+    val saved: Boolean = false,
+    /** Pasted configuration and aliases, only on hubs with launcher_import_parse. */
+    val importParse: Boolean = false,
+    val paste: ProviderPasteUiState = ProviderPasteUiState(),
+    val foundAliases: List<FoundAlias> = emptyList(),
+    /** The form came from Paste; Back returns to its reviewed answer. */
+    val pasteContinued: Boolean = false,
 ) {
+    val editing: Boolean get() = existing != null
+
+    /** Something was changed since editing opened; adding never asks. */
+    val dirty: Boolean get() = opened?.let { (d, sc) -> d != draft || sc != scope } ?: false
+
+    /** The hub's default for own_service: use when the provider is saved with assign, or is a direct API. */
+    val defaultUse: Boolean get() = when {
+        existing != null -> existing.isApi
+        step == WizardStep.Key -> hubNames && assign || selected?.kind == "api"
+        usesPreset -> selected?.kind == "api"
+        else -> draft.kind == "api"
+    }
+
+    /** The scope's fields for the save (none on a hub without scopes). */
+    val scopeBody: ScopeFields get() = scope?.let { scopeFields(it, existing, machines, defaultUse) } ?: ScopeFields()
+
+    /** What keeps the edit from being saved; null when it can go. */
+    val editProblem: ResText? get() {
+        val l = existing ?: return null
+        val d = draft
+        if ((d.kind == "api" || d.agent == "claude") && gatewayHost(d.baseUrl).isEmpty()) return ResText.of(R.string.settings_pedit_url_needed)
+        if (d.model.isBlank()) return ResText.of(R.string.settings_pedit_model_needed)
+        if ((d.kind == "api" || d.agent == "claude") && d.apiKey.isBlank() && !l.hasKey) return ResText.of(R.string.settings_pedit_key_needed)
+        return d.advancedProblem() ?: scope?.problem
+    }
+    val canSaveEdit: Boolean get() = editing && !busy && dirty && editProblem == null
+
+    /** PUT's body for the edit. */
+    val update: persona.core.contracts.api.ProviderUpdate? get() = existing?.let { providerUpdate(draft, it, scopeBody) }
+
     /** The main conversation already answers on a computer's Claude Code: a new key does not take it over by default. */
     val works: Boolean get() = claudeWorks(readiness)
     val assign: Boolean get() = assignSet ?: !works
 
     /** The key step can be saved: a key, a fine name if any, not while its test runs or the readiness is still asked. */
     val canSaveKey: Boolean get() {
-        if (busy || selected == null || draft.apiKey.isBlank() || keyTest?.running == true) return false
+        if (busy || selected == null || draft.apiKey.isBlank() || keyTest?.running == true || scope?.problem != null) return false
         if (!hubNames && draft.name.isBlank()) return false
         return nameProblem == null
     }
@@ -98,8 +180,12 @@ internal data class NewProviderState(
     /** What "Test connection" / "Fetch models" send for the form: the gateway, the key and the auth typed in. */
     val formProbe: ProviderProbe? get() {
         val d = draft
-        if (d.baseUrl.isBlank() || d.apiKey.isBlank()) return null
-        return ProviderProbe(baseUrl = d.baseUrl.trim(), apiKey = d.apiKey.trim(), auth = d.auth, model = d.model.trim().takeIf { it.isNotEmpty() })
+        val stored = existing?.takeIf { it.hasKey }
+        if (d.baseUrl.isBlank() || d.apiKey.isBlank() && stored == null) return null
+        // Editing: by name, so the hub uses the stored key and headers for what is not typed over them.
+        return ProviderProbe(baseUrl = d.baseUrl.trim(), apiKey = d.apiKey.trim().takeIf { it.isNotEmpty() }, auth = d.auth,
+            model = d.model.trim().takeIf { it.isNotEmpty() }, name = existing?.name, headers = d.headersValue().takeIf { !d.chat },
+            api = d.api.takeIf { d.kind == "api" }, viaMachine = d.viaMachine.takeIf { d.kind == "api" && existing != null })
     }
 
     val usesPreset: Boolean get() = draft.fromPreset && selected != null
@@ -112,19 +198,23 @@ internal data class NewProviderState(
         val name = d.name.trim()
         val key = d.apiKey.trim()
         if (name.isEmpty() || nameProblem != null || key.isEmpty()) return null
+        val fields = scopeBody
         selected?.takeIf { d.fromPreset }?.let { preset ->
             val model = d.presetModel.trim()
-            return NewProvider(name, key, preset = preset.id, model = model.takeIf { it.isNotEmpty() && it != preset.defaultModel })
+            return NewProvider(name, key, preset = preset.id, model = model.takeIf { it.isNotEmpty() && it != preset.defaultModel },
+                share = fields.share, scopeMachines = fields.scopeMachines, delivery = fields.delivery, ownService = fields.ownService,
+                machineKeys = fields.machineKeys)
         }
         val api = d.kind == "api"
-        if (d.baseUrl.isBlank() || d.model.isBlank()) return null
+        if (d.baseUrl.isBlank() || d.model.isBlank() || d.advancedProblem() != null || scope?.problem != null) return null
         return NewProvider(
             name, key, kind = d.kind, api = if (api) d.api else "messages", baseUrl = d.baseUrl.trim(), model = d.model.trim(),
             auth = d.auth.takeIf { !api && it == "bearer" },
             smallModel = d.smallModel.trim().takeIf { !api && it.isNotEmpty() },
             subagentModel = d.subagentModel.trim().takeIf { !api && it.isNotEmpty() },
-            args = d.args.split(Regex("\\s+")).filter { it.isNotEmpty() }.takeIf { !api && it.isNotEmpty() },
-        )
+            args = d.argumentValues().takeIf { !api && it.isNotEmpty() },
+            displayName = d.displayName?.trim()?.takeIf { it.isNotEmpty() },
+        ).withExtras(d, fields)
     }
     val canSave: Boolean get() = !busy && request != null
 }
@@ -181,12 +271,15 @@ internal class NewProviderModel(
     val state = mutable.asStateFlow()
     private var readinessAnswer: CompletableDeferred<Unit>? = null
     private var testSeq = 0
+    private var pasteSeq = 0
+    private var listedLaunchers: List<HubLauncher> = emptyList()
 
     /**
      * The presets; the first is picked, and [preferPreset] opens on "From extension" when there are any. [hubNames]: the hub has
      * built-in presets, so the page opens on the list to pick from (the readiness is asked meanwhile).
      */
-    suspend fun load(preferPreset: Boolean = false, hubNames: Boolean = false) {
+    suspend fun load(preferPreset: Boolean = false, hubNames: Boolean = false, importParse: Boolean = false) {
+        mutable.update { it.copy(importParse = importParse, foundAliases = if (importParse) it.foundAliases else emptyList()) }
         if (hubNames) mutable.update { it.copy(hubNames = true, step = WizardStep.Pick) }
         try {
             val presets = api.presets()
@@ -201,6 +294,129 @@ internal class NewProviderModel(
         catch (error: Exception) {
             mutable.update { it.copy(loaded = true, presetsError = if (hubNames) ResText.of(R.string.settings_onb_presets_failed, failureReasonText(error)) else null) }
         }
+        if (importParse) {
+            try {
+                val list = api.launchers()
+                listedLaunchers = list
+                mutable.update { it.copy(foundAliases = foundAliases(list, it.machines, api::ownsMachine)) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            // Finding an alias is optional; the usual add choices still work when the list cannot be read.
+            catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Editing [existing] (Persona-managed): the form opens on it, prefilled (its secrets never are), at the form's step;
+     * [scopeShown] adds the "Computers" page's form (its own scope, or a new provider's defaults) with [machines] to pick from.
+     */
+    fun prepare(existing: HubLauncher?, scopeShown: Boolean, machines: List<Machine>) = mutable.update { s ->
+        if (existing != null) {
+            val draft = providerDraftOf(existing)
+            val scope = scopeFrom(existing)
+            s.copy(existing = existing, draft = draft, scope = scope, machines = machines, opened = draft to scope, step = WizardStep.Form,
+                loaded = true, saved = false, error = null)
+        } else s.copy(scope = if (scopeShown) s.scope ?: ScopeForm() else null, machines = machines)
+    }
+
+    fun openPaste() = mutable.update {
+        if (!it.importParse || it.busy) it else it.copy(step = WizardStep.Paste, error = null, saved = false)
+    }
+
+    fun leavePaste() = mutable.update {
+        it.copy(step = if (it.hubNames) WizardStep.Pick else WizardStep.Form, existing = null, draft = NewProviderDraft(),
+            opened = null, scope = if (it.scope == null) null else ScopeForm(), pasteContinued = false, error = null, saved = false)
+    }
+
+    fun backToPaste() = mutable.update { it.copy(step = WizardStep.Paste, error = null, saved = false) }
+
+    fun editPaste(text: String) {
+        pasteSeq++
+        mutable.update {
+            val immediate = text.length - it.paste.text.length > 1
+            it.copy(paste = it.paste.copy(text = text, reading = false, readImmediately = immediate, error = null))
+        }
+    }
+
+    fun choosePasteDraft(index: Int) = mutable.update {
+        if (index in it.paste.answer?.drafts?.indices ?: IntRange.EMPTY) it.copy(paste = it.paste.copy(draft = index, action = null)) else it
+    }
+
+    fun choosePasteAction(action: ProviderPasteAction) = mutable.update { it.copy(paste = it.paste.copy(action = action)) }
+
+    suspend fun parsePaste() {
+        val text = state.value.paste.text
+        val seq = ++pasteSeq
+        if (text.isBlank()) {
+            mutable.update { it.copy(paste = it.paste.copy(answer = null, answerText = "", draft = -1, action = null, reading = false, readImmediately = false, error = null)) }
+            return
+        }
+        mutable.update { it.copy(paste = it.paste.copy(reading = true, readImmediately = false, error = null)) }
+        try {
+            val answer = api.parse(text)
+            mutable.update {
+                if (seq != pasteSeq || it.paste.text != text) it
+                else it.copy(paste = it.paste.copy(answer = answer, answerText = text, draft = if (answer.drafts.size == 1) 0 else -1,
+                    action = null, reading = false, error = null))
+            }
+        } catch (cancelled: CancellationException) {
+            mutable.update { if (seq == pasteSeq) it.copy(paste = it.paste.copy(reading = false)) else it }
+            throw cancelled
+        } catch (error: Exception) {
+            mutable.update {
+                if (seq != pasteSeq || it.paste.text != text) it
+                else it.copy(paste = it.paste.copy(reading = false, error = ResText.of(R.string.settings_paste_read_failed, failureReasonText(error))))
+            }
+        }
+    }
+
+    suspend fun continuePaste(): Boolean {
+        val choice = state.value.paste.choice ?: return false
+        if (choice.action.kind == PasteActionKind.New) {
+            mutable.update {
+                it.copy(existing = null, draft = choice.draft.newProviderDraft(), opened = null, step = WizardStep.Form,
+                    pasteContinued = true, error = null, probe = null, found = null, saved = false)
+            }
+            return true
+        }
+        if (state.value.busy) return false
+        mutable.update { it.copy(busy = true, paste = it.paste.copy(error = null)) }
+        return try {
+            val existing = api.launcher(choice.action.provider)
+            val base = providerDraftOf(existing)
+            val scope = scopeFrom(existing)
+            mutable.update {
+                it.copy(existing = existing, draft = choice.draft.existingDraft(existing, choice.action), scope = scope,
+                    opened = base to scope, step = WizardStep.Form, pasteContinued = true, error = null, probe = null, found = null, saved = false)
+            }
+            true
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            mutable.update { it.copy(paste = it.paste.copy(error = ResText.of(R.string.settings_providers_load_failed, failureReasonText(error)))) }
+            false
+        } finally { mutable.update { it.copy(busy = false) } }
+    }
+
+    /** The machines changed (one came online, another was confirmed): the lists follow, what was chosen stays. */
+    fun setMachines(machines: List<Machine>) = mutable.update {
+        it.copy(machines = machines, foundAliases = if (it.importParse) foundAliases(listedLaunchers, machines, api::ownsMachine) else emptyList())
+    }
+
+    fun editScope(scope: ScopeForm) = mutable.update { if (it.busy || it.scope == null) it else it.copy(scope = scope, error = null) }
+
+    /** Saves an edit with `PUT`: only what changed goes. False (with the reason in [NewProviderState.error]) when the hub refused it. */
+    suspend fun saveEdit(): Boolean {
+        val current = state.value
+        val existing = current.existing ?: return false
+        val update = current.update ?: return false
+        if (!current.canSaveEdit) return false
+        mutable.update { it.copy(busy = true, error = null) }
+        return try {
+            api.update(existing.name, update)
+            mutable.update { it.copy(saved = true, opened = it.draft to it.scope) }
+            true
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { mutable.update { it.copy(error = ResText.of(R.string.settings_src_not_saved, failureReasonText(error))) }; false }
+        finally { mutable.update { it.copy(busy = false) } }
     }
 
     /** Asks the readiness once (the wizard's switch follows it); saving waits for this answer. */
@@ -255,7 +471,7 @@ internal class NewProviderModel(
 
     /**
      * ② saved: a Claude-compatible preset takes `assign` when asked (after the readiness answer) and refreshes readiness
-     * for ③. A direct API cannot run the main conversation or Agents, so neither readiness nor assign concerns it.
+     * for ③. A direct API cannot run the main conversation or agents, so neither readiness nor assign concerns it.
      */
     suspend fun saveKey(): Boolean {
         val current = state.value
@@ -268,8 +484,11 @@ internal class NewProviderModel(
             val give = preset.runsClaude && current.hubNames && (state.value.assignSet ?: !claudeWorks(before))
             val d = state.value.draft
             val model = d.presetModel.trim().takeIf { it.isNotEmpty() && it != preset.defaultModel }
+            val now = state.value
+            val fields = now.scope?.let { scopeFields(it, null, now.machines, give || preset.kind == "api") } ?: ScopeFields()
             val result = api.create(NewProvider(d.name.trim(), d.apiKey.trim(), preset = preset.id, model = model,
-                assign = AssignPurposes.takeIf { give }))
+                assign = AssignPurposes.takeIf { give }, share = fields.share, scopeMachines = fields.scopeMachines,
+                delivery = fields.delivery, ownService = fields.ownService, machineKeys = fields.machineKeys))
             mutable.update { it.copy(step = WizardStep.Done, added = WizardAdded(result, give, preset.runsClaude && claudeMissing(before))) }
             if (preset.runsClaude) readiness?.let { source ->
                 try { mutable.update { it.copy(readiness = source()) } }
@@ -304,7 +523,8 @@ internal class NewProviderModel(
         catch (error: Exception) { mutable.update { it.copy(discovering = false, foundFailure = failureReasonText(error)) }; return }
         mutable.update { s ->
             val first = result.models.firstOrNull()?.id
-            s.copy(discovering = false, found = result, draft = if (s.draft.model.isBlank() && first != null) s.draft.copy(model = first) else s.draft)
+            val draft = (if (s.draft.model.isBlank() && first != null) s.draft.copy(model = first) else s.draft).withFound(result.models)
+            s.copy(discovering = false, found = result, draft = draft)
         }
     }
 

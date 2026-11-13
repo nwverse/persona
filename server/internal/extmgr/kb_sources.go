@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connector/imessage"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -25,6 +26,7 @@ import (
 func (h *Manager) kbSourcesCall(ctx context.Context, p assistantwire.AppCall) (json.RawMessage, bool, error) {
 	switch p.Method {
 	case assistantwire.ConnectorsArchives, assistantwire.ConnectorsChanges, assistantwire.ConnectorsArchiveMedia,
+		assistantwire.ConnectorsArchiveBegin, assistantwire.ConnectorsArchiveEnd, assistantwire.ConnectorsArchiveAbort,
 		assistantwire.ConnectorsItems, assistantwire.ConnectorsDocTitle, assistantwire.ConnectorsOwner,
 		assistantwire.ConnectorsHistoryChats, assistantwire.ConnectorsHistory, assistantwire.ConnectorsHistoryAnchors:
 	default:
@@ -32,6 +34,9 @@ func (h *Manager) kbSourcesCall(ctx context.Context, p assistantwire.AppCall) (j
 	}
 	if p.AppID != assistantwire.AppConnectors {
 		return nil, false, nil
+	}
+	if p.Method == assistantwire.ConnectorsArchiveBegin || p.Method == assistantwire.ConnectorsArchiveEnd || p.Method == assistantwire.ConnectorsArchiveAbort {
+		return h.kbArchiveFenceCall(ctx, p)
 	}
 	if h.kbReadOnly() {
 		return nil, true, kb.ErrReadOnly
@@ -48,11 +53,12 @@ func (h *Manager) kbSourcesCall(ctx context.Context, p assistantwire.AppCall) (j
 		return h.kbHistoryCall(ctx, p)
 	}
 	var a struct {
-		ID     string `json:"id"`
-		Cursor string `json:"cursor"`
-		Limit  int    `json:"limit"`
-		Ref    string `json:"ref"`
-		URL    string `json:"url"`
+		ID           string `json:"id"`
+		Cursor       string `json:"cursor"`
+		Limit        int    `json:"limit"`
+		Ref          string `json:"ref"`
+		URL          string `json:"url"`
+		FenceVersion int    `json:"fence_version"`
 	}
 	if len(p.Params) > 0 {
 		if err := json.Unmarshal(p.Params, &a); err != nil {
@@ -68,8 +74,16 @@ func (h *Manager) kbSourcesCall(ctx context.Context, p assistantwire.AppCall) (j
 		out, err = h.kbConnectorOwner(ctx)
 	case assistantwire.ConnectorsChanges:
 		var arch connector.Archive
-		if arch, err = h.kbArchive(a.ID); err == nil {
+		if arch, err = h.kbArchive(ctx, a.ID); err == nil {
 			var res assistantwire.ChangesResult
+			if a.ID == imessage.ID {
+				if a.FenceVersion != assistantwire.ArchiveFenceV1 {
+					return nil, true, errors.New("iMessage archive requires commit fencing")
+				}
+				if res.Generation, err = h.imessageArchive.snapshot(ctx); err != nil {
+					return nil, true, err
+				}
+			}
 			res.Batches, res.Next, res.More, err = arch.Changes(ctx, a.Cursor, a.Limit)
 			if res.Batches == nil {
 				res.Batches = []connector.ChatBatch{}
@@ -78,7 +92,7 @@ func (h *Manager) kbSourcesCall(ctx context.Context, p assistantwire.AppCall) (j
 		}
 	case assistantwire.ConnectorsArchiveMedia:
 		var arch connector.Archive
-		if arch, err = h.kbArchive(a.ID); err == nil {
+		if arch, err = h.kbArchive(ctx, a.ID); err == nil {
 			media, ok := arch.(connector.ArchiveMedia)
 			if !ok {
 				return nil, true, errors.New("no attachments")
@@ -125,6 +139,7 @@ func (h *Manager) kbArchives(ctx context.Context) assistantwire.Archives {
 	if h.connectors == nil {
 		return out
 	}
+	h.reconcileIMessageAI(ctx)
 	for _, c := range h.connectors.All() {
 		a, archive := connector.As[connector.Archive](c)
 		_, items := connector.As[connector.Items](c)
@@ -140,15 +155,33 @@ func (h *Manager) kbArchives(ctx context.Context) assistantwire.Archives {
 		_, media := a.(connector.ArchiveMedia)
 		_, history := connector.As[connector.History](c)
 		_, anchors := connector.As[connector.HistoryAnchors](c)
-		out.Archives = append(out.Archives, assistantwire.ArchiveSource{ID: c.ID(), PollMS: c.Manifest().Poll.Milliseconds(),
-			Sources: h.archiveSources(c), Media: media, History: history, HistoryAnchors: history && anchors})
+		src := assistantwire.ArchiveSource{ID: c.ID(), PollMS: c.Manifest().Poll.Milliseconds(),
+			Sources: h.archiveSources(c), Media: media, History: history, HistoryAnchors: history && anchors}
+		if c.ID() == imessage.ID {
+			src.FenceVersion = assistantwire.ArchiveFenceV1
+		}
+		out.Archives = append(out.Archives, src)
+	}
+	// The subscriptions with "Add to knowledge base" on (#2039): read like a connector's archive, kicked after a run.
+	if h.subs != nil {
+		ids, err := h.subs.Archives(ctx)
+		if err != nil {
+			h.logf("kb: subscriptions: %v", err)
+		}
+		for _, id := range ids {
+			out.Archives = append(out.Archives, assistantwire.ArchiveSource{ID: id})
+		}
 	}
 	return out
 }
 
-// kbArchive is connector id's archive, while the user lets it into the knowledge base.
-func (h *Manager) kbArchive(id string) (connector.Archive, error) {
+// kbArchive is connector id's archive, while the user lets it into the knowledge base; or subscription id's (#2039),
+// which answers errArchiveOff-like itself while its knowledge base is off.
+func (h *Manager) kbArchive(ctx context.Context, id string) (connector.Archive, error) {
 	c := h.connectorByID(id)
+	if c == nil && h.subs != nil && h.subs.IsSubscription(ctx, id) {
+		return subscriptionArchive{h.subs, id}, nil
+	}
 	a, ok := connector.As[connector.Archive](c)
 	if c == nil || !ok {
 		return nil, fmt.Errorf("connector %q has no archive", id)
@@ -179,7 +212,7 @@ func (h *Manager) kbHistoryCall(ctx context.Context, p assistantwire.AppCall) (j
 			return nil, true, err
 		}
 	}
-	if _, err := h.kbArchive(params.ID); err != nil {
+	if _, err := h.kbArchive(ctx, params.ID); err != nil {
 		return nil, true, err
 	}
 	c := h.connectorByID(params.ID)

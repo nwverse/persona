@@ -43,9 +43,14 @@ extension AppModel {
             // types it once. Through a short drop (a hub restart) it keeps trying with that id instead of going to
             // the outbox's clock; once the drop's grace is over the outbox takes it (flushOutbox).
             let launcher = assistantLaunchers[key], model = assistantModels[key]
-            try await OpRetry.untilDelivered(keepTrying: { socket?.takesWrites == true }) {
+            let waits = try await OpRetry.untilDelivered(keepTrying: { socket?.takesWrites == true }) {
                 try await api.send(key, text: msg.text, images: msg.images, launcher: launcher, model: model,
-                                   clientMsgID: msg.id.uuidString, clearDraft: clearDraft, opID: msg.id)
+                                   clientMsgID: msg.id.uuidString, clearDraft: clearDraft, via: msg.via, opID: msg.id)
+            }
+            if waits, visibleSession == key {
+                // Sent, but the Agent reads it only after the question on the computer is answered (#5890). Only on
+                // that chat's screen: the toast does not name the chat, and an outbox flush can run from anywhere.
+                toast = Toast(String(localized: "Sent. The Agent will read it after the question on the computer is answered."))
             }
             return .sent
         } catch let e as APIError where e.code == "input_draft" {
@@ -64,6 +69,18 @@ extension AppModel {
             return .failed
         } catch where error.isOffline || error.isTimeout || error.isGap {
             return .waiting
+        } catch let e as APIError where e.code == "dialog_open" {
+            // A dialog holds the computer's terminal (#3752): nothing was typed. Say which one, and open the terminal
+            // from here: answering at the computer is no way out for someone away from it.
+            Haptics.attention()
+            markRefused(key, msg.id)
+            let head = e.fields["dialog"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let reason = head.isEmpty ? (e.shown ?? e.localizedDescription) : String(localized: "The terminal is waiting on “\(head)”.")
+            noteFailure(key, msg.id, reason)
+            toast = Toast(reason, style: .error, action: Toast.Action(title: String(localized: "Open terminal")) { [weak self] in
+                self?.terminalAsk = key
+            })
+            return .failed
         } catch {
             if (error as? APIError)?.fields["delivered"] == "none" { markRefused(key, msg.id) } // a dialog open, say
             noteFailure(key, msg.id, error.shown ?? error.localizedDescription)
@@ -118,16 +135,37 @@ extension AppModel {
         }
     }
 
-    nonisolated static func marks(_ drafts: [SessionKey: String], _ contexts: [SessionKey: [ContextRef]]) -> Set<SessionKey> {
-        Set(drafts.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.keys)
-            .union(contexts.filter { !$0.value.isEmpty }.keys)
+    private static let commentsName = "composer-comments"
+
+    static func savedComments() -> [SessionKey: [MessageComment]] {
+        let list = StateCache.load(commentsName, as: [SavedComments].self) ?? []
+        return Dictionary(list.map { ($0.key, $0.comments) }, uniquingKeysWith: { a, _ in a })
     }
 
-    /// `draftMarks` from the drafts and quotes, set only when it differs.
+    func saveComments() {
+        commentWriter.run { [weak self] in
+            guard let self else { return }
+            StateCache.save(Self.commentsName, self.composerComments.filter { !$0.value.isEmpty }.map { SavedComments(key: $0.key, comments: $0.value) })
+        }
+    }
+
+    nonisolated static func marks(_ drafts: [SessionKey: String], _ contexts: [SessionKey: [ContextRef]],
+                                  _ comments: [SessionKey: [MessageComment]] = [:]) -> Set<SessionKey> {
+        Set(drafts.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.keys)
+            .union(contexts.filter { !$0.value.isEmpty }.keys)
+            .union(comments.filter { !$0.value.isEmpty }.keys)
+    }
+
+    /// `draftMarks` from the drafts, quotes and comments, set only when it differs.
     func markDrafts() {
-        let now = Self.marks(drafts, composerContexts)
+        let now = Self.marks(drafts, composerContexts, composerComments)
         if now != draftMarks { draftMarks = now }
     }
+}
+
+private nonisolated struct SavedComments: Codable, Sendable {
+    var key: SessionKey
+    var comments: [MessageComment]
 }
 
 private nonisolated struct SavedContexts: Codable, Sendable {

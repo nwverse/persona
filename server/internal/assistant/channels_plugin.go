@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/channel"
@@ -418,16 +419,39 @@ func (s *Service) channelDrives(ctx context.Context, id, machine, session string
 func (s *Service) channelInteraction(ix proto.Interaction) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	var to []string
 	for _, v := range s.textChannels(ctx) {
 		if v.Capabilities.Asks != channel.AsksText || !featureOn(v, channel.FeatureAsks) {
 			continue
+		}
+		if ix.Private {
+			continue // a Just me turn's card: never in a channel (meeting_justme.go)
 		}
 		// "All questions" does not take a health conversation's: only one the channel drives itself (health.go).
 		if !s.channelDrives(ctx, v.ID, ix.MachineID, ix.SessionID) && (!featureOn(v, channel.FeatureAllAsks) || s.ixInHealth(ctx, ix)) {
 			continue
 		}
-		s.askInChannel(ctx, v.ID, ix)
+		to = append(to, v.ID)
 	}
+	eachChannel(context.Background(), to, func(ctx context.Context, id string) { s.askInChannel(ctx, id, ix) })
+}
+
+// channelSendTimeout is how long one channel has for what is sent to it, the hub's retries included
+// (extmgr/channels_extension.go).
+const channelSendTimeout = 30 * time.Second
+
+// eachChannel calls send for every channel in ids at once, each with its own channelSendTimeout from parent, and
+// returns when all are done: a channel program that hangs uses up only its own time, never the next channel's.
+func eachChannel(parent context.Context, ids []string, send func(ctx context.Context, id string)) {
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(parent, channelSendTimeout)
+			defer cancel()
+			send(ctx, id)
+		})
+	}
+	wg.Wait()
 }
 
 func (s *Service) askInChannel(ctx context.Context, id string, ix proto.Interaction) {
@@ -525,7 +549,9 @@ func (s *Service) channelAnsweredElsewhere(ctx context.Context, id string, m cha
 }
 
 // channelAnswerAsk takes the owner's message as the answer to the latest thing asked in the channel; false when
-// nothing waits (or what waited was answered elsewhere): the message is then an ordinary one.
+// nothing waits (or what waited was answered elsewhere): the message is then an ordinary one. A question asked
+// without waiting (channel.Ask.Later) holds no turn and may be up for hours, so it takes only a reply that reads as
+// its answer (an option's number or name); other words answer what was asked before it, else are an ordinary message.
 func (s *Service) channelAnswerAsk(ctx context.Context, id string, m channel.Message, text, action string) bool {
 	if text == "" {
 		return false
@@ -554,8 +580,8 @@ func (s *Service) channelAnswerAsk(ctx context.Context, id string, m channel.Mes
 	})
 	var a *channel.Ask
 	for _, x := range c.st.Asks {
-		if x.Channel == id {
-			a = x // the latest one asked
+		if x.Channel == id && (!x.Later || channel.ReadsAsAnswer(x, text)) {
+			a = x // the latest one asked that this reply may answer
 		}
 	}
 	if len(c.st.Asks) != n {
@@ -653,20 +679,50 @@ func rewindLastAnswer(a *channel.Ask) {
 
 // channelPush sends what notify_user pushed to the phone to the plugin channels with pushes on too.
 func (s *Service) channelPush(machine, session, title, body string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_, _ = s.channelPushTo(context.Background(), machine, session, title, body, "", nil)
+}
+
+// channelPushTo is channelPush, each channel's send with its own channelSendTimeout from parent, for a push that may
+// be sent again when ref is set: it goes to every channel with ref and the channel's id (ref:id, which that channel
+// takes once: a program of several channels tells their copies apart), and to none that took is true of. It returns
+// each channel's result, by id; the error is the list's when it could not be read while the hub is away (nothing was
+// sent then).
+func (s *Service) channelPushTo(parent context.Context, machine, session, title, body, ref string, took func(id string) bool) (map[string]error, error) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
+	if _, err := s.channelsNow(ctx); err != nil && !answered(err) {
+		return nil, err
+	}
+	var to []string
 	for _, v := range s.textChannels(ctx) {
-		if v.Capabilities.Push && featureOn(v, channel.FeaturePushes) {
-			if err := s.channelTell(ctx, v.ID, "", strings.TrimSpace("🔔 "+title+"\n\n"+body), channel.OutPush); err == nil {
-				s.markPushed(v.ID, machine, session)
-			}
+		if v.Capabilities.Push && featureOn(v, channel.FeaturePushes) && (took == nil || !took(v.ID)) {
+			to = append(to, v.ID)
 		}
 	}
+	text := strings.TrimSpace("🔔 " + title + "\n\n" + body)
+	var mu sync.Mutex
+	out := map[string]error{}
+	eachChannel(parent, to, func(ctx context.Context, id string) {
+		var err error
+		if ref == "" {
+			err = s.channelTell(ctx, id, "", text, channel.OutPush)
+		} else if err = s.channelSend(ctx, id, ref+":"+id, text, channel.OutPush, ""); err != nil {
+			s.logf("channels: %s: send: %v", id, err)
+		}
+		if err == nil {
+			s.markPushed(id, machine, session)
+		}
+		mu.Lock()
+		out[id] = err
+		mu.Unlock()
+	})
+	return out, nil
 }
 
 // extensionMirror sends a turn that ended without being asked for in a channel: the main conversation's to those
 // with sync on, a scheduled task's own conversation's to those with pushes on.
 func (s *Service) extensionMirror(ctx context.Context, machine, session string) {
+	parent := ctx // what each channel's send gets its own time from (eachChannel)
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var to []channel.View
@@ -690,6 +746,7 @@ func (s *Service) extensionMirror(ctx context.Context, machine, session string) 
 	if !ok {
 		return
 	}
+	var ids []string
 	for _, v := range to {
 		switch {
 		case featureOn(v, channel.FeaturePushes) && s.pushedLately(v.ID, machine, session):
@@ -701,15 +758,21 @@ func (s *Service) extensionMirror(ctx context.Context, machine, session string) 
 		default:
 			continue
 		}
-		l := s.botLang(ctx)
-		head := i18n.T(l, "assistant-channels_plugin.main_chat")
-		if !main {
-			head = i18n.T(l, "assistant-channels_plugin.scheduled_task", i18n.Args{"task": task})
-		} else if asked != "" {
-			head += i18n.T(l, "assistant-channels_plugin.asked_elsewhere", i18n.Args{"asked": clip(oneLine(stripContext(asked)), 80)})
-		}
-		_ = s.channelTell(ctx, v.ID, "", head+"\n\n"+answer, channel.OutPush)
+		ids = append(ids, v.ID)
 	}
+	if len(ids) == 0 {
+		return
+	}
+	l := s.botLang(ctx)
+	head := i18n.T(l, "assistant-channels_plugin.main_chat")
+	if !main {
+		head = i18n.T(l, "assistant-channels_plugin.scheduled_task", i18n.Args{"task": task})
+	} else if asked != "" {
+		head += i18n.T(l, "assistant-channels_plugin.asked_elsewhere", i18n.Args{"asked": clip(oneLine(stripContext(asked)), 80)})
+	}
+	eachChannel(parent, ids, func(ctx context.Context, id string) {
+		_ = s.channelTell(ctx, id, "", head+"\n\n"+answer, channel.OutPush)
+	})
 }
 
 // channelLastTurn is the conversation's last turn: what was asked and its answer (false when it has no answer).

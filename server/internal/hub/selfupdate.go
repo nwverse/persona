@@ -37,6 +37,8 @@ const (
 	updateHistoryKeep  = 50
 	updateSettingsKey  = "hub_update"
 	updateRequestLimit = 30 * time.Second
+	// androidSyncLimit bounds reading android.json and downloading the APK it names (about 20 MB) at each check.
+	androidSyncLimit = 10 * time.Minute
 
 	// An install script (GET /i/<code>, managers_install.go) carries the release's sha256s: when the hub last read
 	// latest.json longer than releaseFreshFor ago it reads it again first, waiting at most releaseRefreshLimit, and
@@ -131,6 +133,9 @@ type updater struct {
 	refreshing   sync.Mutex
 	refreshTried time.Time
 	releaseRead  time.Time
+
+	// androidNote is what syncAndroid last logged: the same failure is not logged again every hour.
+	androidNote string
 }
 
 func newUpdater(h *Hub) *updater {
@@ -151,6 +156,8 @@ func newUpdater(h *Hub) *updater {
 				"alert": map[string]any{"title": title, "body": body}, "sound": "default", "thread-id": "hub_update",
 			}}, "hub_update", nil)
 		}}
+	// hub.json's update.proxy, for this client alone (selfupdate_source.go).
+	transport.Proxy = u.proxyFor
 	if h.slot != nil {
 		u.exec = u.slotExec
 		u.handover = func(ctx context.Context, target string, build int64) error {
@@ -243,7 +250,12 @@ func startWatchdog(prev, pendingPath string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	return cmd.Process.Release()
+	// Wait instead of releasing: when the exec into the new version fails the pending marker goes, the watchdog
+	// exits, and a child nobody waits for stays a zombie for as long as this hub runs. It stays this process's direct
+	// child (update-watch's hubIsParent relies on that); after a successful exec this goroutine is gone and the new
+	// image inherits it.
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // boot runs once, first thing when the hub starts, before the config or the database: a new version that keeps
@@ -547,6 +559,9 @@ func (u *updater) whyNotKey() (string, i18n.Args) {
 	case update.Docker:
 		return "docker", nil
 	case update.Release:
+		if err := u.h.updateSource().urlErr; err != nil {
+			return "bad_source", i18n.Args{"error": err.Error()}
+		}
 		return "no_source", nil
 	}
 	return "dev", i18n.Args{"version": u.h.version}
@@ -594,6 +609,12 @@ type updateView struct {
 	LastCheck       *time.Time  `json:"last_check,omitempty"`
 	Confirmed       bool        `json:"confirmed"`
 	Image           *imageView  `json:"image,omitempty"` // a Docker hub's image
+	// UpdateURL is where the hub looks for releases now (selfupdate_source.go), UpdateFrom whether hub.json's
+	// update.url or the build said so; UpdateProxy the proxy its checks and downloads go through (update.proxy), with
+	// no user or password. All three are left out when there is none.
+	UpdateURL   string `json:"update_url,omitempty"`
+	UpdateFrom  string `json:"update_url_from,omitempty"`
+	UpdateProxy string `json:"update_proxy,omitempty"`
 }
 
 type latestView struct {
@@ -614,10 +635,11 @@ func (u *updater) view() updateView { return u.viewIn(u.h.userLang()) }
 func (u *updater) viewIn(l i18n.Lang) updateView {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	v := updateView{Version: u.h.version, Build: u.h.build.Number, Channel: u.h.build.Channel, CanUpdate: u.h.build.SelfUpdates(),
-		State: u.state, Progress: u.progress, Busy: u.busy, Error: u.errText, Auto: u.settings.auto() && u.h.build.SelfUpdates(),
-		AutoNotice: u.h.build.SelfUpdates() && !u.settings.AutoNoticeSeen, Confirmed: u.confirmed,
-		AutoUpdateNodes: u.nodesEnabledLocked()}
+	selfUpdates, source := u.h.selfUpdates(), u.h.updateSource()
+	v := updateView{Version: u.h.version, Build: u.h.build.Number, Channel: u.h.build.Channel, CanUpdate: selfUpdates,
+		State: u.state, Progress: u.progress, Busy: u.busy, Error: u.errText, Auto: u.settings.auto() && selfUpdates,
+		AutoNotice: selfUpdates && !u.settings.AutoNoticeSeen, Confirmed: u.confirmed,
+		AutoUpdateNodes: u.nodesEnabledLocked(), UpdateURL: source.url, UpdateFrom: source.from, UpdateProxy: proxyShown(source.proxy)}
 	if v.Busy == nil {
 		v.Busy = []busyItem{}
 	}
@@ -632,7 +654,7 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		released := r.Manifest.Released
 		v.Latest = &latestView{Version: r.Manifest.Version, Build: r.Manifest.Build, Released: &released, Notes: r.Manifest.Notes,
 			Newer: u.h.build.Newer(r.Manifest.Build), Bad: slices.Contains(u.settings.Bad, r.Manifest.Build)}
-		if v.Latest.Newer && u.h.build.SelfUpdates() {
+		if v.Latest.Newer && selfUpdates {
 			v.Latest.Held = u.h.build.Hold(r.Manifest)
 			if v.Latest.Held == "" && u.blocked != nil {
 				v.Latest.Held = i18n.Localize(u.blocked, l)

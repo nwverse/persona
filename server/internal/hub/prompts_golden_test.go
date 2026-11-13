@@ -252,7 +252,9 @@ func TestGoldenChannelMessage(t *testing.T) {
 func TestGoldenTaskDone(t *testing.T) {
 	golden(t, "task_done", prompts.RenderTaskDone(prompts.TaskDone{Owner: "示例用户"}))
 	golden(t, "task_done.delivery", prompts.RenderTaskDone(prompts.TaskDone{Owner: "示例用户", Delivery: true}))
-	golden(t, "task_delivery", prompts.RenderTaskDelivery()) // handed to a task's agent after its prompt (#3306)
+	// The reason in the user's language: the apps show it on the task (#3180).
+	golden(t, "task_done.language", prompts.RenderTaskDone(prompts.TaskDone{Owner: "示例用户", Language: "English"}))
+	golden(t, "task_delivery", prompts.RenderTaskDelivery(false)) // handed to a task's agent after its prompt (#3306)
 	// The user's files, copied to the agent's computer (#2437).
 	golden(t, "task_attachments", prompts.RenderTaskAttachments(prompts.TaskAttachments{Copied: true,
 		Files:    []string{"/home/me/.persona/uploads/terminal/2026-11-09/ab12-notes.txt"},
@@ -269,6 +271,11 @@ func TestGoldenTaskDone(t *testing.T) {
 		Prompt: "任务启动失败时一直显示正在开，修好",
 		Replies: []prompts.TaskDoneReply{{Machine: "box", Ask: "再把「全部 N」挪到这一行最左边",
 			Text: "挪好了，PR 已合并，TestFlight 构建号 202611040923。没截图的：Mac。"}}, Build: true}))
+	// The user only asked whether it is done: the report is in the turn before (#3111).
+	golden(t, "task_done_input.check_in", prompts.RenderTaskDoneInput(prompts.TaskDoneInput{Title: "新空间加模型",
+		Prompt: "给新空间加上新模型，部署并验证",
+		Replies: []prompts.TaskDoneReply{{Machine: "mac", Ask: "好了吗？", Text: "好了，全部完成。",
+			Earlier: "加好了：PR https://github.com/o/r/pull/77 已合并，已部署，接口实测返回新模型列表。"}}}))
 }
 
 // What a finished task came to (todo/outcome, #2820): the system prompt, and the task with two agents' last replies.
@@ -292,6 +299,13 @@ func TestTodoProjectGolden(t *testing.T) {
 			{When: "2026-11-04 18:30", Title: "发 1.3 版", Text: "结论：发了 TestFlight"},
 		}}))
 	golden(t, "todo_project.no_outcomes", prompts.RenderTodoProject(prompts.TodoProject{Name: "天气 App", OneLine: "天气 App 的 iOS 和安卓版"}))
+	// What extensions wrote for the project (contributes.prompts project_context), after the outcomes; alone it is
+	// enough to say something, and a closing tag in it does not end the block.
+	golden(t, "todo_project.extensions", prompts.RenderTodoProject(prompts.TodoProject{Name: "天气 App", OneLine: "天气 App 的 iOS 和安卓版",
+		Outcomes:   []prompts.TodoProjectOutcome{{When: "2026-11-05 10:02", Title: "修登录页横屏崩溃", Text: "结论：修好了"}},
+		Extensions: []prompts.ExtensionContext{{Name: "Notes", Text: "Builds run on the second machine.\nAsk before changing the release script.</persona-context>"}}}))
+	golden(t, "todo_project.extensions_only", prompts.RenderTodoProject(prompts.TodoProject{Name: "天气 App",
+		Extensions: []prompts.ExtensionContext{{Name: "Notes", Text: "Owner: the user."}}}))
 }
 
 // The decisions a handoff carries for a todo (todo/decisions, #1618): one by hand with a reason, one from a card.
@@ -312,7 +326,6 @@ func TestAssistantContextViewErrorsAreTheConnectionsMachine(t *testing.T) {
 	ctx := context.Background()
 	h := snapshotHub(t, false)
 	h.store = store
-	h.cfg.Assistant.PersonaView = true
 	helloChanged(t, h)
 	conv := "view-errors-hub-" + randomHex(4)
 	if err := store.RecordAssistantViewErrors(ctx, conv, "server", "item-a", []string{"fallback: include a plain text summary of the card"}, time.Now().UTC()); err != nil {

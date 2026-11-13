@@ -8,6 +8,7 @@ Several people work in this repository, each alongside their own Agents. Two peo
 1. **Check for duplicates before starting**: search for an open issue and open PR about the same thing, and glance at recently closed issues and merged PRs (don't redo finished work).
 2. **Someone has claimed it and the claim hasn't expired**: don't work on it. You can add information, repro steps, logs or leads under the issue (start the comment with "Note:"). The same goes when there is already an open PR: add to the PR / issue.
 3. **No issue? Create one**. When you start, post a claim comment on the issue: what you're doing, how you plan to change it, how long you expect it to take. If an Agent is doing the work, say so.
+   If the work touches UI, settings or defaults, or how something is counted, the claim also has an `Acceptance:` line: criteria written against `docs/design/PRINCIPLES.md`, naming the principles involved and the evidence that will show each is met (screenshots, tests, commands).
 4. **24 hours with no update counts as abandoned**: someone else can post a comment taking it over (with the reason). If you're still working on it, post a progress comment to renew.
 5. **Every PR must link an issue**: write `Fixes #N` / `Closes #N` / `Refs #N` in the description. PRs with no linked issue get a comment from the explicitly dispatched metadata Action and are closed by it.
 6. **Old issue numbers**: `#N` in lines written up to 2026-11-07 (check `git blame`) refers to the previous tracker. Here the same numbers belong to unrelated issues, and issues carried over from it have new numbers. Leave those references as they are; new text cites current numbers.
@@ -37,6 +38,7 @@ Claim (Agents copy it as is; if a person is doing it, drop the "Agent" line):
 Claim: <what you're doing, one sentence>
 Plan: <how you'll change it, which places>
 ETA: <how long, e.g. "2 hours", "today">
+Acceptance: <only for UI, settings / defaults or counts: which principles in docs/design/PRINCIPLES.md, and the evidence for each>
 Agent: yes (<machine id> / <branch or session>)
 ```
 
@@ -138,6 +140,7 @@ gh issue comment <number> --body-file - <<'EOF'
 Claim: <what you're doing>
 Plan: <how you'll change it>
 ETA: <how long>
+Acceptance: <only for UI, settings / defaults or counts: principles from docs/design/PRINCIPLES.md and their evidence>
 Agent: yes (<machine id> / <branch or session>)
 EOF
 
@@ -163,6 +166,8 @@ gh pr create --title "fix(ios): <English title>" --body-file - <<'EOF'
 Fixes #<number>
 EOF
 ```
+
+`gh pr create --body-file` skips `.github/pull_request_template.md`; copy its sections (including the design principles self-check when the change touches UI, settings / defaults or counts) into the body yourself.
 
 - Updating a PR branch with `main`: prefer `git merge origin/main` on the branch to a rebase. PRs are squash-merged, so the merge commit never reaches `main`;
   conflicts are resolved once instead of once per commit, and the push is a plain push with no force while other Agents work in the repository (#5988).

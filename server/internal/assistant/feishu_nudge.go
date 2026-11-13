@@ -195,8 +195,9 @@ func (s *Service) agentGone(ix proto.Interaction) bool {
 	if ix.SessionID == "" {
 		return false
 	}
-	// Only whether it is listed: no copy of the list.
-	found, listed := s.nodeSessionsWhere(ix.MachineID, func(c *proto.Session) bool { return c.SessionID == ix.SessionID })
+	// Only whether it is listed: no copy of the list, nor of the card (the closure takes the id alone).
+	sid := ix.SessionID
+	found, listed := s.nodeSessionsWhere(ix.MachineID, func(c *proto.Session) bool { return c.SessionID == sid })
 	return listed > 0 && len(found) == 0
 }
 
@@ -233,7 +234,7 @@ func (s *Service) nudgeText(ctx context.Context, ix proto.Interaction) string {
 	switch ix.Kind {
 	case proto.IxPermission:
 		if ix.ToolName != "" {
-			return i18n.T(l, "assistant-feishu_cards.nudge_permission", i18n.Args{"tool": toolDisplayName(ix.ToolName)})
+			return i18n.T(l, "assistant-feishu_cards.nudge_permission", i18n.Args{"tool": ixToolName(ix)})
 		}
 	case proto.IxQuestion:
 		what = firstQuestion(ix)

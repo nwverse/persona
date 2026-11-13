@@ -26,6 +26,7 @@ import Testing
         #expect(!NodeMenu.offersPaneActions(session("a", pane: nil)), "no pane: nothing to split")
         #expect(!NodeMenu.offersPaneActions(session("a", pane: "orca:x")), "Orca does not split or close")
         #expect(!NodeMenu.offersPaneActions(session("a", pane: "botmux:x")))
+        #expect(!NodeMenu.offersPaneActions(session("a", pane: "tern:5", kind: "tern")), "Tern is not asked to split, run git or close")
         #expect(!NodeMenu.offersPaneActions(session("a", state: "offline")))
         #expect(!NodeMenu.offersPaneActions(session("a", extra: #","source_kind":"runtime""#)), "a runtime's session has no terminal")
     }
@@ -34,6 +35,8 @@ import Testing
         #expect(NodeMenu.offersSpaceActions(group([session("a")])))
         #expect(!NodeMenu.offersSpaceActions(group([session("a", workspace: nil, space: "-")], space: "-")))
         #expect(!NodeMenu.offersSpaceActions(group([session("a", pane: "orca:x")])))
+        #expect(!NodeMenu.offersSpaceActions(group([session("a", pane: "tern:5", kind: "tern")])))
+        #expect(NodeMenu.kind(group([session("a", pane: "tern:5", kind: "tern")])) == "tern")
         #expect(NodeMenu.workspaceID(group([session("a", workspace: nil)])) == "w1", "falls back to the space id")
     }
 
@@ -41,8 +44,13 @@ import Testing
         #expect(NodeMenu.gitBody(.pull, pane: "w1:p1") == ["op": "pull", "pane": "w1:p1"])
         #expect(NodeMenu.gitBody(.push, workspaceID: "w1", kind: "herdr") == ["op": "push", "workspace_id": "w1", "kind": "herdr"])
         #expect(NodeMenu.gitBody(.fetch, workspaceID: "w1", kind: nil) == ["op": "fetch", "workspace_id": "w1"])
-        #expect(NodeMenu.GitOp.pull.done("已经是最新") == "拉取：已经是最新")
+        #expect(NodeMenu.GitOp.pull.done("已经是最新") == "取回：已经是最新")
         #expect(NodeMenu.GitOp.fetch.done(nil) == "获取：完成")
+        // what came of it in the app's language (#1888); an older node's own words when there is no outcome
+        #expect(NodeMenu.GitOp.push.done(NodeMenu.GitOp.outcome("pushed")) == "推送：已推送")
+        #expect(NodeMenu.GitOp.pull.done(NodeMenu.GitOp.outcome("up_to_date")) == "取回：已经是最新代码")
+        #expect(NodeMenu.GitOp.outcome("something_new") == nil)
+        #expect(NodeMenu.GitOp.outcome(nil) == nil)
         #expect(NodeMenu.GitOp.allCases.map(\.rawValue) == ["pull", "push", "fetch"])
     }
 
@@ -101,10 +109,45 @@ import Testing
         #expect(NodeMenu.shells(in: panes, workspaceID: "w1").isEmpty)
     }
 
-    @Test func onlyClaudeLaunchersRunInAShell() {
+    /// Claude Code runs in a shell; Codex only where the computer keeps the shell when its start fails (#5504).
+    @Test func claudeAndRunHereCodexLaunchersRunInAShell() {
         #expect(NodeMenu.launchableHere(Launcher(name: "claude")))
         #expect(NodeMenu.launchableHere(Launcher(name: "c2", agent: "claude")))
         #expect(!NodeMenu.launchableHere(Launcher(name: "codex", agent: "codex")))
+        #expect(!NodeMenu.launchableHere(Launcher(name: "codex", agent: "codex", promptOptional: true)))
+        #expect(!NodeMenu.launchableHere(Launcher(name: "codex", agent: "codex", promptOptional: true, runHere: false)))
+        #expect(NodeMenu.launchableHere(Launcher(name: "codex", agent: "codex", promptOptional: true, runHere: true)))
+    }
+
+    /// The computer's word decodes, and an older computer's list, without it, does too.
+    @Test func runHereDecodes() throws {
+        let list = try JSON.decoder.decode([Launcher].self, from: Data(#"[{"name":"codex","agent":"codex","prompt_optional":true,"run_here":true},{"name":"cx"}]"#.utf8))
+        #expect(list[0].runHere == true && list[1].runHere == nil)
+    }
+
+    /// The footer names Codex, and where it starts, only on a computer with a Codex launcher it doesn't offer here
+    /// (#5275, #5504).
+    @Test func runHereFooterMentionsCodexOnlyWhereItIsLeftOut() {
+        let plain = NodeMenu.runHereFooter([Launcher(name: "claude"), Launcher(name: "c2", agent: "claude")])
+        let withCodex = NodeMenu.runHereFooter([Launcher(name: "claude"), Launcher(name: "codex", agent: "codex", promptOptional: true)])
+        let offered = NodeMenu.runHereFooter([Launcher(name: "claude"), Launcher(name: "codex", agent: "codex", promptOptional: true, runHere: true)])
+        #expect(!plain.contains("Codex"))
+        #expect(withCodex.contains("Codex"))
+        #expect(withCodex.hasPrefix(plain), "the Codex line comes after the same first sentence")
+        #expect(offered == plain, "Codex offered here needs no word on where it starts")
+        #expect(NodeMenu.runHereFooter([]) == plain)
+    }
+
+    /// Run Agent Here opens the agent it started (#3287): the session `panes/agent` names, on the space's computer and
+    /// hub group; an answer that names none leaves the list in front.
+    @Test func runHereOpensTheSessionTheAnswerNames() {
+        let started = NodeMenu.startedChat(Data(#"{"session_id":"s9"}"#.utf8), on: MachineRef(group: "", id: "m"))
+        #expect(started == SessionKey(machineID: "m", sessionID: "s9"))
+        let elsewhere = NodeMenu.startedChat(Data(#"{"session_id":" s9 "}"#.utf8), on: MachineRef(group: "work", id: "m"))
+        #expect(elsewhere == SessionKey(group: "work", machineID: "m", sessionID: "s9"), "another group's computer keeps its group")
+        #expect(NodeMenu.startedChat(Data("{}".utf8), on: MachineRef(group: "", id: "m")) == nil)
+        #expect(NodeMenu.startedChat(Data(#"{"session_id":""}"#.utf8), on: MachineRef(group: "", id: "m")) == nil)
+        #expect(NodeMenu.startedChat(Data(), on: MachineRef(group: "", id: "m")) == nil, "an empty answer")
     }
 
     @Test func rowMenuIsNotEqualWhenItsPaneItemsChange() {

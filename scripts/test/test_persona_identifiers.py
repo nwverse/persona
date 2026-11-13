@@ -13,7 +13,7 @@ ANDROID_TARGET = '{http://schemas.android.com/apk/res/android}targetActivity'
 class PersonaIdentifiersTest(unittest.TestCase):
     def test_go_commands_have_only_canonical_source_directories(self):
         former = 'jar' + 'vis'
-        for command, retired in (('personad', former + 'd'), ('personad-wechat', former + 'd-wechat')):
+        for command, retired in (('personad', former + 'd'), ('persona-link', former + '-link')):
             target = ROOT / 'server/cmd' / command
             self.assertTrue(target.is_dir())
             self.assertFalse(target.is_symlink())
@@ -50,7 +50,7 @@ class PersonaIdentifiersTest(unittest.TestCase):
             caller = (ROOT / relative).read_text()
             self.assertIn('mainActivityIntent(', caller)
             self.assertNotIn('MainActivity::class.java', caller)
-        self.assertEqual({('persona', 'pair'), ('persona', 'open'),
+        self.assertEqual({('persona', 'pair'), ('persona', 'open'), ('persona', 'password-login'),
                           ('@string/compatibility_legacy_scheme', 'pair'),
                           ('@string/compatibility_legacy_scheme', 'open')}, {
             (data.get('{http://schemas.android.com/apk/res/android}scheme'),
@@ -79,7 +79,9 @@ class PersonaIdentifiersTest(unittest.TestCase):
         self.assertIn('if (PairingInput.isLink(url)) PairingInput.parse(url) else null', helper)
         pairing_input = (ROOT / 'android/feature/settings/src/main/kotlin/persona/feature/settings/PairingInput.kt').read_text()
         self.assertIn('fun isLink(value: String): Boolean = Pairing.isLink(value)', pairing_input)
-        self.assertIn('if (isLink(address)) return parse(address)', pairing_input)
+        link_return = 'if (isLink(address)) return parse(address)'
+        self.assertIn(link_return, pairing_input)
+        self.assertLess(pairing_input.index(link_return), pairing_input.index('val url = withScheme(address.trim())'))
         pairing = (ROOT / 'android/core/domain/src/main/kotlin/persona/core/domain/Pairing.kt').read_text()
         self.assertIn('const val scheme = "persona"', pairing)
         self.assertIn('fun isLink(text: String): Boolean = ProtocolCompatibility.isAppLink(text)', pairing)

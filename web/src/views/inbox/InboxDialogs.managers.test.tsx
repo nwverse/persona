@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // "Hand to AI" with several managers (docs/assistant/managers.md "Clients"): the item goes to its manager's main
 // conversation by default (#1194), handed off through the item's manager so that conversation may write back to it, or
-// to a new conversation with that manager, and the conversation's next requests go there too; an item stamped with the
-// default (a hub with one manager stamps every item so) sends no header at all.
+// to a new conversation with that manager, and the conversation's next requests go there too; the current assistant
+// stays as it was, the conversation opening as itself on its own computer. An item stamped with the default (a hub with
+// one manager stamps every item so) sends no header at all.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,8 +13,12 @@ vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../..
 
 import { reloadInbox, resetInboxForTests, type InboxItem } from "../../lib/inbox";
 import { chooseManager, chosenManager, managerHeaderFor, resetManagerChoice, setRosterDefault } from "../../lib/manager-choice";
+import { adoptedConversation } from "../../lib/outbox";
 import { navigate } from "../../lib/router";
 import { HandOffDialog } from "./InboxDialogs";
+import { getState } from "../../lib/store";
+import type { Session } from "../../lib/types";
+import { t } from "../../i18n";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -21,6 +26,10 @@ const item = (manager: string): InboxItem => ({
   id: "lark:f1:1", manager, source: "lark", kind: "dm", account: "feishu", account_name: "Lark", title: "Example", preview: "text", count: 1,
   updated_at: "2026-11-01T09:00:00Z", tier: "action", lark: { feed_id: "f1", is_group: false },
 });
+
+const existingAgent = {
+  machine_id: "mac", session_id: "s-agent", title: "Existing agent", cwd: "/work", status: "idle", updated_at: "2026-11-01T09:00:00Z",
+} as Session;
 
 let host: HTMLDivElement;
 let root: Root;
@@ -31,10 +40,15 @@ let mains: Record<string, string | undefined>;
 
 beforeEach(() => {
   calls.length = 0;
+  localStorage.clear();
   mains = { assistant: "main-a", "m-1": "main-m1" };
   resetManagerChoice();
   resetInboxForTests();
   setRosterDefault("assistant");
+  Object.assign(getState(), {
+    machines: [{ id: "mac", name: "Mac", online: true }],
+    sessions: { mac: [existingAgent] },
+  });
   vi.mocked(navigate).mockClear();
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const header = new Headers(init?.headers).get("X-Persona-Manager");
@@ -55,6 +69,8 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  Object.assign(getState(), { machines: [], sessions: {} });
+  localStorage.clear();
   resetManagerChoice();
   resetInboxForTests();
   vi.unstubAllGlobals();
@@ -73,7 +89,7 @@ const send = async (done: (c: Call) => boolean) => {
 };
 const started = () => calls.find((c) => c.url.endsWith("/assistant/conversations"))!;
 const sentTo = (sid: string) => (c: Call) => c.method === "POST" && c.url === `/api/v1/sessions/mac/${sid}/messages`;
-const handedOff = (c: Call) => c.method === "POST" && c.url === "/api/v1/inbox/lark:f1:1/handoff";
+const handedOff = (c: Call) => c.method === "POST" && c.url === "/api/v1/inbox/lark:f1:1/handoff" && typeof (c.body as { text?: unknown } | undefined)?.text === "string";
 const handOffs = () => calls.filter(handedOff);
 const filed = (c: Call) => c.url === "/api/v1/inbox/lark:f1:1/done";
 
@@ -117,22 +133,25 @@ describe("Hand to AI: Persona's main conversation", () => {
     expect(chosenManager()).toBeNull();
   });
 
-  it("hands another manager's item to that manager and shows its page", async () => {
+  it("hands another manager's item to that manager and opens its conversation, the current assistant unchanged", async () => {
     act(() => root.render(<HandOffDialog item={item("m-1")} onClose={() => {}} />));
     await send(handedOff);
     expect(handOffs()[0].header).toBe("m-1");
     await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "main-m1" }));
-    expect(chosenManager()).toBe("m-1");
+    expect(chosenManager()).toBeNull();
     expect(managerHeaderFor("/assistant/conversations/main-m1/feed")).toBe("m-1");
+    // its page finds it on its own computer
+    expect(adoptedConversation("main-m1")).toEqual({ machine: "mac", manager: "m-1" });
   });
 
-  it("hands the default's item to the default's manager while the page shows another", async () => {
+  it("hands the default's item to the default's manager while another assistant is current, which stays", async () => {
     chooseManager("m-1");
     act(() => root.render(<HandOffDialog item={item("assistant")} onClose={() => {}} />));
     await send(handedOff);
     expect(handOffs()[0].header).toBeNull();
     await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "main-a" }));
-    expect(chosenManager()).toBeNull();
+    expect(chosenManager()).toBe("m-1");
+    expect(adoptedConversation("main-a")).toEqual({ machine: "mac", manager: "assistant" });
   });
 
   it("marks the item done once handed off when the user asks", async () => {
@@ -168,20 +187,38 @@ describe("Hand to AI: Persona's main conversation", () => {
 });
 
 describe("Hand to AI: mark as done", () => {
-  it("follows the target until the user sets it, then keeps the user's choice", () => {
+  it("is off for every target until the user sets it, then keeps the user's choice", () => {
     act(() => root.render(<HandOffDialog item={item("assistant")} onClose={() => {}} />));
+    expect(doneBox().checked).toBe(false);
     pick("Persona（新对话）");
-    expect(doneBox().checked).toBe(true);
+    expect(doneBox().checked).toBe(false);
+    pick("Existing agent");
+    expect(doneBox().checked).toBe(false);
     pick("Persona（主对话）");
     expect(doneBox().checked).toBe(false);
     toggleDone();
     expect(doneBox().checked).toBe(true);
     pick("Persona（新对话）");
+    pick("Existing agent");
     pick("Persona（主对话）");
     expect(doneBox().checked).toBe(true);
     toggleDone();
     pick("Persona（新对话）");
+    pick("Existing agent");
     expect(doneBox().checked).toBe(false);
+  });
+});
+
+describe("Hand to AI: an existing agent", () => {
+  it("marks the item done once the message got there when the user asks", async () => {
+    await reloadInbox();
+    act(() => root.render(<HandOffDialog item={item("assistant")} onClose={() => {}} />));
+    pick("Existing agent");
+    expect(doneBox().checked).toBe(false);
+    toggleDone();
+    await send(sentTo("s-agent"));
+    await vi.waitFor(() => expect(calls.some(filed)).toBe(true));
+    expect(calls.findIndex(filed)).toBeGreaterThan(calls.findIndex(sentTo("s-agent")));
   });
 });
 
@@ -195,7 +232,7 @@ describe("Hand to AI: an older hub or manager", () => {
     expect(calls.find((c) => c.url === "/api/v1/assistant")).toMatchObject({ header: "m-1" });
     expect(calls.some((c) => c.url.endsWith("/assistant/conversations"))).toBe(false);
     expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "main-m1" });
-    expect(chosenManager()).toBe("m-1");
+    expect(chosenManager()).toBeNull();
   });
 
   it("marks the item done only once the message got there, when asked to", async () => {
@@ -248,7 +285,7 @@ describe("Hand to AI: an older hub or manager", () => {
     const onClose = vi.fn();
     act(() => root.render(<HandOffDialog item={item("m-1")} onClose={onClose} />));
     await send((c) => c.url === "/api/v1/assistant");
-    await vi.waitFor(() => expect(document.body.textContent).toContain("Assistant temporarily unavailable"));
+    await vi.waitFor(() => expect(document.body.textContent).toContain(t("lib-api.manager_offline")));
     expect(onClose).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
     expect(chosenManager()).toBeNull();
@@ -267,21 +304,45 @@ describe("Hand to AI: a new conversation", () => {
     expect(handOffs()).toHaveLength(0);
   });
 
-  it("starts with the item's manager, shows its page and sends the conversation's requests there", async () => {
+  it("starts with the item's manager and sends the conversation's requests there, the current assistant unchanged", async () => {
     act(() => root.render(<HandOffDialog item={item("m-1")} onClose={() => {}} />));
     pick("Persona（新对话）");
     await send((c) => c.url.endsWith("/assistant/conversations"));
     expect(calls[0]).toMatchObject({ url: "/api/v1/inbox/lark:f1:1", header: "m-1" });
     expect(started().header).toBe("m-1");
-    expect(chosenManager()).toBe("m-1");
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "s-new" }));
+    expect(chosenManager()).toBeNull();
     expect(managerHeaderFor("/assistant/conversations/s-new/feed")).toBe("m-1");
+    expect(adoptedConversation("s-new")).toEqual({ machine: "mac", manager: "m-1" });
   });
 
-  it("marks the item done by default", async () => {
+  it("starts another manager's while a third is current, which stays", async () => {
+    chooseManager("m-2");
+    act(() => root.render(<HandOffDialog item={item("m-1")} onClose={() => {}} />));
+    pick("Persona（新对话）");
+    await send((c) => c.url.endsWith("/assistant/conversations"));
+    expect(started().header).toBe("m-1");
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "s-new" }));
+    expect(chosenManager()).toBe("m-2");
+  });
+
+  it("leaves the item open by default", async () => {
     await reloadInbox();
     act(() => root.render(<HandOffDialog item={item("assistant")} onClose={() => {}} />));
     pick("Persona（新对话）");
+    expect(doneBox().checked).toBe(false);
+    await send((c) => c.url.endsWith("/assistant/conversations"));
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "s-new" }));
+    expect(calls.some(filed)).toBe(false);
+  });
+
+  it("marks the item done when the user asks", async () => {
+    await reloadInbox();
+    act(() => root.render(<HandOffDialog item={item("assistant")} onClose={() => {}} />));
+    pick("Persona（新对话）");
+    toggleDone();
     await send((c) => c.url.endsWith("/assistant/conversations"));
     await vi.waitFor(() => expect(calls.some(filed)).toBe(true));
+    expect(calls.findIndex(filed)).toBeGreaterThan(calls.findIndex((c) => c.url.endsWith("/assistant/conversations")));
   });
 });

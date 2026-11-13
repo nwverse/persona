@@ -103,6 +103,10 @@ type busState struct {
 	saidOld map[string]bool
 	// rosterGen numbers the roster changes (busRosterChanged): an older list never goes out after a newer one.
 	rosterGen atomic.Uint64
+	// needsYouPush: a managers push for a changed inbox count is on its way (managers.go, inboxNeedsYouPushDelay);
+	// under mu. needsYouDelay is that delay for tests; zero is inboxNeedsYouPushDelay.
+	needsYouPush  bool
+	needsYouDelay time.Duration
 }
 
 // busConn is one service connection.
@@ -128,6 +132,9 @@ type busConn struct {
 	presence busPresence
 	replaced bool // a newer connection of the identity took over
 	ended    bool
+	// inboxNeedsYou is the inbox's "Needs you" count it reported on this connection (inbox.needs_you, managers.go);
+	// nil: none yet. It goes with the connection, so the roster never shows the count of a manager that is away.
+	inboxNeedsYou *int
 
 	// roster is the managers event on its way to it (sendRoster): the newest list, its number and the one sent last.
 	roster struct {
@@ -272,8 +279,10 @@ func (h *Hub) serveBus(w http.ResponseWriter, r *http.Request) {
 	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ") // the one busCaller took
 	c := &busConn{ident: ident, proofKey: extwire.ProofKey(tok), ws: ws, peer: rpc.New("h", conn), helloed: make(chan struct{})}
 	// A card the hub's own feature asks (fleet.ask) is withdrawn when that feature stops waiting (a tool call whose
-	// caller went away, #2597).
-	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true}
+	// caller went away, #2597). So is what the manager does for one of the hub's features (extensions.hub_call): a
+	// persona_settings change of one of its own settings is a card it holds and a change it makes, and untold it kept
+	// the card up and made the change on a later approval, after the assistant had heard the call failed (#5907).
+	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true, extwire.MethodHubCall: true}
 	c.peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		return h.busRequest(ctx, c, method, params)
 	}
@@ -536,7 +545,7 @@ func (h *Hub) busManagers(ctx context.Context) []busManagerBrief {
 	if s == nil {
 		return out
 	}
-	list, err := s.BusIdentities(ctx)
+	list, err := h.busIdentities(ctx, s)
 	if err != nil {
 		h.logf("bus: identities: %v", err)
 	}
@@ -552,6 +561,7 @@ func (h *Hub) busManagers(ctx context.Context) []busManagerBrief {
 // left (busEnded) until its keepalive hangs up.
 func (h *Hub) busRosterChanged(ctx context.Context, except *busConn) {
 	gen := h.bus.rosterGen.Add(1) // before the list: the list of a later change sees every change before it
+	h.forgetIdentities()          // and it is read afresh
 	list := h.busManagers(ctx)
 	h.bus.mu.Lock()
 	var to []*busConn

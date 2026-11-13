@@ -89,7 +89,14 @@ type ExtensionTools interface {
 }
 
 // SetExtensions gives the service the extensions' tools (before Run).
-func (s *Service) SetExtensions(e ExtensionTools) { s.ext = e }
+func (s *Service) SetExtensions(e ExtensionTools) {
+	s.ext = e
+	if r, ok := e.(launcherSecrets); ok {
+		s.refs = r
+	}
+	s.trans, _ = e.(transcribers)
+	s.transcriptionReadinessReset()
+}
 
 // AskCard is askHub for the extensions in this process: a card of theirs (a mail send, Cua's apps, persona_settings),
 // waited for like a hook's; ctx ending withdraws it.

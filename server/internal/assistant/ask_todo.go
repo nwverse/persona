@@ -36,7 +36,8 @@ const (
 	askTodoKeep = 30 * 24 * time.Hour
 	// askTodoMax bounds the records; past it the oldest go first.
 	askTodoMax = 200
-	// askAnswerTool marks a queued answer to such a question (relayMsg.Tool); relayMsg.From is then the to-do id.
+	// askAnswerTool marks a queued answer to such a question (relayMsg.Tool); relayMsg.From is then the to-do id (the
+	// card's id for a question asked without waiting, ask_later.go).
 	askAnswerTool = "ask_answer"
 	askTitleRunes = 200
 	// askSnapshotMax bounds the snapshot's line (the newest ones).
@@ -62,6 +63,14 @@ type askTodo struct {
 	ClaimedAt  time.Time `json:"claimed_at,omitzero"`
 	AnsweredAt time.Time `json:"answered_at,omitzero"`
 	DroppedAt  time.Time `json:"dropped_at,omitzero"`
+	// Deadline, Reversible and Recommends are the question's deadline, whether it can be undone, and each question's
+	// recommended option (#3127, decision_deadline.go); DueAt is when the deadline was handled (taken by default:
+	// ByDefault, or the owner reminded). Zero: no deadline.
+	Deadline   time.Time `json:"deadline,omitzero"`
+	Reversible bool      `json:"reversible,omitempty"`
+	Recommends []string  `json:"recommends,omitempty"`
+	DueAt      time.Time `json:"due_at,omitzero"`
+	ByDefault  bool      `json:"by_default,omitempty"`
 }
 
 // held: an answer of a's is being sent.
@@ -133,6 +142,9 @@ func (s *Service) askExpired(ctx context.Context, ix proto.Interaction) (Todo, e
 		questions = append(questions, strings.TrimSpace(q.Question))
 	}
 	rec := askTodo{TodoID: id, Interaction: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID, Questions: questions, AskedAt: ix.CreatedAt}
+	if d, ok := askDeadlineOf(ix); ok {
+		rec.Deadline, rec.Reversible, rec.Recommends = d.At, d.Reversible, d.Recommends
+	}
 	if err := s.keepAskTodo(ctx, rec); err != nil {
 		return Todo{}, fmt.Errorf("keep its record: %w", err) // a to-do whose answer could go nowhere after a restart is not made
 	}
@@ -342,6 +354,20 @@ func renderAskAnswer(a askTodo, loc *time.Location, choices []askChoice, thread,
 	return prompts.RenderAskTodoAnswer(m)
 }
 
+// renderAskDefault is the message to the conversation that asked a when nobody decided by its deadline and its
+// recommended options were taken by default (#3127).
+func renderAskDefault(a askTodo, loc *time.Location, choices []askChoice) string {
+	m := prompts.AskTodoAnswer{When: a.AskedAt.In(loc).Format("01-02 15:04"), TodoID: a.TodoID, Defaulted: true,
+		Deadline: a.Deadline.In(loc).Format("01-02 15:04"), Several: len(a.Questions) > 1}
+	for _, q := range a.Questions {
+		m.Questions = append(m.Questions, contextText(q))
+	}
+	for _, c := range choices {
+		m.Choices = append(m.Choices, prompts.AskTodoChoice{Question: contextText(c.Question), Choice: contextText(c.Choice)})
+	}
+	return prompts.RenderAskTodoAnswer(m)
+}
+
 // askTarget is where a's message goes: the conversation that asked, else (its node says it is gone) the main
 // conversation of now. A node that can't be reached is no answer: the message waits in that conversation's queue.
 func (s *Service) askTarget(ctx context.Context, a askTodo) (machine, to string, err error) {
@@ -360,13 +386,20 @@ func (s *Service) askTarget(ctx context.Context, a askTodo) (machine, to string,
 // tellAsker puts text into the conversation a came from: now, or queued behind its turn (the queue conversation_send
 // uses, kept across a restart).
 func (s *Service) tellAsker(ctx context.Context, a askTodo, title, text string) error {
+	return s.relayToAsker(ctx, a, "待办「"+title+"」", text, false) // i18n-ignore: a label of the relay queue, as a task notice's
+}
+
+// relayToAsker is tellAsker with the queue's label for the message given (from): a question asked without waiting has
+// no to-do to name (ask_later.go; a.TodoID is then its card's id). owner: text is the answer the owner just gave on
+// that card, which their presence in the conversation does not hold (relayMsg.Owner).
+func (s *Service) relayToAsker(ctx context.Context, a askTodo, from, text string, owner bool) error {
 	machine, to, err := s.askTarget(ctx, a)
 	if err != nil {
 		return err
 	}
-	msg := relayMsg{From: a.TodoID, FromTitle: "待办「" + title + "」", Tool: askAnswerTool, Text: text, At: time.Now().UTC()} // i18n-ignore: a label of the relay queue, as a task notice's
+	msg := relayMsg{From: a.TodoID, FromTitle: from, Tool: askAnswerTool, Text: text, At: time.Now().UTC(), Owner: owner}
 	c, ok := s.session(ctx, machine, to)
-	if !ok || c.Status == proto.StatusWorking || c.Starting || s.queuedFor(to) > 0 {
+	if !ok || c.Status == proto.StatusWorking || c.Starting || s.relayWaits(to, msg) {
 		if s.queueRelay(to, msg) == 0 {
 			return errors.New("the relay queue can't be read")
 		}
@@ -380,7 +413,7 @@ func (s *Service) tellAsker(ctx context.Context, a askTodo, title, text string) 
 		if s.queueRelay(to, msg) == 0 {
 			return fmt.Errorf("%v, and the relay queue can't be read", err)
 		}
-		s.logf("ask_user to-do %s: %v; queued", a.TodoID, err)
+		s.logf("ask_user %s: %v; queued", a.TodoID, err)
 		s.publish(ctx)
 	}
 	return nil
@@ -401,12 +434,14 @@ func (s *Service) askTodoDecided(ctx context.Context, row db.TodoDecisionRow) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
-		text := renderAskAnswer(a, s.location(ctx), []askChoice{{Question: row.Question, Choice: row.Choice, Reason: row.Reason}}, false, false)
+		choice := askChoice{Question: row.Question, Choice: row.Choice, Reason: row.Reason}
+		text := renderAskAnswer(a, s.location(ctx), []askChoice{choice}, false, false)
 		if err := s.tellAsker(ctx, a, t.Title, text); err != nil {
 			s.logf("ask_user to-do %s: the decision goes nowhere: %v", row.TodoID, err)
 			s.settleAskClaim(ctx, row.TodoID, false)
 			return
 		}
+		s.recordLateAnswer(a, []askChoice{choice}, "", "") // the user's own, on the to-do: the card's history says so
 		s.settleAskClaim(ctx, row.TodoID, true)
 		s.closeAskTodo(ctx, row.TodoID)
 	}()

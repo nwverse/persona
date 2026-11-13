@@ -377,6 +377,26 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   page (a plan card in BeautifulUI at the standard size): another loop. Now it uses only values the cards do not move: the page height, the open
   header, the bar's own measured height (`VoiceBarRoom`) and the count's. The rule: what sizes an area must not take inputs the area itself moves.
 
+## The call's audio route (#3015, 2026-11-10)
+
+- **"Always on the loudspeaker" with a headset connected**: the session was `.playAndRecord` / `.voiceChat` / `[.defaultToSpeaker]` and nothing else.
+  `.voiceChat` implies Bluetooth hands-free (the SDK header says so), but not A2DP, so a Bluetooth device the system does not bring up as hands-free is
+  not a route at all, and `.defaultToSpeaker` then plays on the loudspeaker. The call also never chose a route itself: a connected headset the system left
+  out stayed out, and mid-call it only watched `AVAudioEngineConfigurationChange`. Code reading found no `overrideOutputAudioPort` anywhere, and the other
+  session users (recording, dictation) cannot overlap a call and clear their preferred input.
+- **`AVAudioEngineConfigurationChange` is not a route change**: it fires when the I/O unit's format changes and says nothing about why. Deciding where the
+  voice goes needs `AVAudioSession.routeChangeNotification` and its reason.
+- **Don't decide again on every route change**: the call's own `setPreferredInput` and `overrideOutputAudioPort`, and the user's pick in Control Center, post
+  route changes too. Act on `newDeviceAvailable` / `oldDeviceUnavailable` (and, for 2 s after the session goes active, on anything: a hands-free microphone
+  appears late, the same reason `RecordingCapture` polls for it), and never ask twice for a microphone the route did not take, or the call loops.
+- **Asking for a microphone moves the output**: preferring a Bluetooth hands-free or wired headset input brings the voice to that device; preferring the
+  built-in microphone while AirPods are on hands-free takes the voice off them. So the policy only asks for an external device's own microphone, never
+  another headset's, and never for the built-in one.
+- **What lasts**: `overrideOutputAudioPort(.speaker)` lasts until the next route change; a preferred input lasts for the app's shared session. Clear both
+  when the call ends, or the next recording or dictation starts on the call's choice.
+- **Only a device tells**: the simulator has no Bluetooth or wired routes. On a phone, read `voice: route after …` in Console (subsystem `persona`,
+  category `voice`): it lists port kinds only, never device names, which can carry a person's name.
+
 ## Choosing the voice (#2411, 2026-11-09)
 
 - **Every call went out with no voice, and nobody could tell**: the app asked for the voice list once, as the call started, and ignored a failure
@@ -474,3 +494,64 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
 
 - **Opaque CONNECT tunnels** (#2745): the egress proxy can replay a bounded, complete ClientHello while no server byte has arrived; TCP success alone is insufficient. Preserve record/TCP fragments and stop before early application data. Observe both directions so server-first protocols are not delayed, and resume ordinary relay when the client sniff window expires.
   After HTTP Hijack, detach already-buffered bytes from the returned reader before applying probe deadlines: that reader still uses `net/http`'s connection reader, which cancels the request on a read timeout even after hijacking. Probe the raw connection and preserve the detached bytes instead; otherwise a banner or an idle client closes the entire tunnel. Real CONNECT banner tests catch this even when direct connection-helper tests pass.
+
+## The realtime dialect against a Realtime endpoint (#4011, 2026-11-10)
+
+Measured against a gateway's `/v1/realtime` (`gpt-realtime-1.5`, the GA Realtime wire):
+
+- `session.update` needs `session.type: "realtime"`. Formats go under `audio.input.format` / `audio.output.format`, and the
+  voice only under `audio.output.voice`: `session.audio.format` and `session.voice` are refused as unknown parameters.
+  A refused `session.update` leaves the session on its defaults (no instructions, no tools, `transcription: null`), so
+  the model still talks but the user's lines never come and nothing is handed over. Input transcription has to be asked
+  for (`audio.input.transcription.model`).
+- A response's id is in `response.id` of `response.created` / `response.done`; `response_id` is only on the events
+  inside it.
+- A function call shows up twice, as `response.output_item.done` and as `response.function_call_arguments.done`: take
+  one.
+- `response.create` while a response is in progress (the server VAD starts one on its own) is refused with
+  `conversation_already_has_active_response`: hold it until `response.done`.
+- With server VAD, `input_audio_buffer.speech_started` cancels the response under way (`response.done` status
+  `cancelled`, reason `turn_detected`). The service streams audio faster than it plays, so the app still has some
+  buffered when the user cuts in: clear it then.
+- A gateway that falls back from a Codex `/v1/live` session onto the Realtime wire and forwards the `codex` dialect's
+  `session.update` as it is gets `Missing required parameter: 'session.type'` (and then `Unknown parameter:
+  'session.delegation'`). Point such an upstream at the gateway's `/v1/realtime` with the `realtime` dialect instead.
+
+## The app's player needs a jitter buffer (#4430, 2026-11-11)
+
+- The extension relays the upstream's audio deltas as they come, and the app used to schedule each one the moment it
+  arrived. A delta that reached the player after the one before it had finished left a gap, so the voice played a
+  couple of characters, stopped, and went on. The deltas are late more often than the upstream's speed suggests: they
+  cross the internet and the hub's extension tunnel, and iOS hands every frame to the main actor before reading the
+  next, so a busy main thread holds the audio back as well.
+- iOS holds the voice while nothing is playing until 200 ms has gathered, or the first piece has waited 300 ms, then
+  plays it all at once (`VoicePlayout`); a player that runs dry mid-reply gathers again. A service that sends faster
+  than it plays fills the lead almost at once, so this adds next to no latency there.
+
+## Meeting transcription against the real service (#3862, 2026-11-13)
+
+The first live check of hub transcription against a GPT-Live-compatible service, and six raw sessions probed on the
+same audio (a two-minute meeting of 24 sentences in Chinese, English and both mixed, sent in 100 ms frames):
+
+- **One caption item** (service-specific): with no model replies, a caption session writes the whole meeting as one
+  `…input_transcript.partial` item: one `item_id` and one `start_ms` in all 453 frames, `is_final` never true. The
+  text grows through a sentence, its words revised now and then ("andrea 那边", then "android 那边的…"), and the next
+  sentence replaces it (286 frames grew it, 166 replaced it). Items split only where the model replies (one per reply
+  on a verbatim session with the extension). Keyed on the item and `start_ms`, every window after the first had no
+  captions; the adapter now tells captions apart by their text and places each by where the session's audio was when
+  it came.
+- **`start_ms` counts from the session's start** (service-specific), not from its first audio: audio sent 8 s after
+  `session.started`, speech at 1.0 s of it came back as `start_ms` 9268. `end_ms` and `offset_ms` likewise.
+- **`response.output_text.done` has no text**: empty in all 76 replies, also when the deltas carried text. Join the
+  deltas.
+- **One reply per sentence depends on the prompt and the extension** (model): our Chinese prompt without the
+  interim-caption extension gave 9 replies of 1–4 sentences, every 10–20 s; our English prompt gave 2, one of them 23
+  sentences at the end (the live check's lost windows). An earlier experiment's prompt ("a meeting's verbatim
+  transcriber… each time someone finishes a sentence (a pause), output only that sentence's words") replied once per
+  sentence, 0.05–0.3 s after it ended, with or without the extension; our Chinese prompt with the extension also
+  replied per sentence but lost 5 sentences. Verbatim sessions now ask for the extension and follow the measured
+  wording, without "if nothing could be made out, write nothing" or long lists of prohibitions. The meeting's first
+  sentence never came back as a reply in any per-sentence session.
+- **A short reference hid the opening**: in the final pass the first window's reference was the live caption, 22
+  characters over 14 s of speech, while the sessions heard 164–204; checked against it, both were dropped and the
+  first 18 s were lost. A reference much shorter than the sessions' text no longer counts.

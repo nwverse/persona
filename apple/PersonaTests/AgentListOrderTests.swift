@@ -328,6 +328,20 @@ import Testing
         #expect(AgentListRows.step([], from: nil, by: 1) == nil)
     }
 
+    /// By App (#3756): an open app section's rows in order, none of a folded one's, all of them while searching.
+    @Test func appsListTheirRowsUnlessFolded() {
+        var desktop = session("d", "offline", updated: 9)
+        desktop.agent = "claude"
+        desktop.agentSurface = "desktop"
+        let other = session("o", "working", updated: 5)
+        let groups = AppGroups.build([other, desktop])
+        #expect(rows(.app).apps(groups).map(\.sessionID) == ["d", "o"])
+        #expect(rows(.app, folded: ["app/desktop/claude code"]).apps(groups).map(\.sessionID) == ["o"])
+        let searching = AgentListRows(order: AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false }), grouping: .app,
+                                      searching: true, isFolded: { _ in true })
+        #expect(searching.apps(groups).map(\.sessionID) == ["d", "o"])
+    }
+
     @Test func machinesListTheirBusyRowsAndOpenedIdleOnes() {
         let a = session("a", "working", machine: "m1"), b = session("b", "idle", machine: "m1"), c = session("c", "unread", machine: "m2")
         let refs = [c.machineRef, a.machineRef]

@@ -58,6 +58,7 @@ func (s *Service) inboxReady(ctx context.Context) error {
 		return errInboxUnavailable
 	}
 	b.loaded.Store(true)
+	s.tellInboxNeedsYou() // the hub was told none while it was unread
 	return nil
 }
 
@@ -122,6 +123,12 @@ func (b *inboxBook) stored(it *InboxItem) {
 		it.Chain = synthesizedChain(b.userLang(), it)
 		it.ChainSeq = len(it.Chain)
 	}
+	// Loading a previously linked item is not a new message. Resume the process-local signal cursor at the
+	// stored snapshot; new batches collected after loading still change Last and reach the supervisor.
+	if a := it.Agent; a != nil && a.TodoID != "" {
+		_, a.signaled = receivedSince(it, 0, false)
+		a.signaledOf = it.Last
+	}
 }
 
 // purgeInboxHistory deletes the items done more than inboxKeepHistory ago: at load, then from the rounds at most every
@@ -156,12 +163,18 @@ func (s *Service) saveInboxUndo(ctx context.Context, changed []*InboxItem, undo 
 }
 
 // saveInboxPrepared can stage a detached row and publish its committed effects under mu before saving is released.
-// prepare runs under mu; finish runs there after the store answers, including when every row succeeded.
+// prepare runs under mu; finish runs there after the store answers, including when every row succeeded. Every change
+// of an item reaches the database here, so this is also where GET /api/v1/inbox forgets the changed items' kept bytes
+// (inbox_list_memo.go): first, before waiting for another save, so a GET meanwhile lists what memory holds; as the rows
+// are taken; and after finish, which may undo a change.
 func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, prepare func(*InboxItem) *InboxItem, finish func(map[string]bool)) map[string]bool {
 	b := &s.inbox
 	if len(changed) == 0 {
 		return nil
 	}
+	b.mu.Lock()
+	b.forgetListed(changed)
+	b.mu.Unlock()
 	if !b.loaded.Load() { // not read yet: what is stored stays as it is (inboxReady)
 		s.logf("inbox: %d changed items not saved: what is stored was not read", len(changed))
 		return nil
@@ -169,6 +182,7 @@ func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, p
 	var told []assistantwire.InboxChangedItem
 	b.saving.Lock()
 	b.mu.Lock()
+	b.forgetListed(changed)
 	rows := make([]db.InboxRow, 0, len(changed))
 	now := time.Now()
 	for i, it := range changed {
@@ -200,6 +214,7 @@ func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, p
 	if finish != nil {
 		b.mu.Lock()
 		finish(failed)
+		b.forgetListed(changed)
 		b.mu.Unlock()
 	}
 	b.saving.Unlock()
@@ -241,4 +256,55 @@ func (s *Service) inboxChanged(ctx context.Context, items []assistantwire.InboxC
 		items = []assistantwire.InboxChangedItem{}
 	}
 	s.hub.InboxChanged(ctx, assistantwire.InboxChanged{Items: items})
+	s.tellInboxNeedsYou()
+}
+
+// inboxTeller is tellInboxNeedsYou's state, under inboxBook.needsYouMu: a teller runs (telling), and the inbox changed
+// since it last counted (again). A teller reads s.hub only under needsYouMu too, so a test can swap the hub while one
+// runs (setHub); nothing else changes it after New.
+type inboxTeller struct{ telling, again bool }
+
+// tellInboxNeedsYou tells the hub how many open items are in "Needs you" (EventInboxNeedsYou), for the roster's
+// inbox_needs_you: after every change (inboxChanged), once what is stored was first read (inboxReady), and after each
+// handshake (BusHub.onHello). Nothing is told while the stored items are unread: the hub then shows no number.
+//
+// It never waits for the hub: one teller at a time counts and tells on its own goroutine, and a change that comes
+// while it does is counted and told by it afterwards. So a save's tail is not held up by a connection that stalls,
+// the counts reach the hub in the order they were counted, and the last one told is of the inbox as it is.
+func (s *Service) tellInboxNeedsYou() {
+	b := &s.inbox
+	if !b.loaded.Load() {
+		return
+	}
+	b.needsYouMu.Lock()
+	if b.needsYou.telling {
+		b.needsYou.again = true
+		b.needsYouMu.Unlock()
+		return
+	}
+	b.needsYou.telling = true
+	hub := s.hub
+	b.needsYouMu.Unlock()
+	go func() {
+		for {
+			n := 0
+			b.mu.Lock()
+			for _, it := range b.items {
+				if it.status() == StatusAction {
+					n++
+				}
+			}
+			b.mu.Unlock()
+			_ = hub.Tell(assistantwire.EventInboxNeedsYou, assistantwire.InboxNeedsYou{Count: n}) // an error: not connected, told at the handshake
+			b.needsYouMu.Lock()
+			if !b.needsYou.again {
+				b.needsYou.telling = false
+				b.needsYouMu.Unlock()
+				return
+			}
+			b.needsYou.again = false
+			hub = s.hub
+			b.needsYouMu.Unlock()
+		}
+	}()
 }

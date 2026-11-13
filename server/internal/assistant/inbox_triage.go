@@ -141,11 +141,18 @@ func (s *Service) askTriage(ctx context.Context, it *InboxItem, timeout time.Dur
 	b.mu.Lock()
 	last, input, rules := it.Last, b.triageInput(it), strings.TrimSpace(it.Rules)
 	b.mu.Unlock()
+	return last, s.triageModel(ctx, input, rules, timeout)
+}
+
+// triageModel asks the triage model about one item's prompt input under rules (its source's; "" the Inbox's).
+func (s *Service) triageModel(ctx context.Context, input, rules string, timeout time.Duration) (v triageVerdict) {
 	if rules == "" {
 		rules = s.inboxConfig(ctx).Rules
 	}
 	hello := s.hello(ctx)
-	system := prompts.RenderInboxTriage(prompts.InboxTriage{Owner: hello.Owner, Rules: rules, Language: answerLanguage(hello.Locale)})
+	extContext, _ := s.inboxExtensionContext(ctx)
+	system := prompts.RenderInboxTriage(prompts.InboxTriage{Owner: hello.Owner, Rules: rules, Language: answerLanguage(hello.Locale),
+		Context: extContext})
 	var out struct {
 		Tier    string `json:"tier"`
 		Summary string `json:"summary"`
@@ -175,7 +182,7 @@ func (s *Service) askTriage(ctx context.Context, it *InboxItem, timeout time.Dur
 		v.state, v.why = triageFailed, i18n.T(l, "assistant-inbox_triage.failed")
 	}
 	v.err = err
-	return last, v
+	return v
 }
 
 // ruleTier is the fallback tier, without a model: people talking to me need me, groups are FYI, bots and lists are
@@ -246,16 +253,31 @@ func (s *Service) draftReply(ctx context.Context, id, instruction string) (strin
 		return "", errNoInboxItem
 	}
 	hello := s.hello(ctx)
-	system := prompts.RenderInboxDraft(prompts.InboxDraft{Owner: hello.Owner, Notes: strings.TrimSpace(hello.OwnerNotes),
-		Language: answerLanguage(hello.Locale)})
+	extContext, neverQuote := s.inboxExtensionContext(ctx)
+	// About me as the user last edited it in the app, else the config file's (notes), as the main chat has it.
+	d := prompts.InboxDraft{Owner: hello.Owner, Notes: s.notes(ctx), Language: answerLanguage(hello.Locale), Context: extContext}
 	input := prompts.RenderInboxDraftInput(prompts.InboxDraftInput{Item: item, Instruction: strings.TrimSpace(instruction)})
 	cctx, cancel := context.WithTimeout(ctx, draftModelWait)
 	defer cancel()
-	text, err := s.inboxModelComplete(cctx, purposeDraft, system, input, 1024)
-	if err != nil {
-		return "", err
+	// A draft that repeats a sentence an extension marked never to quote (what it keeps about people: evaluations,
+	// guesses) is written again once, told so; if that one repeats one too, there is no draft (extension_context.go).
+	for {
+		text, err := s.inboxModelComplete(cctx, purposeDraft, prompts.RenderInboxDraft(d), input, 1024)
+		if err != nil {
+			return "", err
+		}
+		text = strings.TrimSpace(text)
+		hit := quotesAny(text, neverQuote)
+		if hit == "" {
+			return text, nil
+		}
+		if d.Rewrite {
+			s.logf("inbox: draft for %s withheld: the rewrite still repeats a sentence an extension marked never to quote", id)
+			return "", errDraftWithheld
+		}
+		s.logf("inbox: draft for %s repeats a sentence an extension marked never to quote; writing it again", id)
+		d.Rewrite = true
 	}
-	return strings.TrimSpace(text), nil
 }
 
 // inboxReply serializes the replies to one inbox item and remembers the last one that went out.
@@ -324,6 +346,12 @@ func (s *Service) replyInboxFrom(ctx context.Context, id, text, clientID string,
 // replyInboxDo is replyInboxFrom; file false keeps the item open (a confirmed suggestion's reply: the event waits for
 // the other side), a repeat of the reply still being answered as sent.
 func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, fromCard, file bool, changes ...DocChange) (InboxItem, error) {
+	return s.replyInboxDoMode(ctx, id, text, clientID, fromCard, file, false, changes...)
+}
+
+// replyInboxDoMode adds the direct /reply route's waiting mode without changing the shared send-once path used by
+// handed-off suggestions. followDirect is true only for POST /api/v1/inbox/{id}/reply.
+func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID string, fromCard, file, followDirect bool, changes ...DocChange) (InboxItem, error) {
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
@@ -397,7 +425,7 @@ func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, f
 	}
 	now := time.Now()
 	if already {
-		if once.unsaved { // the reply filed the item but the row was not written: a repeat writes it (#4627)
+		if once.unsaved { // the reply's item was not written: a repeat writes it (#4627)
 			s.saveReplied(ctx, it, once)
 		}
 		b.mu.Lock()
@@ -406,21 +434,41 @@ func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, f
 		s.markCardsSent(ctx, id, now, text, true)
 		return out, nil
 	}
+	var loc *time.Location
+	if followDirect {
+		loc = s.location(ctx)
+	}
 	b.mu.Lock()
 	// The reply answers what the item held when it was sent. A move that came in meanwhile (collection runs while the
 	// reply is out) is not answered: the item stays open with it, so it is not filed unseen (#1828). An item filed
 	// meanwhile (read elsewhere) is filed as replied.
 	kept := !file && it.open() || it.open() && it.Last != c.Last
+	// A direct reply with a processing conversation waits for the other side instead of filing the matter. Old-App
+	// card sends keep filing. If new messages arrived while the reply was out, the existing kept-open path is unchanged.
+	if followDirect && !fromCard && file {
+		resetInboxFollowChecks(it)
+	}
+	wait := followDirect && !fromCard && file && !kept && it.open() && it.Agent != nil && it.Agent.SessionID != ""
+	kept = kept || wait
 	once.keptOpen = kept
+	if c.Mail != nil {
+		once.clientID = text
+	}
 	b.noteSent(it, now)
 	tell := false
-	if !kept {
+	if wait {
+		it.Suggestion = nil // the user's own reply supersedes a suggestion still waiting for confirmation
+		it.Agent.SentOf = c.Last
+		b.waitForOtherSide(it, defaultInboxFollow(now), ViaUser, now, loc, true)
+		b.tell(it, inboxNote{Name: prompts.NoteSent, Text: text}, false, now)
+		tell = true
+	} else if !kept {
 		it.done(now, "replied")
 		tell = b.closeHandling(it, "replied", now) // its conversation stops
 	}
 	out := it.listed()
 	b.mu.Unlock()
-	if !kept {
+	if !kept || wait {
 		s.saveReplied(ctx, it, once)
 	} else if !file {
 		s.saveInbox(ctx, []*InboxItem{it})
@@ -433,14 +481,14 @@ func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, f
 	return out, nil
 }
 
-// saveReplied writes the item a reply filed. The reply went out, so a failed write keeps the item filed in memory
-// (rolling it back would let a repeat send the reply again) and is remembered on the item's replies: a repeat of
-// the reply writes it then, instead of the item coming back as "Needs you" after a restart. With once.mu held.
+// saveReplied writes the item after its reply, filed or waiting. The reply went out, so a failed write keeps the item's
+// resulting state in memory (rolling it back would let a repeat send the reply again) and is remembered on the item's
+// replies: a repeat writes it then, instead of the item returning to its pre-reply state after a restart. With once.mu held.
 func (s *Service) saveReplied(ctx context.Context, it *InboxItem, once *inboxReply) {
 	failed := s.saveInbox(ctx, []*InboxItem{it})
 	once.unsaved = failed[it.ID]
 	if once.unsaved {
-		s.logf("inbox: %s was replied to but could not be saved as done", it.ID)
+		s.logf("inbox: %s was replied to but its resulting state could not be saved", it.ID)
 	}
 }
 
@@ -450,9 +498,18 @@ func (s *Service) replyMail(ctx context.Context, r inboxReplyReq) (bool, error) 
 	if m == nil || len(m.UIDs) == 0 {
 		return false, errCannotReply
 	}
+	b := &s.inbox
+	b.mu.Lock()
+	repeated := r.once.repeated(r.live, r.text)
+	b.mu.Unlock()
+	if repeated {
+		return true, nil
+	}
 	var sent assistantwire.InboxSent
 	err := s.appCall(ctx, AppInbox, inboxReplyMail, map[string]any{"account_id": m.AccountID, "uid": m.UIDs[len(m.UIDs)-1],
 		"mailbox": m.Mailbox, "text": r.text, "send_id": r.sendID}, &sent)
 	s.inboxSent(sent, r.sendID)
+	// A hub "already" can be the first answer this manager got after an in-doubt send: this manager still writes the
+	// resulting item state. Only the local repeat check above may skip that write.
 	return false, err
 }

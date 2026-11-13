@@ -15,7 +15,7 @@ import { hubHas, onHubEvent, useStore } from "../../lib/store";
 import { deleteUploadedLook, LOOK_UPLOADS_FEATURE, refusalText, type UploadAnswer } from "../../lib/look-upload";
 import { Button, cx, Dialog, IconButton } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { LookUploadDialog } from "./LookUpload";
+import { lazyDialog } from "../LazyOverlay";
 import { MochiFace } from "./MochiFace";
 import { useReducedMotion } from "./face-motion";
 import { personaAccent, setPersonaAccent } from "../../ui/look";
@@ -25,6 +25,9 @@ import { BASE } from "../../lib/base";
 import { navigate } from "../../lib/router";
 import { settingsHref } from "../settings/nav";
 import { setLookIcon } from "../../lib/look-icon";
+
+// the upload dialog (picking, cropping, sending an image) loads on its first open, not with the persona page
+const LookUploadDialog = lazyDialog(() => import("./LookUpload").then((m) => m.LookUploadDialog));
 
 const CHOSEN_KEY = "persona.persona";
 
@@ -267,7 +270,9 @@ function subscribe(l: () => void) {
 }
 
 function usePersonaStore(): PersonaStoreState {
-  const s = useSyncExternalStore(subscribe, () => ps);
+  // The third arg is the server snapshot, so views rendered with renderToStaticMarkup work (the same shape as
+  // useRoster); the module-level state is its stable value.
+  const s = useSyncExternalStore(subscribe, () => ps, () => ps);
   useEffect(() => {
     if (!ps.loaded && !loading) void refreshPersonas();
   }, []);

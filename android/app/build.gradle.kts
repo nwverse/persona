@@ -104,6 +104,7 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
     implementation(libs.compose.preview)
+    implementation(libs.coil.compose)
     debugImplementation(libs.compose.tooling)
 
     implementation(libs.androidx.work)
@@ -119,6 +120,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.turbine)
+    testImplementation("com.squareup.okhttp3:mockwebserver:${libs.versions.okhttp.get()}")
     testImplementation(platform(libs.compose.bom))
     testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("androidx.compose.ui:ui-test-manifest")

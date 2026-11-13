@@ -21,20 +21,20 @@ class AskLineTest {
         val bash = card("permission").copy(toolName = "Bash",
             toolInput = Json.parseToJsonElement("""{"command":"swift test\necho `pwd`","description":"运行测试"}"""))
         // a command keeps its marks; only its lines fold into one
-        assertEquals("需要授权：swift test echo `pwd`", bash.askLine()?.zh())
-        assertEquals("需要授权：hub 摘要", bash.copy(summary = "hub 摘要").askLine()?.zh())
-        assertEquals("需要授权：读取 example.kt", card("permission").copy(toolName = "Read",
+        assertEquals("在等你批准：swift test echo `pwd`", bash.askLine()?.zh())
+        assertEquals("在等你批准：hub 摘要", bash.copy(summary = "hub 摘要").askLine()?.zh())
+        assertEquals("在等你批准：读取 example.kt", card("permission").copy(toolName = "Read",
             toolInput = Json.parseToJsonElement("""{"file_path":"/project/example.kt"}""")).askLine()?.zh())
-        assertEquals("需要授权：Bash", card("permission").copy(toolName = "Bash").askLine()?.zh())
+        assertEquals("在等你批准：Bash", card("permission").copy(toolName = "Bash").askLine()?.zh())
 
         val question = card("question").copy(questions = listOf(Question("网络层的测试用 **哪个** `框架`？"), Question("第二个")), summary = "摘要")
         assertEquals("在问你：网络层的测试用 哪个 框架？", question.askLine()?.zh())
         assertEquals("在问你：摘要", question.copy(questions = null).askLine()?.zh())
         assertEquals("在问你", card("question").askLine()?.zh())
 
-        assertEquals("计划待批准", card("plan").copy(plan = "# 计划\n1. 改代码").askLine()?.zh())
-        assertEquals("终端对话框：要信任这个目录吗？", card("screen").copy(dialog = ScreenDialog(question = "要信任这个目录吗？")).askLine()?.zh())
-        assertEquals("终端对话框", card("screen").askLine()?.zh())
+        assertEquals("计划等你审批", card("plan").copy(plan = "# 计划\n1. 改代码").askLine()?.zh())
+        assertEquals("终端等你处理：要信任这个目录吗？", card("screen").copy(dialog = ScreenDialog(question = "要信任这个目录吗？")).askLine()?.zh())
+        assertEquals("终端等你处理", card("screen").askLine()?.zh())
         assertEquals("MCP 请求：填写部署环境", card("elicitation").copy(elicitation = Elicitation(message = "填写部署环境")).askLine()?.zh())
 
         assertNull(card("unknown").askLine())
@@ -72,14 +72,14 @@ class AskLineTest {
         assertEquals("a", todo.waitingCard(null, cards)?.id)
         // a released agent's card is not the task's
         assertNull(todo.waitingCard(lead, mapOf(releasedCard.sessionKey to releasedCard)))
-        assertEquals("需要授权：swift test", todo.waitingCard(lead, cards)?.askLine()?.zh())
+        assertEquals("在等你批准：swift test", todo.waitingCard(lead, cards)?.askLine()?.zh())
     }
 
     @Test fun theRowSaysWhatItsCardAsksOnlyWhileItNeedsYou() {
         val now = Instant.parse("2026-11-06T08:00:00Z")
         val waiting = Session(machineId = "mac", sessionId = "s1", state = "needs_you", lastText = "我先跑一下测试")
         val ask = card("permission").copy(toolName = "Bash", summary = "./gradlew test")
-        assertEquals("需要授权：./gradlew test", waiting.rowLine(ask, now)?.zh())
+        assertEquals("在等你批准：./gradlew test", waiting.rowLine(ask, now)?.zh())
         // no card, a card of another session, or not waiting: the line it had before
         assertEquals("我先跑一下测试", waiting.rowLine(null, now)?.zh())
         assertEquals("我先跑一下测试", waiting.rowLine(ask.copy(sessionId = "s2"), now)?.zh())

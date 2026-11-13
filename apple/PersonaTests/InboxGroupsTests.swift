@@ -71,6 +71,34 @@ final class InboxGroupsTests: XCTestCase {
         XCTAssertEqual(groups[3].title, "Moments")
     }
 
+    /// A Done group's range holds exactly its own moments (#2969): its start and last moment are in it, its end is not.
+    func testTimeRangeMatchesTheGroups() {
+        let key = { InboxGroups.timeKey($0, now: self.now, calendar: self.calendar) }
+        for k in ["yesterday", "d:2026-11-07", "d:2026-11-03", "week"] {
+            let r = InboxGroups.timeRange(k, now: now, calendar: calendar)
+            guard let start = r.start, let end = r.end else { return XCTFail("\(k) has no bounds") }
+            XCTAssertEqual(key(start), k)
+            XCTAssertEqual(key(end.addingTimeInterval(-0.001)), k)
+            XCTAssertNotEqual(key(end), k)
+        }
+        XCTAssertEqual(InboxGroups.timeRange("today", now: now, calendar: calendar).start, on(9, 0))
+        XCTAssertNil(InboxGroups.timeRange("today", now: now, calendar: calendar).end)
+        let month = InboxGroups.timeRange("month", now: now, calendar: calendar)
+        XCTAssertNil(month.start)
+        XCTAssertEqual(month.end, on(11, 0, month: 10))
+    }
+
+    /// Each day's count goes to its group; Just Now (the list's) comes off Today; 11 Oct is 29 days back (7+ days),
+    /// 10 Oct 30 (1+ month). The web's dayGroupCounts test has the same numbers.
+    func testDayCountsByGroup() {
+        let days = ["2026-11-09": 5, "2026-11-08": 3, "2026-11-04": 2, "2026-11-02": 7, "2026-10-12": 1, "2026-10-11": 1, "2026-10-10": 4, "2026-09-01": 6]
+        XCTAssertEqual(InboxGroups.dayCounts(days, now: now, just: 2, calendar: calendar),
+                       ["just": 2, "today": 3, "yesterday": 3, "d:2026-11-04": 2, "week": 9, "month": 10])
+        XCTAssertEqual(InboxGroups.dayCounts(["2026-11-09": 2], now: now, just: 2, calendar: calendar), ["just": 2])
+        XCTAssertEqual(InboxGroups.sortedKeys(["month", "d:2026-11-04", "just", "week", "yesterday", "today", "week"], now: now, calendar: calendar),
+                       ["just", "today", "yesterday", "d:2026-11-04", "week", "month"])
+    }
+
     func testOpenAtFirst() {
         XCTAssertTrue(InboxGroups.openAtFirst(section: "action", key: "lark"))
         XCTAssertTrue(InboxGroups.openAtFirst(section: "noise", key: "mail:acc1"))

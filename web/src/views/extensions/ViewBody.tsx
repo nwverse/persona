@@ -18,11 +18,13 @@ import {
 } from "../../lib/extension-ui";
 import { presenceStyle, usePresence, type Present } from "../../ui/motion";
 import { Rolling } from "../../ui/Rolling";
+import { scrollBehavior } from "../../ui/stream/motion";
 import { t } from "../../i18n";
 import { Button, cx, EASE, Loading, Spinner } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { Switch } from "../settings/SettingsParts";
 import { ChartFrame, LABEL_H, plotHeight } from "./ChartFrame";
+import { ExtensionChart } from "./view-sections-lazy";
 import { NEW_ICON_GLYPH } from "./icon-map";
 import { SegmentedTrack } from "../../ui/Segmented";
 import { colorOf, hue, hueTint } from "../../lib/extension-ui-v6";
@@ -45,8 +47,8 @@ function CodeItem({ children }: { children: ReactNode }) {
   return <Suspense fallback={<Loading />}>{children}</Suspense>;
 }
 
-// Only chart items draw it: its own chunk, fetched by the idle preload or the first chart (lib/lazy-page.ts).
-const ExtensionChart = lazyPage(() => import("./ExtensionChart").then((m) => m.ExtensionChart), { idle: true });
+// Only chart items draw it (ExtensionChart): registered on the first screen in view-sections-lazy.tsx, so the idle
+// preload still fetches it now that this file is a chunk of its own (#3614).
 
 const TEXT: Record<UITone, string> = { neutral: "text-ink", positive: "text-green", caution: "text-orange", danger: "text-red" };
 const BAR: Record<UITone, string> = { neutral: "bg-accent", positive: "bg-green", caution: "bg-orange", danger: "bg-red" };
@@ -83,10 +85,11 @@ export interface ViewHandlers extends V6Handlers {
   local?: NativeLocal;
   /** Native-only vocabulary supplement; undefined delegates to the unchanged legacy drawing. */
   renderItem?: (item: UIItem, handlers: ViewHandlers) => ReactNode | undefined;
+  /** An assistant card's html component (#4215): drawn only by a caller that runs it; extensions never pass this. */
+  renderHtml?: (item: UIItem) => ReactNode;
 }
 
-/** Nothing acts (an assistant's card): what a press would do is never asked for. */
-export const INERT: ViewHandlers = { values: {}, setValue: () => {}, busy: "", onPress: () => {}, onChoose: () => {} };
+export { INERT } from "./view-sections-lazy";
 
 /** A view's sections. `embedded`: inside another page (lighter); `compact`: a card (no chrome, small charts). */
 export function ViewSections({ view, embedded, compact, ...handlers }: ViewHandlers & { view: UIView; embedded?: boolean; compact?: boolean }) {
@@ -103,7 +106,7 @@ export function ViewSections({ view, embedded, compact, ...handlers }: ViewHandl
 /** Scrolls the page to a file's diff (a file tree without an action, on a page of diffs). */
 function revealDiff(path: string) {
   const el = [...document.querySelectorAll<HTMLElement>("[data-diff-path]")].find((e) => e.dataset.diffPath === path);
-  el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  el?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
 }
 
 /** The side pane's title on a narrow screen: its first section's, with how many files its tree has. */
@@ -164,7 +167,7 @@ interface SectionProps extends ViewHandlers {
 }
 
 /** The components drawn as cards of their own, one under another, not inside the section's card. */
-const STANDALONE = new Set(["code", "diff", "comment_thread", "grid", "carousel"]);
+const STANDALONE = new Set(["code", "diff", "comment_thread", "grid", "carousel", "html"]);
 
 function Section({ section, embedded, compact, bare, onPicked, ...rest }: SectionProps) {
   // Section-level callbacks (including MoreLine) use the section's key under the explicit stream adapter.
@@ -331,12 +334,14 @@ function Item(props: Omit<SectionProps, "section" | "embedded" | "onMore" | "bar
   return <div data-native-key={props.item.key}>{custom === undefined ? <NativeItem {...handlers} /> : custom}</div>;
 }
 
-function NativeItem({ item: it, compact, values, setValue, busy, onPress, onChoose, canPress, chosen, locked, onAct, onPicked, draft, local, nativeFetch, nativeAvailable, ...v6 }: Omit<SectionProps, "section" | "embedded" | "onMore" | "bare"> & { item: UIItem }) {
+function NativeItem({ item: it, compact, values, setValue, busy, onPress, onChoose, canPress, chosen, locked, onAct, onPicked, draft, local, nativeFetch, nativeAvailable, renderHtml, ...v6 }: Omit<SectionProps, "section" | "embedded" | "onMore" | "bare"> & { item: UIItem }) {
   const manager = useLinkManager();
   const pressable = (a: UIAction) => (canPress ? canPress(a) : true);
   const tiles = { glyphs: ROW_ICON, busy, onPress, canPress, ...v6 };
   const code = { act: onAct ?? ((a: UIAction) => onPress(a)), busy: locked ? busy || "stream-locked" : busy, reveal: revealDiff, local, fetch: nativeFetch, canFetch: nativeAvailable };
   switch (it.type) {
+    case "html":
+      return renderHtml ? renderHtml(it) : null;
     case "header":
       return <CodeItem><Header item={it} native={!!local} /></CodeItem>;
     case "breadcrumb":
@@ -685,7 +690,7 @@ function Row({ item: it, busy, onPress, pressable, chosen, h }: { item: UIItem; 
       disabled={!!busy || !pressable(it.action)}
       aria-pressed={chosen ? chosen === it.action.id : undefined}
       onClick={() => onPress(it.action!)}
-      className={cx("flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 text-left whitespace-nowrap transition-colors enabled:hover:bg-hover", chosen === it.action.id && "bg-accent-tint", c && !slider ? "pr-2" : menu.button ? "pr-1" : "pr-4")}
+      className={cx("flex min-w-0 flex-1 w-full items-center gap-3 py-2.5 pl-4 text-left whitespace-nowrap transition-colors enabled:hover:bg-hover", chosen === it.action.id && "bg-accent-tint", c && !slider ? "pr-2" : menu.button ? "pr-1" : "pr-4")}
     >
       {body}
     </button>

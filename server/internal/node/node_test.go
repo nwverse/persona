@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 func TestParseLaunchersSimple(t *testing.T) {
@@ -81,7 +82,7 @@ func TestParseLaunchersSkipsJunk(t *testing.T) {
 	out := "\n  \n_loading…\n123bad model\nok_1 \n"
 	got := parseLaunchers(out)
 	for _, l := range got {
-		if l.Name != "ok_1" && !nameRe.MatchString(l.Name) {
+		if l.Name != "ok_1" && !shellcmd.NameRe.MatchString(l.Name) {
 			t.Fatalf("junk line accepted: %+v", l)
 		}
 	}
@@ -239,6 +240,13 @@ func TestThemePickerNotShown(t *testing.T) {
 
 // A first-run screen the node cannot complete by itself is named at once rather than after the whole timeout.
 func TestFirstRunScreenAwaitingThePerson(t *testing.T) {
+	bypass := "WARNING: Claude Code running in Bypass Permissions mode\n❯ No, exit\n  Yes, I accept\nEnter to confirm · Esc to cancel"
+	if got := firstRunScreen(bypass); !strings.Contains(got, "Bypass Permissions") || !strings.Contains(got, "default") {
+		t.Fatalf("bypass confirmation must name the cause and the normal-mode remedy: %q", got)
+	}
+	if keys := firstRunKeys(bypass); keys != nil {
+		t.Fatalf("bypass permission must not be accepted automatically: %v", keys)
+	}
 	login := strings.Join([]string{
 		"Welcome to Claude Code",
 		"Select login method:",

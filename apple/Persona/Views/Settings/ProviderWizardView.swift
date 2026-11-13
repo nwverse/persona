@@ -31,6 +31,7 @@ enum ProviderWizardStep: String, Hashable, Identifiable {
 /// model" sit beside them, and the import / other connection types under Advanced.
 struct ProviderWizard: View {
     @Environment(AppModel.self) private var model
+    private let requestScope = AssistantSettingsRequestScope(AppModel.shared)
     @Environment(\.dismiss) private var dismiss
     var saved: () async -> Void
     @State private var wizard: ProviderWizardModel
@@ -53,10 +54,13 @@ struct ProviderWizard: View {
     @State private var link: LinkTarget?
     /// The preset whose Sign Up page is open: once it closes, its key is next.
     @State private var signingUp: String?
+    /// The Computers page, pushed without its row (`showComputers`, DEBUG screenshots).
+    @State private var computersOpen = false
 
     init(existing: LauncherView? = nil, start: ProviderWizardStep? = nil, saved: @escaping () async -> Void = {},
-         wizard: ProviderWizardModel? = nil, imports: LauncherImportModel? = nil) {
+         wizard: ProviderWizardModel? = nil, imports: LauncherImportModel? = nil, showComputers: Bool = false) {
         self.saved = saved
+        _computersOpen = State(initialValue: showComputers)
         let first = start ?? (existing == nil ? .pick : .connect)
         self.start = first
         _step = State(initialValue: first)
@@ -82,6 +86,7 @@ struct ProviderWizard: View {
                     }
                 }
                 .pluginLinks($link)
+                .navigationDestination(isPresented: $computersOpen) { computersPage }
                 .onChange(of: link) { _, now in
                     // Back from a Sign Up page: its key is next.
                     guard now == nil, let id = signingUp else { return }
@@ -99,7 +104,8 @@ struct ProviderWizard: View {
                 .task(id: wizard.presetsFlow) {
                     // The toggle's default reads the readiness: ask for a fresh one alongside the presets.
                     if wizard.presetsFlow, model.hubFeatures.contains(AssistantReadiness.feature) {
-                        Task { await model.readiness.refresh(api: model.api) }
+                        let api = requestScope.api(model)
+                        Task { await model.readiness.refresh(api: api) }
                     }
                     await wizard.loadPresets()
                     #if DEBUG
@@ -111,6 +117,15 @@ struct ProviderWizard: View {
             .macSheet()
             #endif
         }
+    }
+
+    /// The Computers page of the provider being edited: the preset's kind on the key step, else the stored provider's.
+    private var computersPage: some View {
+        @Bindable var wizard = wizard
+        let presetStep = step == .key
+        return ProviderComputersPage(scope: $wizard.scope, old: presetStep ? nil : wizard.existing,
+                                     kind: presetStep ? wizard.preset?.kind ?? "launcher" : wizard.existing?.kind ?? "launcher",
+                                     agent: presetStep ? nil : wizard.existing?.agent, assign: presetStep && wizard.preset?.runsClaude != false && wizard.assign)
     }
 
     private var title: String {
@@ -254,7 +269,7 @@ struct ProviderWizard: View {
     }
 
     /// No computer yet: nothing to read a ~/.zshrc on (the import would wait for one forever).
-    private var noComputer: Bool { model.hubMachines.isEmpty }
+    private var noComputer: Bool { requestScope.machines(model).isEmpty }
 
     /// A hub with built-in presets: its providers in its order, the gateway typed by hand last; the two side paths;
     /// the import and the other ways under Advanced.
@@ -330,7 +345,9 @@ struct ProviderWizard: View {
                     }
                 }
                 .accessibilityElement(children: .combine)
-                SecretField(String(localized: "Paste the API key"), filled: String(localized: "Filled in"), text: $wizard.presetKey, identifier: "wizard.preset.key")
+                ProviderKeyField(title: String(localized: "Paste the API key"), filled: String(localized: "Filled in"), text: $wizard.presetKey,
+                                 byReference: $wizard.presetKeyByReference, references: wizard.keyReferences, identifier: "wizard.preset.key",
+                                 explainedBelow: true)
                     .onChange(of: wizard.presetKey) { wizard.keyChanged() }
                 if let url = p.signup {
                     Button { link = LinkTarget(url: url) } label: {
@@ -339,12 +356,20 @@ struct ProviderWizard: View {
                     .accessibilityIdentifier("wizard.preset.signup")
                 }
             } header: { stepHeader(2, String(localized: "Paste the key")) } footer: {
-                Text([p.keyHint, String(localized: "The key is stored encrypted on the hub and never sent back to clients.")].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: "\n"))
+                Text([p.keyHint, wizard.presetKeyByReference ? String(localized: "The hub keeps only the reference and fetches the key from its provider when it's needed.")
+                      : String(localized: "The key is stored encrypted on the hub and never sent back to clients.")].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: "\n"))
             }
-            Section {
-                keyTestRow(p)
-            } header: { Text("Test") } footer: {
-                if p.testable { Text("Once pasted, it's tested once: a very short request that may cost a little.") }
+            if wizard.presetKeyByReference {
+                Section {
+                    Text("Checked when you save it: the reference must resolve. The connection test runs after that.")
+                        .font(Theme.Font.secondary).foregroundStyle(.secondary)
+                } header: { Text("Test") }
+            } else {
+                Section {
+                    keyTestRow(p)
+                } header: { Text("Test") } footer: {
+                    if p.testable { Text("Once pasted, it's tested once: a very short request that may cost a little.") }
+                }
             }
             if p.runsClaude {
                 Section {
@@ -358,6 +383,11 @@ struct ProviderWizard: View {
                     Text("The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.")
                         .font(Theme.Font.secondary).foregroundStyle(.secondary)
                 }
+            }
+            if wizard.scopeShown {
+                Section {
+                    ProviderComputersRow(scope: $wizard.scope, old: nil, kind: p.kind, assign: p.runsClaude && wizard.assign)
+                } footer: { Text("Which computers can run it and get its key.") }
             }
             Section {
                 DisclosureGroup(isExpanded: $showPresetMore) { presetMoreFields(p) } label: {
@@ -584,11 +614,28 @@ struct ProviderWizard: View {
                 }
                 .lineLimit(1)
             }
-            SecretField(wizard.hasStoredKey ? String(localized: "API Key (leave empty to keep)") : "API Key", filled: String(localized: "Filled in"), text: $wizard.apiKey,
-                        identifier: "wizard.key")
+            ProviderKeyField(title: wizard.hasStoredKey ? String(localized: "API Key (leave empty to keep)") : "API Key", filled: String(localized: "Filled in"),
+                             text: $wizard.apiKey, byReference: $wizard.apiKeyByReference, references: wizard.keyReferences,
+                             stored: wizard.existing?.keyReference, identifier: "wizard.key", explainedBelow: true)
         } header: { Text("Gateway") } footer: {
-            Text(wizard.kind == .anthropic ? String(localized: "The key is stored encrypted on the hub, handed to the computer only at launch, and never sent back to apps.")
-                 : String(localized: "Choose Bearer if the gateway only accepts Authorization: Bearer (ANTHROPIC_AUTH_TOKEN). The key is stored encrypted on the hub and never sent back to apps."))
+            switch (wizard.kind == .anthropic, wizard.apiKeyByReference) {
+            case (true, false): Text(String(localized: "The key is stored encrypted on the hub, handed to the computer only at launch, and never sent back to apps."))
+            case (true, true): Text(String(localized: "The hub keeps only the reference and fetches the key from its provider when it's needed. The key is handed to the computer only at launch and never sent back to apps."))
+            case (false, false): Text(String(localized: "Choose Bearer if the gateway only accepts Authorization: Bearer (ANTHROPIC_AUTH_TOKEN). The key is stored encrypted on the hub and never sent back to apps."))
+            case (false, true): Text(String(localized: "Choose Bearer if the gateway only accepts Authorization: Bearer (ANTHROPIC_AUTH_TOKEN). The hub keeps only the reference and fetches the key from its provider when it's needed."))
+            }
+        }
+        if wizard.isAPI {
+            Section {
+                Picker("Send Through", selection: $wizard.viaMachine) {
+                    Text("The Hub Itself").tag("")
+                    ForEach(wizard.viaChoices, id: \.id) { m in Text(m.name).tag(m.id) }
+                }
+                .lineLimit(1)
+                .accessibilityIdentifier("wizard.via")
+            } footer: {
+                Text("Which machine sends this connection’s requests. Choose one of your computers when the hub can’t reach the provider and that computer can; it must be online when a request goes out.")
+            }
         }
         Section {
             Button { Task { await wizard.runTest() } } label: {
@@ -609,13 +656,17 @@ struct ProviderWizard: View {
                     }
                 }
             }
-            .disabled(!wizard.connectionReady || wizard.discovering)
+            .disabled(!wizard.connectionReady || wizard.discovering || wizard.referencePending)
             .accessibilityIdentifier("wizard.discover")
             if let e = wizard.discoverError {
                 Text(e).font(Theme.Font.label).foregroundStyle(Theme.danger).lineLimit(4)
             }
         } header: { Text("Check") } footer: {
-            Text("Testing the connection sends a real, very small request (\(wizard.testModel.isEmpty ? String(localized: "get the model list first") : wizard.testModel)), which may cost a little.")
+            if wizard.referencePending {
+                Text("Checked when you save it: the reference must resolve. The connection test runs after that.")
+            } else {
+                Text("Testing the connection sends a real, very small request (\(wizard.testModel.isEmpty ? String(localized: "get the model list first") : wizard.testModel)), which may cost a little.")
+            }
         }
     }
 
@@ -732,6 +783,11 @@ struct ProviderWizard: View {
                 }
                 .lineLimit(1)
             }
+            // Where it runs and when its key travels (#2333), the same kind of row; only on a hub that takes scopes.
+            if wizard.scopeShown {
+                ProviderComputersRow(scope: $wizard.scope, old: wizard.existing, kind: wizard.existing?.kind ?? "launcher",
+                                     agent: wizard.existing?.agent)
+            }
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 TextField(wizard.hasStoredHeaders ? String(localized: "Headers set (hidden; leave empty to keep)") : String(localized: "Headers, one Name: value per line"),
                           text: $wizard.headers, axis: .vertical)
@@ -787,11 +843,12 @@ struct ProviderWizard: View {
 
     /// The machines to import from: the hub group's, online first.
     private var importMachines: [Machine] {
-        model.hubMachines.sorted { ($0.online ? 0 : 1, $0.name) < ($1.online ? 0 : 1, $1.name) }
+        requestScope.machines(model).sorted { ($0.online ? 0 : 1, $0.name) < ($1.online ? 0 : 1, $1.name) }
     }
 
     #if DEBUG
-    /// `-openProviderWizard connect|models` fills the form in with made-up values (screenshots); `key` / `done` take the
+    /// `-openProviderWizard connect|models` fills the form in with made-up values (screenshots; `-openProviderComputers new`
+    /// then opens its Computers page); `key` / `done` take the
     /// first built-in preset (`-wizardPreset <id>` another) with a made-up key (`-wizardKey <key>`: the mock hub
     /// refuses one with "bad" in it), `done` saves it; `claude` tries the main conversation.
     private func debugFill() async {
@@ -813,6 +870,8 @@ struct ProviderWizard: View {
         wizard.baseURL = "https://gateway.example.com"
         wizard.apiKey = "sk-test-demo"
         if want == "models" { await toModels() }
+        // `-openProviderComputers new` on top: the new provider's Computers page.
+        if want == "models", ProviderComputersDemo.state == "new" { computersOpen = true }
     }
     #endif
 }

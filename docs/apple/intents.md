@@ -9,7 +9,7 @@ They do not need the app in the foreground and do not use WebSocket: each call r
 | `AskClaudeIntent` | Ask Claude | Sends a message to the most recent live session on a machine, or starts a new one with the remembered directory / launcher | Background |
 | `PersonaStatusIntent` | Persona Status | "N working, M need you" + the content of the first pending item | Background |
 | `ApproveFirstIntent` | Approve First Pending | Allows the oldest tool permission request, or approves a plan (`acceptEdits`); asks for an unlock on a locked phone | Background |
-| `OpenSessionIntent` | Open Session | Switches the app to the chat page and jumps to that session (`AppModel.shared.openChat`) | Foreground |
+| `OpenSessionIntent` | Open Session | Opens that session as a notification does (`AppModel.open`): a Persona conversation on Assistant, an Agent's on Agents | Foreground |
 
 `OpenSessionIntent` is not meant to be used on its own: `AskClaudeIntent` returns it, so one tap on the button in the Siri result card opens that session.
 
@@ -22,6 +22,8 @@ They do not need the app in the foreground and do not use WebSocket: each call r
 | `OpenSessionIntent.swift` | `SessionEntity` + `SessionEntityQuery`, `OpenSessionIntent` |
 | `AskClaudeIntent.swift` / `PersonaStatusIntent.swift` / `ApproveFirstIntent.swift` | The three business intents |
 | `AskPersonaIntent.swift` / `PersonalAgentIntents.swift` / `AddTodoIntent.swift` | Ask Persona, personal Agents, new to-do (`docs/apple/siri.md`) |
+| `ClipboardIntents.swift` | Send Clipboard to Computer / Get Computer's Clipboard (#3064, `docs/apple/ios.md` "Clipboard with your computers"): optional computer (default: the one last sent to, else the first online one that shares its clipboard); Send takes optional Text instead of the clipboard, so a shortcut that starts with Get Clipboard never sees the paste prompt; Get writes the phone's clipboard and returns the text. Listed in Shortcuts, not as App Shortcut phrases; the network part is `ClipboardIntentFlow` (`ClipboardIntentsTests`) |
+| `HandleNotificationIntent.swift` | Handle Notification (#3848, below): an item into this device's Shortcuts subscription source; the network part is `ShortcutItemFlow`, the queue `ShortcutOutbox` (`HandleNotificationTests`) |
 | `IntentAnswerSnippet.swift` | The answer card for Ask Persona (question + full text) |
 | `PersonaShortcuts.swift` | `AppShortcutsProvider`, Chinese phrases and icons |
 
@@ -34,6 +36,27 @@ App Intent parameters are compile-time metadata, so an extension manifest cannot
 Text is returned as both result value and Siri dialog. iOS/visionOS with compiler 6.4+ also show a read-only `ExtensionSurfaceView` snippet and optional Open link preserving the original group. Xcode 26.x, macOS and watchOS use the text/dialog fallback. This does not raise the minimum compiler. Widget and action details, cache/revocation behavior and device acceptance boundaries are in [Extensions](../extensions/extensions.md) ("Apple system surface boundaries").
 
 No Apple build, metadata extraction, simulator screenshot or device acceptance was run for this implementation while builds were paused; the Swift tests are additions, not passing evidence.
+
+## Handle Notification
+
+**Handle Notification** (#3848) hands one item to Persona as this device's Shortcuts source, a subscription the device
+fills itself ([subscriptions.md](../extensions/subscriptions.md) "Push sources"): Title, Body, App (where it came from),
+an optional Link and Time (default now). People put it in their own shortcuts and personal automations, such as one
+that runs when a message or an email arrives, or one run from the share sheet. Only what the shortcut passes is sent;
+nothing reads other apps' notifications, and the action's description says so. It is listed in Shortcuts, not as an
+App Shortcut phrase.
+
+- **Runs in the background** (`.background`) and talks to the selected hub group (`IntentSupport.selectedClient`) with
+  `POST /api/v1/subscriptions/-/push`. A title is the body's first line when it has none; neither is "Nothing to send".
+- **Dedup key**: a hash of the app, title, body and the minute, so a shortcut that fires twice for one notification
+  adds one item.
+- **Queued when the hub can't be reached** (offline, a network error, 502 to 504): the item waits on the phone
+  (`ShortcutOutbox`, Application Support, by group, at most 200, none older than a week) and goes with the next run,
+  or when the app connects to that group (`AppModel.didConnect`). Each send takes what waits with it, 20 a push.
+- **Result**: the value `sent` or `queued`, for a shortcut that goes on depending on it, and a sentence: sent; sent,
+  but turn on a destination for the source in Settings › Subscriptions (both are off at first); or queued.
+- **Refusals** say what to do: a hub without push sources (404) "update it", a view-only device, too many items in an
+  hour (429), and the usual pairing and connection sentences. A refused item is not kept.
 
 ## Selection rules
 
@@ -106,7 +129,7 @@ The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor`, while the AppIntent 
 The fix is to mark each protocol member `nonisolated` (`init`, `perform`, `title`, `supportedModes`, `parameterSummary`, the query methods),
 and put the pure logic they call into a `nonisolated enum`. `@Parameter` wraps mutable stored properties, which cannot be `nonisolated`; leaving them on MainActor is fine.
 
-`OpenSessionIntent` is the only place that touches `AppModel`; it uses `await MainActor.run { … }` to change `selectedTab` / `openChat`.
+`OpenSessionIntent` is the only place that touches `AppModel`; it uses `await MainActor.run { … }` to call `AppModel.open`.
 Its `target` is a `SessionEntity` whose `id` looks like `machine/session`, the same shape as the DEBUG `-openSession` argument.
 
 ## Tests

@@ -1,7 +1,11 @@
 // The pure half of the menu in atoms.tsx (#2329): what a key does in an open menu, whether a row needs a second
 // activation, where the context-menu key opens it. No React, so every rule is tested without a DOM.
+import type { ReactNode } from "react";
 import type { AgentState } from "../lib/types";
 import type { IconName } from "./icons";
+
+/** Sidebar header menus: the earlier product menu and the assistant roster, in pixels. */
+export const ASSISTANT_MENU_WIDTH = { product: 220, roster: 264 } as const;
 
 export interface MenuRename {
   /** What the input starts with (selected, so typing replaces it). */
@@ -22,9 +26,23 @@ export interface MenuItem {
   /** A short note at the row's end that never wraps (a count, a unit, a shortcut). A sentence goes in `detail`. */
   hint?: string;
   /** A sentence under the label that explains the choice (#5584): it wraps at word breaks instead of crowding the
-   *  label off the row, and screen readers read it as the row's description. */
+   *  label off the row, and screen readers read it as the row's description. A line break in it starts a new line
+   *  (a project's directories, one to a line). */
   detail?: string;
+  /** What the row means, shown only as its tooltip (the composer's permission picker, #5324): a choice whose name says
+   *  enough at a glance and whose explanation is there on hover. */
+  tip?: string;
   icon?: IconName;
+  /** Something drawn before the label in the icon's place, as a mark that the label names: an assistant's avatar. */
+  lead?: ReactNode;
+  /** A word beside the label that says what the row is among the others ("Default"), drawn as a small tag. */
+  tag?: string;
+  /** How many things wait behind the row (an assistant's agents and inbox items), as a count at its end; 0: none. */
+  badge?: number;
+  /** What a screen reader says for `badge` ("3 things waiting for you"); the number alone without it. */
+  badgeLabel?: string;
+  /** The whole row is drawn faded (an offline assistant) yet chosen like any other, unlike `disabled`. */
+  dim?: boolean;
   state?: AgentState;
   checked?: boolean;
   /** The row is one choice of a set and `checked` marks the chosen one (permission mode, effort, model): it is a

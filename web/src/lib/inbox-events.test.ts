@@ -43,8 +43,8 @@ describe("收件箱事件：分区", () => {
     expect(ids(s.tiers.fyi)).toEqual([conclusion.id]);
     expect(ids(s.tiers.noise)).toEqual([noise.id]);
     expect(s.done).toHaveLength(2);
-    // the badge counts Needs you only (urgent included, it is status action): In progress is the AI's
-    expect(badgeCount(fixture.items)).toBe(4);
+    // The navigation badge follows unread Needs you items, not every open section.
+    expect(badgeCount(fixture.items)).toBe(s.tiers.action.filter((it) => !it.read).length);
     expect(badgeCount([urgent])).toBe(1);
     expect(badgeCount([waiting, agentWorking])).toBe(0);
   });
@@ -92,8 +92,8 @@ describe("收件箱事件：建议的按钮", () => {
 });
 
 describe("收件箱事件：处理链条", () => {
-  it("folds to the newest entry", () => {
-    expect(ids(chainRows(waiting.chain, false))).toEqual(["c6"]);
+  it("folds to the three newest entries", () => {
+    expect(ids(chainRows(waiting.chain, false))).toEqual(["c4", "c5", "c6"]);
     expect(ids(chainRows(waiting.chain, true))).toEqual(["c1", "c2", "c3", "c4", "c5", "c6"]);
     expect(chainRows(undefined, false)).toEqual([]);
   });

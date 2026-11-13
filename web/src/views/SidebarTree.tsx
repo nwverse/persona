@@ -1,6 +1,6 @@
 // The Agents section's trees (by to-do, repository, space, machine, terminal) and the rows they hold. Imports only
 // SidebarParts and SidebarRows among the sidebar's files.
-import { useCallback, useId, useLayoutEffect, useRef } from "react";
+import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef } from "react";
 import { t } from "../i18n";
 import { isSpaceMuted } from "../lib/agent-filter";
 import { isQuiet, sessionHost, type AgentMutes, type Space } from "../lib/agent-groups";
@@ -12,106 +12,250 @@ import { baseName } from "../lib/format";
 import { href, navigate, useRoute, type Route } from "../lib/router";
 import { terminalTarget } from "../lib/session-view";
 import { useStore } from "../lib/store";
-import { treeStateLabel, type TodoTree, type TreeAgent, type TreeState, type TreeTodo } from "../lib/todo-tree";
+import { treeStateLabel, type LooseGroup, type TodoTree, type TreeProject, type TreeAgent, type TreeState, type TreeTodo } from "../lib/todo-tree";
 import { findTodoForSpace, openTodoFromTag } from "../lib/todos";
 import type { AgentState, Machine, Session } from "../lib/types";
-import { Collapse, cx } from "../ui/atoms";
+import { Collapse, cx, sidebarFoldMotion } from "../ui/atoms";
 import { StatusMark, StateTally } from "../ui/StatusMark";
 import { foldedCounts, hasFoldedCounts } from "../lib/folded-counts";
-import { Icon } from "../ui/icons";
+import { Icon, type IconName } from "../ui/icons";
+import { InfoTip } from "../ui/InfoTip";
 import { machineNode, termPaneNode, termSpaceNode, termTabNode, type MenuNode } from "../lib/node-actions";
 import { contextMenuProps } from "../ui/context-menu";
 import type { MenuAt } from "../ui/menu-model";
 import type { TermSpace } from "../lib/terminals";
 import { useFolded } from "../lib/use-folded";
+import { sameValue } from "../lib/stable-lines";
 import { stateCount } from "../lib/state-labels";
 import { neverConnected } from "../lib/add-computer";
-import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section } from "./SidebarParts";
+import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
 import { NavRow, SessionRow } from "./SidebarRows";
+import type { WorkspaceTarget } from "../lib/workspace-catalog";
+import { selectWorkspace, useWorkspaceSelection } from "../lib/workspace-selection";
+import { DirectionCountsText, DirectionStateText } from "./DirectionMarks";
 
-type TreeRowProps = { machines: Machine[]; showHost?: boolean; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn; onNavigate?: () => void };
+export type TreeRowProps = { machineLabel: MachineLabel; showHost?: boolean; /** No space · computer at a row's end (the sidebar's 常驻 rows, nested deep, #4352). */ noContext?: boolean; /** Before each agent row's glide key and its children's fold key: a second copy of a row (the sidebar's 常驻 tree) keeps its own, apart from the Agents list's. */ keyPrefix?: string; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu?: RowMenuFn; onNavigate?: () => void };
+/** A computer's name as an agent row shows it ("" with a single computer). */
+export type MachineLabel = (machineId: string) => string;
 
 const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
-/** "Needs you" / "Working" / "Done" at the end of a tree node's line. */
-function TreeStateText({ state }: { state: TreeState }) {
-  return <span className={cx("shrink-0 text-[11px] font-semibold whitespace-nowrap", TREE_TONE[state])}>{treeStateLabel(state)}</span>;
+/** "Needs you" / "Working" / "Done" at the end of a tree node's line; `label`: a to-do's own word for it (the To-dos
+ *  page's, #6458), in the color of the state it ranks as. */
+const TreeStateText = memo(function TreeStateText({ state, label }: { state: TreeState; label?: string }) {
+  return <span className={cx("shrink-0 text-[11px] font-semibold whitespace-nowrap", TREE_TONE[state])}>{label ?? treeStateLabel(state)}</span>;
+});
+
+// The tree's rows are memoized, and a push hands them the nodes it did not change as the same objects (shareTree), so
+// only the branches a push changed render again. The open row's key goes only to the branch that holds it ("" to the
+// others, where holdsRow and `active` come out the same), so opening another agent re-renders two branches, not the
+// whole tree; and the rows get the computers' names as a lookup that stays the same object while the names do, so a
+// machines push (load, memory) re-renders none of them.
+
+/** `activeKey` for a branch holding these sessions, else "". */
+const within = (sessions: readonly Session[], activeKey: string) => (activeKey && holdsRow(sessions, activeKey) ? activeKey : "");
+/** `activeKey` for an agent's branch (it and the agents it spawned), else "". */
+const withinAgent = (a: TreeAgent, activeKey: string): string => (activeKey && (rowKey(a.session) === activeKey || a.children.some((c) => withinAgent(c, activeKey))) ? activeKey : "");
+
+/** Each computer's row label, one lookup while the labels are the same. */
+export function useMachineLabel(machines: Machine[]): MachineLabel {
+  const last = useRef<Map<string, string> | null>(null);
+  const names = useMemo(() => {
+    const next = machines.length > 1 ? new Map(machines.map((m) => [m.id, machineWithHub(m.id, machines)])) : null;
+    return sameValue(last.current, next) ? last.current : next;
+  }, [machines]);
+  last.current = names;
+  return useCallback((machineId: string) => (names ? names.get(machineId) ?? machineId : ""), [names]);
 }
 
-/** Agents "By to-do" as project › to-do › agent (#2526): projects with their todos, a spawned agent under the one that
- *  spawned it, "Unassigned" last (by project). */
-export function TodoTreeView({ tree, ...p }: { tree: TodoTree } & TreeRowProps) {
+/** Agents "By to-do" (#2526, #6458): the open to-dos at the top level, each over its agents (a spawned agent under the
+ *  one that spawned it), then "Not on a to-do" (the ones opened in a terminal too, #6591), all rows of one kind; `after`
+ *  (the sidebar's "Recent (not running)") last, in the same row. No repository or folder rows: those groupings have tabs
+ *  of their own.
+ *  "By pinned" (#4352, `sections`): its directions are sections over their tasks, and the groups follow as sections. */
+export function TodoTreeView({ tree, machines, activeKey, sections, after, ...p }: { tree: TodoTree; machines: Machine[]; sections?: boolean; after?: React.ReactNode } & Omit<TreeRowProps, "machineLabel">) {
+  const machineLabel = useMachineLabel(machines);
   return (
     <>
       {tree.projects.map((pr) => (
-        <TreeProjectSection key={pr.key} k={pr.key} name={pr.name} state={pr.state} folded={pr.folded} sessions={pr.sessions} todos={pr.todos} {...p} />
+        <TreeProjectSection key={pr.key} k={pr.key} name={pr.name} state={pr.state} folded={pr.folded} sessions={pr.sessions} todos={pr.todos} direction={pr.direction} machineLabel={machineLabel} activeKey={within(pr.sessions, activeKey)} {...p} />
       ))}
+      {tree.todos.map((td) => <TreeTodoRows key={td.key} td={td} top machineLabel={machineLabel} {...p} activeKey={within(td.sessions, activeKey)} />)}
       {tree.loose.map((g) => (
-        <TreeProjectSection key={g.key} k={g.key} name={g.name} state={g.state} folded={g.folded} sessions={g.sessions} todos={g.projects} hint={g.hint} loose {...p} />
+        <LooseBranch key={g.key} g={g} section={sections} machineLabel={machineLabel} {...p} activeKey={within(g.sessions, activeKey)} />
       ))}
+      {after}
     </>
   );
 }
 
-function TreeProjectSection({ k, name, state, folded: initial, sessions, todos, loose, hint, ...p }: { k: string; name: string; state: TreeState; folded: boolean; sessions: Session[]; todos: TreeTodo[]; loose?: boolean; hint?: string } & TreeRowProps) {
+/** A section's title in the trees: its mark and its name ("By pinned"'s directions, and the groups beside them). */
+function SectionTitle({ icon, name }: { icon: IconName; name: string }) {
+  return <span className="flex min-w-0 items-center gap-1.5"><Icon name={icon} size={12} stroke={2} className="shrink-0 text-ink-3" /><span className="truncate normal-case tracking-normal text-[11.5px] text-ink-2">{name}</span></span>;
+}
+
+const TreeProjectSection = memo(function TreeProjectSection({ k, name, state, folded: initial, sessions, todos, direction, ...p }: { k: string; name: string; state: TreeState; folded: boolean; sessions: Session[]; todos: TreeTodo[]; direction?: TreeProject["direction"] } & TreeRowProps) {
   const [folded, toggle] = useFolded(k, initial, { follow: true, holds: holdsRow(sessions, p.activeKey) });
   return (
     <Section
-      title={<span className="flex min-w-0 items-center gap-1.5"><Icon name={loose ? "layers" : "folder"} size={12} stroke={2} className="shrink-0 text-ink-3" /><span className="truncate normal-case tracking-normal text-[11.5px] text-ink-2">{name}</span></span>}
+      title={<SectionTitle icon={direction ? (direction.secretary ? "person" : "target") : "folder"} name={name} />}
       folded={folded}
       onToggle={toggle}
-      right={<TreeStateText state={state} />}
-      hint={hint}
+      // a pinned direction (#4352) shows what it has going (its arc, its 等你 N, #6626) instead of one state word
+      right={direction ? <DirectionCountsText direction={direction} /> : <TreeStateText state={state} />}
     >
-      {todos.map((td) => <TreeTodoRows key={td.key} td={td} {...p} />)}
+      {todos.map((td) => <TreeTodoRows key={td.key} td={td} {...p} activeKey={within(td.sessions, p.activeKey)} />)}
     </Section>
+  );
+});
+
+/** The chevron that folds a branch, turned as its group's (DESIGN_SYSTEM 3.4). */
+function BranchChevron({ folded, size = 9 }: { folded: boolean; size?: number }) {
+  return <Icon name="chevron" size={size} stroke={2.4} className="opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />;
+}
+
+/** A branch's count with what it counts, and its state: "3 Waiting". None for an empty group's state. */
+function BranchEnd({ n, state, label }: { n: number; state?: TreeState; label?: string }) {
+  return (
+    <>
+      <GroupCount n={n} label={t("sidebar.agent_count", { count: n })} className="shrink-0" />
+      {state && <TreeStateText state={state} label={label} />}
+    </>
   );
 }
 
-/** One todo (or, under "Unassigned", one project) and its agents under its own folding line. */
-function TreeTodoRows({ td, ...p }: { td: TreeTodo } & TreeRowProps) {
-  const [folded, toggle] = useFolded(td.key, td.folded, { follow: true, holds: holdsRow(td.sessions, p.activeKey) });
-  return (
-    <div className="mt-px">
-      <div className="relative z-10 flex w-full min-w-0 items-center gap-1.5 rounded-control py-1 pl-2 pr-2 text-[12px] text-ink-2 hover:bg-hover">
-        <button type="button" aria-expanded={!folded} aria-label={td.name} onClick={toggle} className="touch-hit flex shrink-0 items-center">
-          <Icon name="chevron" size={9} stroke={2.4} className="opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+/**
+ * One branch of "By to-do" (#6458): a to-do or a group of agents, as one kind of row whatever it is. The chevron that folds
+ * it, its mark, its title, an ⓘ for a group, then its count and its state, each in the same place; `top`: one of the
+ * list's sticky group headings (a grouping's top level, DESIGN_SYSTEM 3.4, which Collapse all reads), else a row inside a
+ * section. Its body is `children`, or `empty` said in their place when there are none. The row selects no text: a
+ * press-and-drag over the rows that fold groups painted the theme's grey selection behind each of their lines (#6458).
+ */
+export function TreeBranch({ branch, top, folded, onToggle, toggleLabel, icon, title, info, end, empty, children }: { branch: string; top?: boolean; folded: boolean; /** None: nothing to unfold, the title stays in the column. */ onToggle?: () => void; toggleLabel: string; icon?: IconName; title: React.ReactNode; info?: React.ReactNode; end: React.ReactNode; empty?: string; children?: React.ReactNode }) {
+  const row = (
+    <div data-tree-branch-row className="relative z-10 flex w-full min-w-0 select-none items-center gap-1.5 rounded-control py-1 pl-2 pr-2 text-label text-ink-2 hover:bg-hover">
+      {onToggle ? (
+        <button type="button" aria-expanded={!folded} aria-label={toggleLabel} onClick={onToggle} className="touch-hit flex shrink-0 items-center">
+          <BranchChevron folded={folded} />
         </button>
-        {td.todoId && <Icon name="todo" size={11} stroke={2} className="shrink-0 text-ink-3" />}
-        {td.todoId ? (
-          <a href={href({ name: "todos", id: td.todoId })} onClick={(e) => { e.preventDefault(); openTodoFromTag(td.todoId!, navigate, p.onNavigate); }} className="min-w-0 flex-1 truncate font-medium text-ink hover:underline">{td.name}</a>
-        ) : (
-          <button type="button" onClick={toggle} className="min-w-0 flex-1 truncate text-left">{td.name}</button>
-        )}
-        <GroupCount n={td.sessions.length} label={t("sidebar.agent_count", { count: td.sessions.length })} className="shrink-0" />
-        {td.status === "usage_limit" ? (
-          <span className="shrink-0 text-[11px] font-semibold whitespace-nowrap text-orange">{t("lib-usage-limit.short")}</span>
-        ) : (
-          <TreeStateText state={td.state} />
-        )}
+      ) : (
+        <span aria-hidden className="invisible flex shrink-0 items-center"><Icon name="chevron" size={9} stroke={2.4} /></span>
+      )}
+      {icon && <Icon name={icon} size={11} stroke={2} className="shrink-0 text-ink-3" />}
+      {title}
+      {info}
+      {end}
+    </div>
+  );
+  const body = (
+    <Collapse open={!folded} sidebarFold>
+      <div data-tree-branch-list className="flex flex-col gap-px pl-3" inert={folded || undefined}>
+        {children ?? (empty ? <EmptyHint text={empty} /> : null)}
       </div>
-      <Collapse open={!folded}>
-        <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>
-          {td.agents.map((a) => <TreeAgentRows key={a.key} a={a} depth={0} {...p} />)}
-        </div>
-      </Collapse>
+    </Collapse>
+  );
+  return (
+    <div data-tree-branch={branch} className="mt-px">
+      {top ? <SidebarGroup heading={row}>{body}</SidebarGroup> : <>{row}{body}</>}
     </div>
   );
 }
 
+/** What an open group with nothing in it says: what it would hold (#6458). */
+function EmptyHint({ text }: { text: string }) {
+  return <p className="select-none px-2 py-1 text-label leading-[1.45] text-ink-3">{text}</p>;
+}
+
+/** A group's title: it folds the group, as its chevron does. */
+function GroupTitle({ name, onToggle }: { name: string; onToggle: () => void }) {
+  return <button type="button" onClick={onToggle} className="min-w-0 truncate text-left font-medium text-ink">{name}</button>;
+}
+
+/** A group of agents beside the to-dos (#6458): "Not on a to-do" and the sidebar's "Recent (not running)". Its count,
+ *  the most urgent of its agents' states, and, where its name does not say it (`hint`), an ⓘ saying what it holds, which
+ *  is also what an open, empty group says. `section`: drawn as the section headings around it are (the "By pinned"
+ *  grouping's). */
+export function GroupBranch({ branch, name, hint, icon, n, state, folded, onToggle, section, children }: { branch: string; name: string; hint?: string; icon: IconName; n: number; state: TreeState; folded: boolean; onToggle: () => void; section?: boolean; children?: React.ReactNode }) {
+  const said = n > 0 ? state : undefined;
+  const info = hint ? <InfoTip name={name} text={hint} /> : null;
+  const body = n > 0 ? children : undefined;
+  if (section) {
+    return (
+      <Section
+        title={<SectionTitle icon={icon} name={name} />}
+        folded={folded}
+        onToggle={onToggle}
+        right={<span className="flex shrink-0 items-center gap-1.5">{info}<BranchEnd n={n} state={said} /></span>}
+      >
+        {body ?? (hint ? <EmptyHint text={hint} /> : null)}
+      </Section>
+    );
+  }
+  return (
+    <TreeBranch branch={branch} top folded={folded} onToggle={onToggle} toggleLabel={name} icon={icon} title={<GroupTitle name={name} onToggle={onToggle} />} info={info} end={<><span className="flex-1" /><BranchEnd n={n} state={said} /></>} empty={hint}>
+      {body}
+    </TreeBranch>
+  );
+}
+
+/** "Not on a to-do": its agents directly under it, no repository rows (#6458); a row opened in a terminal ends with its
+ *  source mark, as everywhere (#6591). */
+const LooseBranch = memo(function LooseBranch({ g, section, ...p }: { g: LooseGroup; section?: boolean } & TreeRowProps) {
+  const [folded, toggle] = useFolded(g.key, g.folded, { follow: true, holds: holdsRow(g.sessions, p.activeKey) });
+  return (
+    <GroupBranch branch={g.key} name={g.name} hint={g.hint} icon="layers" n={g.sessions.length} state={g.state} folded={folded} onToggle={toggle} section={section}>
+      {g.agents.map((a) => <TreeAgentRows key={a.key} a={a} depth={0} {...p} activeKey={withinAgent(a, p.activeKey)} />)}
+    </GroupBranch>
+  );
+});
+
+/** One todo and its agents under its own folding line (`top`: at the list's top level, "By to-do"); a direction tree's
+ *  task (#4352) says its task state. */
+export const TreeTodoRows = memo(function TreeTodoRows({ td, top, ...p }: { td: TreeTodo; top?: boolean } & TreeRowProps) {
+  const [folded, toggle] = useFolded(td.key, td.folded, { follow: true, holds: holdsRow(td.sessions, p.activeKey) });
+  // a direction's task no agent is on yet (#4352): nothing to unfold, and no bare 0 beside its state
+  const unfolds = td.agents.length > 0 || !td.taskState;
+  const title = td.todoId ? (
+    <a href={href({ name: "todos", id: td.todoId })} onClick={(e) => { e.preventDefault(); openTodoFromTag(td.todoId!, navigate, p.onNavigate); }} className="min-w-0 flex-1 truncate font-medium text-ink hover:underline">{td.name}</a>
+  ) : (
+    <button type="button" onClick={toggle} className="min-w-0 flex-1 truncate text-left">{td.name}</button>
+  );
+  const state = td.taskState ? (
+    <DirectionStateText state={td.taskState} />
+  ) : td.status === "usage_limit" ? (
+    <span className="shrink-0 text-[11px] font-semibold whitespace-nowrap text-orange">{t("lib-usage-limit.short")}</span>
+  ) : (
+    <TreeStateText state={td.state} label={td.statusLabel} />
+  );
+  return (
+    <TreeBranch
+      branch={td.todoId ? `todo:${td.todoId}` : td.key}
+      top={top}
+      folded={folded}
+      onToggle={unfolds ? toggle : undefined}
+      toggleLabel={t("sidebar.task_agents", { name: td.name })}
+      icon={td.todoId ? "todo" : undefined}
+      title={title}
+      end={<>{(td.sessions.length > 0 || !td.taskState) && <GroupCount n={td.sessions.length} label={t("sidebar.agent_count", { count: td.sessions.length })} className="shrink-0" />}{state}</>}
+    >
+      {td.agents.map((a) => <TreeAgentRows key={a.key} a={a} depth={0} {...p} activeKey={withinAgent(a, p.activeKey)} />)}
+    </TreeBranch>
+  );
+});
+
 /** An agent and, folded under it, the agents it spawned for the same todo. */
-function TreeAgentRows({ a, depth, machines, showHost, reg, hover, activeKey, go, onRowMenu }: { a: TreeAgent; depth: number } & TreeRowProps) {
+const TreeAgentRows = memo(function TreeAgentRows({ a, depth, machineLabel, showHost, noContext, keyPrefix = "", reg, hover, activeKey, go, onRowMenu }: { a: TreeAgent; depth: number } & TreeRowProps) {
   const subtree = (n: TreeAgent): Session[] => n.children.flatMap((c) => [c.session, ...subtree(c)]);
-  const [folded, toggle] = useFolded(a.key + ":children", a.folded, { follow: true, holds: holdsRow(subtree(a), activeKey) });
+  const [folded, toggle] = useFolded(keyPrefix + a.key + ":children", a.folded, { follow: true, holds: holdsRow(subtree(a), activeKey) });
   const s = a.session;
-  const key = `s:${s.machine_id}/${s.session_id}`;
-  const context = [s.space_name || baseName(s.cwd), machines.length > 1 ? machineWithHub(s.machine_id, machines) : ""].filter(Boolean).join(" · ");
+  const key = `${keyPrefix}s:${s.machine_id}/${s.session_id}`;
+  const context = noContext ? undefined : [s.space_name || baseName(s.cwd), machineLabel(s.machine_id)].filter(Boolean).join(" · ");
   return (
     <div style={depth ? { paddingLeft: 12 } : undefined}>
       <div className="flex items-center">
         {a.children.length > 0 && (
           <button type="button" aria-expanded={!folded} aria-label={t("lib-todo-tree.spawned_agents", { count: a.children.length })} onClick={toggle} className="touch-hit relative z-10 -mr-1 flex size-4 shrink-0 items-center justify-center text-ink-3">
-            <Icon name="chevron" size={9} stroke={2.4} className="opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+            <Icon name="chevron" size={9} stroke={2.4} className="opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
           </button>
         )}
         <div className="min-w-0 flex-1">
@@ -119,30 +263,42 @@ function TreeAgentRows({ a, depth, machines, showHost, reg, hover, activeKey, go
         </div>
       </div>
       {a.children.length > 0 && (
-        <Collapse open={!folded}>
+        <Collapse open={!folded} sidebarFold>
           <div className="flex flex-col gap-px border-l border-line ml-2" inert={folded || undefined}>
-            {a.children.map((c) => <TreeAgentRows key={c.key} a={c} depth={depth + 1} machines={machines} showHost={showHost} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} />)}
+            {a.children.map((c) => <SpawnedAgentRows key={c.key} a={c} depth={depth + 1} machineLabel={machineLabel} showHost={showHost} noContext={noContext} keyPrefix={keyPrefix} reg={reg} hover={hover} activeKey={withinAgent(c, activeKey)} go={go} onRowMenu={onRowMenu} />)}
           </div>
         </Collapse>
       )}
     </div>
   );
+});
+// the memo again, for the spawned agents' rows: inside the function above, its own name is the bare function
+const SpawnedAgentRows = TreeAgentRows;
+
+/** Exact-target hooks for workspace menus and empty selections. The tree never infers action destinations from cwd. */
+export interface WorkspaceTreeActions {
+  onSelectWorkspace?: (target: WorkspaceTarget) => void;
+  onWorkspaceMenu?: (target: WorkspaceTarget, anchor: HTMLElement, at?: MenuAt) => void;
 }
 
+const holdsWorkspace = (w: RepoWorktree, key?: string): boolean => Boolean(key && (w.key === key || w.children.some((child) => holdsWorkspace(child, key))));
+
 /** One computer in the repository tree (#2108 / #2126): header folds the whole computer; flat when only one computer has agents. */
-export function RepoMachineSection({ m, flat, machines, reg, hover, activeKey, go, onRowMenu }: { m: RepoMachine; flat: boolean; machines: Machine[]; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn }) {
+export function RepoMachineSection({ m, flat, machines, reg, hover, activeKey, go, onRowMenu, ...actions }: { m: RepoMachine; flat: boolean; machines: Machine[]; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn } & WorkspaceTreeActions) {
   const online = m.machine.online;
-  const [folded, toggle] = useFolded(m.foldKey, !online, { holds: holdsRow(m.sessions, activeKey) });
-  const repos = m.repos.map((tree) => <RepoSection key={tree.key} tree={tree} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} />);
+  const selected = useWorkspaceSelection();
+  const onSelectWorkspace = (target: WorkspaceTarget) => { selectWorkspace(target); actions.onSelectWorkspace?.(target); };
+  const [folded, toggle] = useFolded(m.foldKey, !online, { holds: m.repos.some((r) => r.worktrees.some((w) => holdsRow(w.navigationTree ?? w.tree, activeKey) || holdsWorkspace(w, selected))) });
+  const repos = m.repos.map((tree) => <RepoSection key={tree.key} tree={tree} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} selected={selected} {...actions} onSelectWorkspace={onSelectWorkspace} />);
   if (flat) return <>{repos}</>;
   return (
-    <div className="mt-3">
+    <SidebarGroup className="mt-3" heading={
       <div className="group/sec flex items-center gap-1 px-2 pb-0.5">
         <button type="button" aria-expanded={!folded} onClick={toggle} className="relative z-10 flex min-h-7 min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap text-left [@media(pointer:coarse)]:min-h-11">
           <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", online ? "bg-green" : "bg-line-strong")} />
           <span className={cx("min-w-0 truncate text-[12.5px] font-semibold", online ? "text-ink" : "text-ink-3")}>{machineWithHub(m.machine.id, machines)}</span>
           <span className="sr-only">{online ? t("sidebar.online") : neverConnected(m.machine) ? t("sidebar.not_connected_yet") : t("sidebar.offline")}</span>
-          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 opacity-0 transition-[opacity,transform] duration-200 group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
         {m.needs > 0 && !(folded && online) ? (
           <span title={stateCount("needs_you", m.needs)} className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums">
@@ -154,18 +310,19 @@ export function RepoMachineSection({ m, flat, machines, reg, hover, activeKey, g
           <SessionTally sessions={m.sessions} folded={folded} />
         )}
       </div>
-      <Collapse open={!folded}>
+      }>
+      <Collapse open={!folded} sidebarFold unclipped>
         <div className="flex flex-col gap-px" inert={folded || undefined}>
           {repos}
         </div>
       </Collapse>
-    </div>
+    </SidebarGroup>
   );
 }
 
 /** One repository on one machine ("By repo"): its working trees under it, the main checkout marked and first. */
-function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu }: { tree: RepoTree; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn }) {
-  const [folded, toggle] = useFolded(tree.key, false, { holds: tree.worktrees.some((w) => holdsRow(w.tree, activeKey)) });
+function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu, selected, ...actions }: { tree: RepoTree; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn; selected?: string } & WorkspaceTreeActions) {
+  const [folded, toggle] = useFolded(tree.key, false, { holds: tree.worktrees.some((w) => holdsRow(w.navigationTree ?? w.tree, activeKey) || holdsWorkspace(w, selected)) });
   const row = (s: Session, hint: string) => {
     const key = `s:${s.machine_id}/${s.session_id}`;
     return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={hint} onMenu={onRowMenu} />;
@@ -179,36 +336,48 @@ function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu }: { tree: Rep
       onToggle={toggle}
       right={<GroupCount n={tree.count} label={t("sidebar.agent_count", { count: tree.count })} />}
     >
-      {flat ? tree.worktrees[0]!.sessions.map((s) => row(s, tree.name)) : tree.worktrees.map((w) => <RepoWorktreeRows key={w.key} w={w} repo={tree.name} row={row} activeKey={activeKey} />)}
+      {flat ? tree.worktrees[0]!.sessions.map((s) => row(s, tree.name)) : tree.worktrees.map((w) => <RepoWorktreeRows key={w.key} w={w} repo={tree.name} row={row} activeKey={activeKey} go={go} selected={selected} {...actions} />)}
     </Section>
   );
 }
 
 /** One working tree's agents under its own folding row: the main checkout wears a home mark, and a tree with nothing
  *  running says so. Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
-function RepoWorktreeRows({ w, repo, row, activeKey }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactNode; activeKey: string }) {
-  const [folded, toggle] = useFolded(w.key, w.sessions.length === 0, { holds: holdsRow(w.tree, activeKey) });
-  const descendants = w.tree.slice(w.sessions.length);
-  const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, false, { holds: holdsRow(descendants, activeKey) });
+function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactNode; activeKey: string; go: GoFn; selected?: string } & WorkspaceTreeActions) {
+  const [folded, toggle] = useFolded(w.key, !w.workspace && w.sessions.length === 0, { holds: holdsRow(w.navigationTree ?? w.tree, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
+  const descendants = w.navigationTree ? w.children.flatMap((c) => c.navigationTree ?? c.tree) : w.tree.slice(w.sessions.length);
+  const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, false, { holds: holdsRow(descendants, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
+  const selectedRow = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const row = selectedRow.current;
+    if (selected !== w.key || !row || row.closest("[inert]") || !row.getClientRects().length) return;
+    row.scrollIntoView?.({ block: "nearest" });
+  }, [selected, w.key]);
   const mutes = useStore((st) => st.mutes);
   const running = w.sessions.filter((s) => !isQuiet(s, mutes)).length;
+  const title = [w.workspace?.project_name, w.name, w.branch, w.path, w.workspace?.source].filter(Boolean).join(" · ");
+  const label = <><span className="min-w-0 truncate">{w.name}</span>{w.workspace?.project_name && w.workspace.project_name !== repo && <span className="min-w-0 max-w-24 truncate text-ink-3">{w.workspace.project_name}</span>}</>;
   return (
-    <div className="mt-px">
-      <button type="button" aria-expanded={!folded} onClick={toggle} className="relative z-10 flex w-full min-w-0 items-center gap-1.5 whitespace-nowrap rounded-control py-1 pl-3 pr-2 text-left text-[11.5px] text-ink-2 hover:bg-hover">
-        <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+    <div ref={selectedRow} className="mt-px" data-workspace-key={w.workspace ? w.key : undefined}>
+      <div className={cx("group/sec relative z-10 flex w-full min-w-0 items-center gap-1.5 whitespace-nowrap rounded-control py-1 pl-3 pr-2 text-left text-[11.5px] text-ink-2 hover:bg-hover", selected === w.key && "bg-hover")} {...(w.target && actions.onWorkspaceMenu ? contextMenuProps((at, anchor) => actions.onWorkspaceMenu!(w.target!, anchor, at)) : {})}>
+        <button type="button" aria-label={t("workspace-tree.disclosure", { name: w.name })} aria-expanded={!folded} onClick={toggle} className="touch-hit relative flex min-h-7 shrink-0 items-center [@media(pointer:coarse)]:min-h-11">
+          <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
+        </button>
         {w.main && <Icon name="home" size={11} stroke={2} className="shrink-0 text-ink-3" />}
-        <span className="min-w-0 truncate">{w.name}</span>
+        <button type="button" title={title} aria-pressed={selected === w.key} aria-expanded={!folded} onClick={() => { if (w.target) actions.onSelectWorkspace?.(w.target); toggle(); }} className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 text-left hover:text-ink [@media(pointer:coarse)]:min-h-11">{label}</button>
+        {w.workspace?.available === false && <Icon name="warning" size={11} className="shrink-0 text-ink-3" aria-label={t("workspace-tree.unavailable")} />}
         <span className="ml-auto shrink-0 text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
-      </button>
-      <Collapse open={!folded}>
+        {w.target && actions.onWorkspaceMenu && <button type="button" data-row-menu aria-label={t("workspace-tree.actions", { name: w.name })} aria-haspopup="menu" onClick={(e) => actions.onWorkspaceMenu!(w.target!, e.currentTarget)} className="touch-hit relative flex size-5 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover-2 focus-visible:text-ink [@media(hover:none)]:size-8"><Icon name="more" size={12} /></button>}
+      </div>
+      <Collapse open={!folded} sidebarFold>
         <div inert={folded || undefined}>
           <div className="flex flex-col gap-px pl-2">{w.sessions.map((s) => row(s, `${repo} › ${w.name}`))}</div>
           {w.children.length > 0 && (
             <>
               <RepoChildToggle count={w.children.length} counts={w.childStates} folded={childrenFolded} onToggle={toggleChildren} />
-              <Collapse open={!childrenFolded}>
+              <Collapse open={!childrenFolded} sidebarFold>
                 <div className="ml-3.5 flex w-[calc(100%-0.875rem)] flex-col gap-px" inert={childrenFolded || undefined}>
-                  {w.children.map((c) => <RepoWorktreeRows key={c.key} w={c} repo={repo} row={row} activeKey={activeKey} />)}
+                  {w.children.map((c) => <RepoWorktreeRows key={c.key} w={c} repo={repo} row={row} activeKey={activeKey} go={go} selected={selected} {...actions} />)}
                 </div>
               </Collapse>
             </>
@@ -257,7 +426,7 @@ function RepoChildToggle({ count, counts, folded, onToggle }: { count: number; c
                 ))}
               </span>
             )}
-            <Icon name="chevron" size={10} stroke={2.4} className="size-2.5 shrink-0 text-ink-3 transition-transform duration-200 motion-reduce:transition-none" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+            <Icon name="chevron" size={10} stroke={2.4} className="size-2.5 shrink-0 text-ink-3 transition-transform motion-reduce:transition-none" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
           </span>
         </span>
       </button>
@@ -372,13 +541,13 @@ export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: 
   const [folded, toggle] = useFolded(m.foldKey, !online, { holds: holdsRow(m.sessions, p.activeKey) });
   const name = machineWithHub(m.machine.id, p.machines);
   return (
-    <div className="mt-3">
+    <SidebarGroup className="mt-3" heading={
       <div className="group/sec flex items-center gap-1 px-2 pb-0.5 [@media(hover:none)]:pr-11" {...contextMenuProps((at) => p.onNodeMenu(machineNode(m.machine, { fold: { folded, toggle } }), at, name))}>
         <button type="button" aria-expanded={!folded} onClick={toggle} className="relative z-10 flex min-h-7 min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap text-left [@media(pointer:coarse)]:min-h-11">
           <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", online ? "bg-green" : "bg-line-strong")} />
           <span className={cx("min-w-0 truncate text-[12.5px] font-semibold", online ? "text-ink" : "text-ink-3")}>{machineWithHub(m.machine.id, p.machines)}</span>
           <span className="sr-only">{online ? t("sidebar.online") : neverConnected(m.machine) ? t("sidebar.not_connected_yet") : t("sidebar.offline")}</span>
-          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 opacity-0 transition-[opacity,transform] duration-200 group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
         {m.needs > 0 && !(folded && online) ? (
           <span title={stateCount("needs_you", m.needs)} className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums">
@@ -390,7 +559,8 @@ export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: 
           <SessionTally sessions={m.sessions} folded={folded} />
         )}
       </div>
-      <Collapse open={!folded}>
+      }>
+      <Collapse open={!folded} sidebarFold unclipped>
         <div className="flex flex-col gap-px" inert={folded || undefined}>
           {m.spaces.map((sp) => <WorkspaceBlock key={sp.key} sp={sp} {...p} />)}
           {shells && shells.length > 0 && <ShellTree mid={m.machine.id} online={online} spaces={shells} {...p} />}
@@ -403,7 +573,7 @@ export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: 
           {!m.sessions.length && <p className="truncate px-3 py-1 text-[12px] text-ink-3">{online ? t("sidebar.none_running") : t("sidebar.agents_in_recent")}</p>}
         </div>
       </Collapse>
-    </div>
+    </SidebarGroup>
   );
 }
 
@@ -415,13 +585,13 @@ function TreeBlock({ foldKey, sessions, activeKey, state, title, right, children
     <div>
       <div className="group/sec relative flex items-center gap-1 pr-2 pl-2 [@media(hover:none)]:pr-11" {...(onMenu ? contextMenuProps((at, el) => onMenu(at, el, { folded, toggle })) : {})}>
         <button type="button" aria-expanded={!folded} onClick={toggle} className="relative z-10 flex min-h-7 min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap text-left text-[12px] text-ink-2 hover:text-ink [@media(pointer:coarse)]:min-h-11">
-          <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+          <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
           {state ? <StatusMark state={state} size="sm" /> : <span className="size-1.5 shrink-0" />}
           {title}
         </button>
         {right(folded)}
       </div>
-      <Collapse open={!folded}>
+      <Collapse open={!folded} sidebarFold>
         <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>{children}</div>
       </Collapse>
     </div>
@@ -470,11 +640,11 @@ function ChildSpaces({ sp, ...p }: { sp: HerdrSpace } & TreeProps) {
   return (
     <div>
       <button type="button" aria-expanded={!folded} onClick={toggle} className="relative z-10 flex min-h-7 w-full min-w-0 items-center gap-1.5 pr-2 pl-2 text-left text-[11.5px] whitespace-nowrap text-ink-3 hover:text-ink [@media(pointer:coarse)]:min-h-11">
-        <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 transition-transform duration-200" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+        <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         <span className="min-w-0 flex-1 truncate">{t("sidebar.child_count", { count: n })}</span>
         {folded && <SessionTally sessions={sp.tree.slice(sp.sessions.length)} folded />}
       </button>
-      <Collapse open={!folded}>
+      <Collapse open={!folded} sidebarFold>
         <div className="flex flex-col gap-px" inert={folded || undefined}>
           {sp.children.map((c) => <WorkspaceBlock key={c.key} sp={c} {...p} />)}
         </div>
@@ -522,8 +692,8 @@ function tabNode(t: HerdrTab, machines: Machine[]): MenuNode {
   };
 }
 
-// One herdr tab: `#N` (or its name) and what its most urgent pane is doing; it opens on that pane, the others are the
-// chat's pane tabs (PaneTabs). A tab with one pane has that agent's ⋯, one with several the tab's own. A tab with several
+// One herdr tab: `#N` (or its name) and what its most urgent pane is doing; it opens on that pane. A lead's workers are not
+// among its panes (the hub folds them under the lead, lib/team.ts): they are in the lead's Team panel. A tab with one pane has that agent's ⋯, one with several the tab's own. A tab with several
 // agents (#2320) opens up to them, in pane order: the "Lead" (the first pane, the others split from it) on top, its
 // branches under it; the choice is kept per tab like the sidebar's other folds, and folded it is the one row it always was.
 function TabRow({ t: tab, ...p }: { t: HerdrTab } & TreeProps) {
@@ -587,10 +757,10 @@ function TabRow({ t: tab, ...p }: { t: HerdrTab } & TreeProps) {
           className="touch-hit absolute top-1/2 right-8 z-20 flex h-6 -translate-y-1/2 items-center gap-0.5 whitespace-nowrap rounded-[6px] pr-0.5 pl-1 text-[11px] text-ink-3 tabular-nums hover:bg-hover hover:text-ink-2 [@media(hover:none)]:right-11"
         >
           {t("sidebar.agent_count", { count: n })}
-          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 transition-transform duration-200" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
       </div>
-      <Collapse open={!folded}>
+      <Collapse open={!folded} sidebarFold>
         <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>
           {tab.sessions.map((s, i) => {
             const key = rowKey(s);

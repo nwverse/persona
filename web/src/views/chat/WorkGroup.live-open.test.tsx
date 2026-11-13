@@ -154,7 +154,7 @@ describe.each(["assistant", "agents"] as const)("%s compact execution", (style) 
     draw(style, seg(finished), false);
     expect(header().getAttribute("aria-expanded")).toBe("false");
   });
-  it("all tool kinds and every plan update stay inside one summary until manually opened", () => {
+  it("all tool kinds and every plan update stay inside one summary until manually opened", async () => {
     const named = (n: number, name: string, input: Record<string, unknown>): Step => {
       const s = tool(n) as Extract<Step, { kind: "tool" }>;
       return { ...s, use: { ...s.use, tool_name: name, tool_input: input } };
@@ -169,11 +169,15 @@ describe.each(["assistant", "agents"] as const)("%s compact execution", (style) 
     expect(host.querySelectorAll("[data-work-group]")).toHaveLength(1);
     expect(host.textContent).not.toContain("Example subagent");
     expect(host.textContent).not.toContain("Example workflow");
-    tap();
+    await act(async () => { header().click(); await vi.dynamicImportSettled(); });
     expect(detailText()).toContain("Example subagent");
     expect(detailText()).toContain("Example workflow");
-    expect(detailText()).toContain("First plan");
-    expect(detailText()).toContain("Revised plan");
+    // one plan card, the latest list (#5156, cindy); the earlier update stays inspectable as a row
+    const cards = detail()!.querySelectorAll("[data-plan-card]");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].textContent).toContain("Revised plan");
+    expect(cards[0].textContent).not.toContain("First plan");
+    expect(detail()!.querySelector('[data-action-row="TodoWrite"]')).not.toBeNull();
   });
   it("reloaded completed history starts folded and remains manually inspectable", () => {
     draw(style, seg(finished), false);

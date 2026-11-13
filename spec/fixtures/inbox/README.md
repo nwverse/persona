@@ -12,7 +12,7 @@
 | 只有 done_at 非空才是已处理，read、done_by 或 AI 处理状态都不能替代它。 | InboxModels 的 `isDone`；InboxView 的 `list` | `read_and_agent_do_not_change_tier`、`untriaged_and_done_test_assertions` |
 | 非空分段固定按需要你、知悉即可、已折叠、已处理排列。 | InboxView 的 `list`；InboxModels 的 `Tier.allCases` | `tiers_and_done_sections`、`empty_inbox` |
 | 默认展开 action 和 fyi，折叠后仍保留成员及标题计数。 | InboxView 的 `expanded`、`sectionHeader` | `tiers_and_done_sections`、`expanded_noise_and_done` |
-| hub 输出先按 updated_at 倒序，分拣档位不改变它的排序。 | `server/internal/assistant/inbox.go` 的 `Service.inboxList`（收件箱是管理者的，hub 原样转发） | `hub_orders_by_update`、`hub_order_reversed_input`、`hub_order_empty` |
+| hub 输出先按 updated_at 倒序，分拣档位不改变它的排序。 | `server/internal/assistant/inbox_api.go` 的 `Service.inboxList`（收件箱是管理者的，hub 原样转发） | `hub_orders_by_update`、`hub_order_reversed_input`、`hub_order_empty` |
 | iOS 未处理事项在段内保持输入顺序，不自行重排 updated_at。 | InboxStore 的 `apply`；InboxView 的 `list` | `input_order_is_authoritative` |
 | iOS 已处理事项按 done_at 倒序展示。 | InboxView 的 `shownDone` | `tiers_and_done_sections`、`expanded_noise_and_done` |
 | 来源筛选比较 account，飞书的筛选值为 feishu，邮箱的筛选值为账号 id。 | InboxView 的 `matches`、`filters` | `inbox_filter_feishu`、`inbox_filter_mail_account`、`source_filter_compares_account` |
@@ -96,3 +96,16 @@ Hand to AI remembers, per source, the target an item was last handed to (#2121; 
   - Nothing remembered, or an unreadable value, gives `null`: the platform's own default.
   - Cases with `needs_new_chat` apply only where New Chat is a target.
 - `recency`: one entry per source, latest first, at most `limit` sources.
+
+## Following up: state words, row line, timeline, showcase (#6611)
+
+These four files are the contract of `docs/assistant/inbox.md` ("Following up") for the manager and every client (iOS, iPad and iPhone Duo, web, Android). The data is made up; `chat` is a placeholder connector id that the apps draw with their generic source icon. The showcase is in Chinese because its screenshots are read in zh-Hans.
+
+| operation | File | Checked by | Input and output |
+| --- | --- | --- | --- |
+| `inbox_now` | `now.json` | Go (`expected.now`, `expected.section` from the item; the test comes with the manager's state-key change), iOS, web, Android (`expected.text` in `en`, `zh-Hans`, `ja`) | `texts` is the one table of words; `compose` says how `waiting`, `check_due` and `failed` are put together; a case with `input.follow_by_lang` gives the model's `who` and `next` per language; `{time}` in the text is `check_at` in the app's own short format for a future moment, put in before comparing |
+| `inbox_row_meta` | `row.json` | iOS, web, Android | `expected.meta` per language is the row's third line and the detail's small line; `null` means no `where`, so the app keeps today's line |
+| `inbox_timeline` | `timeline.json` | iOS, web, Android | `folded` and `expanded` are the entry ids shown, in order; `steps[].icon` is, with `via`, a meaning in `spec/icons/meanings.json` or `source` (the item's source mark), and `reported` for every reported step; without `via`, the iPhone's `Theme.Icon` name for the kind, which each app maps to the icon it draws for that kind today; `reported` steps are drawn apart |
+| `inbox_showcase` | `showcase.json` | the screenshot runs of every client | the list, then the `detail` item with its timeline folded and expanded, at `now_clock`, in zh-Hans and en, light and dark |
+
+Who may change what: the keys, sections and words are fixed with the contract; a lane that needs a different input (how the manager marks a muted item, say) changes the case's input and says so in its PR.

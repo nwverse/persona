@@ -3,10 +3,13 @@
 // narrow: the opened item takes the list's place, with a way back. "Select" (top right) picks several items to mark them
 // done at once (#2059).
 import { useEffect, useState } from "react";
-import { useInbox, refreshInbox, type InboxItem } from "../../lib/inbox";
-import { sameManager } from "../../lib/manager-choice";
+import { TodoDialogHost } from "./InboxTodoDialog";
+import { useInbox, refreshInbox, loadRoutedItem, type InboxItem } from "../../lib/inbox";
+import { useScope } from "../../lib/current-assistant";
+import { ItemManager, otherManager, sameManager } from "../../lib/manager-choice";
 import { newDraft, useMailAccounts } from "../../lib/mail";
-import { navigate } from "../../lib/router";
+import { backToInboxList } from "../../lib/inbox-nav";
+import { InboxViewMemoryContext, useInboxViewMemory } from "../../lib/inbox-view-memory";
 import { t } from "../../i18n";
 import { Button, cx, IconButton, Spinner } from "../../ui/atoms";
 import { ComposeDialog } from "./ComposeDialog";
@@ -24,10 +27,20 @@ export function routedItem(items: InboxItem[], id: string | undefined, manager: 
 }
 
 export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?: string; onToggleSidebar: () => void }) {
-  const item = useInbox((s) => routedItem(s.items, id, manager));
+  const view = useInboxViewMemory(id, manager);
+  // the list's copy, else Done's history's: the list carries only the newest done items (#5549)
+  const item = useInbox((s) => routedItem(s.items, id, manager) ?? routedItem(s.history, id, manager));
   const loaded = useInbox((s) => s.loaded);
   const loading = useInbox((s) => s.loading);
-  const accounts = useMailAccounts();
+  // neither has it (a link to an item done past what the list carries): the hub's copy, once
+  const routing = useInbox((s) => s.routing.length > 0);
+  useEffect(() => {
+    if (id && loaded && !item) loadRoutedItem(id, manager);
+  }, [id, manager, loaded, item]);
+  // a new mail is the current assistant's (docs/assistant/managers.md "Clients"): its own mail accounts, sent through it
+  const scope = useScope();
+  const composer = scope.several ? otherManager(scope.id) : undefined;
+  const accounts = useMailAccounts({ manager: composer });
   const [composing, setComposing] = useState(false);
   // Selecting (#2059): the picked items' keys (itemKey); null: not selecting. Esc leaves it.
   const [picked, setPicked] = useState<Set<string> | null>(null);
@@ -41,10 +54,11 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
     return () => window.removeEventListener("keydown", onKey);
   }, [picking]);
   return (
+    <InboxViewMemoryContext.Provider value={view}>
     <div className="@container flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         <IconButton icon="sidebar" label={t("inbox-inbox.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
-        {id && <IconButton icon="chevronLeft" label={t("inbox-inbox.back_to_inbox")} onClick={() => navigate({ name: "inbox" })} className="@3xl:hidden" />}
+        {id && <IconButton icon="chevronLeft" label={t("inbox-inbox.back_to_inbox")} onClick={backToInboxList} className="@3xl:hidden" />}
         <h1 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">{t("inbox-inbox.title")}</h1>
         {loading && loaded && <Spinner />}
         {picking ? (
@@ -60,15 +74,21 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
       </header>
       <div className="flex min-h-0 flex-1">
         <section aria-label={t("inbox-inbox.list")} className={cx("min-h-0 w-full flex-col @3xl:flex @3xl:w-[380px] @3xl:shrink-0 @3xl:border-r @3xl:border-line", id ? "hidden" : "flex")}>
-          <InboxList selected={item ?? (id ? { id, manager } : undefined)} picked={picked} onPicked={setPicked} />
+          <InboxList key={view.revision} selected={item ?? (id ? { id, manager } : undefined)} picked={picked} onPicked={setPicked} />
         </section>
         <section aria-label={t("inbox-inbox.detail")} className={cx("min-h-0 min-w-0 flex-1 flex-col @3xl:flex", id ? "flex" : "hidden")}>
-          {id ? <InboxDetail item={item} loaded={loaded} /> : <DetailPlaceholder />}
+          {id ? <InboxDetail item={item} loaded={loaded && !routing} /> : <DetailPlaceholder />}
         </section>
       </div>
       <PolicyDialogHost />
       <FolderDialogHost />
-      {composing && <ComposeDialog draftKey="new" initial={newDraft(accounts[0]?.id ?? "")} accounts={accounts} onClose={() => setComposing(false)} />}
+      <TodoDialogHost />
+      {composing && (
+        <ItemManager.Provider value={composer}>
+          <ComposeDialog draftKey="new" initial={newDraft(accounts[0]?.id ?? "")} accounts={accounts} onClose={() => setComposing(false)} />
+        </ItemManager.Provider>
+      )}
     </div>
+    </InboxViewMemoryContext.Provider>
   );
 }

@@ -13,6 +13,8 @@ struct HubTunnel: Hashable {
 
     let hub: PairedHub
     let kind: Kind
+    /// The in-app route whose core dials the SSH server, for an SSH tunnel set to go through it.
+    var carrier: InAppTunnelRoute?
 
     /// Through it every time, not only when the hub's own addresses do not answer.
     var always: Bool {
@@ -37,7 +39,7 @@ struct HubTunnel: Hashable {
         switch kind {
         case .ssh:
             guard let route = hub.ssh else { return false }
-            return (try? await SSHTunnels.shared.open(hub.id, route: route, hub: hub.config.url)) != nil
+            return (try? await SSHTunnels.shared.open(hub.id, route: route, hub: hub.config.url, carrier: carrier)) != nil
         case .localProxy:
             guard let route = hub.localProxy else { return false }
             return (try? await LocalProxies.shared.open(hub.id, route: route, hub: hub.config.url)) != nil
@@ -64,6 +66,15 @@ struct HubTunnel: Hashable {
     }
 }
 
+/// Buttons pressed outside the app still talking to their hubs (`AppModel.outside`), by group: the last one of a group
+/// to finish closes the tunnels they opened, and the app going to the background leaves them to it.
+@MainActor private var outsideRuns: [String: Int] = [:]
+
+/// Which of two racing tasks answered first.
+@MainActor private final class Once {
+    var done = false
+}
+
 extension AppModel {
     // MARK: Tunnels to the hub (docs/operations/network.md「Connecting to hub through SSH」「经 App 内隧道连 hub」)
 
@@ -71,11 +82,27 @@ extension AppModel {
     func hubTunnels(_ group: String) -> [HubTunnel] {
         registry.members(group).flatMap { h -> [HubTunnel] in
             var out: [HubTunnel] = []
-            if h.ssh?.isUsable == true { out.append(HubTunnel(hub: h, kind: .ssh)) }
+            if let ssh = h.ssh, ssh.isUsable {
+                // Through the in-app tunnel: only with a core and a hub's in-app route to carry it.
+                let carrier = ssh.viaInAppTunnel ? inAppCarrier(for: h) : nil
+                if !ssh.viaInAppTunnel || carrier != nil { out.append(HubTunnel(hub: h, kind: .ssh, carrier: carrier)) }
+            }
             if h.localProxy?.isUsable == true { out.append(HubTunnel(hub: h, kind: .localProxy)) }
             if InAppTunnel.available, h.inAppTunnel?.isUsable == true { out.append(HubTunnel(hub: h, kind: .inApp)) }
             return out
         }
+    }
+
+    /// The in-app route an SSH tunnel set to go through the in-app tunnel uses (its sign-in, its probe): the hub's own,
+    /// else another paired hub's (the core and its sign-in are one per device). Nil in a build without the core.
+    func inAppCarrier(for hub: PairedHub) -> InAppTunnelRoute? {
+        #if DEBUG
+        // `-showSSHViaTunnel YES`: a stand-in route so the SSH page shows its switch in builds without the core (screenshots).
+        if UserDefaults.standard.bool(forKey: "showSSHViaTunnel") { return InAppTunnelRoute(targetHost: "hub.internal.example") }
+        #endif
+        guard InAppTunnel.available else { return nil }
+        if let own = registry.hubs.first(where: { $0.id == hub.id })?.inAppTunnel, own.isUsable { return own }
+        return registry.hubs.lazy.compactMap(\.inAppTunnel).first(where: \.isUsable)
     }
 
     /// Where a group's socket goes next when it has a tunnel, step by step as `HubWay.next` says: straight to the hub
@@ -133,6 +160,62 @@ extension AppModel {
         return t.hub.config
     }
 
+    /// How long a button pressed outside the app may take to find its way, leaving the request and the failure
+    /// notification room in the ~30 s iOS gives it.
+    static let outsideWayLimit: Duration = .seconds(20)
+
+    /// A button pressed outside the app (a notification's, the Live Activity's) for a group with tunnels (#3142). Its
+    /// socket on its way: the request goes to the hub the socket is on, routed already. Otherwise (closed for the
+    /// background with its tunnels, `suspendLinks`; just woken by a silent push, not there yet) a hub reached only
+    /// through a tunnel would not answer at its own address, so the group's way is picked as its socket would pick it
+    /// and the request goes there (the hub the tunnel reaches, not necessarily the group's first). Not found within
+    /// `outsideWayLimit`: timed out. The tunnels close again once the group's last such button is done, if its socket
+    /// is still closed (`recent` kept, so back in front they start while the direct way is asked).
+    @discardableResult
+    func outside<T: Sendable>(_ client: APIClient, _ work: @Sendable (APIClient) async throws -> T) async throws -> T {
+        let group = client.group
+        // A group with tunnels, or with added addresses (#4670): its paired address alone may not answer.
+        let added = registry.members(group).contains { !($0.addresses ?? []).isEmpty }
+        guard !hubTunnels(group).isEmpty || added else { return try await work(client) }
+        var through = client
+        if let live = link(group)?.live, live.state == .connected, let config = live.currentConfig {
+            through.config = config
+            return try await work(through)
+        }
+        outsideRuns[group, default: 0] += 1
+        defer {
+            outsideRuns[group, default: 1] -= 1
+            if outsideRuns[group] == 0 {
+                outsideRuns[group] = nil
+                if link(group)?.live.suspended != false {
+                    for h in registry.members(group) { closeTunnels(h.id, forget: false) }
+                }
+            }
+        }
+        // ponytail: a way still being found after the limit carries on by itself; its tunnel closes when the app next
+        // goes to the background, or stays as the socket's way when the app comes to the front.
+        let once = Once()
+        let config: ServerConfig? = try await withCheckedThrowingContinuation { c in
+            Task { @MainActor in
+                let config = await self.tunnelRoute(group)
+                if !once.done { once.done = true; c.resume(returning: config) }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: AppModel.outsideWayLimit)
+                if !once.done { once.done = true; c.resume(throwing: URLError(.timedOut)) }
+            }
+        }
+        if let config { through.config = config }
+        return try await work(through)
+    }
+
+    /// The app went to the background: every tunnel closes (iOS would cut them anyway), but those of a group whose
+    /// button is still on its way (`outside`), which closes them itself when it is done.
+    func closeTunnelsForBackground() {
+        guard !outsideRuns.isEmpty else { return closeAllTunnels() }
+        for h in registry.hubs where outsideRuns[h.group] == nil { closeTunnels(h.id, forget: false) }
+    }
+
     /// Every tunnel of every hub closes (the app went to the background, or there is no hub left).
     func closeAllTunnels() {
         SSHTunnels.shared.closeAll()
@@ -140,11 +223,11 @@ extension AppModel {
         InAppTunnels.shared.closeAll()
     }
 
-    /// One paired hub's tunnels close (it is removed, or its group is).
-    func closeTunnels(_ id: String) {
-        SSHTunnels.shared.close(id)
-        LocalProxies.shared.close(id)
-        InAppTunnels.shared.close(id)
+    /// One paired hub's tunnels close (it is removed, or its group is; `forget: false`: the app went to the background).
+    func closeTunnels(_ id: String, forget: Bool = true) {
+        SSHTunnels.shared.close(id, forget: forget)
+        LocalProxies.shared.close(id, forget: forget)
+        InAppTunnels.shared.close(id, forget: forget)
     }
 }
 

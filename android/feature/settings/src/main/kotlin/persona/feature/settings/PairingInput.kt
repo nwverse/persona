@@ -93,6 +93,17 @@ fun pairingFailure(error: Throwable): PairingFailure = when (error) {
     else -> error.cause?.takeIf { it !== error }?.let(::pairingFailure) ?: PairingFailure.Unknown
 }
 
+/** The address a failure names (a proxied address whose certificate was refused, #2622), from anywhere in [error]'s chain. */
+fun pairingFailureAddress(error: Throwable): String? =
+    generateSequence(error) { it.cause }.take(16).filterIsInstance<PairingException>().firstOrNull()?.address
+
+/** What went wrong and what to do, naming [address] where the message has room for one ([PairingFailure.ProxyCertificate]). */
+@androidx.compose.runtime.Composable
+fun pairingExplanation(reason: PairingFailure, address: String?): String =
+    if (reason == PairingFailure.ProxyCertificate) androidx.compose.ui.res.stringResource(R.string.settings_pairing_failure_proxy_certificate,
+        address ?: androidx.compose.ui.res.stringResource(R.string.settings_pairing_failure_proxy_this_address))
+    else androidx.compose.ui.res.stringResource(reason.explanation())
+
 /** What went wrong and what to do, as a string resource. */
 @StringRes
 fun PairingFailure.explanation(): Int = when (this) {
@@ -106,12 +117,17 @@ fun PairingFailure.explanation(): Int = when (this) {
     PairingFailure.Expired -> R.string.settings_pairing_failure_expired
     PairingFailure.Incompatible -> R.string.settings_pairing_failure_incompatible
     PairingFailure.TlsRequired -> R.string.settings_pairing_failure_tls_required
+    PairingFailure.AccessRequired -> R.string.settings_pairing_failure_access_required
+    PairingFailure.AccessRejected -> R.string.settings_pairing_failure_access_rejected
+    PairingFailure.ProxyCertificate -> R.string.settings_pairing_failure_proxy_certificate
     PairingFailure.Unknown -> R.string.settings_pairing_failure_unknown
 }
 
 internal enum class PairingRecovery(@StringRes val label: Int) {
     Retry(R.string.settings_pairing_recovery_retry), Scan(R.string.settings_pairing_rescan),
-    Permission(R.string.settings_pairing_recovery_permission), Update(R.string.settings_pairing_recovery_update)
+    Permission(R.string.settings_pairing_recovery_permission), Update(R.string.settings_pairing_recovery_update),
+    /** Back to the confirm page with the Cloudflare Access fields open. */
+    Access(R.string.settings_pairing_recovery_access),
 }
 
 internal fun PairingFailure.recovery(): PairingRecovery = when (this) {
@@ -119,8 +135,11 @@ internal fun PairingFailure.recovery(): PairingRecovery = when (this) {
     PairingFailure.InvalidCode, PairingFailure.Certificate, PairingFailure.Expired,
     PairingFailure.TlsRequired -> PairingRecovery.Scan
     PairingFailure.Incompatible -> PairingRecovery.Update
+    PairingFailure.AccessRequired, PairingFailure.AccessRejected -> PairingRecovery.Access
     PairingFailure.Dns, PairingFailure.Refused, PairingFailure.Unreachable,
     PairingFailure.Timeout, PairingFailure.Unknown -> PairingRecovery.Retry
+    // the proxy's certificate is fixed on the server; the same link works once it is
+    PairingFailure.ProxyCertificate -> PairingRecovery.Retry
 }
 
 /**
@@ -150,11 +169,11 @@ fun pairingStep(error: Throwable, stage: PairingStage? = null): PairingAttemptSt
             HubError.CertificateMismatch -> PairingAttemptStep.Tls
             HubError.PairingExpired -> PairingAttemptStep.Auth
             HubError.Protocol, HubError.Incompatible, HubError.HubMismatch -> PairingAttemptStep.Protocol
-            HubError.Server, HubError.RateLimited -> PairingAttemptStep.Http
+            HubError.Server, HubError.RateLimited, HubError.AccessRequired, HubError.AccessRejected -> PairingAttemptStep.Http
             HubError.TlsRequired -> if (hub.status != null) PairingAttemptStep.Http else PairingAttemptStep.Network
             else -> PairingAttemptStep.Network
         }
-        reason == PairingFailure.Certificate -> PairingAttemptStep.Tls
+        reason == PairingFailure.Certificate || reason == PairingFailure.ProxyCertificate -> PairingAttemptStep.Tls
         reason == PairingFailure.Expired -> PairingAttemptStep.Auth
         reason == PairingFailure.Incompatible -> PairingAttemptStep.Protocol
         reason == PairingFailure.InvalidCode || reason == PairingFailure.TlsRequired ->

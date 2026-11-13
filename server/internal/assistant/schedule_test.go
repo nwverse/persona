@@ -427,7 +427,8 @@ func TestCheckTask(t *testing.T) {
 		{Repeat: repeatDaily, Title: "早报", Prompt: "x", Time: "09:00", Weekdays: []int{5, 1, 1}},
 		{Repeat: repeatInterval, Prompt: "x", EveryMinutes: 30, PermissionMode: "bypassPermissions", Effort: "high", Launcher: "claude-fast"},
 		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Enabled: true, PermissionMode: "acceptEdits"},
-		{Repeat: repeatOnce, Prompt: "x", At: now.Add(-time.Hour)}, // off: a past time is fine
+		{Repeat: repeatOnce, Prompt: "x", At: now.Add(-time.Hour)},                                    // off: a past time is fine
+		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Launcher: "codex", Effort: "ultra"}, // #6181: a codex task takes its launcher's own levels
 	}
 	for _, task := range ok {
 		if err := checkTask(&task, now); err != nil {
@@ -446,6 +447,8 @@ func TestCheckTask(t *testing.T) {
 		{Repeat: repeatOnce, Prompt: "x", At: now.Add(-time.Hour), Enabled: true},
 		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), PermissionMode: "yolo"},
 		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Effort: "huge"},
+		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Launcher: "claude", Effort: "ultra"}, // ultra is Codex-only
+		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Launcher: "codex", Effort: "huge"},
 		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Launcher: "rm -rf"},
 		{Repeat: "weekly", Prompt: "x"},
 		{Repeat: repeatOnce, At: now.Add(time.Hour)},
@@ -1077,7 +1080,7 @@ func TestSnapshotScheduleTellsMisses(t *testing.T) {
 	}
 	sc.mu.Unlock()
 
-	_, routines, routinesTotal, misses, total := h.snapshotSchedule(context.Background(), loc, now)
+	_, _, routines, routinesTotal, misses, total := h.snapshotSchedule(context.Background(), loc, now)
 	if len(routines) != 2 || routinesTotal != 2 || routines[0].Rule != "工作日 09:00" || routines[0].LastStatus != runOK ||
 		routines[1].LastStatus != runFailed || !strings.Contains(routines[1].LastWhy, "API Error: 503") {
 		t.Fatalf("routines: %+v (%d)", routines, routinesTotal)
@@ -1124,7 +1127,7 @@ func TestSnapshotScheduleLateRecordedRunAndTotals(t *testing.T) {
 	}
 	sc.mu.Unlock()
 
-	_, routines, routinesTotal, misses, total := h.snapshotSchedule(context.Background(), loc, now)
+	_, _, routines, routinesTotal, misses, total := h.snapshotSchedule(context.Background(), loc, now)
 	if len(routines) != 8 || routinesTotal != 10 {
 		t.Fatalf("daily tasks: %d shown of %d, want 8 of 10", len(routines), routinesTotal)
 	}

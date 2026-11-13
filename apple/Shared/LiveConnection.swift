@@ -68,9 +68,15 @@ nonisolated enum ServerEvent: Sendable {
     case todos
     /// The personas the hub offers changed, e.g. a tiered look moved to another tier (docs/apple/persona.md): list them again.
     case personas
+    /// The avatar chosen on the hub changed (another device chose one, or the hub went back to the default when its
+    /// package or extension went; docs/apple/persona.md): `effective` is the one to show, `id` the one chosen.
+    case look(id: String?, effective: String?)
     /// The hub's roster of managers changed (docs/assistant/managers.md): Settings › Managers reads it again. Sent only to a
     /// socket that asked for feature `managers` (`queryItems`).
     case managers
+    /// The direction tree changed on the hub (#4352): a to-do, an Agent's session, a direction or its name. No payload:
+    /// the clients read `GET /api/v1/assistant/directions/tree` again, and on every (re)connect.
+    case directions
     case assistantFeed(FeedItem)
     case assistantView(ExtensionAssistantView)
     case assistantViewAction(conversation: String, action: ExtensionViewAction)
@@ -85,7 +91,13 @@ nonisolated enum ServerEvent: Sendable {
     /// An extension's data changed (`ui.invalidate`, docs/extensions/extensions.md「ui.invalidate」): its interface `id` (nil: all of
     /// them) is drawn again where it is shown.
     case extensionInvalidate(extension: String, id: String?)
+    /// A meeting's conversation changed (#3862, docs/assistant/meeting-minutes.md「The `meeting_live` event」): content-free,
+    /// only the parts that changed (an open set) and their revisions; the app reads the newer parts with `GET …/live?parts=`.
+    case meetingLive(recordingID: String, changed: [String], revs: [String: Int64])
     case error(SessionKey?, String)
+
+    private struct EventType: Decodable { var type: String }
+    private static let subscriptionType = Data(#""type":"subscription""#.utf8)
 
     private struct Envelope: Decodable {
         var type: String
@@ -154,6 +166,8 @@ nonisolated enum ServerEvent: Sendable {
         var key: String?
         var conversation: String?
         var plan: TaskPlan?
+        /// look's: the avatar to show (`id` is the one chosen).
+        var effective: String?
         var plugin: String?
         /// extension_ui's (plugin_ui says `plugin`).
         var extensionID: String?
@@ -171,12 +185,17 @@ nonisolated enum ServerEvent: Sendable {
         /// The manager a manager's own message is from, when not the hub's own assistant (docs/protocol/protocol.md
         /// "Messages to the App"); raw, so another event's `manager` of another shape cannot break the envelope.
         var manager: JSONValue?
+        /// meeting_live's.
+        var recordingID: String?
+        /// meeting_live's list of parts; raw, since other messages use `changed` for other shapes.
+        var changed: JSONValue?
 
         enum CodingKeys: String, CodingKey {
             case type, machines, sessions, upsert, remove, revision, items, backlog, text, status, interaction, id, name, args, event, message, error, revs, fleet, history
             case features, epoch, seq, full, cols, rows, data, unsupported, state, desktops, mesh, channel, build, update, item, view, action, key, conversation, plan
             case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution, manager
-            case answeredBy = "answered_by"
+            case effective, changed
+            case answeredBy = "answered_by", recordingID = "recording_id"
             case extensionID = "extension"
             case hubID = "hub_id", hubName = "hub_name", protocolVersion = "protocol", minAppBuild = "min_app_build", publicURL = "public_url"
             case settingsChanged = "settings_changed", olAccount = "ol_account"
@@ -202,6 +221,12 @@ nonisolated enum ServerEvent: Sendable {
     }
 
     static func decode(_ data: Data) -> ServerEvent? {
+        // A source subscription was saved, ran or was deleted (#2041): its pages are drawn again, as an invalidate of theirs.
+        // Read before the envelope, whose `revision` is a string where this event's is a number; the hub's compact JSON is
+        // looked for first, so every other message skips the extra decode.
+        if data.range(of: subscriptionType) != nil, (try? JSON.decoder.decode(EventType.self, from: data))?.type == "subscription" {
+            return .extensionInvalidate(extension: SubscriptionsUI.id, id: nil)
+        }
         guard let e = try? JSON.decoder.decode(Envelope.self, from: data) else { return nil }
         let key = e.machineID.flatMap { m in e.sessionID.map { SessionKey(machineID: m, sessionID: $0) } }
         switch e.type {
@@ -259,7 +284,11 @@ nonisolated enum ServerEvent: Sendable {
         case "inbox": return .inbox
         case "todos": return .todos
         case "personas": return .personas
+        case "look":
+            guard (e.effective ?? e.id).map({ !$0.isEmpty }) == true else { return nil }
+            return .look(id: e.id, effective: e.effective)
         case "managers": return .managers
+        case "directions": return .directions
         case "assistant_feed": return e.item.map { .assistantFeed($0) }
         case "assistant_view":
             guard let view = e.view, !view.id.isEmpty, view.version > 0,
@@ -295,6 +324,13 @@ nonisolated enum ServerEvent: Sendable {
         case "terminal_control":
             guard let key, let state = e.state else { return nil }
             return .terminal(key, .control(state: state, cols: e.cols, rows: e.rows, why: e.error))
+        case "meeting_live":
+            guard let id = e.recordingID, !id.isEmpty else { return nil }
+            let changed = (e.changed?.array ?? []).compactMap { part -> String? in
+                if case .string(let name) = part { return name }
+                return nil
+            }
+            return .meetingLive(recordingID: id, changed: changed, revs: e.revs ?? [:])
         default: return nil
         }
     }
@@ -321,8 +357,8 @@ nonisolated extension ServerEvent {
         case .sessionsDelta(let machine, let upsert, let remove):
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
-             .personas, .managers, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
-             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth: return self
+             .personas, .look, .managers, .directions, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
+             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive: return self
         }
     }
 }
@@ -414,6 +450,9 @@ final class LiveConnection {
     /// tries again only slowly (`rejectedRetry`). Cleared once a socket opens, and by `connect` (paired again).
     private(set) var rejected = false { didSet { if rejected != oldValue { onChange?() } } }
     static let rejectedRetry: TimeInterval = 60
+    /// Cloudflare Access in front of the hub turned the last handshake away (docs/operations/network.md "Behind
+    /// Cloudflare Access"); kept through the retries, cleared once a socket opens or by `connect`.
+    private(set) var accessBlocked: CloudflareAccessError?
     /// When the next attempt starts while the hub is out of reach.
     private(set) var nextTry: Date?
     /// The socket went while connected and is not back yet (docs/operations/hub-restart.md): nil once it is, or after
@@ -491,6 +530,7 @@ final class LiveConnection {
         self.config = config
         backoff = 1
         rejected = false
+        accessBlocked = nil
         open()
     }
 
@@ -594,12 +634,13 @@ final class LiveConnection {
         comps.scheme = config.url.scheme == "https" ? "wss" : "ws"
         comps.queryItems = Self.queryItems(cursor, sessionList: usesSessionList, extensionStream: usesExtensionUIStream)
         var req = URLRequest(url: HubTransport.resolve(comps.url!, hub: config.url))
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         RequestClientMetadata.current.apply(to: &req)
         req.timeoutInterval = 15
         resumed = false // until this socket's hello says so
         let t = session.webSocketTask(with: req)
+        t.delegate = HubRedirects.shared
         t.maximumMessageSize = 64 << 20
         task = t
         state = .connecting
@@ -683,6 +724,7 @@ final class LiveConnection {
                         self.sayHello()
                         self.backoff = 1
                         self.rejected = false
+                        self.accessBlocked = nil
                         self.onConnected?()
                     }
                     self.extensionStreamFrame(data, event: event)
@@ -695,7 +737,11 @@ final class LiveConnection {
                     // The handshake's answer: 401 is the hub refusing this credential, not the hub being away.
                     let refused = (t.response as? HTTPURLResponse)?.statusCode == 401
                     if refused != self.rejected { self.rejected = refused }
-                    self.state = .failed(refused ? String(localized: "The hub doesn't accept this device's credentials (401)") : err.localizedDescription)
+                    // Cloudflare Access in front of the hub turned the handshake away: say so, not a generic failure.
+                    let access = CloudflareAccess.blocked(t.response) ? CloudflareAccessError(tokenSent: self.config?.access != nil) : nil
+                    if access != self.accessBlocked { self.accessBlocked = access }
+                    self.state = .failed(refused ? String(localized: "The hub doesn't accept this device's credentials (401)")
+                                         : access?.localizedDescription ?? err.localizedDescription)
                     self.stalled = false
                     self.scheduleReconnect(gen)
                 }
@@ -823,19 +869,27 @@ final class LiveConnection {
     /// notices and errors on it, and the user's language for what it produces later, match the app. The naming
     /// contract and MCP forms and links are advertised here (`helloFeatures`), with the platform and version this app's
     /// requests carry (`X-Persona-Client`): the hub lists those cards in a REST answer only to a client whose hello
-    /// matches it. Older hubs ignore unknown fields and keep their existing defaults.
+    /// matches it. The version ("1.4.0+52": the app's version and build) and `os` are also what the hub keeps of this
+    /// device for the assistant (`AppVersion`). Older hubs ignore unknown fields and keep their existing defaults.
     private func sayHello() {
         let client = RequestClientMetadata.current
         send(["type": "client_hello", "locale": LanguageStore.shared.launched, "features": Self.helloFeatures(client),
-              "platform": client.platform, "version": client.version])
+              "platform": client.platform, "version": client.version, "os": AppVersion.helloOS])
     }
 
     /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS
     /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open.
+    /// `persona_card_ring` (```persona-card rings, `PersonaCard.swift`) from the apps that build the chat (iOS, Mac,
+    /// visionOS), not the watch or the extensions: a client without it gets each ring as a stacked bar (the hub's
+    /// card_compat.go), which every build before the ring draws.
     nonisolated static func helloFeatures(_ client: RequestClientMetadata) -> [String] {
         let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
-        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation"] : [])
+        let chatApps = [RequestClientMetadata.Platform.iOS, .macOS, .visionOS].map { $0.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue }
+        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation"] : []) + (chatApps.contains(client.platform) ? [cardRingFeature] : [])
     }
+
+    /// The client_hello feature that says this app draws ```persona-card rings (#3068).
+    nonisolated static let cardRingFeature = "persona_card_ring"
 
     func send(_ object: [String: Any]) {
         if let local {

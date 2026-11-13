@@ -1,5 +1,21 @@
 # Bounded Agents list verification
 
+## Direct completion of a decision task
+
+```sh
+node web/e2e/direct-completion.mjs <loopback-web-origin> --shots <artifact-directory> [--chromium <executable>]
+```
+
+Run against an exclusively owned local web server with web dependencies installed. The runner opens the real Assistant app in a fresh headless browser, intercepts all hub HTTP/WebSocket traffic with synthetic conversations, to-dos and an idle Agent, and never uses an existing profile or a live hub. It verifies Open / Finish now / Take recommendation ordering and emphasis, light/dark wide and narrow layouts, all three languages, failure/retry, completion removal and reload. Only `PATCH /todos/{id}` with `{"done":true}` is admitted as a task action; Agent sends, resumes and recommendation acceptance fail the run. Screenshots include before, after and a synthetic save failure. A 180-second watchdog exits with a timeout verdict. These are browser/UI checks, not production-hub delivery evidence.
+
+## Ask card above the composer (#3083)
+
+```sh
+node web/e2e/ask-card-dock.mjs <loopback-web-origin> <artifact-directory> [--chromium <executable>]
+```
+
+Opens the real app against a loopback web server (Vite or a preview build) with every hub request and the socket answered in the browser by invented data. The main conversation shows an ask_user card with four described options in the Pending tray at 1280 × 600, 1024 × 520, 390 × 664 and 360 × 560 (touch), light and dark. It checks the card's send button and the three tray entries are not under the composer before any scrolling, and that "Or write your own" is fully visible (not under the sticky answer row or the tray's title) once tapped and typed into. Writes `results.json` and before/after-typing screenshots; exits nonzero on failure or the four-minute timeout.
+
 ## User-input navigation acceptance
 
 With web dependencies and Chrome already available, point the runner at an **already-running, exclusively owned loopback web server** backed by `scripts/mock/mock_hub.py`. Start the mock on an unused loopback port and configure the web server's `PERSONA_HUB_URL` for that mock; a Vite server proxying a real hub is not acceptable. The runner does not install dependencies, start services, create conversations, or stop the caller's services.
@@ -13,6 +29,38 @@ The URL is an origin without a route or token. The runner uses `playwright-core`
 Checks run in light and dark at 1600 × 900 and a mouse-driven narrow desktop width of 1024 × 820. They verify the bell-shaped mark profile, 16px card radius, roomy padding, bold single-line input and two-line excerpt, card/rail hover transfer and immediate removal when both are left (measured from the actual mouse-out event to DOM removal, independently of the rail's idle timer). They also cover body-scroll reveal, right-edge geometry, a single current-input `aria-current`, input-plus-short-answer hover previews, clicking, dragging between horizontal marks and releasing to jump, Arrow/Home/End and Enter through the focusable navigation region, accessible input labels and selected-input descriptions, Escape cancellation without interrupting the session, fade to zero after roughly two seconds of inactivity, and pointer/Tab recovery through the retained edge trigger. A separate 240-input conversation traverses **every** mark by keyboard and jumps to the first, middle and last inputs; wheel navigation also verifies that a bounded window can move both forward and back to the earliest input. Windowing may bound the rendered marks but must not discard earlier inputs. Every screenshot is checked for page/console errors and Vite overlays, and all runs reject failed reads and external traffic.
 
 Artifacts include `results.json` (per-check verdicts, timings, geometry, reached-mark count, intercepted request metadata and errors) and light/dark screenshots of scroll, hover, click, drag/release, keyboard, idle and edge-focus states, plus the long conversation's earliest/middle/latest inputs. The runner exits nonzero on failure or its four-minute timeout and prints a final one-line verdict. The caller must run it against the completed implementation, actually inspect the images, and upload the evidence; writing or syntax-checking this script is not browser acceptance.
+
+## Conversation scrollbar and navigation clearance (#4803)
+
+```sh
+node web/e2e/chat-scrollbar.mjs <loopback-web-origin> <artifact-directory>
+```
+
+Use the same exclusively owned mock-backed server as the navigation runner, preferably `vite preview` after a production build. All app HTTP/WebSocket traffic is answered by invented data; no writes reach the mock or a real hub. The runner checks 1600, 640 and 390 px pointer layouts, touch-only 390 px, the largest app text size, light/dark, reduced motion, forced colors and an unsupported-scrollbar-color fallback. It measures independent edge/rail hit areas and content clearance, scroll/idle colors and unchanged geometry, and drags the **native** thumb to verify real scroll movement. The 180-second deadline prints a final success/failure/timeout verdict. Screenshots and `results.json` stay outside git.
+
+Presentation contract: `NAV_RAIL_METRICS.edgeGap` moves the existing 36 px navigation hit strip 16 px inward from the native scrollbar gutter; mark width calculations and all navigation gestures remain unchanged. Only missing right-side content padding is added on narrow layouts, so an already roomy centered column stays centered. `useChatScrollbar` changes native thumb color without cancelling input, changing scrollbar width between states, replacing the thumb or rerendering chat content. It reveals while scrolling, retains visibility over the scrollbar's edge or during a drag, and fades after 1 second of inactivity through `--chat-scrollbar-fade` (220 ms, disabled by Reduce Motion). The track stays transparent. Unsupported browsers and forced-color mode keep native presentation. This scoped fix reuses native browser scroll controls rather than introducing a second scroll widget, preserving platform keyboard, touch and drag behavior.
+
+**Headless Chrome pitfall**: Playwright adds `--hide-scrollbars` by default. This runner removes that argument; otherwise screenshots can show no native thumb and a zero-width gutter even though CSS reports a visible color. Always inspect the actual scrolling/idle images as well as computed styles.
+
+## Progressive user-input history (#4836)
+
+```sh
+node web/e2e/user-history-navigation.mjs <loopback-web-origin> <artifact-directory> [input-count] [main|session] [initial-body-count] [standard|large]
+```
+
+The production-built app uses only synthetic intercepted HTTP/WebSocket responses, not a live hub. The default fixture has 678 genuine inputs, with automated supervision and compaction records between them, and only two input bodies in its first page. In wide/narrow light/dark runs it verifies 50 initial marks with full-history ordinals, no body reads on metadata loading or hover, unloaded-target landing through backward pages, and more marks after upward scrolling. Pass `36` for the same short-history check: all 36 marks are present. Pass `120 main 120` to restore a complete larger first page: it still starts at 50 marks, and reaching its earlier body content reveals the remainder without an unnecessary backward request. It saves inspected-state screenshots and `results.json`, and ends with a pass/fail/timeout verdict.
+
+## The paged Agents list by group (#6348)
+
+```sh
+MOCK_SESSIONS_LIST=1 MOCK_SESSIONS_CATALOG=1 MOCK_SESSIONS_MANY=14 MOCK_MANAGERS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/agents-browse-by.mjs <loopback-web-origin> <artifact-directory> [--hub http://127.0.0.1:<port>] [--channel chrome]
+```
+
+Run against an exclusively owned mock-backed web server. `MOCK_SESSIONS_CATALOG=1` gives the mock the hub's catalog (`catalog=1`, `place`, `space`), a Windows PC, one repository checked out on two computers and a notes folder that is no repository on two; `MOCK_MANAGERS=1` keeps one assistant, since with several the sidebar reads the complete list. The runner clears the mock's default pins for the run (they also keep the complete list) and puts them back.
+
+It reads the mock's own catalog and holds the page to it, in English at 1280 x 900 (light and dark), a 240 px sidebar and a 390 px touch phone: Browse by Computer draws one section per computer, the busiest first, the first three open on their newest six sessions and the counts adding up to the list's total; Project lists the catalog's projects in its order, the repository on two computers as one section with its remote and both directories and the sessions of both; the value pill's menu is as wide as its pill and names each computer under the project; a picked project is the one flat list of its sessions; Space names each computer's spaces, tells two of one name apart and ends with the sessions in no space; the chosen Browse by survives a reload; Recently updated is the flat list. With `--hub` it also drives 20 s of the mock's churn while the list is drawn by project and prints the mock's read counters by kind, failing when the groups were read more than once per 1.5 s or a complete list was read. Screenshots of each step go to the artifact directory. A three-minute watchdog ends the run with a timeout verdict. Browser and mock checks only: no real hub, node or Git repository is involved.
 
 ## Bounded list verification
 
@@ -80,3 +128,30 @@ node web/e2e/sync-cases.mjs http://127.0.0.1:19051 --hub http://127.0.0.1:19051 
 - **Known failures.** `KNOWN` lists cases that fail for a known bug, each with its issue. A known case that passes fails the run, so the list stays true.
 
 Output: one line per case and a verdict, `results.json` in `--out`, and a screenshot of any page where an action failed. It exits 1 on any other failure, and after 20 minutes in any case.
+
+## Worktree migration verification
+
+Start `scripts/mock/mock_worktree_migration.py` on a task-owned loopback port, then point a separate Vite server's `PERSONA_HUB_URL` at that fixture. Do not use a real hub. With web dependencies and Chrome already installed:
+
+```sh
+node web/e2e/worktree-migration.mjs <loopback-web-origin> <loopback-fixture-origin> <artifact-directory>
+```
+
+The runner verifies the fixture marker before writes and resets only its synthetic in-memory state for each browser context. External browser requests are blocked; no existing browser profile or account is used. Desktop and 390px touch contexts run in light and dark. Checks cover empty catalog ancestors, title/disclosure separation, exact existing-workspace Agent launch, independent Git source/project/parent/base creation, explicit branch/note/sparse fields, no automatic Agent, acknowledged rename, dirty deletion confirmation and default branch retention. A lost create response is recovered across dialog close/reopen with the same receipt; an uncertain deletion permits only read-only reconciliation. `WORKTREE_ACCEPTANCE_PHASE=catalog` runs just the initial catalog scenarios while dependencies are being integrated.
+
+Artifacts include `results.json` and screenshots of the tree, exact destination, composer, acknowledgment, rename, dirty deletion and uncertain outcomes. The runner exits nonzero on assertions or its four-minute watchdog. Inspect the resulting images on the combined revision. This is full Web application acceptance against invented runtime data; it does not replace node semantic tests or the separately bounded installed-Orca verification on disposable projects.
+
+## `/permissions` and Full access by a restart (#6476)
+
+```sh
+MOCK_BYPASS_RESTART_SECONDS=4 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/permissions-command.mjs <loopback-web-origin> --hub http://127.0.0.1:<port> --theme light|dark [--shots <dir>] [--chromium <executable>]
+```
+
+Run once per theme against a fresh mock (the restart changes the session). On a resting Claude Code Agent started
+without a bypass flag, it checks that "/" lists `/permissions`, that Enter opens all five modes with the current one
+checked and sends nothing, that Auto is posted and shown at once, and that Full access says the session restarts and
+asks first. It then checks that the session waits (`bypass_pending`, the chip still on the mode it runs in) until the
+mock's restart comes up in Full access. It prints one line per check and a verdict, and exits nonzero on a failure or
+its five-minute timeout.

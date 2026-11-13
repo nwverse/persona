@@ -8,17 +8,25 @@ import { requestCrumb } from "./error-reports";
 import { currentLanguage, t } from "../i18n";
 import type { Item } from "./types";
 import { clearFeedCache } from "./feed-cache";
+import { credentialEpoch, renewCredentialEpoch } from "./credential-epoch";
 
 let ownerToken: string | undefined;
+let ownerEpoch: string | undefined;
 let ownerGeneration = 0;
 const credentialListeners = new Set<(owner: string) => void>();
+function publishCredentialOwner(): string {
+  const owner = `credential-${++ownerGeneration}`;
+  credentialListeners.forEach((listener) => listener(owner));
+  return owner;
+}
 /** Opaque in-memory auth partition; never expose credentials in tree keys or persisted drafts. */
 export function credentialOwner(): string {
   const token = getToken();
-  if (token !== ownerToken) {
+  const epoch = credentialEpoch();
+  if (token !== ownerToken || epoch !== ownerEpoch) {
     ownerToken = token;
-    ownerGeneration++;
-    credentialListeners.forEach((listener) => listener(`credential-${ownerGeneration}`));
+    ownerEpoch = epoch;
+    return publishCredentialOwner();
   }
   return `credential-${ownerGeneration}`;
 }
@@ -47,13 +55,27 @@ export function setToken(token: string, tokenId?: string) {
   credentialOwner();
 }
 
+/** A successful sign-in is a new owner even if the hub returned the same token. */
+export function setPairedToken(token: string, tokenId?: string) {
+  credentialOwner();
+  storeCredentials(token, tokenId);
+  const shared = renewCredentialEpoch();
+  clearFeedCache();
+  if (shared) credentialOwner();
+  else {
+    ownerToken = getToken();
+    ownerEpoch = credentialEpoch();
+    publishCredentialOwner();
+  }
+}
+
 export class ApiError extends Error {
   status: number;
   body: Record<string, unknown>;
   isJson: boolean;
   /** The hub logs a failed request under this id (X-Request-Id): for a report, not for the message itself. */
   requestId?: string;
-  constructor(status: number, message: string, body: Record<string, unknown>, isJson = true, requestId?: string) {
+  constructor(status: number, message: string, body: Record<string, unknown>, isJson = true, requestId?: string, readonly requestPath?: string) {
     super(message);
     this.status = status;
     this.body = body;
@@ -61,7 +83,14 @@ export class ApiError extends Error {
     this.requestId = requestId;
   }
   get code(): string | undefined {
-    return typeof this.body.code === "string" ? this.body.code : undefined;
+    const code = typeof this.body.code === "string" ? this.body.code : undefined;
+    const path = this.requestPath?.split("?")[0];
+    // Older hubs lost this business code. Match only their exact refusal on knowledge/recording routes,
+    // never a phrase in an arbitrary internal error. Keep the original body for diagnostics.
+    const knowledge = path === "/kb" || path?.startsWith("/kb/") || path === "/kb-search"
+      || path === "/recordings" || path?.startsWith("/recordings/");
+    if (knowledge && this.status === 503 && code === "internal" && this.body.detail === "the knowledge base is off") return "kb_disabled";
+    return code;
   }
 }
 
@@ -80,7 +109,8 @@ export function handleUnauthorized(fn: () => void): () => void {
  */
 export const CLIENT_PLATFORM = "web";
 export const CLIENT_VERSION = "1";
-/** What this page can render beyond the basics (client_hello `features`). */
+/** What this page can render beyond the basics (client_hello `features`). `persona_card_ring`: it draws ```persona-card
+ *  rings (lib/assistant-view.ts); a client without it gets each ring as a stacked bar (the hub's card_compat.go). */
 /** `managers`: the hub pushes {"type":"managers"} when its roster changes (Settings › Managers, lib/managers.ts). */
 /**
  * The pong timeout (seconds) this page asks the hub for in client_hello. The hub's default of 15 s is tight on a
@@ -89,7 +119,7 @@ export const CLIENT_VERSION = "1";
  * limit, so a dead link is still dropped. Only the timeout is asked for: the 20 s interval stays the hub's.
  */
 export const CLIENT_PONG_TIMEOUT = 45;
-export const CLIENT_FEATURES = ["elicitation", "extension_operations", "extension_auth", "managers", "extension_ui_stream_v1", "persona_contracts_v1"];
+export const CLIENT_FEATURES = ["elicitation", "extension_operations", "extension_auth", "managers", "extension_ui_stream_v1", "persona_contracts_v1", "persona_card_ring"];
 
 // A read the hub has not answered by then fails instead of loading forever (#4492): a restarting hub, a stuck node or a
 // half-dead network. Longer than the hub's own cut-offs for asking a computer (30–40 s), so when the hub has an error
@@ -112,15 +142,27 @@ export class HubTimeoutError extends Error {
   }
 }
 
-type ApiOptions = RequestInit & { json?: unknown; token?: string; tokenOwner?: string; onResponse?: (headers: Headers) => void };
+type ApiOptions = RequestInit & { json?: unknown; token?: string; tokenOwner?: string; isAuthContextCurrent?: () => boolean; onResponse?: (headers: Headers, status: number) => void; readBlob?: (response: Response, signal?: AbortSignal | null) => Promise<Blob> };
 
 /** `tokenOwner`: explicit credentials opt into 401 recovery only while both the token and credential generation are current.
+ *  `isAuthContextCurrent`: an optional additional lifetime fence for a request scoped to a view or manager.
  *  `timeout`: ms before a read gives up with HubTimeoutError (default READ_TIMEOUT_MS for GET, none otherwise; 0: none). */
-export async function api<T>(path: string, init: ApiOptions & { timeout?: number } = {}): Promise<T> {
+export function api<T>(path: string, init: ApiOptions & { timeout?: number } = {}): Promise<T> {
+  return call<T>(path, init, false);
+}
+
+/** A hub route's bytes (an image it serves, such as a meeting photo's) with `api`'s credentials, headers, time limit and
+ *  errors: for what an `<img>` can't fetch itself, since it sends no header (the bearer token, the manager's).
+ *  `readBlob`: an optional bounded reader; omitted, existing binary callers keep their ordinary blob read. */
+export function apiBlob(path: string, init: ApiOptions & { timeout?: number } = {}): Promise<Blob> {
+  return call<Blob>(path, init, true);
+}
+
+async function call<T>(path: string, init: ApiOptions & { timeout?: number }, binary: boolean): Promise<T> {
   const { timeout, ...rest } = init;
   const read = (init.method ?? "GET").toUpperCase() === "GET";
   const limit = timeout ?? (read ? READ_TIMEOUT_MS : 0);
-  if (!limit) return request<T>(path, rest);
+  if (!limit) return request<T>(path, rest, binary);
   // The caller's own signal still aborts as before (an AbortError); only the time running out becomes HubTimeoutError.
   const controller = new AbortController();
   const outer = init.signal;
@@ -135,7 +177,7 @@ export async function api<T>(path: string, init: ApiOptions & { timeout?: number
   try {
     for (let tries = 0; ; tries++) {
       try {
-        return await request<T>(path, { ...rest, signal: controller.signal });
+        return await request<T>(path, { ...rest, signal: controller.signal }, binary);
       } catch (e) {
         // asking again is safe for a read: a gap gets a couple more tries, all inside the read's own time limit
         if (!read || tries >= readRetryMs().length || !isTransient(e)) throw e;
@@ -160,8 +202,8 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-async function request<T>(path: string, init: ApiOptions): Promise<T> {
-  const { onResponse, ...fetchOptions } = init;
+async function request<T>(path: string, init: ApiOptions, binary = false): Promise<T> {
+  const { onResponse, isAuthContextCurrent, readBlob, ...fetchOptions } = init;
   const owner = init.token === undefined ? credentialOwner() : init.tokenOwner;
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${init.token ?? getToken()}`);
@@ -189,10 +231,21 @@ async function request<T>(path: string, init: ApiOptions): Promise<T> {
     if (!isAbort(e)) requestCrumb(method, path, 0);
     throw e;
   }
-  if (intercepted(res)) {
+  // A 304 answers a request that sent a validator (If-None-Match): the caller keeps what it has. It is neither the
+  // sign-in layer's redirect nor an error.
+  const notModified = res.status === 304 && headers.has("If-None-Match");
+  if (!notModified && intercepted(res)) {
     requestCrumb(method, path, res.status);
-    reloadForSignIn(); // the layer in front takes over the page and sends it to its sign-in
+    // Retired requests cannot reload a replacement view or credential; an unowned pairing probe can still sign in.
+    if ((isAuthContextCurrent?.() ?? true)
+      && (owner === undefined || (owner === credentialOwner() && (init.token === undefined || init.token === getToken())))) {
+      reloadForSignIn(); // the layer in front takes over the page and sends it to its sign-in
+    }
     throw new ApiError(res.status || 401, t("lib-api.hub_no_response"), {}, false);
+  }
+  if (binary && res.ok) {
+    onResponse?.(res.headers, res.status);
+    return (await (readBlob ? readBlob(res, init.signal) : res.blob())) as T;
   }
   const text = await res.text();
   let data: Record<string, unknown> = {};
@@ -205,13 +258,14 @@ async function request<T>(path: string, init: ApiOptions): Promise<T> {
     data = { error: /^\s*</.test(text) ? "" : text };
     isJson = false;
   }
-  if (!res.ok) {
+  if (!res.ok && !notModified) {
     requestCrumb(method, path, res.status);
-    if (res.status === 401 && owner !== undefined && owner === credentialOwner() && (init.token === undefined || init.token === getToken())) onUnauthorized();
+    if (res.status === 401 && owner !== undefined && owner === credentialOwner() && (init.token === undefined || init.token === getToken())
+      && (isAuthContextCurrent?.() ?? true)) onUnauthorized();
     const msg = typeof data.error === "string" && data.error ? data.error : `HTTP ${res.status}`;
-    throw new ApiError(res.status, msg, data, isJson, res.headers?.get("X-Request-Id") ?? undefined);
+    throw new ApiError(res.status, msg, data, isJson, res.headers?.get("X-Request-Id") ?? undefined, path);
   }
-  onResponse?.(res.headers);
+  onResponse?.(res.headers, res.status);
   return compatibleEnvelope(data) as T;
 }
 
@@ -262,22 +316,30 @@ export function isTransient(e: unknown): boolean {
   return e instanceof ApiError && [502, 503, 504].includes(e.status) && (!e.isJson || (!e.code && e.body.delivered === undefined));
 }
 
-/** The hub answered for a computer that did not (docs/protocol/protocol.md "Error body"): what became of the computer and
- *  what to do next, by code, not "the hub can't respond". `delivered: none` marks the plainly offline one, where nothing
- *  went out. The hub's own words stay on the ApiError (`message`, `body.detail`). */
-function computerFailureText(e: ApiError): string | undefined {
+/** A coded business refusal is an answer, not evidence of a hub outage. `delivered: none` marks a plainly offline
+ * computer where nothing went out. Original fields stay on ApiError for diagnostics, never interpolated here. */
+function businessFailureText(e: ApiError): string | undefined {
+  if (e.code === "kb_disabled") return t("lib-api.knowledge_disabled");
+  if (e.code === "kb_unavailable") return t("lib-api.knowledge_unavailable");
+  if (e.code === "kb_read_only") return t("lib-api.knowledge_read_only");
+  if (e.code === "assistant_offline") return t("lib-api.manager_offline");
   if (e.code === "node_unreachable") return t(e.body.delivered === "none" ? "lib-api.computer_offline" : "lib-api.computer_dropped");
   if (e.code === "timeout") return t("lib-api.computer_timeout");
+  // a stopped Agent takes no messages (#4754): Resume on its terminal page runs it again
+  if (e.code === "agent_stopped") return t("lib-api.agent_stopped");
+  // nothing the hub can call directly is set up for the request (an Inbox draft): where to set one up
+  if (e.code === "model_unavailable") return t("lib-api.model_unavailable");
   return undefined;
 }
 
 export function errorText(e: unknown): string {
   if (e instanceof ApiError) {
-    const computer = computerFailureText(e);
-    if (computer) return computer;
+    const business = businessFailureText(e);
+    if (business) return business;
     // Keep both the status and the original reason for diagnostics and existing error-specific explanations.
     const status = `HTTP ${e.status}`;
-    const detail = e.message && e.message !== status ? `${status}: ${e.message}` : status;
+    const detail = e.code === "internal" && e.status >= 500 ? status
+      : e.message && e.message !== status ? `${status}: ${e.message}` : status;
     if (e.status === 404 || e.code === "not_found" || /^not[ _]found$/i.test(e.message.trim())) {
       return t("lib-api.not_found", { detail });
     }

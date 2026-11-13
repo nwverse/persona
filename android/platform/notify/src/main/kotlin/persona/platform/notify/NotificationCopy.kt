@@ -26,8 +26,9 @@ internal fun actionResultCopy(result: NotificationActionResult): Pair<Int, Int>?
     NotificationActionResult.Invalid -> R.string.notify_result_invalid_title to R.string.notify_result_invalid_detail
     NotificationActionResult.Duplicate -> R.string.notify_result_unconfirmed_title to R.string.notify_result_duplicate_detail
     NotificationActionResult.ReadOnly -> R.string.notify_result_readonly_title to R.string.notify_result_readonly_detail
-    // Handled by Notifier.notSent: the request comes back with its buttons.
-    NotificationActionResult.Submitted, NotificationActionResult.NotSent -> null
+    // Submitted, AnsweredHere: this phone's own answer, nothing to say. NotSent: handled by Notifier.notSent, the request comes
+    // back with its buttons.
+    NotificationActionResult.Submitted, NotificationActionResult.AnsweredHere, NotificationActionResult.NotSent -> null
 }
 
 /**

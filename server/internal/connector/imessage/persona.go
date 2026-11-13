@@ -151,6 +151,9 @@ func (c *Remote) Collect(context.Context) ([]connector.InboxThing, error) {
 
 var errNoReply = errors.New("在「信息」里回复：Persona 不替你发信息")
 
+// errNotHanded answers a read while the switch is off, for the assistant's tools and the subscription catalog alike.
+var errNotHanded = errors.New("「信息」没有交给 Persona（设置 › 连接器 › 信息）")
+
 // Reply: Persona does not send messages (the item's "Reply in Messages" opens Messages with the number).
 func (c *Remote) Reply(context.Context, connector.InboxReply) error { return errNoReply }
 
@@ -179,20 +182,9 @@ func (c *Remote) Watch(ctx context.Context, changed func(connector.Scope)) error
 }
 
 func (c *Remote) look(ctx context.Context, changed func(connector.Scope)) {
-	var page ChatsPage
-	if err := c.read(ctx, "connector.chats", map[string]any{"id": ID, "limit": watchChats, "keep": KeepContacts}, &page); err != nil {
+	things, newest, err := c.rows(ctx)
+	if err != nil {
 		return
-	}
-	var newest time.Time
-	var things []connector.InboxThing
-	for _, chat := range page.Chats {
-		if chat.Last.After(newest) {
-			newest = chat.Last
-		}
-		if time.Since(chat.Last) > 7*24*time.Hour {
-			continue
-		}
-		things = append(things, c.thing(ctx, chat))
 	}
 	c.inboxMu.Lock()
 	moved := !newest.Equal(c.newest)
@@ -210,6 +202,27 @@ func (c *Remote) look(ctx context.Context, changed func(connector.Scope)) {
 	if !same {
 		changed(connector.ScopeInbox)
 	}
+}
+
+// rows are the inbox's things of the newest conversations, those of the last week, and when the newest one moved:
+// what the watch keeps for Collect, and what inbox_things answers a things subscription, one computation (#6317).
+func (c *Remote) rows(ctx context.Context) ([]connector.InboxThing, time.Time, error) {
+	var page ChatsPage
+	if err := c.read(ctx, "connector.chats", map[string]any{"id": ID, "limit": watchChats, "keep": KeepContacts}, &page); err != nil {
+		return nil, time.Time{}, err
+	}
+	var newest time.Time
+	var things []connector.InboxThing
+	for _, chat := range page.Chats {
+		if chat.Last.After(newest) {
+			newest = chat.Last
+		}
+		if time.Since(chat.Last) > 7*24*time.Hour {
+			continue
+		}
+		things = append(things, c.thing(ctx, chat))
+	}
+	return things, newest, nil
 }
 
 // thing is a conversation as the inbox sees it; an unread one carries its last messages for triage.
@@ -282,6 +295,51 @@ func (c *Remote) transcript(msgs []Message) string {
 
 var readTools = []string{"imessage_chats", "imessage_read", "imessage_search"}
 
+// inboxThings is the catalog's tool a things subscription reads the Inbox's rows with (#6317): not one of the
+// assistant's tools (Tools), which read conversations.
+const inboxThings = "inbox_things"
+
+var _ connector.Catalog = (*Remote)(nil)
+
+// Catalog is connector.Catalog: the read tools as the derived catalog had them (the same names, descriptions and
+// schemas, so a subscription keeps its tool), and inbox_things. None while the switch is off.
+func (c *Remote) Catalog(context.Context) ([]connector.CatalogSource, error) {
+	src := connector.CatalogSource{ID: ID, Name: c.Name(), Tools: []connector.CatalogTool{}}
+	tools := c.Tools()
+	if len(tools) > 0 {
+		t := prompts.Tool("imessage_inbox_things")
+		tools = append(tools, proto.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+	}
+	for _, t := range tools {
+		src.Tools = append(src.Tools, connector.CatalogTool{Name: strings.TrimPrefix(t.Name, ID+"_"), Description: t.Description,
+			InputSchema: t.InputSchema, ReadOnly: true})
+	}
+	return []connector.CatalogSource{src}, nil
+}
+
+// CatalogCall is connector.Catalog: the read tools' JSON answers (CallJSON, as before), and inbox_things' rows.
+func (c *Remote) CatalogCall(ctx context.Context, q connector.CatalogQuery) (string, error) {
+	if q.Tool == inboxThings {
+		if !c.AI() {
+			return "", errNotHanded
+		}
+		things, _, err := c.rows(ctx)
+		if err != nil {
+			return "", errors.New(c.explain(err))
+		}
+		if things == nil {
+			things = []connector.InboxThing{}
+		}
+		out, err := json.Marshal(map[string]any{"things": things})
+		return string(out), err
+	}
+	out, ok, err := c.CallJSON(ctx, ID+"_"+q.Tool, q.Args)
+	if !ok {
+		return "", fmt.Errorf("unknown tool %s", q.Tool)
+	}
+	return string(out), err
+}
+
 // Tools is connector.ReadTools: none while the switch is off.
 func (c *Remote) Tools() []proto.Tool {
 	if !c.AI() {
@@ -297,8 +355,56 @@ func (c *Remote) Tools() []proto.Tool {
 
 // Call runs one of the read tools on the Mac's messages (the conversations that go to Persona, codes masked).
 func (c *Remote) Call(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	v, err := c.answer(ctx, name, args)
+	if err != nil {
+		return "", err
+	}
+	switch v := v.(type) {
+	case ChatsPage:
+		return c.chatsText(v), nil
+	case MessagesPage:
+		return c.messagesText(v), nil
+	case hits:
+		return c.hitsText(v.query, v.list), nil
+	}
+	return "", fmt.Errorf("unknown tool %s", name)
+}
+
+var _ connector.ReadJSON = (*Remote)(nil)
+
+// CallJSON is connector.ReadJSON: the same answers for subscriptions, as JSON with an id on each item
+// (persona_json.go).
+func (c *Remote) CallJSON(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, bool, error) {
+	if !slices.Contains(readTools, name) {
+		return nil, false, nil
+	}
+	v, err := c.answer(ctx, name, args)
+	if err != nil {
+		return nil, true, err
+	}
+	var data any
+	switch v := v.(type) {
+	case ChatsPage:
+		data = chatsData(v)
+	case MessagesPage:
+		data = messagesData(v)
+	case hits:
+		data = hitsData(v.list)
+	}
+	out, err := json.Marshal(data)
+	return out, true, err
+}
+
+// hits is what imessage_search found.
+type hits struct {
+	query string
+	list  []Hit
+}
+
+// answer is what a read tool found: a ChatsPage, a MessagesPage or hits.
+func (c *Remote) answer(ctx context.Context, name string, args json.RawMessage) (any, error) {
 	if !c.AI() {
-		return "", errors.New("「信息」没有交给 Persona（设置 › 连接器 › 信息）")
+		return nil, errNotHanded
 	}
 	var a struct {
 		Chat   string `json:"chat"`
@@ -309,7 +415,7 @@ func (c *Remote) Call(ctx context.Context, name string, args json.RawMessage) (s
 	}
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &a); err != nil {
-			return "", fmt.Errorf("arguments: %w", err)
+			return nil, fmt.Errorf("arguments: %w", err)
 		}
 	}
 	switch name {
@@ -317,34 +423,34 @@ func (c *Remote) Call(ctx context.Context, name string, args json.RawMessage) (s
 		var page ChatsPage
 		if err := c.read(ctx, "connector.chats", map[string]any{"id": ID, "limit": clamp(a.Limit, 30, 100), "before": a.Before,
 			"keep": KeepContacts}, &page); err != nil {
-			return "", errors.New(c.explain(err))
+			return nil, errors.New(c.explain(err))
 		}
-		return c.chatsText(page), nil
+		return page, nil
 	case "imessage_read":
 		chat := strings.TrimSpace(a.Chat)
 		if !ValidChat(chat) {
-			return "", errors.New("chat must be a conversation id from imessage_chats or imessage_search (imessage-<12 hex>)")
+			return nil, errors.New("chat must be a conversation id from imessage_chats or imessage_search (imessage-<12 hex>)")
 		}
 		var page MessagesPage
 		if err := c.read(ctx, "connector.older", map[string]any{"id": ID, "chat": chat, "limit": clamp(a.Limit, 40, 200),
 			"before": a.Before, "keep": KeepContacts}, &page); err != nil {
-			return "", errors.New(c.explain(err))
+			return nil, errors.New(c.explain(err))
 		}
-		return c.messagesText(page), nil
+		return page, nil
 	case "imessage_search":
 		if strings.TrimSpace(a.Query) == "" {
-			return "", errors.New("query is empty")
+			return nil, errors.New("query is empty")
 		}
 		var res struct {
 			Hits []Hit `json:"hits"`
 		}
 		if err := c.read(ctx, "connector.search", map[string]any{"id": ID, "query": a.Query, "limit": clamp(a.Limit, 20, 50),
 			"days": clamp(a.Days, 365, 3650), "keep": KeepContacts}, &res); err != nil {
-			return "", errors.New(c.explain(err))
+			return nil, errors.New(c.explain(err))
 		}
-		return c.hitsText(a.Query, res.Hits), nil
+		return hits{query: a.Query, list: res.Hits}, nil
 	}
-	return "", fmt.Errorf("unknown tool %s", name)
+	return nil, fmt.Errorf("unknown tool %s", name)
 }
 
 func clamp(n, def, most int) int {

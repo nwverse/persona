@@ -23,5 +23,7 @@
   "no_others": "没有别的",
   "unset": "未设置",
   "key_hint": "配置项 {key}",
-  "copy_key": "复制配置项名"
+  "copy_key": "复制配置项名",
+  "show_agent": "展开 {agent}",
+  "hide_agent": "收起 {agent}"
 }

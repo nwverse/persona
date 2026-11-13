@@ -102,7 +102,7 @@ internal const val AWAIT_TURN_MILLIS = 60_000L
  * The session's status says it is not at work, nor offline or waiting on you, and it did not fail to start: the hub may
  * just not have caught up.
  */
-private fun mayBeCatchingUp(status: String?, startFailed: Boolean) =
+internal fun mayBeCatchingUp(status: String?, startFailed: Boolean) =
     !startFailed && (status == null || status == "idle" || status == "done" || status == "unknown")
 
 /** Your message, when it is the newest thing in the transcript (nothing has answered it yet); one pass, no copy. */
@@ -132,6 +132,21 @@ internal fun awaitingTurn(message: Item?, status: String?, startFailed: Boolean,
 internal fun awaitingDelivered(messages: List<OutboxMessage>, status: String?, startFailed: Boolean): Boolean =
     mayBeCatchingUp(status, startFailed) && messages.any { it.state == DeliveryState.Sent }
 
+/**
+ * The session waits on you by the hub's word (#2483): its unified state says needs you, which also covers a question, plan
+ * or permission a hook holds while herdr's status stays working (docs/protocol/agent-states.md), or its status says blocked
+ * (an older hub without the state).
+ */
+internal fun Session?.needsYou(): Boolean = this?.status == "blocked" || this?.agentState == AgentState.NeedsYou
+
+/**
+ * The current turn waits on you rather than works (#2483): the session [needsYou], or one of its own requests is pending
+ * here before the hub's state says so. A task agent's request (Persona's chat lists those too) does not count: this
+ * session's own turn may still be at work. Whenever this holds, the header says "Waiting for you" too ([chatStatusState]).
+ */
+internal fun turnWaitsOnYou(session: Session?, key: SessionKey, requests: List<Interaction>): Boolean =
+    session.needsYou() || requests.any { it.sessionKey == key }
+
 internal fun chatStatusState(
     res: android.content.res.Resources,
     snapshot: persona.core.contracts.api.ChatSnapshot,
@@ -140,15 +155,20 @@ internal fun chatStatusState(
     operationUnknown: Boolean = false,
     /** A turn of yours the hub has not reported yet ([awaitingTurn], [awaitingDelivered]). */
     awaiting: Boolean = false,
+    submittingId: String? = null,
+    receipts: List<MessageSendReceipt> = emptyList(),
 ): StatusLineState = StatusLineState(
     ended = snapshot.ended,
     replaced = snapshot.replaced,
     machineOffline = machine?.online == false,
-    submitting = messages.any { it.state == DeliveryState.Sending },
+    submitting = (submittingId != null && receipts.none { it.clientMessageId == submittingId && it.state != "sending" }) ||
+        receipts.any { it.state == "sending" } ||
+        messages.any { message -> message.state == DeliveryState.Sending && receipts.none { it.clientMessageId == message.clientMessageId && it.state != "sending" } },
+    processing = receipts.any { it.processing },
     answering = answering,
-    unconfirmed = operationUnknown || messages.any { it.state.resultUnknown },
+    unconfirmed = operationUnknown || messages.any { it.state.resultUnknown } || receipts.any { it.state == "unknown" },
     pendingRequests = requests.size,
-    blocked = session?.status == "blocked",
+    blocked = session.needsYou(),
     requestSummary = requests.singleOrNull()?.headline?.shown,
     stopping = snapshot.stopping,
     working = session?.status == "working" || awaiting,
@@ -177,7 +197,9 @@ internal fun ChatLine.contentType(): String = when (this) {
     is ChatLine.Wakes -> "wakes"
     is ChatLine.ApiError -> "api_error"
     is ChatLine.Recaps -> "recaps"
+    is ChatLine.Viewed -> "viewed"
     is ChatLine.Extra -> "extra"
+    is ChatLine.ModelChange -> "model_change"
 }
 
 internal fun interactionSource(res: android.content.res.Resources, interaction: Interaction, machine: Machine?): String = listOfNotNull(

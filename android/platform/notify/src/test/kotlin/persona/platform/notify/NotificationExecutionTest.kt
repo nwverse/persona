@@ -1,6 +1,7 @@
 package persona.platform.notify
 
 import persona.core.contracts.*
+import persona.core.contracts.api.DeviceNotificationPreferences
 import persona.core.contracts.api.InteractionCenter
 import persona.core.contracts.api.InteractionGoneException
 import persona.core.contracts.api.SessionsRepository
@@ -33,7 +34,7 @@ class NotificationExecutionTest {
             persona.core.contracts.api.DeviceNotificationPreferences(input = false)
         var visible = false
         val posted = mutableListOf<NotifyEvent>()
-        val delivery = NotificationDelivery(center, sessions, { visible }, { _, _ -> fail("Not an interaction") },
+        val delivery = NotificationDelivery(center, sessions, { visible }, { _, _, _ -> fail("Not an interaction") },
             { posted += it }, {}, { settings })
         val alert = NotifyEvent("alert", "machine", "session", title = "提醒", body = "请查看任务")
         delivery.accept(alert)
@@ -143,6 +144,35 @@ class NotificationExecutionTest {
         assertEquals(3, center.writes)
     }
 
+    @Test fun aSecondTapOnARequestThisPhoneAnsweredSaysNothingRatherThanHandledOnTheComputer() = runBlocking {
+        // #2483: the first tap's answer took the request off the hub before its notification went away, and a second tap
+        // finds it gone. Claimed here, it was this phone's own answer: no notice, no second resolve. Not claimed here, the
+        // computer answered it, as before.
+        for ((claimedHere, expected) in listOf(
+            true to NotificationActionResult.AnsweredHere,
+            false to NotificationActionResult.Gone,
+        )) {
+            val center = Center(request)
+            center.remote = null
+            val executor = NotificationActionExecutor(center, { fail("A request that is gone is never claimed"); false }, { now },
+                claimed = { it == request.id && claimedHere })
+            val result = executor.execute(request.id, "allow", null, { false })
+            assertEquals("claimed here: $claimedHere", expected, result)
+            assertEquals(0, center.writes)
+            if (claimedHere) assertNull(actionResultCopy(result))
+            else assertEquals(R.string.notify_result_gone_title to R.string.notify_result_gone_detail, actionResultCopy(result))
+        }
+        // The whole sequence with one journal: the first tap answers, the second finds the request gone.
+        val center = Center(request)
+        val claims = mutableSetOf<String>()
+        fun executor() = NotificationActionExecutor(center, { synchronized(claims) { claims.add(it) } }, { now },
+            claimed = { synchronized(claims) { it in claims } })
+        assertEquals(NotificationActionResult.Submitted, executor().execute(request.id, "allow", null, { false }))
+        center.remote = null
+        assertEquals(NotificationActionResult.AnsweredHere, executor().execute(request.id, "allow", null, { false }))
+        assertEquals(1, center.writes)
+    }
+
     @Test fun aHubThatCannotBeAskedMeansNothingWasSent() = runBlocking {
         // #5008: the check before the claim failed, so the tap can be repeated; only a lost reply after it is ambiguous.
         val center = Center(request)
@@ -204,7 +234,7 @@ class NotificationExecutionTest {
         val notifications = mutableListOf<NotifyEvent>()
         val retracted = mutableListOf<String>()
         val delivery = NotificationDelivery(center, sessions, { visible },
-            { ix, _ -> posted += ix }, { notifications += it }, { retracted += it })
+            { ix, _, _ -> posted += ix }, { notifications += it }, { retracted += it })
         val notice = NotifyEvent("interaction", "machine", "session", interactionId = request.id)
         delivery.accept(InteractionEvent(request))
         assertTrue(posted.isEmpty())
@@ -241,7 +271,7 @@ class NotificationExecutionTest {
             override suspend fun refresh() = Unit
         }
         val posted = mutableListOf<Interaction>()
-        val delivery = NotificationDelivery(center, sessions, { true }, { ix, _ -> posted += ix }, { fail("Not an alert") }, {})
+        val delivery = NotificationDelivery(center, sessions, { true }, { ix, _, _ -> posted += ix }, { fail("Not an alert") }, {})
         delivery.accept(NotifyEvent("interaction", "machine", "", interactionId = script.id))
         assertEquals(listOf(script), posted)
         // The same id under another machine is not this card.
@@ -259,7 +289,7 @@ class NotificationExecutionTest {
         var settings: persona.core.contracts.api.DeviceNotificationPreferences? =
             persona.core.contracts.api.DeviceNotificationPreferences(input = false, done = persona.core.contracts.api.DoneNotification.Off)
         var posted = 0
-        val delivery = NotificationDelivery(center, sessions, { false }, { _, _ -> posted++ }, { posted++ }, {}, { settings })
+        val delivery = NotificationDelivery(center, sessions, { false }, { _, _, _ -> posted++ }, { posted++ }, {}, { settings })
         val notice = NotifyEvent("interaction", "machine", "session", interactionId = request.id)
         delivery.accept(InteractionEvent(request))
         delivery.accept(notice)
@@ -283,7 +313,7 @@ class NotificationExecutionTest {
             override suspend fun refresh() = Unit
         }
         var posted = 0
-        val delivery = NotificationDelivery(center, sessions, { false }, { _, _ -> posted++ }, { posted++ }, {})
+        val delivery = NotificationDelivery(center, sessions, { false }, { _, _, _ -> posted++ }, { posted++ }, {})
         val notice = NotifyEvent("interaction", "machine", "session", interactionId = request.id)
         delivery.accept(notice)
         delivery.accept(notice.copy(kind = "done"))
@@ -302,11 +332,16 @@ class NotificationExecutionTest {
             override suspend fun refresh() = Unit
         }
         val hushed = mutableListOf<Boolean>()
-        val delivery = NotificationDelivery(center, sessions, { false }, { _, quiet -> hushed += quiet }, { fail("Not a card") }, {})
+        val deliveryPreferences = mutableListOf<DeviceNotificationPreferences?>()
+        val delivery = NotificationDelivery(center, sessions, { false }, { _, quiet, prefs ->
+            hushed += quiet
+            deliveryPreferences += prefs
+        }, { fail("Not a card") }, {})
         val notice = NotifyEvent("interaction", "machine", "session", interactionId = request.id)
         delivery.accept(notice)
         delivery.accept(notice.copy(quiet = true))
         assertEquals(listOf(false, true), hushed)
+        assertEquals(listOf(null, null), deliveryPreferences)
     }
 
     private class Center(request: Interaction) : InteractionCenter {

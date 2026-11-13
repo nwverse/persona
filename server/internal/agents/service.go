@@ -257,11 +257,14 @@ func (s *Service) listed(ctx context.Context, source, provider string) ([]Sessio
 			continue
 		}
 		list, err := s.sessionsOf(ctx, src, false)
-		if err != nil && source == "" && s.skipsFailed(src.Name()) {
-			s.logf("agents: %s: sessions: %v", src.Name(), err)
-			continue
+		if errors.Is(err, context.Canceled) {
+			return nil, err
 		}
 		if err != nil {
+			s.logf("agents: %s: sessions: %v", src.Name(), err)
+			if source == "" && s.skipsFailed(src.Name()) {
+				continue
+			}
 			return nil, err
 		}
 		for _, x := range list {
@@ -280,11 +283,14 @@ func (s *Service) Search(ctx context.Context, source, q string) ([]SearchHit, er
 			continue
 		}
 		hits, err := src.Search(ctx, q)
-		if err != nil && source == "" && s.skipsFailed(src.Name()) {
-			s.logf("agents: %s: search: %v", src.Name(), err)
-			continue
+		if errors.Is(err, context.Canceled) {
+			return nil, err
 		}
 		if err != nil {
+			s.logf("agents: %s: search: %v", src.Name(), err)
+			if source == "" && s.skipsFailed(src.Name()) {
+				continue
+			}
 			return nil, err
 		}
 		out = append(out, hits...)

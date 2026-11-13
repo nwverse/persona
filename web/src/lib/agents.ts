@@ -241,7 +241,12 @@ const emit = (p: Partial<ListState>) => {
 
 let bounded = false;
 export const personalOrder = (a: AgentSession, b: AgentSession) => b.rankTimeMs - a.rankTimeMs || compareListIds(a.id, b.id);
-export const personalSessions = new SessionList<AgentSession>("/agents/sessions", (s) => s.id, personalOrder);
+export const AGENTS_PAGE_COUNTS_FEATURE = "agents_page_counts";
+let pageCounts = false;
+/** Set from hello: whether this hub reads a personal page's counts with it (`with_counts`, #6496), one request per
+ *  refresh instead of two. A filtered personal list follows (PagedSessionList). */
+export function setPersonalPageCounts(on: boolean) { pageCounts = on; }
+export const personalSessions = new SessionList<AgentSession>("/agents/sessions", (s) => s.id, personalOrder, undefined, undefined, { pageCounts: () => pageCounts });
 export function setAgentListMode(enabled: boolean) {
   bounded = enabled;
 }
@@ -512,15 +517,24 @@ export function refreshAgentPrefs(): Promise<void> {
 
 let saveSeq = 0;
 export function updateAgentPrefs(f: (p: AgentPrefs) => AgentPrefs) {
+  const before = prefs;
   const next = f(prefs);
-  prefsRev++;
+  const rev = ++prefsRev;
   emitPrefs(next);
   if (!hubPrefs) return;
   const seq = ++saveSeq;
   prefsOut++;
   api<AgentPrefs>("/agents/prefs", { method: "PUT", json: next })
     .then((p) => seq === saveSeq && emitPrefs(normalizePrefs(p)))
-    .catch(prefsGone)
+    .catch((e) => {
+      prefsGone(e);
+      if (!hubPrefs) return; // a hub without the endpoint: the change stays here only
+      // Not saved (#1880): put back what was there unless a later change came, say so, and read the hub's once the
+      // PUTs are done (an earlier change that failed too may still show under a later one's undo).
+      if (rev === prefsRev) emitPrefs(before);
+      prefsPullAfterSave = true;
+      toast(t("lib-agents.prefs_save_failed", { error: errorText(e) }), "error");
+    })
     .finally(() => {
       prefsOut--;
       if (prefsOut || !prefsPullAfterSave) return;

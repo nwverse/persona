@@ -2,7 +2,28 @@ import BeautifulUI
 import SwiftUI
 
 @MainActor final class InboxAccountState: ObservableObject {
-    @Published var accounts = StateCache.load("mail-accounts", as: [MailAccount].self) ?? []
+    @Published var accounts = InboxMailAccounts.cached(AppModel.shared.assistantManagerID)
+}
+
+/// The mail accounts the inbox's filters and New Email offer: the current assistant's (each manager keeps its own
+/// sources, docs/assistant/managers.md "Pages"), kept for the next launch apart for each assistant; the default's
+/// under the name they always had.
+@MainActor enum InboxMailAccounts {
+    static func cacheName(_ manager: String?) -> String { manager.map { "mail-accounts." + $0 } ?? "mail-accounts" }
+
+    static func cached(_ manager: String?) -> [MailAccount] {
+        StateCache.load(cacheName(manager), as: [MailAccount].self) ?? []
+    }
+
+    /// The accounts of `manager` (nil: the default's) as the hub has them now, kept; nil when they can't be read, or
+    /// when another assistant became current meanwhile (they are not the page's any more).
+    static func read(_ model: AppModel) async -> [MailAccount]? {
+        let manager = model.assistantManagerID
+        guard let api = model.api?.manager(manager), let accounts = try? await api.mailAccounts(),
+              manager == model.assistantManagerID else { return nil }
+        StateCache.save(cacheName(manager), accounts)
+        return accounts
+    }
 }
 
 // MARK: - Inbox
@@ -34,10 +55,23 @@ extension InboxView {
     static func short(_ email: String) -> String { InboxPage.short(email) }
 }
 
+/// A waiting session pushes only on its own hub's Assistant stack. Another group's card keeps the old open, which
+/// selects that group's Persona for an assistant conversation instead of leaving a foreign route on this hub's stack.
+@MainActor enum InboxWaitingOpen {
+    static func session(_ key: SessionKey, currentHub: String?, push: ((InboxChatRoute) -> Void)?, open: () -> Void) {
+        if let push, key.group == currentHub {
+            push(InboxChatRoute(key: key, manager: nil))
+        } else {
+            open()
+        }
+    }
+}
+
 /// The inbox's page itself, in whatever stack shows it: Inbox's own (InboxView), or the shell's Assistant page (pushed from
 /// the drawer, docs/apple/ios.md「New shell」), which passes `embedded` so the page brings its destinations and link handling.
 struct InboxPage: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.pushInboxChat) private var pushChat
     @Binding var path: NavigationPath
     @ObservedObject var accountState: InboxAccountState
     var embedded = false
@@ -49,19 +83,23 @@ struct InboxPage: View {
         get { accountState.accounts }
         nonmutating set { accountState.accounts = newValue }
     }
-    /// Sections shown open: tiers (action, working, fyi, noise) and "done", in each manager's group. Collapsed and Done start closed.
+    /// Sections shown open: tiers (action, working, fyi, noise) and "done". Collapsed and Done start closed.
     @State private var folds = InboxFolds()
     /// Needs You, FYI and Collapsed by source or by time (#2059), kept on this device; Done is always by time.
     @StoredValue("inbox.grouping") private var grouping = "" // "" by source, "time"
-    /// The groups opened or closed by hand, kept on this device: JSON of "<manager>|<section>|<group>" → open.
+    /// The groups opened or closed by hand, kept on this device: JSON of "|<section>|<group>" → open (the leading bar is
+    /// where a manager's id was while the list had one group per manager).
     @StoredValue("inbox.folds") private var groupFoldsJSON = ""
     /// A title to scroll to (Done's, for the DEBUG `-showInboxDone`).
     @State private var scrollTarget: String?
+    /// Done groups that loaded their first page by themselves on opening (#2969): once while the page is up.
+    @State private var autoLoaded: Set<String> = []
     @State private var composing: ComposeDraft?
     @State private var editingDraft: InboxItem? // Edit on the AI Twin's draft
     @State private var answering: Interaction? // a card on no session, open by itself (#4059)
     @State private var showingMutes = false     // Muted
     @State private var showingRules = false     // Rules
+    @State private var showingSubscriptions = false  // source subscriptions (#2041)
     @State private var ruling: InboxPolicyTarget? // a row's Rule for This Chat / Sender / Repository…
     @State private var confirming = false // Clear All over many items asks first
     /// Selecting (#2059): the picked items' keys (`InboxItem.key`); nil when not selecting. Marking stays in Persona (done, with Undo).
@@ -69,10 +107,10 @@ struct InboxPage: View {
     private var store: InboxStore { .shared }
 
     /// The kind filters, by key.
-    static let kinds = [("mention", String(localized: "@Me")), ("dm", String(localized: "DMs")), ("group", String(localized: "Group chat")), ("mail", String(localized: "Mail [Assistant View 3d708e]")), ("agent", "Agent")]
+    static let kinds = [("mention", String(localized: "@Me")), ("dm", String(localized: "DMs")), ("group", String(localized: "Group chat")), ("mail", String(localized: "Mail [Assistant View 3d708e]")), ("agent", String(localized: "Agent"))]
 
     private var itemProjection: InboxProjection {
-        itemMemo(store.items, filter: .init(source: source, kind: kind, query: query), revision: store.itemsRevision)
+        itemMemo(store.items, filter: .init(source: source, kind: kind, query: query, scope: model.assistantScope), revision: store.itemsRevision)
     }
 
     private var openItems: [InboxItem] { itemProjection.openItems }
@@ -80,11 +118,11 @@ struct InboxPage: View {
     /// The hub's connectors with items in the list (GitHub…), one filter each; none, no chip.
     private var connectorSources: [InboxProjection.Source] { itemProjection.connectorSources }
 
-    /// Agents (and the assistant) waiting for an answer, an approval or a plan review: they need the user too, so they
-    /// head Needs You. Opening one goes to its chat; the Agents tab stays as it is.
+    /// The current assistant's agents (and the assistant) waiting for an answer, an approval or a plan review: they need
+    /// the user too, so they head Needs You. Opening one goes to its chat; the Agents tab stays as it is.
     private var waitingAgents: [Interaction] {
         guard source.isEmpty, kind.isEmpty || kind == "agent" else { return [] }
-        return model.pendingInteractions.filter { ix in
+        return model.scopedInteractions.filter { ix in
             !model.isMuted(ix.sessionKey) && (query.isEmpty || [ix.sessionTitle ?? "", ix.summary ?? "", ix.title].contains { $0.localizedCaseInsensitiveContains(query) })
         }
     }
@@ -124,10 +162,21 @@ struct InboxPage: View {
                         Menu {
                             cleanButton
                             Divider()
-                            Button { composing = ComposeDraft(accountID: accounts.first?.id ?? "") } label: { Label("New Email", systemImage: Theme.Icon.compose) }
+                            Button { composing = ComposeDraft(accountID: accounts.first?.id ?? "", manager: model.assistantManagerID, accounts: accounts) } label: { Label("New Email", systemImage: Theme.Icon.compose) }
                                 .disabled(accounts.isEmpty)
                             Button { showingMutes = true } label: { Label("Muted [Inbox Mutes View e5e468]", systemImage: Theme.Icon.mute) }
                             Button { showingRules = true } label: { Label("Rules [Inbox Policy]", systemImage: Theme.Icon.inboxRule) }
+                            // Every source subscription, with the Inbox's other settings, once the hub shows them (#2041).
+                            if model.hubFeatures.contains(SubscriptionsUI.feature) {
+                                Button { showingSubscriptions = true } label: {
+                                    if model.hubFeatures.contains(SubscriptionsUI.sourcesFeature) { // every source of the Inbox (#5278)
+                                        Label("Inbox Sources", systemImage: Theme.Icon.subscriptions)
+                                    } else {
+                                        Label("Subscriptions [Source Subscriptions]", systemImage: Theme.Icon.subscriptions)
+                                    }
+                                }
+                                .accessibilityIdentifier("inbox.subscriptions")
+                            }
                         } label: { ThemedIcon(Theme.Icon.moreMenu) }
                         .accessibilityLabel("More")
                         .accessibilityIdentifier("inbox.more")
@@ -136,11 +185,12 @@ struct InboxPage: View {
                 }
                 // selecting: the bar at the bottom is the selection's (as in Mail), not the tabs'
                 .toolbar(picked == nil ? .automatic : .hidden, for: .tabBar)
-                .sheet(item: $composing) { d in ComposeView(draft: d, accounts: accounts) }
+                .sheet(item: $composing) { d in ComposeView(draft: d, accounts: d.accounts ?? accounts) }
                 .sheet(item: $editingDraft) { InboxDraftSheet(item: $0, accounts: accounts) }
                 .sheet(item: $answering) { SessionlessCardSheet(interaction: $0) }
                 .sheet(isPresented: $showingMutes) { InboxMutesView() }
                 .sheet(isPresented: $showingRules) { InboxRulesView() }
+                .sheet(isPresented: $showingSubscriptions) { SubscriptionsSheet() }
                 .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
                 .confirmationDialog(InboxBulk.confirmTitle, isPresented: $confirming, titleVisibility: .visible) {
                     Button(InboxBulk.confirmButton(count: cleanScope.count)) { clean(confirmed: true) }
@@ -149,11 +199,33 @@ struct InboxPage: View {
                 } message: {
                     Text(InboxBulk.confirmMessage(count: cleanScope.count, filters: filterNames, query: query))
                 }
+                // Another assistant is current: the list is its inbox now. What was picked, opened or asked of the one
+                // before goes (an item's page, the Muted and Rules lists, a rule's sheet: they read it and would write to
+                // it), a source filter too (a mailbox or a connector of the one before would leave the list empty), and
+                // Done's groups load their first pages again, from its history. A mail being written stays: it keeps
+                // the assistant and the accounts it was started with (`ComposeDraft.manager`), and goes out through it.
+                .onChange(of: model.assistantSwitches) {
+                    source = ""
+                    // This assistant's accounts as last kept (it may be offline), then as the hub has them.
+                    accounts = InboxMailAccounts.cached(model.assistantManagerID)
+                    Task { await loadAccounts() }
+                    picked = nil
+                    autoLoaded = []
+                    showingMutes = false
+                    showingRules = false
+                    ruling = nil
+                    editingDraft = nil
+                    if !embedded, !path.isEmpty { path = NavigationPath() }
+                }
                 // A plugin enabled or set up since: its sources' items open as it draws them.
                 .task { await InboxItemSlots.shared.reload() }
                 .task {
                     store.reload()
                     await loadAccounts()
+                    // A source kept from another time that no chip stands for now (a connector of another assistant's
+                    // items): the list would be empty with nothing to turn off.
+                    if !source.isEmpty, source != "feishu", store.listed, !accounts.contains(where: { $0.id == source }),
+                       !connectorSources.contains(where: { $0.id == source }) { source = "" }
                     #if DEBUG
                     // `-showInboxMutes YES`: the Muted list (screenshots).
                     if UserDefaults.standard.bool(forKey: "showInboxMutes") { showingMutes = true }
@@ -190,26 +262,47 @@ struct InboxPage: View {
                     }
                     // `-showInboxDone YES`: the first group's Done open and scrolled to, its groups' titles sticking (#2059 screenshots).
                     if UserDefaults.standard.bool(forKey: "showInboxDone") {
-                        for _ in 0..<20 where store.items.isEmpty || store.history.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
-                        if let share = shares.first {
-                            let first = share.manager?.id
-                            if !folds.isOpen("done", manager: first) { folds.toggle("done", manager: first) }
-                            let done = doneAll(share.mine(itemProjection.sortedDoneItems, model.managerRoster), share: share)
-                            // its newest group open (only Just Now and Today start open), then scrolled to its first row:
-                            // Done's title and the group's stick above it
-                            if let g = InboxGroups.done(done, now: .now).first {
-                                setGroupOpen("done", g.key, manager: first, true)
-                                try? await Task.sleep(for: .milliseconds(300))
-                                scrollTarget = g.items.first?.key
-                            }
+                        for _ in 0..<20 where store.items.isEmpty || store.history.isEmpty && store.doneDays == nil { try? await Task.sleep(for: .milliseconds(500)) }
+                        let share = share
+                        if !folds.isOpen("done") { folds.toggle("done") }
+                        let done = doneAll(itemProjection.sortedDoneItems)
+                        // its newest group open (only Just Now and Today start open), then scrolled to its first row:
+                        // Done's title and the group's stick above it
+                        if UserDefaults.standard.bool(forKey: "showInboxDoneFolded"),
+                           let last = InboxGroups.done(done, now: .now).filter({ groupOpen("done", $0.key) }).last?.items.last {
+                            // `-showInboxDoneFolded YES`: the groups as they start (Just Now and Today open), the last
+                            // open row at the top so the folded ones with their counts follow it (#2969 screenshots)
+                            try? await Task.sleep(for: .milliseconds(300))
+                            scrollTarget = last.key
+                        } else if let g = InboxGroups.done(done, now: .now).first {
+                            setGroupOpen("done", g.key, true)
+                            try? await Task.sleep(for: .milliseconds(300))
+                            scrollTarget = g.items.first?.key
+                        } else {
+                            // the hub's day counts and nothing loaded yet (#2969): Done's groups are folded, so the
+                            // last open row above it goes to the top (a List scrolls to rows, not headers)
+                            try? await Task.sleep(for: .milliseconds(300))
+                            scrollTarget = [InboxItem.Tier.action, .fyi].flatMap { share.byTier[$0] ?? [] }.last?.key
                         }
+                    }
+                    // `-showInboxJump <group>` ("week", "month", "d:2026-11-06"…): Done open and jumped to that group, its first
+                    // page loaded from the hub's history (#2969 screenshots: exact counts on groups not loaded before).
+                    if let key = UserDefaults.standard.string(forKey: "showInboxJump"), !key.isEmpty {
+                        for _ in 0..<20 where store.items.isEmpty || store.doneDays == nil { try? await Task.sleep(for: .milliseconds(500)) }
+                        if !folds.isOpen("done") { folds.toggle("done") }
+                        setGroupOpen("done", key, true)
+                        autoLoaded.insert(key)
+                        store.loadDoneGroup(key, range: InboxGroups.timeRange(key, now: .now))
+                        for _ in 0..<50 where store.groupLoading.contains(key) || store.history.isEmpty { try? await Task.sleep(for: .milliseconds(100)) }
+                        try? await Task.sleep(for: .milliseconds(300))
+                        scrollTarget = store.history.filter { InboxGroups.timeKey($0.doneAt, now: .now, recent: true) == key }
+                            .max { ($0.doneAt ?? .distantPast) < ($1.doneAt ?? .distantPast) }?.key
                     }
                     // `-showInboxPickGroups YES`: Select with the mail group folded and picked whole and the Lark group picked.
                     if UserDefaults.standard.bool(forKey: "showInboxPickGroups") {
                         for _ in 0..<20 where store.open.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
-                        let first = shares.first
-                        let groups = groupsOf(first?.byTier[.action] ?? [])
-                        if let mail = groups.first(where: { $0.key.hasPrefix("mail:") }) { setGroupOpen("action", mail.key, manager: first?.manager?.id, false) }
+                        let groups = groupsOf(share.byTier[.action] ?? [])
+                        if let mail = groups.first(where: { $0.key.hasPrefix("mail:") }) { setGroupOpen("action", mail.key, false) }
                         picked = Set(groups.filter { $0.key == "lark" || $0.key.hasPrefix("mail:") }.flatMap(\.items).map(\.key))
                         if UserDefaults.standard.bool(forKey: "showInboxPickedDone") {
                             try? await Task.sleep(for: .milliseconds(800))
@@ -228,23 +321,22 @@ struct InboxPage: View {
 
     // MARK: Groups (#2059)
 
-    /// The sections' parts by manager (#1850), as the list draws them.
-    private var shares: [InboxShare] {
-        InboxShare.make(byTier: kind == "agent" ? [:] : itemProjection.byTier, done: itemProjection.doneItems,
-                        agents: waitingAgents, roster: model.managerRoster)
+    /// The sections' parts, as the list draws them.
+    private var share: InboxShare {
+        InboxShare(byTier: kind == "agent" ? [:] : itemProjection.byTier, agents: waitingAgents, done: itemProjection.doneItems)
     }
 
     private var groupFolds: [String: Bool] { (try? JSONDecoder().decode([String: Bool].self, from: Data(groupFoldsJSON.utf8))) ?? [:] }
 
-    private static func groupID(_ section: String, _ key: String, manager: String?) -> String { "\(manager ?? "")|\(section)|\(key)" }
+    private static func groupID(_ section: String, _ key: String) -> String { "|\(section)|\(key)" }
 
-    private func groupOpen(_ section: String, _ key: String, manager: String?) -> Bool {
-        groupFolds[Self.groupID(section, key, manager: manager)] ?? InboxGroups.openAtFirst(section: section, key: key)
+    private func groupOpen(_ section: String, _ key: String) -> Bool {
+        groupFolds[Self.groupID(section, key)] ?? InboxGroups.openAtFirst(section: section, key: key)
     }
 
-    private func setGroupOpen(_ section: String, _ key: String, manager: String?, _ open: Bool) {
+    private func setGroupOpen(_ section: String, _ key: String, _ open: Bool) {
         var f = groupFolds
-        f[Self.groupID(section, key, manager: manager)] = open
+        f[Self.groupID(section, key)] = open
         groupFoldsJSON = (try? JSONEncoder().encode(f)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
     }
 
@@ -262,18 +354,74 @@ struct InboxPage: View {
         tier != .working && (groups.count > 1 || (agents > 0 && !groups.isEmpty))
     }
 
-    /// A share's Done as shown: the list's done items, then the history's it doesn't have, newest done first.
-    private func doneAll(_ listed: [InboxItem], share: InboxShare) -> [InboxItem] {
+    /// Whether a Done group is complete: a page of its own reached its start, or (unfiltered) as many are loaded as the
+    /// hub counts. The list's done rows are not a group being complete: after #5549 it carries only the newest 200 of them.
+    static func doneGroupComplete(_ key: String, _ n: Int, groupComplete: Set<String>, counts: [String: Int], filtered: Bool) -> Bool {
+        if groupComplete.contains(key) { return true }
+        return !filtered && n >= counts[key, default: 0]
+    }
+
+    /// Done's groups (#2969). With the hub's day counts (#2967; the current assistant's, as the history is) every group they
+    /// name is listed with its count, loaded or not, and loads its own items when it opens; filtered or searched, the
+    /// counts are of what is loaded ("n+" until the group is complete), and `next` is the group "Show Older" loads.
+    /// Without them, as before: what the history has loaded, "n+" on the last group while there is more.
+    private func doneGroups(_ done: [InboxItem], days: [String: Int]?) -> (groups: [DoneGroup], next: DoneGroup?) {
+        let now = Date.now
+        let loaded = InboxGroups.done(done, now: now)
+        guard let days else {
+            let more = store.historyMore && !store.history.isEmpty
+            return (loaded.enumerated().map { i, g in
+                DoneGroup(group: g, count: g.items.count, plus: i == loaded.count - 1 && more, more: false, range: InboxGroups.timeRange(g.key, now: now))
+            }, nil)
+        }
+        let filtered = !source.isEmpty || !kind.isEmpty || !query.isEmpty
+        let counts = InboxGroups.dayCounts(days, now: now, just: filtered ? 0 : loaded.first { $0.key == "just" }?.items.count ?? 0)
+        let byKey = Dictionary(loaded.map { ($0.key, $0.items) }, uniquingKeysWith: +)
+        // complete: a page of its own reached its start, or (unfiltered) as many are loaded as the hub counts. The
+        // list's done rows are not a group being complete: after #5549 it carries only the newest 200 of them.
+        func complete(_ key: String, _ n: Int) -> Bool {
+            Self.doneGroupComplete(key, n, groupComplete: store.groupComplete, counts: counts, filtered: filtered)
+        }
+        func group(_ key: String) -> DoneGroup {
+            let items = byKey[key] ?? []
+            let done = complete(key, items.count)
+            return DoneGroup(group: InboxGroups.Group(key: key, title: InboxGroups.timeTitle(key), items: items),
+                             count: filtered ? items.count : max(items.count, counts[key, default: 0]), plus: filtered && !done, more: !done,
+                             range: InboxGroups.timeRange(key, now: now))
+        }
+        let keys = InboxGroups.sortedKeys(filtered ? Array(byKey.keys) : Array(byKey.keys) + Array(counts.keys), now: now)
+        let next = filtered ? InboxGroups.sortedKeys(counts.keys, now: now).first { !complete($0, 0) } : nil
+        return (keys.map(group), next.map(group))
+    }
+
+    /// "Show Older" under Done or in one of its groups: one more page. In a group it loads the first page by itself when
+    /// it shows (the group opened), once: the next ones are a tap each, so opening 1+ Month doesn't stream in all of it.
+    private func olderRow(loading: Bool, auto: String? = nil, run: @escaping () -> Void) -> some View {
+        Button(loading ? String(localized: "Loading…") : String(localized: "Show Older"), action: run)
+            .disabled(loading)
+            .lineLimit(1)
+            .listRowSeparator(.hidden)
+            .themedRow()
+            .onAppear {
+                guard let auto, !autoLoaded.contains(auto) else { return }
+                autoLoaded.insert(auto)
+                run()
+            }
+    }
+
+    /// Done as shown: the list's done items, then the history's it doesn't have (the current assistant's, as the
+    /// store reads it), newest done first.
+    private func doneAll(_ listed: [InboxItem]) -> [InboxItem] {
         let have = Set(listed.map(\.key))
         let filter = InboxProjection.Filter(source: source, kind: kind, query: query)
-        let older = share.mine(store.history, model.managerRoster).filter { $0.isDone && !have.contains($0.key) && filter.matches($0) }
+        let older = store.history.filter { $0.isDone && !have.contains($0.key) && filter.matches($0) }
         return older.isEmpty ? listed : (listed + older).sorted { ($0.doneAt ?? .distantPast) > ($1.doneAt ?? .distantPast) }
     }
 
     /// A group's title: it opens / closes the group (sticking at the top while its rows scroll by); selecting, its tick
     /// picks or unpicks all of it, folded or not, and "n selected" says what is picked in it.
-    private func groupHeader(_ section: String, _ g: InboxGroups.Group, manager: String?, count: Int, more: Bool = false, pickable: Bool) -> some View {
-        let open = groupOpen(section, g.key, manager: manager)
+    private func groupHeader(_ section: String, _ g: InboxGroups.Group, count: Int, more: Bool = false, pickable: Bool) -> some View {
+        let open = groupOpen(section, g.key)
         let n = picked.map { p in g.items.filter { p.contains($0.key) }.count } ?? 0
         return HStack(spacing: Theme.Space.sm) {
             if picked != nil && pickable {
@@ -281,29 +429,37 @@ struct InboxPage: View {
                     ThemedIcon(n == 0 ? Theme.Icon.unchecked : n == g.items.count ? Theme.Icon.successFilled : Theme.Icon.partlyChecked)
                         .font(Theme.Font.heading)
                         .foregroundStyle(n == 0 ? Color.secondary : Theme.accent)
+                        .tapTargetHeight()
+                        // A finger wide too, the title where it was: hit over the header's inset and the gap before the
+                        // title, whose own button, drawn after it, keeps its taps (#6658).
+                        .tapTargetOutset(.horizontal)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(String(localized: "Select All in \(g.title)"))
+                .accessibilityIdentifier("inbox.pickGroup")
             }
             Button {
-                withAnimation(Theme.Motion.standard) { setGroupOpen(section, g.key, manager: manager, !open) }
+                withAnimation(Theme.Motion.standard) { setGroupOpen(section, g.key, !open) }
             } label: {
                 HStack(spacing: Theme.Space.sm) {
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(open ? 90 : 0))
-                    Text(g.title).font(Theme.Font.secondaryStrong).foregroundStyle(.secondary)
-                    Text(verbatim: more ? "\(count)+" : "\(count)").font(Theme.Font.secondary).foregroundStyle(.tertiary)
+                    // the section's title size, not its weight: a level under it ("Done · 2088"), not above it (#2969)
+                    Text(g.title).font(Theme.Font.caption).foregroundStyle(.secondary)
+                    Text(verbatim: more ? "\(count)+" : "\(count)").font(Theme.Font.caption).foregroundStyle(.tertiary)
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            if n > 0 { Text("\(n) Picked").font(Theme.Font.secondary).foregroundStyle(Theme.accent).lineLimit(1) }
+            .accessibilityIdentifier("inbox.groupTitle")
+            if n > 0 { Text("\(n) Picked").font(Theme.Font.caption).foregroundStyle(Theme.accent).lineLimit(1) }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
-        .id(Self.groupID(section, g.key, manager: manager))
+        .listRowInsets(.vertical, Theme.Space.flush) // its buttons are the room above and below (#6576)
+        .id(Self.groupID(section, g.key))
     }
 
     private func pickGroup(_ items: [InboxItem]) {
@@ -319,14 +475,12 @@ struct InboxPage: View {
     /// What Select can pick: the open items in sight (in the sections and groups shown open; In Progress is always
     /// open). The agents waiting and the done items stay as they are, dimmed.
     private var pickable: [InboxItem] {
-        shares.flatMap { share -> [InboxItem] in
-            let manager = share.manager?.id
-            return InboxItem.Tier.allCases.filter { folds.isOpen($0.rawValue, manager: manager) }.flatMap { tier -> [InboxItem] in
-                let items = share.byTier[tier] ?? []
-                let groups = tier == .working ? [] : groupsOf(items)
-                guard titled(tier, groups: groups, agents: tier == .action ? share.agents.count : 0) else { return items }
-                return groups.filter { groupOpen(tier.rawValue, $0.key, manager: manager) }.flatMap(\.items)
-            }
+        let share = share
+        return InboxItem.Tier.allCases.filter { folds.isOpen($0.rawValue) }.flatMap { tier -> [InboxItem] in
+            let items = share.byTier[tier] ?? []
+            let groups = tier == .working ? [] : groupsOf(items)
+            guard titled(tier, groups: groups, agents: tier == .action ? share.agents.count : 0) else { return items }
+            return groups.filter { groupOpen(tier.rawValue, $0.key) }.flatMap(\.items)
         }
     }
 
@@ -354,7 +508,7 @@ struct InboxPage: View {
         }
         ToolbarItemGroup(placement: .bottomBar) {
             Spacer()
-            // One request per manager, versions checked, Undo on the toast (InboxStore.setDone); selecting ends.
+            // One request, versions checked, Undo on the toast (InboxStore.setDone); selecting ends.
             Button("Mark as Done") {
                 withAnimation(Theme.Motion.standard) {
                     store.setDone(chosen, true)
@@ -420,10 +574,10 @@ struct InboxPage: View {
         let projection = itemProjection
         let openItems = projection.openItems
         let waitingAgents = waitingAgents
-        let roster = model.managerRoster
-        // Under each manager's name when the hub has several (#1850); one group with no name otherwise.
-        let shares = InboxShare.make(byTier: kind == "agent" ? [:] : projection.byTier, done: projection.doneItems,
-                                     agents: waitingAgents, roster: roster)
+        // The current assistant's alone where the hub has several: no manager headings (docs/assistant/managers.md "Pages").
+        let share = InboxShare(byTier: kind == "agent" ? [:] : projection.byTier, agents: waitingAgents, done: projection.doneItems)
+        // The hub's merged list has nothing of an assistant that is offline: said so in place of the empty inbox.
+        let offline = model.assistantManagerOffline
         return ScrollViewReader { proxy in
         List {
             filters
@@ -446,87 +600,105 @@ struct InboxPage: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
+            // Sources not read this round keep their earlier items: say so even when triage is otherwise ok (#1849).
+            if let unread = InboxTriageText.unread(store.triage) {
+                InboxUnreadNotice(text: unread)
+                    .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.page, bottom: Theme.Space.s, trailing: Theme.Space.page))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
             if let error = store.error, store.items.isEmpty {
                 Label(error, systemImage: Theme.Icon.error).font(Theme.Font.caption).foregroundStyle(Theme.danger)
                     .themedRow()
             }
-            if openItems.isEmpty && waitingAgents.isEmpty && !store.loading {
+            if openItems.isEmpty && waitingAgents.isEmpty && !store.loading, let offline {
+                AssistantOfflineNotice(manager: offline)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            } else if openItems.isEmpty && waitingAgents.isEmpty && !store.loading {
                 EmptyStateView(symbol: "checkmark.seal", title: query.isEmpty ? String(localized: "All Caught Up") : String(localized: "No Matches"),
                                message: query.isEmpty ? String(localized: "New Lark messages and emails show up here.") : String(localized: "Try a different search."))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
-            ForEach(shares) { share in
-                let manager = share.manager?.id
-                if let m = share.manager {
-                    Section {
-                        ManagerHeading(manager: m, count: share.openCount)
-                            .listRowInsets(EdgeInsets(top: Theme.Space.l, leading: Theme.Space.page, bottom: Theme.Space.xs, trailing: Theme.Space.page))
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                    }
-                }
-                // The AI's triage: Needs You (and what it has not looked at yet), FYI, Collapsed (noise); each by source or
-                // by time (#2059): a group is its own section, so its title sticks while its rows scroll by.
-                ForEach(InboxItem.Tier.allCases, id: \.self) { tier in
-                    let items = share.byTier[tier] ?? []
-                    let agents = tier == .action ? share.agents : []
-                    if !items.isEmpty || !agents.isEmpty {
-                        let groups = tier == .working ? [] : groupsOf(items)
-                        let header = sectionHeader(tier.title, count: items.count + agents.count, key: tier.rawValue, manager: manager,
-                                                   clear: picked == nil ? InboxPage.clearTitle(tier).map { ($0, { store.setDone(items, true) }) } : nil)
-                        if titled(tier, groups: groups, agents: agents.count) {
-                            Section { EmptyView() } header: { header }
-                            if folds.isOpen(tier.rawValue, manager: manager) {
-                                if !agents.isEmpty {
-                                    let g = InboxGroups.Group(key: "agents", title: String(localized: "Agents Waiting on You"), items: [])
-                                    Section { if groupOpen(tier.rawValue, g.key, manager: manager) { ForEach(agents) { agentRow($0) } } } header: {
-                                        groupHeader(tier.rawValue, g, manager: manager, count: agents.count, pickable: false)
-                                    }
-                                }
-                                ForEach(groups) { g in
-                                    Section { if groupOpen(tier.rawValue, g.key, manager: manager) { ForEach(g.items, id: \.key) { row($0) } } } header: {
-                                        groupHeader(tier.rawValue, g, manager: manager, count: g.items.count, pickable: true)
-                                    }
+            // The AI's triage: Needs You (and what it has not looked at yet), FYI, Collapsed (noise); each by source or
+            // by time (#2059): a group is its own section, so its title sticks while its rows scroll by.
+            ForEach(InboxItem.Tier.allCases, id: \.self) { tier in
+                let items = share.byTier[tier] ?? []
+                let agents = tier == .action ? share.agents : []
+                if !items.isEmpty || !agents.isEmpty {
+                    let groups = tier == .working ? [] : groupsOf(items)
+                    let header = sectionHeader(tier.title, count: items.count + agents.count, key: tier.rawValue,
+                                               clear: picked == nil ? InboxPage.clearTitle(tier).map { ($0, { store.setDone(items, true) }) } : nil)
+                    if titled(tier, groups: groups, agents: agents.count) {
+                        Section { EmptyView() } header: { header }
+                        if folds.isOpen(tier.rawValue) {
+                            if !agents.isEmpty {
+                                let g = InboxGroups.Group(key: "agents", title: String(localized: "Agents Waiting on You"), items: [])
+                                Section { if groupOpen(tier.rawValue, g.key) { ForEach(agents) { agentRow($0) } } } header: {
+                                    groupHeader(tier.rawValue, g, count: agents.count, pickable: false)
                                 }
                             }
-                        } else {
-                            Section {
-                                if folds.isOpen(tier.rawValue, manager: manager) {
-                                    ForEach(agents) { agentRow($0) }
-                                    ForEach(items, id: \.key) { row($0) }
+                            ForEach(groups) { g in
+                                Section { if groupOpen(tier.rawValue, g.key) { ForEach(g.items, id: \.key) { row($0) } } } header: {
+                                    groupHeader(tier.rawValue, g, count: g.items.count, pickable: true)
                                 }
-                            } header: { header }
-                        }
-                    }
-                }
-                // Done, by when it was done, with the hub's history after the list's few days.
-                let done = doneAll(share.mine(projection.sortedDoneItems, roster), share: share)
-                if !done.isEmpty {
-                    let dg = InboxGroups.done(done, now: .now)
-                    let count = store.historyMore && !store.history.isEmpty ? "\(done.count)+" : "\(done.count)"
-                    if dg.count > 1 {
-                        Section { EmptyView() } header: { doneHeader(count: count, groups: dg, manager: manager, proxy: proxy) }
-                        if folds.isOpen("done", manager: manager) {
-                            ForEach(Array(dg.enumerated()), id: \.element.key) { i, g in
-                                Section { if groupOpen("done", g.key, manager: manager) { ForEach(g.items, id: \.key) { row($0) } } } header: {
-                                    groupHeader("done", g, manager: manager, count: g.items.count, more: i == dg.count - 1 && store.historyMore, pickable: false)
-                                }
-                            }
-                            if store.historyMore && !store.history.isEmpty {
-                                Button(store.historyLoading ? String(localized: "Loading…") : String(localized: "Show Older")) { store.loadOlderDone() }
-                                    .disabled(store.historyLoading)
-                                    .lineLimit(1)
-                                    .listRowSeparator(.hidden)
-                                    .themedRow()
                             }
                         }
                     } else {
                         Section {
-                            if folds.isOpen("done", manager: manager) { ForEach(done, id: \.key) { row($0) } }
-                        } header: {
-                            doneHeader(count: count, groups: [], manager: manager, proxy: proxy)
+                            if folds.isOpen(tier.rawValue) {
+                                ForEach(agents) { agentRow($0) }
+                                ForEach(items, id: \.key) { row($0) }
+                            }
+                        } header: { header }
+                    }
+                }
+            }
+            // Done, by when it was done, with the hub's history after the list's few days.
+            let done = doneAll(projection.sortedDoneItems)
+            let days = store.doneDays
+            let (dg, nextGroup) = doneGroups(done, days: days)
+            let doneCount = days == nil ? done.count : dg.reduce(0) { $0 + $1.count }
+            if doneCount > 0 {
+                let more = days == nil ? store.historyMore && !store.history.isEmpty : nextGroup != nil || dg.contains { $0.plus }
+                let count = more ? "\(doneCount)+" : "\(doneCount)"
+                let filtered = !source.isEmpty || !kind.isEmpty || !query.isEmpty
+                if dg.count > 1 {
+                    // Its title as a row, not as the header of a section with nothing in it: as that header (with its
+                    // Jump To menu, #2979) its text came out washed like a stuck title's wherever it was, and on an
+                    // iPhone the scroll edge reached from the top down to it, over every row between (#4218).
+                    Section {
+                        doneHeader(count: count, groups: dg, proxy: proxy)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                    if folds.isOpen("done") {
+                        ForEach(dg) { g in
+                            Section {
+                                if groupOpen("done", g.id) {
+                                    ForEach(g.group.items, id: \.key) { row($0) }
+                                    if days != nil && g.more && !filtered {
+                                        olderRow(loading: store.groupLoading.contains(g.id), auto: g.id) { store.loadDoneGroup(g.id, range: g.range) }
+                                    }
+                                }
+                            } header: {
+                                groupHeader("done", g.group, count: g.count, more: g.plus, pickable: false)
+                            }
                         }
+                        if days == nil && store.historyMore && !store.history.isEmpty {
+                            olderRow(loading: store.historyLoading) { store.loadOlderDone() }
+                        }
+                        if let nextGroup {
+                            olderRow(loading: store.groupLoading.contains(nextGroup.id)) { store.loadDoneGroup(nextGroup.id, range: nextGroup.range) }
+                        }
+                    }
+                } else {
+                    Section {
+                        if folds.isOpen("done") { ForEach(done, id: \.key) { row($0) } }
+                    } header: {
+                        doneHeader(count: count, groups: [], proxy: proxy)
                     }
                 }
             }
@@ -535,8 +707,9 @@ struct InboxPage: View {
         .themedPage()
         .refreshable { await store.refresh() }
         .overlay { if store.loading && store.items.isEmpty { ProgressView() } }
-        // Done's history: a first page once the list is in, so Done's groups and counts are there before it opens
-        .task(id: store.listed) { if store.listed && store.history.isEmpty { store.loadOlderDone() } }
+        // Done's day counts once the list is in, so Done lists its groups and counts before it opens (#2969); a hub
+        // without them gets the history's first page instead
+        .task(id: store.listed) { if store.listed { store.loadDoneDays() } }
         .onChange(of: scrollTarget) { _, id in
             guard let id else { return }
             withAnimation(Theme.Motion.standard) { proxy.scrollTo(id, anchor: .top) }
@@ -546,11 +719,11 @@ struct InboxPage: View {
     }
 
     /// Done's title: opens / closes it; "Jump To" lists its groups with their counts, and collapses or expands them all.
-    private func doneHeader(count: String, groups: [InboxGroups.Group], manager: String?, proxy: ScrollViewProxy) -> some View {
-        let open = folds.isOpen("done", manager: manager)
+    private func doneHeader(count: String, groups: [DoneGroup], proxy: ScrollViewProxy) -> some View {
+        let open = folds.isOpen("done")
         return HStack(spacing: Theme.Space.sm) {
             Button {
-                withAnimation(Theme.Motion.standard) { folds.toggle("done", manager: manager) }
+                withAnimation(Theme.Motion.standard) { folds.toggle("done") }
             } label: {
                 HStack(spacing: Theme.Space.sm) {
                     Text(verbatim: "\(String(localized: "Done [Inbox View 59f6c8]")) · \(count)").font(Theme.Font.sectionHeader).foregroundStyle(.secondary)
@@ -559,72 +732,100 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.doneTitle")
             if groups.count > 1 {
                 Menu {
                     ForEach(groups) { g in
-                        Button { jump(to: g, manager: manager, proxy: proxy) } label: { Text(g.title); Text(verbatim: "\(g.items.count)") }
+                        Button { jump(to: g, proxy: proxy) } label: { Text(g.group.title); Text(verbatim: g.plus ? "\(g.count)+" : "\(g.count)") }
                     }
                     Divider()
-                    Button("Collapse All") { for g in groups { setGroupOpen("done", g.key, manager: manager, false) } }
-                    Button("Expand All") { for g in groups { setGroupOpen("done", g.key, manager: manager, true) } }
+                    Button("Collapse All") { for g in groups { setGroupOpen("done", g.id, false) } }
+                    Button("Expand All") { for g in groups { setGroupOpen("done", g.id, true) } }
                 } label: {
+                    // a finger wide too: the two-character zh-Hans label is about 30 pt
                     Text("Jump To").font(Theme.Font.secondary).lineLimit(1)
+                        .tapTargetHeight()
+                        .scaledFrame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
+                        .frame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
+                        .contentShape(.rect)
                 }
                 .accessibilityIdentifier("inbox.jumpTo")
             }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
-        .id("\(manager ?? "")|done")
+        .listRowInsets(.vertical, Theme.Space.flush)
+        .id("|done")
     }
 
     /// Jump To one of Done's groups: Done and the group open, then scrolled to its first row (its title sticks above it;
-    /// a List scrolls to rows, which are identified by `InboxItem.key`, not to section headers).
-    private func jump(to g: InboxGroups.Group, manager: String?, proxy: ScrollViewProxy) {
-        if !folds.isOpen("done", manager: manager) { folds.toggle("done", manager: manager) }
-        setGroupOpen("done", g.key, manager: manager, true)
-        guard let first = g.items.first?.key else { return }
+    /// a List scrolls to rows, which are identified by `InboxItem.key`, not to section headers). A group none of whose
+    /// items has come yet loads its first page (#2969; opening it does), then scrolls once one is there.
+    private func jump(to g: DoneGroup, proxy: ScrollViewProxy) {
+        if !folds.isOpen("done") { folds.toggle("done") }
+        setGroupOpen("done", g.id, true)
+        let key = g.id
+        if g.more {
+            autoLoaded.insert(key)
+            store.loadDoneGroup(key, range: g.range)
+        }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
+            var first = g.group.items.first?.key
+            // up to 5 s for its first page: then the group's first item, newest first, as Done lists it
+            for _ in 0..<50 where first == nil {
+                try? await Task.sleep(for: .milliseconds(100))
+                if store.groupLoading.contains(key) { continue }
+                first = store.history.filter { InboxGroups.timeKey($0.doneAt, now: .now, recent: true) == key }
+                    .max { ($0.doneAt ?? .distantPast) < ($1.doneAt ?? .distantPast) }?.key
+            }
+            guard let first else { return }
             withAnimation(Theme.Motion.standard) { proxy.scrollTo(first, anchor: .top) }
         }
     }
 
     /// A section title that opens / closes the section, with an optional action on the right (List headers take no
     /// context menu, so it is a visible button).
-    private func sectionHeader(_ title: String, count: Int, key: String, manager: String?, clear: (String, () -> Void)?) -> some View {
+    private func sectionHeader(_ title: String, count: Int, key: String, clear: (String, () -> Void)?) -> some View {
         HStack(spacing: Theme.Space.sm) {
             if InboxItem.Tier(rawValue: key)?.folds == false {
                 // In Progress: always open, a plain title (inbox phase 1).
+                // as tall as the other sections' titles, which are buttons
                 Text("\(title) · \(count)").font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
+                    .tapTargetHeight()
                 Spacer(minLength: 0)
             } else {
             Button {
-                withAnimation(Theme.Motion.standard) { folds.toggle(key, manager: manager) }
+                withAnimation(Theme.Motion.standard) { folds.toggle(key) }
             } label: {
                 HStack(spacing: Theme.Space.sm) {
                     Text("\(title) · \(count)").font(Theme.Font.sectionHeader).foregroundStyle(key == "action" ? Color.primary : .secondary)
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelHeavy).foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(folds.isOpen(key, manager: manager) ? 90 : 0))
+                        .rotationEffect(.degrees(folds.isOpen(key) ? 90 : 0))
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.sectionTitle")
             }
             if let clear {
-                Button(clear.0) { withAnimation(Theme.Motion.standard) { clear.1() } }
-                    .font(Theme.Font.secondary)
-                    .lineLimit(1)
-                    .buttonStyle(.borderless)
+                Button { withAnimation(Theme.Motion.standard) { clear.1() } } label: {
+                    Text(clear.0).tapTargetHeight().contentShape(.rect)
+                }
+                .font(Theme.Font.secondary)
+                .lineLimit(1)
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("inbox.clear")
             }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush)
     }
 
     private func agentRow(_ ix: Interaction) -> some View {
@@ -642,7 +843,7 @@ struct InboxPage: View {
     private func open(_ ix: Interaction) {
         // A card on no session has no chat: it opens by itself (#4059).
         if ix.isSessionless { answering = ix; return }
-        model.open(ix.sessionKey) // in its own group (another group's Persona: that group's)
+        InboxWaitingOpen.session(ix.sessionKey, currentHub: model.hub?.group, push: pushChat, open: { model.open(ix.sessionKey) })
     }
 
     @ViewBuilder private func row(_ it: InboxItem) -> some View {
@@ -792,9 +993,8 @@ struct InboxPage: View {
     }
 
     private func loadAccounts() async {
-        guard let api = model.api, let a = try? await api.mailAccounts() else { return }
+        guard let a = await InboxMailAccounts.read(model) else { return }
         accounts = a
-        StateCache.save("mail-accounts", a)
     }
 }
 
@@ -818,6 +1018,7 @@ struct InboxRow: View {
     static let textColumn: CGFloat = 52
 
     var body: some View {
+        let now = self.now
         HStack(alignment: .top, spacing: Theme.Space.m) {
             avatar
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -841,7 +1042,7 @@ struct InboxRow: View {
                                 // white, where the row sets the words' color for these (MacHoverRow).
                                 .font(Theme.Font.secondary)
                                 .foregroundStyle(item.isDone ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary.opacity(0.9))).lineLimit(2)
-                            Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                            if !item.repeatsSummary { Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1) }
                         }
                     } else {
                         Text(from).font(Theme.Font.secondary).lineHeight(.secondary).foregroundStyle(.secondary).lineLimit(2)
@@ -849,7 +1050,7 @@ struct InboxRow: View {
                     Spacer(minLength: 0)
                     if item.count > 1 && !item.isDone {
                         // @Me is the accent (it is about you); any other count is neutral.
-                        CountBadge(count: item.count, look: .solid(item.kind == "mention" ? Theme.accent : Theme.countBadge))
+                        CountBadge(count: item.count, look: item.kind == "mention" ? .accent : .neutral)
                     }
                 }
                 if item.doc != nil && !item.isDone {
@@ -858,7 +1059,9 @@ struct InboxRow: View {
                 if showAccount && !item.isLark {
                     Text(item.accountName).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                if let mark = InboxEventText.mark(item) {
+                if let now, !item.isDone {
+                    nowLine(now)
+                } else if let mark = InboxEventText.mark(item) {
                     // Inbox phase 1: the suggestion (it replaces the AI agent's draft card, which a hub mirrors it
                     // into), In Progress's state, the 'preparing a suggestion' line; its buttons are in the detail.
                     InboxEventMarkLine(mark: mark).padding(.top, Theme.Space.xxs)
@@ -882,8 +1085,47 @@ struct InboxRow: View {
         .contentShape(.rect)
     }
 
+    /// The shared state key wins over the old mark. The frozen Mac list keeps its existing row and mark.
+    private var now: String? {
+        #if os(macOS)
+        nil
+        #else
+        InboxNow.text(for: item)
+        #endif
+    }
+
+    /// The same state line as the other clients: waiting has a still clock, only AI work spins, and anything that
+    /// needs the owner carries the existing Needs you mark. FYI and folded states do not spin.
+    private func nowLine(_ words: String) -> some View {
+        HStack(spacing: Theme.Space.sm) {
+            nowSymbol
+            Text(words).font(Theme.Font.label)
+                .foregroundStyle(item.now == "failed" ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
+                .lineLimit(1)
+        }
+        .padding(.top, Theme.Space.xxs)
+    }
+
+    @ViewBuilder private var nowSymbol: some View {
+        switch item.now {
+        case "waiting":
+            ThemedIcon(Theme.Icon.time).font(Theme.Font.label).foregroundStyle(.secondary)
+        case "queued", "looking", "agent_working":
+            InboxSpinner()
+        case "confirm_reply", "confirm_agent", "decide", "follow_up_ask", "check_due", "needs_you", "failed":
+            ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.label)
+                .foregroundStyle(item.now == "failed" ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(StatusPalette.needsYou.text))
+        default:
+            EmptyView()
+        }
+    }
+
     /// Who wrote what (under the AI's summary once it has one).
     private var from: String {
+        if item.isAssistantRow { return item.preview } // the tag says who: no "Assistant:" in front
+        #if !os(macOS)
+        if let meta = InboxNow.meta(item, lang: interfaceTextLocale.identifier) { return meta }
+        #endif
         if let doc = item.doc { return doc.typeName + " · " + item.preview } // the preview names who: Li Lei mentioned you
         if item.moment != nil { return String(localized: "\(item.sender ?? ""): \(item.preview)", comment: "Who wrote it: what they wrote") } // who commented, on the post in the title
         if let c = item.connector { // example-org/example-repo#12 · bob: please take a look
@@ -896,6 +1138,17 @@ struct InboxRow: View {
     }
 
     private var avatar: some View {
+        Group {
+            if item.isAssistantRow {
+                // The assistant's own row wears the assistant's avatar, with no source badge.
+                PersonaAvatar(size: Theme.Size.avatar).opacity(item.isDone ? 0.6 : 1)
+            } else {
+                sourceAvatar
+            }
+        }
+    }
+
+    private var sourceAvatar: some View {
         ZStack(alignment: .bottomTrailing) {
             Group {
             if let doc = item.doc {
@@ -908,7 +1161,8 @@ struct InboxRow: View {
             } else if item.isLark {
                 LarkAvatarImage(name: item.title, url: item.avatar, isGroup: item.lark?.isGroup ?? false, size: Theme.Size.avatar)
             } else {
-                Monogram(name: item.sender ?? "", fill: Theme.monogramFill)
+                let disc = Theme.monogram(item.sender ?? "")
+                Monogram(name: item.sender ?? "", fill: disc.fill, ink: disc.ink)
             }
             }
             .opacity(item.isDone ? 0.6 : 1)
@@ -1118,6 +1372,7 @@ struct InboxDetailView: View {
                             InboxStore.shared.setDone(current, true)
                             dismiss()
                         } label: { Label("Done [Inbox View 59f6c8]", systemImage: Theme.Icon.done) }
+                            .accessibilityIdentifier("inbox.detail.done")
                     }
                 }
             }
@@ -1155,11 +1410,27 @@ struct InboxDetailView: View {
     }
 }
 
+/// Values a destination needs directly: an outer NavigationStack / NavigationSplitView does not reliably forward them
+/// to pushed pages on iPad. Both are optional on Mac, Vision and the classic layouts, preserving their fallbacks.
+struct InboxDestinationEnvironment: ViewModifier {
+    var chat: ((InboxChatRoute) -> Void)? = nil
+    var openFeishu: ((FeishuRoute) -> Void)? = nil
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.pushInboxChat, chat)
+            .environment(\.feishuOpen, openFeishu)
+    }
+}
+
 /// The pages the inbox opens, in either layout (`SplitNavigation`).
 struct InboxDestinations: ViewModifier {
     var accounts: [MailAccount]
+    var inboxChat: ((InboxChatRoute) -> Void)? = nil
+    var openFeishu: ((FeishuRoute) -> Void)? = nil
     @Environment(AppModel.self) private var model
-    @Environment(\.feishuOpen) private var feishuOpen
+    @Environment(\.feishuOpen) private var inheritedFeishuOpen
+    private var routeOpen: ((FeishuRoute) -> Void)? { openFeishu ?? inheritedFeishuOpen }
 
     // Links on these pages open in the app (feishuHandlesLinks) wherever the stack is: the shell pushes them onto its
     // own stack, where the inbox page's handler does not reach. Those on an item's pages, and on a document or post
@@ -1171,15 +1442,18 @@ struct InboxDestinations: ViewModifier {
             // and draft under the new chat's title (#885).
             .navigationDestination(for: InboxItem.self) {
                 InboxDetailView(item: $0, accounts: accounts).id($0.id).splitDetailPage()
-                    .feishuHandlesLinks(feishuOpen, manager: model.linkManager($0.manager))
+                    .feishuHandlesLinks(routeOpen, manager: model.linkManager($0.manager))
+                    .modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: routeOpen))
             }
             .navigationDestination(for: FeishuRoute.self) {
-                FeishuRouteView(route: $0).splitDetailPage().feishuHandlesLinks(feishuOpen, manager: $0.manager)
+                FeishuRouteView(route: $0).splitDetailPage().feishuHandlesLinks(routeOpen, manager: $0.manager)
+                    .modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: routeOpen))
             }
             // view original and the chain's links of an event (inbox phase 1).
             .navigationDestination(for: InboxSourceRoute.self) {
                 InboxSourcePage(route: $0, accounts: accounts).splitDetailPage()
-                    .feishuHandlesLinks(feishuOpen, manager: model.linkManager($0.item.manager))
+                    .feishuHandlesLinks(routeOpen, manager: model.linkManager($0.item.manager))
+                    .modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: routeOpen))
             }
             .extensionPushDestination()
     }
@@ -1204,4 +1478,15 @@ private struct InboxRowLook: ViewModifier {
                 .alignmentGuide(.listRowSeparatorLeading) { _ in InboxRow.textColumn }
         }
     }
+}
+
+/// A group of Done (#2969): its items loaded so far, its count (the hub's when it has day counts), whether the count reads
+/// "n+" (`plus`), whether more of its items can load (`more`) and its time range (where its pages start).
+private struct DoneGroup: Identifiable {
+    var group: InboxGroups.Group
+    var count: Int
+    var plus: Bool
+    var more: Bool
+    var range: (start: Date?, end: Date?)
+    var id: String { group.key }
 }

@@ -21,6 +21,19 @@ import java.io.IOException
 
 enum class LarkWindowSyncState { Cached, Syncing, Complete, Incomplete, Failed }
 
+/** How many of the done history's records [RealInboxRepository] keeps for changes to them (#2974). */
+private const val PAGED_BACK_KEPT = 2_000
+
+/**
+ * Window snapshots over this are skipped before reading (old versions cached whole traversed histories); new ones are
+ * trimmed under it, less [WINDOW_SNAPSHOT_ENVELOPE_BYTES] for the cursors and flags around the messages.
+ */
+internal const val WINDOW_SNAPSHOT_MAX_BYTES = 512L * 1024
+private const val WINDOW_SNAPSHOT_ENVELOPE_BYTES = 4L * 1024
+
+/** With a hub, polling only backs up its invalidation events. */
+private const val HUB_INBOX_POLL_MILLIS = 300_000L
+
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class RealInboxRepository(
     private val connection: InboxAssistantConnection,
@@ -46,10 +59,13 @@ class RealInboxRepository(
     private val mainConversationOf: (suspend (String) -> persona.core.contracts.SessionKey)? = null,
     /** How long a burst of hub inbox events is collected before the one refresh it causes. */
     private val refreshWindowMillis: Long = 1_000,
+    /** Whether the hub shows source subscriptions (#2041). */
+    private val subscriptionsShownFlow: Flow<Boolean> = flowOf(false),
     // Last, so existing callers that pass it as a trailing lambda keep compiling.
     private val download: suspend (InboxAssistantTransport, LarkPart.File) -> String,
 ) : persona.feature.inbox.InboxRepository {
     override val supportsThreadOutbox: Boolean get() = sendThread != null
+    override val subscriptionsShown: Flow<Boolean> get() = subscriptionsShownFlow
     override val personaOutbox = mainConversationSender?.outbox ?: MutableStateFlow(emptyList())
     override val connectionState: Flow<ConnectionState> = hubConnection?.state ?: connection.current.map {
         if (it == null) ConnectionState.Connecting else ConnectionState.Online
@@ -203,12 +219,18 @@ class RealInboxRepository(
                 quietly { refresh() }
             }
         }
-        // Polling remains a fallback for hubs without invalidation events.
+        // Polling is the fallback for missed or absent invalidation events. Snapshot subscribers include the shell and
+        // capsule even with no inbox page shown, so with a hub (which refreshes on InboxEvent and reconnect) the poll is
+        // slow and starts one interval after going visible; a transport without a hub event stream polls every 15 s.
+        val pollMillis = if (hubConnection == null) 15_000L else HUB_INBOX_POLL_MILLIS
         scope.launch {
             current.subscriptionCount.map { it > 1 }.distinctUntilChanged().collectLatest { visible ->
-                if (visible) while (isActive) {
-                    try { if (online()) refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-                    delay(15_000)
+                if (visible) {
+                    if (hubConnection != null) delay(pollMillis)
+                    while (isActive) {
+                        try { if (online()) refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                        delay(pollMillis)
+                    }
                 }
             }
         }
@@ -274,7 +296,7 @@ class RealInboxRepository(
         completions.withItems(listOf("${transport.scope}:$shown")) {
             if (!owns(transport)) throw CancellationException("Pairing changed")
             val change = completions.begin(setOf(shown), done)
-            val old = change.before.firstOrNull()
+            val old = change.before.firstOrNull() ?: pagedBackRecord(shown)
             try {
                 val result = completions.request { asItem(old) { transport.setDone(old?.hubItemId ?: itemId, done) } }
                 if (owns(transport)) {
@@ -407,6 +429,33 @@ class RealInboxRepository(
         }
     }
 
+    private val itemReadLock = Mutex()
+
+    /**
+     * One record by app or hub id: the live list first, then the done history already paged back, finally the hub's own
+     * copy. A bare id uses its noted manager, else the default, as the hub routes any other request that names no manager.
+     */
+    override suspend fun item(itemId: String): InboxRecord? = itemReadLock.withLock {
+        recordOf(itemId)?.let { return it }
+        val hubId = InboxItemKey.hubId(itemId)
+        val manager = InboxItemKey.managerOf(itemId) ?: AssistantManagerChoice.itemManager(listOf("inbox", hubId))
+        // A bare id may name an item already cached by its manager-aware app id; never alias different managers' records.
+        if (manager != null) recordOf(InboxItemKey.appId(hubId, manager))?.let { return it }
+        val transport = requireTransport()
+        val data = try {
+            asStamped(manager) { transport.item(hubId) }
+        } catch (e: Exception) {
+            if ((e as? persona.core.contracts.api.HubCodedFailure)?.status == 404) return null
+            throw e
+        }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        val stamped = if (manager.isNullOrBlank() || data["manager"] != null) data
+            else JsonObject(data + ("manager" to JsonPrimitive(manager)))
+        val record = listed(listOf(stamped), transport).firstOrNull { it.hubItemId == InboxItemKey.hubId(itemId) } ?: return null
+        notePagedBack(transport, listOf(record))
+        return record
+    }
+
     /**
      * One page of a manager's done history (#2200, #2576), its items as the list's records (the app's ids, the manager
      * stamped). Kept out of the snapshot: the inbox page merges it under Done. An old hub (404) has none.
@@ -427,7 +476,27 @@ class RealInboxRepository(
             if (manager.isNullOrBlank() || item["manager"] != null) item else JsonObject(item + ("manager" to JsonPrimitive(manager)))
         }
         val next = body.obj("next")?.let { n -> n.string("before").takeIf { it.isNotBlank() }?.let { persona.feature.inbox.InboxDoneCursor(it, n.string("before_id").ifBlank { null }) } }
-        return persona.feature.inbox.InboxDonePage(listed(data, transport), next)
+        return persona.feature.inbox.InboxDonePage(listed(data, transport).also { notePagedBack(transport, it) }, next)
+    }
+
+    override suspend fun doneDays(manager: String?, zone: java.time.ZoneId): List<persona.feature.inbox.InboxDoneDay>? {
+        val transport = requireTransport()
+        val body = try {
+            transport.doneDays(manager?.takeIf { it.isNotBlank() }, zone.id)
+        } catch (e: UnsupportedOperationException) {
+            return null
+        } catch (e: Exception) {
+            // An old hub (404 / 405), or a zone it doesn't know (400): Done pages back from the newest as before.
+            if ((e as? persona.core.contracts.api.HubCodedFailure)?.status in setOf(400, 404, 405)) return null
+            throw e
+        }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        return body.array("days").mapNotNull { day ->
+            val d = day as? JsonObject ?: return@mapNotNull null
+            val date = runCatching { java.time.LocalDate.parse(d.string("day")) }.getOrNull() ?: return@mapNotNull null
+            val count = (d["count"] as? JsonPrimitive)?.intOrNull ?: return@mapNotNull null
+            persona.feature.inbox.InboxDoneDay(date, count)
+        }
     }
 
     /** What the managers answered to a bulk action, in the app's ids, and the items it changed as the hub has them now. */
@@ -443,8 +512,10 @@ class RealInboxRepository(
         transport: InboxAssistantTransport, items: List<InboxDoneTarget>, action: InboxBulkAction, old: List<InboxRecord>,
     ): BulkOutcome {
         val byId = old.associateBy { it.item.id }
+        // an item paged back into Done is in no list: its own record from the history page (#2974)
+        fun known(id: String) = byId[id] ?: pagedBackRecord(id)
         val default = AssistantManagerChoice.current.value.defaultId
-        val groups = items.groupBy { byId[it.id]?.manager?.takeIf { m -> m.isNotBlank() && m != default } }
+        val groups = items.groupBy { known(it.id)?.manager?.takeIf { m -> m.isNotBlank() && m != default } }
         val answers = mutableListOf<InboxBulkResult>()
         val changed = mutableListOf<Pair<InboxRecord, JsonObject>>()
         val failed = mutableListOf<String>()
@@ -461,7 +532,7 @@ class RealInboxRepository(
                 answers += InboxBulkResult(r.changed.map(key), r.unchanged.map(key), r.changedSince.map(key), r.missing.map(key), r.failed.map(key))
                 data.array("changed").forEach { e ->
                     (e as? JsonObject)?.let { obj ->
-                        val next = record(obj, transport, byId[key(obj.string("id"))])
+                        val next = record(obj, transport, known(key(obj.string("id"))))
                         val raw = next.manager?.let { JsonObject(obj + ("manager" to JsonPrimitive(it))) } ?: obj
                         changed += next to raw
                     }
@@ -528,6 +599,49 @@ class RealInboxRepository(
         return outcome
     }
 
+    override suspend fun inboxLine(item: InboxRecord): InboxLineage? {
+        val transport = requireTransport()
+        val body = try {
+            asItem(item) { transport.tree("inbox", item.hubItemId) }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (e is UnsupportedOperationException || hubCodedFailure(e)?.status in setOf(404, 405)) return null
+            throw e
+        }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        fun parent(data: JsonObject): InboxParentRef? {
+            val kind = data.optional("kind") ?: return null
+            val id = data.optional("id") ?: return null
+            if (kind.isBlank() || id.isBlank()) return null
+            return InboxParentRef(kind, id, data.optional("by"))
+        }
+        val node = body.obj("node")?.let(::parent) ?: InboxParentRef("inbox", item.hubItemId)
+        val ancestors = body.array("ancestors").mapNotNull { entry ->
+            (entry as? JsonObject)?.let { raw -> parent(raw)?.let { InboxLineAncestor(it, raw.obj("item")?.let { data -> lineageRecord(data, transport, item) }) } }
+        }
+        val children = body.array("children").mapNotNull { (it as? JsonObject)?.let { data -> lineageRecord(data, transport, item) } }
+        return InboxLineage(node, body.obj("item")?.let { data -> lineageRecord(data, transport, item) }, ancestors, children)
+    }
+
+    override suspend fun setInboxParent(item: InboxRecord, parent: InboxParentRef?) {
+        val transport = requireTransport()
+        val result = asItem(item) { transport.setParent(item.hubItemId, parent) }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        val data = result.obj("item") ?: result
+        if (data.optional("id") == item.hubItemId) refreshLock.withLock {
+            replaceRecord(lineageRecord(data, transport, item))
+        }
+    }
+
+    /** A tree is one manager's line: raw hub ids become the same app ids as the merged list, never request targets. */
+    private fun lineageRecord(data: JsonObject, transport: InboxAssistantTransport, owner: InboxRecord): InboxRecord {
+        val hubId = data.string("id")
+        val appId = InboxItemKey.appId(hubId, owner.manager)
+        val previous = current.value.records.firstOrNull { it.item.id == appId } ?: owner.takeIf { it.item.id == appId }
+        val parsed = record(data, transport, previous)
+        return parsed.copy(item = parsed.item.copy(id = appId), manager = owner.manager)
+    }
+
     override suspend fun handOff(request: InboxHandOffRequest): SessionKey? {
         require(request.itemId.isNotBlank() && request.text.isNotBlank() && request.operationId.isNotBlank())
         scope.coroutineContext.ensureActive()
@@ -536,6 +650,17 @@ class RealInboxRepository(
         if (!machine.isNullOrBlank() && !session.isNullOrBlank()) {
             val key = SessionKey(machine, session)
             checkNotNull(messageSender) { "agent message sender not wired" }.send(key, request.text, request.operationId)
+            // The message is already accepted: open it now and record the hand-off without holding the sheet open.
+            scope.launch {
+                quietly {
+                    val transport = requireTransport()
+                    val old = recordOf(request.itemId)
+                    val hubItemId = old?.hubItemId ?: request.itemId
+                    asItem(old) {
+                        transport.recordAgentHandOff(hubItemId, key, request.targetTitle.orEmpty(), request.operationId)
+                    }
+                }
+            }
             return key
         }
         // Main-chat hand-offs need a receipt from the item's manager, not merely a local queue entry.
@@ -725,7 +850,9 @@ class RealInboxRepository(
     private fun windowKey(window: Window) = "${window.source.scope}:lark:${window.feedId}:${window.around}"
     private suspend fun restoreWindow(window: Window) = window.lock.withLock {
         if (window.restored) return@withLock
-        snapshots.restore<JsonObject>(windowKey(window))?.let { data ->
+        // Old versions cached whole traversed histories. A cache is only a first-paint hint: leave an oversized
+        // file untouched and fetch the latest page, with older history available through its server cursor.
+        withContext(Dispatchers.IO) { snapshots.restore<JsonObject>(windowKey(window), WINDOW_SNAPSHOT_MAX_BYTES) }?.let { data ->
             val raw = data.array("messages").map { it.jsonObject }
             val positions = raw.mapNotNull { it.number("position") }
             if (window.around == null || positions.isNotEmpty() && window.around in positions.min()..positions.max()) {
@@ -1048,9 +1175,15 @@ class RealInboxRepository(
         sync.update { it + (window.feedId to if (window.state.value.verified) LarkWindowSyncState.Complete else LarkWindowSyncState.Cached) }
         if (!window.state.value.verified) return
         val start = window.around?.let { anchor -> window.raw.indexOfFirst { (it.number("position") ?: Long.MAX_VALUE) >= anchor } }
-        val offset = if (start != null && start >= 0) (start - 40).coerceIn(0, (window.raw.size - 80).coerceAtLeast(0))
+        var offset = if (start != null && start >= 0) (start - 40).coerceIn(0, (window.raw.size - 80).coerceAtLeast(0))
             else (window.raw.size - 80).coerceAtLeast(0)
-        val cached = window.raw.drop(offset).take(80)
+        var cached = window.raw.drop(offset).take(80)
+        // A snapshot over the restore limit would never be read back: drop its oldest messages until it fits.
+        val sizes = cached.map { it.toString().encodeToByteArray().size.toLong() }
+        var bytes = sizes.sum()
+        var dropped = 0
+        while (dropped < sizes.size && bytes > WINDOW_SNAPSHOT_MAX_BYTES - WINDOW_SNAPSHOT_ENVELOPE_BYTES) bytes -= sizes[dropped++]
+        if (dropped > 0) { offset += dropped; cached = cached.drop(dropped) }
         snapshots.save(windowKey(window), buildJsonObject {
             put("messages", JsonArray(cached))
             put("older_cursor", if (offset > 0) cached.firstOrNull()?.optional("position") else older)
@@ -1135,8 +1268,29 @@ class RealInboxRepository(
         return records
     }
 
-    /** The record shown with [itemId] (the app's id, InboxItemKey; or the hub's, from outside the lists). */
-    private fun recordOf(itemId: String): InboxRecord? = current.value.records.inboxRecord(itemId)
+    /**
+     * The record shown with [itemId] (the app's id, InboxItemKey; or the hub's, from outside the lists), or one the done
+     * history paged back into Done ([pagedBackRecord]).
+     */
+    private fun recordOf(itemId: String): InboxRecord? = current.value.records.inboxRecord(itemId) ?: pagedBackRecord(itemId)
+
+    /**
+     * The records the done history handed out ([doneHistory], #2576), by pairing and the app's id: none of them is in the
+     * list, so a change to one (Move back, Mark done) takes its manager and hub id from here rather than going to the
+     * default manager by the app's id (#2974). The newest [PAGED_BACK_KEPT] are kept.
+     */
+    private val pagedBack = object : LinkedHashMap<String, InboxRecord>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, InboxRecord>?) = size > PAGED_BACK_KEPT
+    }
+
+    private fun notePagedBack(transport: InboxAssistantTransport, records: List<InboxRecord>) = synchronized(pagedBack) {
+        records.forEach { pagedBack["${transport.scope}:${it.item.id}"] = it }
+    }
+
+    private fun pagedBackRecord(itemId: String): InboxRecord? {
+        val scope = connection.current.value?.scope ?: return null
+        return synchronized(pagedBack) { pagedBack["$scope:$itemId"] }
+    }
 
     /**
      * Runs requests for [record]'s item, naming its manager on each of them where they are made (RequestManager): the

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // The assistant's ```persona-card blocks (#886) are charts the apps draw (sdk/go/wire/personacard.go); a Feishu card
@@ -17,30 +18,40 @@ import (
 //     points on one line (the last 31, … marking the cut) with the unit once; "Now" and the note under them
 //   - stacked_bar: a two-column table, the total first, then each part with its note (past 31 rows the rest are
 //     summed into one "Other" row); the card's note after it
+//   - ring: the same table, with a "remaining" row last when the total is more than the parts' sum (as the apps draw it)
 //   - a card the apps cannot draw either (View is nil): its title alone, or nothing
 //
-// The model's words are escaped (EscapeMarkdown), numbers are written as the apps write them (wire.Number). Only
-// persona-card blocks change: persona-view blocks, other code, and examples inside another code block stay.
+// A ```persona-view block (a card the apps draw, docs/assistant/assistant-views.md) is written as its text fallback,
+// as on the watch and in notifications: a Feishu card runs none of it, and its JSON is no answer either.
+//
+// The model's words are escaped (EscapeMarkdown), numbers are written as the apps write them (wire.Number). Other
+// code and examples inside another code block stay.
 
 // mostPoints is how many points of a line or bar are written: a month of days.
 const mostPoints = 31
 
 var sparks = []rune("▁▂▃▄▅▆▇█")
 
-// PersonaCards is md with each persona-card block written as numbers (a line or two, or a table), set apart from the
-// text around it by blank lines.
+// PersonaCards is md with each persona-card block written as numbers (a line or two, or a table) and each
+// persona-view block as its text fallback, set apart from the text around it by blank lines.
 func PersonaCards(md string) string {
-	if !strings.Contains(strings.ToLower(md), "persona-card") {
+	if lower := strings.ToLower(md); !strings.Contains(lower, "persona-card") && !strings.Contains(lower, "persona-view") {
 		return md
 	}
 	var b strings.Builder
 	at := 0
 	for _, blk := range wire.AssistantViewBlocks(md) {
-		if blk.Language != "persona-card" {
+		var s string
+		switch blk.Language {
+		case "persona-card":
+			s = personaCardText(blk.Raw)
+		case "persona-view":
+			s = strings.TrimSpace(wire.AssistantViewFallback(blk.Raw)) + "\n"
+		default:
 			continue
 		}
 		b.WriteString(md[at:blk.Start])
-		if s := personaCardText(blk.Raw); s != "" {
+		if s != "" {
 			if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n\n") {
 				b.WriteString("\n")
 			}
@@ -76,7 +87,7 @@ func personaCardText(raw json.RawMessage) string {
 			b.WriteString(" · " + note)
 		}
 		b.WriteString("\n")
-	case wire.PersonaCardKindStackedBar:
+	case wire.PersonaCardKindStackedBar, wire.PersonaCardKindRing:
 		parts := append([]wire.CardPart{}, c.Segments...)
 		if c.Rest != nil {
 			parts = append(parts, *c.Rest)
@@ -86,6 +97,9 @@ func personaCardText(raw json.RawMessage) string {
 			total += p.Value
 		}
 		if c.Total != nil {
+			if c.Type == wire.PersonaCardKindRing && c.Total.Value > total {
+				parts = append(parts, wire.CardPart{Label: i18n.T(i18n.ZhHans, "feishubot-personacard.remaining"), Value: c.Total.Value - total})
+			}
 			u, total = firstOf(words(c.Total.Unit), unit), c.Total.Value
 		}
 		if len(parts) > mostPoints {

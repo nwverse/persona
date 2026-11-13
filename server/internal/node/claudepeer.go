@@ -129,6 +129,21 @@ const (
 // (peerTaken). Refusals come back as *errPeer (nothing sent); any other error came after the line was written (the
 // inbox may have it): the caller looks at the transcript before calling it unknown.
 func peerSend(ctx context.Context, p claudePeer, sessionID, text string) error {
+	return peerSendAt(ctx, p, sessionID, text, peerNext)
+}
+
+// The priorities a message to the inbox goes at. peerNext queues it behind a running turn, or runs it when the session
+// rests. peerNow cuts the running turn — and a question or permission prompt the session waits on (their tool call
+// ends "Tool permission request aborted") — and runs it at once: Claude Code's own "send now", its queue aborting the
+// turn for a command of priority now (measured with Claude Code 2.1.311 in the desktop app, 2026-11-12: a reply cut
+// at its 481st character, the new message answered 2 s later).
+const (
+	peerNext = "next"
+	peerNow  = "now"
+)
+
+// peerSendAt is peerSend at priority (peerNext, peerNow).
+func peerSendAt(ctx context.Context, p claudePeer, sessionID, text, priority string) error {
 	if p.socket == "" {
 		return &errPeer{code: peerUnsupported, msg: peerNoInboxMsg}
 	}
@@ -145,7 +160,7 @@ func peerSend(ctx context.Context, p claudePeer, sessionID, text string) error {
 		}
 		token = "" // auth is optional on this platform: an inbox whose key file is missing takes the line without it
 	}
-	msg, err := peerMessage(sessionID, text)
+	msg, err := peerMessageAt(sessionID, text, priority)
 	if err != nil {
 		return &errPeer{code: peerUnsupported, msg: peerNoInboxMsg, cause: err}
 	}
@@ -182,13 +197,18 @@ func peerSend(ctx context.Context, p claudePeer, sessionID, text string) error {
 // peerSender, for sessionID; msgV 1, a fresh msg_id, priority next (queued behind a running turn, or run when the
 // session rests).
 func peerMessage(sessionID, text string) ([]byte, error) {
+	return peerMessageAt(sessionID, text, peerNext)
+}
+
+// peerMessageAt is peerMessage at priority.
+func peerMessageAt(sessionID, text, priority string) ([]byte, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, errors.New("empty message")
 	}
 	return marshalNoEscape(map[string]any{
 		"type":       "user",
 		"message":    map[string]string{"role": "user", "content": peerEnvelope(prompts.RenderPeerMessage(prompts.PeerMessage{Text: text}))},
-		"priority":   "next",
+		"priority":   priority,
 		"msgV":       1,
 		"msg_id":     peerMsgID(),
 		"session_id": sessionID,
@@ -344,35 +364,68 @@ func peerSeen(path string, offset int64, needle string) bool {
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return false
 	}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 8<<20)
-	for sc.Scan() {
-		l := sc.Bytes()
-		if !bytes.Contains(l, []byte(`"queue-operation"`)) && !bytes.Contains(l, []byte(`"peer"`)) {
-			continue
-		}
-		var e struct {
-			Type    string `json:"type"`
-			Content string `json:"content"`
-			Message struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-			Origin *struct {
-				Kind string `json:"kind"`
-				Body string `json:"body"`
-			} `json:"origin"`
-		}
-		if json.Unmarshal(l, &e) != nil {
-			continue
-		}
-		var said string
-		_ = json.Unmarshal(e.Message.Content, &said)
-		switch {
-		case e.Type == "queue-operation" && strings.Contains(e.Content, needle):
-			return true
-		case e.Origin != nil && e.Origin.Kind == "peer" && (strings.Contains(e.Origin.Body, needle) || strings.Contains(said, needle)):
+	br := bufio.NewReaderSize(f, 64<<10)
+	for {
+		l, err := peerLine(br)
+		if peerLineSeen(l, needle) {
 			return true
 		}
+		if err != nil {
+			return false
+		}
+	}
+}
+
+// peerScanMax bounds a transcript line peerSeen decodes: a queue-operation or a peer's line carries one inbox message
+// (peerLineMax, JSON-escaped). A longer line (several pasted images inline, a tool result repeating a large output)
+// cannot be one; it is read past without being kept, and the lines after it are still read.
+const peerScanMax = 8 << 20
+
+// peerLine is br's next line without its newline: nil when it is longer than peerScanMax. err is the last read's;
+// io.EOF with a line is a last line without a newline (possibly still being written).
+func peerLine(br *bufio.Reader) ([]byte, error) {
+	b, err := br.ReadSlice('\n')
+	if !errors.Is(err, bufio.ErrBufferFull) {
+		return bytes.TrimSuffix(b, []byte("\n")), err
+	}
+	l := append([]byte(nil), b...) // copied: the next read reuses b
+	for errors.Is(err, bufio.ErrBufferFull) {
+		b, err = br.ReadSlice('\n')
+		if l != nil && len(l)+len(b) <= peerScanMax {
+			l = append(l, b...)
+		} else {
+			l = nil
+		}
+	}
+	return bytes.TrimSuffix(l, []byte("\n")), err
+}
+
+// peerLineSeen: l is a queue-operation, or a line with a peer origin, whose text has needle in it.
+func peerLineSeen(l []byte, needle string) bool {
+	if !bytes.Contains(l, []byte(`"queue-operation"`)) && !bytes.Contains(l, []byte(`"peer"`)) {
+		return false
+	}
+	var e struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+		Message struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+		Origin *struct {
+			Kind string `json:"kind"`
+			Body string `json:"body"`
+		} `json:"origin"`
+	}
+	if json.Unmarshal(l, &e) != nil {
+		return false
+	}
+	var said string
+	_ = json.Unmarshal(e.Message.Content, &said)
+	switch {
+	case e.Type == "queue-operation" && strings.Contains(e.Content, needle):
+		return true
+	case e.Origin != nil && e.Origin.Kind == "peer" && (strings.Contains(e.Origin.Body, needle) || strings.Contains(said, needle)):
+		return true
 	}
 	return false
 }

@@ -33,11 +33,12 @@ enum AssistantScheduleText {
     }
 
     /// The rule in words, as Reminders says it: "Every weekday 9:00 AM" / "Every Day 9:30 PM" / "Every Fri 5:00 PM" /
-    /// "Every 30 min" / "Once · Today 15:30".
+    /// "Every 30 min" / "Once · Today 15:30" / "0 10 1 * * · At 10:00, on day 1 of the month".
     static func sentence(_ r: APIClient.ScheduledTask) -> String {
         switch r.repeats {
         case .interval: return every(r.everyMinutes)
         case .once: return r.at.map { String(localized: "Once · \(moment($0))") } ?? String(localized: "Once")
+        case .cron: return cronRule(r)
         case .daily: break
         }
         let d = Set(r.weekdays)
@@ -48,6 +49,14 @@ enum AssistantScheduleText {
         else { let list = dayList(d); days = String(localized: "Every \(list)") }
         let time = clock(r.time)
         return String(localized: "\(days) \(time)", comment: "Repeat rule and time of day, e.g. Every weekday 9:00 AM")
+    }
+
+    /// A cron task's rule: its expression, then the hub's words for it (first, so a one-line row always shows the
+    /// expression); "Cron <expression>" when the hub has no words for it.
+    static func cronRule(_ r: APIClient.ScheduledTask) -> String {
+        let cron = r.cron
+        guard let text = r.cronText else { return String(localized: "Cron \(cron)") }
+        return String(localized: "\(cron) · \(text)")
     }
 
     /// "09:00" → "9:00 AM", "21:30" → "9:30 PM", "00:15" → "12:15 AM".
@@ -104,11 +113,21 @@ enum AssistantScheduleText {
         r.pushesOnlyAsked ? String(localized: "Pushes only when it alerts you") : nil
     }
 
-    /// The capsule row's rule line: the rule, then the push mark (on the line rather than as a second pill, which
-    /// squeezes the title on a phone). The plain row puts the mark on a line of its own, since its rule line is one line.
+    /// The mark for a task that puts rows in the Inbox (#6430): beside the push mark, so the list shows which ones do; nil for Don't.
+    static func inboxMark(_ r: APIClient.ScheduledTask) -> String? {
+        switch r.inbox {
+        case APIClient.ScheduledTask.inboxWorthy: String(localized: "Inbox: if worth a look")
+        case APIClient.ScheduledTask.inboxEvery: String(localized: "Inbox: every time")
+        default: nil
+        }
+    }
+
+    /// The capsule row's rule line: the rule, then the push mark and the Inbox mark (on the line rather than as pills,
+    /// which squeeze the title on a phone). The plain row puts the marks on lines of their own, since its rule line is one line.
     static func ruleLine(_ r: APIClient.ScheduledTask) -> String {
         let rule = rule(r)
-        return r.pushesOnlyAsked ? String(localized: "\(rule) · Pushes only when it alerts you") : rule
+        let pushed = r.pushesOnlyAsked ? String(localized: "\(rule) · Pushes only when it alerts you") : rule
+        return [pushed, inboxMark(r)].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// What it runs with when that isn't the default, in a few words: "claude-fast · Auto-Edit · Thinking Low"; `danger`
@@ -144,7 +163,7 @@ enum AssistantScheduleText {
         return switch r.repeats {
         case .once: Theme.Icon.followOn
         case .interval: Theme.Icon.inProgress
-        case .daily: "alarm"
+        case .daily, .cron: "alarm"
         }
     }
 
@@ -264,6 +283,13 @@ struct AssistantRoutinesView: View {
         }
         .task { await load() }
         .refreshable { await page.load() }
+        // Another assistant is current and the page is still up (in Settings; on the Persona page it closes): the task
+        // being edited was the one before's, and the list is read for the one shown now.
+        .onChange(of: model.assistantSwitches) {
+            editing = nil
+            creating = nil
+            Task { await page.restart() }
+        }
     }
 
     private func row(_ t: APIClient.ScheduledTask) -> some View {
@@ -317,6 +343,7 @@ struct AssistantRoutinesView: View {
         switch UserDefaults.standard.string(forKey: "openAssistantPage") {
         case "routine" where editing == nil: editing = page.repeating.first
         case "intervalTask" where editing == nil: editing = page.repeating.first { $0.repeats == .interval }
+        case "cronTask" where editing == nil: editing = page.repeating.first { $0.repeats == .cron }
         case "followup" where editing == nil: editing = page.oneOff.first
         case "newRoutine" where creating == nil: creating = AssistantRoutineTemplate.all.last?.routine
         default: break
@@ -410,6 +437,13 @@ struct AssistantTaskRow: View {
                 }
                 if let mark = AssistantScheduleText.pushMark(t) {
                     Label(mark, systemImage: Theme.Icon.notifications)
+                        .labelStyle(AssistantCompactLabel())
+                        .font(Theme.Font.label)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if let mark = AssistantScheduleText.inboxMark(t) {
+                    Label(mark, systemImage: Theme.Icon.inbox)
                         .labelStyle(AssistantCompactLabel())
                         .font(Theme.Font.label)
                         .foregroundStyle(.secondary)
@@ -509,6 +543,8 @@ struct AssistantTaskEditor: View {
     private var changed: Bool { saved.map { !Self.same($0, draft) } ?? true }
     /// Push When Done shows when the hub takes it (task_push), or the task already has it.
     private var showsPush: Bool { model.hubFeatures.contains(APIClient.ScheduledTask.pushFeature) || opened.pushesOnlyAsked }
+    /// When Done, Put It in the Inbox shows when the hub takes it (task_inbox), or the task already has a setting.
+    private var showsInbox: Bool { model.hubFeatures.contains(APIClient.ScheduledTask.inboxFeature) || !(opened.inbox ?? "").isEmpty }
     private var machineID: String { model.assistantConfig?.machineID ?? model.hubMachineID }
 
     var body: some View {
@@ -535,6 +571,7 @@ struct AssistantTaskEditor: View {
             }
             runsWithSection
             if showsPush { pushSection }
+            if showsInbox { inboxSection }
             conversationSection
             Section {
                 Button { Task { await runNow() } } label: {
@@ -678,6 +715,31 @@ struct AssistantTaskEditor: View {
         }
     }
 
+    /// When Done, Put It in the Inbox (docs/assistant/assistant.md「Put it in the Inbox when done」): nothing, a row only when a run finds something
+    /// worth a look, or a row after every run. Independent of Push When Done; Don't is sent as "" so a task switched back is saved as such.
+    private var inboxSection: some View {
+        Section {
+            SegmentedChoice(String(localized: "When Done, Put It in the Inbox"),
+                            [(value: "", label: String(localized: "Don’t")),
+                             (value: APIClient.ScheduledTask.inboxWorthy, label: String(localized: "Worth a Look")),
+                             (value: APIClient.ScheduledTask.inboxEvery, label: String(localized: "Every Time"))],
+                            selection: Binding { draft.inbox ?? "" } set: { new in withAnimation(Theme.Motion.standard) { draft.inbox = new } })
+                .accessibilityIdentifier("task-inbox")
+        } header: {
+            Text("When Done, Put It in the Inbox")
+        } footer: {
+            Text(inboxHint)
+        }
+    }
+
+    private var inboxHint: String {
+        switch draft.inbox ?? "" {
+        case APIClient.ScheduledTask.inboxEvery: String(localized: "Every run adds a row to your Inbox so you can follow up. Tapping it opens that chat.")
+        case APIClient.ScheduledTask.inboxWorthy: String(localized: "A row is added to your Inbox only when a run finds something worth a look. Tapping it opens that chat.")
+        default: String(localized: "Nothing is added to your Inbox.")
+        }
+    }
+
     /// Only Its Alerts leaves Continue in Original Chat: such a task runs in its own conversation. Every Run is sent as "" (the default),
     /// so a task switched back is saved as such; one never switched sends nothing.
     private var push: Binding<String> {
@@ -708,13 +770,10 @@ struct AssistantTaskEditor: View {
         Section {
             Group {
                 if AppStyle.current.usesBeautifulUI {
-                    BUISegmented([.init(APIClient.ScheduledTask.Repeat.once, String(localized: "Once")), .init(.daily, String(localized: "Every Day")), .init(.interval, String(localized: "Interval [Assistant Proactive Views 100107]"))],
-                                 selection: repeats, fills: true)
+                    BUISegmented(repeatOptions.map { .init($0.value, $0.label) }, selection: repeats, fills: true)
                 } else {
                     Picker("Repeat", selection: repeats) {
-                        Text("Once").tag(APIClient.ScheduledTask.Repeat.once)
-                        Text("Every Day").tag(APIClient.ScheduledTask.Repeat.daily)
-                        Text("Interval [Assistant Proactive Views 100107]").tag(APIClient.ScheduledTask.Repeat.interval)
+                        ForEach(repeatOptions, id: \.value) { o in Text(o.label).tag(o.value) }
                     }
                     .pickerStyle(.segmented)
                 }
@@ -731,6 +790,14 @@ struct AssistantTaskEditor: View {
                 Picker("Interval [Assistant Proactive Views 4f5df7]", selection: $draft.everyMinutes) {
                     ForEach(intervals, id: \.self) { m in Text(AssistantScheduleText.every(m)).tag(m) }
                 }
+            case .cron:
+                // Shown, not edited here: the web editor checks an expression as it is typed (docs/assistant/assistant.md "Scheduled tasks").
+                LabeledContent("Cron Expression") {
+                    Text(verbatim: draft.cron).font(Theme.Font.code).textSelection(.enabled)
+                }
+                if let text = draft.cronText {
+                    Text(text).font(Theme.Font.secondary).foregroundStyle(.secondary)
+                }
             }
         } header: {
             Text("When")
@@ -746,6 +813,7 @@ struct AssistantTaskEditor: View {
                 case .daily: Text("\(AssistantScheduleText.repeats(draft.weekdays)) at \(draft.time), in your phone's time zone.")
                 #endif
                 case .interval: Text("Runs \(AssistantScheduleText.every(draft.everyMinutes)), counting from when it's saved.")
+                case .cron: Text("Runs when its cron expression matches, in your time zone. To change the expression, edit it in Persona on the web or ask Persona.")
                 }
             }
         }
@@ -789,6 +857,15 @@ struct AssistantTaskEditor: View {
                      + (draft.sessionID != nil ? String(localized: " When it continues in the original chat, that chat switches to these settings too.", comment: "Appended right after the previous sentence") : ""))
             }
         }
+    }
+
+    /// The rules the editor offers; Cron only for a task that is one (its expression is edited on the web).
+    private var repeatOptions: [(value: APIClient.ScheduledTask.Repeat, label: String)] {
+        var options: [(value: APIClient.ScheduledTask.Repeat, label: String)] = [
+            (.once, String(localized: "Once")), (.daily, String(localized: "Every Day")), (.interval, String(localized: "Interval [Assistant Proactive Views 100107]")),
+        ]
+        if opened.repeats == .cron, !opened.cron.isEmpty { options.append((.cron, String(localized: "Cron"))) }
+        return options
     }
 
     private var intervals: [Int] {
@@ -841,11 +918,12 @@ struct AssistantTaskEditor: View {
     static func same(_ a: APIClient.ScheduledTask, _ b: APIClient.ScheduledTask) -> Bool {
         guard a.title == b.title, a.prompt == b.prompt, a.repeats == b.repeats, a.enabled == b.enabled, a.sessionID == b.sessionID,
               a.launcher == b.launcher, a.permissionMode == b.permissionMode, a.effort == b.effort,
-              (a.push ?? "") == (b.push ?? "") else { return false }
+              (a.push ?? "") == (b.push ?? ""), (a.inbox ?? "") == (b.inbox ?? "") else { return false }
         return switch a.repeats {
         case .once: a.at == b.at
         case .daily: a.time == b.time && Set(a.weekdays) == Set(b.weekdays)
         case .interval: a.everyMinutes == b.everyMinutes
+        case .cron: a.cron == b.cron
         }
     }
 

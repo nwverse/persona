@@ -6,12 +6,16 @@ dumpsys gfxinfo for every run (docs/android/android.md, "Interface style perform
 Each run: open the page through the debug entry (debug.style, debug.automation: no frame-drop fallback), wait, reset
 gfxinfo, fling up and down twice, then read the summary (total / janky frames, percentiles) and the framestats rows
 (frame time = FrameCompleted - IntendedVsync). The conversation is the Persona tab unless CHAT=<machine>/<session>; ONLY=chat,inbox limits the scenarios.
-The last style passed stays selected in the app: end with the one the phone should keep."""
-import json, re, statistics, subprocess, sys, time
+The last style passed stays selected in the app: end with the one the phone should keep.
+RUNS, SWIPE_MS and SETTLE_S override the run count, swipe duration and idle delay; for example, SWIPE_MS=1000 SETTLE_S=0
+keeps the page scrolling through most of the sample instead of counting ambient-rendering frames during the default idle delays."""
+import json, os, re, statistics, subprocess, sys, time
 
 serial, package, out = sys.argv[1:4]
 styles = sys.argv[4:] or ["glass", "brief", "board"]
-RUNS = 10
+RUNS = int(os.environ.get("RUNS", "10"))
+SWIPE_MS = int(os.environ.get("SWIPE_MS", "180"))
+SETTLE_S = float(os.environ.get("SETTLE_S", "0.9"))
 
 def adb(*args, capture=False):
     cmd = ["adb", "-s", serial, *args]
@@ -33,7 +37,7 @@ def launch(style, extras):
 
 def fling(up=True):
     y1, y2 = (int(h * 0.78), int(h * 0.28)) if up else (int(h * 0.28), int(h * 0.78))
-    adb("shell", "input", "swipe", str(x), str(y1), str(x), str(y2), "180")
+    adb("shell", "input", "swipe", str(x), str(y1), str(x), str(y2), str(SWIPE_MS))
 
 def summary():
     text = adb("shell", "dumpsys", "gfxinfo", package, "framestats", capture=True)
@@ -75,8 +79,8 @@ def run_scenario(style, name, extras):
         time.sleep(3.5)
         adb("shell", "dumpsys", "gfxinfo", package, "reset")
         for _ in range(2):
-            fling(up=True); time.sleep(0.9)
-            fling(up=False); time.sleep(0.9)
+            fling(up=True); time.sleep(SETTLE_S)
+            fling(up=False); time.sleep(SETTLE_S)
         runs.append(summary())
         print(style, name, i, runs[-1]["total"], runs[-1]["janky"], flush=True)
     return runs
@@ -89,7 +93,6 @@ def stats(values):
     return {"n": len(values), "min": values[0], "p50": q(0.5), "p90": q(0.9), "max": values[-1], "mean": round(statistics.fmean(values), 2)}
 
 if __name__ == "__main__":
-    import os
     chat = os.environ.get("CHAT")
     result = {}
     for style in styles:

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorText, isAbort, sessionPath } from "../../lib/api";
 import { sessionLoadError } from "../../lib/session-link";
 import { getState, listenSession, send, type ItemsEvent } from "../../lib/store";
-import { afterPull, afterPush, FRESH_TALLY, newestItemAt, notLive as tallyNotLive, shouldPull, type StaleTally } from "../../lib/stale-page";
+import { afterPull, afterPush, FRESH_TALLY, newestItemAt, notLive as tallyNotLive, RevWatch, shouldPull, type StaleTally } from "../../lib/stale-page";
 import { mergeItems, withoutFolded } from "../../lib/turns";
 import { chosenManager } from "../../lib/manager-choice";
 import { discardFeedCache, discardMemoryPage, feedCacheScope, readFeedCache, readMemoryPage, writeFeedCache, writeMemoryPage, type FeedCache } from "../../lib/feed-cache";
@@ -19,6 +19,11 @@ const lastPulls = new Map<string, number>();
 /** After an older page fails, loadEarlier waits this long before asking again (scrolling at the top calls it on every tick), doubling up to the cap. */
 const EARLIER_RETRY_MS = 3000;
 const EARLIER_RETRY_MAX_MS = 30_000;
+
+/** Tests only: forget the asks, as a fresh page load does (each sync case starts its clock at the same moment again). */
+export function resetStalePullsForTests() {
+  lastPulls.clear();
+}
 
 export interface Transcript {
   items: Item[];
@@ -58,10 +63,11 @@ function cachedPage(mid: string, sid: string, cache?: TranscriptCache): FeedCach
   return page?.machineID === mid && page.sessionID === sid && (page.manager ?? "") === (cache.manager ?? "") ? page : null;
 }
 
-/** `updatedAt`: the session's `updated_at` from the list (a subagent's from its parent's), what the stale-page check compares.
+/** `updatedAt` and `rev`: the session's `updated_at` and `rev` from the list (a subagent's `updated_at` from its parent's;
+ *  it has no rev), what the stale-page check compares; the hub's `revs` event moves the rev too.
  *  `assistant`: a Persona conversation, whose live text is the headless assistant's whole reply so far (any reply item
  *  ends it); otherwise it is an agent's message as Claude shows it, which the transcript replaces by its start. */
-export function useTranscript(mid: string, sid: string, opts: { starting?: boolean; updatedAt?: string; cache?: TranscriptCache; assistant?: boolean } = {}): Transcript {
+export function useTranscript(mid: string, sid: string, opts: { starting?: boolean; updatedAt?: string; rev?: number; cache?: TranscriptCache; assistant?: boolean } = {}): Transcript {
   const [initial] = useState(() => cachedPage(mid, sid, opts.cache));
   const [items, setItems] = useState<Item[]>(initial?.items ?? []);
   const [loading, setLoading] = useState(!initial);
@@ -78,6 +84,9 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   const snapshot = useRef<{ scope: string; page: FeedCache } | null>(initial && cacheScope ? { scope: cacheScope, page: initial } : null);
   const updatedAt = useRef(opts.updatedAt);
   updatedAt.current = opts.updatedAt;
+  const rev = useRef(opts.rev);
+  rev.current = opts.rev;
+  const revWatch = useRef<RevWatch | null>(null); // the shown conversation's, for the list's rev as it changes
   const covered = useRef(0); // the last transcript line we have without a gap
   const history = useRef("");
   const itemsRef = useRef<Item[]>([]);
@@ -136,6 +145,9 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     let ready = false; // the first page is in
     let pulling = false;
     let checkedFor: string | undefined;
+    // Starts from the rev the first read below covers: a move heard while that read is on its way is asked about.
+    const revs = new RevWatch(rev.current);
+    revWatch.current = revs;
     const pullKey = `${mid}/${sid}`;
     let latest = cached?.items ?? [];
     let latestMore = cached?.hasMore ?? false;
@@ -181,6 +193,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         return;
       }
       const want = liveRaw.current && unlandedLive(liveRaw.current, latest);
+      if (!want) liveRaw.current = "";
       if (want === liveShown.current) return;
       liveShown.current = want;
       if (!want || batch) deltas.current.flush(want); // the end, and what items took off, at once
@@ -196,6 +209,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
 
     // Items after what we have, a page at a time (past 8 the newest page is cheaper); how many of them were new.
     const pull = async (): Promise<number> => {
+      const sent = revs.sending();
       let fresh = 0;
       for (let n = 0; n < 8 && !dead; n++) {
         const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?after_seq=${covered.current}&lazy_images=1`, { signal: ctl.signal });
@@ -212,7 +226,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         showLive(got);
         if (p.to_seq) covered.current = Math.max(covered.current, p.to_seq);
         lastArrival = Date.now();
-        if (!p.more_after) return fresh;
+        if (!p.more_after) {
+          revs.answered(sent);
+          return fresh;
+        }
       }
       if (!dead) setNonce((x) => x + 1);
       return fresh;
@@ -224,7 +241,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       if (dead || !ready) return;
       const now = Date.now();
       const asked = updatedAt.current;
-      if (!shouldPull({ updatedAt: asked, lastItemAt: newestItemAt(itemsRef.current), lastArrival, lastPull: lastPulls.get(pullKey) ?? 0, checkedFor, now, visible: document.visibilityState === "visible", pulling })) return;
+      if (!shouldPull({
+        updatedAt: asked, lastItemAt: newestItemAt(itemsRef.current), revUnread: revs.unread, revMovedAt: revs.movedAt, lastArrival,
+        lastPull: lastPulls.get(pullKey) ?? 0, checkedFor, now, visible: document.visibilityState === "visible", pulling,
+      })) return;
       lastPulls.set(pullKey, now);
       pulling = true;
       pull()
@@ -293,7 +313,15 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     const off = listenSession(mid, sid, {
       items: onItems,
       delta: onDelta,
-      reconnected: subscribe,
+      rev: (r) => {
+        if (!dead) revs.heard(r, Date.now());
+      },
+      // Every hello (the first one too) resubscribes from what the chat has. Before the first page is in that is
+      // nothing: a subscribe without since_seq has the hub read and send that whole page again, while the read
+      // below is on its way (a page load opens the socket and reads at once). The read subscribes when it is done.
+      reconnected: () => {
+        if (ready) subscribe();
+      },
     });
 
     (async () => {
@@ -344,6 +372,11 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mid, sid, nonce, cacheScope, cacheManager, assistant]);
+
+  // After the effect above, which starts each conversation's watch from the rev it has then.
+  useEffect(() => {
+    revWatch.current?.heard(opts.rev, Date.now());
+  }, [opts.rev]);
 
   const loadEarlier = useCallback(async () => {
     const first = itemsRef.current[0];

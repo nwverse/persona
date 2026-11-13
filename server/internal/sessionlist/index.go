@@ -35,10 +35,37 @@ type Item struct {
 	// BackgroundWaiting: a working row that only waits on background commands (#6045). It stays in State's count
 	// (older apps call it working) and is counted apart in Counts.BackgroundWaiting too.
 	BackgroundWaiting bool
-	UpdatedAt         time.Time
-	SearchText        string
-	Summary           any
-	Full              any
+	// Private: a row a reader with Options.NoPrivate is never shown, in its rows, totals or counts (a health-space
+	// conversation, which an extension's token does not see).
+	Private bool
+	// Fold is the item's place in the session hierarchy (#5120); nil for an item folded under none that shows its own
+	// State and BackgroundWaiting, as every item without children does. It sits behind a pointer to keep Item in its
+	// allocation size class: an adapter builds a whole batch as one []Item, as the hub does on every pass.
+	Fold       *Fold
+	UpdatedAt  time.Time
+	SearchText string
+	Summary    any
+	Full       any
+}
+
+// Fold is how an Item folds. Root is the session id (as parent_session_id names it, not the composite ID) of the item
+// on the same Machine this one is folded under (a child session under its topmost listed ancestor), only when that
+// item is in the same batch; State is the state the item shows with the items folded under it ("" for its own);
+// BackgroundWaiting is Item.BackgroundWaiting for Options.Roots: none of the items folded under it works or needs the
+// user either. Options.Roots leaves out the items with a Root and filters and counts the others by their folded state;
+// Options.Under selects the items folded under one. Like the rest of an Item it is immutable once handed to Replace:
+// copies of the item share it.
+type Fold struct {
+	Root, State       string
+	BackgroundWaiting bool
+}
+
+// root is the session v is folded under ("" for none).
+func (v *Item) root() string {
+	if v.Fold == nil {
+		return ""
+	}
+	return v.Fold.Root
 }
 
 // Options selects a filtered full list or an incremental change list. Limit zero
@@ -48,7 +75,27 @@ type Item struct {
 type Options struct {
 	Limit                                                                              int
 	ID, Cursor, Since, State, Machine, Project, Group, Source, Provider, Q, PaneSource string
-	Summary                                                                            bool
+	// Manager selects the rows of the batches replaced with that owner (ReplaceOwned); like the other filters, a
+	// cursor is bound to it. It is the adapter's to set (not a key Parse reads): the adapter knows which owners exist
+	// and who may ask for which.
+	Manager string
+	// Roots (roots=1) leaves the items folded under another (Fold.Root) out of the rows, the totals and every count,
+	// and filters and counts the rest by their folded state (Fold.State). Under (parent_session_id, which needs Machine) selects the
+	// items of Machine folded under that session, all depths; the two cannot be combined. Both bind a cursor, as the
+	// other filters do.
+	Roots   bool
+	Under   string
+	Summary bool
+	// NoPrivate leaves the Private items out of the rows, the totals and every count; like Manager it is the adapter's
+	// to set (who asks), not a key Parse reads, and it binds a cursor as the other filters do.
+	NoPrivate bool
+	// Places (place=["<machine>","<project>"], repeatable) selects the items at any of these machine and project
+	// pairs: one project's directories across computers. Spaces (space=["<machine>","<group>"]) does the same by
+	// machine and group. An empty key selects the items of that machine without the attribute. Each combines with
+	// the other filters and binds a cursor as they do, whatever order its pairs come in. At most maxPlaces each,
+	// every pair with a machine.
+	Places []Place
+	Spaces []Place
 }
 
 // Page contains transport values rather than adapter-specific session types.
@@ -79,6 +126,13 @@ type Counts struct {
 	Revision          string `json:"revision"`
 }
 
+// PageWithCounts is a page with its view's current counts (with_counts=1): what a separate ?counts=1 read with the
+// same filters returns, ignoring since, cursor and limit (#4858; the personal Agents too, #6496).
+type PageWithCounts struct {
+	Page
+	Counts Counts `json:"counts"`
+}
+
 // Error lets adapters map invalid_query to HTTP 400 and cursor_expired or
 // revision_expired to HTTP 409 without interpreting human-readable messages.
 type Error struct {
@@ -93,6 +147,9 @@ func failure(code, message string) error { return &Error{Code: code, message: me
 type record struct {
 	item   Item
 	search string
+	// owner is the manager its batch was replaced with (ReplaceOwned), "" for none: what filters.Manager selects by.
+	// It is the batch's, not an Item attribute, so the items an adapter builds for every update stay the size they were.
+	owner string
 }
 
 type change struct{ before, after *record }
@@ -102,7 +159,10 @@ type journalEntry struct {
 }
 
 type filters struct {
-	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource string
+	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under string
+	// Places and Spaces are Options' as placesKey spells them: filters stay comparable.
+	Places, Spaces   string
+	Roots, NoPrivate bool
 }
 
 type binding struct {
@@ -198,7 +258,12 @@ func (i *Index) Revision() string {
 // Replace atomically replaces one owner's entire batch. Unchanged batches do
 // not advance Revision, even if their input order changes. IDs must be nonempty
 // and unique within and across owners; violating this adapter contract panics.
-func (i *Index) Replace(source string, items []Item) {
+func (i *Index) Replace(source string, items []Item) { i.ReplaceOwned(source, "", items) }
+
+// ReplaceOwned is Replace of a batch that belongs to owner (a manager's id, "" for none): Options.Manager selects
+// its rows. A batch whose owner changed is a change of every row of it, even when nothing else of them did: each
+// leaves the old owner's filtered list as a removal and enters the new owner's.
+func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.initialize()
@@ -219,13 +284,13 @@ func (i *Index) Replace(source string, items []Item) {
 		// Strip monotonic clock data and normalize zones before comparison.
 		item.UpdatedAt = item.UpdatedAt.Round(0).UTC()
 		previous := old[item.ID]
-		if previous != nil && sameItem(&previous.item, &item) {
+		if previous != nil && previous.owner == owner && sameItem(&previous.item, &item) {
 			next[item.ID] = previous
 			continue
 		}
 		item.Full = clone(item.Full)
 		item.Summary = clone(item.Summary)
-		r := &record{item: item, search: normalizeQ(item.SearchText)}
+		r := &record{item: item, search: normalizeQ(item.SearchText), owner: owner}
 		next[item.ID] = r
 		changes[item.ID] = change{before: previous, after: r}
 	}
@@ -239,10 +304,10 @@ func (i *Index) Replace(source string, items []Item) {
 	}
 	for id, c := range changes {
 		if c.before != nil {
-			addCount(&i.counts, c.before.item, -1)
+			addCount(&i.counts, c.before.item, false, -1)
 		}
 		if c.after != nil {
-			addCount(&i.counts, c.after.item, 1)
+			addCount(&i.counts, c.after.item, false, 1)
 		}
 		if c.after == nil {
 			delete(i.items, id)

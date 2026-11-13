@@ -274,6 +274,28 @@ struct LocalProxyRouteTests {
         }
     }
 
+    /// A button pressed while the app is in the background (#3142): the sockets and their tunnels are closed, so the
+    /// request picks the group's way itself, reaches the hub only the proxy reaches, and the proxy closes again
+    /// afterwards, kept as the way to start first next time.
+    @MainActor @Test func aButtonInTheBackgroundGoesThroughTheProxy() async throws {
+        let (fake, proxy) = try await hubAndProxy()
+        defer { fake.stop(); proxy.stop() }
+        var hub = PairedHub(id: "rt-button", config: ServerConfig(url: URL(string: "http://rt-button.invalid:18660")!, token: "t"))
+        hub.localProxy = LocalProxyRoute(port: proxy.port, targetHost: "127.0.0.1", targetPort: fake.port)
+        defer { LocalProxies.shared.close(hub.id) }
+        // The group's socket as it is in the background: built for this registry (not the keychain's) and suspended.
+        let m = model(hub)
+        m.buildLinks()
+        m.link(hub.group)?.live.suspended = true
+        let body = try await m.outside(APIClient(config: hub.config, group: hub.group)) { api in
+            let (data, _) = try await APIClient.uncachedSession.data(from: api.url("/api/v1/health"))
+            return String(decoding: data, as: UTF8.self)
+        }
+        #expect(body.contains(#""hub_id":"hub-test""#))
+        #expect(HubTransport.via(hub.config.url) == nil && !LocalProxies.shared.routed.contains(hub.id))
+        #expect(LocalProxies.shared.recent.contains(hub.id))
+    }
+
     /// The hub answers directly: straight to it, and the proxy started meanwhile (it was the last way) closes.
     @MainActor @Test func theDirectWayClosesTheProxyStartedMeanwhile() async throws {
         let (fake, proxy) = try await hubAndProxy()

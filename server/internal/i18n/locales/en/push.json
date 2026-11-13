@@ -3,13 +3,13 @@
   "elicitation_server_title": "MCP server {server} needs you",
   "elicitation_body": "Open Persona to respond",
   "question_title": "Claude has a question",
-  "plan_title": "A plan needs your approval",
-  "permission_title": "Permission needed",
-  "screen_title": "The terminal needs you",
+  "plan_title": "Plan awaiting approval",
+  "permission_title": "Needs your permission",
+  "screen_title": "Terminal needs you",
   "assistant_asks": "Persona has a question",
   "decide_title": "Your call",
   "agent_asks": "{agent} has a question",
-  "agent_permission": "{agent} needs permission",
+  "agent_permission": "{agent} needs your permission",
   "screen_body": "Open Persona to see the screen and respond",
   "fill_in_suffix": " (open Persona to fill in)",
   "done_body": "Done",
@@ -19,5 +19,6 @@
   "question_more_options": " and {count} more",
   "question_more_one": "{count} more question",
   "question_more_other": "{count} more questions",
-  "usage_limit": "Usage limit reached; continue it once the limit resets: {error}"
+  "usage_limit": "Usage limit reached; continue it once the limit resets: {error}",
+  "private_card": "Persona needs your answer. Open Persona to see it."
 }

@@ -268,3 +268,14 @@ func TestConvertNamesThePDFOrSaysWhatIsMissing(t *testing.T) {
 		}
 	}
 }
+
+// Previews and downloads do not depend on the file transfer switch (off for a machine that never turned it on, as
+// here): the machine's file still streams.
+func TestDownloadDoesNotNeedTheFileTransferSwitch(t *testing.T) {
+	f := &downloadNode{data: []byte("0123456789")}
+	rec := httptest.NewRecorder()
+	downloadHub(t, f).ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/machines/m1/file/download?path=preview.mp4", nil))
+	if rec.Code != 200 || rec.Body.String() != "0123456789" {
+		t.Fatalf("%d %q", rec.Code, rec.Body)
+	}
+}

@@ -20,7 +20,10 @@ import persona.core.designsystem.icons.PhIcons
 // ① the providers to pick from, ② the key, ③ what now runs on it. The state is NewProviderModel.
 
 /** ①: the hub's providers in its order (a built-in one says who it is for; an extension's its kind and host), the gateway typed in last. */
-internal fun LazyListScope.pickStep(res: Resources, state: NewProviderState, onPick: (String?) -> Unit) {
+internal fun LazyListScope.pickStep(
+    res: Resources, state: NewProviderState, onPick: (String?) -> Unit,
+    onPaste: () -> Unit = {}, onAlias: (FoundAlias) -> Unit = {},
+) {
     item("pick-intro") { SettingsCaption(stringResource(R.string.settings_onb_pick_intro), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.m)) }
     val rows = state.presets.size + 1
     itemsIndexed(state.presets, key = { _, it -> "pick-${it.id}" }) { index, p ->
@@ -36,6 +39,7 @@ internal fun LazyListScope.pickStep(res: Resources, state: NewProviderState, onP
                 subtitleLines = 3, onClick = { onPick(null) })
         }
     }
+    otherProviderWays(state, onPaste, onAlias)
     state.presetsError?.let { error -> item("pick-error") { JInlineStatus(error.text(), Modifier.padding(top = Tokens.Space.m), tone = InlineTone.Caution) } }
 }
 
@@ -43,6 +47,8 @@ internal fun LazyListScope.pickStep(res: Resources, state: NewProviderState, onP
 internal fun LazyListScope.keyStep(
     state: NewProviderState, preset: ProviderPreset, editable: Boolean, onEdit: (NewProviderDraft) -> Unit, onAssign: (Boolean) -> Unit,
     onRetest: () -> Unit, onModel: () -> Unit, more: Boolean, onMore: () -> Unit,
+    /** "Computers" under "More options", on a hub with device scopes. */
+    onComputers: () -> Unit = {},
 ) {
     val draft = state.draft
     item("key-preset") {
@@ -53,7 +59,7 @@ internal fun LazyListScope.keyStep(
     }
     if (!state.hubNames) nameStepField(state, editable, onEdit)
     item("key") {
-        JTextField(draft.apiKey, { onEdit(draft.copy(apiKey = it)) }, Modifier.fillMaxWidth().padding(top = Tokens.Space.m), label = "API Key",
+        JTextField(draft.apiKey, { onEdit(draft.copy(apiKey = it)) }, Modifier.fillMaxWidth().padding(top = Tokens.Space.m), label = "API Key", // i18n-ignore: the field name providers' docs use, same on iOS / web
             placeholder = stringResource(R.string.settings_onb_key_paste), singleLine = true, enabled = editable,
             visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             supportingText = preset.keyHint?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.settings_onb_key_hint_with, it) }
@@ -108,6 +114,7 @@ internal fun LazyListScope.keyStep(
             SettingsCaption(preset.modelsError?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.settings_src_provider_models_error, it) }
                 ?: stringResource(R.string.settings_src_provider_model_note), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
         }
+        computersRow(state, onComputers)
     }
 }
 
@@ -163,7 +170,7 @@ internal fun LazyListScope.doneStep(state: NewProviderState, added: WizardAdded)
     }
 }
 
-/** What "Now using it: main conversation, new Agents" and each kept category say; [assigned] null when none was asked (or an older hub). */
+/** What "Now using it: main conversation, new agents" and each kept category say; [assigned] null when none was asked (or an older hub). */
 internal data class AssignSummary(val assigned: ResText?, val kept: List<ResText>)
 
 internal fun assignSummary(result: ProviderAdded, asked: Boolean): AssignSummary {

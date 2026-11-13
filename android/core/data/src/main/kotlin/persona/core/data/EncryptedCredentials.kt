@@ -33,6 +33,11 @@ data class HubCredentials(
     val candidateAddresses: List<String>,
     val deviceToken: String,
     val deviceId: String? = null,
+    /**
+     * The link's proxied origins ("host:port"), checked with system trust instead of [fp] (#2622,
+     * HubPairingClient.systemTrustedOrigin). Empty in a pairing saved before it, which stays pinned throughout.
+     */
+    val systemOrigins: List<String> = emptyList(),
 ) {
     override fun toString(): String = "HubCredentials(<redacted>)"
 }
@@ -75,6 +80,20 @@ internal class EncryptedCredentials(context: Context) {
     fun endpoints(path: String, scope: CoroutineScope): DataStore<EndpointOverridesDocument> = store(
         File(root, "$path/endpoints.enc"), scope, EndpointOverridesDocument(), EndpointOverridesDocument.serializer(),
         { it.version }, ReplaceFileCorruptionHandler { EndpointOverridesDocument() },
+    )
+
+    /** Like route choices, a pairing's tunnels that cannot be read are none instead of blocking the pairing. */
+    fun tunnels(path: String, scope: CoroutineScope): DataStore<TunnelsDocument> = store(
+        File(root, "$path/tunnels.enc"), scope, TunnelsDocument(), TunnelsDocument.serializer(),
+        { it.version }, ReplaceFileCorruptionHandler { TunnelsDocument() },
+    )
+
+    /**
+     * This device's SSH key. A file that cannot be read is reported, never replaced: a new key would lock the device
+     * out of every SSH server that lists the old one.
+     */
+    fun sshKey(scope: CoroutineScope): DataStore<SshKeyDocument> = store(
+        File(root, "ssh-key.enc"), scope, SshKeyDocument(), SshKeyDocument.serializer(), { it.version },
     )
 
     private fun <T> store(

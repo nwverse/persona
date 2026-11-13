@@ -40,7 +40,7 @@ func (s *Service) modelBaseline(ctx context.Context, p ModelPurpose) (ModelBindi
 			// failing while a keyed Claude connection sits unused (#388). Not stored, so a later explicit choice still
 			// wins.
 			if name := s.fallbackAPIProvider(ctx); name != "" {
-				return ModelBinding{Provider: "launcher." + name}, mc(l, modelAutoSource), nil
+				return ModelBinding{Provider: "launcher." + name, Effort: c.ReasoningEffort}, mc(l, modelAutoSource), nil
 			}
 		}
 		return ModelBinding{Provider: provider, Model: c.Model, Effort: c.ReasoningEffort}, mc(l, "source_hub_config"), nil
@@ -97,7 +97,7 @@ func inheritedLabel(l i18n.Lang, p ModelPurpose, base ModelBinding, from string,
 		return mc(l, "source_delegate_connection", i18n.Args{"provider": name}) // the model is the user's pick, or the connection's own
 	case p.ID == "agent.delegate":
 		return mc(l, "source_delegate_default", i18n.Args{"provider": name, "model": model})
-	case p.ID == purposeLarkAgent, isExtensionPurpose(p.ID):
+	case ownModelRecord(p.ID), isExtensionPurpose(p.ID):
 		return purposeName(l, p.Parent)
 	case from == mc(l, modelAutoSource):
 		return mc(l, "source_auto_named", i18n.Args{"provider": name})
@@ -105,9 +105,23 @@ func inheritedLabel(l i18n.Lang, p ModelPurpose, base ModelBinding, from string,
 	return from
 }
 
-// modelNoAPIStatus explains an API use with nothing to call: launchers like "Claude Code default" only start a CLI on a
-// computer, so they never show up for these uses. A catalog name.
+// modelNoAPIStatus explains an API use with nothing to call without assuming which launchers are installed.
+// modelCodexNoAPIStatus adds Codex's limitation only when a visible Codex launcher actually exists.
 const modelNoAPIStatus = "status_no_api"
+const modelCodexNoAPIStatus = "status_codex_no_api"
+
+// noAPIStatus is the catalog key for an unconfigured API use, on the settings row and on a done judge's task alike.
+// It reads the last-seen node list: explaining a failed call must not start another round of node requests.
+func (s *Service) noAPIStatus(ctx context.Context) string {
+	seen, _ := s.zshrcLaunchersLastSeen(ctx)
+	views := s.launcherViewsFrom(ctx, seen, s.storedLaunchers(ctx))
+	if slices.ContainsFunc(views, func(v LauncherView) bool {
+		return !v.Hidden && v.Kind != "api" && viewAgent(v) == "codex"
+	}) {
+		return modelCodexNoAPIStatus
+	}
+	return modelNoAPIStatus
+}
 
 // modelUnverified is the status of a use nothing is known to be wrong with. Not translated: the apps compare it to
 // this text (iOS ModelConfigurationView, Android HttpVoiceExtensions) to leave it out.
@@ -155,7 +169,17 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 	return base
 }
 
-// resolveModel reads category defaults, except the opt-in Lark /agent override and independent plugin models.
+// effectiveModel applies purpose defaults after merging, so choosing another provider cannot clear triage's default.
+func effectiveModel(p ModelPurpose, base, over ModelBinding) ModelBinding {
+	b := mergeModel(base, over)
+	if p.ID == "inbox.triage" && b.Effort == "" {
+		b.Effort = "off"
+	}
+	return b
+}
+
+// resolveModel reads category defaults, except the opt-in overrides of Agents (agentsOverride), a task's own and
+// independent plugin models.
 func (s *Service) resolveModel(ctx context.Context, id string) (ModelBinding, error) {
 	return s.resolveModelRecord(ctx, id, nil)
 }
@@ -180,7 +204,7 @@ func (s *Service) resolveModelRecord(ctx context.Context, id string, r *modelRec
 		}
 		r = &read
 	}
-	return mergeModel(base, r.Binding), nil
+	return effectiveModel(p, base, r.Binding), nil
 }
 
 func launcherProvider(name string) string {
@@ -200,23 +224,30 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 		for _, l := range s.storedLaunchers(ctx) {
 			if l.Name == name {
 				if l.Kind != "api" && !messagesAPI(l.API) {
-					return c, i18n.Err("assistant-models.err_launcher_not_responses")
+					break // no gateway the manager can call: its CLI answers on a computer (models_run.go)
 				}
 				if err := checkAPITransport(l.Kind, l.API, l.Proxy, l.NoProxy, l.HeadersSealed != ""); err != nil {
 					return c, err
 				}
-				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, Bearer: l.BearerAuth()}
-				key, err := s.openKey(l.KeySealed)
+				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, Bearer: l.BearerAuth(), ViaMachine: l.ViaMachine}
+				key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 				if err != nil {
-					return c, i18n.Err("assistant-models.err_key_decrypt")
+					return c, err
 				}
 				c.APIKey = key
 				found = true
 				break
 			}
 		}
-		if !found {
-			return c, i18n.Err("assistant-models.err_not_callable")
+		if !found { // plain claude, a computer's own launcher, a managed one without a Messages gateway
+			// Claude Code only (an empty agent is Claude Code) and one the manager knows: a deleted launcher is an error.
+			if name != "claude" && !slices.ContainsFunc(s.launcherViews(ctx), func(v LauncherView) bool { return v.Name == name && (viewAgent(v) == "" || viewAgent(v) == "claude") }) {
+				return c, i18n.Err("assistant-models.err_not_callable")
+			}
+			c = ai.Config{RunLauncher: name, ViaMachine: s.settings(ctx).MachineID}
+			if c.ViaMachine == "" {
+				return c, i18n.Err("assistant-models.err_run_no_machine")
+			}
 		}
 	} else {
 		return c, i18n.Err("assistant-models.err_not_api")
@@ -228,9 +259,9 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 	if c.API != "" && c.API != "messages" && c.API != "responses" && c.API != "chat" {
 		return c, i18n.Err("assistant-models.err_api_protocol")
 	}
-	if c.API != "responses" && b.Effort != "" {
+	if c.API != "responses" && c.API != "messages" && c.API != "" && b.Effort != "" {
 		c.ReasoningEffort = ""
-	} // Older Messages configurations carried an unused Responses-only field.
+	}
 	return c, nil
 }
 
@@ -245,7 +276,7 @@ func (s *Service) purposeModel(id string) *ai.Client {
 		if err != nil {
 			return nil, err
 		}
-		return ai.New(c), nil
+		return s.aiClient(c), nil
 	})
 }
 

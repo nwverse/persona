@@ -164,12 +164,17 @@ type kbHit struct {
 	Line string `json:"line"`
 }
 
-// searchKnowledge: lines of the knowledge base matching every word of the query.
-func (h *hubClient) searchKnowledge(ctx context.Context, query string) ([]kbHit, error) {
+// searchKnowledge: lines of the knowledge base matching every word of the query, of one kind when kind is not ""
+// (GET /api/v1/kb-search's kind, #3862 phase 6: a hub from before searches every kind, an unknown kind is its 400).
+func (h *hubClient) searchKnowledge(ctx context.Context, query, kind string) ([]kbHit, error) {
 	var out struct {
 		Hits []kbHit `json:"hits"`
 	}
-	err := h.call(ctx, "GET", "/api/v1/kb-search?q="+url.QueryEscape(query), nil, &out)
+	q := url.Values{"q": {query}}
+	if kind != "" {
+		q.Set("kind", kind)
+	}
+	err := h.call(ctx, "GET", "/api/v1/kb-search?"+q.Encode(), nil, &out)
 	return out.Hits, err
 }
 
@@ -204,6 +209,25 @@ func (h *hubClient) session(ctx context.Context, machine, id string) (*proto.Ses
 		}
 	}
 	return nil, nil
+}
+
+// liveRoom is a recording's room conversation as GET /api/v1/recordings/{id}/live tells it
+// (docs/assistant/meeting-minutes.md "Fields on GET …/live and detail.meta"): its state (an open set), and its ids once
+// it has started.
+type liveRoom struct {
+	State     string `json:"state"`
+	MachineID string `json:"machine_id"`
+	SessionID string `json:"session_id"`
+}
+
+// meetingRoom is recording id's room (GET …/live?parts=room, full credentials: the hub's own token takes it); nil when
+// the recording has none (not a room meeting, or a manager from before rooms).
+func (h *hubClient) meetingRoom(ctx context.Context, id string) (*liveRoom, error) {
+	var out struct {
+		Room *liveRoom `json:"room"`
+	}
+	err := h.call(ctx, "GET", "/api/v1/recordings/"+url.PathEscape(id)+"/live?parts=room", nil, &out)
+	return out.Room, err
 }
 
 // machineOnline: the hub has machine id connected (false when it does not know it).
@@ -257,11 +281,22 @@ func (h *hubClient) channels(ctx context.Context) ([]channel.View, error) {
 }
 
 // triageSwitches are the hub's session triage switches (GET /api/v1/agents/triage, docs/assistant/agent-work.md "Switches"): whether
-// it triages an agent's stopped turn at all, and whether it goes on ("Continue") after a transient model error.
+// it triages an agent's stopped turn at all, and whether it goes on ("Continue") after a transient model error
+// (transient_retry, unset: on, also with the triage off) or once a usage limit resets (auto_continue).
 type triageSwitches struct {
-	Enabled      bool `json:"enabled"`
-	AutoContinue bool `json:"auto_continue"`
+	Enabled        bool  `json:"enabled"`
+	AutoContinue   bool  `json:"auto_continue"`
+	TransientRetry *bool `json:"transient_retry,omitempty"`
 }
+
+// triageOff: nothing triages, nothing is continued (the switches unknown).
+func triageOff() triageSwitches {
+	off := false
+	return triageSwitches{TransientRetry: &off}
+}
+
+// transientOn: the hub continues a transient model error by itself.
+func (sw triageSwitches) transientOn() bool { return sw.TransientRetry == nil || *sw.TransientRetry }
 
 func (h *hubClient) triage(ctx context.Context) (triageSwitches, error) {
 	var out triageSwitches

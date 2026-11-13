@@ -6,6 +6,10 @@ import { t } from "../../i18n";
 import type { MachineUsage, UsageRange } from "../../lib/tokens";
 import { UsageSection } from "./UsageSection";
 
+// the providers' names (#5029), without a read of the model configuration among the usage reads
+const providerNames = vi.hoisted(() => ({ list: [] as { name: string; display_name?: string }[] }));
+vi.mock("../../lib/provider-names", async (original) => ({ ...(await original<typeof import("../../lib/provider-names")>()), useProviderNames: () => providerNames.list }));
+
 const usage: MachineUsage = {
   machine_id: "computer-a", online: true, range: "24h", step: 600,
   points: [{ t: 1_788_480_000, in: 100, out: 23, req: 4 }],
@@ -62,6 +66,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
   reads = [];
+  providerNames.list = [];
   // Keep late responses deliverable after abort, exercising ownership beyond cooperative cancellation.
   vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => new Promise<Response>((resolve) => {
     reads.push({ url: new URL(url, "http://localhost"), signal: init.signal!, resolve });
@@ -311,5 +316,62 @@ describe("polling, ordering and compatibility", () => {
     await answer(reads.at(-1)!, json({ error: "Synthetic upgraded read failed" }, 500));
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Synthetic upgraded read failed");
     expect(host.textContent).not.toContain(t("machines-usage.old_hub"));
+  });
+});
+
+describe("hovering the usage charts", () => {
+  // A day at 10-minute steps (144 points), the four kinds stacked, two offline steps.
+  const step = 600;
+  const points = Array.from({ length: 144 }, (_, i) =>
+    i === 60 || i === 61 ? { t: 1_788_480_000 + i * step, gap: true } : { t: 1_788_480_000 + i * step, in: 4000 + 37 * i, out: 900 + 11 * i, cache_write: 300 + (i % 7) * 40, cache_read: 30_000 + 211 * i, req: 3 + (i % 4) });
+  const shapes = () => [...host.querySelectorAll("polygon, polyline")].map((p) => p.getAttribute("points"));
+  const charts = () => [...host.querySelectorAll<SVGSVGElement>('svg[role="img"]')];
+  const crosshair = () => charts()[0].querySelector(':scope > g[pointer-events="none"] text')?.textContent;
+  const move = (svg: SVGSVGElement, x: number) =>
+    act(() => {
+      svg.querySelector(':scope > rect[fill="transparent"]')!.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: x }));
+    });
+
+  it("redraws the crosshair and the read-outs, not the areas and lines", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, right: 588, bottom: 170, width: 588, height: 170, x: 0, y: 0, toJSON() {} } as DOMRect);
+    await render();
+    await answer(reads[0], report({ step, points, total: { in: 1e6, out: 2e5, cache_write: 5e4, cache_read: 8e6, req: 600 } }));
+    expect(charts()).toHaveLength(2);
+    const drawn = shapes();
+    expect(drawn.length).toBeGreaterThanOrEqual(5);
+
+    const toFixed = vi.spyOn(Number.prototype, "toFixed");
+    for (let i = 0; i < 20; i++) move(charts()[i % 2], 15 + i * 27);
+    const calls = toFixed.mock.calls.length;
+    toFixed.mockRestore();
+    // Before: both charts rebuilt every area and line on every move (51,920 toFixed calls for these 20 moves).
+    expect(calls).toBeLessThan(200);
+    expect(shapes()).toEqual(drawn);
+
+    // positive control: the moment still follows the pointer
+    move(charts()[1], 100);
+    const first = crosshair();
+    move(charts()[1], 400);
+    expect(first).toMatch(/^\d\d:\d\d$/);
+    expect(crosshair()).toMatch(/^\d\d:\d\d$/);
+    expect(crosshair()).not.toBe(first);
+  });
+});
+
+describe("launchers by their display names (#5029)", () => {
+  it("names a provider by its display name with its ID; an rc alias and Other read as before", async () => {
+    providerNames.list = [{ name: "launcher-a", display_name: "我的中转 站" }];
+    await ready();
+    expect([...select(1).options].map((o) => o.textContent)).toEqual([t("machines-usage.all_launchers"), "我的中转 站 (launcher-a)", "launcher-b", t("machines-usage.other_launcher")]);
+    const card = [...host.querySelectorAll("h3")].find((h) => h.textContent === t("machines-usage.by_launcher"))!.parentElement!;
+    const labels = [...card.querySelectorAll("button")].map((b) => b.querySelector("span")!);
+    expect(labels.map((l) => [l.textContent, l.classList.contains("font-mono")])).toEqual([
+      ["我的中转 站 launcher-a", false], ["launcher-b", true], [t("machines-usage.other_launcher"), true],
+    ]);
+    expect(labels[0].querySelector(".font-mono")!.textContent).toBe("launcher-a");
+    // picked, then gone from the catalog: still said by its display name
+    await choose(1, "launcher-a");
+    await answer(reads.at(-1)!, report({ launchers: [], total: {} }));
+    expect(select(1).selectedOptions[0].textContent).toBe("我的中转 站 (launcher-a)");
   });
 });

@@ -2,6 +2,8 @@ package persona.android.capsule
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.ensureActive
@@ -19,6 +21,8 @@ import persona.core.domain.inbox.buildInboxList
 import persona.core.domain.sort.AgentPreferences
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.canSend
+import persona.core.domain.sort.foldedSubtasks
+import persona.core.domain.sort.isNestedSubtask
 import persona.core.navigation.RequestRef
 import persona.feature.agents.AgentsPreferencesSnapshot
 import persona.feature.agents.listSession
@@ -40,12 +44,31 @@ internal const val LarkGroup = "lark"
 internal fun capsuleUnreadSessions(sessions: List<Session>, preferences: AgentsPreferencesSnapshot): List<Session> =
     capsuleNotifiableUnreadSessions(sessions, preferences).filterNot { it.assistant }
 
+/**
+ * The Unread list, its count, the badge and the completion notices: unseen, not quiet, not muted, and no subtask the
+ * Agents list folds under its parent, whose Unread count leaves it out too (#4769). It is read there, under its parent.
+ */
 private fun capsuleNotifiableUnreadSessions(sessions: List<Session>, preferences: AgentsPreferencesSnapshot): List<Session> =
     sessions.distinctBy { it.key }.filter { session ->
         !session.quiet && session.listSession(preferences).let {
-            it.state == AgentState.Unread && !preferences.mutes.mutes(it)
+            it.state == AgentState.Unread && !it.isNestedSubtask && !preferences.mutes.mutes(it)
         }
     }.sortedByDescending { it.updatedAt.orEmpty() }
+
+/**
+ * What goes on, which keeps the capsule shown "When tasks are running": every session that needs the user, works, or is
+ * unread, not quiet and not muted (the main chat even when muted). A subtask is left out as the Unread list and the
+ * main chat's dock leave it out (#4769): an unread one always, a working one while a session above it is listed too.
+ */
+private fun capsuleActivity(sessions: List<Session>, main: SessionKey?, requests: List<Interaction>,
+    preferences: AgentsPreferencesSnapshot): List<CapsuleEntry> {
+    val going = sessions.filter { current -> !current.quiet && (!preferences.mutes.mutes(AgentSession(current)) || current.key == main) }
+        .map { current -> current.listSession(preferences).let { row -> row to capsuleEntry(row.session, requests) } }
+        .filter { (row, entry) -> entry.state != CapsuleState.Idle && !(entry.state == CapsuleState.Done && row.isNestedSubtask) }
+    val listed = going.mapTo(HashSet()) { (row, _) -> row.id }
+    val folded = foldedSubtasks(sessions.map(::AgentSession)) { it.id in listed }
+    return going.filterNot { (row, _) -> row.id in folded }.map { it.second }.sortedBy { it.state.ordinal }
+}
 
 private fun capsuleEntry(session: Session, requests: List<Interaction> = emptyList(), id: String = capsuleId(session.key)): CapsuleEntry {
     val pending = requests.filter { it.sessionKey == session.key }
@@ -126,6 +149,7 @@ internal class CapsuleSessions(
     private val openConversation: (SessionKey?, Boolean) -> Unit,
     /** A request outside any session (#5308): there is no conversation to open, only its card (#4808). */
     private val openCard: (RequestRef) -> Unit,
+    private val computationContext: CoroutineContext = EmptyCoroutineContext,
 ) : CapsuleContentSource {
     private val selectedSection = MutableStateFlow<String?>(null)
     private val selected = MutableStateFlow<Session?>(null)
@@ -150,12 +174,7 @@ internal class CapsuleSessions(
     // parsed, sorted and grouped) is built from the latest of them only, never once per queued change.
     private val catalog = combine(agents, session.inbox.snapshot) { data, snapshot -> data to snapshot }.conflate().map { (data, snapshot) ->
         val inbox = capsuleInbox(snapshot)
-        val activity = data.sessions.filter { current ->
-            !current.quiet && (!data.preferences.mutes.mutes(AgentSession(current)) || current.key == data.main)
-        }.map { current ->
-            val projected = current.listSession(data.preferences)
-            capsuleEntry(projected.session, data.requests)
-        }.filter { it.state != CapsuleState.Idle }.sortedBy { it.state.ordinal }
+        val activity = capsuleActivity(data.sessions, data.main, data.requests, data.preferences)
         CapsuleCatalog(data.sessions, data.main, capsuleUnreadSessions(data.sessions, data.preferences).map { capsuleEntry(it) },
             data.sessions.firstOrNull { it.key == data.main }?.let { capsuleEntry(it, data.requests, MainEntry).copy(title = AppText.get(R.string.app_main_chat)) }
                 ?: mainPlaceholder(), inbox, activity,
@@ -167,7 +186,7 @@ internal class CapsuleSessions(
                     } ?: !data.preferences.mutes.mutes(target.key.path, null)
                 }
             })
-    }.stateIn(scope, SharingStarted.Eagerly, CapsuleCatalog())
+    }.flowOn(computationContext).stateIn(scope, SharingStarted.Eagerly, CapsuleCatalog())
     private val selection = combine(catalog, selectedSection, selected) { data, section, chosen ->
         val entrance = section ?: if (data.unread.isNotEmpty()) UnreadSection else MainSection
         when (entrance) {
@@ -202,7 +221,8 @@ internal class CapsuleSessions(
                 DeliveryState.WaitingForNetwork -> "\n" + AppText.get(R.string.app_capsule_waiting_network)
                 DeliveryState.Queued -> "\n" + AppText.get(R.string.app_capsule_queued)
                 DeliveryState.Unknown, DeliveryState.NeedsConfirmation, DeliveryState.Verifying -> "\n" + AppText.get(R.string.app_capsule_unconfirmed)
-                DeliveryState.Refused, DeliveryState.Rejected -> "\n" + (it.error ?: AppText.get(R.string.app_capsule_not_sent))
+                // The hub's code is not words: the chat says why and offers Retry (#2821).
+                DeliveryState.Refused, DeliveryState.Rejected -> "\n" + AppText.get(R.string.app_capsule_not_sent)
                 else -> "\n" + AppText.get(R.string.app_capsule_sending)
             }, true) }
         CapsuleContent(entries = target.entries, selectedId = target.id, messages = history + pending,

@@ -19,15 +19,18 @@ nonisolated struct TerminalPanes: Decodable, Sendable, Equatable {
         var worktree: Bool
         var tabs: [Tab]
         var panes: [Pane]
+        /// The host's workspaces (the Terminals page's New Terminal, #4754).
+        var workspaces: [Workspace] = []
 
-        enum CodingKeys: String, CodingKey { case kind, tabs, panes, newTab = "new_tab", worktree }
+        enum CodingKeys: String, CodingKey { case kind, tabs, panes, workspaces, newTab = "new_tab", worktree }
 
-        init(kind: String, newTab: Bool = false, worktree: Bool = false, tabs: [Tab] = [], panes: [Pane] = []) {
+        init(kind: String, newTab: Bool = false, worktree: Bool = false, tabs: [Tab] = [], panes: [Pane] = [], workspaces: [Workspace] = []) {
             self.kind = kind
             self.newTab = newTab
             self.worktree = worktree
             self.tabs = tabs
             self.panes = panes
+            self.workspaces = workspaces
         }
 
         init(from decoder: Decoder) throws {
@@ -37,6 +40,19 @@ nonisolated struct TerminalPanes: Decodable, Sendable, Equatable {
             worktree = try c.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
             tabs = try c.decodeIfPresent([Tab].self, forKey: .tabs) ?? []
             panes = try c.decodeIfPresent([Pane].self, forKey: .panes) ?? []
+            workspaces = try c.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
+        }
+    }
+
+    nonisolated struct Workspace: Decodable, Sendable, Equatable {
+        var id: String
+        var label: String
+        enum CodingKeys: String, CodingKey { case id, label }
+        init(id: String, label: String = "") { self.id = id; self.label = label }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
         }
     }
 
@@ -56,36 +72,84 @@ nonisolated struct TerminalPanes: Decodable, Sendable, Equatable {
         var title: String? = nil
         var cwd: String? = nil
         var sessionID: String? = nil
+        /// The address its terminal streams by (`pane:<id>`).
+        var terminal: String = ""
+        /// The program in front of a plain pane ("zsh", "vim"…), as the host names it (#4754).
+        var foreground: String? = nil
+        /// The stopped Agent whose terminal this is: a pane Persona opened for that session, no Agent in it now (#4754).
+        var agentSession: String? = nil
         var id: String { pane }
         enum CodingKeys: String, CodingKey {
-            case pane, agent, title, cwd
-            case tabID = "tab_id", workspaceID = "workspace_id", sessionID = "session_id"
+            case pane, agent, title, cwd, terminal, foreground
+            case tabID = "tab_id", workspaceID = "workspace_id", sessionID = "session_id", agentSession = "agent_session"
+        }
+        init(pane: String, tabID: String, workspaceID: String, agent: String? = nil, title: String? = nil, cwd: String? = nil,
+             sessionID: String? = nil, terminal: String = "", foreground: String? = nil, agentSession: String? = nil) {
+            self.pane = pane
+            self.tabID = tabID
+            self.workspaceID = workspaceID
+            self.agent = agent
+            self.title = title
+            self.cwd = cwd
+            self.sessionID = sessionID
+            self.terminal = terminal.isEmpty ? "pane:" + pane : terminal
+            self.foreground = foreground
+            self.agentSession = agentSession
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            pane = try c.decode(String.self, forKey: .pane)
+            tabID = try c.decodeIfPresent(String.self, forKey: .tabID) ?? ""
+            workspaceID = try c.decodeIfPresent(String.self, forKey: .workspaceID) ?? ""
+            agent = try c.decodeIfPresent(String.self, forKey: .agent)
+            title = try c.decodeIfPresent(String.self, forKey: .title)
+            cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
+            sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
+            terminal = try c.decodeIfPresent(String.self, forKey: .terminal) ?? "pane:" + pane
+            foreground = try c.decodeIfPresent(String.self, forKey: .foreground)
+            agentSession = try c.decodeIfPresent(String.self, forKey: .agentSession)
         }
     }
 }
 
-/// What `panes/git` did: a one-line summary for the toast.
+/// What `panes/git` did: what came of it (`outcome`, said in the app's language, #1888), and the node's own one-line
+/// summary, which is all an older node sends.
 nonisolated struct PaneGitResult: Decodable, Sendable {
     var op: String?
+    var outcome: String?
     var message: String?
 }
 
+/// What `panes/agent` answers: the session it started in the pane (`docs/protocol/protocol.md`).
+nonisolated struct PaneAgentResult: Decodable, Sendable {
+    var sessionID: String?
+    enum CodingKeys: String, CodingKey { case sessionID = "session_id" }
+}
+
 extension APIClient {
-    func terminalPanes(machine: String) async throws -> TerminalPanes {
-        try await get("/api/v1/machines/\(machine)/panes", as: TerminalPanes.self)
+    /// `requestID`: sent as `X-Client-Request-Id` (the hub logs it), for a page that shows it.
+    func terminalPanes(machine: String, requestID: String? = nil) async throws -> TerminalPanes {
+        let headers = requestID.map { ["X-Client-Request-Id": $0] } ?? [:]
+        return try JSON.decoder.decode(TerminalPanes.self, from: try await request("GET", "/api/v1/machines/\(machine)/panes", extraHeaders: headers))
     }
 
     /// One of the node menu's routes, `POST /machines/{mid}/<path>`; only allowlisted fields and boolean flags reach the node.
     @discardableResult
     func nodeAction<Body: Encodable & Sendable>(machine: String, _ path: String, _ body: Body, timeout: TimeInterval = 40, opID: UUID? = nil) async throws -> Data {
-        try await post("/api/v1/machines/\(machine)/\(path)", body: body, timeout: timeout, opID: opID)
+        do {
+            return try await post("/api/v1/machines/\(machine)/\(path)", body: body, timeout: timeout, opID: opID)
+        } catch var error as APIError {
+            if error.status == 502 && error.code == "internal" { error.showsNodeReason = true }
+            throw error
+        }
     }
 }
 
 // MARK: - What the menus offer
 
 nonisolated enum NodeMenu {
-    /// Closing, splitting, running an agent in a shell and git are herdr's: Orca, herdr-core and botmux are not asked.
+    /// Closing, splitting, running an agent in a shell and git are herdr's: Orca, herdr-core, Tern and botmux are not
+    /// asked.
     static func canChange(hostKind: String?) -> Bool { hostKind == "herdr" }
 
     /// The pane items of an agent row: a live herdr pane the app may drive.
@@ -124,7 +188,20 @@ nonisolated enum NodeMenu {
             case .fetch: Theme.Icon.gitFetch
             }
         }
-        /// The toast after it ran: the node's one-line summary ("Already up to date"), or Done.
+        /// What came of it in the app's language (#1888); nil for an outcome this app doesn't know (an older node
+        /// sends none), which then shows the node's own words.
+        static func outcome(_ code: String?) -> String? {
+            switch code {
+            case "fetched": String(localized: "Remote updates fetched")
+            case "up_to_date": String(localized: "Already up to date")
+            case "pulled": String(localized: "Pulled the latest code")
+            case "nothing_to_push": String(localized: "No commits to push")
+            case "pushed": String(localized: "Pushed")
+            default: nil
+            }
+        }
+
+        /// The toast after it ran: what came of it, else the node's one-line summary, or Done.
         func done(_ message: String?) -> String {
             let m = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let said = m.isEmpty ? String(localized: "Done [Extension System Presentation c0b3fb]") : m
@@ -179,8 +256,29 @@ nonisolated enum NodeMenu {
         return tab.isEmpty ? detail : "\(tab) · \(detail)"
     }
 
-    /// Only the agents a launcher starts without a first message: Claude Code (a Codex start needs one).
-    static func launchableHere(_ l: Launcher) -> Bool { (l.agent ?? "").isEmpty || l.agent == "claude" }
+    /// Claude Code, and a launcher the computer says it starts in a pane the user picked, keeping that pane when the
+    /// start fails (`runHere`: its Codex launchers, #5504), as the web's `launchableHere`. An older computer's failed
+    /// Codex start closes its pane, here the user's own shell (#5275): there Codex starts from New Session in a tab of its own.
+    /// Not the one that starts the session in Claude's desktop app (#5480): it never runs in this terminal.
+    static func launchableHere(_ l: Launcher) -> Bool {
+        !l.startsInDesktopApp && (l.runHere == true || (l.agent ?? "").isEmpty || l.agent == "claude")
+    }
+
+    /// Run Agent Here's footer: the agent starts in the picked shell; where the computer has a Codex launcher it doesn't
+    /// offer here, also that Codex starts from New Session (#5275). Codex is not mentioned where it is offered or absent,
+    /// nor for the Codex App's launcher: its chat starts in the App, not in a tab.
+    static func runHereFooter(_ launchers: [Launcher]) -> String {
+        launchers.contains(where: { $0.isCodex && !$0.startsInDesktopApp && !launchableHere($0) })
+            ? String(localized: "Starts in the selected shell without opening a new tab. Codex starts in a tab of its own: use New Session.")
+            : String(localized: "Starts in the selected shell without opening a new tab.")
+    }
+
+    /// The chat of the agent Run Agent Here started on `machine`, from what `panes/agent` answered: it opens the way New
+    /// Session opens the one it starts (#3287). nil when the answer names no session: the list stays in front.
+    static func startedChat(_ answer: Data, on machine: MachineRef) -> SessionKey? {
+        let id = (try? JSON.decoder.decode(PaneAgentResult.self, from: answer))?.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return id.isEmpty ? nil : SessionKey(group: machine.group, machineID: machine.id, sessionID: id)
+    }
 }
 
 // MARK: - Doing it
@@ -248,7 +346,7 @@ final class NodeActions {
             do {
                 let data = try await api.nodeAction(machine: machine.id, "panes/git", body, timeout: 100)
                 let result = try? JSON.decoder.decode(PaneGitResult.self, from: data)
-                model.toast = Toast(op.done(result?.message), style: .success)
+                model.toast = Toast(op.done(NodeMenu.GitOp.outcome(result?.outcome) ?? result?.message), style: .success)
                 Haptics.success()
             } catch {
                 fail(String(localized: "\(op.title) failed"), error)
@@ -494,7 +592,7 @@ struct RunAgentHereSheet: View {
                         // The pane's shell is a terminal's too: what New Agent grays out is said here (#1643), not hidden.
                         LauncherBlockLine(block: block)
                     } else {
-                        Text("Starts in the selected shell without opening a new tab. Codex needs a first message, so use New Session.")
+                        Text(NodeMenu.runHereFooter(loaded.launchers))
                     }
                 }
             }
@@ -547,11 +645,14 @@ struct RunAgentHereSheet: View {
         Task {
             defer { busy = false }
             do {
-                try await api.nodeAction(machine: group.machineID, "panes/agent", ["pane": pane, "launcher": name], timeout: 130)
+                let answer = try await api.nodeAction(machine: group.machineID, "panes/agent", ["pane": pane, "launcher": name], timeout: 130)
                 model.toast = Toast(String(localized: "Started \(name) in the pane"), style: .success)
                 Haptics.success()
                 dismiss()
                 await model.refresh()
+                // Into the new agent's chat (#3287), as New Worktree's sheet opens the one it starts: after the refresh,
+                // so the chat comes up with its title and its computer.
+                if let started = NodeMenu.startedChat(answer, on: group.machineRef) { model.open(started) }
             } catch {
                 failure = String(localized: "Failed to start: \(error.shown ?? error.localizedDescription)")
                 Haptics.error()

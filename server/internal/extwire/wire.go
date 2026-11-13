@@ -38,7 +38,13 @@ var Routes = []string{
 	"/api/v1/machines/{mid}/computer/",
 	"/api/v1/machines/{mid}/browser",
 	"/api/v1/machines/{mid}/browser/",
+	"/api/v1/machines/{mid}/iphone",
+	"/api/v1/machines/{mid}/iphone/",
+	"/api/v1/iphone",
+	"/api/v1/iphone/",
 	"/api/v1/error-reports",
+	"/api/v1/subscriptions",
+	"/api/v1/subscriptions/",
 }
 
 // KeptRoutes are GET routes whose last answer the hub keeps and gives while the manager is away, so the apps keep
@@ -190,10 +196,11 @@ type APIPrefix struct {
 	Events []string `json:"events,omitempty"`
 }
 
-// MachineExtras is one machine's computer (Cua) and browser (ego) state, nil when not on.
+// MachineExtras is one machine's computer (Cua), browser (ego) and paired iPhones' (iphone) state, nil when not on.
 type MachineExtras struct {
 	Computer json.RawMessage `json:"computer,omitempty"`
 	Browser  json.RawMessage `json:"browser,omitempty"`
+	IPhone   json.RawMessage `json:"iphone,omitempty"`
 	// ScreenPort: the computer's screen may be opened (the plugin cua or ego is on for it).
 	ScreenPort bool `json:"screen_port,omitempty"`
 }
@@ -228,12 +235,19 @@ const (
 	// AuditTerminalControlRefused: {route, path}: a request with terminal control characters, which an extension may
 	// not send (hub's terminal_controls.go).
 	AuditTerminalControlRefused = "terminal_control_refused"
+	// AuditSecretHandoffRefused: {interaction_id, machine_id, session_id, role, reason, device_name?}: an approval of a
+	// hand-off card from a device or client that may not give one (hub's secret_handoff.go). Extension is a provider
+	// the card hands a value from and Actor who tried ("device:<id>", "extension:<id>", "hub token"); the card's
+	// variables, references and values are not in it.
+	AuditSecretHandoffRefused = "secret_handoff_approve_refused"
 )
 
-// Audit is HubAudit's params: what extension Extension's token was refused. Detail holds ids and reasons only.
+// Audit is HubAudit's params: what extension Extension's token was refused, or (AuditSecretHandoffRefused) whose
+// approval of a card handing over a value of provider Extension was. Detail holds ids and reasons only.
 type Audit struct {
 	Extension string         `json:"extension"`
 	Action    string         `json:"action"`
+	Actor     string         `json:"actor,omitempty"`
 	Detail    map[string]any `json:"detail,omitempty"`
 }
 

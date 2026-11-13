@@ -85,6 +85,20 @@ describe("per-session listeners", () => {
     expect(sessionListenerKeysForTests()).toBe(before);
   });
 
+  it("hands the hub's revs event to each open session's listener, and to no other (#1179)", () => {
+    const s = online();
+    const got: number[] = [], other: number[] = [];
+    const off = listenSession("m", "open", { rev: (r) => got.push(r) });
+    const offOther = listenSession("m2", "open", { rev: (r) => other.push(r) });
+    s.push({ type: "revs", machine_id: "m", revs: { open: 120, closed: 80 } });
+    s.push({ type: "revs", machine_id: "m", revs: { open: "not a rev" } });
+    s.push({ type: "revs", machine_id: "m" });
+    expect(got).toEqual([120]);
+    expect(other).toEqual([]);
+    off();
+    offOther();
+  });
+
   it("a session listened to again after its key went hears its items", () => {
     const s = online();
     listenSession("m", "again", {})();

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
@@ -343,9 +342,10 @@ func (n *Node) ultracodeHook(req sockRequest, in hookInput) {
 }
 
 // ultracodeRow fills a Claude row's ultracode fields and runs a queued switch once its turn is over. Only a running
-// row reads its transcript: an offline one shows what was last seen of its process, and no version of the past.
-func (n *Node) ultracodeRow(s *proto.Session) {
-	if s.Agent != "claude" || n.isAssistantSession(s.SessionID) {
+// row reads its transcript: an offline one shows what was last seen of its process, and no version of the past. pass
+// is the list's (codexListPass; nil: each lookup made again).
+func (n *Node) ultracodeRow(s *proto.Session, pass *codexListPass) {
+	if s.Agent != "claude" || n.isAssistantSessionIn(s.SessionID, pass) {
 		return
 	}
 	running := s.PaneID != "" && s.Status != proto.StatusOffline
@@ -474,7 +474,7 @@ func (n *Node) setUltracode(ctx context.Context, id string, on *bool, dismiss bo
 	defer unlock()
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
-		return fmt.Errorf("这个 Agent 没在运行：发一条消息恢复它以后再改")
+		return n.noPaneForModes(id)
 	}
 	if a, ok := n.agent(id); !ok || a.Agent != "claude" {
 		return ultracodeUnsupported("只有 Claude Code Agent 支持 ultracode")
@@ -708,7 +708,7 @@ func (n *Node) startUltracode(ctx context.Context, id, pane string, on *bool) (u
 	n.mu.Unlock()
 	typed, err := n.applyUltracode(ctx, id, pane)
 	if err != nil {
-		log.Printf("start %s: ultracode: %v", id, err)
+		n.logf("start %s: ultracode: %v", id, err)
 	}
 	return typed && err != nil
 }

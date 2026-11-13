@@ -117,6 +117,47 @@ nonisolated enum InboxGroups {
         byTime(items, now: now, at: \.doneAt, recent: true, calendar: calendar)
     }
 
+    /// Where a Done group starts and ends (end not included), so it can load its own items (#2969): Just Now and Today
+    /// run on past now (no end), 1+ Month has no start. Local midnights in `calendar`'s zone, as timeKey's days are.
+    static func timeRange(_ key: String, now: Date, calendar: Calendar = .current) -> (start: Date?, end: Date?) {
+        let today = calendar.startOfDay(for: now)
+        let back = { (n: Int) in calendar.date(byAdding: .day, value: -n, to: today) ?? today }
+        switch key {
+        case "just": return (now.addingTimeInterval(-3600), nil)
+        case "today": return (today, nil)
+        case "yesterday": return (back(1), today)
+        case "week": return (back(29), back(6))
+        case "month": return (nil, back(29))
+        default:
+            guard let d = day(of: key, calendar: calendar) else { return (nil, nil) }
+            return (d, calendar.date(byAdding: .day, value: 1, to: d))
+        }
+    }
+
+    /// Done's group counts from the hub's per-day counts ("YYYY-MM-DD" in this device's zone; GET /api/v1/inbox/done/days,
+    /// #2967): each day's count goes to the group its day falls in. Just Now is part of Today and all in the list: `just`
+    /// (how many it holds) comes off Today. The web's dayGroupCounts.
+    static func dayCounts(_ days: [String: Int], now: Date, just: Int = 0, calendar: Calendar = .current) -> [String: Int] {
+        var out: [String: Int] = [:]
+        for (day, n) in days {
+            guard let d = Self.day(of: "d:" + day, calendar: calendar) else { continue }
+            // the day's noon: its key whatever the day's length (a daylight-saving day has 23 or 25 hours)
+            let noon = calendar.date(byAdding: .hour, value: 12, to: d) ?? d
+            out[timeKey(noon, now: now, calendar: calendar), default: 0] += n
+        }
+        if just > 0 {
+            out["just"] = just
+            let today = (out["today"] ?? 0) - just
+            out["today"] = today > 0 ? today : nil
+        }
+        return out
+    }
+
+    /// Time group keys in Done's order (newest first), each once: for groups that come from counts as well as from items.
+    static func sortedKeys(_ keys: some Sequence<String>, now: Date, calendar: Calendar = .current) -> [String] {
+        Set(keys).sorted { rank($0, now: now, calendar: calendar) < rank($1, now: now, calendar: calendar) }
+    }
+
     /// Groups open at first: every group of Needs You, FYI and Collapsed; in Done only "Just Now" and "Today".
     static func openAtFirst(section: String, key: String) -> Bool {
         section != "done" || key == "just" || key == "today"

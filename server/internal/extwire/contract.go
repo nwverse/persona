@@ -19,6 +19,9 @@ const (
 	ScopeAssistantAsk  = "assistant.ask"
 	ScopeTodosRead     = "todos.read"
 	ScopeTodosWrite    = "todos.write"
+	// ScopeLeadersRead: being told of the leader conversations (leader.changed) and what they report (leader.report),
+	// and listing them (GET /api/v1/assistant/leaders); #3484.
+	ScopeLeadersRead = "leaders.read"
 	// ScopeAgentsPermissionMode: changing the permission mode of a conversation the extension opened itself, and of no
 	// other (the hub checks who opened it: hub/extension_modes.go).
 	ScopeAgentsPermissionMode = "agents.permission_mode"
@@ -28,6 +31,9 @@ const (
 	// ScopeAssistantRead: reading the assistant's own-space conversations, the user's and the assistant's words
 	// (assistant.conversations, assistant.messages; #1288). assistant.ask does not include it.
 	ScopeAssistantRead = "assistant.read"
+	// ScopeAssistantMemoryRead: listing the assistant's own-space memory entries (assistant.memory), read-only; the
+	// health space's memory is never included and writing it stays with full credentials.
+	ScopeAssistantMemoryRead = "assistant.memory.read"
 	// ScopeCallPrefix and an extension's id: calling that extension's own HTTP (/api/v1/extensions/<id>/…).
 	ScopeCallPrefix = "extensions.call:"
 )

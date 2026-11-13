@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/mail"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -353,13 +354,21 @@ func (h *Manager) toolPersonaSettings(ctx context.Context, machineID, sessionID 
 	if err != nil {
 		return "", err
 	}
-	if r.Allow == nil || !*r.Allow {
-		return "The user declined on the phone: nothing changed.", nil
+	if !r.UserAllowed() { // only the user's own answer counts: an expired card, or one answered for them, is no decline (#3722)
+		if r.UserDenied() {
+			return "The user declined the change: nothing changed.", nil
+		}
+		return prompts.RenderSettingUnanswered(), nil
 	}
 	for _, f := range change.fields {
 		if !f.Optional && strings.TrimSpace(r.Values[f.Key]) == "" {
 			return "", fmt.Errorf("%s was left empty on the phone: nothing changed", f.Label)
 		}
+	}
+	// Whoever asked stopped waiting while the card was being answered (the hub's call ended, the bus dropped): it was
+	// told nothing came of the call, so nothing is changed now that nobody would hear of (#5907).
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("the change was approved after its caller stopped waiting: nothing changed (%w)", err)
 	}
 	return change.apply(ctx, r.Values)
 }

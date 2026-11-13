@@ -1,8 +1,4 @@
 {
-  "kind_question": "Question",
-  "kind_plan": "Plan to approve",
-  "kind_permission": "Needs permission",
-  "kind_screen": "Terminal dialog",
   "greeting_late": "Up late",
   "greeting_morning": "Good morning",
   "greeting_noon": "Good afternoon",
@@ -36,7 +32,6 @@
   "mark_all_seen_title_one": "Mark {count} unread session as seen",
   "mark_all_seen_title_other": "Mark {count} unread sessions as seen",
   "agent_preview": "{agent}: {preview}",
-  "kind_elicitation": "MCP request",
   "answered": "Answered: {answer}",
   "permission_detail": "{tool}: {what}",
   "tasks": "Tasks in progress",

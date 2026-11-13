@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { promptsOf, rewindBlock, rewindDone, rewindFailure, rewindSession, rewindTarget } from "./rewind";
+import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindFailure, rewindSession, rewindTarget } from "./rewind";
 import { ApiError } from "./api";
 import type { Item, Session } from "./types";
 
@@ -42,14 +42,47 @@ describe("rewindBlock", () => {
   it("is off with the reason", () => {
     expect(rewindBlock(session(), false)).toBe("");
     expect(rewindBlock(session({ agent: undefined }), false)).toBe("");
-    expect(rewindBlock(session({ agent: "codex" }), false)).toBe("仅 Claude");
-    expect(rewindBlock(session({ source_kind: "claude_bg" }), false)).toBe("仅 Claude");
-    expect(rewindBlock(session({ assistant: true }), false)).toBe("仅 Claude");
+    expect(rewindBlock(session({ agent: "codex" }), false)).toBe("不支持回退");
+    expect(rewindBlock(session({ source_kind: "claude_bg" }), false)).toBe("不支持回退");
+    expect(rewindBlock(session({ assistant: true }), false)).toBe("不支持回退");
     expect(rewindBlock(session({ state: "working" }), false)).toBe("工作中");
     expect(rewindBlock(session(), true)).toBe("工作中");
     expect(rewindBlock(session({ state: "needs_you" }), false)).toBe("需要你");
     expect(rewindBlock(session({ status: "offline" }), false)).toBe("未运行");
-    expect(rewindBlock(undefined, false)).toBe("仅 Claude");
+    expect(rewindBlock(undefined, false)).toBe("不支持回退");
+  });
+});
+
+describe("the last editable prompt", () => {
+  it("recalls the full last entry including quotes, context and multiple text blocks", () => {
+    const text = '> Quoted text\n\n<persona-context>Context</persona-context>\nRevise it';
+    const items = [user("a#0", "Earlier"), user("b#0", text), user("b#1", "Second block"), tool("result#0"), reply("answer#0")];
+    expect(lastEditablePrompt(items)).toEqual({ id: "b#0", raw: text + "\nSecond block" });
+  });
+
+  it.each([
+    { kind: "image" as const, text: undefined, image: { mime: "image/png" } },
+    { full_size: 99999 },
+    { from: "Other conversation" },
+    { injected: { kind: "followup", line: "Scheduled input" } },
+    { source: { kind: "supervision" } },
+    { source: { kind: "conversation", conversation_id: "other-chat" } },
+  ])("does not rewind an earlier input when the last entry cannot be restored: %j", (extra) => {
+    expect(lastEditablePrompt([user("a#0", "Earlier"), user("b#0", "Last", extra)])).toBeNull();
+  });
+
+  it("refuses a text entry with a binary image", () => {
+    expect(lastEditablePrompt([user("a#0", "Look at this"), { id: "a#1", seq: 1, role: "user", kind: "image" }])).toBeNull();
+  });
+
+  it("refuses inbound provenance carried only in durable or legacy context tags", () => {
+    const durable = '<persona-context kind="message-source">{"kind":"conversation","conversation_id":"other-chat"}</persona-context>\nIncoming prompt';
+    const legacy = '<persona-context kind="context" title="来自对话「Other chat」">\n这条消息不是用户本人发的，是 Persona 的另一段对话（other-chat）用 conversation_send 发来的，第 1 跳（最多 3 跳）。\n按里面说的做。要把结果告诉那段对话就用 conversation_send 发回 other-chat；只是确认收到就不要回，免得两段对话来回发。\n</persona-context>\nIncoming prompt'; // i18n-ignore: canonical hub relay data
+    expect(lastEditablePrompt([user("a#0", durable)])).toBeNull();
+    expect(lastEditablePrompt([user("b#0", legacy)])).toBeNull();
+    expect(lastEditablePrompt([user("c#0", legacy, { client_msg_id: "sent-here" })])?.raw).toBe(legacy);
+    const quoted = '<persona-context kind="message-source">{"author":"user"}</persona-context>\n' + legacy;
+    expect(lastEditablePrompt([user("d#0", quoted)])?.raw).toBe(quoted);
   });
 });
 
@@ -86,5 +119,18 @@ describe("the request", () => {
     expect(rewindDone(res, "conversation").text).toBe("已回退对话");
     expect(rewindDone(res, "code_and_conversation").text).toContain("没有代码改动");
     expect(rewindDone({ ...res, restore: "code_and_conversation", code_restored: true }, "code_and_conversation").text).toBe("已回退代码和对话");
+  });
+});
+
+
+describe("native rewind capabilities", () => {
+  it.each(["codex", "agy"])("enables conversation rewind for %s with explicit support", (agent) => {
+    const native = session({ agent, source_kind: agent === "codex" ? "codex_app_server" : "runtime", capabilities: { rewind: true, rewind_code: false } });
+    expect(rewindBlock(native, false)).toBe("");
+    expect(rewindBlock(native, true)).toBe("工作中");
+    expect(rewindBlock({ ...native, pending_interactions: 1 }, false)).toBe("需要你");
+  });
+  it("respects an explicit refusal and preserves older Claude controls", () => {
+    expect(rewindBlock(session({ capabilities: { rewind: false } }), false)).toBe("不支持回退");
   });
 });

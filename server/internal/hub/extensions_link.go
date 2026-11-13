@@ -126,7 +126,8 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 	}
 	for k, x := range a {
 		y, ok := b[k]
-		if !ok || string(x.Computer) != string(y.Computer) || string(x.Browser) != string(y.Browser) || x.ScreenPort != y.ScreenPort {
+		if !ok || string(x.Computer) != string(y.Computer) || string(x.Browser) != string(y.Browser) || string(x.IPhone) != string(y.IPhone) ||
+			x.ScreenPort != y.ScreenPort {
 			return false
 		}
 	}
@@ -135,21 +136,30 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 
 // features are the hub's features with those of the extensions serving part of the API.
 func (h *Hub) features() []string {
-	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureSessionsPaneSource, featureMachineRename)
+	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureSessionsPaneSource, featureSessionsManager, featureSessionsPageCounts,
+		featureAgentsPageCounts, featureSessionsHierarchy, featureSessionsCatalog, featureMachineRename)
 	out = append(out, h.agentSessionArchiveFeatures()...)
-	// The assistant's card interfaces that answer now (docs/assistant/assistant-views.md): assistant_views is declarative actions
-	// (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions with both switches
-	// on. Neither says a client may run HTML: that is each platform's own security sign-off, else fallback.
-	if views, bridge := h.assistantCards(); views {
-		out = append(out, "assistant_views")
-		if bridge {
-			out = append(out, "assistant_html_bridge")
-		}
-	}
+	out = append(out, h.meetingAttendanceFeatures()...)
+	out = append(out, h.meetingConversationFeatures()...)
+	out = append(out, h.meetingPhotosFeatures()...)
+	out = append(out, h.meetingLiveViewFeatures()...)
+	out = append(out, h.meetingHighlightsFeatures()...)
+	out = append(out, h.meetingEchoFeatures()...)
+	out = append(out, h.meetingTranscriptionFeatures()...)
+	out = append(out, h.recordingDayFeatures()...)
+	out = append(out, h.assistantSearchFeatures()...)
+	out = append(out, h.assistantStartServiceTierFeatures()...)
+	// The assistant's card interfaces, always on (docs/assistant/assistant-views.md, #5509): assistant_views is declarative
+	// actions (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions. Neither says
+	// a client may run HTML: that is each platform's own security sign-off, else fallback.
+	out = append(out, "assistant_views", "assistant_html_bridge")
 	for _, f := range h.extReport().Features {
-		if f == featureAgentSessionArchives || f == featureAgentSessionArchiveClose {
-			continue
-		} // only manager hello can promise fleet archive support
+		switch f {
+		case featureAgentSessionArchives, featureAgentSessionArchiveClose, featureMeetingAttendance, featureMeetingConversation,
+			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
+			featureAssistantSearch, featureAssistantStartServiceTier:
+			continue // only manager hello can promise fleet archives, meetings, all-day recordings, chat search and start speed
+		}
 		if !slices.Contains(out, f) {
 			out = append(out, f)
 		}
@@ -157,29 +167,25 @@ func (h *Hub) features() []string {
 	return out
 }
 
-// computerOf / browserOf are machine m's Cua and ego state as the manager reports it (nil when not on).
-func (h *Hub) computerOf(m *Machine) *proto.Computer {
+// extrasOf is machine m's Cua, ego and iPhone state as the manager reports it (each nil when not on), read from one
+// report: extReport merges every manager's report each time it is called.
+func (h *Hub) extrasOf(m *Machine) (*proto.Computer, *proto.Browser, *proto.IPhone) {
 	x, ok := h.extReport().Machines[m.cfg.ID]
-	if !ok || len(x.Computer) == 0 {
-		return nil
+	if !ok {
+		return nil, nil, nil
 	}
-	var c proto.Computer
-	if json.Unmarshal(x.Computer, &c) != nil {
-		return nil
-	}
-	return &c
+	return decodeExtra[proto.Computer](x.Computer), decodeExtra[proto.Browser](x.Browser), decodeExtra[proto.IPhone](x.IPhone)
 }
 
-func (h *Hub) browserOf(m *Machine) *proto.Browser {
-	x, ok := h.extReport().Machines[m.cfg.ID]
-	if !ok || len(x.Browser) == 0 {
+func decodeExtra[T any](raw json.RawMessage) *T {
+	if len(raw) == 0 {
 		return nil
 	}
-	var b proto.Browser
-	if json.Unmarshal(x.Browser, &b) != nil {
+	var v T
+	if json.Unmarshal(raw, &v) != nil {
 		return nil
 	}
-	return &b
+	return &v
 }
 
 // screenAllowed: the app may open m's screen (cua or ego is on for it).
@@ -379,6 +385,11 @@ func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id str
 		rec = &keptRecorder{ResponseWriter: w, status: http.StatusOK}
 		w = rec
 	}
+	// What may change the manager's inbox, as in relayHTTP: before it goes, and when it is answered (inbox_answers.go).
+	changes := r.Method != http.MethodGet && r.Method != http.MethodHead
+	if changes {
+		h.inboxAnswers.changed(id)
+	}
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme, pr.Out.URL.Host = "http", "manager"
@@ -407,6 +418,9 @@ func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id str
 			pr.Out.Header["X-Forwarded-For"] = nil
 		},
 		ModifyResponse: func(res *http.Response) error {
+			if changes {
+				h.inboxAnswers.changed(id)
+			}
 			if apps, _ := computerAppsRoute(r); apps {
 				res.Header.Del(computerAppsOwnerHeader)
 				if guardedApps && res.StatusCode >= 200 && res.StatusCode < 300 {
@@ -420,6 +434,9 @@ func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id str
 		}, DisableKeepAlives: true, ResponseHeaderTimeout: 5 * time.Minute},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if changes {
+				h.inboxAnswers.changed(id)
+			}
 			if errors.Is(err, errBusOffline) || h.busConnOf(id) == nil {
 				writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
 				return

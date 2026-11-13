@@ -46,26 +46,6 @@ class ChatSyncScenariosTest(private val name: String, private val case: JsonObje
          * the list, and a new failure is not hidden behind an old entry.
          */
         private val KNOWN: Map<String, Known> = mapOf(
-            "card_answered_then_resumed_snapshot" to Known(
-                "#2767: the pending-card snapshot after a resumed hello brings back a card this device answered " +
-                    "(HubInteractionCenter un-ends a card on any `interaction` frame, snapshot or replay)",
-                Regex("""card ix1 is answerable again|open cards \[ix1], want \[]""")),
-            "card_answer_fails_card_back" to Known(
-                "#2768: an answer refused with 503 `assistant_offline` is retried as a cut-off for up to a minute " +
-                    "(HubChatTransport.cutOff), so the card stays locked instead of coming back at once",
-                Regex("""open cards \[], want \[ix1]""")),
-            "send_failed_stays_above_later" to Known(
-                "#2769: ChatScreen draws the outbox's bubbles below every transcript line, so a failed message drops " +
-                    "below the ones sent after it",
-                Regex("""got {2}\[.*If it rains: the aquarium\., user\[failed] Find a dinner place\.]""")),
-            "restart_resumable_send_in_flight" to Known(
-                "#2770: the case wants the send posted again; Android looks the unanswered send up by its op id instead " +
-                    "(GET /ops/{id}, OutboxMessageSender.reconcile) and gets the same receipt",
-                Regex("""requests: no \{"post":"messages","id":"m1"}""")),
-            "catch_up_over_cap_asks_rest" to Known(
-                "#2770: the case wants the rest asked from the replay's cap (after_seq 12); Android reads after_seq=covered " +
-                    "as soon as the socket is back (HubChatRepository catchUp), so it has every line before the replay",
-                Regex("""requests: no \{"get":"/items","after_seq":12}""")),
             "start_answer_cut_then_receipt" to Known(
                 "can't be played yet: a new chat starts from the new-conversation page, not this harness's chat",
                 Regex("can't be played yet: a new chat")),
@@ -116,6 +96,9 @@ internal class SyncRun(private val test: TestScope, private val case: JsonObject
         var discarded = false
     }
     private val sent = mutableListOf<Sent>()
+
+    /** The case's id for the message whose POSTs went under [op]; [op] itself for one this page never sent. */
+    fun keyOfOp(op: String): String = sent.firstOrNull { op in it.ops }?.id ?: op
 
     /** A POST for the message the page sent as [clientMessageId] under [op]: the case's id for it. */
     fun posted(clientMessageId: String, op: String): String {
@@ -375,6 +358,9 @@ internal class SyncRun(private val test: TestScope, private val case: JsonObject
     }
 
     private fun matches(seen: JsonObject, want: JsonObject): Boolean = when {
+        // any one of these, where the protocol allows several ways (#2770)
+        want["one_of"] is JsonArray -> (want["one_of"] as JsonArray).any { matches(seen, it.jsonObject) }
+        want.str("get") == "/ops" -> seen.str("get") == "/ops" && seen.str("id") == want.str("id")
         want.str("get") != null -> seen.str("get") == want.str("get") &&
             (want.int("after_seq") == null || seen.int("after_seq") == want.int("after_seq"))
         want.str("ws") != null -> seen.str("ws") == want.str("ws") &&

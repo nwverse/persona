@@ -32,10 +32,14 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     val replyComposers: StateFlow<ReplyComposers?> get() = emptyReplyComposers
     suspend fun readingStore(): LarkReadingStore? = null
     val snapshot: StateFlow<InboxSnapshot>
+    /** The listed or paged-back record, else one read by id from the hub; null only when every lookup answers 404. */
+    suspend fun item(itemId: String): InboxRecord? = throw UnsupportedOperationException("Inbox item lookup unavailable")
     val mailTransport: StateFlow<MailTransport?> get() = disconnectedMail
     val personaOutbox: StateFlow<List<OutboxMessage>> get() = emptyPersonaOutbox
     val connectionState: Flow<ConnectionState> get() = flowOf(ConnectionState.Connecting)
     val preferences: Flow<InboxPreferences> get() = flowOf(InboxPreferences())
+    /** Whether the hub shows source subscriptions (#2041, `source_subscriptions`): their entry joins the Inbox's other settings. */
+    val subscriptionsShown: Flow<Boolean> get() = flowOf(false)
     suspend fun savePreferences(value: InboxPreferences) = Unit
     /** Where Hand to AI last sent each source's items (#2121, [InboxHandOffMemory]): the group's own, latest first. */
     val handOffMemory: Flow<List<HandOffMemoryEntry>> get() = flowOf(emptyList())
@@ -59,6 +63,12 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
      */
     suspend fun actOnSuggestion(request: SuggestionRequest): SuggestionOutcome =
         error("建议尚未接入") // i18n-ignore: developer error for a repository without the hub
+
+    /** The item's ancestry and direct children; null from a hub without the tree route. */
+    suspend fun inboxLine(item: InboxRecord): InboxLineage? = error("Inbox tree unavailable")
+    /** Clears or sets an item's parent, then applies the returned item to the snapshot. Call [inboxLine] again for the new line. */
+    suspend fun setInboxParent(item: InboxRecord, parent: persona.core.contracts.api.InboxParentRef?): Unit =
+        error("Inbox parent route unavailable")
 
     /** "Hand to AI": the item as context with what to do, queued for Persona's main conversation or a running Agent. */
     suspend fun handOff(request: InboxHandOffRequest): SessionKey? = error("交给 AI 尚未接入") // i18n-ignore: developer error for a repository without the hub
@@ -89,6 +99,9 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
      * (null: from the newest). A hub without history answers an empty page with no next.
      */
     suspend fun doneHistory(manager: String?, cursor: InboxDoneCursor?): InboxDonePage = InboxDonePage()
+
+    /** [manager]'s done items per day in [zone] (#2967), newest first; null from a hub that doesn't count them. */
+    suspend fun doneDays(manager: String?, zone: java.time.ZoneId): List<InboxDoneDay>? = null
     suspend fun bulk(items: List<persona.core.contracts.api.InboxDoneTarget>, action: persona.core.contracts.api.InboxBulkAction): InboxBulkResult =
         error("批量处理尚未接入") // i18n-ignore: developer error for a repository without the hub
     suspend fun readDraft(target: ReplyTarget): ReplyDraft?
@@ -230,6 +243,9 @@ object InboxItemKey {
     fun of(hubId: String, manager: String): String = "$hubId$SEPARATOR$manager"
 
     fun hubId(key: String): String = key.substringBefore(SEPARATOR)
+
+    /** The manager an app id carries, or null for a bare hub id and for the default manager. */
+    fun managerOf(key: String): String? = key.substringAfter(SEPARATOR, "").takeIf { it.isNotBlank() }
 
     /** The app's id of the item [hubId] of [manager] (null: unstamped). */
     fun appId(hubId: String, manager: String?): String =
@@ -410,6 +426,9 @@ data class InboxPreferences(
 data class InboxDoneCursor(val before: String, val beforeId: String?)
 
 /** A page of done history: its items as records (the app's ids), and where the next page starts (null: none). */
+/** How many items were done on [day] (#2967). */
+data class InboxDoneDay(val day: java.time.LocalDate, val count: Int)
+
 data class InboxDonePage(val records: List<InboxRecord> = emptyList(), val next: InboxDoneCursor? = null)
 
 enum class InboxAiAction { Summarize, DraftReply, Handoff }
@@ -425,7 +444,8 @@ enum class ReplyDelivery { Ready, Queued, WaitingForNetwork, Sending, Unknown, V
 
 /**
  * One "Hand to AI". No [machineId] / [sessionId]: Persona's main conversation. [operationId] stays the same while the same
- * text goes to the same place, so a retry after an unclear failure is not queued twice.
+ * text goes to the same place, so a retry after an unclear failure is not queued twice. [targetTitle] is the Agent's display
+ * title, sent only when recording its accepted hand-off on the item.
  */
 @Serializable
 data class InboxHandOffRequest(
@@ -434,6 +454,7 @@ data class InboxHandOffRequest(
     val machineId: String? = null,
     val sessionId: String? = null,
     val operationId: String = UUID.randomUUID().toString(),
+    val targetTitle: String? = null,
 )
 
 /**

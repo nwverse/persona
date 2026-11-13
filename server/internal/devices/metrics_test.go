@@ -209,6 +209,11 @@ func TestUsageSummary(t *testing.T) {
 	if s.TPM != 400 || len(s.Machines) != 2 || s.Machines[0].Load != 0.5 {
 		t.Fatalf("tpm / machines = %d %+v", s.TPM, s.Machines)
 	}
+	// By the hour on the user's clock (#5721): 09:00 is a's 1,000,100 and b's 550, 08:59 is a's 1,000,400; yesterday's
+	// minute is in no hour; the hours to come are 0.
+	if len(s.Hourly) != 24 || s.Hourly[9] != 1_000_650 || s.Hourly[8] != 1_000_400 || s.Hourly[23] != 0 {
+		t.Fatalf("hourly = %v", s.Hourly)
+	}
 	// A full report (the node reconnected) replaces everything.
 	report("b", true)
 	if s := book.summary(now, loc); s.Output != 500 {
@@ -274,6 +279,29 @@ func TestUsageAndMetricsForgetARemovedMachine(t *testing.T) {
 	}
 	if machine, latest, outdated := d.MachineResources("gone"); machine != nil || latest != nil || outdated != nil {
 		t.Fatalf("removed machine still listed: %+v %+v %v", machine, latest, outdated)
+	}
+}
+
+// An entry absorbed by another one (the same computer) answers with that computer's latest sample: samples are kept
+// under the id of the machine whose connection sent them, not the id the caller asked by.
+func TestMachineResourcesOfAnAbsorbedEntry(t *testing.T) {
+	d := newTestDevices(t)
+	owner := newMachine(d, MachineConfig{ID: "box", Name: "box", Kind: "ssh"})
+	link := newMachine(d, MachineConfig{ID: "box-link", Name: "box-link", Kind: kindLink})
+	d.addEntry(owner)
+	d.addEntry(link)
+	f := &d.fleet
+	f.mu.Lock()
+	f.init()
+	f.absorbed[link] = owner
+	f.mu.Unlock()
+	d.onMetrics("box", []byte(`{"sample":{"t":7}}`))
+
+	for _, id := range []string{"box", "box-link"} {
+		machine, latest, _ := d.MachineResources(id)
+		if machine == nil || machine.ID != "box" || latest == nil || latest.T != 7 {
+			t.Fatalf("MachineResources(%q): machine=%+v latest=%+v", id, machine, latest)
+		}
 	}
 }
 

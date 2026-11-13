@@ -11,6 +11,22 @@ struct LinkEndpoint: Decodable, Hashable, Identifiable {
     var id: String { url }
 }
 
+/// Optional SSH tunnel settings in link.json and status (`ssh`, internal/link SSH).
+struct SSHConfig: Codable, Equatable {
+    var server: String
+    var target: String
+    var always: Bool?
+
+    var isAlways: Bool { always == true }
+}
+
+/// Structured SSH failure code reported while waiting (`ssh_error`, internal/link SSHStatusError).
+struct SSHStatusError: Decodable, Equatable {
+    var code: String
+    var server: String?
+    var target: String?
+}
+
 /// One status line from `persona-link run` (internal/link Status).
 struct LinkStatus: Decodable, Equatable {
     var state: String // unpaired | connecting | connected | waiting | refused
@@ -23,6 +39,8 @@ struct LinkStatus: Decodable, Equatable {
     var error: String?
     var retry: Date?
     var endpoints: [LinkEndpoint]?
+    var ssh: SSHConfig?
+    var sshError: SSHStatusError?
     /// What the hub calls itself, and (while connected) how many hubs its mesh has; older hubs send neither.
     var hubName: String?
     var meshHubs: Int?
@@ -60,7 +78,8 @@ struct LinkStatus: Decodable, Equatable {
     var renamable: Bool { !passive && state == "connected" && !(machineName ?? "").isEmpty && pending != true }
 
     enum CodingKeys: String, CodingKey {
-        case state, machine, address, kind, since, node, error, retry, endpoints, mode, listen, addrs, from, trust, pending, conn
+        case state, machine, address, kind, since, node, error, retry, endpoints, ssh, mode, listen, addrs, from, trust, pending, conn
+        case sshError = "ssh_error"
         case nodeError = "node_error"
         case hubName = "hub_name"
         case meshHubs = "mesh_hubs"
@@ -164,7 +183,64 @@ enum LinkLook {
 }
 
 enum LinkText {
-    static let kinds = ["lan": "内网", "ipv6": "公网 IPv6", "name": "域名", "ipv4": "公网 IPv4"]
+    static var kinds: [String: String] {
+        ["lan": linkText("LAN"), "ipv6": linkText("Public IPv6"), "name": linkText("Domain"), "ipv4": linkText("Public IPv4"), "ssh": linkText("SSH")]
+    }
+
+    static func sshLoginCommand(_ server: String) -> String {
+        let s = server.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return "ssh <server>" }
+        let user: String
+        let hostPort: Substring
+        if let at = s.lastIndex(of: "@") {
+            user = String(s[..<at])
+            hostPort = s[s.index(after: at)...]
+        } else {
+            user = ""
+            hostPort = s[...]
+        }
+        if hostPort.hasPrefix("["), let close = hostPort.firstIndex(of: "]") {
+            let host = String(hostPort[hostPort.index(after: hostPort.startIndex)..<close])
+            let rest = hostPort[hostPort.index(after: close)...]
+            let dest = user.isEmpty ? host : "\(user)@\(host)"
+            if rest.hasPrefix(":") {
+                let port = String(rest.dropFirst())
+                if !port.isEmpty && port != "22" { return "ssh -p \(port) \(dest)" }
+            }
+            return "ssh \(dest)"
+        }
+        if let colon = hostPort.lastIndex(of: ":"), hostPort.firstIndex(of: ":") == colon {
+            let host = String(hostPort[..<colon])
+            let port = String(hostPort[hostPort.index(after: colon)...])
+            if let p = Int(port), (1...65535).contains(p) {
+                let dest = user.isEmpty ? host : "\(user)@\(host)"
+                return port == "22" ? "ssh \(dest)" : "ssh -p \(port) \(dest)"
+            }
+        }
+        return "ssh \(s)"
+    }
+
+    static func sshError(_ e: SSHStatusError) -> String {
+        let server = e.server ?? ""
+        let target = e.target ?? ""
+        let cmd = sshLoginCommand(server)
+        switch e.code {
+        case "no_ssh":
+            return linkText("There is no ssh command on this computer; install an OpenSSH client first.")
+        case "auth_refused":
+            return linkText("The SSH server (\(server)) refused authentication; check your key, ssh-agent, or ~/.ssh/config.")
+        case "host_key":
+            return linkText("This SSH server's host key isn't trusted yet; run “\(cmd)” once in a terminal to check and accept it.")
+        case "forward_refused":
+            return linkText("The SSH server refused port forwarding to \(target); check AllowTcpForwarding and permitopen on the server.")
+        case "target_unreachable":
+            return linkText("The hub isn't answering at \(target) through the SSH server; check that the hub is running and the target port is right.")
+        case "invalid":
+            return linkText("Enter an SSH server as [user@]host[:port] or an alias, and a target as host:port.")
+        default:
+            return linkText("Can't reach the SSH server (\(server)); check the server address and this computer's network.")
+        }
+    }
 
     /// The host and port of a hub URL, and the path a reverse proxy puts the hub under.
     static func host(_ url: String?) -> String {
@@ -174,53 +250,53 @@ enum LinkText {
     }
 
     /// How a hub behind an HTTPS reverse proxy is checked.
-    static let systemTrust = "经反向代理 · 系统证书"
+    static var systemTrust: String { linkText("Via reverse proxy · system certificate") }
 
     static func duration(since: Date, now: Date) -> String {
         let s = max(0, Int(now.timeIntervalSince(since)))
         switch s {
-        case ..<60: return "不到 1 分钟"
-        case ..<3600: return "\(s / 60) 分钟"
-        case ..<86400: return "\(s / 3600) 小时 \(s % 3600 / 60) 分钟"
-        default: return "\(s / 86400) 天 \(s % 86400 / 3600) 小时"
+        case ..<60: return linkText("Under 1 minute")
+        case ..<3600: return linkText("\(s / 60) min")
+        case ..<86400: return linkText("\(s / 3600) h \(s % 3600 / 60) min")
+        default: return linkText("\(s / 86400) d \(s % 86400 / 3600) h")
         }
     }
 
     /// The hub line: its name, and how many hubs its mesh has when that is known.
     static func hub(name: String, mesh: Int?) -> String {
         switch mesh {
-        case let n? where n > 1: "hub「\(name)」· 互联组共 \(n) 台 hub"
-        case 1: "hub「\(name)」· 没和别的 hub 互联"
-        default: "hub「\(name)」"
+        case let n? where n > 1: linkText("Hub “\(name)” · \(n) hubs in its mesh")
+        case 1: linkText("Hub “\(name)” · not meshed with other hubs")
+        default: linkText("Hub “\(name)”")
         }
     }
 
     static func until(_ date: Date, now: Date) -> String {
         let s = Int(date.timeIntervalSince(now).rounded(.up))
-        if s <= 0 { return "马上重试" }
-        if s < 60 { return "\(s) 秒后重试" }
-        return "\(s / 60) 分钟后重试"
+        if s <= 0 { return linkText("Retry now") }
+        if s < 60 { return linkText("Retry in \(s) s") }
+        return linkText("Retry in \(s / 60) min")
     }
 
     /// How long ago, in a few words.
     static func ago(_ date: Date, now: Date) -> String {
         let s = max(0, Int(now.timeIntervalSince(date)))
         switch s {
-        case ..<60: return "刚刚"
-        case ..<3600: return "\(s / 60) 分钟前"
-        case ..<86400: return "\(s / 3600) 小时前"
-        default: return "\(s / 86400) 天前"
+        case ..<60: return linkText("Just now")
+        case ..<3600: return linkText("\(s / 60) min ago")
+        case ..<86400: return linkText("\(s / 3600) h ago")
+        default: return linkText("\(s / 86400) d ago")
         }
     }
 
     /// How long a pairing link is still good, in a few words.
     static func left(_ date: Date, now: Date) -> String {
         let s = Int(date.timeIntervalSince(now).rounded(.up))
-        if s < 60 { return "不到 1 分钟" }
-        return "\(s / 60) 分钟"
+        if s < 60 { return linkText("Under 1 minute") }
+        return linkText("\(s / 60) min")
     }
 
-    static func mode(_ passive: Bool) -> String { passive ? "让 hub 来连（被动）" : "我去连 hub（主动）" }
+    static func mode(_ passive: Bool) -> String { passive ? linkText("The hub connects to me (passive)") : linkText("I connect to the hub (active)") }
 }
 
 /// Runs the persona-link helper inside the app bundle, keeps it running, and turns its status lines into state.
@@ -233,6 +309,7 @@ enum LinkText {
     private(set) var loginNote: String?
     /// The candidates in link.json (read here, written only by the helper).
     private(set) var endpoints: [LinkEndpoint] = []
+    private(set) var ssh: SSHConfig?
     private(set) var pairedMachine: String?
     /// The mode link.json is in, and passive mode's pairing (kept while in active mode, for switching back).
     private(set) var configMode: String?
@@ -310,6 +387,16 @@ enum LinkText {
     /// Passive mode: what the helper says, else what link.json says.
     var passive: Bool { status?.mode.map { $0 == "passive" } ?? (configMode == "passive") }
 
+    /// Default SSH tunnel target (`127.0.0.1:<TLS port>`) from saved endpoints, or the hub's usual TLS port.
+    var defaultSSHTarget: String {
+        for e in endpoints {
+            guard let c = URLComponents(string: e.url), c.scheme?.lowercased() == "https", !(c.host ?? "").isEmpty else { continue }
+            let port = c.port ?? 443
+            if (1...65535).contains(port) { return "127.0.0.1:\(port)" }
+        }
+        return "127.0.0.1:18662"
+    }
+
     func start() {
         webAddress = defaults.string(forKey: Self.webAddressKey) ?? ""
         LinkNotifier.shared.start(open: { [weak self] route, webURL in self?.open(route: route, webURL: webURL) },
@@ -333,12 +420,13 @@ enum LinkText {
     /// Used by the snapshots: a status without a helper.
     func show(_ status: LinkStatus?, helperDown: String? = nil, endpoints: [LinkEndpoint] = [], machine: String? = nil,
               mode: String? = nil, passive: PassivePairing? = nil, node: NodeService? = nil, webAddress: String = "",
-              notificationsOff: Bool = false) {
+              notificationsOff: Bool = false, ssh: SSHConfig? = nil) {
         self.status = status
         self.webAddress = webAddress
         self.notificationsOff = notificationsOff
         self.helperDown = helperDown
         self.endpoints = endpoints
+        self.ssh = ssh ?? status?.ssh
         self.pairedMachine = machine
         self.configMode = mode ?? status?.mode
         self.passivePairing = passive
@@ -373,7 +461,7 @@ enum LinkText {
             helperDown = nil
             presence.helperStarted()
         } catch {
-            helperDown = "后台程序启动不了：\(error.localizedDescription)"
+            helperDown = linkText("Can't start the helper: \(error.localizedDescription)")
             scheduleRestart()
         }
     }
@@ -398,8 +486,8 @@ enum LinkText {
             let line = lines[lines.startIndex..<nl]
             lines.removeSubrange(lines.startIndex...nl)
             if let s = try? LinkStatus.decode(line, previous: status?.attention) {
-                if s.endpoints != status?.endpoints || s.machine != status?.machine || s.mode != status?.mode
-                    || s.hubName != status?.hubName || s.state != status?.state { readConfig() }
+                if s.endpoints != status?.endpoints || s.ssh != status?.ssh || s.machine != status?.machine
+                    || s.mode != status?.mode || s.hubName != status?.hubName || s.state != status?.state { readConfig() }
                 setStatus(s)
             }
         }
@@ -412,7 +500,7 @@ enum LinkText {
         s?.attention = nil // the summary belonged to the helper's connection
         setStatus(s)
         guard !quitting else { return }
-        helperDown = "后台程序退出了（\(code)），正在重启"
+        helperDown = linkText("The helper exited (\(Int(code))); restarting")
         if Date().timeIntervalSince(startedAt) > 60 { restartDelay = 1 }
         scheduleRestart()
     }
@@ -509,11 +597,11 @@ enum LinkText {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             loginNote = nil
         } catch {
-            loginNote = "改不了：\(error.localizedDescription)"
+            loginNote = linkText("Can't change it: \(error.localizedDescription)")
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
         if on && SMAppService.mainApp.status == .requiresApproval {
-            loginNote = "要在 系统设置 › 通用 › 登录项 里允许"
+            loginNote = linkText("Allow it in System Settings › General › Login Items")
         }
     }
 
@@ -549,17 +637,76 @@ enum LinkText {
     /// The notice about a link for another app goes once the user pairs or opens a link for this one.
     func clearNotice() { incomingNotice = nil }
 
-    func pair(link: String, machine: String) async -> (ok: Bool, message: String) {
+    func pair(link: String, machine: String, ssh: SSHConfig? = nil) async -> (ok: Bool, message: String) {
         pairRuns += 1
         incomingNotice = nil
         var args = ["pair"]
         let id = machine.trimmingCharacters(in: .whitespacesAndNewlines)
         if !id.isEmpty { args += ["--machine", id] }
+        if let ssh {
+            let srv = ssh.server.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !srv.isEmpty {
+                args += ["--ssh", srv]
+                let tgt = ssh.target.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !tgt.isEmpty { args += ["--ssh-target", tgt] }
+                args.append(ssh.isAlways ? "--ssh-always" : "--no-ssh-always")
+            }
+        }
         args.append("-")
         let r = await Self.runHelper(args, stdin: link)
         readConfig()
-        if r.ok { signal(SIGUSR1) }
+        if r.ok { signal(SIGUSR2) }
         return r
+    }
+
+    func setSSH(_ next: SSHConfig?) async -> (ok: Bool, message: String) {
+        let args: [String]
+        if let next {
+            let srv = next.server.trimmingCharacters(in: .whitespacesAndNewlines)
+            var a = ["ssh", srv]
+            let tgt = next.target.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tgt.isEmpty { a += ["--target", tgt] }
+            a.append(next.isAlways ? "--always" : "--no-always")
+            a.append("--json")
+            args = a
+        } else {
+            args = ["ssh", "--off", "--json"]
+        }
+        let r = await Self.runHelper(args, stdin: nil, split: true)
+        readConfig()
+        if r.ok {
+            reconnect()
+            return (true, next == nil ? linkText("SSH tunnel removed.") : linkText("SSH tunnel saved. Reconnecting…"))
+        }
+        return (false, r.message)
+    }
+
+    func testSSH(server: String, target: String, link: String) async -> (ok: Bool, message: String, target: String?) {
+        struct Reply: Decodable {
+            var ok: Bool
+            var code: String?
+            var server: String?
+            var target: String?
+            var message: String
+        }
+        var args = ["ssh", server.trimmingCharacters(in: .whitespacesAndNewlines), "--test", "--json"]
+        let tgt = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tgt.isEmpty { args += ["--target", tgt] }
+        let raw = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !raw.isEmpty { args += ["--link", raw] }
+        let r = await Self.runHelper(args, stdin: nil, split: true)
+        if let reply = try? JSONDecoder().decode(Reply.self, from: Data(r.out.utf8)) {
+            if reply.ok {
+                let resolved = reply.target ?? tgt
+                return (true, linkText("SSH tunnel reached the hub at \(resolved)."), reply.target)
+            }
+            if let code = reply.code, !code.isEmpty {
+                let se = SSHStatusError(code: code, server: reply.server ?? server, target: reply.target ?? tgt)
+                return (false, LinkText.sshError(se), nil)
+            }
+            return (false, reply.message, nil)
+        }
+        return (r.ok, r.message, nil)
     }
 
     func addAddress(_ raw: String) async -> (ok: Bool, message: String) {
@@ -578,17 +725,20 @@ enum LinkText {
             var machine: String?
             var token: String?
             var endpoints: [LinkEndpoint]?
+            var ssh: SSHConfig?
             var mode: String?
             var passive: PassivePairing?
         }
         guard let data = try? Data(contentsOf: Self.configURL), let f = try? JSONDecoder().decode(File.self, from: data) else {
             endpoints = []
+            ssh = nil
             pairedMachine = nil
             configMode = nil
             passivePairing = nil
             return
         }
         endpoints = Self.ranked(f.endpoints ?? [])
+        ssh = f.ssh
         pairedMachine = (f.token ?? "").isEmpty ? nil : f.machine
         configMode = f.mode
         passivePairing = f.passive
@@ -714,7 +864,7 @@ enum LinkText {
             do {
                 try p.run()
             } catch {
-                finish(false, "后台程序启动不了：\(error.localizedDescription)", "", "")
+                finish(false, linkText("Can't start the helper: \(error.localizedDescription)"), "", "")
                 return
             }
             if let stdin {
@@ -723,7 +873,7 @@ enum LinkText {
                 } catch {
                     // The helper quit before reading stdin (broken pipe). Its termination handler may still win
                     // the race; if it does not, say the send failed rather than blaming the launch.
-                    finish(false, "给后台程序发送数据失败：\(error.localizedDescription)", "", "")
+                    finish(false, linkText("Couldn't send data to the helper: \(error.localizedDescription)"), "", "")
                 }
             }
             try? input.fileHandleForWriting.close()

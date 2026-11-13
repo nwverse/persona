@@ -36,6 +36,22 @@ final class PerfAssistantTests: PerfTestCase {
         measureIdle(push: "say?stream=1&steps=40&ms=80&text=" + q, seconds: 5)
     }
 
+    /// Real replies streamed at the cadence a phone gets them (#6651): the model's recorded token times
+    /// (`scripts/mock/stream_traces/`), sent as the node sends them (`node=trail`; `PERSONA_PERF_STREAM_NODE=lead` for the
+    /// node before #6651). The frames record the gaps between visible text changes (`StreamCadence`).
+    @MainActor func testStreamingTraceMarkdown() throws {
+        openMain()
+        measureIdle(push: "say?trace=markdown&node=" + Self.streamNode, seconds: 24)
+    }
+
+    /// A long reply of plain paragraphs, likewise.
+    @MainActor func testStreamingTraceProse() throws {
+        openMain()
+        measureIdle(push: "say?trace=prose&node=" + Self.streamNode, seconds: 44)
+    }
+
+    static var streamNode: String { ProcessInfo.processInfo.environment["PERSONA_PERF_STREAM_NODE"] ?? "trail" }
+
     /// The main conversation at rest while agents' sessions churn (pushes for other pages).
     @MainActor func testMainConversationIdleUnderPushes() throws {
         openMain()
@@ -129,8 +145,8 @@ final class PerfAssistantTests: PerfTestCase {
     /// The task board sheet from the action bar's Progress tray (#2879), presented and closed.
     @MainActor func testTaskBoardSheet() throws {
         openMain()
-        see(app.buttons["action-bar.progress"], "the action bar's Progress", timeout: 15).tap()
-        let board = see(app.buttons["action-tray.board"], "the Progress tray's All", timeout: 5)
+        see(app.buttons["action-bar.running"], "the action bar's In Progress", timeout: 15).tap()
+        let board = see(app.buttons["action-tray.board"], "the In Progress tray's All", timeout: 5)
         measureTransition(navigation: false) {
             board.tap()
             let close = app.buttons["关闭"].firstMatch
@@ -144,7 +160,7 @@ final class PerfAssistantTests: PerfTestCase {
     @MainActor func testWelcomePageIdle() throws {
         launch(["-dev.openChat", "", "-app.tab", "assistant", "-tab", "assistant", "-newAssistant", "YES"])
         see(any("assistant-welcome"), "the welcome page", timeout: 20)
-        measureIdle(push: "churn?n=12&ms=300&inbox=1")
+        measureIdle(push: "churn?n=12&ms=300&inbox=1", assertMainThreadBudget: true)
     }
 
     // MARK: Pages from the conversation

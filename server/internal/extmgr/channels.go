@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
+	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -135,6 +136,7 @@ func (h *Manager) feishuChannel(ctx context.Context) channel.View {
 		{ID: "main", On: f.Main}, {ID: "cards", On: f.Cards}, {ID: "all_cards", On: f.AllCards},
 		{ID: "pushes", On: f.Pushes}, {ID: "sync", On: f.Sync}, {ID: "agents", On: f.Agents},
 		{ID: "reports", On: f.Reports}, {ID: "board", On: f.Board}, {ID: "only_conclusions", On: f.OnlyConclusions},
+		{ID: "report_steps", On: f.ReportSteps}, {ID: "answer_new_card", On: f.AnswerNewCard},
 		{ID: "workbench", On: f.Workbench},
 	}
 	for i := range out.Features {
@@ -237,17 +239,38 @@ func (h *Manager) marketChannels(have []channel.View) []channel.View {
 	for _, v := range have {
 		seen[v.ID] = true
 	}
-	for _, it := range h.catalog("", "") {
-		if it.Installed != "" || len(it.Contributes["channel"]) == 0 || it.Problem != "" {
+	l := h.userLang()
+	for _, s := range h.marketStates() {
+		if s.index == nil {
 			continue
 		}
-		for _, id := range it.Contributes["channel"] {
-			if seen[id] {
+		// Few entries contribute a channel, and the catalog's item is costly (translations, permission lines, every
+		// contribution, whether this hub can install it): only the entries that do are built. The channel list is
+		// asked for every few seconds while agents work, and building the whole catalog for it was 4.4 ms and
+		// 1.1 MB a time with the official market's entries (#3197).
+		var items []CatalogItem
+		for i := range s.index.Extensions {
+			e := &s.index.Extensions[i]
+			if len(e.Parsed.Contributes["channel"]) == 0 || len(e.Parsed.Items("channel")) == 0 {
 				continue
 			}
-			seen[id] = true
-			out = append(out, channel.View{ID: id, Name: it.Name, Kind: channel.KindIM, Source: channel.SourceMarket, Plugin: it.ID, Market: it.Market,
-				State: channel.StateNotInstalled, Bind: channel.BindNone, Description: it.Description})
+			items = append(items, h.catalogItem(l, s, e, e.Translations()))
+		}
+		if extension.IsOfficialMarket(s.rec.Spec) {
+			slices.SortFunc(items, officialCatalogOrder) // the catalog's order for that market
+		}
+		for _, it := range items {
+			if it.Installed != "" || len(it.Contributes["channel"]) == 0 || it.Problem != "" {
+				continue
+			}
+			for _, id := range it.Contributes["channel"] {
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+				out = append(out, channel.View{ID: id, Name: it.Name, Kind: channel.KindIM, Source: channel.SourceMarket, Plugin: it.ID, Market: it.Market,
+					State: channel.StateNotInstalled, Bind: channel.BindNone, Description: it.Description})
+			}
 		}
 	}
 	return out
@@ -307,7 +330,7 @@ func (h *Manager) enableChannel(ctx context.Context, id string, on bool) error {
 		return errors.New(i18n.T(h.botLang(ctx), "hub-channels.no_channel", i18n.Args{"id": id}))
 	}
 	if on && !pc.extension.Record.Enabled {
-		if err := h.extensions.reg.SetEnabled(ctx, pc.extension.Record.ID, true, actorOf(ctx)); err != nil {
+		if err := h.channelExtensionSet(ctx, pc.extension.Record.ID, true); err != nil {
 			return err
 		}
 	}
@@ -315,9 +338,17 @@ func (h *Manager) enableChannel(ctx context.Context, id string, on bool) error {
 		return h.setConnectorEnabled(ctx, pc.item.Connector, on)
 	}
 	if !on {
-		return h.extensions.reg.SetEnabled(ctx, pc.extension.Record.ID, false, actorOf(ctx))
+		return h.channelExtensionSet(ctx, pc.extension.Record.ID, false)
 	}
 	return nil
+}
+
+// channelExtensionSet switches a channel's extension as the user switching it by itself (setByUser): its pack, if it
+// switched it off, forgets it (#1830).
+func (h *Manager) channelExtensionSet(ctx context.Context, id string, on bool) error {
+	h.extensions.switchMu.Lock()
+	defer h.extensions.switchMu.Unlock()
+	return h.setByUser(ctx, id, on, actorOf(ctx))
 }
 
 // configureFeishu applies the assistant's changes to the bot's switches (feishu.configure): only what is given.
@@ -350,6 +381,10 @@ func (h *Manager) configureFeishu(ctx context.Context, enabled *bool, features m
 				f.Workbench = on
 			case "only_conclusions":
 				f.OnlyConclusions = on
+			case "report_steps":
+				f.ReportSteps = on
+			case "answer_new_card":
+				f.AnswerNewCard = on
 			default:
 				return errors.New(i18n.T(h.botLang(ctx), "hub-channels.no_feature", i18n.Args{"feature": id}))
 			}
@@ -413,18 +448,49 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 		{Name: "app_secret", Label: "App Secret", Secret: true},
 		{Name: "domain", Label: i18n.T(l, "hub-channels.domain_label")},
 	}
+	credentials := func(errText string) connector.Prompt {
+		p := connector.Prompt{Step: "credentials", Fields: fields, Hint: i18n.T(l, "hub-channels.credentials_hint")}
+		if u := feishubot.ConsoleURL(strings.TrimSpace(values["domain"])); u != "" {
+			p.Link, p.LinkText = u, i18n.T(l, "hub-channels.console_link")
+		}
+		p.Error = errText
+		return p
+	}
+	if step == stepRegister {
+		return h.pollFeishuRegistration(ctx, credentials)
+	}
+	var configNote string
 	if step == "credentials" && values != nil {
 		id, secret, domain := strings.TrimSpace(values["app_id"]), strings.TrimSpace(values["app_secret"]), strings.TrimSpace(values["domain"])
 		on := true
 		if err := h.updateBot(ctx, &on, &id, &secret, &domain, nil); err != nil {
-			return connector.Prompt{Step: "credentials", Fields: fields, Error: i18n.Localize(err, l)}, nil
+			if feishubot.CredentialRejected(err) {
+				h.logf("bots: credentials rejected by the platform: %v", err)
+				return credentials(i18n.T(l, "hub-channels.credentials_rejected")), nil
+			}
+			return credentials(i18n.Localize(err, l)), nil
 		}
+		// Best-effort: with the credentials just verified, set the scopes, events and the long-connection mode
+		// and submit the publish, so the console's manual steps are done (docs/extensions/bots.md). Its outcome
+		// is a sentence on the next step, never a failure of the bind.
+		rep := feishubot.New(id, secret, domain).AutoConfigure(ctx)
+		if rep.Detail != "" {
+			h.logf("bots: auto-configure: %s", rep.Detail)
+		}
+		configNote = feishuConfigureNote(l, rep, domain, id)
 		step = ""
 	}
 	v := h.botView(ctx)
 	if !v.HasSecret {
-		return connector.Prompt{Step: "credentials", Fields: fields,
-			Hint: i18n.T(l, "hub-channels.credentials_hint")}, nil
+		// No app yet: create one in a single authorization (bots_register.go); typing the credentials is the way
+		// when the accounts site cannot be reached, and on the Lark bot's settings page.
+		// A private deployment has no accounts site of ours to ask.
+		if feishubot.ConsoleURL(h.cfg.Bots.Feishu.Domain) != "" {
+			if p, ok := h.beginFeishuRegistration(ctx, ""); ok {
+				return p, nil
+			}
+		}
+		return credentials(""), nil
 	}
 	if !v.Enabled {
 		on := true
@@ -451,8 +517,41 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 	if issued {
 		h.auditBot(ctx, botRecord{action: auditBotPairCode})
 	}
-	return connector.Prompt{Step: "pair", Kind: PromptPairCode, UserCode: code, Interval: 3,
-		Hint: i18n.T(l, "hub-channels.pair_hint")}, nil
+	hint := i18n.T(l, "hub-channels.pair_hint")
+	if configNote != "" { // what the auto-configure just did, if anything
+		hint = configNote + " " + hint
+	}
+	return connector.Prompt{Step: "pair", Kind: PromptPairCode, UserCode: code, Interval: 3, Hint: hint}, nil
+}
+
+// feishuConfigureNote turns the auto-configure report into one sentence for the pair step; "" when nothing
+// was tried or there is nothing worth saying. The manual fallback names the one thing to do by hand, with a
+// link to the app's console page.
+func feishuConfigureNote(l i18n.Lang, rep feishubot.ConfigureReport, domain, appID string) string {
+	if rep.Skipped {
+		return ""
+	}
+	if rep.Issue == feishubot.IssueNone && rep.Configured {
+		return i18n.T(l, "hub-channels.auto_configured")
+	}
+	what := ""
+	switch rep.Issue {
+	case feishubot.IssueBotCapability:
+		what = i18n.T(l, "hub-channels.auto_config_bot_capability")
+	case feishubot.IssuePatchScope:
+		what = i18n.T(l, "hub-channels.auto_config_patch_scope")
+	case feishubot.IssueNotSelfBuilt:
+		what = i18n.T(l, "hub-channels.auto_config_not_self_built")
+	default:
+		what = i18n.T(l, "hub-channels.auto_config_unreachable")
+	}
+	note := i18n.T(l, "hub-channels.auto_config_manual", i18n.Args{"what": what})
+	if rep.Issue != feishubot.IssueUnreachable {
+		if u := feishubot.AppConsoleURL(domain, appID); u != "" {
+			note += " " + u // the app's console page, where that one switch is
+		}
+	}
+	return note
 }
 
 // unbindChannel undoes the binding: a plugin channel's connector signs out, the Feishu bot forgets its owner.

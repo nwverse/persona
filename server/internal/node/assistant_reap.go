@@ -17,6 +17,11 @@ const assistantTaskMaxIdle = 12 * time.Hour
 // assistantInterrupt stops the current turn. claude -p has no interrupt over stdin, so the process is killed;
 // the next message resumes the conversation from its transcript. Codex has turn/interrupt: the process stays.
 func (n *Node) assistantInterrupt(id string) error {
+	// An explicit Stop wins over any queued same-model or fallback continuation: cancelled before the session lock, a
+	// recovery send that has not started gives up at once instead of holding Stop behind it (#3495).
+	n.cancelAssistantRecovery(id)
+	defer n.typing.lock(id)()
+	n.cancelAssistantRecovery(id)
 	if n.runtimeAssistant(id) {
 		return n.assistantInterruptRuntime(context.Background(), id)
 	}
@@ -30,20 +35,58 @@ func (n *Node) assistantInterrupt(id string) error {
 			return nil
 		}
 	}
-	n.stopAssistant(id)
+	n.stopAssistantProcess(id)
 	n.rememberTasks(id, nil) // stopped on purpose, background tasks included
 	return nil
 }
 
+// stopAssistant cancels recovery before replacing a process. Explicit user stops additionally hold the session send
+// lock (assistantInterrupt and session.close); internal callers may already hold settings locks and must not take it.
 func (n *Node) stopAssistant(id string) {
-	n.mu.Lock()
-	p := n.procs[id]
-	delete(n.procs, id)
-	n.mu.Unlock()
-	if p != nil {
+	n.cancelAssistantRecovery(id)
+	n.stopAssistantProcess(id)
+}
+
+func (n *Node) stopAssistantProcess(id string) {
+	if p := n.takeAssistant(id); p != nil {
 		p.stop()
 	}
 }
+
+// takeAssistant removes id's process from this Node's and returns it (nil for none).
+func (n *Node) takeAssistant(id string) *assistantProc {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	p := n.procs[id]
+	delete(n.procs, id)
+	return p
+}
+
+// stopAtConnectionEnd ends the conversations ids and the warm spare of a node without a resident keeper, whose
+// process exits once its connection has (`node --stdio`), and returns when they have exited (stopAndWait). Each
+// process leads its own group, so nothing else takes them down with the node: a node the manager killed left them
+// running beside the processes the next node started for the same conversations, the old ones refused the
+// assistant's tools by that node (mcpSession) and their background tasks reported lost while still running (#4259).
+// What they were running is still remembered (rememberTasks), so the next node tells each conversation.
+func (n *Node) stopAtConnectionEnd(ids []string, spare *assistantProc) {
+	var procs []*assistantProc
+	for _, id := range ids {
+		n.cancelAssistantRecovery(id)
+		if p := n.takeAssistant(id); p != nil {
+			procs = append(procs, p)
+		}
+	}
+	if spare != nil {
+		procs = append(procs, spare)
+	}
+	if left := stopAndWait(procs); left > 0 {
+		n.logger.Printf("assistant: %d conversations still running after SIGKILL as the connection ended", left)
+	}
+}
+
+// reaperStopWait bounds how long Serve waits for reapAssistants to stop the conversations as the connection ends:
+// stopAndWait's own bounds, and a margin.
+func reaperStopWait() time.Duration { return keeperStopGrace + keeperKillWait + time.Second }
 
 func (p *assistantProc) stop() {
 	_ = p.stdin.Close()
@@ -87,6 +130,22 @@ func (p *assistantProc) idleCompactable() bool {
 // compactIdle sends /compact to an idle process. It is not a turn: the conversation stays as it was in the app (the
 // transcript shows a notice), and the process is let go when idle again.
 func (n *Node) compactIdle(p *assistantProc) {
+	// Not while a send, a restore or the user's compaction has this conversation (assistantLife), and only on the same
+	// process, still idle: the next sweep tries again.
+	unlock, ok := n.assistantLife.tryLock(p.id)
+	if !ok {
+		return
+	}
+	defer unlock()
+	n.mu.Lock()
+	same := n.procs[p.id] == p
+	n.mu.Unlock()
+	p.mu.Lock()
+	idle := !p.busy && !p.compacting && !p.manual
+	p.mu.Unlock()
+	if !same || !idle {
+		return
+	}
 	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "/compact"}})
 	p.mu.Lock()
 	tokens := p.context
@@ -101,7 +160,9 @@ func (n *Node) compactIdle(p *assistantProc) {
 	n.logger.Printf("assistant %s: idle with %d tokens in context, compacting before letting it go", p.id[:8], tokens)
 }
 
-// reapAssistants ends processes idle for a while; their conversations resume on the next message.
+// reapAssistants ends processes idle for a while; their conversations resume on the next message. When ctx ends (the
+// connection did) a resident node hands its conversations over; any other node stops them and returns once they have
+// exited (stopAtConnectionEnd).
 func (n *Node) reapAssistants(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
@@ -116,16 +177,14 @@ func (n *Node) reapAssistants(ctx context.Context) {
 			spare := n.spare
 			n.spare = nil
 			n.mu.Unlock()
-			if spare != nil {
-				spare.stop()
-			}
 			if n.keeper != nil { // a resident node: the next connection takes them over (assistant_keep.go)
+				if spare != nil {
+					spare.stop()
+				}
 				n.handOverAssistants()
-				ids = nil
+				return
 			}
-			for _, id := range ids {
-				n.stopAssistant(id)
-			}
+			n.stopAtConnectionEnd(ids, spare)
 			return
 		case <-t.C:
 		}

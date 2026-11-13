@@ -74,7 +74,7 @@ class ConnectShotsTest {
         override suspend fun unpair() = Unit
     }
     private val machine = Machine("m1", "工作站", online = true, engine = "herdr",
-        engines = listOf(DetectedEngine("herdr", "herdr", true), DetectedEngine("orca", "Orca", false)))
+        engines = listOf(DetectedEngine("herdr", "herdr", true), DetectedEngine("orca", "Orca", false), DetectedEngine("tern", "Tern", true)))
     private val sessions = object : SessionsRepository {
         override val machines = MutableStateFlow(listOf(machine))
         override val sessions = MutableStateFlow(emptyList<Session>())
@@ -165,7 +165,13 @@ class ConnectShotsTest {
         for ((s, d) in variants) for (next in Shot.entries) {
             style = s; dark = d; shot = next
             rule.waitForIdle()
+            if (next == Shot.Connect) {
+                rule.onNodeWithText(rule.activity.getString(R.string.settings_password_login_title)).assertExists()
+                rule.onNodeWithText(rule.activity.getString(manualLabel)).assertDoesNotExist()
+            }
             if (next == Shot.Manual || next == Shot.ManualInvalid) {
+                rule.onNode(hasText(rule.activity.getString(R.string.settings_password_login_pairing)) and hasClickAction()).performClick()
+                rule.waitForIdle()
                 rule.onNode(hasText(rule.activity.getString(manualLabel)) and hasClickAction()).performClick()
                 rule.waitForIdle()
                 rule.onNodeWithText(rule.activity.getString(R.string.settings_pairing_code_label)).assertExists()

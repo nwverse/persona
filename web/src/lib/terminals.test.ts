@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  homeShellHost,
   buildTerminalTree,
   filterTerminalTree,
   isPaneAddress,
@@ -88,6 +89,68 @@ describe("the terminal browser's tree", () => {
     expect(tree.map((s) => [s.id, s.tabs.map((t) => t.id), s.canOpen])).toEqual([["w9", ["w9:t1"], false]]);
   });
 
+  // what a computer with both answers: botmux has no tabs, and every pane of it has an empty tab id
+  const herdrAndBotmux: PanesResponse = {
+    hosts: [
+      {
+        kind: "herdr",
+        stream: true,
+        control: true,
+        new_tab: true,
+        workspaces: [
+          { id: "w2", label: "myherdr", number: 1 },
+          { id: "w4", label: "mybrowser", number: 2 },
+        ],
+        tabs: [
+          { id: "w2:t1", workspace_id: "w2", label: "shell", number: 1 },
+          { id: "w4:t1", workspace_id: "w4", label: "shell", number: 1 },
+        ],
+        panes: [
+          { pane: "w2:p1", terminal: "pane:w2:p1", tab_id: "w2:t1", workspace_id: "w2", title: "zsh" },
+          { pane: "w4:p1", terminal: "pane:w4:p1", tab_id: "w4:t1", workspace_id: "w4", title: "zsh" },
+        ],
+      },
+      {
+        kind: "botmux",
+        stream: false,
+        control: false,
+        new_tab: false,
+        workspaces: [
+          { id: "dir:/home/me/a/research", label: "research", number: 1, cwd: "/home/me/a/research" },
+          { id: "dir:/home/me/b/notes", label: "notes", number: 2, cwd: "/home/me/b/notes" },
+          { id: "dir:/home/me/b/trade", label: "trade", number: 3, cwd: "/home/me/b/trade" },
+        ],
+        tabs: [],
+        panes: [
+          { pane: "botmux:id1", terminal: "pane:botmux:id1", tab_id: "", workspace_id: "dir:/home/me/a/research", agent: "claude", status: "working", cwd: "/home/me/a/research", session_id: "id1" },
+          { pane: "botmux:id2", terminal: "pane:botmux:id2", tab_id: "", workspace_id: "dir:/home/me/b/notes", agent: "claude", status: "idle", cwd: "/home/me/b/notes", session_id: "id2" },
+          { pane: "botmux:id3", terminal: "pane:botmux:id3", tab_id: "", workspace_id: "dir:/home/me/b/trade", agent: "codex", status: "idle", cwd: "/home/me/b/trade" },
+        ],
+      },
+    ],
+  };
+
+  it("lists under each botmux workspace only its own sessions, with no tabs and empty tab ids", () => {
+    const tree = buildTerminalTree(herdrAndBotmux, []);
+    const rows = tree.filter((s) => s.host === "botmux").map((s) => [s.id, s.tabs.map((t) => t.panes.map((p) => p.pane))]);
+    expect(rows).toEqual([
+      ["dir:/home/me/a/research", [["botmux:id1"]]],
+      ["dir:/home/me/b/notes", [["botmux:id2"]]],
+      ["dir:/home/me/b/trade", [["botmux:id3"]]],
+    ]);
+    expect(paneIds(tree)).toEqual(["pane:w2:p1", "pane:w4:p1", "id1", "id2", "pane:botmux:id3"]); // one row a pane
+  });
+
+  it("leaves herdr's workspaces as they were beside botmux's", () => {
+    const shape = (spaces: ReturnType<typeof buildTerminalTree>) => spaces.map((s) => [s.id, s.canOpen, s.tabs.map((t) => [t.id, t.label, t.panes.map((p) => p.id)])]);
+    const expected = [
+      ["w2", true, [["w2:t1", "shell", ["pane:w2:p1"]]]],
+      ["w4", true, [["w4:t1", "shell", ["pane:w4:p1"]]]],
+    ];
+    expect(shape(buildTerminalTree({ hosts: [herdrAndBotmux.hosts[0]] }, []))).toEqual(expected);
+    expect(shape(buildTerminalTree(herdrAndBotmux, []).filter((s) => s.host === "herdr"))).toEqual(expected);
+  });
+
   it("is empty for a machine with nothing yet", () => {
     expect(buildTerminalTree(undefined, [])).toEqual([]);
     expect(buildTerminalTree({ hosts: [] }, [])).toEqual([]);
@@ -161,5 +224,14 @@ describe("the page's address", () => {
     expect(parse("/terminal")).toEqual({ name: "terminal" });
     expect(href({ name: "terminal" })).toBe("/terminal");
     expect(parse("/terminal/mac")).toEqual({ name: "terminal" }); // half an address is the list
+  });
+});
+
+describe("New terminal with no workspace", () => {
+  const host = (kind: string, newTab: boolean) => ({ kind, stream: true, control: true, new_tab: newTab, workspaces: [], tabs: [], panes: [] });
+  it("opens in the first engine that opens tabs, none when no engine can", () => {
+    expect(homeShellHost({ hosts: [host("orca", false), host("herdr", true)] })).toBe("herdr");
+    expect(homeShellHost({ hosts: [host("orca", false)] })).toBeUndefined();
+    expect(homeShellHost(undefined)).toBeUndefined();
   });
 });

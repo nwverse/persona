@@ -195,8 +195,8 @@ struct ChatLinesTests {
         guard case .turn(let t) = b.last else { Issue.record("expected a turn"); return }
         #expect(t.hasPendingWake, "the wake marks unfinished continuation even before another text segment")
         let running = ChatLines(openWork: []).build(b, live: t.id)
-        #expect(kinds(running) == ["user", "work"], "a pending wake folds its earlier narration")
-        #expect(running.last?.holds("3#0") == false)
+        #expect(kinds(running) == ["user", "work", "answer"], "before new words stream, the previous answer stays in place")
+        #expect(running.last?.holds("3#0") == true)
         let streaming = ChatLines(openWork: []).build(b, live: t.id, streaming: true)
         #expect(kinds(streaming) == ["user", "work"], "new live words replace the wake's pre-existing text slot")
         guard case .work(let id, let work, _, _, _) = running[1].content else {
@@ -205,7 +205,7 @@ struct ChatLinesTests {
         }
         #expect(work.contains { $0.id == wake.id })
         #expect(work.contains { $0.id == "5#0" })
-        let open = ChatLines(openWork: [id]).build(b, live: t.id)
+        let open = ChatLines(openWork: [id]).build(b, live: t.id, streaming: true)
         #expect(kinds(open) == ["user", "work", "step", "step", "step", "step", "end"])
         #expect(open.contains { if case .workStep(_, .step(.thought(let i)), _) = $0.content { i.id == wake.id } else { false } })
         #expect(open.contains { if case .workStep(_, .text(let i), _) = $0.content { i.id == "3#0" } else { false } })

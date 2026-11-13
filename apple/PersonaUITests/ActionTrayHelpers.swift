@@ -1,9 +1,9 @@
 import XCTest
 
-/// The phone's action bar above the assistant's composer (#2879): its entries open the trays that list what the dock's
-/// pills used to (tasks in Progress, agents in Agents, the board behind Progress' All).
+/// The action bar above the assistant's composer (#3393): Needs You and In Progress open the trays that list what the
+/// dock's pills used to (tasks and agents of no task, each in one of them; the board behind each tray's All).
 extension XCUIApplication {
-    /// Opens the tray of `entry` (`pending`, `progress`, `agents`) unless it is open, and returns its entry.
+    /// Opens the tray of `entry` (`needs-you`, `running`) unless it is open, and returns its entry.
     @MainActor @discardableResult
     func openActionTray(_ entry: String, timeout: TimeInterval = 20) -> XCUIElement {
         let button = buttons["action-bar.\(entry)"]
@@ -11,6 +11,19 @@ extension XCUIApplication {
         if !button.isSelected { button.tap() }
         _ = otherElements["action-tray.\(entry)"].waitForExistence(timeout: 5)
         return button
+    }
+
+    /// Needs You's plan, reply-draft and to-verify rows are folded to a line (#5569): taps each folded row open, so the card
+    /// under it (its buttons) can be reached. A row already open is left as it is.
+    @MainActor func expandTrayRows(timeout: TimeInterval = 5) {
+        let folded = buttons.matching(identifier: "action-tray.row")
+        _ = folded.firstMatch.waitForExistence(timeout: timeout)
+        var taps = 0
+        while folded.count > 0 && taps < 12 {
+            folded.element(boundBy: 0).tap()
+            taps += 1
+            usleep(300_000)
+        }
     }
 
     /// The task rows of the open tray.

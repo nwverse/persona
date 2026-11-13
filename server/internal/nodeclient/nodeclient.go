@@ -54,8 +54,10 @@ type Request struct {
 	Name      string          `json:"name,omitempty"`
 	Args      json.RawMessage `json:"args,omitempty"`
 	SessionID string          `json:"session_id,omitempty"`
-	Assistant bool            `json:"assistant,omitempty"` // the caller is the assistant's MCP server
-	Guest     bool            `json:"guest,omitempty"`     // a guest conversation's MCP server (assistant_guest.go)
+	// CodexThreadID is the tool process's CODEX_THREAD_ID; the node resolves it in its own Codex registry.
+	CodexThreadID string `json:"codex_thread_id,omitempty"`
+	Assistant     bool   `json:"assistant,omitempty"` // the caller is the assistant's MCP server
+	Guest         bool   `json:"guest,omitempty"`     // a guest conversation's MCP server (assistant_guest.go)
 	// Attempt is the hook process's own id, the same on each reconnect; Resume marks those reconnects.
 	Attempt string `json:"attempt,omitempty"`
 	Resume  bool   `json:"resume,omitempty"`
@@ -67,8 +69,10 @@ type Request struct {
 	// AwayOK: the client takes {"away":true} (a resident node in standby) for no node. An older `personad mcp` does
 	// not, so standby gives one without it the answer of a node that cannot reach its manager.
 	AwayOK bool `json:"away_ok,omitempty"`
-	// LaunchKey: launcher.env's proof that the caller can read LaunchKeyPath.
+	// LaunchKey: launcher.env's and secret.env's proof that the caller can read LaunchKeyPath.
 	LaunchKey string `json:"launch_key,omitempty"`
+	// Ticket: secret.env's one-time ticket (a hand-off's values for one Agent start).
+	Ticket string `json:"ticket,omitempty"`
 }
 
 // Dialer sends one request line to the node's socket and returns its answer line (Dial).

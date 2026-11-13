@@ -18,6 +18,7 @@ import SwiftUI
 /// `WaitingBadge`, beside the menu rather than in its label, and reads the agents itself.
 struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     @Binding var tab: AppTab
+    @Environment(AppModel.self) private var model
     /// Across the top bar, or down the side rail on iPhone Duo (`ShellSideRail`): a segment there is the page's symbol over
     /// its name, as a tab bar's item on the side.
     var axis: Axis = .horizontal
@@ -30,6 +31,8 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     /// it moves, so theirs sits on the page in front and does not read the strip at all (`PagerPill`).
     @Environment(\.shellPillFollowsStrip) private var follows
     @Environment(\.buiTheme) private var theme
+    /// A phone's tabs (iPhone Duo open, #2623): the switch stands in for the tab bar, Persona's badge with it.
+    @Environment(\.pageTabSwitch) private var pageTabSwitch
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -62,20 +65,28 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     /// At rest the strip is on the shell's page anyway.
     private func opensMenu(_ value: AppTab) -> Bool {
         guard chosen == value else { return false }
+        // No menu to open (the switch over a phone's tabs, iPhone Duo open, #3680): the chosen segment is a plain button,
+        // not an empty menu that VoiceOver called List Options.
+        if value == .chats, let shell, !shell.workAtRoot { return false }
+        if value == .chats, WorkMenu.self == EmptyView.self { return false }
+        if value == .assistant, ChatMenu.self == EmptyView.self { return false }
         guard let pager = shell?.pager else { return true }
         return !pager.moving
     }
 
     private var row: some View {
         stack {
-            if opensMenu(.assistant) {
-                Menu { chatMenu() } label: { segment(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, selected: true) }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("shell-assistant")
-                    .accessibilityHint("Chat menu")
-            } else {
-                button(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, id: "shell-assistant")
+            ZStack(alignment: .topTrailing) {
+                if opensMenu(.assistant) {
+                    Menu { chatMenu() } label: { segment(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, selected: true) }
+                        .menuStyle(.button)
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("shell-assistant")
+                        .accessibilityHint("Chat menu")
+                } else {
+                    button(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, id: "shell-assistant")
+                }
+                if pageTabSwitch { AssistantWaitingBadge() }
             }
             ZStack(alignment: .topTrailing) {
                 if opensMenu(.chats) {
@@ -110,12 +121,12 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
             #if DEBUG
             ShellTrace.shared.note("switch \(value) chosen=\(chosen)")
             #endif
+            if chosen != value { Haptics.tap() }
+            model.selectHomeTab(value)
             if let shell {
-                // Also while the strip slides: the last tap is where it ends.
-                if chosen != value { Haptics.tap() }
+                // Also while the strip slides, or when the same tab is reselected: the last tap wins.
                 shell.select(ShellState.index(for: value))
             } else if tab != value {
-                Haptics.tap()
                 tab = value
             }
         } label: {
@@ -239,16 +250,30 @@ private struct WaitingBadge: View {
 
     var body: some View {
         let waiting = model.agentsWaiting
-        if waiting > 0, AppStyle.current.usesBeautifulUI {
-            BUIPill(waiting > 99 ? "99+" : "\(waiting)", tone: .custom(ink: StatusPalette.needsYou.text, fill: StatusPalette.needsYou.tint))
+        if AppStyle.current.usesBeautifulUI, let text = CountBadge.text(waiting) {
+            BUIPill(text, tone: .custom(ink: StatusPalette.needsYou.text, fill: StatusPalette.needsYou.tint))
                 .offset(offset)
                 .allowsHitTesting(false)
                 .accessibilityLabel(StateName.count(.needsYou, waiting))
         } else if waiting > 0 {
-            CountBadge(count: waiting, look: .tone(StatusPalette.needsYou))
+            CountBadge(count: waiting, look: .needs, label: StateName.count(.needsYou, waiting))
                 .offset(offset)
                 .allowsHitTesting(false)
-                .accessibilityLabel(StateName.count(.needsYou, waiting))
+        }
+    }
+}
+
+/// Persona's own badge on the switch where it stands in for the tab bar (iPhone Duo open, #2623): what the Persona tab
+/// counted (`AppModel.badges`), read here as `WaitingBadge` reads the agents, so the switch is not built again for it.
+private struct AssistantWaitingBadge: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let waiting = model.badges.assistant
+        if waiting > 0 {
+            CountBadge(count: waiting, look: .needs, label: StateName.count(.needsYou, waiting))
+                .offset(x: Theme.Space.s, y: -Theme.Space.sm)
+                .allowsHitTesting(false)
         }
     }
 }
@@ -327,7 +352,7 @@ struct ShellPersonaButton: View {
             }
         }
         .accessibilityLabel("Chat History [Shell Components 60636b]")
-        .accessibilityValue([String(localized: "\(model.persona.name), \(state.title)"), inbox ? String(localized: "Something in the Inbox needs you") : nil]
+        .accessibilityValue([String(localized: "\(model.assistantShownName), \(state.title)"), inbox ? String(localized: "Something in the Inbox needs you") : nil]
             .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "List separator")))
         .accessibilityHint("Opens the sidebar")
         .accessibilityIdentifier(id)

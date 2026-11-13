@@ -22,6 +22,7 @@ import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import persona.core.contracts.api.SUBSCRIPTIONS_UI
 
 // The places an extension's View is drawn (docs/extensions/extensions.md "Declarative UI"): a page of its own (extension_page, from the
 // extension's page in Settings › Extensions; nav_page, from the "Extensions" section of the settings home) and a section on a launcher's
@@ -41,7 +42,8 @@ internal fun nativePageBinding(owner: persona.core.contracts.api.ExtensionStream
 fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId: String, title: String, onBack: () -> Unit,
                     initialState: String? = null, depth: Int = 0, shown: Boolean = true, availableAdapter: NativeExtensionStreamAdapter? = null,
                     onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null) {
-    val defaultBinding = extensions?.nativeStream?.collectAsState(initial = null)?.value
+    // The source subscription pages (#2041) are the manager's, drawn over HTTP only.
+    val defaultBinding = extensions?.nativeStream?.collectAsState(initial = null)?.value?.takeUnless { extensionId == SUBSCRIPTIONS_UI }
     val binding = remember(defaultBinding, manager) { nativePageBinding(defaultBinding, manager) }
     val owned = if (availableAdapter == null && binding != null) androidx.lifecycle.viewmodel.compose.viewModel(
         key = "native-extension:${binding.group}:${binding.owner}:${binding.manager}:${System.identityHashCode(binding.connection)}:$extensionId:$uiId:$depth",
@@ -90,7 +92,7 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
             JEmptyState(stringResource(R.string.settings_ext_page_empty_title), stringResource(R.string.settings_ext_page_empty_text), icon = PhIcons.PuzzlePiece)
         }
         extensionViewItems("page", state, handle)
-        item("page-end") { Spacer(Tokens.Space.xxl) }
+        item("page-end") { Spacer(Tokens.Space.xl) }
     }
 }
 
@@ -211,7 +213,7 @@ fun LauncherPage(machines: MachineManagement?, extensions: ExtensionManagement?,
                 item("places-loading") { JLoading() }
             }
         }
-        item("end") { Spacer(Tokens.Space.xxl) }
+        item("end") { Spacer(Tokens.Space.xl) }
     }
 }
 

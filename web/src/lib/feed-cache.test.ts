@@ -136,6 +136,22 @@ describe("main conversation feed cache", () => {
     expect(read.hasMore).toBe(true);
   });
 
+  it.each(["tool_result", "notice"] as const)("retains an older launch and contiguous history referenced by a cached %s report", (kind) => {
+    const launch = item(2, "assistant", { kind: "tool_use", tool_name: "Agent", tool_use_id: "example-launch" });
+    const receipt = item(3, "user", { kind: "tool_result", tool_use_id: "example-launch", text: "Async agent launched successfully.\nagentId: example-agent" });
+    const task = { kind: "agent", status: "completed", task_id: "example-agent", detail: "Synthetic report" };
+    const report = item(22, kind === "notice" ? "system" : "user", { kind, wake: true, text: kind === "tool_result" ? "Synthetic report" : "Agent completed", task, ...(kind === "tool_result" ? { tool_use_id: "example-launch" } : {}) });
+    const items = [item(1, "user"), launch, receipt, item(4), item(10, "user"), item(11), item(20, "user"), item(21), report];
+    const scope = cache.feedCacheScope();
+    cache.writeFeedCache(scope, page({ items }));
+    expect(cache.readFeedCache()?.items.map((i) => i.id)).toEqual(items.map((i) => i.id));
+    cache.writeMemoryPage(scope, page({ items }));
+    expect(cache.readMemoryPage(scope, "machine-demo", "main-demo")?.items.map((i) => i.id)).toEqual(items.map((i) => i.id));
+    const ordinary = items.slice(0, -1);
+    cache.writeFeedCache(scope, page({ items: ordinary }));
+    expect(cache.readFeedCache()?.items.map((i) => i.id)).toEqual(ordinary.slice(4).map((i) => i.id));
+  });
+
   it("replaces the one cached main page instead of accumulating conversations", () => {
     const scope = cache.feedCacheScope();
     cache.writeFeedCache(scope, page());
@@ -200,10 +216,19 @@ describe("main conversation feed cache", () => {
       JSON.stringify({ ...page(), items: [item(1, "assistant", { compact: { notes: {} } as Item["compact"] })] }),
       JSON.stringify({ ...page(), items: [item(1, "assistant", { injected: { line: {} } as Item["injected"] })] }),
       JSON.stringify({ ...page(), items: [item(1, "assistant", { fold: { items: 1, tools: 1, thoughts: 0, through_seq: 2, tasks: [{}] } as Item["fold"] })] }),
+      JSON.stringify({ ...page(), items: [item(1, "assistant", { fold: { items: 1, tools: 1, thoughts: 0, through_seq: 2, changes: {} } as unknown as Item["fold"] })] }),
+      JSON.stringify({ ...page(), items: [item(1, "assistant", { fold: { items: 1, tools: 1, thoughts: 0, through_seq: 2, changes: [{ path: 1, add: 1, del: 0, exact: true }] } as unknown as Item["fold"] })] }),
       JSON.stringify(page({ items: [item(1, "user", { text: "x".repeat(cache.FEED_CACHE_MAX_BYTES) })] }))]) {
       stored.set(key, raw);
       expect(cache.readFeedCache()).toBeNull();
     }
+  });
+
+  it("keeps a fold's changed files (#5157), and a fold without them stays without", () => {
+    const changes = [{ path: "/home/user/project/a.ts", add: 3, del: 1, exact: true }];
+    const folds = [changes, [], null, undefined].map((c, i) => item(i + 2, "assistant", { fold: { items: 4, tools: 2, thoughts: 0, through_seq: i + 2, ...(c === undefined ? {} : { changes: c }) } }));
+    expect(cache.writeFeedCache(cache.feedCacheScope(), page({ items: [item(1, "user"), ...folds] }))).toBe(true);
+    expect(cache.readFeedCache()!.items.slice(1).map((it) => it.fold?.changes)).toEqual([changes, [], null, undefined]);
   });
 
   it("degrades quietly when browser storage is unavailable or its quota is exhausted", () => {

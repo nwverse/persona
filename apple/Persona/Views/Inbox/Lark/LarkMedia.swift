@@ -234,7 +234,7 @@ struct LarkRemoteImage: View {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
             } else if failed {
                 Rectangle().fill(Color.primary.opacity(0.05))
-                    .overlay { Image(systemName: "photo.badge.exclamationmark").font(Theme.Font.title).foregroundStyle(.tertiary) }
+                    .overlay { Image(systemName: Theme.Icon.brokenImage).font(Theme.Font.title).foregroundStyle(.tertiary) }
             } else {
                 Rectangle().fill(Color.primary.opacity(0.05)).overlay { ProgressView().controlSize(.small) }
             }
@@ -307,7 +307,9 @@ struct LarkPlayerView: View {
         .task {
             guard let cfg = AppModel.shared.config else { return }
             let full = LarkMedia.streamURL(url, hub: cfg.url, manager: manager)
-            let asset = AVURLAsset(url: full, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(cfg.token)"]])
+            var auth = URLRequest(url: full)
+            cfg.authorize(&auth) // the Access token only when `full` is on the hub's own address
+            let asset = AVURLAsset(url: full, options: ["AVURLAssetHTTPHeaderFieldsKey": auth.allHTTPHeaderFields ?? [:]])
             let p = AVPlayer(playerItem: AVPlayerItem(asset: asset))
             player = p
             p.play()
@@ -354,7 +356,8 @@ struct LarkAvatar: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        Monogram(name: name, size: size * Theme.sizeScale(typeSize), fill: Theme.monogramFill, font: Self.font(size))
+        let disc = Theme.monogram(name)
+        Monogram(name: name, size: size * Theme.sizeScale(typeSize), fill: disc.fill, ink: disc.ink, font: Self.font(size))
     }
 
     /// The letter's text level for an avatar `size` points across at the default text size: about 0.4 of it, as before.

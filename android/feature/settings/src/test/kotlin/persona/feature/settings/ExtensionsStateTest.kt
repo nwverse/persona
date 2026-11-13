@@ -56,9 +56,10 @@ private class FakeExtensions(var detail: ExtensionDetail) : ExtensionApiStub() {
         detail = detail.copy(extension = detail.extension.copy(autoUpgrade = auto))
         return detail
     }
-    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean) {
+    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean, members: Boolean): ExtensionRemoval {
         refuseDependents("uninstall", cascade)
         uninstalls += keepData; fail?.let { throw it }
+        return ExtensionRemoval()
     }
     private fun refuseDependents(call: String, cascade: Boolean) {
         cascades += "$call cascade=$cascade"
@@ -122,6 +123,15 @@ class ExtensionsStateTest {
         assertEquals("未设置（必填）", ExtensionText.secretState(res, notes.secrets[0]))
         assertEquals("已设置", ExtensionText.secretState(res, notes.secrets[0].copy(set = true)))
         assertEquals("未设置", ExtensionText.secretState(res, ExtensionSecret("x", "X")))
+    }
+
+    /** x-confirm asks only before a switch is turned on, and only when the field has a sentence. */
+    @Test fun aSwitchAsksItsConfirmOnlyWhenTurnedOn() {
+        val asking = ExtensionField("agent", "boolean", confirm = "Replies go out as you.")
+        assertTrue(asking.asksFirst(true))
+        assertFalse(asking.asksFirst(false))
+        assertFalse(ExtensionField("agent", "boolean").asksFirst(true))
+        assertFalse(asking.copy(confirm = " ").asksFirst(true))
     }
 
     @Test fun theDraftSetsByPathAndDropsEmptyGroups() {

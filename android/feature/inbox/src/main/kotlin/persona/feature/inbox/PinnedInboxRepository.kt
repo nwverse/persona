@@ -22,6 +22,7 @@ internal class PinnedInboxRepository(val base: InboxRepository, val pins: Manage
     override fun conversation(feedId: String, startPosition: Long?) = base.conversation(feedId, startPosition).flowOn(pins)
 
     override suspend fun refresh() = withContext(pins) { base.refresh() }
+    override suspend fun item(itemId: String) = withContext(pins) { base.item(itemId) }
     override suspend fun readingStore() = withContext(pins) { base.readingStore() }
     override suspend fun savePreferences(value: InboxPreferences) = withContext(pins) { base.savePreferences(value) }
     override suspend fun refreshNow() = withContext(pins) { base.refreshNow() }
@@ -43,6 +44,7 @@ internal class PinnedInboxRepository(val base: InboxRepository, val pins: Manage
     override suspend fun setDone(items: List<InboxDoneTarget>, done: Boolean) = withContext(pins) { base.setDone(items, done) }
     override suspend fun bulk(items: List<InboxDoneTarget>, action: InboxBulkAction) = withContext(pins) { base.bulk(items, action) }
     override suspend fun doneHistory(manager: String?, cursor: InboxDoneCursor?) = withContext(pins) { base.doneHistory(manager, cursor) }
+    override suspend fun doneDays(manager: String?, zone: java.time.ZoneId) = withContext(pins) { base.doneDays(manager, zone) }
     override suspend fun readDraft(target: ReplyTarget) = withContext(pins) { base.readDraft(target) }
     override suspend fun saveDraft(target: ReplyTarget, draft: ReplyDraft) = withContext(pins) { base.saveDraft(target, draft) }
     override suspend fun reply(target: ReplyTarget, request: ReplyRequest) = withContext(pins) { base.reply(target, request) }
