@@ -298,7 +298,7 @@ func TestCodexStartExec(t *testing.T) {
 	t.Chdir(proj)
 	for _, words := range [][]string{{"/x/personad", "launch", "codex-work"}, {"pi", "--session", "s1"}} {
 		path := "/bin/" + filepath.Base(words[0])
-		if p, argv, _, st := codexStartExec(path, words, nil); p != path || !slices.Equal(argv, words) || st.State != sandbox.AgentOff {
+		if p, argv, _, st := codexStartExec(path, words, nil, nil); p != path || !slices.Equal(argv, words) || st.State != sandbox.AgentOff {
 			t.Errorf("%v: %s %q %+v", words, p, argv, st)
 		}
 	}
@@ -309,12 +309,12 @@ func TestCodexStartExec(t *testing.T) {
 	command := func(words []string) []string {
 		if runtime.GOOS != "windows" {
 			if shell, err := exec.LookPath(loginShellProgram()); err == nil {
-				return append([]string{shell, "-ic", `"$@"`, "persona-codex-start"}, words...)
+				return append([]string{shell, "-ic", codexNativeStartScript, "persona-codex-start", proj, "--"}, words...)
 			}
 		}
 		return append([]string{"/opt/bin/codex"}, words[1:]...)
 	}
-	p, argv, env, st := codexStartExec("/opt/bin/codex", words, []string{"A=1"})
+	p, argv, env, st := codexStartExec("/opt/bin/codex", words, []string{"A=1"}, nil)
 	if st.State != sandbox.AgentActive || p != argv[0] || !inSandbox(argv) || !slices.Equal(argv[3:], command(words)) || !slices.Contains(env, sandbox.AgentEnv+"=1") {
 		t.Errorf("danger-full-access: %s %q %q %+v", p, argv, env, st)
 	}
@@ -324,7 +324,7 @@ func TestCodexStartExec(t *testing.T) {
 	if wantPath == "/opt/bin/codex" {
 		want = words
 	}
-	if p, argv, _, st := codexStartExec("/opt/bin/codex", words, nil); p != wantPath || !slices.Equal(argv, want) || st.State != sandbox.AgentSkipped || st.Why == "" {
+	if p, argv, _, st := codexStartExec("/opt/bin/codex", words, nil, nil); p != wantPath || !slices.Equal(argv, want) || st.State != sandbox.AgentSkipped || st.Why == "" {
 		t.Errorf("plain codex: %s %q %+v", p, argv, st)
 	}
 	if st := readAgentSandboxStatus(dir)["codex-start"]; st.State != sandbox.AgentSkipped {

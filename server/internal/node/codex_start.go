@@ -3,6 +3,7 @@ package node
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -490,19 +492,23 @@ func CodexStart(args []string) error {
 	}
 	words := f.Argv
 	env := os.Environ()
+	var explicit []string
 	if f.Dir != "" {
 		if err := os.Chdir(f.Dir); err != nil {
 			return fmt.Errorf("%s %v", codexStartError, err)
 		}
 		if _, set := os.LookupEnv("PWD"); set { // what the shell said its directory was: the one it runs in now
 			env = append(withoutEnv(env, []string{"PWD"}), "PWD="+f.Dir)
+			explicit = append(explicit, "PWD="+f.Dir)
 		}
 	}
 	if f.Agent != "" {
 		env = append(withoutEnv(env, []string{herdrAgentEnv}), herdrAgentEnv+"="+f.Agent)
+		explicit = append(explicit, herdrAgentEnv+"="+f.Agent)
 	}
 	for len(words) > 0 && shellcmd.AssignRe.MatchString(words[0]) {
 		env = append(env, words[0])
+		explicit = append(explicit, words[0])
 		words = words[1:]
 	}
 	if len(words) == 0 {
@@ -532,7 +538,7 @@ func CodexStart(args []string) error {
 	if f.Prompt != "" { // a resume without a message (`personad tab-start`, pi.go) runs the words alone
 		argv = append(argv, "--", f.Prompt)
 	}
-	path, argv, env, _ = codexStartExec(path, argv, env)
+	path, argv, env, _ = codexStartExec(path, argv, env, explicit)
 	return osproc.Exec(path, argv, env)
 }
 
@@ -570,11 +576,31 @@ func codexStartNotef(w io.Writer, format string, a ...any) {
 	fmt.Fprintf(w, codexStartNote+" "+format+"\n", a...)
 }
 
+// The rc file may change directory or export defaults. Restore the start's decisions without parsing them as code.
+// Only the names of the saved environment entries reach argv; values can be secrets. Indirection never evals them.
+const codexNativeStartScript = `
+builtin cd -- "$1" || exit
+shift
+while [ "$1" != -- ]; do
+  if [ -n "${ZSH_VERSION-}" ]; then
+    [ -n "${(P)1}" ] || exit 1
+    builtin export "${(P)1}" || exit
+  else
+    [ -n "${!1}" ] || exit 1
+    builtin export "${!1}" || exit
+  fi
+  builtin unset "$1" || exit
+  shift
+done
+shift
+"$@"
+`
+
 // codexStartExec is what codex-start execs for its words (path, argv, env): in the agent sandbox when it is on
 // (agentsandbox.go), for a Codex only when it is sure to run danger-full-access in its own process (codexInner). A
 // managed launcher (`personad launch`) is left to Launch, which wraps its own start; other words (pi resumed by
 // tab-start) are not in this phase. Not wrapped, they come back as they are.
-func codexStartExec(path string, argv, env []string) (string, []string, []string, sandbox.AgentStatus) {
+func codexStartExec(path string, argv, env, explicit []string) (string, []string, []string, sandbox.AgentStatus) {
 	if len(argv) == 0 || filepath.Base(argv[0]) != "codex" {
 		return path, argv, env, sandbox.AgentStatus{State: sandbox.AgentOff}
 	}
@@ -585,7 +611,14 @@ func codexStartExec(path string, argv, env []string) (string, []string, []string
 	if argv[0] == "codex" && runtime.GOOS != "windows" {
 		if shell, err := exec.LookPath(loginShellProgram()); err == nil {
 			// Resolve a same-name function after its rc file, without expanding aliases twice or parsing data as code.
-			run = append([]string{shell, "-ic", `"$@"`, "persona-codex-start"}, argv...)
+			run = []string{shell, "-ic", codexNativeStartScript, "persona-codex-start", cwd}
+			prefix := "__PERSONA_CODEX_START_" + rand.Text() + "_"
+			for i, assignment := range explicit {
+				name := prefix + strconv.Itoa(i)
+				env = append(env, name+"="+assignment)
+				run = append(run, name)
+			}
+			run = append(append(run, "--"), argv...)
 		}
 	}
 	logf := func(format string, a ...any) { codexStartNotef(os.Stderr, format, a...) }
