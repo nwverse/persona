@@ -32,6 +32,10 @@ packages:
   # Vision apps, not the watch or widgets.
   PersonaKit:
     path: Packages/PersonaKit
+  # The shared Rust core: the iOS app and its tests only. No Shared/ source imports it, so watch, widgets, Vision,
+  # Persona Link and the frozen Mac app keep their existing dependencies and never link the XCFramework.
+  PersonaCore:
+    path: Packages/PersonaCore
   # The live screen's video channel (#3954, docs/extensions/computer-use.md「Live screen video (#3954)」): its wire codec, shared
   # with Persona Link's helper. The iOS app only; Mac and Vision compile the same sources and skip it with
   # `#if os(iOS) && canImport`, and the watch and widgets never see it.
@@ -84,6 +88,7 @@ targets:
       - package: BeautifulUI
       - package: PersonaSSH
       - package: PersonaKit
+      - package: PersonaCore
       - package: MarqueeGlow
       - package: PersonaScreenKit
     entitlements:
@@ -752,6 +757,7 @@ targets:
         excludes: ["*.json", "*.py"] # Static checks and TokenBaseline.json are read from the source tree, not the bundle
     dependencies:
       - target: Persona
+      - package: PersonaCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PERSONA_BUNDLE_ID).tests
