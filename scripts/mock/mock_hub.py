@@ -12751,6 +12751,10 @@ LAUNCHER_MODELS = {
     ]},
 }
 LAUNCHER_MODELS["sonnetcc"] = dict(LAUNCHER_MODELS["claude"], locked="启动器固定了模型参数，不能覆盖具体模型")
+# The Codex App's launcher (MOCK_DESKTOP_APPS): the App picks a chat's model, so the node answers no models and why
+# (server/internal/node/launcher_models.go), as for the Claude desktop app's.
+LAUNCHER_MODELS["codex-app"] = {"agent": "codex", "models": [], "locked": "Codex App 用它自己选的模型运行这个对话。"}
+LAUNCHER_MODELS["claude-desktop"] = {"agent": "claude", "models": [], "locked": "Claude 桌面版用它自己选的模型运行这个会话。"}
 # MOCK_NEW_AGENT_PANEL=1 (#5104, web/e2e/new-agent-model.mjs): the gateway behind claude's glm-5.3 also serves Codex, so
 # codex lists the same model ID and New Agent's flyout offers that model under both engines; and the Mac Studio has no
 # codex launcher, so a Codex pick made on another computer falls back to the default there.
