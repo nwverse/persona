@@ -637,6 +637,8 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   it came out washed like a stuck title's, and on an iPhone the scroll edge blurred every row above it once a title stuck (#4218).
   Done's title has Jump To (its groups with counts; picking one unfolds it, loads it if it isn't, and scrolls to its first row, since an iOS `List` can't scroll to a header)
   and Fold all / Unfold all.
+  On iOS each title a finger taps (a section's and its Mark all seen / Clear all, a group's and, selecting, its tick, Done's and its Jump To) is at least 44 pt tall,
+  its header or row adding no room above or below it (#6576, `InboxTitleTargetUITests`); a tap on Jump To opens its menu and leaves Done's fold beside it alone.
 - **Done's history**: past what the list holds (its 3 days, at most 200 done items), Done reads each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page; on iOS the default manager's).
   Items the hub didn't stamp with a manager get the default one when there are several, so the per-manager filter keeps them. Done from history reopens through the item's own manager.
   - **With day counts** (#2969; "Days" under "Lifecycle", #2967): when the list is shown the apps ask for the counts in this device's zone, and Done lists every group they name
@@ -714,6 +716,32 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   letters and digits only, so spacing, width and punctuation do not hide a repeat). On a hit it writes the draft once more, told not to
   copy the background; if that one repeats a sentence too, there is no draft: `422 draft_withheld` with a localized message asking the
   user to write the reply themselves. Details: `docs/extensions/extensions.md` "Assistant content from the data directory".
+
+- **Recheck task link (maintenance)**: authenticated `POST /api/v1/inbox/{id}/task-link/recheck` reuses `inbox.judge`
+  with all current open tasks, including for an old open event with an existing processing conversation or draft.
+  Judge candidates do not inherit the assistant briefing's item limit or age window; closed/cancelled tasks are excluded.
+  Each candidate includes up to 1200 characters of its original request as subject context. The judge compares the
+  actual requested work, not names or messages merely quoted as examples in another task's notes.
+  An existing event also supplies up to 1600 characters of its investigation recap, marked as possibly stale subject
+  context rather than an instruction or confirmed reply; the current message takes precedence.
+  Eligible events require the AI twin to be enabled and preserve existing links. Bot/app broadcasts are excluded
+  before either exact-link routing or the model judge. Legacy Lark private chats with an explicit user sender
+  identity remain eligible, even if their old kind says `bot`; quoted notification text does not make a human a bot.
+  For an excluded event the maintenance action needs no model or enabled twin: it answers `excluded`, or `cleared`
+  after removing a stale task association through normal rollback-aware writes (`method: "policy"`). It preserves
+  the draft, suggestion, processing conversation and completion state, and publishes no task card or supervisor signal.
+  Other results are `{status, method?, item}`: `linked`
+  or `unmatched` (with `method: "judge"` when the model ran), or `existing`; `409` distinguishes `disabled`, `closed`,
+  `changed` and `task_closed`. Model failures answer `502`, storage failures `503`, and a missing event `404`.
+  A changed message or a task closed during judgment invalidates the result. A new link is persisted through normal
+  Inbox writes before raising the existing supervisor signal; a saved reply draft also gets its task message card.
+  This action never starts processing, sends a reply, changes a suggestion or files an event/task. It does not
+  periodically rejudge old events: an operator explicitly requests each bounded recheck. Normal initial escalation
+  still judges only events without a processing session; refresh alone does not rejudge an existing draft.
+- **Linked work (Web)**: the detail header shows the linked task and its current task-lineage Agents, each as an
+  in-app link. These are the business task's workers, not the Inbox draft-processing conversation. Older hubs without
+  lineage use unreleased workers; a task still starting never substitutes a previous lineage worker. The shared
+  task list supplies live titles and manager ownership, with the task ID as a fallback before it is loaded.
   Do not invent unknown facts or leave 【】 placeholders for the user; omit unknown details. Include `assistant.notes` as About the user. Edit directly in the sheet or enter "Have AI revise: …" to rewrite.
   Send uses `POST /api/v1/inbox/{id}/reply {text}`: the manager asks hub to post in the original Lark chat through its plugin, or reply by mail (Re: subject, In-Reply-To / References,
   quote first 40 lines, using the receiving account), then mark done (`done_by=replied`). Phone and Watch use the same API.

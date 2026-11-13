@@ -416,9 +416,12 @@ struct InboxPage: View {
                     ThemedIcon(n == 0 ? Theme.Icon.unchecked : n == g.items.count ? Theme.Icon.successFilled : Theme.Icon.partlyChecked)
                         .font(Theme.Font.heading)
                         .foregroundStyle(n == 0 ? Color.secondary : Theme.accent)
+                        .tapTargetHeight()
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(String(localized: "Select All in \(g.title)"))
+                .accessibilityIdentifier("inbox.pickGroup")
             }
             Button {
                 withAnimation(Theme.Motion.standard) { setGroupOpen(section, g.key, !open) }
@@ -432,13 +435,15 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.groupTitle")
             if n > 0 { Text("\(n) Picked").font(Theme.Font.caption).foregroundStyle(Theme.accent).lineLimit(1) }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush) // its buttons are the room above and below (#6576)
         .id(Self.groupID(section, g.key))
     }
 
@@ -650,7 +655,6 @@ struct InboxPage: View {
                     // iPhone the scroll edge reached from the top down to it, over every row between (#4218).
                     Section {
                         doneHeader(count: count, groups: dg, proxy: proxy)
-                            .listRowInsets(.vertical, Theme.Space.s)
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
                             .accessibilityAddTraits(.isHeader)
@@ -713,9 +717,11 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.doneTitle")
             if groups.count > 1 {
                 Menu {
                     ForEach(groups) { g in
@@ -725,13 +731,18 @@ struct InboxPage: View {
                     Button("Collapse All") { for g in groups { setGroupOpen("done", g.id, false) } }
                     Button("Expand All") { for g in groups { setGroupOpen("done", g.id, true) } }
                 } label: {
+                    // a finger wide too: 跳到 is two characters, about 30 pt
                     Text("Jump To").font(Theme.Font.secondary).lineLimit(1)
+                        .tapTargetHeight()
+                        .scaledFrame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
+                        .frame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
+                        .contentShape(.rect)
                 }
                 .accessibilityIdentifier("inbox.jumpTo")
             }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush)
         .id("|done")
     }
 
@@ -767,7 +778,9 @@ struct InboxPage: View {
         HStack(spacing: Theme.Space.sm) {
             if InboxItem.Tier(rawValue: key)?.folds == false {
                 // In Progress: always open, a plain title (inbox phase 1).
+                // as tall as the other sections' titles, which are buttons
                 Text("\(title) · \(count)").font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
+                    .tapTargetHeight()
                 Spacer(minLength: 0)
             } else {
             Button {
@@ -780,19 +793,24 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.sectionTitle")
             }
             if let clear {
-                Button(clear.0) { withAnimation(Theme.Motion.standard) { clear.1() } }
-                    .font(Theme.Font.secondary)
-                    .lineLimit(1)
-                    .buttonStyle(.borderless)
+                Button { withAnimation(Theme.Motion.standard) { clear.1() } } label: {
+                    Text(clear.0).tapTargetHeight().contentShape(.rect)
+                }
+                .font(Theme.Font.secondary)
+                .lineLimit(1)
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("inbox.clear")
             }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush)
     }
 
     private func agentRow(_ ix: Interaction) -> some View {
