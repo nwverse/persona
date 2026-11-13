@@ -38,7 +38,7 @@ import { StatusMark } from "../ui/StatusMark";
 import { Icon, type IconName } from "../ui/icons";
 import { HerdrNotices as HerdrNoticesContent } from "./agents/HerdrNotices";
 import { HubNoticeLine as HubNoticeLineContent } from "./agents/HubNoticeRow";
-import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, RenameDialog, RenameSpaceDialog } from "./chat/SessionDialogs";
+import { DeleteSessionDialog, RenameDialog, RenameSpaceDialog } from "./chat/SessionDialogs";
 import { AGENT_ARCHIVES_FEATURE } from "../lib/agent-archives";
 import { AgentRowMenu, MarkSeenDialog as MarkSeenDialogContent, SpaceMenu } from "./AgentMenus";
 import { NodeMenu } from "./NodeMenu";
@@ -630,8 +630,6 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
   const [rowMenu, setRowMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
   const [renaming, setRenaming] = useState<Session | null>(null);
   const [deleting, setDeleting] = useState<Session | null>(null);
-  const [closing, setClosing] = useState<Session | null>(null);
-  const [archiveClosing, setArchiveClosing] = useState<Session | null>(null);
   const [linkTarget, setLinkTarget] = useState<Session>();
   const closeLinkTarget = useCallback(() => setLinkTarget(undefined), []);
   // the ⋯ toggles the menu, as in the full list
@@ -710,11 +708,9 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
         const where = [within === "machine" ? "" : machineWithHub(s.machine_id, machines), within === "group" ? "" : s.space_name || baseName(s.cwd)];
         return <SessionRow s={s} k={k} reg={reg} hover={hover} active={activeKey === k} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} hint={where.filter(Boolean).join(" · ")} showTodoTag={within !== "todo"} />;
       }} />
-    {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTarget} onCloseAgent={setClosing} onArchiveClose={setArchiveClosing} />}
+    {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTarget} />}
     {renaming && <RenameDialog open session={renaming} onClose={() => setRenaming(null)} />}
     {deleting && <DeleteSessionDialog open session={deleting} machineName={machineWithHub(deleting.machine_id, machines)} onClose={() => setDeleting(null)} />}
-    {closing && <CloseAgentDialog open session={closing} machineName={machineWithHub(closing.machine_id, machines)} onClose={() => setClosing(null)} />}
-    {archiveClosing && <ArchiveCloseDialog open session={archiveClosing} machineName={machineWithHub(archiveClosing.machine_id, machines)} onClose={() => setArchiveClosing(null)} />}
     <LinkTodoDialog open={Boolean(linkTarget)} session={linkTarget} onClose={closeLinkTarget} />
   </div>;
 }
@@ -871,8 +867,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const [renaming, setRenaming] = useState<Session | null>(null);
   const [renamingSpace, setRenamingSpace] = useState<Session | null>(null);
   const [deleting, setDeleting] = useState<Session | null>(null);
-  const [closingAgent, setClosingAgent] = useState<Session | null>(null);
-  const [archiveClosing, setArchiveClosing] = useState<Session | null>(null);
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
   const [confirmSeen, setConfirmSeen] = useState<Session[] | null>(null);
   // stable, like `go`: every row gets it, and a new one each render would re-render them all (SessionRow's memo)
@@ -1043,7 +1037,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     </SidebarGroup>
       {/* the row's ⋯ (and its right click): pin, rename, mute, the todo it hangs on, close, delete — a long press on iOS
           Safari sends no contextmenu, so nothing lives only there */}
-      {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTargetSession} onCloseAgent={setClosingAgent} onArchiveClose={setArchiveClosing} />}
+      {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTargetSession} />}
       {spaceMenu && (
         <SpaceMenu
           sp={spaceMenu.sp}
@@ -1060,8 +1054,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       {renaming && <RenameDialog open session={renaming} onClose={() => setRenaming(null)} />}
       {renamingSpace && <RenameSpaceDialog open session={renamingSpace} onClose={() => setRenamingSpace(null)} />}
       {deleting && <DeleteSessionDialog open session={deleting} machineName={machineWithHub(deleting.machine_id, machines)} onClose={() => setDeleting(null)} />}
-      {closingAgent && <CloseAgentDialog open session={closingAgent} machineName={machineWithHub(closingAgent.machine_id, machines)} onClose={() => setClosingAgent(null)} />}
-      {archiveClosing && <ArchiveCloseDialog open session={archiveClosing} machineName={machineWithHub(archiveClosing.machine_id, machines)} onClose={() => setArchiveClosing(null)} />}
       <MarkSeenDialog list={confirmSeen} onClose={closeMarkSeen} onDone={clearKept} />
       <LinkTodoDialog open={Boolean(linkTargetSession)} session={linkTargetSession} onClose={closeLinkSession} />
       <LinkTodoDialog open={Boolean(linkTargetSpace)} space={linkTargetSpace} onClose={closeLinkSpace} />

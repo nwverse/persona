@@ -241,6 +241,14 @@ it isn't in `PersonaTests`; the Apple CI script runs its SwiftPM tests separatel
 - Package code must build with Foundation only: no SwiftUI / UIKit imports, App `Theme` or `AppModel`. Design-system source checks (`TokenRatchetTests`, etc.) don't scan it.
 - On a Mac still on macOS 15 the test bundle builds but does not load (`Symbol not found … built for macOS 26.0 which is newer than running OS`: the package targets macOS 26). Build it for the running system in a separate build folder: `swift test --scratch-path /tmp/personakit-macos15 -Xswiftc -target -Xswiftc arm64-apple-macosx15.0`.
 
+**PersonaCore** (`apple/Packages/PersonaCore`, #6871): the iOS-only binding of the shared Rust continuity core. Run
+`native/app-core/scripts/build-apple.sh` before XcodeGen / package resolution, then `xcrun swift test --package-path
+apple/Packages/PersonaCore -Xswiftc -warnings-as-errors`. The XCFramework and Cargo output stay ignored; generated Swift
+codecs are committed and `cargo run -p persona-core-typegen -- --check` checks both Swift and Kotlin. The package uses
+Swift 6 strict concurrency. The real-C replay and native `ChatStore` comparison are in
+`PersonaTests/PersonaCoreContinuityTests.swift`; the package and fixtures alone are not a physical-device performance,
+launch, memory or download-size result. Watch, widgets, Vision, Persona Link and the frozen Mac app do not link it.
+
 Transcript parsing uses real-sample golden tests (`server/internal/transcript/testdata/`, `fixtures_test.go`): each sample's parse result,
 "incremental read while writing = one full read", and "backward paging has no gaps/duplicates". After parsing changes run `go test ./internal/transcript -run Fixture -update` and review the golden diff.
 Before adding samples, redact with `scripts/diag/redact_transcript.py`, then manually review (`testdata/README.md`). After Claude Code / Codex upgrades, run
