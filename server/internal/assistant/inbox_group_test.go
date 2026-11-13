@@ -1534,3 +1534,87 @@ func TestInboxGroupReopenDropsTheClosedNote(t *testing.T) {
 		t.Fatalf("reopened event %+v, handling %+v", it, it.Handling)
 	}
 }
+
+// With the AI twin off, or a policy that keeps the item the user's, a reopened event goes back to the open list as
+// any item would, and no processing conversation is woken: the twin's release would otherwise say it failed.
+func TestInboxGroupReopenLeavesTheTwinAlone(t *testing.T) {
+	answer := `{"assign":[{"message":"m1060","event":"lark:F1:900"},{"message":"m1061","event":"lark:F1:900"}],
+		"events":[{"event":"lark:F1:900","title":"示例发布跟进","summary":"对方补充了时间","tier":"action","reason":"继续追问"}]}`
+	for _, c := range []struct {
+		name   string
+		enable bool
+		twin   string
+	}{
+		{name: "twin off"},
+		{name: "policy never", enable: true, twin: TwinNever},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
+			_, client := newGroupModel(t, answer)
+			h, _ := groupHub(t, g, client)
+			h.setConfig(func(cfg *assistantwire.InboxConfig) { cfg.Agent.Enabled = c.enable })
+			it := h.inbox.items["lark:F1:900"]
+			it.Count, it.Context = 1, "示例群：m900"
+			it.Agent = &InboxAgent{State: AgentRunning, MachineID: "server", SessionID: "s1", Of: it.Last}
+			it.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingDone, MachineID: "server", SessionID: "s1"}
+			if c.twin != "" {
+				h.inbox.mu.Lock()
+				h.inbox.policies = []InboxPolicy{{ID: "p1", Source: "lark", Tag: connector.TagChat, Value: "F1", Name: "示例群", Twin: c.twin}}
+				h.inbox.mu.Unlock()
+			}
+			h.collectInbox(context.Background(), roundPoll)
+			h.waitGrouping()
+
+			if !it.open() || it.DoneBy != "" || it.Tier != TierAction || !slices.Contains(chainKinds(it), ChainReopened) {
+				t.Fatalf("reopened event %+v", it)
+			}
+			if it.Handling.State == HandlingLooking || it.status() != StatusAction {
+				t.Fatalf("the twin was woken on a reopened event: handling %+v, status %q", it.Handling, it.status())
+			}
+			h.inbox.mu.Lock()
+			for _, n := range it.Agent.Pending {
+				if n.Name == prompts.NoteNewMessages {
+					h.inbox.mu.Unlock()
+					t.Fatalf("new messages queued for a conversation the twin is not running: %+v", it.Agent.Pending)
+				}
+			}
+			h.inbox.mu.Unlock()
+			if got := notesOf(h.f, "s1"); len(got) != 0 {
+				t.Fatalf("the conversation was told %v", got)
+			}
+			h.handPass(context.Background()) // the twin's pass: nothing it did on the item is released
+			h.inbox.mu.Lock()
+			defer h.inbox.mu.Unlock()
+			if it.Handling.State == HandlingLooking || it.Handling.State == HandlingFailed || !it.open() ||
+				it.status() != StatusAction || it.Tier != TierAction {
+				t.Fatalf("after the twin's pass: event %+v, handling %+v, status %q", it, it.Handling, it.status())
+			}
+			if got := notesOf(h.f, "s1"); len(got) != 0 {
+				t.Fatalf("the twin's pass told the conversation %v", got)
+			}
+		})
+	}
+}
+
+// The same reopen with the twin on: it goes back to the conversation, which the new messages wake.
+func TestInboxGroupReopenWakesTheTwin(t *testing.T) {
+	answer := `{"assign":[{"message":"m1060","event":"lark:F1:900"},{"message":"m1061","event":"lark:F1:900"}],
+		"events":[{"event":"lark:F1:900","title":"示例发布跟进","summary":"对方补充了时间","tier":"fyi","reason":"同步"}]}`
+	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
+	_, client := newGroupModel(t, answer)
+	h, _ := groupHub(t, g, client)
+	h.setConfig(func(cfg *assistantwire.InboxConfig) { cfg.Agent.Enabled = true })
+	it := h.inbox.items["lark:F1:900"]
+	it.Count, it.Context = 1, "示例群：m900"
+	it.Agent = &InboxAgent{State: AgentRunning, MachineID: "server", SessionID: "s1", Of: it.Last}
+	it.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingDone, MachineID: "server", SessionID: "s1"}
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+
+	if !it.open() || it.Handling.State != HandlingLooking || it.Agent.SessionID != "s1" {
+		t.Fatalf("reopened event %+v, handling %+v", it, it.Handling)
+	}
+	waitFor(t, "the new messages told to the conversation", func() bool {
+		return strings.Contains(strings.Join(notesOf(h.f, "s1"), "\n"), "有了新消息")
+	})
+}
