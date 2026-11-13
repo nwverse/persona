@@ -34,7 +34,6 @@
   "launch_background": "バックグラウンドで起動中",
   "idle_spaces": "アイドル状態のスペース{count}",
   "recent": "最近（停止中）",
-  "recent_hint": "停止したエージェントや、コンピュータがオフラインのエージェントです。新しい順に並びます。開くと何をしたか確認できます。",
   "show_less": "折りたたむ",
   "show_more": "さらに{count}件表示",
   "quick_filters": "クイックフィルター",
