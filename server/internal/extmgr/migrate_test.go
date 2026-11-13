@@ -102,8 +102,23 @@ func TestABuiltinSwitchesToItsDefaultSubscription(t *testing.T) {
 	if err := b.SetMigrated(ctx, c.ID(), false, subscriptions.Actor{ID: "device:phone"}); err != nil || viaOf().On {
 		t.Fatalf("switched back: %v %+v", err, viaOf())
 	}
-	if err := b.SetMigrated(ctx, "github", true, subscriptions.Actor{}); err == nil {
+	if err := b.SetMigrated(ctx, "lark", true, subscriptions.Actor{}); err == nil {
 		t.Fatal("a source without a default switched")
+	}
+	// GitHub's default is known but withheld until the owner says (#6404): no switch, and switching on is refused.
+	if m := migrations["github"]; m.Recipe.Tool != subscriptions.InboxThingsTool || m.Recipe.Mode != wire.ConnectorSubscriptionModeThings || !withheld["github"] {
+		t.Fatalf("GitHub's default: %+v (withheld %v)", m.Recipe, withheld["github"])
+	}
+	withheld[c.ID()] = true // as GitHub's is: a default known, not offered
+	if v := viaOf(); v != nil {
+		t.Fatalf("a withheld default's switch is offered: %+v", v)
+	}
+	if err := b.SetMigrated(ctx, c.ID(), true, subscriptions.Actor{}); err == nil {
+		t.Fatal("a withheld default switched on")
+	}
+	delete(withheld, c.ID())
+	if withheld["imessage"] {
+		t.Fatal("iMessage's default is withheld")
 	}
 	if m := migrations["imessage"]; m.Recipe.Tool != "inbox_things" || m.Recipe.Mode != wire.ConnectorSubscriptionModeThings || m.Recipe.ItemsPath != "$.things" {
 		t.Fatalf("iMessage's default: %+v", m.Recipe)
