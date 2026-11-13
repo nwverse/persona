@@ -18,12 +18,14 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -626,6 +628,9 @@ func (d *Devices) forward(machine, event string, params any) {
 // Call is devices.call: a call to a machine's node, coded for the hub (no_device, machine_offline, node_closed;
 // the node's own coded errors as they are).
 func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMessage, error) {
+	if strings.HasPrefix(p.Method, "session.codex.takeover.") {
+		return nil, &rpc.Error{Code: "user_confirmation_required", Message: i18n.Err("codex-takeover.user_only").Error()}
+	}
 	m := d.machineByID(p.MachineID)
 	if m == nil {
 		return nil, &rpc.Error{Code: devicewire.CodeNoDevice, Message: fmt.Sprintf("no machine %q", p.MachineID)}
@@ -703,6 +708,9 @@ func wireError(err error) error {
 // Notify is devices.notify: a one-way event to a machine's node, queued for it (notes.go): the bus's read loop goes
 // on at once.
 func (d *Devices) Notify(p devicewire.NodeEvent) {
+	if strings.HasPrefix(p.Event, "session.codex.takeover.") {
+		return
+	}
 	m := d.machineByID(p.MachineID)
 	if m == nil {
 		return

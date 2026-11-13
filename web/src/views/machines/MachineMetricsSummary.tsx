@@ -50,12 +50,12 @@ function MetricCell({ label, value, detail, severity = "normal", valueColor, det
 }) {
   return (
     <div className="min-w-0">
-      <div className="text-[11px] text-ink-3">{label}</div>
-      <div className={cx("mt-0.5 truncate text-[16px] leading-6 font-medium tabular-nums", severity === "critical" ? "text-red" : severity === "warning" ? "text-orange" : "text-ink")} title={value}>
+      <div className="text-xs text-ink-3">{label}</div>
+      <div className={cx("mt-0.5 truncate text-base leading-6 font-medium tabular-nums", severity === "critical" ? "text-red" : severity === "warning" ? "text-orange" : "text-ink")} title={value}>
         {valueColor ? <><span style={{ color: valueColor }}>{value.slice(0, 1)}</span>{value.slice(1)}</> : value}
         {severity !== "normal" && <span className="sr-only"> {t(severity === "critical" ? "machines-machinedetail.critical" : "machines-machinedetail.high")}</span>}
       </div>
-      <div className="min-h-4 truncate text-[10.5px] text-ink-3 tabular-nums" title={detail}>
+      <div className="min-h-4 truncate text-xs text-ink-3 tabular-nums" title={detail}>
         {detailColor ? <><span style={{ color: detailColor }}>{detail.slice(0, 1)}</span>{detail.slice(1)}</> : detail}
       </div>
       <div className="mt-2">{children}</div>
@@ -71,7 +71,7 @@ export function Spark({ points, series = CPU, minimumMax = 100, label = t("machi
   const W = 160, H = 40;
   const lines = series.map((s) => ({ ...s, runs: runs(points, s.read) }));
   if (!lines.some((s) => s.runs.some((r) => r.length > 1))) {
-    return <div className="flex h-10 items-center text-[10px] text-ink-3" aria-label={`${label}: ${t("machines.no_history")}`}>{t("machines.no_history")}</div>;
+    return <div className="flex h-10 items-center text-xs text-ink-3" aria-label={`${label}: ${t("machines.no_history")}`}>{t("machines.no_history")}</div>;
   }
   const top = Math.max(minimumMax, ...lines.flatMap((s) => s.runs.flatMap((r) => r.map((p) => p.v))));
   const x = (time: number) => ((time - (end - 3600)) / 3600) * W;

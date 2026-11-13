@@ -14,6 +14,15 @@ the Web menu useful without changing active links, supervision, counts or quiet 
 Put its completion marker before the variable-length title: end truncation can hide a suffix even when a DOM-text
 test finds it. Regress the order in every translation and inspect the actual long-title menu.
 
+## A grey text selection over sidebar rows reads as a stuck highlight (#6458)
+
+The theme paints `::selection` with `--accent-tint`, a neutral grey in the default theme close to the hover fill. A
+press-and-drag that started on a group's always-shown explanation (trying to drag an Agent onto a to-do) selected the
+group titles, state words and explanations below it, line by line, and pressing the fold buttons afterwards kept it
+(a press on a button does not move the selection), so the owner reported it as a highlight style leaking. Rows that
+fold or group (`Section`'s heading, `TreeBranch`) are `select-none`; a drag test in `web/e2e/todo-grouping.mjs` keeps
+it so. Before calling a stray grey block a style bug, check `String(getSelection())`.
+
 ## Live acceptance must distinguish a lookup POST from a mutation (#5753)
 
 The live composer driver rejected the app's normal `POST /api/v1/launchers/catalog`, although the handler is a

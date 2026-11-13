@@ -27,3 +27,30 @@ func TestCompletedTodoIsSparseAndCopyOnWrite(t *testing.T) {
 		t.Fatal("clearing the last sparse value left a carrier or changed the original")
 	}
 }
+
+func TestCompletedTodoPreservesParentAgentMetadata(t *testing.T) {
+	var original Session
+	original.SetParentAgentID("parent")
+	original.SetCompletedTodo(&TodoRef{ID: "done", Title: "Completed task"})
+	withoutTodo := original
+	withoutTodo.SetCompletedTodo(nil)
+	if withoutTodo.Hierarchy == nil || withoutTodo.ParentAgentID() != "parent" {
+		t.Fatal("clearing completed ownership discarded the independent parent agent")
+	}
+	withoutParent := original
+	withoutParent.SetParentAgentID("")
+	if withoutParent.CompletedTodo() == nil || withoutParent.CompletedTodo().ID != "done" ||
+		original.ParentAgentID() != "parent" || original.CompletedTodo() == nil {
+		t.Fatal("clearing parent agent metadata discarded completed ownership or changed the original")
+	}
+	checkWire(t, "completed ownership beside parent agent metadata", original)
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Session
+	if err := json.Unmarshal(raw, &decoded); err != nil || decoded.ParentAgentID() != "parent" ||
+		decoded.CompletedTodo() == nil || decoded.CompletedTodo().ID != "done" || decoded.Todo != nil {
+		t.Fatalf("sparse metadata did not round trip independently: %s, %v", raw, err)
+	}
+}
