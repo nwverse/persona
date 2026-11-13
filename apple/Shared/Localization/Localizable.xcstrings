@@ -40722,6 +40722,29 @@
       },
       "extractionState" : "manual"
     },
+    "Connection Stats" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection Stats"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続の統計"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接数值"
+          }
+        }
+      }
+    },
     "Connection Type" : {
       "localizations" : {
         "en" : {
@@ -66781,6 +66804,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Hide Connection Stats" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide Connection Stats"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続の統計を隠す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏连接数值"
+          }
+        }
+      }
     },
     "Hide Key Bar When Not Typing" : {
       "localizations" : {
@@ -98394,6 +98440,29 @@
       },
       "extractionState" : "manual"
     },
+    "OK" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好"
+          }
+        }
+      }
+    },
     "OK [In App Tunnel View f867f3]" : {
       "localizations" : {
         "en" : {
@@ -109487,6 +109556,29 @@
       },
       "extractionState" : "manual"
     },
+    "Picture" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Picture"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画面"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画面"
+          }
+        }
+      }
+    },
     "Picture in Picture" : {
       "localizations" : {
         "en" : {
@@ -112517,6 +112609,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Quality" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quality"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画質"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画质"
+          }
+        }
+      }
     },
     "Question [Ask Persona Intent 33a861]" : {
       "localizations" : {
