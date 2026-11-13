@@ -19,7 +19,7 @@ import persona.core.domain.lines.ChatLine
  */
 data class BackgroundFolding(val open: Set<String> = emptySet(), val reveal: String? = null, val rounds: Boolean = true) {
     companion object {
-        /** The source a folded supervision round stands under: drawn "Supervision record" (iOS `SupervisionRecordLine`). */
+        /** The source a folded supervision round stands under: drawn "Handled in the background" (iOS `SupervisionRecordLine`). */
         val supervision = MessageSource("supervision")
 
         /** The message sources whose rounds fold (the web's `supervisionRound`, widened by #4314). */
@@ -44,13 +44,13 @@ data class BackgroundFolding(val open: Set<String> = emptySet(), val reveal: Str
 }
 
 /**
- * One folded background round, drawn as one muted line, `@<source> · Background round` (`· Running in the background`
+ * One folded background round, drawn as one muted line, `@<source> · Reported from the background` (`· Working in the background…`
  * while [live]); while [open] its [lines] follow it unchanged.
  */
 data class BackgroundRound(
     val id: String, val source: MessageSource, val live: Boolean, val open: Boolean, val lines: List<ChatLine>,
 ) {
-    /** A quiet supervision round (Glass), drawn "Supervision record" rather than with a source mention. */
+    /** A quiet supervision round (Glass), drawn "Handled in the background" rather than with a source mention. */
     val supervision: Boolean get() = source.kind == BackgroundFolding.supervision.kind
 }
 

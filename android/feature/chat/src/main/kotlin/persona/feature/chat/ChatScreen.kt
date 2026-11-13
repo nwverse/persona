@@ -152,6 +152,8 @@ private fun ChatPage(
     val machines by sessions.machines.collectAsStateWithLifecycle()
     val allRequests by interactions.pending.collectAsStateWithLifecycle()
     val allMessages by sender.outbox.collectAsStateWithLifecycle()
+    val adoptedSessions by sessions.adoptedSessions.collectAsStateWithLifecycle()
+    val startedThreads by sessions.startedThreads.collectAsStateWithLifecycle()
     val writtenAt by sender.writtenAt.collectAsStateWithLifecycle()
     val allSendReceipts by key(sender) { sender.sendReceipts.collectAsStateWithLifecycle() }
     val sendReceipts = allSendReceipts.filter { receipt -> receipt.session == key ||
@@ -174,7 +176,11 @@ private fun ChatPage(
     val readOnly = historyOnly || child != null || workflowAgent != null || key.sessionId.contains('@')
     var lastSession by remember(key) { mutableStateOf<Session?>(null) }
     var detailInfo by remember(key) { mutableStateOf<SessionInfo?>(null) }
-    val row = sessionList.firstOrNull { it.key == key }
+    val adopted = adoptedSessions.lastOrNull { it.key == key }
+    val row = sessionList.firstOrNull { it.key == key }?.let {
+        // Summary rows from older hubs omit this flag; a waiting pane keeps its id only until it becomes a thread.
+        if (adopted?.awaitingFirstMessage == true) it.copy(awaitingFirstMessage = true) else it
+    } ?: adopted
     LaunchedEffect(key, row?.waiting != null, row?.rev, row?.model, chrome.actions) {
         if (row?.waiting == null) return@LaunchedEffect
         try { detailInfo = chrome.actions?.info(row) }
@@ -184,8 +190,8 @@ private fun ChatPage(
     // What an Agent's summary row leaves out and `info` doesn't say: the launcher switch waiting for the next message
     // (#5055), read from the session's complete row where the hub looks one up (`sessions_lookup`); Glass's pill shows it.
     var completeRow by remember(key) { mutableStateOf<Session?>(null) }
-    val lookup = "sessions_lookup" in LocalHubFeatures.current && PersonaTheme.style == AppStyle.Glass &&
-        renderStyle != ChatRenderStyle.Assistant && AgentModelPanel.LAUNCHER_SWITCH in LocalHubFeatures.current
+    val lookup = "sessions_lookup" in LocalHubFeatures.current && renderStyle != ChatRenderStyle.Assistant &&
+        PersonaTheme.style == AppStyle.Glass && AgentModelPanel.LAUNCHER_SWITCH in LocalHubFeatures.current
     LaunchedEffect(key, row?.waiting != null, row?.rev, chrome.actions, lookup) {
         if (row?.waiting == null || !lookup) return@LaunchedEffect
         try { completeRow = chrome.actions?.completeRow(row) }
@@ -205,6 +211,13 @@ private fun ChatPage(
     } ?: lastSession
     SideEffect { if (liveSession != null) lastSession = liveSession }
     val session = liveSession ?: readOnlySessionMetadata(key, historyReadOnly, historySession)
+    val codexThread = session?.takeIf { it.awaitingFirstMessage && !historyOnly }?.let {
+        startedThreads[key] ?: codexThreadOf(sessionList, it)
+    }
+    val followSession = chrome.onFollowSession ?: onContextCleared ?: chrome.onOpenSession
+    LaunchedEffect(codexThread?.key) {
+        codexThread?.let { followSession?.invoke(it.key) }
+    }
     // A launcher switch this page recorded or dropped (#5055), drawn at once until the row's next push says what the hub has.
     var drawnSwitch by remember(key) { mutableStateOf<DrawnSwitch?>(null) }
     val switchSession = session?.let { drawnSwitch.over(it) }
@@ -700,10 +713,13 @@ private fun ChatPage(
     val rewindMenu = if (actionsService != null && canSend && !readOnly && renderStyle != ChatRenderStyle.Assistant) RewindMenu(
         block = rewindBlock?.let { res.getString(when (it) {
             Rewind.Block.ClaudeOnly -> R.string.chat_rewind_block_claude_only
+            Rewind.Block.Unsupported -> R.string.chat_rewind_block_unsupported
             Rewind.Block.Offline -> R.string.chat_rewind_block_offline
             Rewind.Block.NeedsYou -> R.string.chat_rewind_block_needs_you
             Rewind.Block.Working -> R.string.chat_rewind_block_working
         }) },
+        // "Code and conversation" only where the node says it puts files back too (#6294), or says nothing (a Claude terminal).
+        code = Rewind.restoresCode(session),
         run = { target, restore ->
             val at = Rewind.target(snapshot.items, target.id)
             val on = session
@@ -717,7 +733,9 @@ private fun ChatPage(
                         // The message goes back into the composer, as Claude's own /rewind puts it back in its box.
                         if (done.inputCleared) composer.edit(target.editText)
                         notice = res.getString(when {
-                            !done.inputCleared -> R.string.chat_rewind_input_kept
+                            // Claude's own box on the computer: only Claude's /rewind in its terminal (a session whose node
+                            // declares no rewind of its own) has one to say this of; a runtime or Codex goes back itself (#6294).
+                            !done.inputCleared && on.capabilities?.rewind != true -> R.string.chat_rewind_input_kept
                             restore == RewindRestore.CodeAndConversation && !done.codeRestored -> R.string.chat_rewind_done_no_code_changes
                             done.codeRestored -> R.string.chat_rewind_done_code_and_conversation
                             else -> R.string.chat_rewind_done_conversation
@@ -1450,7 +1468,7 @@ private fun ChatPage(
                             }
                             else if (!settling && lines.isEmpty() && messages.isEmpty() && snapshot.error == null)
                                 JEmptyState(stringResource(R.string.chat_screen_empty_title),
-                                    stringResource(if (readOnly) R.string.chat_screen_empty_read_only else R.string.chat_screen_empty_hint),
+                                    emptyChatHint(res, session, machines.firstOrNull { it.id == key.machineId }?.name, readOnly),
                                     Modifier.align(Alignment.Center).padding(padding).padding(horizontal = horizontalPadding))
                             // The newest plan card scrolled out of view: "Step N/M" above the composer brings it back (web PlanPill).
                             val anchor = remember(lines, contentPlans, renderStyle) { latestPlanLine(lines, contentPlans) }
