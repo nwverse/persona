@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -374,6 +375,8 @@ func TestInboxReplyWithAConversationWaits(t *testing.T) {
 	}
 	// Delivery empties Pending after the send (keepToldSince), so wait for that rather than read it at once.
 	deadline := time.Now().Add(5 * time.Second)
+	poll := time.NewTicker(5 * time.Millisecond)
+	defer poll.Stop()
 	for {
 		h.inbox.mu.Lock()
 		pending, startedNow := len(it.Agent.Pending), it.Agent.StartedAt
@@ -391,7 +394,7 @@ func TestInboxReplyWithAConversationWaits(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the notice was not delivered: %d notes pending", pending)
 		}
-		time.Sleep(5 * time.Millisecond)
+		<-poll.C
 	}
 	// Listed, it is in progress waiting, not filed.
 	h.inbox.mu.Lock()
@@ -406,6 +409,11 @@ func TestInboxReplyWithAConversationWaits(t *testing.T) {
 // item returns to waiting and keeps what it waits on.
 func TestInboxHandbackRecapOnlyKeepsWaiting(t *testing.T) {
 	h, _, it := handledHub(t)
+	// Hold the item's delivery off: tellSoon sends its pending notes (and clears the wake) on a goroutine once a request
+	// has answered, which the test would race with.
+	delivery, _ := h.inbox.telling.LoadOrStore(it.ID, &sync.Mutex{})
+	delivery.(*sync.Mutex).Lock()
+	t.Cleanup(delivery.(*sync.Mutex).Unlock)
 	if _, err := suggestTool(t, h, `{"recap":"先问张三","follow":{"who":"张三","next":"等他给口径","check_in":"4h"}}`); err != nil {
 		t.Fatal(err)
 	}

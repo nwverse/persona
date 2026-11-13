@@ -313,7 +313,7 @@ func (s *Service) inboxMergeRoutes() {
 		}
 		switch {
 		case len(in.Items) < 2:
-			apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.merge_few"))
+			apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.merge_too_few_rows"))
 			return
 		case len(in.Items) > mergeMax:
 			apierr.Write(w, http.StatusRequestEntityTooLarge, errBulkTooMany)

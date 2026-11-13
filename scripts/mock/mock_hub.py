@@ -9270,6 +9270,60 @@ if os.environ.get("MOCK_SCREEN_DANGER") in ("before", "after"):
                    + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend",
          "dialog": _danger})
 
+# MOCK_LONG_ASKS=1 (#6605): pending cards whose command or plan runs far past the cards' area, one long card per
+# conversation and two on one. The review agent: a terminal prompt read without its command (the dialog's detail is the
+# agent's words and the 52-line command, Yes / No), as a hub reads one whose header scrolled off. The blog agent: a Bash
+# permission with the same command. The orders agent: a 60-line plan. The release agent: the command as a hub reads it
+# now (command, description, warning, countdown) and a second long Bash permission. None of them is a chat
+# PendingCardsTests opens, so one mock with MOCK_AGENTS=1 serves both.
+def _long_ask_cmd():
+    rows = ["set -euo pipefail", "cd ./fixtures", "python3 -I - <<'EOF'", "import json, pathlib",
+            "root = pathlib.Path('.')", "seen = {}"]
+    for n in range(1, 15):
+        rows += ["p%d = root / 'city-%02d.json'" % (n, n),
+                 "d%d = json.loads(p%d.read_text()) if p%d.exists() else {'hours': []}" % (n, n, n),
+                 "seen['city-%02d'] = len(d%d['hours'])  # hours of rain to check" % (n, n)]
+    rows += ["print(json.dumps(seen, indent=2, sort_keys=True))", "EOF",
+             "swift test --filter ForecastFormatTests 2>&1 | tail -20", "git status --short ./fixtures | head -40"]
+    return "\n".join(rows)
+
+
+if os.environ.get("MOCK_LONG_ASKS") == "1":
+    _long_cmd = _long_ask_cmd()
+    _long_desc = "Check every city fixture's rain hours and run the formatter's tests"
+    _long_plan = "## 天气小组件的降雨时间线\n\n" + "\n".join(
+        "%d. 第 %d 步：把第 %d 个城市的小时数据接到时间线上，补上对应的格式化测试，跑一遍确认没有回归" % (n, n, n)
+        for n in range(1, 41)) + "\n\n## 不做的事\n\n" + "\n".join("- 第 %d 件先不做的事：留到下一轮再说" % n for n in range(1, 16))
+    INTERACTIONS.extend([
+        {"id": "scr_macbook_review_long", "machine_id": "macbook", "session_id": REVIEW, "session_title": "检查 PR #42 的改动",
+         "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=1), "expires_at": later(hours=24),
+         "screen": " " + _long_desc + "\n " + _long_cmd.replace("\n", "\n ") + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel",
+         "dialog": {"question": "Do you want to proceed?", "detail": _long_desc + "\n" + _long_cmd, "rev": "6605a0000001",
+                    "options": [{"key": "1", "label": "Yes", "keys": ["1"]}, {"key": "2", "label": "No", "keys": ["2"]}]}},
+        {"id": "ix_blog_long_bash", "machine_id": "studio", "session_id": BLOG, "session_title": "博客迁移到 Astro",
+         "cwd": "/Users/me/code/blog", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+         "tool_name": "Bash", "tool_use_id": "toolu_long_bash", "summary": _long_cmd,
+         "tool_input": {"command": _long_cmd, "description": _long_desc}},
+        {"id": "ix_orders_long_plan", "machine_id": "server", "session_id": ORDERS, "session_title": "排查 /orders 接口变慢",
+         "cwd": "/home/me/code/shop-api", "kind": "plan", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+         "tool_name": "ExitPlanMode", "tool_use_id": "toolu_long_plan", "plan": _long_plan},
+        {"id": "scr_macbook_release_long", "machine_id": "macbook", "session_id": RELEASE, "session_title": "整理发布说明",
+         "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=2), "expires_at": later(hours=24),
+         "screen": " Bash command\n " + _long_desc + "\n │ " + _long_cmd.replace("\n", "\n │ ")
+                   + "\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend",
+         "dialog": {"question": "Do you want to proceed?", "rev": "6605a0000002", "detail": "Bash command\n" + _long_desc + "\n" + _long_cmd,
+                    "command": _long_cmd, "description": _long_desc, "risk": "delete",
+                    "warning": "Dangerous rm operation not ruled out — the shell may read this command differently than it was parsed",
+                    "deadline": "Claude Code will automatically block this request in 4:59, to avoid holding up an unattended session",
+                    "deadline_action": "deny",
+                    "deadline_at": (datetime.now(timezone.utc) + timedelta(seconds=299)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "options": [{"key": "1", "label": "Yes", "keys": ["1"]}, {"key": "2", "label": "No", "keys": ["2"]}]}},
+        {"id": "ix_release_long_bash", "machine_id": "macbook", "session_id": RELEASE, "session_title": "整理发布说明",
+         "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+         "tool_name": "Bash", "tool_use_id": "toolu_long_bash_2", "summary": _long_cmd,
+         "tool_input": {"command": _long_cmd, "description": _long_desc}},
+    ])
+
 # MOCK_SCREEN_MULTI=1: a multi-select AskUserQuestion read off the terminal (Claude Code 2.1.316), the second of
 # three questions: two boxes already ticked at the computer, a few words in its free-text field, "Next" to send it.
 # /mock/reset puts it back unanswered (MultiSelectCardTests: each case starts from the card).
@@ -18376,22 +18430,35 @@ def search_fold(s):
     return unicodedata.normalize("NFKC", s).lower()
 
 
+def search_fold_map(s):
+    """`s` folded a character at a time (`search_fold`), and for each folded character the index of the one it came
+    from: NFKC makes "…" three dots, so a cut snippet's folded text is longer than it (the manager's searchFoldRunes)."""
+    out, src = [], []
+    for i, ch in enumerate(s):
+        f = search_fold(ch)
+        out.append(f)
+        src.extend([i] * len(f))
+    return "".join(out), src
+
+
 def search_snippet(body, words):
     """The text around the first match on one line, "…" where cut, and every match's UTF-16 [start, end)."""
     start, end = 0, min(len(body), 120)
-    low = search_fold(body)
+    low, src = search_fold_map(body)
     for w in words:
         at = low.find(w)
-        if at >= 0 and len(low) == len(body):
-            start, end = max(0, at - 40), min(len(body), at + len(w) + 80)
+        if at >= 0:
+            first, last = src[at], src[at + len(w) - 1]
+            start, end = max(0, first - 40), min(len(body), last + 1 + 80)
             break
     snippet = ("…" if start else "") + " ".join(x.strip() for x in body[start:end].splitlines() if x.strip()) + ("…" if end < len(body) else "")
-    marked, low = [False] * len(snippet), search_fold(snippet)
+    marked = [False] * len(snippet)
+    low, src = search_fold_map(snippet)
     for w in words:
-        i = low.find(w) if len(low) == len(snippet) else -1
+        i = low.find(w)
         while i >= 0:
             for j in range(i, i + len(w)):
-                marked[j] = True
+                marked[src[j]] = True
             i = low.find(w, i + len(w))
     utf16 = [0]
     for ch in snippet:
@@ -19556,6 +19623,19 @@ LIVE = []  # (send, subscribed session ids) of each open WebSocket
 # GET /api/v1/messaging lists the source lark, /api/v1/messaging/lark/… answers in the protocol's shapes, the feature
 # messaging is on, every {type: lark} push goes out as {type: messaging} too.
 MOCK_MESSAGING = os.environ.get("MOCK_MESSAGING") == "1"
+# Settings › Inbox Sources › Source Relationships (`GET /api/v1/subscriptions/-/graph`, SourcesGraphView): one
+# extension's reads, two sources and the Inbox; `-openSourcesGraph YES`, then tap `graph.source.news` for its sheet.
+SOURCES_GRAPH = {
+    "extensions": [{"id": "mail", "name": "Mail", "line": "Two accounts"}],
+    "reads": [{"id": "mail.inbox", "extension": "mail", "title": "Inbox", "direct": True},
+              {"id": "mail.lists", "extension": "mail", "title": "Mailing lists", "push": True}],
+    "sources": [{"id": "news", "read": "mail.lists", "name": "Newsletters", "icon": "", "line": "Daily at 9:00",
+                 "badge": {"text": "On", "tone": "positive"}, "reading": True, "to": ["inbox"], "state": "active",
+                 "ask": "persona://assistant?q=newsletters"},
+                {"id": "work", "read": "mail.inbox", "name": "Work mail", "icon": "", "line": "As it arrives",
+                 "reading": True, "to": ["inbox"], "state": "active"}],
+    "destinations": [{"id": "inbox", "name": "Inbox", "line": "What needs you"}],
+}
 if MOCK_MESSAGING:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import lark_messaging
@@ -23200,6 +23280,7 @@ class H(BaseHTTPRequestHandler):
         if preview_route and preview_route(self, "GET", p, q): return
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
+        if p == "/api/v1/subscriptions/-/graph": return self.send_json(SOURCES_GRAPH)
         if recordings_route(self, "GET", p): return
         if custom_models_route(self, "GET", p, q): return
         if managers_route(self, "GET", p): return
