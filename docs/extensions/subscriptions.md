@@ -224,7 +224,7 @@ is 403 `read_only_device`.
 
 **Inbox Sources** (#5278). Unnarrowed, the list is every source that brings things into the Inbox or the knowledge base: the
 manager's built-in sources (the connectors with an inbox or an archive that are set up, and mail; `server/internal/extmgr/inbox_sources.go`)
-beside the subscriptions. Settings has an **Inbox Sources** row for it (iOS and the web; Android #5308), and the Inbox's ⋯ menu
+beside the subscriptions, and the assistant's own source (#6430, `docs/assistant/inbox.md` "Assistant rows"), always last: a row named Assistant whose Add to Inbox switch says whether the assistant may put its conversations into the Inbox (`inbox.post`). Settings has an **Inbox Sources** row for it (iOS and the web; Android #5308), and the Inbox's ⋯ menu
 opens the same page. The manager reports `inbox_sources` with these pages, and the apps show the Settings row only then.
 
 **Relationships** (#5741, `server/internal/subscriptionsui/graph.go`). The same sources as relations, for the apps to draw

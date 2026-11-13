@@ -8,8 +8,6 @@
   "offline": "离线",
   "reconnect": "重新连接",
   "memory": "内存",
-  "disk": "磁盘",
-  "disk_free": "剩 {size}",
   "waiting_node": "等待这台电脑重新连接",
   "unreachable": "连不上这台电脑",
   "agents_other": "{count} 个 Agent",
@@ -38,6 +36,5 @@
   "network": "网络",
   "load_value": "负载 {value}",
   "memory_last_hour": "最近一小时内存",
-  "network_last_hour": "最近一小时网络：下载（橙色）、上传（紫色）",
-  "tokens_last_hour": "最近一小时 Tokens"
+  "network_last_hour": "最近一小时网络：下载（橙色）、上传（紫色）"
 }
