@@ -738,15 +738,16 @@ func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 
 func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	var p struct {
-		MachineID       string `json:"machine_id"`
-		Cwd             string `json:"cwd"`
-		Launcher        string `json:"launcher"`
-		AgentType       string `json:"agent_type,omitempty"`
-		WorkSession     bool   `json:"work_session,omitempty"`
-		Model           string `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
-		Prompt          string `json:"prompt"`
-		ResumeSessionID string `json:"resume_session_id"`
-		WorkspaceID     string `json:"workspace_id"`
+		MachineID        string `json:"machine_id"`
+		Cwd              string `json:"cwd"`
+		Launcher         string `json:"launcher"`
+		AgentType        string `json:"agent_type,omitempty"`
+		WorkSession      bool   `json:"work_session,omitempty"`
+		Model            string `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
+		Prompt           string `json:"prompt"`
+		ResumeSessionID  string `json:"resume_session_id"`
+		WorkspaceID      string `json:"workspace_id"`
+		DesktopProjectID string `json:"desktop_project_id"`
 		// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
 		// Checked by the node (an older node ignores it and starts in its engine).
 		Host           string `json:"host,omitempty"`
@@ -838,12 +839,15 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		p.Prompt = decided
 	}
 	async := startsAsync(p.Async, p.ResumeSessionID, p.AgentType)
+	if desktopStartLauncher(p.Launcher) {
+		async = false // native desktop creation waits for import and first-message delivery
+	}
 	parent := r.Context()
 	if r.Header.Get("X-Persona-Op-Id") != "" {
 		// Finish an accepted start even if its HTTP response is lost; client_ops records the outcome.
 		parent = context.WithoutCancel(parent)
 	}
-	ctx, cancel := context.WithTimeout(parent, startBudget(async && !p.WorkSession))
+	ctx, cancel := context.WithTimeout(parent, startBudgetForLauncher(async && !p.WorkSession, p.Launcher))
 	defer cancel()
 	var res struct {
 		Session      proto.Session `json:"session"`
@@ -981,6 +985,17 @@ func startBudget(async bool) time.Duration {
 		return 15 * time.Second
 	}
 	return 100 * time.Second
+}
+
+func desktopStartLauncher(launcher string) bool {
+	return launcher == "claude-desktop" || launcher == "codex-app"
+}
+
+func startBudgetForLauncher(async bool, launcher string) time.Duration {
+	if desktopStartLauncher(launcher) {
+		return 3 * time.Minute // seed (30s), import (15s), and first message (up to 2m)
+	}
+	return startBudget(async)
 }
 
 // ---- WebSocket ----

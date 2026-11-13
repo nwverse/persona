@@ -1,9 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { ago, attentionReason, externalLink, failureReason, failureText, sessionPreview } from "./format";
+import { ago, attentionReason, baseName, externalLink, failureReason, failureText, sessionPreview } from "./format";
 import { formatRelative } from "../i18n";
 import type { Session } from "./types";
 
 const session = (o: Partial<Session>): Session => ({ machine_id: "m", session_id: "s", cwd: "/x", status: "idle", ...o }) as Session;
+
+describe("remote path names", () => {
+  it.each([
+    ["C:\\Work\\App", "App"],
+    ["c:/Work/App/", "App"],
+    ["C:\\Work\\App\\", "App"],
+    ["\\\\server\\share\\Project", "Project"],
+    ["//server/share/Project/", "Project"],
+    ["/work/App/", "App"],
+    ["/work/a\\b", "a\\b"],
+    ["/", "/"],
+    ["", ""],
+  ])("shows the last component of %s", (path, name) => {
+    expect(baseName(path)).toBe(name);
+  });
+});
 
 // A botmux session's reason for waiting and its Feishu topic (attention_reason, external_url; docs/integrations/engines.md "botmux").
 describe("sessionPreview", () => {

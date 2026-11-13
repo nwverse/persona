@@ -88,6 +88,26 @@ describe("the panel's providers", () => {
     expect(locked.locked).toBeUndefined();
   });
 
+  it.each(["claude_desktop", "codex_app"])("%s offers its desktop settings without model or effort overrides", (source) => {
+    const desktop: Launcher = { name: "desktop", agent: source === "codex_app" ? "codex" : "claude", source };
+    const p = panel({ launchers: [desktop], listOf: () => ({ list: { agent: desktop.agent!, models: [], locked: "Settings follow the desktop app." } }),
+      choice: { launcher: desktop.name, model: "opus", effort: "max" }, configured: { provider: "launcher.desktop", model: "sonnet", effort: "high" }, runs: desktop.name, tiers: [] });
+    const item = provider(p, desktop.name);
+    expect(item.models).toEqual([{ id: "default", name: "默认", efforts: [], providerDefault: true, description: "Settings follow the desktop app." }]);
+    expect(item.typable).toBeUndefined();
+    expect(item.locked).toBeUndefined();
+    expect(p.state.current).toEqual({ provider: desktop.name, model: "default" });
+  });
+
+  it("does not offer desktop overrides when its model list failed", () => {
+    const desktop: Launcher = { name: "claude-desktop", agent: "claude", source: "claude_desktop" };
+    const p = panel({ launchers: [desktop], listOf: () => ({ error: "Read failed" }), choice: none, configured: null, runs: desktop.name, tiers: [] });
+    const item = provider(p, desktop.name);
+    expect(item.models).toEqual([{ id: "default", name: "默认", efforts: [], providerDefault: true }]);
+    expect(item.typable).toBeUndefined();
+    expect(item.error).toBe("Read failed");
+  });
+
   it("a list that couldn't be read: why and Retry, the launcher's Default row, and a typed ID for Claude Code and Codex", () => {
     const p = newAgentPanel({ launchers, listOf: (name) => (name === "claude" || name === "work_gw" ? { error: "no answer" } : listOf(name)), choice: none, configured: null, runs: "claude", tiers: [] });
     expect(provider(p, "claude")).toMatchObject({ error: "no answer", typable: true });
@@ -224,6 +244,17 @@ describe("the pill", () => {
     expect(newAgentPill({ launchers, runs: "sonnetcc", list: lists.sonnetcc, choice: { launcher: "sonnetcc", model: "", effort: "" }, configured: null, fallback: "" }).model).toBe("sonnet");
     expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "gpt-5.5", effort: "high" }, configured: null, fallback: "" })).toMatchObject({ engine: "codex", model: "5.5" });
     expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "", effort: "high" }, configured: null, fallback: "" }).effort).toBeUndefined();
+  });
+
+  it("desktop pills omit stale model and effort choices, including while their list is unavailable", () => {
+    const desktop: Launcher = { name: "claude-desktop", agent: "claude", source: "claude_desktop" };
+    for (const list of [{ list: { agent: "claude", models: [], locked: "Settings follow the desktop app." } }, { error: "Read failed" }]) {
+      const pill = newAgentPill({ launchers: [desktop], runs: desktop.name, list, choice: { launcher: desktop.name, model: "opus", effort: "max" },
+        configured: { provider: "launcher.claude-desktop", model: "sonnet", effort: "high" }, fallback: "" });
+      expect(pill.effort).toBeUndefined();
+      expect(pill.model).not.toBe("Opus 5.5");
+      expect(pill.model).not.toBe("sonnet");
+    }
   });
 
   it("while the list is read the first time, when that failed, and with no launcher known", () => {

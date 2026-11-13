@@ -50,5 +50,11 @@
   "follow_row": "Follow Model settings",
   "carry_dropped": "{name} can’t run on {computer}, so its default is used.",
   "preset_picked": "Preset {name} · {what}",
-  "typed_now": "Typed for this start"
+  "typed_now": "Typed for this start",
+  "temporary_folder": "Temporary session",
+  "desktop_folder_hint": "Choose a folder below, enter a new folder, or use a temporary session.",
+  "desktop_folder_placeholder": "Leave empty for a temporary session",
+  "desktop_settings_hint": "The desktop app uses its own model and permission settings.",
+  "desktop_unavailable": "The {app} desktop launcher is unavailable on this computer. Choose another launcher to continue.",
+  "desktop_project_detached": "The original desktop project is no longer selected."
 }

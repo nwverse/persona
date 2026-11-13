@@ -837,6 +837,8 @@ export interface Delegate {
 }
 
 export interface Launcher {
+  /** Where the node runs the launcher, including a desktop application. */
+  source?: string;
   name: string;
   /** A Persona-managed provider's name for people, any language (#5029); absent for an rc alias or from an older hub.
    *  Show it through lib/provider-names.ts. */

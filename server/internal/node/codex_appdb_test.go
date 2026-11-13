@@ -82,6 +82,7 @@ func rowsByThread(rows []proto.Session) map[string]proto.Session {
 // The App's sidebar lists chats whose rollout it deleted after moving their history into its database, and chats whose
 // rollout is older than the two weeks rollouts looks at: both are listed, as the sidebar lists them (#3305).
 func TestCodexAppChatsAreListedLikeTheSidebar(t *testing.T) {
+	noFakeCodexBus(t)
 	n := remoteTestNode(t)
 	home := n.codexHome()
 	project := t.TempDir()
@@ -105,7 +106,7 @@ func TestCodexAppChatsAreListedLikeTheSidebar(t *testing.T) {
 	if chat.Title != "Alpha chat" || chat.Cwd != filepath.Join(project, "sub") || !chat.UpdatedAt.Equal(updated) || chat.Status != proto.StatusOffline {
 		t.Fatalf("chat = %+v", chat)
 	}
-	if chat.AgentName != "Codex App" || chat.SpaceKind != "codex_app" || chat.SpaceID != "codex-project:"+realPath(project) {
+	if chat.AgentName != "Codex App" || chat.SpaceKind != "codex_app" || chat.SpaceID != codexDesktopProjectID(home, "p1") {
 		t.Fatalf("chat placed as %q %q %q, want in its project", chat.AgentName, chat.SpaceKind, chat.SpaceID)
 	}
 	if chat.Capabilities.Send {
@@ -218,7 +219,7 @@ func TestCodexAppChatsInNoProjectAreUnderCodexChats(t *testing.T) {
 	if !rows[sub].IsSubagent {
 		t.Fatal("the subagent is not marked as one")
 	}
-	if r := rows[appChat]; r.SpaceID != "codex-project:"+realPath(project) {
+	if r := rows[appChat]; r.SpaceID != codexDesktopProjectID(home, "p1") {
 		t.Fatalf("the chat in a project is placed in %q", r.SpaceID)
 	}
 }

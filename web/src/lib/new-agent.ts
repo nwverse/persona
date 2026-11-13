@@ -33,6 +33,8 @@ export interface AgentLaunch {
   permissionMode?: string;
   /** The exact runtime workspace, scoped to machine and host; absent for an ordinary folder start. */
   workspaceId?: string;
+  /** The exact native desktop project, independent of terminal-host workspaces. */
+  desktopProjectId?: string;
   /** An explicit host stays explicit even when it equals the machine's default; none: follow the default. */
   host?: string;
   /** Turn ultracode on once Claude is up (#3428); only ever true: off is what a new Claude is (docs/protocol/protocol.md). */
@@ -54,11 +56,13 @@ export interface AgentLaunch {
   uncertain?: boolean;
   /** The target is locked on retry: work-session choices or a start that the hub may already have. */
   repeatOnly?: boolean;
+  /** A native session exists but desktop setup has not acknowledged completion. */
+  desktopSetupIncomplete?: boolean;
   clearable?: string;
   draft?: string;
 }
 
-export function launchAgent(input: Pick<AgentLaunch, "machineId" | "cwd" | "workspaceId" | "launcher" | "agentType" | "workSession" | "inlinePrompt" | "model" | "effort" | "permissionMode" | "host" | "ultracode" | "text" | "attachments" | "todoId">) {
+export function launchAgent(input: Pick<AgentLaunch, "machineId" | "cwd" | "workspaceId" | "desktopProjectId" | "launcher" | "agentType" | "workSession" | "inlinePrompt" | "model" | "effort" | "permissionMode" | "host" | "ultracode" | "text" | "attachments" | "todoId">) {
   const launch: AgentLaunch = { ...input, id: `local-${uuid()}`, phase: "creating", uploaded: {}, ...launchOpIds() };
   putLaunch(launch);
   navigate({ name: "session", mid: launch.machineId, sid: launch.id });
@@ -111,9 +115,20 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
   try {
     const imageBytes = launch.attachments.filter((a) => a.mime.startsWith("image/")).reduce((total, a) => total + Math.ceil(a.file.size / 3) * 4, 0);
     if (imageBytes + new TextEncoder().encode(launch.text).byteLength > 31 * 1024 * 1024) throw new Error(t("lib-new-agent.attachments_too_large_start"));
+    if (launch.session && launch.desktopSetupIncomplete && launch.launcher === "claude-desktop" && !launch.text && !launch.attachments.length) {
+      // A blank conversation cannot use its first message to retry native import. This resumes setup of the known
+      // native id only: the node validates it and never seeds a second conversation or sends a model turn.
+      update({ phase: "creating" });
+      const r = await launchOp<{ session: Session }>("/sessions", launch.startOpId, controller.signal, {
+        machine_id: launch.machineId, cwd: launch.cwd, launcher: launch.launcher, resume_session_id: launch.session.session_id, prompt: "", async: false,
+      });
+      update({ session: r.session, desktopSetupIncomplete: false });
+      upsertSession(r.session);
+    }
     if (!launch.session) {
       const target = {
         machine_id: launch.machineId, cwd: launch.cwd, workspace_id: launch.workspaceId || undefined,
+        desktop_project_id: launch.desktopProjectId || undefined,
         launcher: launch.launcher || undefined, agent_type: launch.agentType, work_session: launch.workSession,
         model: launch.model || undefined, host: launch.host || undefined, todo_id: launch.todoId || undefined,
       };
@@ -138,7 +153,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         try {
           const r = await launchOp<{ session: Session }>("/sessions", launch.startOpId, controller.signal, {
             ...target, effort: launch.effort || undefined, permission_mode: launch.permissionMode || undefined,
-            ultracode: launch.ultracode === true ? true : undefined, async: true, name_hint: launch.text || undefined,
+            ultracode: launch.ultracode === true ? true : undefined, async: launch.launcher !== "claude-desktop" && launch.launcher !== "codex-app", name_hint: launch.text || undefined,
           });
           session = r.session;
         } catch (e) {
@@ -179,7 +194,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > 32 * 1024 * 1024) throw new Error(t("lib-new-agent.attachments_too_large_retry"));
       await launchOp(`${sessionPath(launch.machineId, launch.session!.session_id)}/messages`, launch.messageId, controller.signal, payload);
     }
-    update({ phase: "ready" });
+    update({ phase: "ready", desktopSetupIncomplete: false });
     releaseAttachments(launch.attachments);
     update({ attachments: [] });
     const local = { name: "session" as const, mid: launch.machineId, sid: launch.id };
@@ -188,10 +203,21 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
     const phase: AgentLaunch["phase"] = getState().launches[id]?.phase ?? "failed";
     const sending = phase === "sending";
     const creating = phase === "creating";
+    // Native creation succeeded before import or first-message delivery failed. Keep its identity so Retry can only
+    // send to this session; another session.start would create a second native conversation.
+    const partial = creating && e instanceof ApiError && e.body.created === true && typeof e.body.session_id === "string" && e.body.session_id.trim()
+      && (launch.launcher === "claude-desktop" || launch.launcher === "codex-app") ? e.body : undefined;
+    if (partial) {
+      const recovered = partial.session && typeof partial.session === "object" ? partial.session as Partial<Session> : {};
+      update({ desktopSetupIncomplete: true, session: { title: launch.text.split("\n")[0] || t("startingagent.title"), cwd: launch.cwd, status: "unknown", ...recovered,
+        machine_id: launch.machineId, session_id: partial.session_id as string } });
+      upsertSession(launch.session!);
+    }
     // no answer: the same op id on Retry finds out whether the hub had it, so nothing starts or sends twice
     const gap = isTransient(e) || isAbort(e);
     // the hub answered that it doesn't know, and its receipt would say so again: going on takes new ids and the person's word
-    const uncertain = (creating || sending) && !gap && e instanceof ApiError && (e.body.delivered === "unknown" || (e.status >= 500 && e.body.delivered !== "none"));
+    const uncertain = partial ? Boolean((launch.text || launch.attachments.length) && partial.first_message_delivered !== "none")
+      : (creating || sending) && !gap && e instanceof ApiError && (e.body.delivered === "unknown" || (e.status >= 500 && e.body.delivered !== "none"));
     // the hub won't start it with ultracode here (an old node, a CLI or engine that can't take it): asking again would
     // get the same answer, so "Retry" starts it without, and the card says so (#3428)
     const noUltracode = creating && launch.ultracode === true && ultracodeRefused(e);
@@ -216,6 +242,10 @@ export interface NewAgentPreset {
   prompt?: string;
   machineId?: string;
   cwd?: string;
+  /** The desktop application owning a project; it is offered only when the computer lists this launcher. */
+  launcher?: string;
+  /** The native project owning a desktop start, even when another project shares its folder. */
+  desktopProjectId?: string;
   /** A message forwarded to a new Agent (#3899): its card over the first message, which carries it in front; and the
    *  pictures it had, attached. */
   forward?: ContextRef;

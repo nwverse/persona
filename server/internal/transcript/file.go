@@ -140,7 +140,7 @@ func (f *File) Changed() bool {
 	if revoked {
 		return true
 	}
-	st, err := os.Stat(path)
+	st, err := statTranscript(path)
 	return err != nil || !unchanged(st, offset, ino)
 }
 
@@ -151,16 +151,17 @@ func unchanged(st os.FileInfo, offset int64, ino uint64) bool {
 
 func (f *File) refresh() ([]proto.Item, Span, error) {
 	// A file with nothing new is the common case of a watched session at rest (a refresh four times a second): a stat
-	// says so, without the open, fstat and close below. A stat that fails goes on to the open, which reports it.
-	if st, err := os.Stat(f.Path); err == nil && unchanged(st, f.offset, f.ino) {
+	// says so without parsing. Windows also reads the file index through a metadata handle. A failed stat goes on
+	// to the open, which reports it.
+	if st, err := statTranscript(f.Path); err == nil && unchanged(st, f.offset, f.ino) {
 		return nil, Span{f.history(), f.lines, f.lines}, nil
 	}
-	fh, err := os.Open(f.Path)
+	fh, err := openTranscript(f.Path)
 	if err != nil {
 		return nil, Span{}, err
 	}
 	defer fh.Close()
-	st, err := fh.Stat()
+	st, err := statOpenedTranscript(fh)
 	if err != nil {
 		return nil, Span{}, err
 	}
@@ -372,7 +373,7 @@ func (f *File) WithImages(items []proto.Item) []proto.Item {
 
 // reparse reads line seq again and returns its items by id (none if the file changed under it).
 func (f *File) reparse(seq int, ref lineRef, scratch *Meta) map[string]proto.Item {
-	fh, err := os.Open(f.Path)
+	fh, err := openTranscript(f.Path)
 	if err != nil {
 		return nil
 	}

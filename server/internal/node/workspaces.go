@@ -77,12 +77,18 @@ func fillSpaceDirectories(spaces []host.Space, panes []host.Agent) {
 
 func (n *Node) listWorkspaces(ctx context.Context) (proto.WorkspacesResponse, error) {
 	out := proto.WorkspacesResponse{Workspaces: []proto.Workspace{}}
+	desktop, desktopSources, desktopErrors := n.desktopWorkspaces()
+	out.Workspaces = append(out.Workspaces, desktop...)
+	out.Errors = append(out.Errors, desktopErrors...)
 	hs := n.hosts.All()
-	if len(hs) == 0 {
+	if len(hs) == 0 && desktopSources == 0 && len(desktopErrors) == 0 {
 		return out, fmt.Errorf("unsupported: this node has no workspace host")
 	}
 	var failures []error
-	succeeded := 0
+	for _, failure := range desktopErrors {
+		failures = append(failures, fmt.Errorf("%s workspaces: %s", failure.Source, failure.Error))
+	}
+	succeeded := desktopSources
 	for _, h := range hs {
 		var spaces []host.Space
 		var err error

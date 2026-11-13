@@ -80,3 +80,16 @@ func TestSessionStartBudgetMatchesNodeStartup(t *testing.T) {
 		})
 	}
 }
+
+func TestDesktopCreationBudgetIncludesImportAndFirstMessage(t *testing.T) {
+	for _, launcher := range []string{"claude-desktop", "codex-app"} {
+		for _, async := range []bool{true, false} {
+			if budget := startBudgetForLauncher(async, launcher); budget < 165*time.Second {
+				t.Fatalf("%s async=%v: budget %s cannot complete native creation", launcher, async, budget)
+			}
+		}
+	}
+	if got := startBudgetForLauncher(true, "claude"); got != startBudget(true) {
+		t.Fatalf("ordinary async startup budget changed: %s", got)
+	}
+}

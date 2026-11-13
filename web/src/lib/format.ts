@@ -178,8 +178,13 @@ export function sessionTitle(s: Pick<Session, "title" | "cwd">): string {
 
 export function baseName(p?: string): string {
   if (!p) return "";
-  const parts = p.replace(/\/+$/, "").split("/");
+  const parts = pathSlashes(p).replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || p;
+}
+
+/** Remote Windows paths use either separator. A backslash inside a POSIX filename stays literal. */
+export function pathSlashes(path: string): string {
+  return /^[a-z]:[\\/]/i.test(path) || /^(?:\\\\|\/\/)[^\\/]+[\\/]/.test(path) ? path.replaceAll("\\", "/") : path;
 }
 
 export function tabLabel(s: Session): string {

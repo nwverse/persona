@@ -97,6 +97,7 @@ func (n *Node) scanOffline() []proto.Session {
 	unlisted := n.runtimes.unlistedTranscripts() // sessions of a runtime's own that it no longer lists (runtimeunlisted.go)
 	// The desktop app's sessions as its sidebar lists them (claudedesktop.go).
 	desktop := readClaudeDesktopIndex(n.home)
+	desktopProjects := map[string]string{}
 	for _, p := range files {
 		id := strings.TrimSuffix(filepath.Base(p), ".jsonl")
 		if !validID(id) {
@@ -189,6 +190,7 @@ func (n *Node) scanOffline() []proto.Session {
 		n.setModelRestore(&s, c.path, m)
 		s.PermissionMode, s.Effort = n.currentModes(id, m)
 		untitled(&s, m)
+		n.decorateClaudeDesktop(&s, desktop, desktopProjects)
 		out = append(out, s)
 		shown[id] = true
 		counted[c.count]++

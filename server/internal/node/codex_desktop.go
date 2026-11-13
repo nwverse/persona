@@ -190,8 +190,8 @@ func (n *Node) sendCodexDesktop(ctx context.Context, src codexSource, text strin
 // A process holding the rollout open only ever said "unknown", which the phone folds away with the quiet ones.
 const codexDesktopRecent = 72 * time.Hour
 
-// codexAppState is what the App keeps in <CODEX_HOME>/.codex-global-state.json about its sidebar: the unread threads,
-// its projects and which thread belongs to which. Read again when the file changes.
+// codexAppState joins the App's legacy sidebar state with its native project catalog and thread assignments.
+// Projects and memberships migrate independently, so both sources remain readable until that migration finishes.
 type codexAppState struct {
 	unread      map[string]bool
 	projectless map[string]bool
@@ -212,27 +212,22 @@ type codexAppProject struct {
 }
 
 type codexAppStateCache struct {
-	mtime time.Time
-	size  int64
-	state *codexAppState
+	stamp    string
+	revision uint64
+	state    *codexAppState
 }
 
 var codexAppStates sync.Map // home → codexAppStateCache
 
 func loadCodexAppState(home string) *codexAppState {
-	p := filepath.Join(home, ".codex-global-state.json")
-	st, err := os.Stat(p)
-	if err != nil {
-		return nil
-	}
+	snapshot, snapshotErr := codexDesktopProjectSnapshot(home)
 	if v, ok := codexAppStates.Load(home); ok {
 		c := v.(codexAppStateCache)
-		if c.mtime.Equal(st.ModTime()) && c.size == st.Size() {
+		if snapshotErr != nil || c.stamp == snapshot.Stamp && c.revision == snapshot.Revision {
 			return c.state
 		}
 	}
-	b, err := os.ReadFile(p)
-	if err != nil {
+	if snapshot.Projects == nil {
 		return nil
 	}
 	var raw struct {
@@ -243,13 +238,15 @@ func loadCodexAppState(home string) *codexAppState {
 		Assignments map[string]struct {
 			ProjectID string `json:"projectId"`
 		} `json:"thread-project-assignments"`
-		Projects map[string]codexAppProject `json:"local-projects"`
-		Order    []string                   `json:"project-order"`
 	}
-	if json.Unmarshal(b, &raw) != nil {
+	b, err := os.ReadFile(filepath.Join(home, ".codex-global-state.json"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	s := &codexAppState{unread: map[string]bool{}, projectless: map[string]bool{}, assigned: map[string]string{}, projects: raw.Projects, order: raw.Order}
+	if err == nil && json.Unmarshal(b, &raw) != nil {
+		return nil
+	}
+	s := &codexAppState{unread: map[string]bool{}, projectless: map[string]bool{}, assigned: map[string]string{}, projects: snapshot.Projects, order: snapshot.Order}
 	for _, hosts := range raw.ReadState.UnreadByIdentity {
 		for host, ids := range hosts {
 			if len(host) < 6 || host[:6] != "local:" {
@@ -264,7 +261,20 @@ func loadCodexAppState(home string) *codexAppState {
 		s.projectless[id] = true
 	}
 	for id, a := range raw.Assignments {
-		s.assigned[id] = a.ProjectID
+		pid := a.ProjectID
+		if canonical := snapshot.NativeProjectIDs[pid]; canonical != "" {
+			pid = canonical
+		}
+		s.assigned[id] = pid
+	}
+	for id, pid := range snapshot.ThreadProjects {
+		if pid == "" {
+			delete(s.assigned, id)
+			s.projectless[id] = true
+			continue
+		}
+		s.assigned[id] = pid
+		delete(s.projectless, id)
 	}
 	add := func(id string) {
 		if validID(id) && len(s.sidebar) < codexAppSidebarMax {
@@ -279,7 +289,7 @@ func loadCodexAppState(home string) *codexAppState {
 	}
 	slices.Sort(s.sidebar)
 	s.sidebar = slices.Compact(s.sidebar)
-	codexAppStates.Store(home, codexAppStateCache{mtime: st.ModTime(), size: st.Size(), state: s})
+	codexAppStates.Store(home, codexAppStateCache{stamp: snapshot.Stamp, revision: snapshot.Revision, state: s})
 	return s
 }
 
@@ -469,6 +479,9 @@ var codexTurnMarks sync.Map
 // source "exec" (their subagents keep the originator). Only the App's threads go through its IPC bus.
 type codexOrigin struct {
 	desktop bool
+	// persona: a chat Persona started in the App (originator codexAppClient, codexapp_new.go), which the App lists
+	// without a record in its state; desktop too, so its subagents are the App's as well.
+	persona bool
 	cli     bool
 	// exec: a one-shot run a program started (`codex exec`, an SDK, the App's background runs) or a subagent of one:
 	// nobody's conversation, not listed in Agents (programRun).
@@ -513,7 +526,8 @@ func readCodexOrigin(path string) codexOrigin {
 	if json.Unmarshal(line, &m) != nil || m.Type != "session_meta" {
 		return codexOrigin{} // not written yet: read again next time
 	}
-	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop", cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
+	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop" || m.Payload.Originator == codexAppClient,
+		persona: m.Payload.Originator == codexAppClient, cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
 	if at, err := time.Parse(time.RFC3339Nano, m.Timestamp); err == nil && !at.IsZero() {
 		o.started = &proto.SessionHierarchy{StartedAt: at.UTC()}
 	}
@@ -560,7 +574,7 @@ func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
 		return ok
 	}
 	o := readCodexOrigin(src.path)
-	return o.desktop && o.parent == "" && loadCodexAppState(src.home).listed(src.thread)
+	return o.desktop && o.parent == "" && (o.persona || loadCodexAppState(src.home).listed(src.thread))
 }
 
 // owner: the App window that owns the thread.

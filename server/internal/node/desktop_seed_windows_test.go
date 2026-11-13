@@ -1,0 +1,230 @@
+package node
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+const desktopSeedThread = "aaaaaaaa-0000-4000-8000-000000000111"
+
+type desktopSeedRecord struct {
+	Args  []string          `json:"args"`
+	Cwd   string            `json:"cwd"`
+	Env   map[string]string `json:"env"`
+	Calls []map[string]any  `json:"calls"`
+}
+
+// The copied test executable stands in for a native CLI. It runs before the test harness (which clears agent
+// environment variables), never reads credentials, and records only the fields asserted below.
+func init() {
+	mode := os.Getenv("PERSONA_TEST_DESKTOP_CHILD")
+	if mode == "" || filepath.Base(os.Args[0]) != "desktop-seed-helper.exe" {
+		return
+	}
+	record := desktopSeedRecord{Args: os.Args[1:], Env: map[string]string{}}
+	record.Cwd, _ = os.Getwd()
+	for _, name := range []string{"CLAUDE_CONFIG_DIR", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "PERSONA_SESSION_ID", "CODEX_HOME", "KEEP_DESKTOP_TEST"} {
+		record.Env[name] = os.Getenv(name)
+	}
+	writeRecord := func() {
+		body, _ := json.Marshal(record)
+		if os.WriteFile(os.Getenv("PERSONA_TEST_DESKTOP_RECORD"), body, 0o600) != nil {
+			os.Exit(3)
+		}
+	}
+	if mode == "claude" {
+		writeRecord()
+		os.Exit(0)
+	}
+	lines := bufio.NewScanner(os.Stdin)
+	for lines.Scan() {
+		var call map[string]any
+		if json.Unmarshal(lines.Bytes(), &call) != nil {
+			os.Exit(4)
+		}
+		record.Calls = append(record.Calls, call)
+		writeRecord()
+		id, request := call["id"]
+		if !request {
+			continue
+		}
+		result := any(map[string]any{})
+		switch call["method"] {
+		case "project/list":
+			result = map[string]any{"data": []any{
+				map[string]any{"id": "project-test", "name": "Example", "roots": []any{map[string]any{"path": record.Cwd}}},
+				map[string]any{"id": "project-chosen", "name": "Chosen", "position": 10, "roots": []any{map[string]any{"path": record.Cwd}}},
+			}, "nextCursor": nil}
+		case "thread/start":
+			if mode == "codex-lost" {
+				os.Exit(0)
+			}
+			result = map[string]any{"thread": map[string]any{"id": desktopSeedThread}}
+		case "thread/name/set":
+			writeRecord()
+		case "initialize":
+		default:
+			os.Exit(5) // a turn or resume here is a regression
+		}
+		b, _ := json.Marshal(map[string]any{"id": id, "result": result})
+		fmt.Println(string(b))
+	}
+	os.Exit(0)
+}
+
+func windowsDesktopSeedCLI(t *testing.T, mode string) (string, string) {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program := filepath.Join(t.TempDir(), "desktop-seed-helper.exe")
+	if err := os.WriteFile(program, body, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(t.TempDir(), "seen.json")
+	t.Setenv("PERSONA_TEST_DESKTOP_CHILD", mode)
+	t.Setenv("PERSONA_TEST_DESKTOP_RECORD", record)
+	return program, record
+}
+
+func readWindowsDesktopSeed(t *testing.T, file string) desktopSeedRecord {
+	t.Helper()
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record desktopSeedRecord
+	if err := json.Unmarshal(b, &record); err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+
+func TestWindowsDesktopSeedArguments(t *testing.T) {
+	cli, seen := windowsDesktopSeedCLI(t, "claude")
+	dir := t.TempDir()
+	t.Setenv("Claude_Config_Dir", `C:\other profile`)
+	t.Setenv("ClaudeCode", "1")
+	t.Setenv("Claude_Code_Entrypoint", "claude-desktop")
+	t.Setenv("Persona_Session_Id", "a-parent-session")
+	t.Setenv("KEEP_DESKTOP_TEST", "yes")
+	title := `A "quoted" title & %PATH% 中文`
+	if err := seedDesktopSession(context.Background(), cli, dir, desktopSeedThread, title); err != nil {
+		t.Fatal(err)
+	}
+	record := readWindowsDesktopSeed(t, seen)
+	if !reflect.DeepEqual(record.Args, []string{"-p", "--session-id", desktopSeedThread, "/rename " + title}) || !strings.EqualFold(record.Cwd, dir) {
+		t.Fatalf("seed arguments or directory changed: %+v", record)
+	}
+	for _, key := range []string{"CLAUDE_CONFIG_DIR", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "PERSONA_SESSION_ID"} {
+		if record.Env[key] != "" {
+			t.Fatalf("inherited %s", key)
+		}
+	}
+	if record.Env["KEEP_DESKTOP_TEST"] != "yes" {
+		t.Fatal("unrelated environment was removed")
+	}
+}
+
+func TestWindowsCodexMetadataSession(t *testing.T) {
+	cli, seen := windowsDesktopSeedCLI(t, "codex")
+	dir, home := t.TempDir(), t.TempDir()
+	t.Setenv("Codex_Home", `C:\old-profile`)
+	title := `Fix "CSV" & export 中文`
+	thread, err := startCodexAppChat(context.Background(), cli, home, dir, title)
+	if err != nil || thread != desktopSeedThread {
+		t.Fatalf("seed = %s, %v", thread, err)
+	}
+	record := readWindowsDesktopSeed(t, seen)
+	if !reflect.DeepEqual(record.Args, []string{"app-server"}) || record.Env["CODEX_HOME"] != home || !strings.EqualFold(record.Cwd, dir) {
+		t.Fatalf("server environment or arguments changed: %+v", record)
+	}
+	var methods []string
+	for _, call := range record.Calls {
+		method := call["method"].(string)
+		methods = append(methods, method)
+		params, _ := call["params"].(map[string]any)
+		switch method {
+		case "initialize":
+			if params["clientInfo"].(map[string]any)["name"] != codexAppClient {
+				t.Fatal("seed did not identify the desktop client")
+			}
+			if capabilities, _ := params["capabilities"].(map[string]any); capabilities["experimentalApi"] != true {
+				t.Fatal("native project APIs require the experimental capability")
+			}
+		case "thread/start":
+			if params["cwd"] != dir || params["projectId"] != "project-test" {
+				t.Fatalf("new chat is not in the picked native project: %v", params)
+			}
+		case "thread/name/set":
+			if params["name"] != title || params["threadId"] != desktopSeedThread {
+				t.Fatalf("name params = %v", params)
+			}
+		}
+	}
+	if !reflect.DeepEqual(methods, []string{"initialize", "initialized", "project/list", "thread/start", "thread/name/set"}) {
+		t.Fatalf("unexpected metadata requests: %v", methods)
+	}
+}
+
+func TestWindowsDesktopSeedRejectsUnknownBatchFiles(t *testing.T) {
+	batch := filepath.Join(t.TempDir(), "untrusted.cmd")
+	if err := os.WriteFile(batch, []byte("exit 0\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedDesktopSession(context.Background(), batch, t.TempDir(), desktopSeedThread, `a & echo no`); err == nil {
+		t.Fatal("Claude seed accepted an unknown shell wrapper")
+	}
+	if err := withCodexAppServer(context.Background(), batch, t.TempDir(), t.TempDir(), func(codexAppCall) error { return nil }); err == nil {
+		t.Fatal("Codex metadata client accepted an unknown shell wrapper")
+	}
+}
+
+func TestWindowsCodexMetadataUsesExactSelectedProject(t *testing.T) {
+	for _, chosen := range []string{"project-chosen", "project-missing"} {
+		t.Run(chosen, func(t *testing.T) {
+			cli, seen := windowsDesktopSeedCLI(t, "codex")
+			thread, err := startCodexAppChatInProject(context.Background(), cli, t.TempDir(), t.TempDir(), "title", chosen)
+			record := readWindowsDesktopSeed(t, seen)
+			if chosen == "project-missing" {
+				if err == nil || thread != "" {
+					t.Fatalf("missing project accepted: %s, %v", thread, err)
+				}
+				for _, call := range record.Calls {
+					if call["method"] == "thread/start" {
+						t.Fatal("created a thread before rejecting the selected project")
+					}
+				}
+				return
+			}
+			if err != nil || thread != desktopSeedThread {
+				t.Fatalf("explicit project creation: %s, %v", thread, err)
+			}
+			for _, call := range record.Calls {
+				if call["method"] == "thread/start" && call["params"].(map[string]any)["projectId"] != chosen {
+					t.Fatal("a different project with the same root replaced the explicit selection")
+				}
+			}
+		})
+	}
+}
+
+func TestWindowsCodexCreationResponseLossIsUncertain(t *testing.T) {
+	cli, _ := windowsDesktopSeedCLI(t, "codex-lost")
+	thread, err := startCodexAppChat(context.Background(), cli, t.TempDir(), t.TempDir(), "title")
+	if thread != "" || !maybeDelivered(err) {
+		t.Fatalf("lost creation response allowed an automatic retry: %s, %v", thread, err)
+	}
+}

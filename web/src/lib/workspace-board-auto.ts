@@ -2,7 +2,7 @@
 // computed from the agents a card has, so a card moves as its agents change, and nothing is persisted for them.
 // Needs you → Working → To review → Idle; reviewing and clearing a card is the existing Archive action.
 import { stateOf } from "./format";
-import { sameDirectory } from "./workspace-board";
+import { sameDirectory } from "./workspace-directory";
 import { todoStatus, type SessionLookup, type Todo } from "./todos";
 import type { BoardCard } from "./workspace-board";
 import type { Session } from "./types";

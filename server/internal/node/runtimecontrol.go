@@ -157,6 +157,7 @@ type runtimeStartParams struct {
 	Cwd, Prompt, Launcher         string
 	Model, PermissionMode, Effort string
 	WorkspaceID                   string // a space of the runtime's to start in (one of its sessions' space_id)
+	DesktopProjectID              string // the exact native desktop project selected in the project board
 	Resume                        string // the Claude session to take over and continue (caps.resume)
 	Shell                         bool   // Launcher is a login shell's launcher: the runtime picks its own of that name
 	OpenElsewhere                 bool   // a running claude has Resume open: only a runtime running it may take it

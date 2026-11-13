@@ -611,6 +611,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	}
 	var p struct {
 		Path             string        `json:"path"`
+		DesktopApp       string        `json:"desktop_app"`
+		DesktopProjectID string        `json:"desktop_project_id"`
+		CreateDirectory  bool          `json:"create_directory"`
+		IdempotencyKey   string        `json:"idempotency_key"`
+		BoundDirectories []string      `json:"bound_directories"`
 		Paths            []string      `json:"paths"`
 		Offset           int64         `json:"offset"`
 		Stream           bool          `json:"stream"`
@@ -629,6 +634,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ResumeSessionID  string        `json:"resume_session_id"`
 		Host             string        `json:"host"` // session.start: the enabled host to open in ("" the default host, #2576)
 		WorkspaceID      string        `json:"workspace_id"`
+		NameHint         string        `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (claudedesktop_new.go)
 		Text             string        `json:"text"`
 		Images           []proto.Image `json:"images"`
 		PreKeys          []string      `json:"pre_keys"`
@@ -958,6 +964,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			// launcher is not (the shell's runs: runtimeStart).
 			ls, err = append(append([]proto.Launcher(nil), ls...), n.runtimes.besideShell(bl, ls)...), nil
 		}
+		if withDesktop, added := n.withDesktopLauncher(ls); added { // Claude's desktop app (claudedesktop_new.go)
+			ls, err = withDesktop, nil
+		}
+		if withApp, added := n.withCodexAppLauncher(ls); added { // the Codex App (codexapp_new.go)
+			ls, err = withApp, nil
+		}
 		shell, rcFile := launcherShell()
 		return map[string]any{"launchers": typedLaunchers(ls), "shell": shell, "rc_file": rcFile}, err
 	case "launchers.managed", "launchers.catalog": // the providers added in Persona (managed.go): all with their secrets, or this computer's scope
@@ -1022,6 +1034,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.listWorkspaces(ctx)
 	case "workspace.resolve":
 		return n.resolveWorkspace(p.Path)
+	case "workspace.create":
+		return n.createWorkspaceProjectWithBindings(ctx, p.Path, p.Name, p.DesktopApp, p.IdempotencyKey, p.CreateDirectory, p.BoundDirectories)
 	case "sessions.list":
 		n.configured()          // a hub that lists without engine.use keeps herdr (engine.go)
 		n.useBotmux(true, true) // and one that lists without saying botmux keeps it, as before (hostbotmux.go)
@@ -1086,10 +1100,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			tab = *p.TabName
 		}
 		rp := runtimeStartParams{Cwd: p.Cwd, Prompt: p.Prompt, Launcher: p.Launcher, Model: p.Model, PermissionMode: p.PermissionMode,
-			Effort: p.Effort, WorkspaceID: p.WorkspaceID, Resume: p.ResumeSessionID}
+			Effort: p.Effort, WorkspaceID: p.WorkspaceID, DesktopProjectID: p.DesktopProjectID, Resume: p.ResumeSessionID}
 		if p.SecretTicket != "" { // only a new Claude Code start in a terminal takes one (control.go secretStartProblem)
 			_, onRuntime := engineRuntimes[cmp.Or(p.Host, n.defaultKind())]
-			if h, _ := n.startRuntime(p.Launcher); h != nil || onRuntime || p.ResumeSessionID != "" {
+			if h, _ := n.startRuntime(p.Launcher); h != nil || onRuntime || p.ResumeSessionID != "" || isDesktopLauncher(p.Launcher) || isCodexAppLauncher(p.Launcher) {
 				return nil, refusal(secretEnvAgentCode, secretEnvAgentText, nil)
 			}
 			if !n.handoffs().has(p.SecretTicket) {
@@ -1101,7 +1115,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			s, err := n.runtimeStartOn(ctx, work.runtime, rp)
 			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 		}
+		if method == "session.start" {
+			if s, err, ok := n.startInDesktopApp(ctx, rp, p.NameHint); ok { // a new session in Claude's desktop app (claudedesktop_new.go)
+				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+			}
+		}
 		if method == "session.start" && p.ResumeSessionID == "" {
+			if s, err, ok := n.startInCodexApp(ctx, rp, p.NameHint); ok { // a new chat in the Codex App (codexapp_new.go)
+				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+			}
 			if s, err, ok := n.runtimeStart(ctx, rp); ok { // a runtime's launcher
 				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 			}

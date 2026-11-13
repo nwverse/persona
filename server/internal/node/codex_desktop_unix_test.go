@@ -13,11 +13,12 @@ import (
 func listenFakeCodexBus(t *testing.T) (home string, l net.Listener) {
 	t.Helper()
 	// A short path: a unix socket path over ~104 bytes (macOS's t.TempDir()) cannot be bound.
-	home, err := os.MkdirTemp("/tmp", "cxbus")
+	root, err := os.MkdirTemp("/tmp", "cxbus")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(home) })
+	t.Cleanup(func() { os.RemoveAll(root) })
+	home = filepath.Join(root, ".codex")
 	os.MkdirAll(filepath.Join(home, "ipc"), 0o700)
 	l, err = net.Listen("unix", codexDesktopSocket(home))
 	if err != nil {

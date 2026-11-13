@@ -33,6 +33,7 @@ export const DEFAULT_ROW = "default";
 /** A list's model by an id it may stand for (its own id, or what an alias resolves to; a named model before the default
  *  entry standing for the same one). */
 const listed = (list: LauncherModels | null | undefined, id: string): AgentModel | undefined => (id && list ? currentModelRow(list.models, id) : undefined);
+const desktopLauncher = (launcher: Launcher | undefined): boolean => launcher?.source === "codex_app" || launcher?.source === "claude_desktop";
 
 /** A model's name for people: its list's name, else a short form of the id (a gateway's path without its vendor). */
 export function modelTitle(list: LauncherModels | null | undefined, id: string): string {
@@ -51,6 +52,7 @@ function resolvedTitle(models: AgentModel[], d: AgentModel): string {
  *  else Model settings' model on their launcher, else what the default entry stands for, else the launcher's model when
  *  its list has no default entry. The Default row and the pill both say it. */
 function defaultRuns(l: Launcher | undefined, list: LauncherModels | null | undefined, followed: ModelBinding): string {
+  if (desktopLauncher(l)) return "";
   const d = list ? defaultModel(list.models) : undefined;
   if (list?.locked) return l?.model ? modelLabel(l.model) : "";
   if (followed.model) return modelTitle(list, followed.model);
@@ -88,6 +90,7 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     const e = listOf(l.name);
     const list = e.list;
     const agent = launcherAgent(l.name, launchers, list);
+    const desktop = desktopLauncher(l);
     const followed = followedBinding(l.name, configured);
     const p: PanelProvider = { id: l.name, name: providerTitle(l), engine: agentId(agent), models: null };
     const idNote = providerIdNote(l);
@@ -114,17 +117,17 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     const first: PanelModel = {
       id: DEFAULT_ROW,
       name: runsModel ? t("lib-launcher-models.default_named", { name: runsModel }) : t("lib-launcher-models.default"),
-      efforts: takesEffort(agent) ? effortChoices(list, "", followed) : [],
+      efforts: !desktop && takesEffort(agent) ? effortChoices(list, "", followed) : [],
       providerDefault: true,
     };
     const note = locked || folded?.description;
     if (note) first.description = note;
     const defaultEffort = followed.effort || d?.default_effort;
-    if (defaultEffort) first.defaultEffort = defaultEffort;
+    if (!desktop && defaultEffort) first.defaultEffort = defaultEffort;
     if (folded?.resolved) first.resolved = folded.resolved;
     const models: PanelModel[] = [first];
     // a launcher that fixes its own --model takes no pick of a model: its Default row alone
-    if (!locked) {
+    if (!locked && !desktop) {
       for (const m of all) {
         if (m === folded) continue;
         const row: PanelModel = { id: m.id, name: modelName(m), efforts: effortsOf(m) };
@@ -147,8 +150,9 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
 
   // the row lit: the model picked, else the launcher's Default row (which says what it runs)
   const followed = followedBinding(runs, configured);
+  const desktop = desktopLauncher(launchers.find((l) => l.name === runs));
   const state: PanelState = {
-    current: runs ? cleanSetup({ provider: runs, model: choice.model || DEFAULT_ROW, effort: choice.effort || followed.effort }) : null,
+    current: runs ? cleanSetup({ provider: runs, model: desktop ? DEFAULT_ROW : choice.model || DEFAULT_ROW, effort: desktop ? undefined : choice.effort || followed.effort }) : null,
     recommended: [],
     starting: true,
   };
@@ -182,10 +186,11 @@ export function newAgentPill(o: { launchers: Launcher[]; runs: string; list: Mod
   const agent = launcherAgent(runs, o.launchers, list);
   const followed = followedBinding(runs, o.configured);
   const l = o.launchers.find((x) => x.name === runs);
+  const desktop = desktopLauncher(l);
   const d = list ? defaultModel(list.models) : undefined;
   // the model picked, else what the launcher's Default row runs; with nothing to say once the list is in, its default
   // entry's name or "Default model"
-  const named = !list?.locked && choice.model ? modelTitle(list, choice.model) : defaultRuns(l, list, followed);
+  const named = !desktop && !list?.locked && choice.model ? modelTitle(list, choice.model) : defaultRuns(l, list, followed);
   const model = !runs ? o.fallback : named || (list !== undefined ? (d ? modelName(d) : t("chat-modelpill.default_model")) : undefined);
   const out: PillSetup & { loading: boolean; failed: boolean } = {
     engine: agentId(agent),
@@ -194,7 +199,7 @@ export function newAgentPill(o: { launchers: Launcher[]; runs: string; list: Mod
     failed: list === undefined && Boolean(e.error),
   };
   if (model) out.model = model;
-  const effort = takesEffort(agent) ? choice.effort || followed.effort : "";
+  const effort = !desktop && takesEffort(agent) ? choice.effort || followed.effort : "";
   if (effort) out.effort = effort;
   return out;
 }

@@ -27,6 +27,12 @@ var launcherCheckTimeout = 90 * time.Second
 // directory, and says whether an answer came back, how long it took and which model answered. It is a real request
 // (a few tokens).
 func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherCheck {
+	if isDesktopLauncher(name) {
+		return proto.LauncherCheck{Agent: "claude", Error: desktopCheckMsg}
+	}
+	if isCodexAppLauncher(name) {
+		return proto.LauncherCheck{Agent: "codex", Error: codexAppCheckMsg}
+	}
 	if name != "claude" && !shellcmd.NameRe.MatchString(name) {
 		return proto.LauncherCheck{Error: fmt.Sprintf("invalid launcher %q", name)}
 	}

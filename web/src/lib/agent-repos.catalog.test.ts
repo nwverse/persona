@@ -9,6 +9,7 @@ const session = (id: string, workspaceId: string, patch: Partial<Session> = {}):
 const options = (workspaces: HostWorkspace[], patch: Partial<RepoCatalogOptions> = {}): RepoCatalogOptions => ({ owner: "credential-a", manager: "manager-a", workspaces, ...patch });
 const flatten = (rows: RepoWorktree[]): RepoWorktree[] => rows.flatMap((w) => [w, ...flatten(w.children)]);
 const rows = (all: Session[], opts: RepoCatalogOptions) => buildRepoMachineTree(all, machines, opts).flatMap((m) => m.repos.flatMap((r) => flatten(r.worktrees)));
+const desktops = [["codex_app", "codex-project:home"], ["claude_desktop", "claude-environment:account"]] as const;
 
 describe("catalog-backed By repo projection", () => {
   it("preserves three empty ancestors, a standalone empty workspace, metadata and zero Agent counts", () => {
@@ -51,6 +52,56 @@ describe("catalog-backed By repo projection", () => {
     expect(sessionWorkspace(session("foreign", "b", { cwd: "/code/a", space_kind: "herdr", workspace_id: "b" }), catalog)).toBeUndefined();
     expect(sessionWorkspace(session("unknown", "missing", { cwd: "/code/a" }), catalog)).toBeUndefined();
     expect(sessionWorkspace(session("other-manager", "a", { manager: "manager-b" }), catalog, "manager-a")).toBeUndefined();
+  });
+
+  it.each(desktops)("keeps each %s project root visible and assigns Agents to the deepest matching root", (source, prefix) => {
+    const project = `${prefix}:project-a`;
+    const root = workspace("root", { source, source_id: project, cwd: "C:\\Projects\\App" });
+    const child = { ...root, id: "child-root", title: "Child", cwd: "C:\\Projects\\App\\Packages\\Child" };
+    const docs = { ...root, id: "docs-root", title: "Docs", cwd: "D:\\Docs" };
+    const agents = [
+      session("main", project, { space_kind: source, cwd: "c:/projects/app/src" }),
+      session("child", project, { space_kind: source, cwd: "c:/projects/app/packages/child/src" }),
+      session("docs", project, { space_kind: source, cwd: "d:/docs/pages" }),
+    ];
+    const actual = rows(agents, options([root, child, docs]));
+    expect(actual).toHaveLength(3);
+    expect(new Set(actual.map((w) => w.key)).size).toBe(3);
+    for (const [w, id] of [[root, "main"], [child, "child"], [docs, "docs"]] as const) {
+      expect(actual.find((entry) => entry.workspace === w)?.sessions.map((s) => s.session_id)).toEqual([id]);
+    }
+  });
+
+  it.each(desktops)("uses a %s linked worktree's common Git root when its cwd is outside the project's roots", (source, prefix) => {
+    const project = `${prefix}:project-a`;
+    const app = workspace("app", { source, source_id: project, cwd: "C:\\Projects\\App" });
+    const docs = { ...app, id: "docs-root", cwd: "D:\\Docs" };
+    const agent = session("worktree", project, { space_kind: source, cwd: "C:\\Worktrees\\fix", repo_root: "c:/projects/app" });
+    expect(sessionWorkspace(agent, [app, docs])).toBe(app);
+    expect(sessionWorkspace({ ...agent, cwd: "d:/docs/pages" }, [app, docs])).toBe(docs);
+    expect(sessionWorkspace({ ...agent, repo_root: undefined, workspace_cwd: "D:\\Docs" }, [app, docs])).toBe(docs);
+    expect(sessionWorkspace({ ...agent, repo_root: undefined }, [app, docs])).toBeUndefined();
+  });
+
+  it.each(desktops)("never cross-binds saved %s projects that share a directory", (source, prefix) => {
+    const a = workspace("a", { source, source_id: `${prefix}:a`, cwd: "C:\\Projects\\App" });
+    const b = { ...a, id: "project-b-root", source_id: `${prefix}:b` };
+    const otherRoot = { ...a, id: "project-a-docs", cwd: "D:\\Docs" };
+    const agent = session("agent", a.source_id, { space_kind: source, cwd: "c:/projects/app/src" });
+    expect(sessionWorkspace(agent, [a, b, otherRoot])).toBe(a);
+    expect(sessionWorkspace({ ...agent, space_id: b.source_id }, [a, b, otherRoot])).toBe(b);
+    expect(sessionWorkspace(agent, [b])).toBeUndefined();
+    expect(sessionWorkspace({ ...agent, cwd: "C:/Unrelated" }, [a, b, otherRoot])).toBeUndefined();
+    expect(sessionWorkspace(agent, [a, { ...a, id: "duplicate-root" }, otherRoot])).toBeUndefined();
+  });
+
+  it.each(desktops)("matches directory-derived %s placement only when a unique saved project contains its directory", (source, prefix) => {
+    const project = workspace("app", { source, source_id: `${prefix}:saved`, cwd: "C:\\Projects\\App" });
+    const directoryPrefix = source === "codex_app" ? "codex-project:" : "claude-project:";
+    const inferred = session("unassigned", `${directoryPrefix}C:\\Projects\\App`, { space_kind: source, cwd: "c:/projects/app/src" });
+    expect(sessionWorkspace(inferred, [project])).toBe(project);
+    expect(sessionWorkspace({ ...inferred, cwd: "C:\\Users\\User\\.codex\\worktrees\\fix" }, [project])).toBe(project);
+    expect(sessionWorkspace(inferred, [project, { ...project, id: "other", source_id: `${prefix}:other` }])).toBeUndefined();
   });
 
   it("attributes unbound native Agents only to a unique deepest containing directory and respects worktree markers", () => {

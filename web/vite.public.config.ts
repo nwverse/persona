@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, normalizePath, type Plugin } from "vite";
 
-const root = fileURLToPath(new URL("./public-share", import.meta.url));
-const source = fileURLToPath(new URL("./src", import.meta.url));
+const root = normalizePath(fileURLToPath(new URL("./public-share", import.meta.url)));
+const source = normalizePath(fileURLToPath(new URL("./src", import.meta.url)));
 const paletteID = "\0virtual:public-share-palette";
 const palette: Plugin = {
   name: "public-share-palette",

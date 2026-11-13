@@ -153,7 +153,7 @@ func readCodexAppThreads(ctx context.Context, db string, ids []string) (map[stri
 }
 
 func readCodexThreads(ctx context.Context, db, where string) (map[string]codexAppThread, error) {
-	sqlite, err := exec.LookPath("sqlite3")
+	sqlite, err := codexSQLiteProgram()
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +162,9 @@ func readCodexThreads(ctx context.Context, db, where string) (map[string]codexAp
 	q := `SELECT id, rollout_path AS rolloutPath, COALESCE(NULLIF(name, ''), title) AS title, cwd, source, ` +
 		`COALESCE(updated_at_ms, updated_at * 1000) AS updatedAtMs FROM threads ` +
 		`WHERE ` + where
-	out, err := exec.CommandContext(cctx, sqlite, "-readonly", "-bail", "-json", "-cmd", ".timeout 2000", codexDBTarget(db), q).Output()
+	cmd := exec.CommandContext(cctx, sqlite, "-readonly", "-bail", "-json", "-cmd", ".timeout 2000", codexDBTarget(db), q)
+	hideCodexSQLiteWindow(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}

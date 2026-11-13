@@ -50,5 +50,11 @@
   "follow_row": "モデル設定に従う",
   "carry_dropped": "{computer} では {name} を使えないため、このコンピューターのデフォルトに戻しました。",
   "preset_picked": "プリセット {name} · {what}",
-  "typed_now": "今回入力したモデル ID"
+  "typed_now": "今回入力したモデル ID",
+  "temporary_folder": "一時的な会話",
+  "desktop_folder_hint": "下のフォルダーを選ぶか、新しいフォルダーを入力するか、一時的な会話を使えます。",
+  "desktop_folder_placeholder": "空欄の場合は一時的な会話を作成",
+  "desktop_settings_hint": "モデルと権限はデスクトップアプリの設定を使います。",
+  "desktop_unavailable": "このコンピューターでは {app} デスクトップのランチャーを利用できません。別のランチャーを選んでください。",
+  "desktop_project_detached": "元のデスクトッププロジェクトは選択されていません。"
 }

@@ -1,4 +1,4 @@
-# node on Windows (herdr and Orca engines)
+# node on Windows (terminal engines and desktop apps)
 
 Lets the phone see and drive Claude Code inside herdr or Orca on a Windows computer: that computer runs the resident node (`personad node --attach`) and the connector persona-link (active mode, see [link.md](link.md)),
 while the hub lives elsewhere (WSL2 / Docker / another machine). Requirements and steps are in #1090; the overview of Windows support is #1179. Pitfalls we hit are in [lessons/windows.md](../lessons/windows.md).
@@ -30,6 +30,19 @@ The table below is for Orca; where the herdr engine differs is in the table in t
 | hub self-update | ❌ | Still `syscall.Exec`; the hub doesn't run natively on Windows (#1179) |
 | Updating the resident node through the hub ([node-update.md](node-update.md)) | ❌ | The node reports it as unsupported ("resident node is not managed by launchd/systemd"), and the App shows why; to upgrade, run `persona-link install --personad <new personad.exe>` again |
 | Passive mode (hub connects to this machine) | Not verified | Builds, and `install --listen` takes the same path; you have to open the port in Windows Firewall yourself (`install` prints the `New-NetFirewallRule` command) |
+
+## Desktop projects and new sessions
+
+The node also lists Claude Desktop and Codex App projects independently of terminal engines. The web app is the desktop interface; Persona Link supplies local discovery, history and message delivery. Empty saved projects can appear before any Agent runs there. Claude's existing saved environments supply their native names and identities; sessions without an environment reference fall back to their original project folders, keeping desktop-created worktrees together.
+
+- **Claude discovery:** search `Claude`, `Claude-3p` and `Claude-Data` under the user's local and roaming AppData, including Microsoft Store redirection under `Packages/Claude_*/LocalCache`. Read session-index files and the dedicated saved-environment metadata mirror, never credential-bearing app configuration. The index supplies transcript IDs, archive state, titles, folders and environment references. Native environment IDs are scoped to profile and account; only local absolute roots are included, with WSL, SSH and cloud targets excluded. Reading these names does not provide native create/rename support. Existing transcripts remain in Claude Code's projects directory.
+- **Codex projects and history:** merge the legacy `.codex-global-state.json` project catalog with native `projects` / `project_roots` in `state_<n>.sqlite`, preserving project identities and order during migration. Paginated chat content comes from `thread_history_<n>.sqlite`. SQLite reads require `sqlite3.exe`: search the inherited PATH first, then beside `personad.exe`, the current registered user/system PATH and `%LOCALAPPDATA%\Microsoft\WinGet\Links`. These checks do not change PATH, and SQLite runs without a console window.
+- **Create or bind a project:** Workflow board's **Add workspace** binds an existing folder or discovered native project to a Persona card. **New project** can create a Persona project, reusing a folder or creating its final missing child under an existing parent. Native Codex App and Claude Desktop project creation is disabled: `workspace.create` with either desktop app returns `desktop_project_sync_unavailable` before creating a directory or native metadata. Create the project in the desktop app, then bind it in Persona. A Persona card's title does not rename the native project. See [workspace-board.md](../web/workspace-board.md).
+- **New desktop session:** choose `claude-desktop` or `codex-app` in **New agent**; no terminal engine is needed. The app uses its own model and permission settings. An existing folder or one new child folder is accepted; a blank folder creates a temporary session folder. Codex requires a first message. Claude imports a CLI-created transcript and receives messages through its peer inbox; Codex creates thread metadata and sends the first turn through the owning desktop window. The registered `claude://` and `codex://` handlers open the apps through `ShellExecute`.
+
+A Codex card selects its exact project, even when another project shares its folder. Projects from a different Codex profile, or legacy JSON projects without a native mapping, cannot be started from that selection; open or update the legacy project in Codex first. Claude's existing named environments can be read and bound, but starting with their `desktop_project_id` is refused with `claude_desktop_project_unsupported` before transcript creation, import or delivery because the import cannot guarantee that environment assignment. Clear that selection to start a directory-based Claude desktop session. If session creation succeeds but setup or delivery fails, retry continues the returned session. An empty Claude session retries import only. These recovery paths do not create a replacement conversation.
+
+The desktop launchers are a local integration of upstream PR #5528 (Claude) and PR #5755 (Codex, stacked on #5528); this statement does not imply either PR has merged. This Windows extension has local automated and mock-protocol coverage plus read-only inspection of installed app schemas. Native sidebar project creation and name synchronization remain unavailable, so the project-creation API refuses those requests before side effects; refreshing or reopening the app is not a verified remedy. Real Windows message delivery and new desktop sessions remain unverified. The older real-machine checks below do not validate these additions.
 
 ## Install and start at logon
 
@@ -222,5 +235,5 @@ If Git Bash can't be found, these commands don't start (the machine info has no 
 
 ## Real-machine checks
 
-Each part above was checked on a real Windows 10 or 11 machine between 2026-11-03 and 2026-11-07: Orca and Claude through the hub and an Android phone, the herdr engine, install and start at logon, the tray, Claude outside Persona's terminals, and Codex.
+The earlier platform support was checked on a real Windows 10 or 11 machine between 2026-11-03 and 2026-11-07: Orca and Claude through the hub and an Android phone, the herdr engine, install and start at logon, the tray, Claude outside Persona's terminals, and Codex. The newer desktop project and session changes have the narrower validation scope described above.
 What ran, what was found on the way, and what each check could not cover are in `docs/archive/operations/windows-records.md`.
