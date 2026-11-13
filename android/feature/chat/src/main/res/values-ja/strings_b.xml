@@ -45,6 +45,8 @@
     <string name="chat_chrome_actions_title">セッションの操作</string>
     <string name="chat_chrome_todo">ToDo · %1$s</string>
     <string name="chat_chrome_terminal">ターミナル</string>
+    <string name="chat_chrome_resume_in_terminal">ターミナルで再開</string>
+    <string name="chat_chrome_resume_no_engine">%1$s ではターミナルエンジンが有効になっていません</string>
     <string name="chat_chrome_search">検索</string>
     <string name="chat_chrome_files">ファイル</string>
     <string name="chat_chrome_details">セッションの詳細</string>
@@ -181,6 +183,17 @@
     <string name="chat_screen_command_ids">リクエスト%1$s、ツール呼び出し%2$s</string>
     <string name="chat_screen_type_answer">回答を入力</string>
     <string name="chat_screen_unreadable">このダイアログはまだ読み取れません。コンピューターで確認して対応してください。</string>
+    <string name="chat_command_ask_title">%1$sがコマンドを実行しようとしています</string>
+    <string name="chat_command_ask_risk_delete">このコマンドでファイルが削除されないか確認できません</string>
+    <string name="chat_command_ask_risk_other">Claude Codeがこのコマンドについて警告しています</string>
+    <string name="chat_command_ask_countdown_deny">%1$s後に自動で拒否されます</string>
+    <string name="chat_command_ask_countdown_allow">%1$s後に自動で許可されます</string>
+    <string name="chat_command_ask_countdown_over_deny">時間切れのため、Claude Codeが自動で拒否します</string>
+    <string name="chat_command_ask_countdown_over_allow">時間切れのため、Claude Codeが自動で許可します</string>
+    <string name="chat_command_ask_show_original">原文を表示</string>
+    <string name="chat_command_ask_hide_original">原文を隠す</string>
+    <string name="chat_command_ask_show_all">すべて表示</string>
+    <string name="chat_command_ask_collapse">折りたたむ</string>
     <string name="chat_request_unsupported">このリクエストはまだスマートフォンで対応できません。コンピューターで確認して対応してください。</string>
     <string name="chat_request_terminal_help">ターミナルでの対応</string>
     <string name="chat_request_dismiss">コンピューターに任せる</string>
@@ -326,6 +339,9 @@
     </plurals>
     <string name="chat_queue_deleted">キューから削除しました</string>
     <string name="chat_queue_restored">入力欄に戻しました。編集してから送信してください。</string>
+    <plurals name="chat_queue_photos_lost">
+        <item quantity="other">入力欄に戻しました。画像%1$d枚は戻せませんでした。</item>
+    </plurals>
     <string name="chat_queue_not_found">このメッセージが見つかりません。キューが変わった可能性があります。確認してもう一度お試しください</string>
     <string name="chat_queue_failed">変更できませんでした：%1$s</string>
     <string name="chat_queue_edit">取り消して編集</string>

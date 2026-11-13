@@ -188,6 +188,8 @@ type Node struct {
 	adoptedFailures []adoptedFailure
 	// fallbacks: each conversation's last model switch that answered, and the hold on it (assistant_fallback_hold.go).
 	fallbacks map[string]*assistantFallback
+	// unavailable: launcher + "\x00" + model a recovery found the gateway does not serve, and until when it is skipped.
+	unavailable map[string]time.Time
 
 	// runtimes: agent runtimes without a terminal, connected on runtime.sock (runtimes.go); runtimeSock overrides the
 	// socket path (tests).
@@ -597,6 +599,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.secretStageCall(params)
 	case proto.MethodModelHTTP: // an API connection's request sent through this computer (modelhttp.go); the same
 		return modelHTTP(ctx, params)
+	case proto.MethodModelRun: // an API purpose's request answered by a launcher here (modelrun.go); the same
+		return n.modelRun(ctx, params)
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
@@ -612,6 +616,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Paths            []string      `json:"paths"`
 		Offset           int64         `json:"offset"`
 		Stream           bool          `json:"stream"`
+		Detail           bool          `json:"detail"` // fs.stat: the Info sheet's fields (files_info.go)
 		SessionID        string        `json:"session_id"`
 		CreationID       string        `json:"creation_id"`
 		Incarnation      string        `json:"incarnation"`
@@ -791,10 +796,16 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	} else if h, err := n.runtimeFor(ctx, method, p.SessionID); err != nil {
 		return nil, err
 	} else if h != nil {
+		if err := n.switchNowElsewhere(method, p.SessionID, params); err != nil {
+			return nil, err // the runtime would take the message without the switch (launcher_switch.go)
+		}
 		if res, err, handled := n.runtimeHandle(ctx, h, method, params); handled {
 			return res, err
 		}
 	} else if r, ok := n.terminalOnly(p.SessionID); ok { // a pi or opencode without its extension, any other agent (opencode.go)
+		if err := n.switchNowElsewhere(method, p.SessionID, params); err != nil {
+			return nil, err
+		}
 		if res, err, handled := n.terminalOnlyCalls(ctx, method, p.SessionID, r); handled {
 			return res, err
 		}
@@ -1036,7 +1047,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if p.ResumeSessionID != "" {
 				return nil, workStartRefused("work_target_required", "A work session must be new.")
 			}
-			cwd, _, err := n.checkStart(p.Cwd, p.Launcher, "", p.PermissionMode, p.Effort)
+			cwd, _, err := n.checkStart(p.Cwd, p.Launcher, "", p.PermissionMode, p.Effort, p.AgentType)
 			if err != nil {
 				return nil, workStartRefused("work_project_unavailable", "The project folder or start options are no longer valid.")
 			}
@@ -1220,11 +1231,18 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return n.assistantMemory(a)
+	case "session.switch": // the switch picked a moment before, carried out now with no message (launcher_switch.go)
+		var to struct {
+			From string `json:"from"`
+		}
+		_ = json.Unmarshal(params, &to)
+		return ok(n.switchIdle(ctx, p.SessionID, p.Launcher, to.From, p.Model))
 	case "session.send":
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
 		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
-		return ok(n.sends.once(opts.ClientMsgID, func() error {
+		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
+		err := n.sends.once(opts.ClientMsgID, func() error {
 			var after int
 			if opts.ClientMsgID != "" {
 				after = n.echoBase(p.SessionID)
@@ -1236,7 +1254,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				}
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)
 			})
-		}))
+		})
+		if err == nil && *waits {
+			return map[string]any{"ok": true, "waits_on_computer": true}, nil
+		}
+		return ok(err)
 	case "session.echoes": // what the hub kept of earlier sends (echo.go), after this node started
 		var a struct {
 			Echoes []echoRecord `json:"echoes"`
@@ -1352,9 +1374,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		var a struct {
 			Kind        string `json:"kind"`
 			WorkspaceID string `json:"workspace_id"`
+			Cwd         string `json:"cwd"` // the file page's Open Terminal Here (#5832)
 		}
 		_ = json.Unmarshal(params, &a)
-		return n.newShell(ctx, a.Kind, a.WorkspaceID)
+		return n.newShell(ctx, a.Kind, a.WorkspaceID, a.Cwd)
 	case "panes.close_finished": // the user's "Close finished terminals" (stopped.go, #4754)
 		var a struct {
 			Panes   string `json:"panes"`
@@ -1515,6 +1538,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		// Pages counted back from the end fold the agent's work for callers that ask (transcript.FoldWork).
 		fold := func(page []proto.Item) []proto.Item {
 			if p.FoldWork {
+				if p.BeforeSeq == 0 {
+					return transcript.FoldWorkLatest(page)
+				}
 				return transcript.FoldWork(page)
 			}
 			return page
@@ -1608,6 +1634,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.uploadCall(method, params)
 	case "file.rename", "file.move", "file.trash", "file.restore":
 		return n.fileEditCall(method, params)
+	case "file.mkdir", "file.write", "file.zip", "file.copy", "file.chmod": // new folders, text files, zips, copies, permissions (filemake.go, filecopy.go)
+		return n.fileMake(ctx, method, params)
 	case "health.reports.list", "health.reports.delete":
 		return n.healthReportsCall(method, params)
 	case "file.chunk":
@@ -1652,8 +1680,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		"browser.status", "browser.install", "browser.open", "browser.cancel", "browser.call",
 		"browser.cookies.list", "browser.cookies.import", "browser.cookies.clear":
 		return legacyBuiltinCall(ctx, method, params, n.lcuComputerCall)
-	case "fs.stat":
-		return map[string]any{"stats": n.statPaths(p.Paths, p.Cwd)}, nil
+	case "fs.stat": // detail: the Info sheet (files_info.go)
+		return map[string]any{"stats": n.statPaths(p.Paths, p.Cwd, p.Detail)}, nil
 	case "space.rename":
 		name, err := n.renameSpace(ctx, p.WorkspaceID, p.Name)
 		if err != nil {

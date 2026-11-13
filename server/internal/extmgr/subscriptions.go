@@ -49,6 +49,7 @@ func (h *Manager) startSubscriptions(ctx context.Context) {
 		store = subscriptions.NewMemStore() // no database (tests): kept in memory only
 	}
 	h.subs = subscriptions.New(h.subscriptionOptions(store))
+	h.subsLive.Store(h.subs)
 	go h.subs.Run(ctx)
 }
 
@@ -118,7 +119,7 @@ func (h *Manager) readSubscriptions(ctx context.Context, r *assistantwire.InboxR
 	for _, src := range srcs {
 		r.Names[src.ID] = src.Name
 		r.Sources = append(r.Sources, assistantwire.InboxSource{ID: src.ID, Name: src.Name, Extension: true, Counts: true, Kinds: src.Kinds,
-			Things: src.Things})
+			Things: src.Things, ReadError: src.ReadError, Via: src.Connector, ViaSource: src.SourceName, Chats: src.Chats})
 	}
 }
 

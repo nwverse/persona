@@ -134,6 +134,11 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
 
 Login-shell launchers (those in `~/.zshrc`) still appear in the creation form. If selected, use the Paseo provider with the same name if one exists;
 otherwise use Paseo's default provider (its built-in Claude Code provider if enabled, otherwise the first provider running Claude Code).
+When a named launcher is replaced, the bridge leaves model and reasoning effort unset so the replacement provider uses its own
+defaults. This includes a Persona-managed launcher or a resolved Agent preset: the manager can accept that launcher while the
+Paseo engine has no enabled provider with the same name. An enabled Codex variant does not automatically stand in for `codex`;
+the existing fallback still prefers a Claude provider. Model and effort stay with starts that keep their launcher, or that named
+no launcher. Permission mode, workspace and the first message keep their existing behavior.
 
 ## How the bridge runs
 

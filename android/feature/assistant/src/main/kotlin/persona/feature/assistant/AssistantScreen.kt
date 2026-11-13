@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -58,6 +59,8 @@ import persona.core.navigation.AppTab
 import persona.core.navigation.InboxRoute
 import persona.core.navigation.SettingsRoute
 import persona.core.navigation.ChatRoute
+import persona.core.navigation.ConversationKind
+import persona.core.navigation.TodoDetailRoute
 import persona.core.navigation.ModelPurposeRoute
 import persona.core.navigation.Navigator
 import persona.feature.assistant.proactive.AssistantProactiveScreen
@@ -165,6 +168,8 @@ fun AssistantScreen(
     mentionSessions: StateFlow<List<Session>>? = null,
     /** Reads the assistant's computer's folders for a path typed after @ on New chat's page; null: sessions only. */
     mentionFiles: persona.core.contracts.api.SessionFiles? = assistantSessionFiles(),
+    /** The selected hub group's name while several are paired, which ends the title menu's heading as on iOS; null with one. */
+    hubGroup: String? = null,
 ) = PersonaTheme {
     val receivedSnapshot by repository.assistant.collectAsStateWithLifecycle()
     val conversationsOf = repository as? persona.core.contracts.api.AssistantConversations
@@ -788,6 +793,8 @@ fun AssistantScreen(
             onTodos = onTodos?.let { action -> { scope.launch { drawerOpen = false }; action() } },
             todoCount = todoCount,
             showTodos = showTodos,
+            onOpenTodo = { id -> scope.launch { drawerOpen = false }; navigator.navigate(TodoDetailRoute(id)) },
+            onOpenAgent = { key -> scope.launch { drawerOpen = false }; navigator.navigate(ChatRoute(key.machineId, key.sessionId, ConversationKind.Agent)) },
         )
         ConversationHistoryDialogs(history, snapshot.conversations, scope,
             onOpen = { openConversation(it); scope.launch { drawerOpen = false } },
@@ -808,8 +815,8 @@ fun AssistantScreen(
         val hasComposer = active == null || !hasChat || demo
         val blankPage = active == null && !viewingMainQueue && !healthPage
         val needsOverComposer = PersonaTheme.style == AppStyle.Glass
-        // The @ list takes their room while it is open (iOS `MentionMenuOpen`): with the keyboard up all three did not fit.
-        val shellLines = if (needsOverComposer && blankPage && onOpenNeed != null && !mentionOpen) shellNeedsYou else emptyList()
+        // They step aside while the @ list is open (`NeedsStepAside`); the dock keeps the page's backdrop meanwhile, as iOS's does.
+        val shellLines = if (needsOverComposer && blankPage && onOpenNeed != null) shellNeedsYou else emptyList()
         Box(Modifier.fillMaxSize().then(if (shellLines.isEmpty()) Modifier else Modifier.onSizeChanged { needsRoom.pageSize(it) })) {
         JPage(
             title = LocalPersonaName.current,
@@ -861,7 +868,7 @@ fun AssistantScreen(
                             actionLabel = stringResource(ReadinessActionId.AddComputer.label),
                             onAction = { runReadinessAction(ReadinessActionId.AddComputer) })
                     }
-                    if (shellLines.isNotEmpty()) {
+                    if (shellLines.isNotEmpty()) NeedsStepAside(mentionOpen, Modifier.testTag("shell-needs-aside")) {
                         ShellNeedsYou(shellLines, { needsRoom.height(needsFade) }, requireNotNull(onOpenNeed), onMore = { more ->
                             if (more.opensAgents) navigator.selectTab(AppTab.Agents) else onOpenInbox?.invoke() ?: navigator.navigate(InboxRoute)
                         }, Modifier.padding(horizontal = Tokens.Space.m))
@@ -1047,36 +1054,36 @@ fun AssistantScreen(
         val sections = assistantMenu(offline = connection != null && connection != persona.core.contracts.api.ConnectionState.Online,
             voice = onVoice != null, main = snapshot.mainSession, active = active, compact = onMain && mainActions.compact,
             newMain = onMain && mainActions.newMain, working = interrupt != null && persona.core.domain.lines.isLiveStatus(shown?.status))
-        fun action(item: AssistantMenuItem, separator: Boolean): JAction = when (item) {
-            AssistantMenuItem.ConnectionDetails -> JAction(resources.getString(R.string.assistant_connection_details), separatorBefore = separator,
+        fun rawAction(item: AssistantMenuItem, separator: Boolean): JAction = when (item) {
+            AssistantMenuItem.ConnectionDetails -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = openConnectionDetails)
-            AssistantMenuItem.Knowledge -> JAction(resources.getString(R.string.assistant_info_knowledge), separatorBefore = separator, onClick = {
+            AssistantMenuItem.Knowledge -> JAction(resources.getString(item.label), separatorBefore = separator, onClick = {
                 if (onKnowledge != null) onKnowledge() else info = AssistantInfo.Knowledge
             })
             // iOS's Details opens Persona's profile: here the assistant's own page, its settings.
-            AssistantMenuItem.Details -> JAction(resources.getString(R.string.assistant_details), separatorBefore = separator, onClick = {
+            AssistantMenuItem.Details -> JAction(resources.getString(item.label), separatorBefore = separator, onClick = {
                 if (pageManagement != null) settingsOpen = true else info = AssistantInfo.Settings
             })
-            AssistantMenuItem.Voice -> JAction(resources.getString(R.string.assistant_voice_chat), separatorBefore = separator,
+            AssistantMenuItem.Voice -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { onVoice?.invoke() })
             // In place of the home page's Home (#4339 C11), as iOS's menu has it: off the main conversation only.
-            AssistantMenuItem.BackToMain -> JAction(resources.getString(R.string.assistant_back_to_main), PhIcons.House,
+            AssistantMenuItem.BackToMain -> JAction(resources.getString(item.label), PhIcons.House,
                 separatorBefore = separator, onClick = { snapshot.mainSession?.let(::openConversation) })
-            AssistantMenuItem.CopyDirectory -> JAction(resources.getString(R.string.assistant_copy_directory), separatorBefore = separator,
+            AssistantMenuItem.CopyDirectory -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { copy(copyText.cwd, resources.getString(R.string.assistant_directory_copied)) })
-            AssistantMenuItem.CopyInfo -> JAction(resources.getString(R.string.assistant_copy_info), separatorBefore = separator,
+            AssistantMenuItem.CopyInfo -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { copy(copyText.info(resources), resources.getString(R.string.assistant_info_copied)) })
-            AssistantMenuItem.CopySessionId -> JAction(resources.getString(R.string.assistant_copy_session_id), separatorBefore = separator,
+            AssistantMenuItem.CopySessionId -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { active?.let(::copyId) })
-            AssistantMenuItem.CopyDiagnostics -> JAction(resources.getString(R.string.assistant_copy_diagnostics), separatorBefore = separator,
+            AssistantMenuItem.CopyDiagnostics -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { active?.let { key -> copyDiagnostics(shown ?: Session(machineId = key.machineId, sessionId = key.sessionId)) } })
-            AssistantMenuItem.Compact -> JAction(resources.getString(R.string.assistant_compact), separatorBefore = separator,
+            AssistantMenuItem.Compact -> JAction(resources.getString(item.label), separatorBefore = separator,
                 enabled = !compacting && compaction.line != CompactionLine.Running, onClick = ::compactMain)
-            AssistantMenuItem.NewMain -> JAction(resources.getString(R.string.assistant_new_main), separatorBefore = separator,
+            AssistantMenuItem.NewMain -> JAction(resources.getString(item.label), separatorBefore = separator,
                 enabled = !newMainBusy, onClick = { newMainOpen = true })
-            AssistantMenuItem.SessionInfo -> JAction(resources.getString(R.string.assistant_info_session), separatorBefore = separator,
+            AssistantMenuItem.SessionInfo -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { info = AssistantInfo.Session })
-            AssistantMenuItem.Interrupt -> JAction(resources.getString(R.string.assistant_interrupt), separatorBefore = separator, onClick = {
+            AssistantMenuItem.Interrupt -> JAction(resources.getString(item.label), separatorBefore = separator, onClick = {
                 val key = active
                 if (interrupt != null && key != null) scope.launch {
                     try { interrupt.interrupt(key); say(resources.getString(persona.feature.chat.R.string.chat_composer_interrupt_requested)) }
@@ -1085,7 +1092,12 @@ fun AssistantScreen(
                 }
             })
         }
-        JActionSheet(title = LocalPersonaName.current, onDismiss = { menu = false },
+        // iOS's icon on every item: Glass draws them; Brief and Board keep their words (Back to main chat has had its house all along).
+        val glassIcons = PersonaTheme.style == AppStyle.Glass
+        fun action(item: AssistantMenuItem, separator: Boolean): JAction = rawAction(item, separator)
+            .copy(icon = item.icon.takeIf { glassIcons || item == AssistantMenuItem.BackToMain })
+        // iOS's heading: which conversation and what it runs on ("Main chat · claude · Opus 4.5").
+        JActionSheet(title = copyText.menuTitle(resources, LocalPersonaName.current, hubGroup), onDismiss = { menu = false },
             actions = sections.flatMapIndexed { index, items -> items.mapIndexed { i, item -> action(item, separator = index > 0 && i == 0) } })
     }
     if (newMainOpen) {
@@ -1324,6 +1336,8 @@ internal fun AssistantDrawer(
     onInbox: (() -> Unit)? = null, inboxCount: Int = 0,
     settingsCount: Int = 0, settingsDot: Boolean = false, settingsBadge: String? = null,
     pages: List<NavItem> = emptyList(), onPage: (String) -> Unit = {},
+    /** Opens a to-do's card / an Agent's session from a 常驻 lead's tree (#4352); null: those rows only fold. */
+    onOpenTodo: ((String) -> Unit)? = null, onOpenAgent: ((SessionKey) -> Unit)? = null,
     /** The sidebar's head with the assistant switcher (docs/assistant/managers.md "Clients"); none: the head as it was. */
     switcher: AssistantSwitcherSlot? = null,
 ) {
@@ -1392,15 +1406,20 @@ internal fun AssistantDrawer(
                 JSectionHeader(stringResource(R.string.assistant_directions), count = groups.directions.size)
             }
             itemsIndexed(groups.directions, key = { _, session -> "direction-" + session.key.path }) { index, session ->
-                ConversationRow(session, selected = session.key == active,
-                    position = GroupPosition.of(index, groups.directions.size),
-                    onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
-                    onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
-                    onRename = onRename?.let { action -> { action(session) } },
-                    onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
-                    leader = true, onLeader = onLeader?.let { action -> { action(session) } },
-                    counts = leaderCountsLabel(groups.counts[session.sessionId], resources),
-                    named = groups.names[session.sessionId])
+                // With the hub's direction tree a lead folds open to its to-dos and their Agents (#4352, DirectionRows.kt).
+                DirectionLeadRows(groups.tree?.direction(session.sessionId)?.takeUnless { it.secretary },
+                    groups.names[session.sessionId] ?: session.conversationTitle(conversationWords()),
+                    GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent) { position, disclosure ->
+                    ConversationRow(session, selected = session.key == active,
+                        position = position,
+                        onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
+                        onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
+                        onRename = onRename?.let { action -> { action(session) } },
+                        onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
+                        leader = true, onLeader = onLeader?.let { action -> { action(session) } },
+                        counts = leaderCountsLabel(groups.counts[session.sessionId], resources),
+                        named = groups.names[session.sessionId], disclosure = disclosure)
+                }
             }
             // The newest eligible chats (#4922, #5196), the same rows and menu; All chats below still lists everything.
             if (groups.recent.isNotEmpty()) item(key = "recent-header") { JSectionHeader(stringResource(R.string.assistant_recent)) }
@@ -1478,6 +1497,8 @@ private fun ConversationRow(
     leader: Boolean = false, onLeader: (() -> Unit)? = null, onCopy: () -> Unit = {}, onArchive: (() -> Unit)? = null,
     onRename: (() -> Unit)? = null, onDiagnostics: (() -> Unit)? = null,
     counts: String? = null, named: String? = null, origin: String? = session.origin,
+    /** A 常驻 lead's caret that folds its to-dos open (#4352, DirectionRows.kt), before its ⋯; null: none. */
+    disclosure: (@Composable () -> Unit)? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
     // What opened an automatic chat takes precedence; a user's own chat keeps its latest message's channel mark (#5196).
@@ -1495,7 +1516,7 @@ private fun ConversationRow(
     if (LocalHomeDrawer.current) JSwipeActions(modifier, end = swipe) {
         JSidebarHistoryRow(dated?.topic ?: title, session.conversationStatus(), selected, onOpen, { menu = true },
             stringResource(R.string.assistant_conversation_actions), hint = counts,
-            titleAccessory = accessory, titleLead = dated?.head)
+            titleAccessory = accessory, titleLead = dated?.head, trailingAccessory = disclosure)
     } else JSwipeActions(modifier, end = swipe) { JGroupItem(position) {
         // The time goes on the line under the title, with the state: beside the title it left the title two or three
         // characters in the wide window's 300dp list (2026-11-02), and a narrow drawer cut it short too.
@@ -1504,7 +1525,10 @@ private fun ConversationRow(
             subtitle = session.lastText?.takeIf { it.isNotBlank() },
             leading = { JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,
                 selected = selected, tint = if (selected) PersonaTheme.palette.accent else PersonaTheme.palette.ink2) },
-            trailing = { JIconButton(PhIcons.DotsThree, stringResource(R.string.assistant_conversation_actions), { menu = true }) }, chevron = false)
+            trailing = {
+                disclosure?.invoke()
+                JIconButton(PhIcons.DotsThree, stringResource(R.string.assistant_conversation_actions), { menu = true })
+            }, chevron = false)
         // Under the title, not the icon: a fixed 16dp put it under the icon in glass and board and past it in brief.
         Row(Modifier.padding(start = rowTitleStart, end = rowPadding, bottom = 10.dp.dense),
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {

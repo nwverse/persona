@@ -38,6 +38,7 @@ import { hubLabel, routeText } from "../../lib/mesh";
 import { machineDeployment } from "../../lib/machine-deploy";
 import { classifyConnection } from "../../lib/node-health";
 import { screenPath, showsScreen } from "../../lib/computer";
+import { openPanel } from "../../lib/panel";
 import { href, onLinkClick } from "../../lib/router";
 import { getState, refresh, useStore } from "../../lib/store";
 import { foldRows } from "../../lib/folded-rows";
@@ -248,6 +249,12 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
       right={
         <>
           <span className="hidden whitespace-nowrap text-[11.5px] text-ink-3 sm:inline">{range === "1h" ? t("machines-machinedetail.refresh_10s") : t("machines-machinedetail.refresh_1m")}</span>
+          {online && (
+            // the computer's files from its home, in the side panel (#5827; the iPhone's Files row)
+            <Button icon="folder" onClick={() => openPanel({ kind: "files", mid, sid: "", cwd: "~" })} title={t("machines-machinedetail.files_hint")}>
+              {t("machines-machinedetail.files")}
+            </Button>
+          )}
           {showsScreen(m) && (
             <Button icon="monitor" href={screenPath(mid)} title={t("machines-machinedetail.screen_hint")}>
               {t("machines-machinedetail.screen")}

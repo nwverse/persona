@@ -508,7 +508,9 @@ A pane with no Agent carries `foreground`, the program in front as the host name
 ### New terminal: `panes.new` (optional, explicit action)
 
 `POST /api/v1/machines/{mid}/panes {workspace_id, kind?}` → node calls host `CreateSlot` (herdr `tab create --no-focus`, computer view doesn't jump) to open a tab in that space,
-named `shell` (`-2` suffix on collision), at **the space's own directory** (host-reported, otherwise home); **request cannot specify directory**. Returns `{pane, terminal, tab_id}`, then web opens it. Only called when user clicks + beside a space.
+named `shell` (`-2` suffix on collision), at **the space's own directory** (host-reported, otherwise home). Returns `{pane, terminal, tab_id}`, then web opens it. Called when the user clicks + beside a space, or Open Terminal Here in the file page.
+
+**Open Terminal Here** (#5832; hub feature and node capability `pane_cwd`): the request may carry `cwd`, a folder (`~/…` or absolute). The node checks it with the read guard (a key folder or iCloud Drive is refused) and that it is a folder, and gives it to the host as the new tab's starting directory; with `cwd` and no `workspace_id` the tab opens in the first workspace of a host that opens tabs. The folder is never typed into the shell, so a request still cannot run a command (the rule below). The hub answers 409 `node_outdated` for `cwd` to a node without the capability rather than open the terminal elsewhere. The earlier rule that a request could not name a directory is relaxed for this: a full device can `cd` anywhere in the shell it opens, so starting there gives nothing more.
 
 ### Permissions
 
@@ -607,7 +609,10 @@ with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / 
 - **Run Agent Here…**: only panes at shell prompts (no Agent, no bound session, all foreground programs shells; unreadable foreground also rejected). `panes.agent {pane, launcher}` reuses the full `start` pipeline—
   same launcher command, trust-dialog handling, readiness wait, pane binding, continuation command—without creating a tab, replacing `newTab` with selected pane in `context` (`withAdoptedPane`). Failure **doesn't** close this pane (new-tab failures do close the new tab).
   It answers `{session_id}`, and the clients open that agent's chat as New Agent opens the one it starts (#3287).
-  Web and iOS list only Claude Code launchers: a Codex start that fails closes its pane (`closeCodexStart`, `node/codex_start.go`), which here would be the user's own shell, so Codex starts from New Agent in a tab of its own (#5275). iOS's footer says so only on a computer that has a Codex launcher (`NodeMenu.runHereFooter`).
+  Web and iOS list Claude Code launchers, and Codex launchers that carry `run_here: true` (#5504; web `launchableHere` in `web/src/lib/node-actions.ts`, iOS `NodeMenu.launchableHere`).
+  The node starts such a Codex in the pane with no first message and answers its waiting row (`docs/integrations/codex.md`, "Starting without a first message"), which the clients open. A start that fails never closes the pane or queues it for cleanup (`startCodex`, `node/codex_start.go`); a Codex whose box never comes is `codex_no_box_here`.
+  An older node's Codex launchers lack `run_here`: there a failed start would close its pane, here the user's own shell, so they stay out and Codex starts from New Agent in a tab of its own (#5275). iOS's footer says so only on a computer with such a launcher (`NodeMenu.runHereFooter`).
+  Tests: `node/run_here_codex_test.go` (the start in a shell pane with history above Codex, its waiting row and first message; a failed start leaving the pane), `assistant/models_launchers_runhere_test.go`, the clients' unit tests. Checked live on a Mac (Codex 0.153.4, herdr 0.9.3, 2026-11-12): Codex came up in a scratch shell pane under its history, the pane listed as its waiting row, and `/quit` left the shell.
 - **Git**: run in pane directory (workspace uses its own), reject non-repositories (`not_a_repository`).
   Results and refusals are codes (#1888): success carries an `outcome` (`fetched`, `up_to_date`, `pulled`, `nothing_to_push`, `pushed`) that web and iOS say in their own strings, with an English `message` for older clients; each refusal is a coded 409 the hub words in the client's language (`rpc-errors`: `no_directory`, `detached_head`, `no_upstream`, `uncommitted_changes`, `not_fast_forward`, `push_rejected`; `pull_failed` / `push_failed` / `fetch_failed` carry git's words), the node's words as `detail`. **Pull** uses existing `gitPull`: fast-forward only, reject uncommitted changes; **Fetch** `git fetch --no-recurse-submodules`.
   **Push** asks first in every client (#1883, like the Git panel's Push; Pull and Fetch don't change the remote and run at once). It requires branch/upstream and pending commits (otherwise the `nothing_to_push` outcome), explicit `refs/heads/<branch>:<upstream branch>` without `+`, preventing force push even if `remote.<name>.push = +…` is configured. A remote that rejects a branch behind it is `push_rejected` (pull first; git's words in `detail`).
@@ -666,6 +671,13 @@ Same shape as Moshi `worktree/prepare` + `worktree/create`.
 ### Advanced Orca worktree actions
 
 The local Orca adapter also provides a capability-gated composer, GitHub issue/PR source lookup, sparse presets and preview-confirmed workspace removal. The exact HTTP fields, adapter/runtime capability distinction, receipt handling and deletion reconciliation are specified in [the protocol](../protocol/protocol.md#orca-worktree-composer-and-removal). Legacy branch/path creation remains available. Removal keeps branches by default, unregisters folder workspaces without deleting their directories, and requires a fresh instance-bound preview when identity or dirty content changes. A background acknowledgement is not completion; clients reconcile without automatically repeating the destructive request.
+
+The sidebar also offers **Close workspace** for herdr. Confirmation ends its terminals and keeps the directory, files
+and branches, including a main checkout or a workspace whose directory has disappeared. A linked Git checkout also
+offers **Delete worktree** after its directory is verified. Deletion previews the checkout's changed files and keeps
+its branch by default. The optional merged-branch cleanup uses Git's safe branch deletion. Each confirmation binds
+the workspace, pane membership, available native socket identity and, for deletion, the checkout and reviewed file contents.
+An uncertain response is reconciled through the live catalog and filesystem. Reconciliation preserves one-use dispatch. A herdr parent with linked workspaces requires closing those child workspaces first.
 
 ### A new agent in a worktree (#6115)
 

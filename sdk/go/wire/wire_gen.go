@@ -3087,7 +3087,9 @@ const (
 var ConnectorSubscriptionKinds = []string{"sub_mail", "sub_message", "sub_notice", "sub_deadline", "sub_event", "sub_update", "sub_digest"}
 
 // ConnectorSubscriptionFields: paths relative to one item. Only $, .field and [index] are supported; no expressions
-// or recursive descent.
+// or recursive descent. sender_id, chat and chat_name name who and where for mutes and policies (the Inbox row's
+// sender and chat tags), seen its read state, and reply_to where a reply goes; none of them is part of an item's
+// content.
 type ConnectorSubscriptionFields struct {
 	ID      string `json:"id,omitempty"`
 	Thread  string `json:"thread,omitempty"`
@@ -3097,19 +3099,37 @@ type ConnectorSubscriptionFields struct {
 	Body    string `json:"body,omitempty"`
 	Link    string `json:"link,omitempty"`
 	DueDate string `json:"due_date,omitempty"`
+	// The sender's stable id; without it the sender tag is the lowercased display name.
+	SenderID string `json:"sender_id,omitempty"`
+	// The conversation's stable id: the row gets a chat tag.
+	Chat string `json:"chat,omitempty"`
+	// The conversation's name, the chat tag's name.
+	ChatName string `json:"chat_name,omitempty"`
+	// Whether the item was already seen in the source: true, a non-zero number, or true, 1, yes, read or seen in any
+	// case. The Inbox row is read when its newest item is; seen only ever turns on.
+	Seen string `json:"seen,omitempty"`
+	// Where a reply goes and who sees it, in a line for people. With it, an item with an id can be replied to through
+	// the connector's inbox reply, with its thread (else its id) and its id as last.
+	ReplyTo string `json:"reply_to,omitempty"`
 }
 
 // ConnectorSubscriptionRecipe: A pull recipe, not a schedule. args is an object (default {}); strings may contain
-// {{since}} or {{since_date}}. items_path defaults to $; fields are relative to one item. Text results require
-// snapshot mode. Runtime argument/schema and mapped-value validation belongs to the subscription runner.
+// {{since}} or {{since_date}}. cursor_arg and next_cursor_path opt into cursor pagination; page_arg and optional
+// next_page_path opt into page pagination (without next_page_path, a full requested page continues). items_path
+// defaults to $; fields are relative to one item. Text results require snapshot mode. Runtime argument/schema and
+// mapped-value validation belongs to the subscription runner.
 type ConnectorSubscriptionRecipe struct {
-	Mode      string                       `json:"mode"`
-	Tool      string                       `json:"tool"`
-	Args      json.RawMessage              `json:"args,omitempty"`
-	ItemsPath string                       `json:"items_path,omitempty"`
-	Fields    *ConnectorSubscriptionFields `json:"fields,omitempty"`
-	Kind      string                       `json:"kind"`
-	GroupBy   string                       `json:"group_by"`
+	Mode           string                       `json:"mode"`
+	Tool           string                       `json:"tool"`
+	Args           json.RawMessage              `json:"args,omitempty"`
+	CursorArg      string                       `json:"cursor_arg,omitempty"`
+	NextCursorPath string                       `json:"next_cursor_path,omitempty"`
+	PageArg        string                       `json:"page_arg,omitempty"`
+	NextPagePath   string                       `json:"next_page_path,omitempty"`
+	ItemsPath      string                       `json:"items_path,omitempty"`
+	Fields         *ConnectorSubscriptionFields `json:"fields,omitempty"`
+	Kind           string                       `json:"kind"`
+	GroupBy        string                       `json:"group_by"`
 }
 
 // ConnectorErrorCode: error.code a program answers or gets besides the base ErrorCode: rate_limited (tools.call /
@@ -4493,6 +4513,52 @@ type KBDetail struct {
 	Recap json.RawMessage `json:"recap,omitempty"`
 	// A topic's knowledge points (docs/assistant/knowledge.md "Topics").
 	Points []KBTopicPoint `json:"points,omitempty"`
+	// A person's profiles by writer ("user", "ext:<id>"), as written; summary shows them too
+	// (docs/assistant/knowledge.md "Person profiles").
+	Profiles map[string]KBProfileRecord `json:"profiles,omitempty"`
+}
+
+type KBProfileRecord struct {
+	Profile KBPersonProfile `json:"profile"`
+	At      time.Time       `json:"at"`
+}
+
+// KBPersonProfile: one writer's profile of a person, its four parts kept apart. Every item says where it comes from;
+// at most 30 items a part, and 8000 bytes as summary.md shows it.
+type KBPersonProfile struct {
+	// Their role, what they are in charge of, how they relate to the user.
+	Facts []KBProfileItem `json:"facts,omitempty"`
+	// The user's own words about them, quoted.
+	Views []KBProfileItem `json:"views,omitempty"`
+	// Inferred, never stated: each needs its basis. Shown as only a hint.
+	Inferences []KBProfileItem `json:"inferences,omitempty"`
+	// Promises and to-dos between the user and them, either way.
+	Commitments []KBProfileCommitment `json:"commitments,omitempty"`
+}
+
+type KBProfileItem struct {
+	Text string `json:"text"`
+	// Inferences only (required there): what it rests on.
+	Basis string `json:"basis,omitempty"`
+	// Where it comes from: a knowledge-base path (chats/<id>/messages/<day>.md, recordings/<id>), a URL, or "user" for
+	// the user's own word.
+	Sources []string `json:"sources"`
+}
+
+type KBProfileCommitment struct {
+	Text string `json:"text"`
+	// user: the user owes it to them; them: they owe it to the user.
+	Owes string `json:"owes"`
+	// YYYY-MM-DD, when there is one.
+	Due     string   `json:"due,omitempty"`
+	Done    bool     `json:"done,omitempty"`
+	Sources []string `json:"sources"`
+}
+
+// KBIgnoredField: A field an update carried that its kind does not use: not applied, and why.
+type KBIgnoredField struct {
+	Field  string `json:"field"`
+	Reason string `json:"reason"`
 }
 
 // KBTopicPoint: one knowledge point of a topic, under up to two levels of subtopics (path).
@@ -4536,6 +4602,10 @@ type KBRecordingSegment struct {
 	// An all-day recording's line number: the segment's 1-based position in its uploads (docs/assistant/day-recap.md);
 	// absent on other recordings.
 	N int `json:"n,omitempty"`
+	// The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md
+	// "Persona's echo"): kept in the transcript but not what the meeting said, so leave it out of anything read as the
+	// meeting's words; absent (false) on every other line.
+	Echo bool `json:"echo,omitempty"`
 }
 
 // KBDayParams: kb.day: a chat's messages of one day in the knowledge base's time zone.
@@ -4628,6 +4698,10 @@ type KBUpdateParams struct {
 	Projects []string `json:"projects,omitempty"`
 	// Refused (conflict) when the user or another extension holds anything on the project folded away; no before.
 	MergeInto string `json:"merge_into,omitempty"`
+	// People only: this extension's own profile of the person, replacing the one it wrote before (one with no items
+	// removes it). Nobody else's profile, nor pinned or note, is touched; before.profile is the one replaced. A profile
+	// breaking a rule is invalid_params and nothing is written.
+	Profile *KBPersonProfile `json:"profile,omitempty"`
 	// Kept as the provenance of the fields this write holds.
 	Evidence []KBEvidence `json:"evidence,omitempty"`
 	// Fields this extension holds, handed back to the built-in pipeline; unlocking pinned clears it.
@@ -4636,8 +4710,12 @@ type KBUpdateParams struct {
 
 type KBUpdateResult struct {
 	ID string `json:"id"`
-	// The previous value of each field written (null when unset; summary is the old text), for the extension's own undo.
+	// The previous value of each field written (null when unset; summary is the old text, profile this extension's own
+	// profile before), for the extension's own undo.
 	Before map[string]json.RawMessage `json:"before,omitempty"`
+	// Fields the update carried that its kind does not use (a person's summary and log, for one): not applied, each with
+	// why.
+	Ignored []KBIgnoredField `json:"ignored,omitempty"`
 }
 
 // KBOwnerParams: kb.owner takes nothing.
@@ -6227,6 +6305,11 @@ var newDef = map[string]func() any{
 	"KBGetParams":                   func() any { return new(KBGetParams) },
 	"KBGetResult":                   func() any { return new(KBGetResult) },
 	"KBDetail":                      func() any { return new(KBDetail) },
+	"KBProfileRecord":               func() any { return new(KBProfileRecord) },
+	"KBPersonProfile":               func() any { return new(KBPersonProfile) },
+	"KBProfileItem":                 func() any { return new(KBProfileItem) },
+	"KBProfileCommitment":           func() any { return new(KBProfileCommitment) },
+	"KBIgnoredField":                func() any { return new(KBIgnoredField) },
 	"KBTopicPoint":                  func() any { return new(KBTopicPoint) },
 	"KBTopicSource":                 func() any { return new(KBTopicSource) },
 	"KBMomentRef":                   func() any { return new(KBMomentRef) },
