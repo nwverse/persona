@@ -24,8 +24,7 @@ nonisolated enum TodoPlanText {
 
     /// The day a `due_date` names, written as the hub reads it ("yyyy-MM-dd").
     static func day(_ date: Date, calendar: Calendar = .current) -> String {
-        let c = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0) // i18n-ignore: wire format
+        TodosLogic.dayKey(date, calendar: calendar)
     }
 }
 

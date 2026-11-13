@@ -91,6 +91,9 @@ type RecordingUpload struct {
 	Complete  bool                `json:"complete"`
 	Kind      string              `json:"kind"`
 	Calendar  *RecordingCalendar  `json:"calendar,omitempty"`
+	// Spoken is where Persona spoke in the meeting and what it said (#5905, echo.go): clean marks the segments that are
+	// its echo by it, beside the phone's own marks. Read leniently (UnmarshalJSON, readSpoken); never stored.
+	Spoken []SpokenSpan `json:"spoken,omitempty"`
 	// Attendance is the role Persona attends the meeting in ("" or AttendanceOff: none) and AttendingSession the
 	// session that attends (nil: the main chat); see normalizeAttendance and live.go.
 	Attendance       string      `json:"attendance,omitempty"`
@@ -408,7 +411,8 @@ func (u *RecordingUpload) clean() error {
 	for i, sg := range u.Segments {
 		sg.Text, sg.N = strings.TrimSpace(sg.Text), 0
 		if day {
-			sg.N = i + 1 // its position, empty ones counted
+			sg.N = i + 1    // its position, empty ones counted
+			sg.Echo = false // Persona never speaks in an all-day recording
 		}
 		if sg.Text == "" {
 			continue
@@ -424,6 +428,11 @@ func (u *RecordingUpload) clean() error {
 	}
 	sort.SliceStable(segs, func(i, j int) bool { return segs[i].Start < segs[j].Start })
 	u.Segments = segs
+	if day {
+		u.Spoken = nil
+	}
+	// Persona's echo: the phone's mark, or the same rule against the stretches it says Persona spoke in.
+	markEcho(u.Segments, u.Spoken)
 	sort.SliceStable(u.Bookmarks, func(i, j int) bool { return u.Bookmarks[i].At < u.Bookmarks[j].At })
 	u.Title = oneLine(u.Title)
 	u.Language = strings.TrimSpace(u.Language)
@@ -575,7 +584,9 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	r.Attendance, r.AttendingSession = u.Attendance, u.AttendingSession // never a room meeting's (putMeetingFields)
 	r.Segments, r.Chars = len(u.Segments), 0
 	for _, sg := range u.Segments {
-		r.Chars += len([]rune(sg.Text))
+		if !sg.Echo { // Persona's echo is not the meeting's text: a meeting of only that has none (planMinutes)
+			r.Chars += len([]rune(sg.Text))
+		}
 	}
 	if day {
 		r.putDay(&u)
@@ -622,7 +633,8 @@ func nonNilSegments(s []RecordingSegment) []RecordingSegment {
 	return s
 }
 
-// renderTranscript is transcript.md: a line per segment (and bookmark) at its clock time in the user's zone.
+// renderTranscript is transcript.md: a line per segment (and bookmark) at its clock time in the user's zone; Persona's
+// echo (#5905) keeps its line, marked.
 func (s *Store) renderTranscript(r *Recording, segs []RecordingSegment) string {
 	zone := s.RecordingZone(r)
 	at := func(sec float64) string {
@@ -634,7 +646,11 @@ func (s *Store) renderTranscript(r *Recording, segs []RecordingSegment) string {
 	}
 	var lines []line
 	for _, sg := range segs {
-		lines = append(lines, line{sg.Start, "- " + at(sg.Start) + " " + strings.Join(strings.Fields(sg.Text), " ")})
+		text := strings.Join(strings.Fields(sg.Text), " ")
+		if sg.Echo {
+			text = "[Persona 回声] " + text // i18n-ignore: knowledge-base data, like the bookmarks' mark
+		}
+		lines = append(lines, line{sg.Start, "- " + at(sg.Start) + " " + text})
 	}
 	for _, b := range r.Bookmarks {
 		lines = append(lines, line{b.At, "- " + at(b.At) + " [书签] " + oneLine(b.Label)})
@@ -930,7 +946,7 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) (called b
 	zone := e.Store.Zone()
 	in := prompts.KBRecordingInput{Pinned: r.Pinned, Title: r.Title, Device: r.Device, Language: r.Language,
 		Start: r.StartedAt.In(zone), Minutes: int(r.Duration / 60), Projects: e.knownProjects(), Tags: e.TopTags(40),
-		Transcript: clipMiddle(e.Store.renderTranscript(r, segs), recordingPromptChars)}
+		Transcript: clipMiddle(e.Store.renderTranscript(r, MeetingLines(segs)), recordingPromptChars)}
 	var out recordingSummary
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	err = e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBRecording(e.writingOwner(e.outputLang(r))), prompts.RenderKBRecordingInput(in), 4000, &out)
