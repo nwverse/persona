@@ -1047,7 +1047,8 @@ whether there is a newer one.
 
 **The first build of an existing archive** runs in the index lane, in its own goroutine: the manager's start does not wait for it, and neither
 does a search, which reads the files the index has not reached yet (what every search did before) and gets faster as segments are published. At
-4M lines it takes ~30 s with four readers and ~45 s with `GOMAXPROCS=2` (one reader), and holds ~500 MB at most (numbers below). The history import
+4M lines it takes ~30 s with four readers and ~43 s with `GOMAXPROCS=2` (one reader), and holds ~500 MB at most (numbers below); a search
+meanwhile takes what it took before the index (up to ~2 s for Find and ~7 s for `kb_search` of an absent word there, 6–8 s with `GOMAXPROCS=2`). The history import
 waits for it (`needs_search_index`).
 
 **Deletions.** An entry of a file that is gone is never used, but its keys would stay on disk until the next merge. So after text is deleted on
@@ -1068,19 +1069,19 @@ read from disk):
 
 | 3,982,000 lines, 362,000 day files | Before | With the index |
 | --- | --- | --- |
-| Cold Find: rare word / word on every line / absent word | 1.85 s / 1.97 s / 2.33 s | 0.94 s / 1.09 s / 0.87 s |
-| The same with `GOMAXPROCS=2` | 4.62 s / 4.53 s / 4.26 s | 1.26 s / 1.63 s / 1.16 s |
-| Warm Find (the same engine again) | 0.94 s / 1.02 s / 1.22 s | 0.19 s / 0.29 s / 0.16 s |
-| The same with `GOMAXPROCS=2` | 3.10 s / 3.27 s / 2.96 s | 0.56 s / 0.61 s / 0.58 s |
-| Cold `kb_search`: rare word / absent word | 0.78 s / 7.63 s | 0.79 s / 0.86 s |
-| The same with `GOMAXPROCS=2` | 0.75 s / 6.92 s | 0.79 s / 1.20 s |
-| Peak memory of the process: Find / `kb_search` | 974 MB / 481 MB (1,123 MB / 528 MB with `GOMAXPROCS=2`) | 504 MB / 343 MB (476 MB / 356 MB) |
-| First index: time, size on disk, peak memory | | 30 s, 155 MB, 483 MB (43 s and 515 MB with `GOMAXPROCS=2`) |
-| An index run with nothing changed | | 0.5 s (0.95 s with `GOMAXPROCS=2`) |
+| Cold Find: rare word / word on every line / absent word | 1.85 s / 1.97 s / 2.33 s | 0.89 s / 1.09 s / 0.90 s |
+| The same with `GOMAXPROCS=2` | 4.62 s / 4.53 s / 4.26 s | 1.27 s / 1.63 s / 1.18 s |
+| Warm Find (the same engine again) | 0.94 s / 1.02 s / 1.22 s | 0.20 s / 0.28 s / 0.15 s |
+| The same with `GOMAXPROCS=2` | 3.10 s / 3.27 s / 2.96 s | 0.55 s / 0.61 s / 0.52 s |
+| Cold `kb_search`: rare word / absent word | 0.78 s / 7.63 s | 0.76 s / 0.93 s |
+| The same with `GOMAXPROCS=2` | 0.75 s / 6.92 s | 0.78 s / 1.21 s |
+| Peak memory of the process: Find / `kb_search` | 974 MB / 481 MB (1,123 MB / 528 MB with `GOMAXPROCS=2`) | 499 MB / 356 MB (493 MB / 364 MB) |
+| First index: time, size on disk, peak memory | | 30 s, 155 MB, 493 MB (42 s and 505 MB with `GOMAXPROCS=2`) |
+| An index run with nothing changed | | 0.5–0.8 s (0.95 s with `GOMAXPROCS=2`) |
 
-At 396,000 lines (36,000 day files): cold Find 0.25 s → 0.14 s for a rare or absent word and unchanged, 0.26 s, for a word on every line (a chat
-has 18 days there, fewer than the first round reads); `kb_search` for an absent word 0.74 s → 0.11 s; the first index takes 2 s and 27 MB. With
-the one repeated line the benchmarks used before, the 4M index is 22 MB and builds in 13 s: measure an index on text that varies.
+At 396,000 lines (36,000 day files): cold Find 0.25 s → 0.15 s for a rare or absent word and unchanged, 0.27 s, for a word on every line (a chat
+has 18 days there, fewer than the first round reads); `kb_search` for an absent word 0.74 s → 0.10 s; the first index takes 2 s and 27 MB. With
+the one repeated line the benchmarks used before, the 4M index is 22 MB and builds in 14 s: measure an index on text that varies.
 
 ## Pages (checked with real data 2026-10-31)
 
