@@ -426,6 +426,8 @@ export interface Session {
   /** The channels messages came into it from, newest first (docs/extensions/channels.md "Source markers"). */
   channels?: string[];
   todo?: { id: string; title: string };
+  /** Display-only completed association; never an active task or a reason to suppress notifications. */
+  completed_todo?: { id: string; title: string };
   /** Works (or worked) for a quiet task (#1731): not in the global badge; the main conversation tells about it. */
   quiet?: boolean;
   /** Why it waits for the user, in its host's words (a botmux attention's reason); only while it needs you (docs/integrations/engines.md "botmux"). */
@@ -863,6 +865,9 @@ export interface Launcher {
   /** A Codex launcher the computer starts in a shell pane the user picked (Run agent here), keeping that pane when the
    *  start fails (#5504); absent from an older computer, where Run agent here offers Claude Code only. */
   run_here?: boolean;
+  /** Where it starts the session when not in a terminal: "claude_desktop" (the launcher `claude-desktop`, Claude's desktop
+   *  app, #5480) or "codex_app" (`codex-app`, the Codex App, #5726); lib/desktop-start.ts. Absent for every other one. */
+  source?: string;
   /** How its last check or start went on the computer the list is for (GET /machines/{mid}/launchers,
    *  docs/server/launcher-health.md); absent: never checked, a failure too old to count, or an older hub. */
   health?: LauncherHealth;

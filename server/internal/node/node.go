@@ -51,6 +51,8 @@ type Node struct {
 	questions questionCalls
 	// closeoutBriefs: what the manager said to tell each starting session of the closeout's form (closeout_start.go).
 	closeoutBriefs closeoutBriefs
+	// desktopSeen: when someone was found attending a session in Claude's desktop app (claudedesktop_unread.go).
+	desktopSeen desktopSeenStore
 
 	// bootAt: when this node started. A session whose record says it was started in a pane before this ran in the
 	// previous herdr server, so the restart is what ended it (interrupted.go).
@@ -112,6 +114,7 @@ type Node struct {
 
 	mu      sync.Mutex
 	titleMu sync.Mutex // orders the custom-title lines renames write (rename.go retitle)
+	deltaMu sync.Mutex // orders the session.delta sends (emitDelta, flushPartial)
 	state   *stateFile
 	files   map[string]*transcript.File // session id -> parsed transcript
 	paths   map[string]string           // session id -> transcript path
@@ -755,7 +758,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return ok(err)
 		}
 	}
-	if n.externalCodex(p.SessionID) {
+	// A session a connected runtime lists is the runtime's, also when its thread is in this machine's own Codex inventory
+	// (a Codex CLI process the runtime hosts): its calls go on to the runtime below.
+	if h, _, _ := n.runtimes.belongs(p.SessionID); h == nil && n.externalCodex(p.SessionID) {
 		switch method {
 		case "session.keys", "session.screen", "session.screen.before", "terminal.watch", "session.close", "session.queue.edit", "session.queue.send_now", "session.rename", "assistant.send":
 			return nil, refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)

@@ -457,6 +457,12 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 	}
 	live, last := liveTaskAgents(agents)
 	if len(live) == 0 { // every agent has stopped (read-only, #4754): the user's message starts a new one (tasks_successor.go)
+		if guard != nil {
+			cur, ok := s.todoNow(todoID)
+			if !ok || !guard(cur) {
+				return FeedItem{}, db.ErrTodoCompleted
+			}
+		}
 		if relay != "" {
 			return FeedItem{}, i18n.Err("assistant-tasks.route_agents_stopped")
 		}

@@ -1,5 +1,16 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A presence window is not an owner-turn guarantee (#6394). The two-minute `ownerPresentFor` hold and the
+  five-minute `relayDecisionMax` cap let queued relayed/decision messages start new rounds behind the owner's back
+  once the window expires, even while the owner is still waiting on their own round. Keep the ranked queue and the
+  presence window, but add an in-memory per-conversation gate armed when the owner speaks (`relayBook.ownerTurns`)
+  that holds every rank until a session list shows the round stopped. Give it two safety releases — a short
+  `ownerTurnStartWait` when the round is never seen working (refused send, dropped conversation) and a hard
+  `ownerTurnMax` once seen working but never stopped — and make an expired gate return immediately rather than fall
+  back onto the presence window, or the cap is not authoritative. The gate is memory-only on purpose: a restart
+  degrades to the persisted presence window. Update the time-window tests by shortening the new limits in lockstep
+  with the presence timers instead of waiting real minutes.
+
 - Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
   automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
   archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
@@ -11,12 +22,20 @@
   `DeviceAssistantSend` text. This proves literal deduplication, not a stable-policy refactor or provider-context savings.
 
 
+- Rechecking an Inbox task link must not replay event handling (#5680). Existing processing conversations and saved
+  drafts skip the initial task judge; resetting their processing fields to force another pass can duplicate work.
+  Use the task-link maintenance action instead: validate the message and candidate after judgment, persist through
+  Inbox rollback-aware writes, then publish the draft's task card and supervisor signal. A model failure is distinct
+  from a successful no-match result.
+
 - Proven `prompt` source can describe either a terminal tool label or a first-message fallback (#5269).
   Ordinary Claude inventory falls back to the first message for a bare tool label but not its spinner-prefixed
   form, so spinner normalization alone still lets a generated name disappear. Accept recognizable bad fallback
   changes only with explicit Claude runtime and prompt provenance; reject other tool/runtime names, meaningful
   titles, manual/custom titles and unknown sources. Apply this comparison at display and late-result boundaries,
   and test both directions plus service reconstruction without a new model call or counter reset.
+
+- A to-do's PR reference may exist only in `PRURL`, without appearing in its title or notes (#5458). Duplicate hints must read that link too; an open to-do still represents ongoing work when its linked Agent is idle.
 
 - Terminal spinner frames are presentation, not native-title changes (#5254). Comparing a saved `raw_title`
   byte for byte with a later inventory hid a successful automatic name while leaving its one-shot count spent.
@@ -407,6 +426,7 @@ tree shows pieces no Agent has worked on as `planned`. Two traps found on the wa
 To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves the tree; the leader touching it keeps it),
 and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.
 
+- Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions.
 ## A source read by pages must settle what left the page (#5993)
 
 The Inbox's mail rounds read each account's newest 40 INBOX messages, and every rule that files a mail item (read
@@ -435,3 +455,15 @@ the candidates. Given seven unrelated tasks, it linked a GitHub bug report to a 
 words with it, and the link stuck. A selection model needs two guards: narrow the candidates by something exact first
 (the repository, the thread), skipping the call when none is left, and accept an answer only with evidence the code can
 check, such as a verbatim quote from the chosen candidate.
+
+- A legacy `bot` Inbox kind is not enough to reject a human Lark conversation (#5680). Check its explicit sender
+  identity, keep forwarded notification text as content, and apply one eligibility predicate before both URL routing
+  and the model judge. Correct old excluded links through the bounded maintenance write, with rollback on save failure.
+
+- A streamed reply is only as smooth as its slowest stage, and the model's output is bursty (#6651): Claude's
+  `text_delta`s come a few dozen characters at a time about every 350 ms, up to 2 s apart. A leading-edge throttle
+  ("send if 80 ms passed since the last send") holds back the rest of every burst until the next one, and a client that
+  draws whatever arrived shows one jump per burst however fast it renders. Throttles that drop in-between values need a
+  trailing send; a typewriter effect has to pace by the stream's average rate, not the last burst, or it finishes each
+  burst early and waits. Measure on recorded streams (`scripts/mock/stream_traces/`, `/mock/say?trace=…`) and report the
+  gaps between visible text changes and the added lag, not only frames: an evenly timed mock stream hides all of this.
