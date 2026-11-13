@@ -654,6 +654,10 @@ nonisolated enum Theme {
         static let doneFade: Double = 0.5
         /// A day of the month grid that belongs to the month before or after.
         static let outsideFade: Double = 0.45
+        /// A to-do being dragged, where it was (#2045): where it would land is drawn in full.
+        static let liftedFade: Double = 0.3
+        /// How far the axis scrolls each frame while a dragged to-do is held near its top or bottom edge.
+        static let autoscrollStep: CGFloat = 4
         /// Lines a day of the month grid shows: its entries, or one fewer and "N more".
         static let monthLines = 3
         /// Where a new to-do's time snaps to when the empty axis is tapped, in minutes.
@@ -912,6 +916,12 @@ nonisolated enum Theme {
         static let pink = Color(light: 0xD62E5C, dark: 0xFF6B8B)
         /// A quiet mark: a list row's tile that is information, not a place to go.
         static let gray = Color(light: 0x8E8E93, dark: 0x636366)
+        // The rest of an extension's named colors (UI version 6, `ExtensionUIStyle.color`, #827): marks only (icons,
+        // badges' tints, tiles, chart series), never text.
+        static let red = Color(light: 0xD1342C, dark: 0xFF6961)
+        static let amber = Color(light: 0xB7791F, dark: 0xF5B342)
+        static let yellow = Color(light: 0x9A7B00, dark: 0xFFD60A)
+        static let teal = Color(light: 0x0F7C80, dark: 0x40C8C8)
     }
 
     /// A permission mode's tone where the Agents header shows it (#3719), by how much the agent does without asking.

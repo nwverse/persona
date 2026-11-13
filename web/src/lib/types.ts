@@ -1,4 +1,5 @@
 import type { UsageCard } from "./tokens";
+import type { RuleSuggestion } from "./rule-suggestion";
 // The hub's wire types (docs/protocol/protocol.md). Only the fields the web client reads.
 
 export type AgentState = "needs_you" | "working" | "unread" | "idle" | "offline" | "unknown";
@@ -817,6 +818,9 @@ export interface Interaction {
   delegating?: boolean;
   /** What the assistant filled in when it left the question to the user. */
   delegate?: Delegate;
+  /** A rule the hub suggests on a question a supervisor passed up, once the owner gave the same answer three times
+   *  (#4929, lib/rule-suggestion.ts); the card comes again without it once it was answered. Absent otherwise. */
+  suggestion?: RuleSuggestion;
 }
 
 /** The assistant's context on a question it left to the user (Interaction.delegate). */
@@ -844,6 +848,9 @@ export interface Launcher {
   /** A Codex launcher the computer starts with no first message too; absent from an older computer, whose Codex
    *  starts need one. */
   prompt_optional?: boolean;
+  /** A Codex launcher the computer starts in a shell pane the user picked (Run agent here), keeping that pane when the
+   *  start fails (#5504); absent from an older computer, where Run agent here offers Claude Code only. */
+  run_here?: boolean;
   /** How its last check or start went on the computer the list is for (GET /machines/{mid}/launchers,
    *  docs/server/launcher-health.md); absent: never checked, a failure too old to count, or an older hub. */
   health?: LauncherHealth;

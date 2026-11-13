@@ -945,11 +945,20 @@ nonisolated struct APIClient: Sendable {
     /// clear first.
     /// opID: the message's op id (the outbox passes its id, the same as clientMsgID: docs/protocol/protocol.md「Operation receipts」).
     /// via: how the app sent it when not typed in the app itself (Siri, the share sheet).
+    /// Returns whether the message waits behind a question on the computer (`waits_on_computer`, #5890): a Claude
+    /// outside Persona's terminals took it while a dialog only the computer can answer holds it. Only `sendPending`
+    /// (the composer and the outbox flush) tells the user; the other callers drop it.
+    @discardableResult
     func send(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
-              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws {
-        try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
-                                                           model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via),
-                       timeout: 100, opID: opID)
+              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> Bool {
+        let data = try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
+                                                                      model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via),
+                                  timeout: 100, opID: opID)
+        struct Answer: Decodable {
+            var waitsOnComputer: Bool?
+            enum CodingKeys: String, CodingKey { case waitsOnComputer = "waits_on_computer" }
+        }
+        return (try? JSON.decoder.decode(Answer.self, from: data))?.waitsOnComputer == true
     }
     func interrupt(_ k: SessionKey) async throws { try await post(sp(k) + "/interrupt") }
     func attach(_ k: SessionKey) async throws { try await post(sp(k) + "/attach") }
@@ -1034,18 +1043,21 @@ nonisolated struct APIClient: Sendable {
         var command: String?
         /// One line that installs and pairs; only when the hub knows the site it was published from.
         var install: Install?
+        /// The manager the computer belongs to now (`add.manager`); nil from a hub before the field.
+        var manager: String?
         enum CodingKeys: String, CodingKey {
-            case token, machine, name, trust, added, command, install, expiresAt = "expires_at", pairLink = "pair_url"
+            case token, machine, name, trust, added, command, install, manager, expiresAt = "expires_at", pairLink = "pair_url"
         }
     }
 
     /// Adds a computer, waiting to be confirmed (`add`): `name` may be Chinese (40 characters at most), `os` is
-    /// mac / linux / windows (which instructions the app shows), `icon` laptop / desktop / server.
-    func computerCode(addNamed name: String, os: String, icon: String) async throws -> ComputerCode {
-        struct Add: Encodable { var name: String; var os: String; var icon: String }
+    /// mac / linux / windows (which instructions the app shows), `icon` laptop / desktop / server. `manager` is the assistant
+    /// the computer is for (its real id, the default's too); nil leaves it to the hub, as a hub before `add.manager` does.
+    func computerCode(addNamed name: String, os: String, icon: String, manager: String? = nil) async throws -> ComputerCode {
+        struct Add: Encodable { var name: String; var os: String; var icon: String; var manager: String? }
         struct Body: Encodable { var add: Add }
         return try JSON.decoder.decode(ComputerCode.self, from: try await request("POST", "/api/v1/auth/pair-codes",
-                                                                                  body: Body(add: Add(name: name, os: os, icon: icon))))
+                                                                                  body: Body(add: Add(name: name, os: os, icon: icon, manager: manager))))
     }
 
     /// A new code for a computer still waiting to be confirmed (`machine`); a confirmed one is 409 `not_pending`.
@@ -1879,6 +1891,11 @@ nonisolated struct APIClient: Sendable {
     /// The persona this device's Live Activity draws, alone (the PUT merges): the hub echoes it in the device's pushes.
     func setFleetLook(device: String, _ look: FleetLook) async throws {
         _ = try await request("PUT", "/api/v1/devices/\(device)/prefs", body: FleetLookPut(look: look))
+    }
+    /// Whether this device has the Home Screen widgets, alone: while its app is not open, the hub wakes it to write them
+    /// again when the agents' counts change (#5721). An older hub keeps the field and does nothing with it.
+    func setHasWidgets(device: String, _ has: Bool) async throws {
+        _ = try await request("PUT", "/api/v1/devices/\(device)/prefs", body: WidgetsPut(widgets: has))
     }
     func setNotifyPrefs(device: String, _ prefs: NotifyPrefs) async throws -> NotifyPrefs {
         try JSON.decoder.decode(NotifyPrefs.self, from: try await request("PUT", "/api/v1/devices/\(device)/prefs", body: prefs))
