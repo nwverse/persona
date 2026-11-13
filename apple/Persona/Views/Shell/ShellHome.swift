@@ -441,10 +441,7 @@ struct ShellDestinations: ViewModifier {
                 .environment(\.feishuOpen) { path.append($0) }
                 .environment(\.pushInboxChat, inboxChat)
                 #if DEBUG
-                .onAppear {
-                    ShellTrace.shared.note("inbox chat closure available=\(inboxChat != nil)")
-                    NSLog("IM-BACK destinations appear closureNil=\(inboxChat == nil)")
-                }
+                .onAppear { ShellTrace.shared.note("inbox chat closure available=\(inboxChat != nil)") }
                 #endif
         } else {
             content
