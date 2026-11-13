@@ -1,0 +1,1 @@
+Frames from `xcrun simctl io recordVideo` of the iPhone 17 Pro simulator: conversation …0004 (mock hub), the recorded markdown trace streamed at the node cadence after #6651 (`/mock/say?trace=markdown&node=trail`), app at 30 reveals/s (#7136).
