@@ -70,6 +70,7 @@ Performance measurements are in section 5.
 | `PersonaTheme.shapes` | corner radii for cards, panels, controls, chips, buttons, bottom sheets |
 | `PersonaTheme.motion` | durations and curves (springs in Glass); `count` is the duration for numbers rolling to a new value and chart bars growing to a new height (#2811) |
 | `PersonaTheme.glass` | the glass level actually rendered |
+| `SpinnerTokens` | `JSpinner`'s fixed stroke widths; `compactStroke` is the 1.8dp compact activity arc, not density-scaled spacing |
 | `ContentTokens` | Existing mail, media, profile, reaction and task-content dimensions that cannot be expressed by the common spacing tokens; keeps page geometry unchanged while adopting tokens |
 
 Material 3's ColorScheme, Typography and Shapes are also generated from the current style, so Material components not yet replaced change colors and fonts along with it, but pages should switch to the components below.
