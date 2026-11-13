@@ -47,7 +47,7 @@ def features():
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
             "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
-                ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
+                ["terminal_panes", "pane_new_space"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
@@ -1579,8 +1579,11 @@ if os.environ.get("MOCK_DESKTOP_APPS"):
         kw = dict(NO_SPACE, agent_surface=surface, started_by_persona=False)
         cwd = "/Users/me/" + project[1:] if project.startswith("~") else f"/Users/me/code/{project}" if project else "/Users/me"
         if surface == "desktop" and agent == "codex":
+            # Its effort changes from the phone through the App (#5575, node/codex_desktop_effort.go): its model's levels
+            # on the App's codex, and the effort its last turn ran with.
             kw.update(space_kind="codex_app", space_id=f"codex-project:{cwd}", space_name=cwd.rsplit("/", 1)[-1],
-                      agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True})
+                      agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True},
+                      efforts=["low", "medium", "high", "xhigh", "max", "ultra"], effort="max")
         elif surface == "desktop" and status != "offline":
             kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
         SESSIONS.append(sess("macbook", sid, title, cwd, status, state, "", 0, "", 0, mins,

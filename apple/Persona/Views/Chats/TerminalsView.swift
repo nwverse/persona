@@ -103,7 +103,7 @@ struct TerminalsView: View {
     /// A computer with no terminals: New Terminal when its engine can open one (in its home folder when it has no
     /// workspace yet), otherwise where terminals come from.
     @ViewBuilder private func empty(_ list: TerminalPanes, _ ref: MachineRef) -> some View {
-        if let space = TerminalsList.spaces(list).first {
+        if let space = TerminalsList.spaces(list, newSpace: hubHasNewSpace(ref)).first {
             HStack(spacing: Theme.Space.m) {
                 Text("No terminals open on this computer.").font(Theme.Font.label).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
@@ -170,7 +170,7 @@ struct TerminalsView: View {
             Spacer(minLength: 0)
             if let list = loads[ref.path]?.list {
                 Menu {
-                    ForEach(TerminalsList.spaces(list), id: \.id) { s in
+                    ForEach(TerminalsList.spaces(list, newSpace: hubHasNewSpace(ref)), id: \.id) { s in
                         Button { newTerminal(on: ref, space: s) } label: {
                             Label(String(localized: "New Terminal in \(s.label)"), systemImage: Theme.Icon.add)
                         }
@@ -263,12 +263,19 @@ struct TerminalsView: View {
         }
     }
 
+    /// The hub checks the node can open a workspace for New Terminal (`pane_new_space`, #6362); an unknown list offers it.
+    private func hubHasNewSpace(_ ref: MachineRef) -> Bool {
+        let f = model.features(ref.group)
+        return f.isEmpty || f.contains("pane_new_space")
+    }
+
     private func newTerminal(on ref: MachineRef, space: TerminalsList.Space) {
         guard let api = model.api(ref.group) else { return }
         Task {
             do {
-                var body = space.id.isEmpty ? ["cwd": "~"] : ["workspace_id": space.id] // no workspace yet: the node opens one
-                if !space.kind.isEmpty { body["kind"] = space.kind }
+                // no workspace yet: the node opens one (new_space: the hub answers node_outdated for a node that can't)
+                var body: [String: JSONValue] = space.id.isEmpty ? ["cwd": .string("~"), "new_space": .bool(true)] : ["workspace_id": .string(space.id)]
+                if !space.kind.isEmpty { body["kind"] = .string(space.kind) }
                 let data = try await api.nodeAction(machine: ref.id, "panes", body)
                 await load()
                 if let made = try? JSONDecoder().decode(NewShell.self, from: data), !made.terminal.isEmpty {
@@ -375,10 +382,11 @@ nonisolated enum TerminalsList {
     }
 
     /// The workspaces a new terminal can open in: those of hosts that open tabs. A host that opens tabs but has no
-    /// workspace yet offers its home folder (id ""): the node opens a new workspace there.
-    static func spaces(_ list: TerminalPanes) -> [Space] {
+    /// workspace yet offers its home folder (id "") when the hub has `pane_new_space` (`newSpace`): the node opens a new
+    /// workspace there.
+    static func spaces(_ list: TerminalPanes, newSpace: Bool) -> [Space] {
         list.hosts.filter(\.newTab).flatMap { h in
-            h.workspaces.isEmpty ? [Space(id: "", label: String(localized: "Home Folder"), kind: h.kind)]
+            h.workspaces.isEmpty ? (newSpace ? [Space(id: "", label: String(localized: "Home Folder"), kind: h.kind)] : [])
                 : h.workspaces.map { Space(id: $0.id, label: $0.label.isEmpty ? $0.id : $0.label, kind: h.kind) }
         }
     }
