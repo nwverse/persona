@@ -67,11 +67,12 @@ struct RootView: View {
         #endif
     }
 
-    /// The iPhone-width shell; regular-width and other platforms keep their own navigation, and the Sidebar layout its own.
-    private var usesShell: Bool { compactWidth && !usesSidebar }
+    /// The shell is the root: the iPhone's width in the Separate layout.
+    private var showsShell: Bool { usesShell && !usesSidebar }
 
-    /// The window is at the iPhone's width (the shell's, or the Sidebar layout's drawer).
-    private var compactWidth: Bool {
+    /// The iPhone-width shell; regular-width and other platforms keep their own navigation. In the Sidebar layout the
+    /// same width is its drawer's (`showsShell`).
+    private var usesShell: Bool {
         #if os(visionOS)
         // Apple Vision Pro keeps the tabs, as the system's ornament (VisionShell), whatever the window's width.
         return false
@@ -104,13 +105,13 @@ struct RootView: View {
 
     /// The shell is on screen, and with it its toast window (`ToastWindow`): not on the welcome page, the engine step or
     /// the checklist after pairing (the same branches as `body`).
-    private var shellShown: Bool { usesShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist }
+    private var shellShown: Bool { showsShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist }
 
     /// The tabs are on screen at regular width (iPad, iPhone Duo open), with a toast window of
     /// their own (`ToastWindowHook`): the same branches as `body`, with no extension page in the app's place.
     private var tabsToastWindow: Bool {
         #if os(iOS)
-        !usesShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist && model.extensionOpen == nil
+        !showsShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist && model.extensionOpen == nil
         #else
         false
         #endif
@@ -134,8 +135,8 @@ struct RootView: View {
                 #if os(visionOS)
                 RootTabs().visionShell()
                 #elseif os(iOS)
-                if usesShell { ShellView().modifier(BuiltTreeRoot()) }
-                else if usesSidebar { SidebarRoot().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
+                if usesSidebar { SidebarRoot().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
+                else if usesShell { ShellView().modifier(BuiltTreeRoot()) }
                 else { RootTabs().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
                 #else
                 RootTabs()
@@ -207,7 +208,7 @@ struct RootView: View {
             }
             swaps.count += 1
         }
-        .onChange(of: usesShell) { swaps.rebuilt += 1 }
+        .onChange(of: showsShell) { swaps.rebuilt += 1 }
         .screenProbe("tree", swaps)
         // LookBlink drives UIWindowScene overrides, so it only exists on iOS and visionOS.
         #if os(iOS) || os(visionOS)
