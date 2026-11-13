@@ -6,6 +6,8 @@
 //! Kotlin goes to android/core/rustcore. The generated files are committed, so a change to a wire type and its codecs
 //! land together.
 
+mod arkts;
+
 use std::path::{Path, PathBuf};
 
 use persona_core_runtime::wire::{
@@ -72,16 +74,19 @@ fn generated(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 fn main() {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
     let kotlin_root = repository.join("android/core/rustcore/src/main/kotlin");
+    let arkts_root = repository.join("harmony/entry/src/main/ets/core/rustcore");
     let registry = registry();
     if std::env::args().any(|a| a == "--check") {
         let scratch = std::env::temp_dir().join(format!("persona-core-typegen-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&scratch);
         write_kotlin(&scratch, &registry);
+        arkts::write(&scratch.join("arkts"), &registry).expect("ArkTS codecs");
         let fresh = generated(&scratch);
+        let fresh_arkts = files(&scratch.join("arkts"));
         let _ = std::fs::remove_dir_all(&scratch);
-        if fresh != generated(&kotlin_root) {
+        if fresh != generated(&kotlin_root) || fresh_arkts != files(&arkts_root) {
             eprintln!(
-                "persona-core-typegen: the Kotlin codecs are out of date; run `cargo run -p persona-core-typegen`"
+                "persona-core-typegen: the Kotlin or ArkTS codecs are out of date; run `cargo run -p persona-core-typegen`"
             );
             std::process::exit(1);
         }
@@ -92,5 +97,7 @@ fn main() {
         let _ = std::fs::remove_dir_all(kotlin_root.join(dir));
     }
     write_kotlin(&kotlin_root, &registry);
+    arkts::write(&arkts_root, &registry).expect("ArkTS codecs");
     println!("persona-core-typegen: wrote {}", kotlin_root.display());
+    println!("persona-core-typegen: wrote {}", arkts_root.display());
 }

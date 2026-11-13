@@ -10,7 +10,8 @@ One Rust library under the iOS, Android and HarmonyOS clients' native UIs. Desig
 | `persona-core` | Pure logic: no IO, no clock, no FFI, no `unsafe`. Today it holds `continuity` (a chat's items, how far they are complete, and what to fetch), ported from the rules every client implements (`spec/fixtures/continuity`). |
 | `persona-core-runtime` | Runs `persona-core` on one worker thread. `dispatch` only queues an action's bytes. The worker applies actions, runs timers, sends requests to the client and builds each chat's patch. `changed` wakes the client once per batch, and the client pulls the patch with `drain`. `wire` holds every type that crosses the boundary. |
 | `persona-core-ffi` | The entry points, built as `libpersona_core`: C functions for Swift (`include/persona_core.h`) and JNI functions for Android's `persona.core.rustcore.NativeBridge`. Each catches panics and returns its failure value. |
-| `persona-core-typegen` | Generates the clients' bincode codecs for the `wire` types. Kotlin goes to android/core/rustcore; Swift and ArkTS follow with their bindings. |
+| `persona-core-ohos` | HarmonyOS's single NAPI library. Its default host build tests the close-safe runtime registry and all shared fixtures; the `ohos` feature adds ohos-rs's NAPI entry points and thread-safe callbacks, supplied by the device runtime. |
+| `persona-core-typegen` | Generates the clients' bincode codecs for the `wire` types. Kotlin goes to android/core/rustcore, ArkTS to harmony/entry/src/main/ets/core/rustcore; Swift follows with its Apple binding. |
 
 Hub items stay exactly as the hub sent them: the core reads the fields its rules use and passes each item's JSON through
 untouched, in `ListOp::Insert`.
