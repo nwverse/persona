@@ -62,6 +62,8 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 			s.botNote(ctx, messageID, i18n.T(l, "assistant-reports.accept_not_taken", i18n.Args{"error": clip(oneLine(i18n.Localize(err, l)), 120)}))
 		} else if ok {
 			s.botNote(ctx, messageID, acceptedNote(l, &ask))
+		} else { // not this round that waits: answered as its button answers (feishu_card_actions.go), not swallowed
+			s.botNote(ctx, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
 		}
 		return true
 	}
@@ -102,7 +104,7 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 			s.logf("task %s: acceptance reopen: %v", id, err)
 		}
 	}
-	if _, err := s.routeToTask(ctx, t.Origin, id, msg); err != nil {
+	if _, err := s.relayToTask(ctx, t.Origin, id, msg, nil); err != nil {
 		s.logf("task %s: acceptance to agent: %v", id, err)
 		s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 120)}), media))
 		return true
@@ -147,7 +149,19 @@ func (s *Service) acceptTry(ctx context.Context, id, card string) (bool, error) 
 // acceptTryAs is acceptTry; byDefault: nobody answered decision id by its deadline and the hub takes its recommendation
 // (sweepTaskDeadlines), which only a reversible decision past its deadline allows.
 func (s *Service) acceptTryAs(ctx context.Context, id, card string, byDefault bool) (bool, error) {
+	s.reviewDismissals.actions.acquire(id)
+	defer s.reviewDismissals.actions.release(id)
+	return s.acceptTryAsDismissalLocked(ctx, id, card, byDefault)
+}
+
+// acceptTryAsDismissalLocked holds only this task's action lock across its send, not the book mutex.
+func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card string, byDefault bool) (bool, error) {
 	t, todoOK := s.todoNow(id)
+	if todoOK {
+		if dismissed, err := s.decisionDismissed(ctx, t); err != nil || dismissed {
+			return false, err
+		}
+	}
 	b := &s.accept
 	b.mu.Lock()
 	if !s.loadAcceptLocked(ctx) {

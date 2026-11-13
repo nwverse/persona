@@ -2,7 +2,13 @@
 
 派活时的要求：
 {{.Prompt}}
-{{if .Criteria}}
+{{with .Asked}}
+这件事最初的要求（{{$.AskedAt}} 用户的原话；上面的「派活时的要求」可能只是后来接手时的交接说明，以原话和验收标准为准）：
+{{.}}
+{{end}}{{with .Dropped}}
+范围调整时已经去掉、不再要求的标准：
+{{range .}}- {{.}}
+{{end}}{{end}}{{if .Criteria}}
 当前任务的验收标准：
 {{range .Criteria}}- {{.}}
 {{end}}{{end}}

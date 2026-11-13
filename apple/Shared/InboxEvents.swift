@@ -36,9 +36,11 @@ extension InboxItem {
         var machineID: String?
         var changes: [DocChange]?
         var at: Date?
+        /// The conversation the item was handed to that handed it in (Hand to AI); nil for the item's own AI twin.
+        var conversation: Handoff?
 
         enum CodingKeys: String, CodingKey {
-            case version, kind, text, note, handback, changes, at
+            case version, kind, text, note, handback, changes, at, conversation
             case machineID = "machine_id"
         }
 
@@ -179,9 +181,9 @@ nonisolated enum InboxEventText {
         return nil
     }
 
-    /// Who filed a done item, where it is told: 「管理者处理了」 for the manager (it read it, nothing to do); nil otherwise.
+    /// Who filed a done item, where it is told: 「助手处理了」 for the manager (it read it, nothing to do); nil otherwise.
     static func doneBy(_ it: InboxItem) -> String? {
-        it.isDone && it.doneBy == "manager" ? String(localized: "Handled by the manager") : nil
+        it.isDone && it.doneBy == "manager" ? String(localized: "Handled by the assistant") : nil
     }
 
     /// The handling state for people; nil when there is nothing to say (done, unknown).

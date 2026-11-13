@@ -124,6 +124,19 @@ extension View {
     /// Glass buttons in the glass styles, bordered ones in Lark, soft raised pills in Clay / Island. Picks the system
     /// style directly: wrapping `Button(configuration)` in a PrimitiveButtonStyle that re-styles it recursed until the
     /// stack overflowed (crash on opening a chat in the glass styles).
+    /// Primary and secondary decisions on a pending draft use large targets, not compact utility buttons.
+    @ViewBuilder func draftDecisionButton(prominent: Bool = false) -> some View {
+        #if os(macOS)
+        if StyleSpec.current.buttons == .glass {
+            buttonStyle(MacCapsuleButton(prominent: prominent, minimumHeight: Theme.Size.tapTarget)).controlSize(.large)
+        } else {
+            themedButton(prominent: prominent).controlSize(.large)
+        }
+        #else
+        themedButton(prominent: prominent).controlSize(.large)
+        #endif
+    }
+
     @ViewBuilder func themedButton(prominent: Bool = false) -> some View {
         switch StyleSpec.current.buttons {
         case .glass:
@@ -195,10 +208,6 @@ extension View {
 }
 
 extension Theme {
-    /// A path linked in the user's bubble (underlined): the accent, as links in replies, on a pale bubble;
-    /// on a colored one (white words) its words' color, where the accent would not show.
-    static var userBubbleLink: Color { Quote.tint }
-
     /// The line a file was opened at (`path:12`), marked across the code view.
     static var lineFocus: Color { accent.opacity(Quote.flashOpacity) }
 

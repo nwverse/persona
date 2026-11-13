@@ -311,7 +311,7 @@ struct InboxHandOffModelTests {
         let went = await m.send(ask: "a")
         #expect(went && errors == [String(localized: "It may have reached the computer already. Check the chat before sending it again."),
                                    String(localized: "Can't reach the hub"), nil,
-                                   String(localized: "The manager is offline or restarting. Try again shortly."), Self.lookAgain])
+                                   String(localized: "The assistant is offline or restarting. Try again shortly."), Self.lookAgain])
         #expect(calls.handOffs.count == 6 && Set(calls.handOffs.map(\.clientID)).count == 1 && calls.opened.count == 1)
     }
 
@@ -410,7 +410,7 @@ struct InboxHandOffModelTests {
             errors.append(m.error)
         }
         #expect(errors == [String(localized: "The request timed out. Try again later."), "Bad Gateway", "no such item",
-                           String(localized: "The manager is offline or restarting. Try again shortly."),
+                           String(localized: "The assistant is offline or restarting. Try again shortly."),
                            String(localized: "Can't reach the hub")] && calls.handOffs.isEmpty)
         let went = await m.send(ask: "a")
         #expect(went && calls.handOffs.count == 1)
@@ -428,7 +428,7 @@ struct InboxHandOffModelTests {
         c.failures = [APIError(status: 405, message: "Method Not Allowed")]
         c.askFailures = [APIError(status: 503, message: "Persona is offline", fields: ["code": "assistant_offline"])]
         let wentAnyway = await checked.send(ask: "a")
-        #expect(!wentAnyway && c.done == 0 && checked.error == String(localized: "The manager is offline or restarting. Try again shortly."))
+        #expect(!wentAnyway && c.done == 0 && checked.error == String(localized: "The assistant is offline or restarting. Try again shortly."))
         c.failures = [APIError(status: 405, message: "Method Not Allowed")]
         _ = await checked.send(ask: "a")
         #expect(c.done == 1 && c.asked.count == 2 && c.handOffs[0].clientID != c.handOffs[1].clientID)
@@ -497,6 +497,29 @@ struct InboxHandOffModelTests {
         #expect(await m.send(ask: "c"))
         m.open()
         #expect(calls.went.last?.target == .agent(agent) && calls.went.last?.key == agent && calls.went.count == 3)
+    }
+
+    /// The Mac sheet (#5921): a send opens nothing while the sheet is up; once it has closed, where it went opens once.
+    @Test func aSendFromTheSheetOpensOnlyOnceTheSheetHasClosed() async {
+        let calls = Calls(), m = model(calls)
+        m.target = .newChat
+        #expect(await m.send(ask: "a"))
+        m.openWhenClosed()
+        #expect(calls.went.isEmpty && m.opensWhenClosed)
+        m.closed()
+        #expect(calls.went.count == 1 && calls.went[0].target == .newChat && calls.went[0].key == Self.fresh)
+        m.closed() // a second disappearance opens nothing more
+        #expect(calls.went.count == 1 && !m.opensWhenClosed)
+    }
+
+    @Test func aSheetClosedWithoutASendOpensNothing() async {
+        let calls = Calls(), m = model(calls)
+        m.closed() // Cancel
+        calls.failures = [APIError(status: 400, message: "no")]
+        #expect(!(await m.send(ask: "a")))
+        m.openWhenClosed() // nothing went, so nothing is waiting
+        m.closed() // Cancel after the error
+        #expect(calls.went.isEmpty && !m.opensWhenClosed)
     }
 
     @Test func aFailedSendHasNowhereToOpen() async {

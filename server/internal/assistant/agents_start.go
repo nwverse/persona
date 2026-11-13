@@ -52,12 +52,17 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		if err := s.applyModel(ctx, "agent.new", params); err != nil {
 			return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id among them
 		}
+		if params["launch"] != "engine" {
+			return nil, badRequest(fmt.Errorf("purpose %q requires engine launch for session.start", "agent.new"), s.appLang(ctx, p.Lang))
+		}
 		// Held to what the computer has (#2640): a launcher picked that it lacks is refused, a default it lacks gives
 		// way to one it has.
 		if m, ok := s.device(ctx, p.MachineID); ok {
-			if _, err := s.fitLauncher(ctx, m, own, params); err != nil {
+			note, _, err := s.fitLauncher(ctx, m, own, params)
+			if err != nil {
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
 			}
+			leaveLauncherNote(ctx, note) // the app says so (agents_bus.go launcher_note, #4661)
 		}
 		if name, _ := params["launcher"].(string); name != "" {
 			if err := s.launcherScopeErr(ctx, p.MachineID, name); err != nil {
@@ -89,7 +94,7 @@ func (s *Service) AgentResumeParams(ctx context.Context, p AgentResumeParams) (m
 	}
 	// One the computer lacks gives way to one it has (#2640; a default is never refused).
 	if m, ok := s.device(ctx, p.MachineID); ok {
-		if _, err := s.fitLauncher(ctx, m, startPick{}, q); err != nil {
+		if _, _, err := s.fitLauncher(ctx, m, startPick{}, q); err != nil {
 			s.logf("resume %s: the New Agent launcher not applied: %v", p.SessionID, err)
 			return params, nil
 		}

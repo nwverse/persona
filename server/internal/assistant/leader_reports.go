@@ -114,6 +114,7 @@ func (s *Service) leaderReportsLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			s.leaderReportsSync(ctx, time.Now(), true)
+			s.directionTreeSoon() // a task of the tree may be stuck now with nothing else changing (direction_tree.go)
 		}
 	}
 }
@@ -199,9 +200,8 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		if a, ok := asks[t.ID]; ok {
 			lt.Ask = &a
 		}
-		tr := triageTodo(lt, look, now, time.Time{}, loc)
-		stuck := !tr.Last.IsZero() && now.Sub(tr.Last) >= leaderStuckAfter && t.DoneAt == nil &&
-			slices.Contains([]string{triageWaiting, triagePR, triageOther, triageShelved}, tr.Section)
+		tr := triageTodo(lt, look, now, time.Time{}, loc, false) // a failed start is closed: never stuck
+		stuck := taskStuck(t, tr, reached[t.ID], now)
 		if last, ok := told.Stuck[t.ID]; stuck && (!ok || now.Sub(last) >= leaderStuckAfter) {
 			told.Stuck[t.ID] = now
 			key := "stuck|" + t.ID + "|" + now.UTC().Format(time.RFC3339Nano)
@@ -319,9 +319,44 @@ func (s *Service) openPlans(ctx context.Context, conversation string, since time
 	return out
 }
 
+// taskStuck is the one stuck rule (#3485, #4352): by the To-dos SOP it sits in Waiting on you, or stopped unfinished
+// (PR to merge, Other open, Shelved), and nothing of it moved for leaderStuckAfter. reached: every machine its agents are
+// on answered (one that did not may be running it). leader.report kind stuck and the direction tree's stuck both read it.
+// A to-do no agent has worked on yet (notStarted) is stuck only in Waiting on you: elsewhere it has not started, it is
+// not stopped (#5846).
+func taskStuck(t Todo, tr todoTriage, reached bool, now time.Time) bool {
+	if notStarted(t) && tr.Section != triageWaiting {
+		return false
+	}
+	return reached && t.DoneAt == nil && !tr.Last.IsZero() && now.Sub(tr.Last) >= leaderStuckAfter &&
+		slices.Contains([]string{triageWaiting, triagePR, triageOther, triageShelved}, tr.Section)
+}
+
+// notStarted: no agent has ever worked on to-do t (none linked, not even one let go since), and it is not a concern
+// (#5846): a piece of a direction a leader recorded with todo_create and has not handed out, a Lark topic's to-do, a
+// to-do the user made. The direction tree shows it as planned, and it is stuck only while it waits on the owner
+// (taskStuck). A concern waits for the main conversation's answer (concerns.go) and keeps the rules it had.
+func notStarted(t Todo) bool {
+	return len(t.Agents) == 0 && !t.isConcern()
+}
+
 // leaderSessions finds the sessions of the tasks' agents as the apps get them, asking each machine once; reached says,
 // by to-do id, whether every machine its agents are on answered.
 func (s *Service) leaderSessions(ctx context.Context, tasks []Todo) (triageLookup, map[string]bool) {
+	lists, reached := s.agentSessionLists(ctx, tasks)
+	return func(machine, id string) (proto.Session, bool) {
+		for _, c := range lists[machine] {
+			if c.SessionID == id {
+				return c, true
+			}
+		}
+		return proto.Session{}, false
+	}, reached
+}
+
+// agentSessionLists are the session lists, by machine, of the machines the tasks' active agents are on, each asked
+// once; reached says, by to-do id, whether every machine its agents are on answered.
+func (s *Service) agentSessionLists(ctx context.Context, tasks []Todo) (map[string][]proto.Session, map[string]bool) {
 	lists := map[string][]proto.Session{}
 	failed := map[string]bool{}
 	reached := map[string]bool{}
@@ -343,14 +378,7 @@ func (s *Service) leaderSessions(ctx context.Context, tasks []Todo) (triageLooku
 		}
 		reached[t.ID] = ok
 	}
-	return func(machine, id string) (proto.Session, bool) {
-		for _, c := range lists[machine] {
-			if c.SessionID == id {
-				return c, true
-			}
-		}
-		return proto.Session{}, false
-	}, reached
+	return lists, reached
 }
 
 // leaderReport is one report, named by its key.

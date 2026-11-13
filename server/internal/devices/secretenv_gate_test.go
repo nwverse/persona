@@ -1,0 +1,75 @@
+package devices
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"github.com/nwverse/persona/server/internal/devicewire"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
+	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
+)
+
+// A hand-off goes only to a node that announces secret_env: an older one would answer secret.stage "unknown method"
+// and, worse, start an Agent without the values its ticket stands for.
+func TestSecretHandOffNeedsANodeWithSecretEnv(t *testing.T) {
+	_, _, m, _ := engineHub(t)
+	f, _ := connectEngineNode(t, m)
+	outdated := func(what string, err error) {
+		t.Helper()
+		var rerr *rpc.Error
+		if !errors.As(err, &rerr) || rerr.Code != proto.CodeNodeOutdated || rerr.Message == "" {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	m.mu.Lock()
+	m.info.Version, m.info.Protocol, m.info.Capabilities = "old", 1, []string{nodeproto.Sessions}
+	m.mu.Unlock()
+	outdated("secret.stage", m.call(context.Background(), proto.MethodSecretStage, proto.SecretStageParams{Check: true}, nil))
+	outdated("a start with a ticket", m.call(context.Background(), "session.start", map[string]any{"cwd": "/tmp", "secret_ticket": "t"}, nil))
+	outdated("a ticket hidden by its case", m.call(context.Background(), "session.start", json.RawMessage(`{"cwd":"/tmp","secret_ticket":"t","SECRET_TICKET":""}`), nil))
+	if calls := f.seen(); len(calls) != 0 {
+		t.Fatalf("sent to the old node: %v", calls)
+	}
+	if err := m.call(context.Background(), "session.start", map[string]any{"cwd": "/tmp"}, nil); err != nil {
+		t.Fatalf("a start without one: %v", err)
+	}
+
+	m.mu.Lock()
+	m.info.Capabilities = append(m.info.Capabilities, nodeproto.SecretEnv)
+	m.mu.Unlock()
+	if err := m.call(context.Background(), "session.start", map[string]any{"cwd": "/tmp", "secret_ticket": "t"}, nil); err != nil {
+		t.Fatalf("a node with secret_env: %v", err)
+	}
+}
+
+// Only the manager that connects the computer makes a hand-off (CallNode, in its own process, after its card): the
+// hub's and other managers' calls (Devices.Call) cannot stage values or start an Agent with a ticket, whatever node.
+func TestSecretHandOffIsTheManagersOwn(t *testing.T) {
+	d, _, m, _ := engineHub(t)
+	f, _ := connectEngineNode(t, m)
+	m.mu.Lock()
+	m.info.Version, m.info.Protocol, m.info.Capabilities = "new", 1, []string{nodeproto.Sessions, nodeproto.SecretEnv}
+	m.mu.Unlock()
+	for what, c := range map[string]devicewire.NodeCall{
+		"secret.stage":          {MachineID: m.cfg.ID, Method: proto.MethodSecretStage, Params: json.RawMessage(`{"check":true}`)},
+		"a start with a ticket": {MachineID: m.cfg.ID, Method: "session.start", Params: json.RawMessage(`{"cwd":"/tmp","secret_ticket":"t"}`)},
+		// a case variant after it: a struct decode would see "", the re-marshalled map put "t" last
+		"a ticket hidden by its case": {MachineID: m.cfg.ID, Method: "session.start", Params: json.RawMessage(`{"cwd":"/tmp","launcher":"claude","secret_ticket":"t","SECRET_TICKET":""}`)},
+		"only a case variant":         {MachineID: m.cfg.ID, Method: "session.start", Params: json.RawMessage(`{"cwd":"/tmp","Secret_Ticket":"t"}`)},
+	} {
+		var rerr *rpc.Error
+		if _, err := d.Call(context.Background(), c); !errors.As(err, &rerr) || rerr.Code != devicewire.CodeHandoffRefused {
+			t.Errorf("%s from the hub: %v", what, err)
+		}
+	}
+	if calls := f.seen(); len(calls) != 0 {
+		t.Fatalf("sent to the node: %v", calls)
+	}
+	if _, err := d.CallNode(context.Background(), m.cfg.ID, proto.MethodSecretStage, json.RawMessage(`{"check":true}`)); err != nil {
+		t.Fatalf("the manager's own: %v", err)
+	}
+}

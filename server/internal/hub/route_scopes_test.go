@@ -53,7 +53,7 @@ func routePatterns(t *testing.T) []string {
 			})
 		}
 	}
-	for _, p := range slices.Concat(assistantwire.Routes, assistantwire.InboxRoutes, devicewire.Routes, devicewire.MetricsRoutes, devicewire.UsageRoutes, devicewire.AdminUsageRoutes, extwire.Routes) {
+	for _, p := range slices.Concat(assistantwire.Routes, assistantwire.InboxRoutes, devicewire.Routes, devicewire.ShareRoutes, devicewire.MetricsRoutes, devicewire.UsageRoutes, devicewire.AdminUsageRoutes, extwire.Routes) {
 		seen[p] = true // the manager's, relayed
 	}
 	return slices.Sorted(func(yield func(string) bool) {

@@ -19,6 +19,10 @@ var (
 	fakeNoLockMu sync.Mutex
 	fakeNoLock   = map[string][]bool{}
 	fakeCursor   = map[string][]bool{}
+	// fakeWindows and fakeApps answer list_windows and list_apps on a fake Mac when set (#4336): fakeWindows is
+	// given how many run_steps calls that Mac has had, so a window can come up partway through a call.
+	fakeWindows = map[string]func(runs int) string{}
+	fakeApps    = map[string]string{}
 )
 
 // computerCall is one computer.call a fake node got.
@@ -94,9 +98,26 @@ func computerMac(t *testing.T, h *Manager, id string) (*Machine, func() (statuse
 			var c computerCallSeen
 			_ = json.Unmarshal(params, &c)
 			calls = append(calls, c)
+			fakeNoLockMu.Lock()
+			windows, apps := fakeWindows[id], fakeApps[id]
+			fakeNoLockMu.Unlock()
 			switch c.Tool {
 			case "list_apps":
+				if apps != "" {
+					return proto.ComputerResult{Output: json.RawMessage(apps)}, nil
+				}
 				return proto.ComputerResult{Output: json.RawMessage(`{"apps": [{"name": "Calculator", "bundle_id": "com.apple.calculator"}, {"name": "Terminal", "bundle_id": "com.apple.Terminal"}]}`)}, nil
+			case "list_windows":
+				if windows != nil {
+					runs := 0
+					for _, seen := range calls {
+						if seen.Tool == "run_steps" {
+							runs++
+						}
+					}
+					return proto.ComputerResult{Output: json.RawMessage(windows(runs))}, nil
+				}
+				return proto.ComputerResult{Output: json.RawMessage(`{"windows": []}`)}, nil
 			case "run_script":
 				return proto.ComputerResult{Output: json.RawMessage(`{"ok": true, "value": {"pid": 63, "window_id": 2318}}`)}, nil
 			case "get_window_state", "get_desktop_state":
@@ -235,7 +256,7 @@ func TestComputerToolsCallTheNode(t *testing.T) {
 	}
 
 	steps := `[{"click": {"app": "Calculator", "role": "button", "name": "6"}}, {"tool": "press_key", "args": {"key": "return"}}]`
-	res = h.callComputerTool(ctx, "conv1234-5678", "computer_run", json.RawMessage(`{"machine": "mac", "steps": `+steps+`}`))
+	res = h.callComputerTool(ctx, "conv1234-5678", "computer_run", json.RawMessage(`{"machine": "mac", "app": "Calculator", "steps": `+steps+`}`))
 	if res.IsError || !strings.Contains(res.Content[0].Text, `"executed":1`) {
 		t.Fatalf("%+v", res)
 	}
@@ -270,9 +291,15 @@ func TestComputerToolsCallTheNode(t *testing.T) {
 	deskOf(h) // nobody answers on the phone
 	short, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
-	res = h.callComputerTool(short, "c", "computer_run", json.RawMessage(`{"machine": "mac", "script": "return 1"}`))
-	if _, after := seen(); !res.IsError || !strings.Contains(res.Content[0].Text, "declined") || len(after) != len(before) {
+	res = h.callComputerTool(short, "c", "computer_run", json.RawMessage(`{"machine": "mac", "script": "const a = await cua.getApp(\"Calculator\"); return 1"}`))
+	_, after := seen()
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "declined") {
 		t.Fatalf("not confirmed: %+v", res)
+	}
+	for _, c := range after[len(before):] { // only the look at its apps and windows (#4336)
+		if c.Tool != "list_apps" && c.Tool != "list_windows" {
+			t.Fatalf("not confirmed, yet it ran: %+v", c)
+		}
 	}
 }
 

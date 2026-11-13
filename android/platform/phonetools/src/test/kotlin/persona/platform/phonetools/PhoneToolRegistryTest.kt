@@ -122,6 +122,12 @@ class PhoneToolRegistryTest {
         assertFalse(text(notShown).contains(PhoneToolText.DECLINED))
         assertTrue(text(notShown).contains("could not be shown on the phone"))
         assertTrue(text(notShown).contains("Android Settings › Apps › Persona › Notifications"))
+        outcome = PhoneConfirmation.Dismissed
+        val dismissed = registry.call(PhoneToolCall("dismissed", "phone_calendar_create_event", args))
+        assertTrue(dismissed.isError)
+        assertFalse(text(dismissed).contains(PhoneToolText.DECLINED))
+        assertTrue(text(dismissed).contains("dismissed on the phone"))
+        assertTrue(text(dismissed).contains("This is not a refusal"))
         outcome = PhoneConfirmation.Withdrawn
         val withdrawn = registry.call(PhoneToolCall("withdrawn", "phone_calendar_create_event", args))
         assertEquals(text(PhoneToolText.interrupted()), text(withdrawn))

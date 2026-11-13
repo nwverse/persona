@@ -105,6 +105,56 @@ struct TodoTriageTests {
         #expect(t.section == .justDone && t.rule == .finishedUnseen)
     }
 
+    // #5707: seen (Got It, or opening it) at or after the moment that put it in Just finished, it is Done at once
+    @Test func seenTodoGoesToDoneAtOnceOneSeenBeforeItGotThereStays() {
+        let closed = { (seen: Double) in self.at(self.todo("t", done: 3) { $0.seenAt = self.ago(seen) }) }
+        #expect(closed(2).section == .done && closed(2).rule == .closed)
+        #expect(closed(3).section == .done)
+        #expect(closed(4).section == .justDone && closed(4).rule == .closed)
+        let accepted = at(todo("t", agents: ["idle"]) { $0.supervision = acceptedReopened(); $0.seenAt = ago(4) })
+        #expect(accepted.section == .done && accepted.rule == .accepted)
+        let deployed = at(todo("t") { $0.delivery = .init(state: "live", at: ago(2)); $0.seenAt = ago(1) })
+        #expect(deployed.section == .done && deployed.rule == .deployed)
+        let failed = todo("f", done: 2) { $0.startError = "x"; $0.seenAt = ago(1) }
+        let superseded = TodoTriageLogic.triage(failed, lookup: lookup, now: now, superseded: true)
+        #expect(superseded.section == .done && superseded.rule == .superseded)
+    }
+
+    @Test func finishedTurnSeenSinceItLastMovedIsDoneUnlessItsPRIsOpen() {
+        // the unseen session last moved an hour ago
+        let seen = at(todo("t", agents: ["unseen"]) { $0.seenAt = ago(0.5) })
+        #expect(seen.section == .done && seen.rule == .seen)
+        let movedSince = at(todo("t", agents: ["unseen"]) { $0.seenAt = ago(2) })
+        #expect(movedSince.section == .justDone && movedSince.rule == .finishedUnseen)
+        let pr = at(todo("t", agents: ["unseen"]) { $0.seenAt = ago(0.5); $0.prURL = "https://example.com/pull/1" })
+        #expect(pr.section == .pr && pr.rule == .prOpen)
+        // seen, it is no longer open work: every count reads it the same way
+        #expect(TodoTriageLogic.bucket(todo("t", agents: ["unseen"]) { $0.seenAt = ago(0.5) }, lookup: lookup, now: now) == .closed)
+        #expect(TodoTriageLogic.bucket(todo("t", agents: ["unseen"]), lookup: lookup, now: now) == .open)
+    }
+
+    @Test func unfinishedSectionsComeFirstAndOpenShelvedAndDoneFoldedDoneLast() {
+        #expect(TodoSection.allCases == [.waiting, .working, .pr, .other, .justDone, .shelved, .done])
+        #expect(TodoSection.allCases.filter(\.startsFolded) == [.shelved, .done])
+    }
+
+    @Test func unfinishedTodosLeadARowAndComeBeforeJustFinishedSeenOnesAreDone() {
+        let look = TodosLogic.makeSessionLookup([session("unseen", state: .unread), session("unseen2", state: .unread),
+                                                 session("idle", state: .idle, updatedHoursAgo: 2)])
+        let list = [
+            todo("fix", title: "Fix #512 crash on launch", agents: ["unseen"]),
+            todo("test", title: "#512 crash: add a regression test", updated: 2, agents: ["idle"]),
+            todo("notes", title: "Write the release notes", updated: 3, done: 3) { $0.seenAt = ago(2.5) },
+            todo("speed", title: "Speed up the web page", agents: ["unseen2"]) { $0.seenAt = ago(0.5) },
+            todo("logs", title: "Rotate the logs", updated: 3, done: 3),
+        ]
+        let r = TodoTriageLogic.triageTodos(list, lookup: look, now: now)
+        #expect(r.groups(.other).map { $0.members.map(\.id) } == [["test", "fix"]])
+        #expect(r.groups(.justDone).map(\.lead.id) == ["logs"])
+        #expect(r.groups(.done).map(\.lead.id) == ["speed", "notes"])
+        #expect(r.open == 2 && r.shelved == 0 && r.finished == 3)
+    }
+
     @Test func openPRIsPRToMergeHoweverOldMergedIsNot() {
         #expect(at(todo("t", updated: 300, agents: ["old"]) { $0.delivery = .init(state: "pr") }).section == .pr)
         #expect(at(todo("t", updated: 300, agents: ["old"]) { $0.prURL = "https://example.com/pull/1" }).section == .pr)
@@ -198,6 +248,28 @@ struct TodoTriageTests {
         #expect(r.groups(.justDone).count == 1)
     }
 
+    /// The same case as `failed_start_superseded_by_finished_work` in spec/fixtures/triage/groups.json (#3713): a failed
+    /// start whose row's work really finished goes with it to Just finished, behind it, not counted open; failed starts
+    /// with nothing finished beside them still wait on the owner. The checkbox reads them so.
+    @Test func failedStartSupersededByFinishedWorkLeavesWaitingOnYou() {
+        let failed = todo("f1", title: "Deploy the self-hosted panel", done: 1) { $0.planID = "p1"; $0.startError = "no launcher" }
+        let done = todo("done1", title: "Panel: verify it on the hub", done: 2) { $0.planID = "p1"; $0.doneBy = "review" }
+        let other = todo("f2", title: "Rotate the backup keys", done: 3) { $0.planID = "p2"; $0.startError = "no launcher" }
+        let twin = todo("f3", title: "Rotate the backup keys", done: 4) { $0.startError = "no launcher" }
+        let list = [failed, done, other, twin]
+        #expect(TodoTriageLogic.supersededFailedStarts(list) == ["f1"])
+        let r = TodoTriageLogic.triageTodos(list, lookup: lookup, now: now)
+        #expect(r.groups(.justDone).map { $0.members.map(\.id) } == [["done1", "f1"]])
+        #expect(r.groups(.waiting).map { $0.members.map(\.id) } == [["f2", "f3"]])
+        #expect(r.open == 2 && r.finished == 2)
+        #expect(TodoTriageLogic.bucket(failed, lookup: lookup, now: now, superseded: true) == .closed)
+        #expect(TodoTriageLogic.bucket(failed, lookup: lookup, now: now) == .open)
+        // the checkbox: open while it waits on the owner, done once superseded
+        #expect(TodoTriageLogic.checksAsOpen(other, r.groups(.waiting)[0].triage["f2"]))
+        #expect(!TodoTriageLogic.checksAsOpen(failed, r.groups(.justDone)[0].triage["f1"]))
+        #expect(!TodoTriageLogic.checksAsOpen(done, r.groups(.justDone)[0].triage["done1"]))
+    }
+
     @Test func failedStartWaitingOnTheOwnerCountsAsOpen() {
         let r = TodoTriageLogic.triageTodos([todo("f", done: 1) { $0.startError = "no launcher" }], lookup: lookup, now: now)
         #expect(r.groups(.waiting).map(\.lead.id) == ["f"])
@@ -243,6 +315,15 @@ struct TodoTriageTests {
         #expect(t.delivery?.state == "pr" && t.delivery?.gate == "review" && t.reopenedAt != nil)
         let bad = try JSON.decoder.decode(TodoItem.self, from: Data(#"{"id":"t","title":"x","delivery":"live"}"#.utf8))
         #expect(bad.delivery == nil)
+    }
+
+    @Test func decodesSeenAtAndABadOneFilesNothing() throws {
+        let t = try JSON.decoder.decode(TodoItem.self, from: Data(#"{"id":"t","title":"x","seen_at":"2026-11-10T08:00:00Z"}"#.utf8))
+        #expect(t.seenAt == ISO8601DateFormatter().date(from: "2026-11-10T08:00:00Z"))
+        // a mark that does not parse reads as the epoch (JSON.decoder): it files nothing
+        var bad = try JSON.decoder.decode(TodoItem.self, from: Data(#"{"id":"t","title":"x","seen_at":"soon"}"#.utf8))
+        bad.doneAt = ago(3)
+        #expect(at(bad).section == .justDone)
     }
 }
 

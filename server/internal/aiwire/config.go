@@ -12,11 +12,18 @@ type Config struct {
 	// APIKey is an in-memory credential supplied by the hub's encrypted provider store.
 	APIKey string `json:"-"`
 	Model  string `json:"model"`
-	// ReasoningEffort is sent as reasoning.effort to the Responses API when set (e.g. "low").
+	// ReasoningEffort is sent to Responses as reasoning.effort and to Messages as output_config.effort. "off" maps
+	// to Responses "none" and the model's supported Messages no-thinking mode, or low effort when it cannot disable it.
 	ReasoningEffort string `json:"reasoning_effort"`
 	// Bearer sends the key to the Messages API as Authorization: Bearer instead of x-api-key, for gateways that take
 	// only that (what Claude Code does with ANTHROPIC_AUTH_TOKEN). Responses and Chat Completions always use Bearer.
 	Bearer bool `json:"bearer,omitempty"`
+	// ViaMachine is the computer whose node sends the requests (an API connection's "Send through"); empty: the
+	// manager sends them itself. The manager's client is built for it (assistant/models_via.go).
+	ViaMachine string `json:"-"`
+	// RunLauncher is a launcher on ViaMachine whose CLI answers each request headless there instead of an HTTP API: no
+	// address or key here (assistant/models_run.go, docs/assistant/model-config.md "Running API purposes on a launcher").
+	RunLauncher string `json:"-"`
 }
 
 // Over is c with its empty fields taken from base: a task that uses another model names only what differs.
@@ -43,5 +50,8 @@ func (c Config) Over(base Config) Config {
 // assumed (it used to default to one person's gateway and key file): without a model set up, the helpers that need
 // one say so.
 func (c Config) Configured() bool {
+	if c.RunLauncher != "" {
+		return c.ViaMachine != ""
+	}
 	return c.BaseURL != "" && c.Model != "" && (c.APIKeyFile != "" || c.APIKey != "")
 }

@@ -375,6 +375,7 @@ struct InboxHandOffSheet: View {
                 }
             }
         }
+        .onDisappear { handOff.closed() }
     }
 
     private func send() async {
@@ -382,12 +383,21 @@ struct InboxHandOffSheet: View {
         guard await handOff.send(ask: ask.isEmpty ? Self.presets[0] : ask) else { return }
         if let key = InboxHandOffMemory.key(item) { memory.remember(key, target: handOff.target) }
         Haptics.success()
-        handOff.open()
+        #if os(macOS)
+        // The sheet closes first and `onDisappear` opens where it went: opening first left the sheet up for good (#5921).
+        handOff.openWhenClosed()
+        #else
+        handOff.open() // the tab changes under the sheet as it slides away
+        #endif
         dismiss()
     }
 
     /// The item as context the chat shows as a chip, then the ask.
-    static func message(_ it: InboxItem, ask: String) -> String {
+    static func message(_ it: InboxItem, ask: String) -> String { contextRef(it).xml + "\n\n" + ask }
+
+    /// The item as context: where it came from, its words, and how the agent reads more or answers (Hand to AI here, the
+    /// composer's Add as Context › Inbox Item…, #3721). No link back: the app has no address for an Inbox item.
+    static func contextRef(_ it: InboxItem) -> ContextRef {
         let title = it.connector != nil ? "\(it.accountName) · \(it.title)" : it.isLark ? String(localized: "Lark · \(it.title)") : String(localized: "Email · \(it.title)")
         var text = it.context?.isEmpty == false ? it.context! : [it.sender ?? "", it.preview].filter { !$0.isEmpty }.joined(separator: "：") // i18n-ignore: context for the agent
         if let l = it.lark {
@@ -398,7 +408,6 @@ struct InboxHandOffSheet: View {
         if let m = it.mail, let uid = m.uids.last {
             text += "\n\n（邮件 account_id \(m.accountID)，mailbox \(m.mailbox)，uid \(uid)，可用 mail_read 读全文、mail_send 回复）" // i18n-ignore
         }
-        let ref = ContextRef(kind: "context", title: title, url: "", text: text)
-        return ref.xml + "\n\n" + ask
+        return ContextRef(kind: "context", title: title, url: "", text: text)
     }
 }

@@ -90,16 +90,19 @@ internal class ClaudeSettingsModel(
             val settings = kind.read(api, machine)
             mutable.update { if (it.machineId == machine) it.copy(settings = settings, error = it.error.takeIf { keepError }) else it }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) { mutable.update { if (it.machineId == machine) it.copy(error = ResText.of(R.string.settings_src_claude_read_failed, failureReasonText(error))) else it } }
+        // A write's failure stays: "not saved" says more than "could not read" about the control the owner just moved.
+        catch (error: Exception) { mutable.update { if (it.machineId == machine && !(keepError && it.error != null)) it.copy(error = ResText.of(R.string.settings_src_claude_read_failed, failureReasonText(error))) else it } }
         finally { mutable.update { it.copy(loading = false) } }
     }
 
     /**
      * Writes [key] (JsonNull: back to the default) to this machine, or to every [online] machine; the control moves
-     * at once and the hub's answer (or a reload after a failure) corrects it. Returns the notice to show when it worked.
+     * at once and the hub's answer corrects it. When the shown machine's write fails the control goes back, then the
+     * table is read again (which may fail too while offline). Returns the notice to show when it worked.
      */
     suspend fun set(key: String, value: JsonElement, online: List<Machine>): ResText? {
         val current = state.value
+        val before = current.settings.firstOrNull { it.key == key }
         val targets = if (current.applyAll) online.map { it.id }.ifEmpty { listOf(current.machineId) } else listOf(current.machineId)
         mutable.update { s -> s.copy(settings = s.settings.map { if (it.key == key) it.copy(value = value) else it }) }
         val failed = mutableListOf<ResText>()
@@ -108,7 +111,10 @@ internal class ClaudeSettingsModel(
                 val list = kind.write(api, id, key, value)
                 if (id == state.value.machineId) mutable.update { it.copy(settings = list) }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { failed += ResText.of(R.string.settings_src_name_reason, online.firstOrNull { it.id == id }?.displayName ?: id, failureReasonText(error)) }
+            catch (error: Exception) {
+                failed += ResText.of(R.string.settings_src_name_reason, online.firstOrNull { it.id == id }?.displayName ?: id, failureReasonText(error))
+                if (id == current.machineId && state.value.machineId == id && before != null) mutable.update { s -> s.copy(settings = s.settings.map { if (it.key == key) before else it }) }
+            }
         }
         if (failed.isEmpty()) {
             mutable.update { it.copy(error = null) }

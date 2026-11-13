@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -55,6 +56,13 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 		s.logf("mcp tools: %v", err)
 		return []proto.Tool{}
 	}
+	if _, room, err := s.roomOf(ctx, machine, session); guest && err == nil && room {
+		if s.isWorkMachine(machine) {
+			return []proto.Tool{}
+		}
+		// A meeting's room: its meeting tools only (meeting_room_tools.go), those it started with.
+		return guestTools(meetingRoomTools(), allowed)
+	}
 	if !guest {
 		if guestHint {
 			return []proto.Tool{}
@@ -62,7 +70,11 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 		if s.isWorkMachine(machine) {
 			return s.AgentTools()
 		}
-		return s.mcpTools(ctx, assistant)
+		tools := s.mcpTools(ctx, assistant)
+		if !assistant {
+			tools = append(tools, s.leaderTools(ctx, machine, session)...) // a task leader's task_plan (task_leader.go)
+		}
+		return tools
 	}
 	if s.isWorkMachine(machine) {
 		return []proto.Tool{}
@@ -109,6 +121,12 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	if !assistant && isAgentTool(name) {
 		return s.agentTool(ctx, machine, session, name, args)
 	}
+	if !assistant && name == "task_plan" { // only a task leader's agent has it (task_leader.go)
+		return s.leaderTaskPlan(ctx, machine, session, args)
+	}
+	if !assistant && name == "task_review" {
+		return s.leaderTaskReview(ctx, machine, session, args)
+	}
 	if !assistant && isDispatchTool(name) {
 		return s.dispatchTool(ctx, machine, session, name, args)
 	}
@@ -119,6 +137,11 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	case name == runtimeCLITool:
 		return proto.TextResult("unknown tool "+name, true)
 	case strings.HasPrefix(name, "phone_"):
+		if name == "phone_notify" && s.justMeNow(machine, session) {
+			// A Just me turn (meeting_justme.go): a phone on the table shows its notifications to the room. As
+			// notify_user's: nothing goes out, the text stays in the conversation, which the meeting page shows.
+			return proto.TextResult(justMeNotice(s.lang(ctx)), false)
+		}
 		if name == "phone_notify" && s.inHealth(ctx, session) {
 			var a map[string]any
 			if err := json.Unmarshal(args, &a); err != nil {
@@ -181,16 +204,33 @@ func (s *Service) isOwnTool(ctx context.Context, name string) bool {
 }
 
 // assistantLark is what the assistant's machine gets for its skills' commands (proto.AssistantLark): lark-cli's
-// settings and rules, and the plugins' command gates (the hub's, app.call hub). Another machine gets nothing: the
-// credentials go to the assistant's machine only (its process runs them).
+// settings and rules, and the plugins' command gates (the hub's, app.call hub). The credentials go to the assistant's
+// machine only (its process runs them): another personal machine gets otherMachineLark, a work machine nothing.
 func (s *Service) assistantLark(ctx context.Context, machine string) (proto.AssistantLark, error) {
-	if s.isWorkMachine(machine) || !s.sameMachine(machine, s.settings(ctx).MachineID) {
+	if s.isWorkMachine(machine) || s.ext == nil {
 		return proto.AssistantLark{}, nil
 	}
-	if s.ext == nil {
-		return proto.AssistantLark{}, nil
+	cfg, err := s.ext.AssistantLark(ctx)
+	if err != nil || s.sameMachine(machine, s.settings(ctx).MachineID) {
+		return cfg, err
 	}
-	return s.ext.AssistantLark(ctx)
+	return otherMachineLark(cfg), nil
+}
+
+// otherMachineLark is what another personal machine's gate gets for the assistant conversations the manager starts
+// there (a Lark /agent placed on it, #5479): the rules and lark-cli's name, so its lark-cli calls go by lark-cli's own
+// risk levels instead of all being confirmed. Not the command gates (their credentials) nor the extensions' MCP
+// servers, and not the profile, which names one in the manager computer's lark-cli: that machine uses its lark-cli's
+// default profile, and an absolute bin is looked up there by its base name.
+func otherMachineLark(cfg proto.AssistantLark) proto.AssistantLark {
+	out := proto.AssistantLark{Rules: cfg.Rules}
+	if cfg.CLI != nil {
+		out.CLI = &proto.LarkCLI{Bin: cfg.CLI.Bin}
+		if out.CLI.Bin != "" {
+			out.CLI.Bin = filepath.Base(out.CLI.Bin)
+		}
+	}
+	return out
 }
 
 // assistantSummary is the text a gated command's card shows, as its plugin names what the ids are; false: none.

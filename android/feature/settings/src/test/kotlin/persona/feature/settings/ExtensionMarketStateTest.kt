@@ -52,7 +52,7 @@ private class FakeMarket : ExtensionApiStub() {
     override suspend fun previewFromMarket(market: String, extension: String): ExtensionPreview { calls += "preview $market/$extension"; check(); return preview }
     override suspend fun install(preview: ExtensionPreview): ExtensionDetail { calls += "install ${preview.previewId} ${preview.permissionsDigest}"; check(); return installed }
     override suspend fun upgrade(id: String, preview: ExtensionPreview): ExtensionDetail { calls += "upgrade $id ${preview.previewId}"; check(); return installed }
-    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean) { calls += "uninstall $id keep=$keepData"; check() }
+    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean, members: Boolean): ExtensionRemoval { calls += "uninstall $id keep=$keepData"; check(); return ExtensionRemoval() }
     override suspend fun markets(): List<ExtensionMarket> { check(); return markets }
     override suspend fun addMarket(spec: String, token: String?): ExtensionMarket {
         calls += "add $spec token=${token != null}"; check()
@@ -68,6 +68,45 @@ private class FakeMarket : ExtensionApiStub() {
 @Config(sdk = [35])
 class ExtensionMarketStateTest {
     private val res get() = ApplicationProvider.getApplicationContext<android.content.Context>().resources
+
+    @Test fun catalogMetadataNeverInventsCountsOrLoadsInvalidLogoAddresses() {
+        assertNull(catalogDownloads(res, null))
+        assertNull(catalogDownloads(res, -1))
+        assertEquals(2, installedSubtitleLines(catalogDownloads(res, null)))
+        assertEquals(2, installedSubtitleLines(catalogDownloads(res, -1)))
+        assertEquals(3, installedSubtitleLines(catalogDownloads(res, 0)))
+        assertEquals("下载 0 次", catalogDownloads(res, 0))
+        assertEquals("下载 4,294,967,296 次", catalogDownloads(res, 4294967296))
+        assertEquals("https://extensions.example.com/logo.png", catalogLogoUrl("https://extensions.example.com/logo.png"))
+        for (url in listOf(null, "", "http://example.com/logo.png", "/logo.png", "//example.com/logo.png", "https:///logo.png",
+            "https://", "https://bad host/logo.png", "https://user:password@example.com/logo.png", "https://example.com:99999/logo.png")) {
+            assertNull("Invalid URL must use the generic icon: $url", catalogLogoUrl(url))
+        }
+    }
+
+    @Test fun downloadCountWordsFollowTheAppLanguageAndEnglishPluralRules() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        fun localized(tag: String) = context.createConfigurationContext(android.content.res.Configuration(res.configuration).apply {
+            setLocale(java.util.Locale.forLanguageTag(tag))
+        }).resources
+        assertEquals("1 download", catalogDownloads(localized("en"), 1))
+        assertEquals("0 downloads", catalogDownloads(localized("en"), 0))
+        assertEquals("2 downloads", catalogDownloads(localized("en"), 2))
+        assertEquals("下载 1 次", catalogDownloads(localized("zh-Hans"), 1))
+        assertEquals("1回ダウンロード", catalogDownloads(localized("ja"), 1))
+    }
+
+    @Test fun catalogKeepsPopularityOrderThroughOfficialMarketNaming() = runBlocking {
+        val popular = fresh.copy(name = "Zeta", downloads = 20)
+        val lessPopular = fresh.copy(id = "alpha", name = "Alpha", downloads = 10)
+        val zero = fresh.copy(id = "zero", downloads = 0)
+        val old = fresh.copy(id = "old")
+        val api = FakeMarket().apply { catalog = listOf(popular, lessPopular, zero, old); markets[0] = markets[0].copy(official = true) }
+        val model = CatalogModel(api, res)
+        model.load()
+        assertEquals(listOf("example-calendar", "alpha", "zero", "old"), model.state.value.extensions.map { it.id })
+        assertEquals(listOf(20L, 10L, 0L, null), model.state.value.extensions.map { it.downloads })
+    }
 
     @Test fun whereEachExtensionStandsAndWhatThePageOffers() {
         assertEquals(CatalogStanding.Available, CatalogText.standing(fresh))

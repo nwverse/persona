@@ -95,10 +95,22 @@ enum LocationTool {
         var longitude: Double
     }
 
-    /// The places MapKit finds for `query`, at most `limit`.
-    static func find(_ query: String, limit: Int) async throws -> [Found] {
+    /// The places MapKit finds for `query`, at most `limit`. `region` puts places in it first: Saved Places passes what
+    /// its map shows; `phone_location_search` passes none, so its answers stay as they were.
+    static func find(_ query: String, limit: Int, near region: MKCoordinateRegion? = nil) async throws -> [Found] {
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = query
+        if let region { request.region = region }
+        return try await found(request, limit: limit)
+    }
+
+    /// The place a search suggestion stands for (Saved Places' `MKLocalSearchCompleter`), with its coordinates and
+    /// address; nil when MapKit has none for it.
+    static func find(_ suggestion: MKLocalSearchCompletion) async throws -> Found? {
+        try await found(MKLocalSearch.Request(completion: suggestion), limit: 1).first
+    }
+
+    private static func found(_ request: MKLocalSearch.Request, limit: Int) async throws -> [Found] {
         let items = try await MKLocalSearch(request: request).start().mapItems
         return items.prefix(limit).map { item in
             let place = item.placemark

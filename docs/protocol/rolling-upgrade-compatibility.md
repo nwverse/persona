@@ -55,7 +55,7 @@
 
 The hub sends its feature list in `devices.connected`, matching the capabilities advertised in `hello.features`.
 The devices manager forwards it as `node.configure.hub_features`; the node snapshots that list when starting an
-assistant process. A new Claude assistant, Agent SDK assistant or guest conversation registers the built-in MCP
+assistant process. A new Claude, Codex app-server, Agent SDK or guest assistant registers the built-in MCP
 handler only as `persona` when the hub announces
 `persona_contracts_v1`. Its automatic tool permissions use the same namespace selection, so each built-in tool is
 offered once and only one built-in MCP process is needed. An old hub, an absent feature list or a connection that has
@@ -67,20 +67,20 @@ The manager handshake does not wait for capability resets or disconnect nodes ov
 is not changed halfway through its startup. An unused warm process whose namespace policy
 no longer matches is replaced before reuse. No user configuration is required.
 
-Resumed assistant sessions retain both namespaces, even with a capable hub. This conservative fallback also applies
-after an idle process restart: removing a namespace that occurs in historical `tool_use` blocks has not been verified
-against a live model. The [Agent SDK session documentation](https://code.claude.com/docs/en/agent-sdk/sessions) describes
-restoring tool-call history, and [Claude Code's MCP documentation](https://code.claude.com/docs/en/mcp#dynamic-tool-updates)
-describes refreshing tool lists, but neither establishes that this particular rename is safe on resume. The
-[Messages API tool-call guide](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls) documents
-tool-call/result pairing, not compatibility with removing a previously used MCP namespace. Existing cache measurements
-in [assistant.md](../assistant/assistant.md) ("Live snapshots and prefix caching") cover removing a tool, but do not
-establish that it was present in historical calls.
+With a capable hub, resumed assistant sessions also register only `persona`, including idle recycling and scheduled-task
+resumes. Claude Code 2.1.322 was driven through a real two-turn check: the first turn called
+`mcp__jarvis__todo_decisions`; resuming that transcript with only `persona` configured completed the next request without
+a provider or transcript error. Historical recognition remains independent of registration, so readers and read-only
+worker supervision accept both `mcp__persona__report_to_supervisor` and its legacy name. Generated assistant instructions
+tell the model to translate old `mcp__jarvis__X` references in stored routines to `mcp__persona__X`.
+
+Only `persona_settings` is listed in the assistant's tool schemas. `jarvis_settings` remains accepted by the call path
+and normalized to `persona_settings`, so an old direct call still runs without publishing a second identical schema.
 
 The shared `mcp.json` generated at node startup and checked or repaired by doctor also retains both namespaces.
 It is created before the hub handshake, and ordinary Agent launches and resumes reuse it without a per-session
 namespace decision. Doctor cannot safely narrow that file from the connected hub's capabilities alone. This
-optimization therefore applies to the per-process assistant, Agent SDK assistant and guest configurations.
+optimization therefore applies to the per-process Claude, Codex app-server, Agent SDK and guest assistant configurations.
 
 Registration and historical recognition are separate: transcript readers, task completion and supervision folding
 continue accepting `mcp__persona__*` and `mcp__jarvis__*` forever. Extension namespaces and their permission rules are

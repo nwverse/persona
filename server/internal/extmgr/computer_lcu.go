@@ -1,6 +1,7 @@
 package extmgr
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"strings"
@@ -30,6 +31,11 @@ func (h *Manager) answerComputerElicit(ctx context.Context, m *Machine, params j
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return map[string]any{"action": "cancel"}, nil
+	}
+	if name, id, ok := lcuconfirm.NativeApp(p.Params); ok && protectedApp(approvedApp{BundleID: id, Name: name}) {
+		// Never System Settings or a permission prompt (#4336): refused, with no card to allow it on.
+		h.logf("[%s] computer elicitation refused: protected app %s", m.cfg.ID, cmp.Or(id, name))
+		return lcuconfirm.Decline(), nil
 	}
 	l := h.userLang()
 	original := lcuconfirm.Card(p.Params)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -160,6 +161,18 @@ func TestReadinessClaudeMissing(t *testing.T) {
 	if r.Mode != ReadinessSetup || nextOf(r) != StepClaude || cl.State != StepProblem || cl.Code != proto.CodeClaudeMissing ||
 		cl.Action.ID != "install_claude" || len(cl.AltActions) != 1 || cl.AltActions[0].ID != "connect_model" ||
 		cl.Detail != "server 上还没装 Claude Code。装好它，或者改用 API Key。" {
+		t.Fatalf("claude = %+v (%s)", cl, r.Mode)
+	}
+}
+
+// A self-check whose claude --version did not answer this time (a busy machine's 10 s ran out) while the shell found
+// claude is unknown, never claude_missing: Claude Code may well be there.
+func TestReadinessClaudeUnanswered(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	f.doctor["server"] = "这次没读到 claude 的版本（超时或出错），claude 本身找得到"
+	f.doctorState = map[string]string{"server": "unanswered"}
+	r := getReadiness(t, s, "", "")
+	if cl := readinessStep(t, r, StepClaude); cl.State != StepUnknown || cl.Code == proto.CodeClaudeMissing || r.Mode != ReadinessFull {
 		t.Fatalf("claude = %+v (%s)", cl, r.Mode)
 	}
 }
@@ -382,6 +395,47 @@ func TestReadinessProbe(t *testing.T) {
 	r5 := getReadiness(t, s, "", "")
 	if first := readinessStep(t, r5, StepFirstMessage); first.State != StepOK || r5.Next != nil {
 		t.Fatalf("persisted first_message: %+v", first)
+	}
+}
+
+// A client that stops waiting for its probe (its own time ran out, the page closed) does not cut the check off: the
+// result is kept, and the next try within the reuse window answers it instead of starting the check again (#1892).
+func TestReadinessProbeOutlivesTheClient(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	var asked atomic.Int32 // the checks the node was asked for, the one cut off too
+	f.mu.Lock()
+	f.checkWait = func(ctx context.Context) error {
+		asked.Add(1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		select {
+		case <-release:
+			return ctx.Err() // a check cut off with the client fails, however the select woke
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	f.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = serveHTTP(ctx, s, assistantwire.HTTPRequest{Method: "GET", Path: "/api/v1/assistant/readiness", Query: "probe=1"}, s.lang)
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the check never started")
+	}
+	cancel() // the client hangs up while the check runs
+	close(release)
+	<-done
+	r := getReadiness(t, s, "probe=1", "")
+	if r.Probe == nil || !r.Probe.OK || asked.Load() != 1 {
+		t.Fatalf("the try after: %+v, checks asked for %d (want the first one's result, 1)", r.Probe, asked.Load())
 	}
 }
 

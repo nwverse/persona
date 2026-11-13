@@ -2,6 +2,7 @@
 // each one's page — its switch, binding a step at a time (a QR code to scan in the chat app, a pairing code to send the
 // bot, credentials), where its messages go, what it does, a test message to the owner — and, for a market's, the way
 // to install it. Read-only ones (the apps, /agent, voice) say where they are set up.
+import { OwnerMark } from "./OwnerMark";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
@@ -11,7 +12,7 @@ import {
   type Channel, type ChannelDetail, type ChannelPrompt, type ChannelTarget, type ChannelTone,
 } from "../../lib/channels";
 import { canSendStep, fieldInput } from "../../lib/connectors";
-import { otherManager, pinManager } from "../../lib/manager-choice";
+import { otherManager, ownedSub, pinManager, useChosenManager } from "../../lib/manager-choice";
 import { ago } from "../../lib/format";
 import { useStore } from "../../lib/store";
 import { Button, copyText, cx, Dialog, EASE, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
@@ -77,12 +78,15 @@ export function ChannelLink({ id, manager, onOpen }: { id: string; manager?: str
 // ── the list ─────────────────────────────────────────────
 
 export function ChannelList({ onOpen, onMarketItem }: { onOpen: (id: string) => void; onMarketItem: (market: string, plugin: string) => void }) {
+  // the current assistant's channels (docs/assistant/managers.md "The current assistant"), asked of it by name (none for
+  // the default); a row opens its copy (`<id>@<manager>`)
+  const owner = otherManager(useChosenManager() ?? undefined);
   const [list, setList] = useState<Channel[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const load = () => {
     setLoading(true);
-    listChannels()
+    listChannels(owner)
       .then((l) => (setList(l), setError("")))
       .catch((e) => setError(errorText(e)))
       .finally(() => setLoading(false));
@@ -121,7 +125,7 @@ export function ChannelList({ onOpen, onMarketItem }: { onOpen: (id: string) => 
             <button
               key={c.id}
               type="button"
-              onClick={() => (c.source === "market" && c.market && c.plugin ? onMarketItem(c.market, c.plugin) : onOpen(c.id))}
+              onClick={() => (c.source === "market" && c.market && c.plugin ? onMarketItem(c.market, c.plugin) : onOpen(ownedSub(c.id, owner)))}
               className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover"
               style={{ animation: `fade-up 320ms ${EASE} ${Math.min(i, 8) * 30}ms both` }}
             >
@@ -152,8 +156,10 @@ export function ChannelList({ onOpen, onMarketItem }: { onOpen: (id: string) => 
 // ── one channel ──────────────────────────────────────────
 
 /** `manager`: whose channel (another manager's, opened from its extension's page): the page's requests name it while it
- *  is open; none: the default's. */
-export function ChannelPage({ id, manager, onBack, onSettings }: { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void }) {
+ *  is open; none: the current assistant's. */
+export function ChannelPage({ id, manager: named, onBack, onSettings }: { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void }) {
+  // a route that names none (written by hand, or before several managers): the current assistant's, as for an extension
+  const manager = named ?? otherManager(useChosenManager() ?? undefined);
   useLayoutEffect(() => pinManager(`/channels/${encodeURIComponent(id)}`, otherManager(manager)), [id, manager]);
   const [d, setD] = useState<ChannelDetail | null>(null);
   const [error, setError] = useState("");
@@ -208,6 +214,7 @@ export function ChannelPage({ id, manager, onBack, onSettings }: { id: string; m
   const head = (
     <div className="mb-3 flex items-center gap-2">
       <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-channels.title")}</Button>
+      <OwnerMark manager={manager} />
       <span className="flex-1" />
       <IconButton icon="retry" label={t("settings-channels.refresh")} onClick={() => void load()} />
     </div>
@@ -402,7 +409,17 @@ function TargetPicker({ open, current, onClose, onPick }: { open: boolean; curre
 
 // ── binding, a step at a time ────────────────────────────
 
-function BindSteps({ c, onDone }: { c: Channel; onDone: () => Promise<void> }) {
+/**
+ * Binding `c` a step at a time. The Lark bot's page reuses it to create the bot's app by scanning (#5818), with its own
+ * `title`, `footer` and `startLabel` for the first button; everything after the first press is the same steps.
+ */
+export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }: {
+  c: Pick<Channel, "id" | "name" | "bind">;
+  onDone: () => Promise<void>;
+  title?: string;
+  footer?: string;
+  startLabel?: string;
+}) {
   const [prompt, setPrompt] = useState<ChannelPrompt | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -441,13 +458,13 @@ function BindSteps({ c, onDone }: { c: Channel; onDone: () => Promise<void> }) {
   // A QR code or a code on screen: ask again every interval until it is scanned / sent.
   useStepPolling(isPolled(prompt) ? prompt : null, (step) => send(step, {}, true), 3);
 
-  const footer = c.bind === "qr" ? t("settings-channels.qr_footer", { name: c.name }) : undefined;
+  const footer = startFooter ?? (c.bind === "qr" ? t("settings-channels.qr_footer", { name: c.name }) : undefined);
   if (!prompt) {
     return (
-      <Group title={t("settings-channels.binding")} footer={footer ?? t("settings-channels.bind_footer")}>
+      <Group title={title ?? t("settings-channels.binding")} footer={footer ?? t("settings-channels.bind_footer")}>
         <div className="px-4 py-3">
-          <Button tone="accent" icon={c.bind === "qr" ? "image" : "link"} busy={busy} onClick={() => void send("", {})}>
-            {bindTitle(c)}
+          <Button tone="accent" icon={c.bind === "qr" || startLabel ? "image" : "link"} busy={busy} onClick={() => void send("", {})}>
+            {startLabel ?? bindTitle(c)}
           </Button>
         </div>
       </Group>
@@ -455,7 +472,7 @@ function BindSteps({ c, onDone }: { c: Channel; onDone: () => Promise<void> }) {
   }
   const canSend = canSendStep(prompt, values) && !busy;
   return (
-    <Group title={bindTitle(c)}>
+    <Group title={title ?? bindTitle(c)}>
       {(prompt.hint || prompt.error) && (
         <div className="flex flex-col gap-1 px-4 py-2.5">
           {prompt.hint && <p className="text-[12.5px] leading-relaxed text-ink-2">{prompt.hint}</p>}
