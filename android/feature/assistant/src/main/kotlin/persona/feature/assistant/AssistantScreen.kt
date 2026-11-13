@@ -1085,10 +1085,10 @@ fun AssistantScreen(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         if (sharedSidebar != null) {
             body(false)
-        } else if (maxWidth >= 840.dp) {
+        } else if (maxWidth >= Tokens.Android.Size.assistantSplitMin) {
             Row(Modifier.fillMaxSize()) {
                 // The list of conversations sits on the same background as the page beside it, not a panel of its own.
-                if (sidebarVisible) Box(Modifier.width(300.dp).fillMaxHeight()) {
+                if (sidebarVisible) Box(Modifier.width(Tokens.Size.box300).fillMaxHeight()) {
                     PageBackdrop()
                     Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) { sidebar() }
                 }
@@ -1616,7 +1616,7 @@ private fun ConversationRow(
             titleAccessory = accessory, titleLead = dated?.head,
             subtitle = session.lastText?.takeIf { it.isNotBlank() },
             leading = {
-                if (leadActive) JSpinner(Modifier.size(20.dp), color = PersonaTheme.palette.accent, stroke = 1.8.dp)
+                if (leadActive) JSpinner(Modifier.size(Tokens.Size.iconXS), color = PersonaTheme.palette.accent, stroke = SpinnerTokens.compactStroke)
                 else JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,
                     selected = selected, tint = if (selected) PersonaTheme.palette.accent else PersonaTheme.palette.ink2)
             },
