@@ -292,8 +292,8 @@ type Node struct {
 	hookFlights   hookFlights  // hook calls in progress by session: their process waits on them (model_restore.go)
 
 	// screens: live-screen hardware video channel (#3954). Login binding per `pair` and the busy count (screen.go).
-	// screenStart is the capture/encode helper seam (Persona Screen.app) filled by the PoC on a real Mac; while it is
-	// nil, screen.dial returns video_unavailable, so a node without the helper keeps today's RFB-only behaviour.
+	// screenStart starts the capture/encode helper (Persona Screen.app) for a stream: startScreenHelper on a Mac
+	// (screenhelper.go), nil elsewhere, where screen.dial returns video_unavailable and the screen stays RFB only.
 	screens     *screenLogins
 	screenStart func(ctx context.Context, id, pair string, keepAwake bool, done func()) error
 }
@@ -350,6 +350,9 @@ func New(version string) (*Node, error) {
 	n.sessionScope = scope
 	if n.uid, err = LoadMachineUID(dir); err != nil {
 		n.logger.Printf("machine uid: %v", err) // the hubs then treat this computer as theirs alone
+	}
+	if runtime.GOOS == "darwin" {
+		n.screenStart = n.startScreenHelper // Persona Screen, the live screen's video helper (#3954)
 	}
 	n.configureCodex(proto.CodexConfig{})
 	n.hosts = host.NewRegistry(nodeHosts(proto.EngineHerdr, false, n.logger.Printf)...) // herdr until engine.use, botmux until the hub says
