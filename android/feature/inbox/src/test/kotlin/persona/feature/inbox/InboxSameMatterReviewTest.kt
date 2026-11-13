@@ -16,7 +16,6 @@ import java.io.IOException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -74,9 +73,11 @@ class InboxSameMatterReviewTest {
         val reads = repository.lineCalls
         rule.onNode(hasText("Alpha", substring = true) and hasClickAction() and !hasSetTextAction()).performClick()
         rule.waitForIdle()
-        assertEquals(1, feedback.failures)
-        assertTrue(feedback.notices.isEmpty())
-        // The picker stays open with the choice still offered (a 409 may be tried again), and the section behind it is
+        // Every 409 from the parent route gets one plain explanation, never the hub's own sentence and never a success.
+        assertEquals("这个关联不成立，请选择其他内容。", feedback.notices.single().message)
+        assertEquals(FeedbackStyle.Error, feedback.notices.single().style)
+        assertEquals(0, feedback.failures)
+        // The picker stays open with the choice still offered (another one may work), and the section behind it is
         // still the line it had: no reload was asked for and nothing claims the link happened.
         rule.onNode(hasSetTextAction()).assertExists()
         assertEquals(reads, repository.lineCalls)
