@@ -36,11 +36,13 @@ final class FormDatePickerTests: XCTestCase {
     }
 
     /// The to-do's page with a due day and a reminder (the mock's 「给 NAS 配自动备份」): the screen as it opens, then each
-    /// picker brought into view.
+    /// picker brought into view. The page is known by its title in the bar: at the largest sizes its header can fill the
+    /// screen, and the plan's rows below it may not exist until scrolled to.
     @MainActor private func page(_ hub: String, _ language: String, _ size: String, check: Bool) {
-        launch(hub, language, size, ["-openTodoTitled", "给 NAS 配自动备份"])
-        let due = app.switches["todo.plan.due"]
-        XCTAssertTrue(due.waitForExistence(timeout: 60), "\(language) \(size): the to-do's page")
+        let name = "给 NAS 配自动备份"
+        launch(hub, language, size, ["-openTodoTitled", name])
+        let title = app.navigationBars.staticTexts[name].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 60), "\(language) \(size): the to-do's page")
         shot("page-\(language)-\(size)")
         for id in ["todo.plan.dueDate", "todo.plan.remindAt"] {
             let picker = app.descendants(matching: .any)[id].firstMatch
@@ -119,8 +121,17 @@ final class FormDatePickerTests: XCTestCase {
         return false
     }
 
+    /// The screen once two shots in a row are the same: the glass behind a sheet that has just opened can still change
+    /// by a shade, which a pixel comparison would count.
     @MainActor private func shot(_ name: String) {
-        save(XCUIScreen.main.screenshot(), name)
+        var last = XCUIScreen.main.screenshot()
+        for _ in 0..<8 {
+            usleep(300_000)
+            let next = XCUIScreen.main.screenshot()
+            if next.pngRepresentation == last.pngRepresentation { break }
+            last = next
+        }
+        save(last, name)
     }
 
     @MainActor private func row(_ element: XCUIElement, _ name: String) {
