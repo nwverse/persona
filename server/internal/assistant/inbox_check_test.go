@@ -46,8 +46,9 @@ func followCheckNoFailure(t *testing.T, h *inboxHub, it *InboxItem) {
 	}
 }
 
-// A future look, one whose suggestion already waits for the user, and a member merged into another row are left exactly
-// as they were. A merged member is not open even though its DoneAt may be empty.
+// A future look, one whose suggestion already waits for the user, a member merged into another row, and one with new
+// content still to escalate are left exactly as they were. A merged member is not open even though its DoneAt may be
+// empty; new content is a source-triggered wake, not an empty due check.
 func TestInboxCheckSkipsItemsThatMustNotRun(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -62,6 +63,10 @@ func TestInboxCheckSkipsItemsThatMustNotRun(t *testing.T) {
 		}},
 		{name: "merged member", prepare: func(it *InboxItem, now time.Time) {
 			it.MergedInto = "lark:f1:parent"
+		}},
+		{name: "new content not escalated yet", prepare: func(it *InboxItem, now time.Time) {
+			it.Last = "101"
+			it.Context = "飞书私聊（张三）的新消息：\n[11-05 12:00] 张三：报价好了"
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

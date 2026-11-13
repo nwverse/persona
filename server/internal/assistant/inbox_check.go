@@ -26,7 +26,9 @@ func (s *Service) checkInboxFollowUps(ctx context.Context, cfg InboxAgentConfig,
 			// Keep this count the same as startInboxAgents': a conversation woken below joins it immediately.
 			running++
 		}
-		if inboxFollowCheckDue(it, now) {
+		if inboxFollowCheckDue(it, now) && it.Agent != nil && it.Agent.Of == it.Last {
+			// Content the conversation has not seen goes through escalate first: it is news, not an empty due check. This
+			// also leaves it waiting while the twin is off, so enabling the twin again still delivers that content.
 			due = append(due, it)
 		}
 	}
