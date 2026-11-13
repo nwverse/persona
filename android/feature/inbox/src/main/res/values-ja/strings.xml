@@ -161,8 +161,6 @@
     <string name="inbox_handoff_what">依頼内容</string>
     <string name="inbox_handoff_who">依頼先</string>
     <string name="inbox_handoff_main_chat">メインチャット</string>
-    <string name="inbox_handoff_new_agent">新規エージェント…</string>
-    <string name="inbox_handoff_new_agent_detail">コンピュータ、フォルダ、モデルを選びます</string>
     <string name="inbox_handoff_no_agents">オンラインのエージェントがいません。まずPersonaに任せることができます。</string>
     <string name="inbox_handoff_last_time">前回</string>
     <string name="inbox_handoff_last_gone">前回渡したエージェントは終了しているため、今回は Persona に渡します。</string>

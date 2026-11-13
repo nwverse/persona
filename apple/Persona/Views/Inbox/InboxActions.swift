@@ -332,9 +332,7 @@ struct InboxHandOffSheet: View {
                             lastTimeMark(.newChat)
                         }
                         .tag(Optional(InboxHandOffModel.Target.newChat))
-                        #if os(iOS)
                         newAgentRow.tag(InboxHandOffModel.Target?.none)
-                        #endif
                         ForEach(agents) { s in
                             HStack(spacing: Theme.Space.s) {
                                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
@@ -368,15 +366,16 @@ struct InboxHandOffSheet: View {
                 lastTarget = r.lastTime ? r.target : nil
                 lastGone = r.gone
             }
-            #if os(iOS)
             .sheet(item: $newAgent) { p in
                 NewChatView(initialPrompt: p.prompt, contextBlock: p.contextBlock, forwarded: p.card, forwardedIcon: Theme.Icon.inbox,
                             nameHint: p.nameHint, onlyGroup: p.group) { s in
                     newAgent = nil
                     started(s.key, prefill: p)
                 }
+                #if os(macOS)
+                .macSheet()
+                #endif
             }
-            #endif
             .navigationTitle("Hand to AI")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -444,7 +443,11 @@ struct InboxHandOffSheet: View {
         memory.rememberStarted(item, agent: key)
         handOff.started(key, markDone: prefill.markDone)
         Haptics.success()
+        #if os(macOS)
+        handOff.openWhenClosed() // as `send()`: the Agent opens once this sheet has closed (#5921)
+        #else
         handOff.open()
+        #endif
         dismiss()
     }
 

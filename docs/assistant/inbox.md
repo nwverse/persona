@@ -702,15 +702,15 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   found by asking it; with none yet, the message starts it), which then opens; **Persona (new chat)** starts a new conversation with the item's manager (iOS / Mac switch to the
   Persona tab); an Agent (latest 8) receives it in its session (navigate there). Only live, writable Agents on online computers are offered. Marked done by default once the message got there, except for the main chat (below).
   Apple sends an Agent hand-off as one pending outbox message: a wait for the connection keeps the same message and operation id through the outbox's retries, not a new send; the item is filed only at the terminal sent state, and a refusal keeps the sheet open with its reason (#1846). The filing intent and whether it was initiated are restored with the outbox, so delivery after an app relaunch still files the item once.
-  **New Agent…** (#5933; iOS / iPadOS bar and sheet, web, Android; not the frozen Mac app) is the first row of the Agents, shown even when none is running, for giving the
-  item to a fresh Agent in another folder. It reads the item and opens the existing New Agent page prefilled:
+  **New Agent…** (#5933; iOS / iPadOS bar and sheet, the Mac through the same sheet, web; Android later) is the first row of the Agents, shown even when none is running,
+  for giving the item to a fresh Agent in another folder. It reads the item and opens the existing New Agent page prefilled:
   - **Context:** the item as a card over the first message, sent ahead of it: the same `<persona-context>` an Agent target gets.
   - **First message:** the typed ask or the chosen preset (the first preset when nothing was typed), editable there.
-  - **Name and computers (iOS):** the item's title as the name hint; only the computers of the item's hub.
+  - **Name and computers (Apple):** the item's title as the name hint; only the computers of the item's hub.
   - **The rest:** computer, folder, runtime and model are chosen there as for any new Agent, from that page's own last choices.
   - **Confirmation:** nothing is sent before Start there, so there is no Undo toast. Cancel comes back to the item with the ask kept: the bar's field or the sheet / dialog as
-    it was; Android closes its sheet for the page and starts Hand to AI on that item from the same words again.
-  - **After start:** the Agent opens, and the item's source remembers that Agent, never "New Agent…" (the bar's `inbox.handOffTarget` too), so the next item from it starts there
+    it was.
+  - **After start:** the Agent opens (on the Mac once the sheet has closed, as for the other targets), and the item's source remembers that Agent, never "New Agent…" (the bar's `inbox.handOffTarget` too), so the next item from it starts there
     while it can take messages. "Also mark as done" follows the Agent targets' default (on) unless the user set the box: the item is filed once the Agent started (web: once its
     first message went).
   - **Hub and manager:** unchanged; the page's start (`POST /api/v1/sessions`) and first message are New Agent's own.

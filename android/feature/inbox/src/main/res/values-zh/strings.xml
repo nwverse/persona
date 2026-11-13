@@ -161,8 +161,6 @@
     <string name="inbox_handoff_what">要它做什么</string>
     <string name="inbox_handoff_who">交给谁</string>
     <string name="inbox_handoff_main_chat">主对话</string>
-    <string name="inbox_handoff_new_agent">开 Agent…</string>
-    <string name="inbox_handoff_new_agent_detail">选电脑、文件夹和模型</string>
     <string name="inbox_handoff_no_agents">没有在线的 Agent；可以先交给 Persona。</string>
     <string name="inbox_handoff_last_time">上次</string>
     <string name="inbox_handoff_last_gone">上次交给的 Agent 已经结束，这次默认交给 Persona。</string>

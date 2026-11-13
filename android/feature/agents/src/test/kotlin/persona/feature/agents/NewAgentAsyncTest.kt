@@ -158,24 +158,6 @@ class NewAgentAsyncTest {
         } finally { elsewhere.viewModelScope.cancel() }
     }
 
-    /** An Inbox item handed to a new Agent (#5933): its context block goes ahead of what was typed, the name from the typed words. */
-    @Test fun aPrefilledContextGoesAheadOfTheFirstMessage() = test {
-        val block = "<persona-context kind=\"context\" title=\"Lark · Example\" url=\"\">\nExample: is it merged?\n</persona-context>"
-        val sender = Sender()
-        val service = Service().apply { result = AgentStartResult.Created(Session(machineId = "first", sessionId = "new", status = "idle", starting = true)) }
-        val model = NewAgentViewModel(service, MemoryStore(), machines, sender, prefill = NewAgentPrefill(prompt = "Look into it", context = block))
-        try {
-            advanceUntilIdle()
-            assertEquals(block, model.state.value.context)
-            assertEquals("Look into it", model.state.value.prompt)
-            model.submit()
-            advanceUntilIdle()
-            assertEquals("Look into it", service.request?.nameHint)
-            assertEquals(listOf(block + "\n\nLook into it"), sender.sent.map { it.second })
-            assertEquals("new", model.state.value.created?.sessionId)
-        } finally { model.viewModelScope.cancel() }
-    }
-
     private class MemoryStore : AgentCreationStore {
         var operation: AgentStartOperation? = null
         val saved = mutableMapOf<String, AgentDefaults>()

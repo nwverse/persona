@@ -33,8 +33,6 @@ import persona.core.navigation.AppTab
 import persona.core.navigation.ChatRoute
 import persona.core.navigation.ConversationKind
 import persona.core.navigation.Navigator
-import persona.core.navigation.NewAgentRoute
-import persona.core.navigation.NewAgentStarts
 import java.io.File
 
 @RunWith(AndroidJUnit4::class)
@@ -117,52 +115,6 @@ class InboxHandOffShotsTest {
         assertEquals(2, repository.requests.size)
         assertEquals(repository.requests[0].operationId, repository.requests[1].operationId)
         assertTrue(dismissed)
-    }
-
-    /** "New Agent…" (#5933): the new agent page with the item ahead of the first preset, nothing sent before its Start. */
-    @Test fun newAgentOpensTheNewAgentPageWithTheItemAndNothingIsSent() {
-        show()
-        rule.onNodeWithText("New agent…").performClick()
-        rule.waitForIdle()
-        assertTrue(dismissed)
-        val route = navigator.routes.single() as NewAgentRoute
-        assertEquals("Summarize, tell me what to do, suggest a reply", route.prompt)
-        assertEquals(handoffPrompt(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().resources, handOffItem(repository.record, null), route.prompt!!), route.context + "\n\n" + route.prompt)
-        assertNotNull(route.tag)
-        assertTrue(repository.requests.isEmpty())
-        assertEquals(0, repository.doneCalls)
-    }
-
-    /** Once the Agent started, the source remembers it (never "New Agent…") and the item is filed, as for any Agent. */
-    @Test fun theStartedAgentIsRememberedAndTheItemFiled() {
-        val remembering = HandOffTestRepository(listOf(InboxMuteOption("sender", "me@example.com", "Me")))
-        rule.setContent { PersonaTheme(reduceMotion = true) { InboxHandOffSheet(remembering, remembering.record, navigator, onDismiss = { dismissed = true }) } }
-        rule.onNodeWithText("New agent…").performClick()
-        rule.waitForIdle()
-        val route = navigator.routes.single() as NewAgentRoute
-        NewAgentStarts.started(route.tag!!, "laptop", "fresh")
-        rule.waitForIdle()
-        assertEquals(listOf(HandOffMemoryEntry("mail|sender:me@example.com", "agent:laptop/fresh")), remembering.handOffMemory.value)
-        assertEquals(1, remembering.doneCalls)
-        NewAgentStarts.started(route.tag!!, "laptop", "fresh") // heard once
-        rule.waitForIdle()
-        assertEquals(1, remembering.doneCalls)
-    }
-
-    /** The user turned Also mark as done off; the ask typed is kept for the item when the new agent page is left. */
-    @Test fun theUsersMarkDoneChoiceAndTheAskAreKept() {
-        show()
-        rule.onNode(isToggleable()).performClick().performClick() // on, then off: the user's choice
-        rule.onNode(hasSetTextAction()).performTextInput("Check the plan")
-        rule.onNodeWithText("New agent…").performClick()
-        rule.waitForIdle()
-        val route = navigator.routes.single() as NewAgentRoute
-        assertEquals("Check the plan", route.prompt)
-        assertEquals("Check the plan", HandOffAsks.recall(repository.record.item.id))
-        NewAgentStarts.started(route.tag!!, "laptop", "fresh")
-        rule.waitForIdle()
-        assertEquals(0, repository.doneCalls)
-        assertEquals("", HandOffAsks.recall(repository.record.item.id))
     }
 
     /** Per source (#2121): the sender's last target is preselected and marked; one that has ended falls back with a note. */

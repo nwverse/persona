@@ -35,8 +35,6 @@ object InboxHandOffMemory {
 
     fun agent(target: HandOffTarget): String = "agent:${target.key}"
 
-    fun agent(machineId: String, sessionId: String): String = "agent:$machineId/$sessionId"
-
     /**
      * The remembered target while it is still there. A remembered Agent no longer listed resolves to Persona's main
      * conversation (`gone`). Nothing remembered, a value that doesn't read, or New Chat (not a target here) is null: the

@@ -11,28 +11,18 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
-import persona.core.designsystem.icons.PersonaIcons
 import persona.core.navigation.AppTab
 import persona.core.navigation.ChatRoute
 import persona.core.navigation.ConversationKind
 import persona.core.navigation.Navigator
-import persona.core.navigation.NewAgentRoute
-import persona.core.navigation.NewAgentStarts
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-
-/** Where "New Agent…" files the item and remembers the Agent once it started (#5933): the sheet is long gone by then. */
-private val newAgentScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
 /**
  * "Hand to AI" (iOS `InboxHandOffSheet`, the old app's sheet): what to do with the item (three presets or the user's own
  * words), who does it — Persona's main conversation (2026-11-02: hand-offs go there) or one of the live Agents — and
  * whether to file the item as done. Persona receives the item through its hand-off route; older hubs and Agent
- * targets use the chat outbox. Once accepted, the sheet closes and the conversation it went to opens. "New Agent…"
- * (#5933) opens the new agent page instead, with the item ahead of the ask as its first message.
+ * targets use the chat outbox. Once accepted, the sheet closes and the conversation it went to opens.
  *
  * [context] replaces the hub's text of the item (the mail page has the whole message); [onHandedOff] hears where it
  * went (null: Persona).
@@ -51,7 +41,7 @@ internal fun InboxHandOffSheet(
     val feedback = LocalAppFeedback.current
     val scope = rememberCoroutineScope()
     val itemId = record.item.id
-    var instruction by rememberSaveable(itemId) { mutableStateOf(HandOffAsks.recall(itemId)) }
+    var instruction by rememberSaveable(itemId) { mutableStateOf("") }
     var targetKey by rememberSaveable(itemId) { mutableStateOf<String?>(null) }
     var markDone by rememberSaveable(itemId) { mutableStateOf(false) }
     var doneChosen by rememberSaveable(itemId) { mutableStateOf(false) }
@@ -105,7 +95,6 @@ internal fun InboxHandOffSheet(
                 val operation = attempt.operationId(text, target)
                 val session = repository.handOff(InboxHandOffRequest(itemId, text, target?.machineId, target?.sessionId, operation))
                 attempt.done()
-                HandOffAsks.forget(itemId)
                 memoryKey?.let { key ->
                     val entries = InboxHandOffMemory.remember(memory.orEmpty(), key, target?.let(InboxHandOffMemory::agent) ?: InboxHandOffMemory.MAIN)
                     try { repository.saveHandOffMemory(entries) } catch (e: CancellationException) { throw e } catch (_: Exception) {}
@@ -126,31 +115,6 @@ internal fun InboxHandOffSheet(
             finally { busy = false }
         }
     }
-    // "New Agent…" (#5933): the new agent page with the item ahead of the ask (the first preset when none), nothing sent
-    // before its Start. The ask is kept for this item if that page is left; once the Agent started, its source remembers
-    // it and the item is filed unless the user turned that off here (on for Agents).
-    fun newAgent() {
-        if (busy) return
-        busy = true
-        error = null
-        val file = if (doneChosen) markDone else true
-        val ask = instruction.trim().ifEmpty { presets[0] }
-        scope.launch {
-            try {
-                val block = handoffContext(res, handOffItem(record, context ?: repository.personaContext(itemId)))
-                val tag = java.util.UUID.randomUUID().toString()
-                val notFiled = res.getString(R.string.inbox_handoff_done_failed)
-                NewAgentStarts.await(tag) { machineId, sessionId ->
-                    newAgentScope.launch { if (!newAgentStarted(repository, record, file, machineId, sessionId)) feedback?.notice(notFiled) }
-                }
-                HandOffAsks.keep(itemId, instruction)
-                onDismiss()
-                navigator?.navigate(NewAgentRoute(prompt = ask, context = block, tag = tag))
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { error = res.getString(R.string.inbox_handoff_failed, failureReason(e).resolve(res)) }
-            finally { busy = false }
-        }
-    }
     JSheet(onDismiss = onDismiss, title = stringResource(R.string.inbox_hand_to_ai), dismissible = !busy, scrollable = true) {
         Column(Modifier.fillMaxWidth().imePadding()) {
             JSectionHeader(stringResource(R.string.inbox_handoff_what))
@@ -162,18 +126,13 @@ internal fun InboxHandOffSheet(
                 }
             }
             JSectionHeader(stringResource(R.string.inbox_handoff_who))
-            val rows = targets.size + 2
+            val rows = targets.size + 1
             JGroupItem(GroupPosition.of(0, rows)) {
                 JRow("Persona", subtitle = stringResource(R.string.inbox_handoff_main_chat), leadingIcon = PhIcons.Sparkle, onClick = { selectTarget(null) }, chevron = false,
                     trailing = { LastTimeRadio(target == null, lastPersona) })
             }
-            // First of the Agents, there even when none is online.
-            JGroupItem(GroupPosition.of(1, rows)) {
-                JRow(stringResource(R.string.inbox_handoff_new_agent), subtitle = stringResource(R.string.inbox_handoff_new_agent_detail),
-                    leadingIcon = PersonaIcons.add, onClick = ::newAgent, enabled = !busy)
-            }
             targets.forEachIndexed { index, agent ->
-                JGroupItem(GroupPosition.of(index + 2, rows)) {
+                JGroupItem(GroupPosition.of(index + 1, rows)) {
                     JRow(agent.title, subtitle = agent.machine, leadingIcon = PhIcons.Robot, onClick = { selectTarget(agent) },
                         chevron = false, trailing = { LastTimeRadio(target == agent, agent.key == lastKey) })
                 }

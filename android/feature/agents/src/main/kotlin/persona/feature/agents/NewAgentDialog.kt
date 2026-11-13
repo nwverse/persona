@@ -26,7 +26,6 @@ import persona.feature.chat.UltracodeQuotaLines
 import persona.feature.chat.rememberUltracodeQuota
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
-import persona.core.domain.parseContexts
 import java.net.URI
 
 @Composable
@@ -285,15 +284,13 @@ private fun LazyListScope.newAgentItems(
             UltracodeQuotaLines(quota, blocked == null, Modifier.padding(horizontal = rowPadding).padding(bottom = Tokens.Space.m))
         }
     }
-    // An Inbox item handed to a new Agent (#5933): the folded context row a sent message shows, over the first message.
-    state.context?.let { context ->
-        item("context") {
-            MessageContextGroup(remember(context) { parseContexts(context).first }, id = "new-agent-context", onOpen = {}, alignEnd = false)
-        }
-    }
     item("prompt") {
         JTextField(state.prompt, model::prompt, enabled = !state.locked,
-            label = stringResource(if (state.agentType == "codex") R.string.agents_new_first_message_codex else R.string.agents_new_first_message),
+            label = stringResource(when {
+                state.promptRequired -> R.string.agents_new_first_message_codex
+                state.agentType == "codex" -> R.string.agents_new_first_message_codex_optional
+                else -> R.string.agents_new_first_message
+            }),
             minLines = 3, maxLines = 8, modifier = Modifier.fillMaxWidth().focusRequester(prompt))
     }
 }
@@ -326,10 +323,10 @@ private fun NewAgentFooter(state: NewAgentState, model: NewAgentViewModel, machi
     }
 }
 
-/** A folder, a launcher or the configuration to follow, an online machine, and Codex's first message. */
-private fun startable(state: NewAgentState, machines: List<Machine>): Boolean =
+/** A folder, a launcher or the configuration to follow, an online machine, and a first message when required. */
+internal fun startable(state: NewAgentState, machines: List<Machine>): Boolean =
     state.selection.cwd.isNotBlank() && (state.selection.launcher.isNotBlank() || state.following) &&
-        machines.any { it.id == state.machineId && it.online } && (state.agentType != "codex" || state.prompt.isNotBlank() || state.context != null)
+        machines.any { it.id == state.machineId && it.online } && (!state.promptRequired || state.prompt.isNotBlank())
 
 internal fun String.agentLabel() = when (this) { "claude" -> "Claude Code"; "codex" -> "Codex"; "traex" -> "TRAEX"; else -> this }
 internal val permissionModes = listOf("" to R.string.agents_mode_follow, "default" to R.string.agents_mode_default,

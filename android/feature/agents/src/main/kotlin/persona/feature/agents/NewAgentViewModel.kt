@@ -23,10 +23,9 @@ internal data class AgentSpacePreset(val machineId: String, val workspaceId: Str
 
 /**
  * What a caller fills in ahead (the knowledge base's "Open Agent"): [machineId] and [cwd] are picked when that machine is
- * online, [prompt] starts the first message; all of it can still be changed. [context] (a `<persona-context>` block, an
- * Inbox item handed to a new Agent, #5933) goes ahead of the first message, as iOS `NewChatView.contextBlock`.
+ * online, [prompt] starts the first message; all of it can still be changed.
  */
-internal data class NewAgentPrefill(val machineId: String? = null, val cwd: String? = null, val prompt: String? = null, val context: String? = null)
+internal data class NewAgentPrefill(val machineId: String? = null, val cwd: String? = null, val prompt: String? = null)
 
 /** The hub's "New Agent" model use (docs/assistant/model-config.md), read once per form. */
 internal sealed interface NewAgentModelConfig {
@@ -71,8 +70,6 @@ internal data class NewAgentState(
     val modelConfig: NewAgentModelConfig = NewAgentModelConfig.Unknown,
     /** The prefilled machine was not online, so another one was picked (named here for the form to say so). */
     val prefillOffline: String? = null,
-    /** What goes ahead of the first message ([NewAgentPrefill.context]), shown over it; null: nothing. */
-    val context: String? = null,
     val models: NewAgentModels = NewAgentModels(),
     /**
      * The model picked for this start, an id of [modelList]; "": the default. Not saved on its own: picking a machine
@@ -106,6 +103,9 @@ internal data class NewAgentState(
         else launchers.firstOrNull { it.name == selection.launcher }?.agentType ?: "claude"
     /** The launcher that will run, whose models the "Model" row lists: the one picked, or the configuration's. */
     val modelLauncher: String get() = if (following) configuredLauncher?.name.orEmpty() else selection.launcher
+    /** Older computers still require Codex's first message, including when following model configuration. */
+    val promptRequired: Boolean get() = agentType == "codex" &&
+        launchers.firstOrNull { it.name == modelLauncher }?.promptOptional != true
     /** [modelLauncher]'s models, once there are some to show. */
     val modelList: LauncherModels? get() = models.list?.takeIf {
         it.models.isNotEmpty() && models.machineId == machineId && models.launcher == modelLauncher
@@ -188,8 +188,7 @@ internal class NewAgentViewModel(
                         recentSetups = recents)
                 } else {
                     val last = store.lastMachine(service.scope)
-                    mutable.update { it.copy(initialized = true, prompt = prefill?.prompt.orEmpty(), context = prefill?.context?.takeIf { c -> c.isNotBlank() },
-                        recentSetups = recents) }
+                    mutable.update { it.copy(initialized = true, prompt = prefill?.prompt.orEmpty(), recentSetups = recents) }
                     machines.collect { list ->
                         if (state.value.machineId.isEmpty() && !state.value.locked) {
                             val space = state.value.space
@@ -407,7 +406,8 @@ internal class NewAgentViewModel(
         val agentType = current.agentType
         if (previous == null && (current.selection.cwd.isBlank() || (current.selection.launcher.isBlank() && !current.following) ||
                 machines.value.none { it.id == current.machineId && it.online } ||
-                (current.space != null && current.space.machineId != current.machineId))) return
+                (current.space != null && current.space.machineId != current.machineId) ||
+                (current.promptRequired && current.prompt.isBlank()))) return
         mutable.update { it.copy(starting = true, error = null) }
         viewModelScope.launch {
             try {
@@ -436,9 +436,7 @@ internal class NewAgentViewModel(
      * with the start, and so does any start without a sender.
      */
     private fun newOperation(current: NewAgentState, agentType: String, worktree: String? = null): AgentStartOperation {
-        val typed = current.prompt.trim().takeIf { it.isNotEmpty() }
-        // A context block goes first, then what was typed (iOS NewChatView.start); the name comes from what was typed.
-        val first = listOfNotNull(current.context, typed).joinToString("\n\n").takeIf { it.isNotEmpty() }
+        val first = current.prompt.trim().takeIf { it.isNotEmpty() }
         val async = sender != null && agentType == "claude"
         val efforts = current.modelEfforts
         val request = AgentStartRequest(
@@ -447,7 +445,7 @@ internal class NewAgentViewModel(
             // Codex starts take no effort; Claude's only one the model that will run takes.
             current.selection.effort.takeIf { it.isNotEmpty() && agentType == "claude" && (efforts == null || it in efforts) },
             current.space?.workspaceId, agentType.takeIf { it != "claude" }, async = true.takeIf { async },
-            nameHint = typed.takeIf { async }, model = current.sentModel,
+            nameHint = first.takeIf { async }, model = current.sentModel,
             ultracode = true.takeIf { current.ultracode && agentType == "claude" },
         )
         return AgentStartOperation(UUID.randomUUID().toString(), request,
