@@ -38,7 +38,7 @@ export function DeleteConversationDialog({ s, onClose }: { s: Session; onClose: 
     <Button tone="quiet" disabled={busy} onClick={onClose}>{t("common.cancel")}</Button>
     <Button tone="danger" icon="trash" busy={busy} onClick={() => void remove()}>{t("conversation-delete.delete_confirm")}</Button>
   </>}>
-    <p className="text-[13px] leading-relaxed text-ink-2">{t("conversation-delete.delete_body")}</p>
-    {error && <p role="alert" className="mt-3 text-[13px] text-red">{error}</p>}
+    <p className="text-meta leading-relaxed text-ink-2">{t("conversation-delete.delete_body")}</p>
+    {error && <p role="alert" className="mt-3 text-meta text-red">{error}</p>}
   </Dialog>;
 }
