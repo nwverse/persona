@@ -1,5 +1,21 @@
 # Lessons: web UI and interactions
 
+## Pending cards need exact session metadata outside the loaded page (#6432)
+
+A task row can render from `taskRows` even when `getSession` has no row for its Agent. On a paging hub, hydrate every
+pending card's missing session, not only `folded_under` children, before checking approval capabilities. Keep missing
+and explicitly read-only sessions disabled. Test a root Agent outside the list window, and type without submitting.
+An expanded Needs you title opens the asking Agent; keep folding on its separate chevron, never on that title.
+
+## A grey text selection over sidebar rows reads as a stuck highlight (#6458)
+
+The theme paints `::selection` with `--accent-tint`, a neutral grey in the default theme close to the hover fill. A
+press-and-drag that started on a group's always-shown explanation (trying to drag an Agent onto a to-do) selected the
+group titles, state words and explanations below it, line by line, and pressing the fold buttons afterwards kept it
+(a press on a button does not move the selection), so the owner reported it as a highlight style leaking. Rows that
+fold or group (`Section`'s heading, `TreeBranch`) are `select-none`; a drag test in `web/e2e/todo-grouping.mjs` keeps
+it so. Before calling a stray grey block a style bug, check `String(getSelection())`.
+
 ## Live acceptance must distinguish a lookup POST from a mutation (#5753)
 
 The live composer driver rejected the app's normal `POST /api/v1/launchers/catalog`, although the handler is a
@@ -88,6 +104,18 @@ every later alias moves on by one, the list reorders and every first-screen impo
 grew 9 B, but the ja count grew 255 B and `main` failed the build, with no first-screen code changed. `firstScreenBytes`
 now counts imported names as one fixed string and export lists as empty ones. To check a surprising move, compare the
 number of entries in each first-screen chunk's `export{…}` between the two builds.
+
+## A change's first-screen cost depends on the main it is measured on (#6348)
+
+The paged Agents list's groups measured +1,402 B for ja on one `main`, then +1,510 B, +1,396 B and +1,501 B on the
+next three, within two hours and with the change's own code untouched: brotli counts a change against everything around it,
+and each merge moved what it compresses against. For the same reason a lazy split saves far less than the module weighs
+alone: the sections' view is about 1.5 KB minified and compressed on its own, and moving it to its own chunk took 407 B
+off. Measure the branch and `main` at the same commit, after the last merge, and write that pair beside
+`FIRST_SCREEN_BUDGET`; never carry a delta over from an earlier base, and never estimate a split from a module's own
+size. A build under its budget prints no numbers: build a scratch checkout with the constant set to 1 B, and the error
+names every language's count. While the PR waits, `main` may raise the budget for its own changes: merge it, keep its
+note, and append yours with a new pair.
 
 ## An idle-contracted chunk's growth raises the idle budget, it cannot move to on-intent (#5386)
 

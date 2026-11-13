@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -192,73 +193,102 @@ func codexAppSlug(title string) string {
 func startCodexAppChat(ctx context.Context, cli, home, dir, title string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, codexAppSeedWait)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, cli, "app-server")
-	cmd.Dir = dir
-	cmd.Env = append(desktopSeedEnv(os.Environ()), "CODEX_HOME="+home)
-	in, err := cmd.StdinPipe()
+	s, err := startCodexStdio(ctx, cli, home, dir)
 	if err != nil {
 		return "", err
 	}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", err
-	}
-	if err := cmd.Start(); err != nil {
-		return "", err
-	}
-	defer func() {
-		_ = in.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	}()
-	lines := bufio.NewReaderSize(out, 1<<20)
-	call := func(id int, method string, params any) (json.RawMessage, error) {
-		b, _ := json.Marshal(map[string]any{"id": id, "method": method, "params": params})
-		if _, err := in.Write(append(b, '\n')); err != nil {
-			return nil, err
-		}
-		for {
-			line, err := lines.ReadBytes('\n')
-			if err != nil {
-				return nil, fmt.Errorf("%s: %v", method, err)
-			}
-			var m struct {
-				ID     *int            `json:"id"`
-				Result json.RawMessage `json:"result"`
-				Error  *struct {
-					Message string `json:"message"`
-				} `json:"error"`
-			}
-			if json.Unmarshal(line, &m) != nil || m.ID == nil || *m.ID != id {
-				continue // a notification, or another's
-			}
-			if m.Error != nil {
-				return nil, fmt.Errorf("%s: %s", method, m.Error.Message)
-			}
-			return m.Result, nil
-		}
-	}
-	if _, err := call(1, "initialize", map[string]any{"clientInfo": map[string]any{"name": codexAppClient, "title": "Persona", "version": "1"}}); err != nil {
-		return "", err
-	}
-	b, _ := json.Marshal(map[string]any{"method": "initialized"})
-	if _, err := in.Write(append(b, '\n')); err != nil {
-		return "", err
-	}
-	raw, err := call(2, "thread/start", map[string]any{"cwd": dir})
-	if err != nil {
-		return "", err
-	}
+	defer s.close()
 	var started struct {
 		Thread struct {
 			ID string `json:"id"`
 		} `json:"thread"`
 	}
-	if json.Unmarshal(raw, &started) != nil || started.Thread.ID == "" {
+	if err := s.call(ctx, "thread/start", map[string]any{"cwd": dir}, &started); err != nil {
+		return "", err
+	}
+	if started.Thread.ID == "" {
 		return "", errors.New("thread/start: no thread")
 	}
-	if _, err := call(3, "thread/name/set", map[string]any{"threadId": started.Thread.ID, "name": title}); err != nil {
+	if err := s.call(ctx, "thread/name/set", map[string]any{"threadId": started.Thread.ID, "name": title}, nil); err != nil {
 		return "", err
 	}
 	return started.Thread.ID, nil
+}
+
+// codexStdio is a `codex app-server` over stdio (JSON lines) for a short exchange, as the App's client
+// (codexAppClient): started in dir for home and initialized; close ends it. Its calls end when ctx does (the
+// app-server is killed).
+type codexStdio struct {
+	cmd   *exec.Cmd
+	in    io.WriteCloser
+	lines *bufio.Reader
+	next  int
+}
+
+func startCodexStdio(ctx context.Context, cli, home, dir string) (*codexStdio, error) {
+	cmd := exec.CommandContext(ctx, cli, "app-server")
+	cmd.Dir = dir
+	cmd.Env = append(desktopSeedEnv(os.Environ()), "CODEX_HOME="+home)
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	s := &codexStdio{cmd: cmd, in: in, lines: bufio.NewReaderSize(out, 1<<20)}
+	if err := s.call(ctx, "initialize", map[string]any{"clientInfo": map[string]any{"name": codexAppClient, "title": "Persona", "version": "1"}}, nil); err != nil {
+		s.close()
+		return nil, err
+	}
+	b, _ := json.Marshal(map[string]any{"method": "initialized"})
+	if _, err := in.Write(append(b, '\n')); err != nil {
+		s.close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *codexStdio) close() {
+	_ = s.in.Close()
+	_ = s.cmd.Process.Kill()
+	_ = s.cmd.Wait()
+}
+
+// call sends one request and reads up to its answer, into into (nil: none wanted); notifications and others' answers
+// are skipped.
+func (s *codexStdio) call(_ context.Context, method string, params, into any) error {
+	s.next++
+	id := s.next
+	b, _ := json.Marshal(map[string]any{"id": id, "method": method, "params": params})
+	if _, err := s.in.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	for {
+		line, err := s.lines.ReadBytes('\n')
+		if err != nil {
+			return fmt.Errorf("%s: %v", method, err)
+		}
+		var m struct {
+			ID     *int            `json:"id"`
+			Result json.RawMessage `json:"result"`
+			Error  *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(line, &m) != nil || m.ID == nil || *m.ID != id {
+			continue // a notification, or another's
+		}
+		if m.Error != nil {
+			return fmt.Errorf("%s: %s", method, m.Error.Message)
+		}
+		if into == nil {
+			return nil
+		}
+		return json.Unmarshal(m.Result, into)
+	}
 }

@@ -230,6 +230,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/clipboard
 -                    GET /api/v1/machines/{mid}/clipboard/settings
 -                    GET /api/v1/machines/{mid}/codex-settings
+-                    GET /api/v1/machines/{mid}/codex/{sid}/takeover
 -                    GET /api/v1/machines/{mid}/computer
 -                    GET /api/v1/machines/{mid}/computer/apps
 -                    GET /api/v1/machines/{mid}/computer/clipboard
@@ -456,6 +457,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{id}/reject
 -                    POST /api/v1/machines/{mid}/browser/cookies
 -                    POST /api/v1/machines/{mid}/browser/{action}
+-                    POST /api/v1/machines/{mid}/codex/{sid}/takeover
 -                    POST /api/v1/machines/{mid}/computer/clipboard
 -                    POST /api/v1/machines/{mid}/computer/{action}
 -                    POST /api/v1/machines/{mid}/deploy
@@ -537,6 +539,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/rename
 agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 -                    POST /api/v1/sessions/{mid}/{sid}/share-preview
 -                    POST /api/v1/sessions/{mid}/{sid}/unarchive
+-                    POST /api/v1/skills/import
 -                    POST /api/v1/subscriptions
 -                    POST /api/v1/subscriptions/-/dry-run
 -                    POST /api/v1/subscriptions/-/push
@@ -548,6 +551,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 -                    POST /api/v1/task-plans/{id}/start
 -                    POST /api/v1/task-plans/{id}/workspace-preview
 todos.write          POST /api/v1/todos
+-                    POST /api/v1/todos/import/reminders
 -                    POST /api/v1/todos/retitle
 -                    POST /api/v1/todos/{id}/accept
 -                    POST /api/v1/todos/{id}/decision-dismiss

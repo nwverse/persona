@@ -230,10 +230,31 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * browser started share one on-demand import of the rule, lib/star-prompt-load.ts, which a failed load only skips, and
  * the sidebar's milestone line is a lazy component; the rule, the pill, the line and their strings stay off the first
  * screen). And 128 B for recent main changes (#6346: ja 474,617 B on main at 2010e8229f, 63 B over the old budget,
- * with 65 B of room).
+ * themselves, views/agents/GroupedSessions.tsx, load when a Browse by is chosen, which took 407 B back off; the same
+ * code measured +1,396 B and +1,510 B on the two mains before, docs/lessons/web.md; the 30 B of room main had stay).
+ * +100 B for the scheduled tasks list's "Inbox: …" marks and the assistant's own Inbox row (#6430): the Japanese first
+ * screen was 49 B over with them, in three languages' text and a few lines of code.
+ * And 720 B for "By to-do" as one kind of row (#6458: main at 8269cd921 measured ja 476,774 B, 114 B over the budget
+ * before; this change takes it to 477,349 B, +575 B: the to-dos at the top level and their groups, "Recent (not running)"
+ * among them, as rows with a count, a state and an ⓘ, a to-do's state in the To-dos page's word, and the groups'
+ * explanations; the ⓘ's words, ui/InfoTipPanel.tsx, load the first time one is asked for, which took 287 B back off;
+ * 31 B of room).
+ * And 176 B for side sessions drawn under their parent, with main's own growth (#5935: main at 2d9596043 measured ja
+ * 477,447 B, 67 B over the budget before; this change takes it to 477,525 B, +78 B: lib/side-sessions.ts's
+ * arrangement, the paged list's use of it for its order and the Earlier split, and a row's parent identity in
+ * lib/runtime-list.ts; 31 B of room).
+ * And 108 B for the foldable sidebar Recent on top of current main (#6228, measured 2026-11-13 on main at eaa68818e:
+ * first screen en 474,144 B, ja 477,860 B, zh-Hans 475,147 B — main already 304 B over the 477,556 B ceiling; this branch
+ * adds 108 B to each, en 474,252 B, ja 477,968 B, zh-Hans 475,255 B — the foldable Recent heading and its kept-on-device
+ * folded state). It reuses the existing `Collapse` / `useFold` fold path and the section heading's chevron, so it adds no
+ * new helper or lazy boundary, and the Scheduled-task exclusion is a constant-time check inside the existing pure
+ * `recentConversations`. The ceiling moves to the measured ja 477,968 B, 0 B of room; the idle tier is unaffected because
+ * the fold stays on the first screen.
+ * And 162 B for restoring expanded Needs you title navigation and hydrating off-page question sessions (#6432:
+ * main at f0c995f923 measured ja 477,957 B; sharing the header's label and chevron takes this fix to 478,119 B,
+ * +162 B, keeping main's 11 B of room). Keep only this feature's measured allowance on top of main's changes.
  */
-export const FIRST_SCREEN_BUDGET = 474_682;
-
+export const FIRST_SCREEN_BUDGET = 478_130;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -402,9 +423,18 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * And 35 B of minifier drift (2026-11-13): #5534 left no room, and by bdbfabd69 the idle tier sent 43,969 B with none
  * of its pages (ComposerPanel, QueuePanel, SlashPalette, ImageEditor, ViewBody, ExtensionChart, Palette) changed since,
  * only the code they share with other chunks (#5760); 31 B of room so the next main does not tip it.
+ * And 475 B for finding a Persona chat by what was said in it in ⌘K (#6283, 2026-11-13: 43,846 B on main at 39b5b57403,
+ * 44,444 B after, +598 B, of which 154 B fit the room main had: the merge of the manager's results into the palette's
+ * rows and the matched sentence as a row's second line; the search itself, lib/assistant-search.ts, loads on the first
+ * query typed, off the idle tier; 31 B of room so the next main does not tip it). And 108 B for the same main
+ * with the lead row-title restoration (#6400: 44,583 B after merging it, +108 B, of which 0 B fit the old room).
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
+ * The foldable sidebar Recent (#6228) adds nothing to this tier: the fold stays on the first screen. On main at
+ * eaa68818e the idle pages send 44,608 B (25 B over the 44,583 B ceiling from the intervening #6458 / #5935 growth), and
+ * this branch measures 44,585 B — 23 B less than main, two over the old ceiling; the ceiling moves to 44,608 B so it
+ * covers main, 0 B of room for this branch's measured 44,585 B.
  */
-export const IDLE_TIER_BUDGET = 44_000;
+export const IDLE_TIER_BUDGET = 44_608;
 
 const gzip = promisify(gzipCompress);
 

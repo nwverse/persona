@@ -1,6 +1,96 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "About %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About “%@”"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于「%@」"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」について"
+          }
+        }
+      }
+    },
+    "Agents you opened yourself in the terminal, on no to-do. Touch and hold one › Link to To-do… to file it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agents you opened yourself in the terminal, on no to-do. Touch and hold one › Link to To-do… to file it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你自己在终端里开的、没挂在待办上的 Agent。长按一行 › 关联到待办… 可以归过去。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルで自分で開いた、どのToDoにも関連付けられていないエージェントです。行を長押し ›「ToDoに関連付け…」で関連付けられます。"
+          }
+        }
+      }
+    },
+    "Highlights [Meeting]" : {
+      "comment" : "The meeting page's top card: the room's highlights of the meeting so far (#3862 phase 2b)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Highlights"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要点"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要点"
+          }
+        }
+      }
+    },
+    "On no to-do; often started from Lark, the phone or elsewhere. Touch and hold one › Link to To-do… to file it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On no to-do; often started from Lark, the phone or elsewhere. Touch and hold one › Link to To-do… to file it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没挂在任何待办上，常是从飞书、手机或别的入口开的。长按一行 › 关联到待办… 可以归过去。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "どのToDoにも関連付けられていないエージェントです。多くはLarkやスマートフォンなど、ほかの場所から開始されたものです。行を長押し ›「ToDoに関連付け…」で関連付けられます。"
+          }
+        }
+      }
+    },
     "Among the Codex App's chats in no project" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -70,6 +160,75 @@
         }
       }
     },
+    "Back to Configured Model" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back to Configured Model"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定済みのモデルに戻す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回到配置的模型"
+          }
+        }
+      }
+    },
+    "Continue in a new session" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue in a new session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいセッションで続ける"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另开新会话继续"
+          }
+        }
+      }
+    },
+    "Continue in a new session?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue in a new session?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいセッションで続けますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要在新会话中继续吗？"
+          }
+        }
+      }
+    },
     "Done [Talk Window]": {
       "extractionState": "manual",
       "localizations": {
@@ -89,30 +248,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "終了"
-          }
-        }
-      }
-    },
-    "Highlights [Meeting]" : {
-      "comment" : "The meeting page's top card: the room's highlights of the meeting so far (#3862 phase 2b)",
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Highlights"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "要点"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "要点"
           }
         }
       }
@@ -302,6 +437,29 @@
         }
       }
     },
+    "Session note" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session note"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションについて"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话提示"
+          }
+        }
+      }
+    },
     "Starts in the Codex App. With no folder it goes where the App keeps chats in no project; a new folder is made when it starts." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -344,6 +502,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "Personaで会議の録音を始め、カレンダーで進行中の予定の名前を付けます。音声はこの iPhone に残ります。ただし「話す」を押している間は例外で、そのときに話された内容は音声サービスに送られます。文字起こしはナレッジに入ります。"
+          }
+        }
+      }
+    },
+    "Take over" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take over"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "引き継ぐ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接管"
+          }
+        }
+      }
+    },
+    "Take over this Codex session?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take over this Codex session?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Codex セッションを引き継ぎますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接管此 Codex 会话？"
           }
         }
       }
@@ -436,6 +640,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Claude アプリのサイドバーで 1 つのグループにまとまります"
+          }
+        }
+      }
+    },
+    "This conversation's context is sealed. Continue in a new session instead." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation’s context is sealed. Continue in a new session instead."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話のコンテキストは封印されています。新しいセッションで続けてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此对话的上下文已封存，请改在新会话中继续。"
+          }
+        }
+      }
+    },
+    "This session cannot be safely resumed. Continue in a new session instead." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This session cannot be safely resumed. Continue in a new session instead."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションは安全に再開できません。新しいセッションで続けてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此会话无法安全恢复，请改在新会话中继续。"
+          }
+        }
+      }
+    },
+    "This will end the turn currently running in the terminal." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This will end the turn currently running in the terminal."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルで実行中のこのターンを終了します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会结束终端里正在跑的这一轮"
           }
         }
       }
@@ -14830,6 +15103,41 @@
       },
       "extractionState" : "manual"
     },
+    "%lld messages from other conversations are waiting [Queue Strip]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld message from another conversation is waiting [Queue Strip]"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld messages from other conversations are waiting [Queue Strip]"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の会話からのメッセージが %1$lld 件待機中 [Queue Strip]"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %1$lld 条别的对话在排队 [Queue Strip]"
+          }
+        }
+      }
+    },
     "%lld videos [Queue Strip]" : {
       "localizations" : {
         "en" : {
@@ -21219,6 +21527,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Agent stopped and closed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent stopped and closed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェントを停止して閉じました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止并关闭 Agent"
+          }
+        }
+      }
     },
     "Agent stopped and closed. The chat history was kept." : {
       "localizations" : {
@@ -33171,6 +33502,98 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Change the assistant's name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change the assistant's name"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アシスタントの名前を変更"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修改助手的名字"
+          }
+        }
+      }
+    },
+    "Edit name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit name"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名前を編集"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑名字"
+          }
+        }
+      }
+    },
+    "Name saved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name saved"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名前を保存しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名字已保存"
+          }
+        }
+      }
+    },
+    "Name your assistant" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name your assistant"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アシスタントの名前を入力"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "给助手起个名字"
+          }
+        }
+      }
     },
     "Cancel" : {
       "localizations" : {
@@ -63643,6 +64066,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Go back to before this message: everything after it is removed from the conversation." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Go back to before this message: everything after it is removed from the conversation."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージを送る前に戻ります。以降のチャットは会話から削除されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回到发这条消息之前：之后的对话会被移除。"
+          }
+        }
+      }
     },
     "Go through my Lark messages that @mention me: which need a reply from me, and draft the ones you can" : {
       "localizations" : {
@@ -94906,6 +95352,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "回到 App 时提示发送剪贴板"
+          }
+        }
+      }
+    },
+    "Import into To-dos": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import into To-dos"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ToDo に取り込む"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入到待办"
+          }
+        }
+      }
+    },
+    "Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選んだリストの未完了のリマインダーが ToDo になり、その後のタイトル、メモ、期限の変更も反映されます。リマインダーには書き戻しません。リマインダーを完了または削除しても ToDo はそのままです。取り込みは Persona を開いている間に行われます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选列表中未完成的提醒事项会成为待办，之后它们的标题、备注或截止时间改动也会同步过来。不会写回提醒事项；完成或删除提醒事项不影响对应的待办。只在 Persona 打开时导入。"
           }
         }
       }
@@ -130939,6 +131431,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Stops the current task and ends this session" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stops the current task and ends this session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のタスクを停止して、このセッションを終了します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止当前任务，并结束这个会话"
+          }
+        }
+      }
     },
     "Stops the current task, quits %@, and closes its terminal tab (only this pane when split)" : {
       "localizations" : {
@@ -171589,25 +172104,71 @@
         }
       }
     },
-    "No terminals on this computer.": {
+    "New Terminal": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No terminals on this computer."
+            "value": "New Terminal"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このコンピュータにはターミナルがありません。"
+            "value": "新規ターミナル"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这台电脑上没有终端。"
+            "value": "新建终端"
+          }
+        }
+      }
+    },
+    "No terminals open on this computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No terminals open on this computer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータで開いているターミナルはありません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑上没有打开的终端。"
+          }
+        }
+      }
+    },
+    "Terminals open here when an Agent starts on this computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminals open here when an Agent starts on this computer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータで Agent を開始すると、ここにターミナルが表示されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在这台电脑上启动 Agent 后，终端会显示在这里。"
           }
         }
       }
@@ -181261,6 +181822,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "「%@」会回到「最近」；还在办的任务交还主对话督办，不会关闭或删除。"
+          }
+        }
+      }
+    },
+    "Direction Expand Help [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expand the open tasks of this direction"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この方向の進行中タスクを開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开这个方向的在办任务"
+          }
+        }
+      }
+    },
+    "Direction Collapse Help [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collapse the open tasks of this direction"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この方向の進行中タスクを閉じる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起这个方向的在办任务"
           }
         }
       }

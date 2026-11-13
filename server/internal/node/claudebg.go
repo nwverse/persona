@@ -19,7 +19,7 @@ import (
 // Claude sessions that run where Persona has no terminal pane: a background session Claude's own daemon runs (/fork,
 // /background: kind "bg"), a session open in Claude's desktop app (entrypoint claude-desktop…), claude in a terminal
 // that herdr, Orca, Tern or botmux do not run (entrypoint cli). Each writes sessions/<pid>.json in its config directory with
-// the session it has open, its status (busy / idle / waiting) and, since Claude Code 2.1.29x, its peer inbox
+// the session it has open, its status (busy / idle / shell / waiting) and, since Claude Code 2.1.29x, its peer inbox
 // (claudepeer.go). They listed as offline while they worked, and a message from the phone was refused (a second
 // claude --resume would write the same transcript, openelsewhere.go). The node lists every live one as running, with
 // its status from the file and its transcript as for any session; a message goes through its inbox when the node can
@@ -138,6 +138,7 @@ func (n *Node) outsideSource(c claudeProc) string {
 func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool) []proto.Session {
 	var out []proto.Session
 	listed := map[string]bool{}
+	var desktop *claudeDesktopIndex // read once, when a desktop session rests
 	for _, c := range procs {
 		id := c.SessionID
 		if seen[id] || listed[id] {
@@ -160,6 +161,16 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool) []proto.
 		status, ok := claudeBgStatus[c.Status]
 		if !ok {
 			status = proto.StatusUnknown
+		}
+		if status == proto.StatusIdle && source == proto.SourceClaudeDesktop {
+			// Its last turn ended while nobody looked: Unread until it is seen (claudedesktop_unread.go).
+			if desktop == nil {
+				d := readClaudeDesktopIndex(n.home)
+				desktop = &d
+			}
+			if n.desktopTurnUnread(id, *desktop) {
+				status = proto.StatusDone
+			}
 		}
 		s := proto.Session{
 			SessionID: id, Cwd: c.Cwd, Status: status, Agent: "claude", Title: m.title, SourceKind: source,

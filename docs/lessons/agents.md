@@ -2,6 +2,14 @@
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
+## Supervised handoffs and runtime children (#5751)
+
+Codex sidecar parent/root metadata establishes display ancestry, not a to-do link. A standalone `create_thread` can
+have no parent metadata at all. Use `task_spawn` for a separate session on the current supervised task; never work
+around missing task tools by extracting the hub token. Codex's shared daemon may carry an old pane environment, so
+its per-turn `CODEX_THREAD_ID` must resolve unambiguously in the node's registry before a CLI handoff. Unknown
+threads must not fall back to whichever task an inherited pane happens to run.
+
 - An Agent SDK guest must register its session id and tools before the node starts: its bridge lists tools before
   `assistant.send` returns. A later `guestSet` makes the first list empty, and a connected MCP server with no tools
   does not fail by itself. On SDK 0.3.318 / Claude Code 2.1.322, use `tools: []` for no built-ins and register the
@@ -921,6 +929,10 @@ sees a wait it can't name, and a following `dequeue` pops whatever it guessed. G
 `cancelled: false` as "it went in": writing it again would send it twice. Check such behavior against the real CLI with a short
 `claude -p` script before building on it; the requests are not in the public docs.
 
+## Herdr workspace directories come from panes (#4761)
+
+herdr's `workspace.list` does not report a workspace cwd, even though panes do (#4761). Resolve cwd-only worktree requests from each session's `pane.list` and optional worktree metadata, with canonical deepest-prefix matching. Only associate a pane-derived directory when the workspace's panes agree: herdr creates from the workspace source, so a matching later pane must not select another repository (#5524). A linked-worktree workspace holds only its checkout, not its main repository: herdr refuses it as a worktree source. A workspace that contains the path can still belong to an ancestor repository. Use it for native creation only when its matched directory is inside the requested Git root; otherwise use Git. Use foreground directories only when the workspace has no stable pane directory. Test with workspace records that omit cwd and a matching second pane from another repository. A repository with no matching terminal workspace can still use Git worktree creation and open a plain workspace: checkout isolation remains, but terminal parent grouping is unavailable.
+
 ## A published runtime stream must end after its viewer leaves (#5247)
 
 The Hub caches the latest live text for new subscribers. The runtime SDK's watch state can disappear before the
@@ -928,6 +940,18 @@ prompt finishes, while that published text still exists. `streamEnd` uses the st
 watch to send its empty boundary, and cancels pending throttled text first. A native transcript may have a
 middle-truncated copy of the reply, so text reconciliation alone cannot retire the Hub's full cached copy.
 Cover unwatch before completion, a pending batch, and a later watcher in the SDK and AGY lifecycle tests.
+
+## herdr's published state can be a reporter's word, not the screen's (2026-11-12, #4865)
+
+- `herdr agent get` / `agent list` / the snapshot give the pane's published `agent_status`; `herdr agent explain <pane>` runs the
+  screen detection again and names the rule it matched. When they disagree (explain says `working` from `osc_title_working`,
+  get says `idle`), a reporter holds the pane and its last report wins: on herdr 0.7.5 a single `pane.report_agent` with
+  `state: idle` kept a running Codex `idle` until the reporter released it (#4657). Compare the two before suspecting Persona's
+  own judgment, and test reporter behavior only on an isolated server (`env -i`, its own HOME and XDG directories).
+- An agent Persona can judge itself must not take herdr's word alone. Claude panes already had `claudeStatus`; a Codex pane
+  joined on its app-server listed Idle for a whole turn while the node knew the turn ran (its `turn/started`), and its chat
+  page showed Working from the live words, so the two pages disagreed. `codexStatus` counts the app-server's turn and Codex's
+  title spinner over the host's done / idle / unknown.
 
 ## Native preview exports can silently truncate assistant replies (#5644)
 
