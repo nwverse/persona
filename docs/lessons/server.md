@@ -27,6 +27,60 @@ resource after what is in use now (the slot that served last), not after how man
 process's clean-up remove only what it made: the edge notes any socket file already at a slot's path when it starts
 it and leaves that file alone. A test of one failed switch passed for this reason; test failures in a row.
 
+## An index over files answers only for the files it read, and is measured on text that varies (2026-11-13, #1273)
+
+The knowledge base's search index (`server/internal/kb/search_index.go`) is kept beside files that people, Agents and
+the import all write, so "is the index current?" has no single answer. What made it safe was asking it a smaller
+question: it may rule a file out only when the file's path, mtime and size are exactly the ones it read, and
+everything else is read by the scan that existed before. Then a missing, half-built, stale or damaged index can only
+cost time, and the tests compare results with the scan instead of trusting an invalidation scheme. Three things went
+wrong on the way. The first benchmark archive repeated one line four million times: its index was 22 MB and built in
+13 s, while text with a long tail of rare characters and words gave 155 MB and 30 s, and the first design, which kept
+every segment's key table in memory, peaked at 1.1 GB on it against a 1 GB target (the keys now stay on disk in
+blocks, with one entry per block in memory). An index that outlives the process also outlives what a cache forgave:
+a writer whose index directory is removed under it, a reader in another process after the writer merged, and entries
+of deleted text that no search uses but that stay on disk until something rewrites them each needed their own rule
+and test. And a lane that runs on every round runs on every kick: one `stat` per file is cheap once and not every five
+seconds.
+
+## Checksums inside a file do not say it is the file you read before (2026-11-13, #1273)
+
+The search index's segments were named from a counter kept in the manifest, and every part of a segment was under a
+checksum. A reader keeps a segment's file table in memory and opens the file by name for each query. Review found the
+hole between the two: remove `.search`, rename one day file, and the rebuild writes a second `seg-000001.idx` of the
+same size with its files numbered differently; a read-only store that still held the first one's table read the new
+lists through it, every checksum passed, and a search lost a result. A checksum stored in a file proves the file agrees
+with itself, not with what a reader remembers of an earlier file under that name. Two rules came out of it: a name is
+never given to other content (64 random bits in each file name; a counter starts again whenever the thing it counts
+does), and whoever keeps part of a file in memory checks on every open that the file is still that one (a random id in
+the footer, compared with the footer it read). The same review found a data race that no test had shown, because only
+an opt-in harness ran a search, an update and the removal of the directory at once: what the doc calls safe to do at
+any time needs a default test that does it at that time, under `-race`. And the new tests took 70 s on Linux and
+968 s on a shared Mac, at 20% CPU: their cost was file opens (2.4 million of them), which one machine does in
+microseconds and another in most of a millisecond. Count the system calls of a test that walks directories
+(`strace -f -c -e trace=%file,%desc`) instead of trusting its seconds on the machine it was written on.
+
+## A stat and a read are two moments, and a path is not a file (2026-11-14, #1273)
+
+The search index's update looked at every file (`stat`), then read the ones it had to, and kept each file's keys
+under the mtime and size the look had seen, checking only that the bytes read were of that size. Review found what
+lies between: the file is replaced by other text of the same size after the look, the update reads that, and the first
+text comes back under its own mtime later (moved back, or restored by a sync or backup tool). The index then held the
+second text's keys under the first one's mtime and size, the entry matched the file exactly, and searches passed over
+it for words it holds, in every later run and every new process. Nobody had set an mtime or made two versions with one
+mtime and size: the index had invented the pair itself, and on a first build the window was the whole run. What an
+entry says has to be true when it is written: these bytes had this mtime and size. So the file is opened once, asked
+through the handle before the first byte and after the last, read through the same handle, and kept only when both
+answers are the look's. Each of the three parts is needed, and each has a test that fails without it: without the
+first look a file written back in place after the read passes; without the second, one written in place before it;
+and a second `stat` of the path, instead of the handle, is answered by whatever file is there by then. A test of
+this needs a hook at the moment, not a sleep (`searchIndex.hook`). The same review found two more of the kind
+"decided once, true for ever": a flag set after the state it described had been replaced (a read-only store marked
+broken with nothing left to compare, for good; set such a flag under the lock and only if the state is still the one
+it is about), and an error class matched by type (`*json.SyntaxError`, `*json.UnmarshalTypeError`) that missed a
+third kind of decode error, so every run failed the same way and nothing was ever rebuilt (say "this file is not
+valid" where it is decoded, and match that).
+
 ## A new file in the knowledge base is searched unless `searchable` says otherwise (2026-11-13, #5991)
 
 Search reads every `.md` and `.json` file of the data dir it is not told to skip, profile files before any message
