@@ -148,6 +148,9 @@ fun JSectionHeader(
     else if (style == AppStyle.Glass) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp))
     else PersonaTheme.type.headline.copy(fontSize = androidx.compose.ui.unit.TextUnit(15f, androidx.compose.ui.unit.TextUnitType.Sp))
     val textMeasurer = rememberTextMeasurer()
+    val countStyle = PersonaTheme.type.micro
+    val trailingStyle = PersonaTheme.type.caption
+    val actionStyle = PersonaTheme.type.labelSmall
     SubcomposeLayout(
         modifier.fillMaxWidth().then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClickLabel = fold?.action, onClick = onClick) else Modifier)
             .padding(top = if (sub) Tokens.Space.s else if (style == AppStyle.Board) 18.dp.dense else 26.dp.dense, bottom = if (sub) Tokens.Space.xs else 10.dp.dense,
@@ -198,7 +201,7 @@ fun JSectionHeader(
         ).size.width
         fun Dp.toPxInt() = with(density) { this@toPxInt.toPx() }.roundToInt()
         val fullTitleWidth = textWidth(title, titleStyle) + (count?.let {
-            6.dp.dense.toPxInt() + textWidth("$it", PersonaTheme.type.micro) +
+            6.dp.dense.toPxInt() + textWidth("$it", countStyle) +
                 if (countTone != null) SectionHeaderTokens.countPadding.toPxInt() * 2 else 0
         } ?: 0)
         @Composable
@@ -211,8 +214,8 @@ fun JSectionHeader(
             if (action != null) Row { action.invoke(this) }
         }
         val ordinaryWidth = (if (trailing != null || action != null) 8.dp.dense.toPxInt() else 0) +
-            (trailing?.let { textWidth(it, PersonaTheme.type.caption) } ?: 0) +
-            if (action != null) maxOf(48.dp.toPxInt(), textWidth(overflowActions.last().label, PersonaTheme.type.labelSmall) + 16.dp.dense.toPxInt()) else 0
+            (trailing?.let { textWidth(it, trailingStyle) } ?: 0) +
+            if (action != null) maxOf(48.dp.toPxInt(), textWidth(overflowActions.last().label, actionStyle) + 16.dp.dense.toPxInt()) else 0
         val overflow = overflowActions.isNotEmpty() && leadingWidth + fullTitleWidth + ordinaryWidth > constraints.maxWidth
         val right = if (overflow) subcompose("overflow") {
             Spacer(Modifier.width(8.dp.dense))
