@@ -183,7 +183,7 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
 
       <Group title={data && !error && !updating ? t("settings-extensionmarket.extension_count", { count: data.extensions.length }) : t("settings-extensionmarket.extensions")}>
         {updating && data && (
-          <p role="status" className="flex items-center gap-2 px-4 py-2 text-[12px] text-ink-3">
+          <p role="status" className="flex items-center gap-2 px-4 py-2 text-label text-ink-3">
             <Spinner />
             {t("settings-extensionmarket.updating")}
           </p>

@@ -209,7 +209,7 @@ func TestInboxJudgeRelinksAClosedTask(t *testing.T) {
 	b := supervisedTodo(t, s, "发版后核对补绑")
 	closeTodo(t, s, a.ID)
 	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
-	model, calls := captureModel(t, `{"task_id":"`+b.ID+`"}`)
+	model, calls := captureModel(t, `{"task_id":"`+b.ID+`","evidence":"发版后核对补绑"}`)
 	in.setModel(model)
 	it := actionItem("lark:f1:12", time.Now())
 	it.Agent = &InboxAgent{State: AgentDrafted, MachineID: "server", SessionID: "handling-1", Of: "11", TodoID: a.ID}

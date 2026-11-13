@@ -350,14 +350,14 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       {prefix && <span className={prefixClass}>{prefix}</span>}
       {/* a lead's name reads as a row, even with nothing second to say: the ⋯'s reserved slot must not take the title's place */}
       {keepTrailing && !ultra && !detail.length && !workflow && !line && !childLine && !plan ? (
-        <span className={cx("flex-1 truncate text-[13px]", titleMin, titleFirst, active ? "font-medium text-ink" : "text-ink-2")}>
+        <span className={cx("flex-1 truncate text-meta", titleMin, titleFirst, active ? "font-medium text-ink" : "text-ink-2")}>
           {label ?? sessionTitle(s)}
         </span>
       ) : null}
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}
       {ultra || detail.length > 0 || workflow || line || childLine || plan ? (
-        <span className={cx("min-w-0 flex-1 flex-col", titleMin, titleFirst)}>
+        <span className={cx("flex min-w-0 flex-1 flex-col", titleMin, titleFirst)}>
           {ultra ? (
             <span className="flex min-w-0 items-center gap-1">
               <span className={cx("min-w-0 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>
@@ -401,7 +401,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
           </span>}
         </span>
       ) : (
-        <span className={cx("flex-1 truncate text-[13px]", titleMin, titleFirst, active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && "font-medium text-ink")}>
+        <span className={cx("flex-1 truncate text-meta", titleMin, titleFirst, active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && "font-medium text-ink")}>
           {label ?? sessionTitle(s)}
         </span>
       )}
