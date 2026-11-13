@@ -31,12 +31,39 @@ func InboxText(l Lang, text string) string {
 				}
 				args[name] = n
 			} else {
-				args[name] = value
+				args[name] = inboxTemplateArg(l, form.key, name, value)
 			}
 		}
 		return T(l, form.key, args)
 	}
 	return text
+}
+
+// inboxTemplateArg translates only values that are hub-owned labels inside an already recognized template. Every other
+// placeholder stays opaque: a person's name, a session title or a model's reason may happen to equal a label.
+func inboxTemplateArg(l Lang, key, name, value string) string {
+	const detail = "assistant-inbox_chain.triaged_detail"
+	switch {
+	case name == "tier" && (key == "assistant-inbox_chain.triaged" || key == "assistant-inbox_chain.triaged_urgent" || key == detail):
+		return knownInboxLabels(l, value, "assistant-inbox_chain.tier_action", "assistant-inbox_chain.tier_fyi", "assistant-inbox_chain.tier_noise")
+	case name == "reason" && key == detail:
+		return knownInboxLabels(l, value, "assistant-inbox.by_rules")
+	default:
+		return value
+	}
+}
+
+// knownInboxLabels finds value by its exact catalog text in any supported language. Unknown or user-written words stay
+// as they are; matching by value is necessary because a stored chain does not record the language it was written in.
+func knownInboxLabels(l Lang, value string, keys ...string) string {
+	for _, key := range keys {
+		for _, from := range Langs {
+			if value == T(from, key) {
+				return T(l, key)
+			}
+		}
+	}
+	return value
 }
 
 var inboxTemplates = sync.OnceValue(func() *templateIndex {
@@ -96,7 +123,7 @@ func InboxJSON(l Lang, raw []byte) []byte {
 					for _, entry := range chain {
 						if e, ok := entry.(map[string]any); ok {
 							translate(e, "text")
-							if e["kind"] == "failed" {
+							if e["kind"] == "failed" || e["kind"] == "triaged" {
 								translate(e, "detail")
 							}
 						}
