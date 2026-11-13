@@ -49,18 +49,21 @@ struct RootView: View {
     @StoredValue(NavigationLayout.key) private var navigation: NavigationLayout = .separate
     #endif
 
-    /// The Sidebar layout instead of the tabs at regular width (#6332): where it is built (`NavigationLayout.offered`).
-    /// The iPhone-width shell stays the shell for now.
+    /// The Sidebar layout instead of the shell or the tabs (#6332): one root at every width, the drawer on a phone's
+    /// width and the column beside the page at regular width (`ChatsView` under `\.unifiedSidebar`).
     private var usesSidebar: Bool {
         #if os(iOS)
-        navigation == .sidebar && NavigationLayout.offered && !usesShell
+        navigation == .sidebar && NavigationLayout.offered
         #else
         false
         #endif
     }
 
-    /// The iPhone-width shell; regular-width and other platforms keep their own navigation.
-    private var usesShell: Bool {
+    /// The iPhone-width shell; regular-width and other platforms keep their own navigation, and the Sidebar layout its own.
+    private var usesShell: Bool { compactWidth && !usesSidebar }
+
+    /// The window is at the iPhone's width (the shell's, or the Sidebar layout's drawer).
+    private var compactWidth: Bool {
         #if os(visionOS)
         // Apple Vision Pro keeps the tabs, as the system's ornament (VisionShell), whatever the window's width.
         return false

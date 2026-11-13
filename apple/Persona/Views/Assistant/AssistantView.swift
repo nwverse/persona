@@ -26,10 +26,13 @@ struct AssistantView: View {
     @Environment(\.splitDetail) private var split
     @Environment(\.splitShowList) private var showList
     private var embedded: Bool { unified != nil && shell == nil && hostPath != nil }
+    /// The Sidebar layout on a phone: the page under the drawer (`SplitDetail.drawer`).
+    private var drawerPage: Bool { embedded && split?.drawer == true }
     /// The path this page's pages are pushed on: the page beside the sidebar's in the Sidebar layout, its own otherwise.
     private var navPath: Binding<NavigationPath> { hostPath ?? $path }
     #else
     private var embedded: Bool { false }
+    private var drawerPage: Bool { false }
     private var navPath: Binding<NavigationPath> { $path }
     #endif
     /// The last shell request shown (`ShellState.request`'s serial).
@@ -219,8 +222,9 @@ struct AssistantView: View {
                     .environment(\.messageLiftHost, liftHost)
                     #endif
                     // The iPad draws the shell's composer too (`ChatComposerKind.padCard`): the assistant's, as on the iPhone.
-                    .environment(\.shellChat, shell != nil || ChatComposerKind.padCard)
-            } else if shell != nil || pageTabSwitch {
+                    // The Sidebar layout's phone page too: the iPhone's conversation, as in the shell (#6332).
+                    .environment(\.shellChat, shell != nil || ChatComposerKind.padCard || drawerPage)
+            } else if shell != nil || pageTabSwitch || drawerPage {
                 // A phone's tabs too (iPhone Duo open, #3680): the iPhone's new conversation, with what needs the user
                 // over the composer. The iPad keeps `AssistantHome`.
                 ShellHome(pending: shownStart, error: shownFailure?.reason, launcher: $starterLauncher, mode: $starterMode,
@@ -256,6 +260,7 @@ struct AssistantView: View {
                             sidebarIsColumn: widthClass == .regular,
                             sidebarShown: sidebarColumnShown,
                             sidebarCounts: embedded,
+                            drawerTitle: drawerPage,
                             openSidebar: toggleSidebar,
                             // In a health conversation New opens Health's new conversation page, whose list has the
                             // space's past ones (#4329); elsewhere the assistant's.
