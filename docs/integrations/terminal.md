@@ -638,6 +638,11 @@ Moshi switches Term/Chat in the same session page's center (top segmented contro
 Workspace context/⋯ menu New Worktree… (W), same command in palette. Dialog has **Branch** and **Checkout Path**; Create and Open adds a worktree on the computer, opens it as a herdr workspace grouped under the original, and navigates web to its first terminal.
 Same shape as Moshi `worktree/prepare` + `worktree/create`.
 
+The Agents space menu also offers **New child worktree…**. A native space uses its catalog identity. A runtime-only
+space can suggest supported native workspaces at its verified Git worktree directory, with the source shown in the
+creation dialog. Several matches open a source submenu. An unavailable source leaves the entry disabled with guidance.
+These suggestions apply only to creation and do not establish ownership for closing or deleting runtime spaces.
+
 - **Routes** (`nodeActions` in `hub/panes.go`, **`full` devices only** like other menu actions, `answer`/extension tokens 403, `route_scopes.txt` `-`):
   - `POST /machines/{mid}/worktree/prepare {workspace_id, kind?}` → `{root, repoName, branch, path}`: `root` Git top-level, `repoName` repo name (main repo name even from linked worktree), `branch` workspace branch (empty for detached HEAD), `path` herdr checkout directory `<worktrees directory>/<repo name>`.
   - `POST /machines/{mid}/worktree/create {workspace_id, branch, path, kind?}` → `{workspace_id, tab_id?, pane?, terminal?, path, branch}`.

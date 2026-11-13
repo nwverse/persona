@@ -49,6 +49,7 @@ func (h *Manager) startSubscriptions(ctx context.Context) {
 		store = subscriptions.NewMemStore() // no database (tests): kept in memory only
 	}
 	h.subs = subscriptions.New(h.subscriptionOptions(store))
+	h.subsLive.Store(h.subs)
 	go h.subs.Run(ctx)
 }
 

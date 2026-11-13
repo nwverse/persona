@@ -272,11 +272,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		n.cancelAssistantRecovery(id)
 	}
 	restartForRecovery := recovery != nil && restart
-	if err := validModes(mode, effort); err != nil {
-		return "", err
-	}
 	resume := id != ""
 	st, _ := n.state.get(id)
+	if err := validModesFor(launcherOr(launcher, st.Launcher), mode, effort); err != nil {
+		return "", err
+	}
 	isMain := executionOption(options).IsMain
 	interject := executionOption(options).Interject // this message, not the conversation (assistant_interject.go)
 	if len(options) == 0 {
@@ -351,7 +351,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if effort != "" {
 		execution.Effort = effort
 	}
-	if err := execution.check(); err != nil {
+	if err := execution.check(rl); err != nil {
 		return "", err
 	}
 	if launcher == "" && id != "" {
