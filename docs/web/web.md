@@ -1819,6 +1819,11 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   chips did, and a pick of a launcher the list no longer offers goes back to the default with a word. The new-chat page
   keeps its pick for the start (`POST /assistant/conversations` `{launcher, model?, effort?}`), which the new chat keeps
   as its own pick on a hub with `assistant_model_pick` (an older hub ignores the model and keeps nothing).
+  If Model configuration › Main chat later changes to another agent kind, the existing main conversation does not migrate:
+  with no pick and a confirmed cross-kind mismatch, its pill and setup use the actual session launcher / model / effort,
+  and a lazy-loaded status strip above the composer names the actual and configured launchers and opens the existing
+  **New main chat…** dialog (#4662). The Main chat settings editor shows the same explanation from its provider draft.
+  A same-kind default, an unloaded launcher list, an unknown default or a conversation pick shows no strip.
 - **Tests**: `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
   sends, the lists kept and read again), `lib/session-panel.test.ts` (the switch to another launcher: with and without the
   feature, another engine, the pending setup and note, what a switch or its cancel sends, the pill's pending setup, which
