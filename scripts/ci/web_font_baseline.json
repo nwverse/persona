@@ -81,7 +81,7 @@
  "web/src/views/UsageBars.tsx": 8,
  "web/src/views/WorkSessionForm.tsx": 8,
  "web/src/views/agents/AgentArchives.tsx": 8,
- "web/src/views/agents/AgentChatListControls.tsx": 13,
+ "web/src/views/agents/AgentChatListControls.tsx": 9,
  "web/src/views/agents/AgentsView.tsx": 28,
  "web/src/views/agents/HerdrNotices.tsx": 3,
  "web/src/views/agents/HubNoticeRow.tsx": 2,

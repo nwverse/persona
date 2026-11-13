@@ -62,7 +62,8 @@ async function search(query: string, listShown = true) {
   openPalette("jump");
   setPaletteQuery(query);
   act(() => root.render(<Palette open onClose={() => closed++} onNewAgent={() => {}} listShown={listShown} />));
-  for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+  // lib/agent-search.ts loads with the first query typed
+  for (let i = 0; i < 4; i++) await act(async () => { await new Promise((ok) => setTimeout(ok, 0)); });
   return document.body;
 }
 /** The Agent rows' titles, top to bottom. */

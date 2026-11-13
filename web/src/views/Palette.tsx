@@ -10,7 +10,10 @@ import { appCommands, commandKeys, contextCommands, filterCommands, inboxHits, o
 import { isDone, itemRoute, useInbox, type InboxItem } from "../lib/inbox";
 import { useNavPages } from "./Sidebar";
 import type { EvidenceSnippet } from "../lib/agent-chatlist-filter";
-import { agentSearchHit, hasSearchOperators, useCompleteAgentList } from "../lib/agent-search";
+import { storedValue } from "../lib/compatibility";
+import { useScope } from "../lib/current-assistant";
+import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
+import { completeAgentList, GROUPING_KEY } from "../lib/sidebar-api";
 import { filterAgentList } from "../lib/agent-list-filters";
 import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, type Route } from "../lib/router";
@@ -134,7 +137,8 @@ function sections(items: Section[], listId: string): ReactNode[] {
   });
 }
 
-/** A Persona chat's match: its title (starting with what was typed 100, containing it 80), then every word in its last line. */
+/** A chat's match by its title (starting with what was typed 100, containing it 80), then every word in its folder,
+ *  computer or last line (40): a Persona chat's, and an Agent's until lib/agent-search.ts has loaded. */
 function score(s: Session, q: string, machine: string): number {
   if (!q) return 1;
   const title = sessionTitle(s).toLowerCase();
@@ -166,8 +170,15 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const q = usePalette().query;
   const setQ = setPaletteQuery;
   const { mode, text } = parseQuery(q);
+  // the Agents list's matcher (#6589), loaded with the first query typed as the manager's chat search is: the palette is
+  // idle-tier (src/startup-preload.ts IDLE_TIER_BUDGET); until then an Agent matches as a Persona chat does
+  const [agentSearch, setAgentSearch] = useState<typeof import("../lib/agent-search") | null>(null);
+  const wantsAgentSearch = open && mode === "jump" && text !== "" && !agentSearch;
+  useEffect(() => {
+    if (wantsAgentSearch) void import("../lib/agent-search").then(setAgentSearch, () => {}); // a failed load keeps the titles
+  }, [wantsAgentSearch]);
   // `machine:`, `project:`, `is:pinned`, `since:`… speak of Agent sessions: with one, only they are listed (#6589)
-  const operators = mode === "jump" && hasSearchOperators(text);
+  const operators = mode === "jump" && Boolean(agentSearch?.hasSearchOperators(text));
   const [active, setActive] = useState(0);
   const [box, setBox] = useState<{ top: number; height: number } | null>(null);
   const sessions = useAgentSessions();
@@ -179,7 +190,9 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const interactions = useStore((s) => s.interactions);
   const bySession = useStore((s) => s.sessions);
   // "Filter Agents list" narrows the complete list; the hub's paged list keeps its own search field
-  const completeList = useCompleteAgentList();
+  const paged = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  const several = useScope().several;
+  const completeList = completeAgentList(paged, pins, storedValue(GROUPING_KEY), several);
   const panesOn = useStore((s) => s.features.includes("terminal_panes"));
   // Persona chats found by what was said in them too (#6283): the manager's search, merged into the local matches
   const searchOn = useStore((s) => s.features.includes("assistant_search"));
@@ -260,7 +273,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     // an Agent as the list's search found it: its operators, then its name, its project or computer, what is inside it
     const ctx = { machines, pins, interactions, now: Date.now() };
     for (const s of sessions) {
-      const found = agentSearchHit(s, text, ctx);
+      const found = agentSearch ? agentSearch.agentSearchHit(s, text, ctx) : { score: score(s, query, machineWithHub(s.machine_id, machines)), snippet: undefined };
       if (found.score) out.push({ key: `s:${s.machine_id}/${s.session_id}`, s, to: { name: "session", mid: s.machine_id, sid: s.session_id }, score: found.score + (stateOf(s) === "offline" ? 0 : 5), evidence: found.snippet });
     }
     for (const s of operators ? [] : assistant?.conversations ?? []) {
@@ -296,7 +309,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     const mail = (operators ? [] : inboxHits(inboxItems.filter((it) => !isDone(it)), text)).map((h) => ({ kind: "inbox" as const, key: h.key, hit: h, score: h.score }));
     const go = (operators ? [] : placeHits(places, text)).map((h) => ({ kind: "place" as const, key: h.key, hit: h, score: h.score }));
     return [...recentRows, ...orderGroups<Row & { score: number }>([all.slice(0, 40), mail, go]).flat()];
-  }, [mode, text, operators, sessions, assistant, machines, pins, interactions, machinePanes, inboxItems, places, recentChats, said.answer]);
+  }, [mode, text, operators, agentSearch, sessions, assistant, machines, pins, interactions, machinePanes, inboxItems, places, recentChats, said.answer]);
 
   // command mode: what other modules offer for here, then the registered commands with their shortcuts
   const commands = useMemo((): Row[] => {

@@ -28,6 +28,5 @@
   "filter": "フィルタ",
   "remove_filter": "{name} を外す",
   "search_as_code_off": "コード検索をオフ",
-  "query_chip": "検索",
-  "edit_query": "検索を編集"
+  "query_chip": "検索"
 }

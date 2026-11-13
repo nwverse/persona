@@ -28,6 +28,5 @@
   "filter": "筛选",
   "remove_filter": "移除{name}",
   "search_as_code_off": "关闭代码检索",
-  "query_chip": "搜索",
-  "edit_query": "修改搜索"
+  "query_chip": "搜索"
 }

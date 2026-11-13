@@ -1,10 +1,6 @@
 // ⌘K's search over Agent sessions (#6589): the Agents list's own field went, and Search chats finds what it found. Loaded
-// with the palette, off the first screen (src/startup-preload.ts): the list itself only reads the query it is given.
-import { storedValue } from "./compatibility";
-import { useScope } from "./current-assistant";
-import { SESSIONS_LIST_FEATURE } from "./session-list";
-import { completeAgentList, GROUPING_KEY } from "./sidebar-api";
-import { useStore } from "./store";
+// with the first query typed (views/Palette.tsx), as lib/assistant-search.ts is: off the first screen and the idle tier
+// (src/startup-preload.ts); the list itself only reads the query it is given.
 import { baseName, sessionTitle } from "./format";
 import { machineWithHub } from "./mesh";
 import {
@@ -62,12 +58,4 @@ export function agentSearchHit(s: Session, query: string, ctx: EvalContext): Age
   const inside = scopeHaystacks(s, "all", ctx).map((h) => h.text).join("\n").toLowerCase();
   if (!terms.every((w) => place.includes(w) || inside.includes(w))) return { score: 0 };
   return { score: 40, snippet: buildEvidenceSnippet(s, parsed.text, "all", ctx) ?? undefined };
-}
-
-/** The list "Filter Agents list" narrows is the one on show (#6589): the hub's paged list keeps its own search field. */
-export function useCompleteAgentList(): boolean {
-  const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
-  const pins = useStore((s) => s.pins);
-  const several = useScope().several;
-  return completeAgentList(bounded, pins, storedValue(GROUPING_KEY), several);
 }

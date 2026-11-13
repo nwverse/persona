@@ -28,6 +28,5 @@
   "filter": "Filter",
   "remove_filter": "Remove {name}",
   "search_as_code_off": "Turn off Search as Code",
-  "query_chip": "Search",
-  "edit_query": "Edit search"
+  "query_chip": "Search"
 }

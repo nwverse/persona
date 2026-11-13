@@ -234,7 +234,7 @@ export function AgentFilterChips({
               className="inline-flex max-w-full items-center gap-1 rounded-full bg-inset py-0.5 pr-1 pl-2 font-medium text-ink shadow-hairline"
             >
               {chip.onEdit ? (
-                <button type="button" onClick={chip.onEdit} title={t("lib-agent-filter.edit_query")} className="min-w-0 truncate text-left hover:text-accent-ink">
+                <button type="button" onClick={chip.onEdit} title={t("sidebar.search_sessions")} className="min-w-0 truncate text-left hover:text-accent-ink">
                   {chip.label}
                 </button>
               ) : (
