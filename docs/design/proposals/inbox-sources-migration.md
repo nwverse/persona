@@ -150,7 +150,7 @@ Smallest gap first, so each step proves part of the design before the harder sou
 | P2 | The `reply_to` field; reply through the subscription's connector (#6198). The apps already offer Draft only with `CanReply` | 3b, 3c |
 | P3 | The twin's source info and knowledge-base chat for subscription items (#6222) | 3d |
 | P4 | P4a `changed` starts runs (#6247); P4b extension-owned push sources | 3e |
-| P5 | P5a the default subscription's fixed id and `migrated` mark, delivery under the built-in's id, catch-up as rows, rollback (#6265); P5b the switch on the Inbox Sources pages, with M1 | 3a, 3g |
+| P5 | P5a the default subscription's fixed id and `migrated` mark, delivery under the built-in's id, catch-up as rows, rollback (#6265); P5b the switch on the Inbox Sources pages, with M1 (#6345) | 3a, 3g |
 | M1 | **iMessage**: a `things` recipe over its `inbox_things` tool (#6296, #6317), the `changed` kick, the switch on the pages (P5b) | P4a, P5, things |
 | M2 | **GitHub**: comments as replies, inferred read, repo mutes. Its read tools first need a notifications tool | P1–P5 |
 | M3 | **Lark**: JSON read tools for `larkcli` first, then its events through a push source, replies | P1–P5 |

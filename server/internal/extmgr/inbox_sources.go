@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -112,9 +113,42 @@ func (b builtinSources) List(ctx context.Context) []subscriptionsui.Builtin {
 			b.mail(&src)
 		}
 		b.rules(&src)
+		b.via(ctx, &src)
 		out = append(out, src)
 	}
 	return out
+}
+
+// migrations are the built-in sources whose Inbox feed can be read through a default subscription (#6345, the M steps
+// of docs/design/proposals/inbox-sources-migration.md), by connector: what each subscription reads.
+var migrations = map[string]subscriptions.Migration{
+	// iMessage's rows as its Collect makes them, ready-made (#6317).
+	"imessage": {Connector: "imessage", Source: "imessage", Icon: "chat", Recipe: subscriptions.Recipe{
+		Mode: wire.ConnectorSubscriptionModeThings, Tool: "inbox_things", ItemsPath: "$.things",
+		Kind: wire.ConnectorSubscriptionKindSubMessage, GroupBy: wire.ConnectorSubscriptionGroupThread}},
+}
+
+// via is a built-in source's default subscription, for its page's switch: none when it has no migration.
+func (b builtinSources) via(ctx context.Context, src *subscriptionsui.Builtin) {
+	if _, ok := migrations[src.ID]; !ok || b.h.subs == nil {
+		return
+	}
+	src.Via = &subscriptionsui.Via{}
+	if s, _, err := b.h.subs.Get(ctx, subscriptions.MigrationID(src.ID)); err == nil {
+		src.Via.On, src.Via.Subscription = s.Migrated != nil, s.ID
+	}
+}
+
+// SetMigrated reads source id's Inbox feed through its default subscription (on) or as before, named as the source.
+func (b builtinSources) SetMigrated(ctx context.Context, id string, on bool, by subscriptions.Actor) error {
+	m, ok := migrations[id]
+	c := b.h.connectors.Get(id)
+	if !ok || c == nil || b.h.subs == nil {
+		return fmt.Errorf("no default subscription for %q", id)
+	}
+	m.Label, m.SourceName = connector.DisplayName(ctx, c), c.Name()
+	_, err := b.h.subs.Migrate(ctx, m, on, by)
+	return err
 }
 
 // mail is the mail source's accounts: every account's inbox is read each mail round, with no switch for it.

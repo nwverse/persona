@@ -507,3 +507,27 @@ func TestRuntimeSessionForksFromItsTranscript(t *testing.T) {
 		t.Fatalf("its turn still being written: %v", err)
 	}
 }
+
+// session.seen goes to a runtime that keeps an unread mark of its own (caps.seen, #6299); any other is answered here.
+func TestRuntimeSeenGoesToARuntimeThatAsks(t *testing.T) {
+	for _, asks := range []bool{true, false} {
+		n, _ := runtimeNode(t)
+		hello := paseoHello()
+		if asks {
+			hello["caps"].(map[string]any)["seen"] = true
+		}
+		host := dialRuntime(t, n, hello)
+		_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "paseo-a1", "status": "done"}}})
+		waitFor(t, "listed", func() bool { _, ok := listed(t, n)["paseo-a1"]; return ok })
+		if _, err := nodeCall(t, n, "session.seen", map[string]any{"session_id": "paseo-a1"}); err != nil {
+			t.Fatalf("seen (asks %v): %v", asks, err)
+		}
+		if got := len(host.got("session.seen")); got != map[bool]int{true: 1, false: 0}[asks] {
+			t.Fatalf("told %d times (asks %v)", got, asks)
+		}
+	}
+	n, _ := runtimeNode(t)
+	if _, err := nodeCall(t, n, "session.seen", map[string]any{"session_id": "11111111-2222-4333-8444-555555555555"}); err != nil {
+		t.Fatalf("a session of no runtime: %v", err)
+	}
+}
