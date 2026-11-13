@@ -245,8 +245,8 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * retaining that feature allocation when merging the latest main.
  * Task delivery tracking (#5732) adds cancellation counts and reasons, delivery and owner-wait labels, bidirectional
  * lineage, and matching triage and navigation. On 15c68c3048, main measured en 475,240 / ja 478,937 / zh-Hans
- * 476,227 B and the final merged tree en 475,426 / ja 479,129 / zh-Hans 476,415 B (+186/+192/+188 B). Carrying the
- * largest measured increment and main's 31 B of room sets the cap to 479,160 B.
+ * 476,227 B and the merged tree en 475,426 / ja 479,129 / zh-Hans 476,415 B (+186/+192/+188 B). The #6295 allowance
+ * below adds 11 B on both sides; carrying the same +192 B and main's 31 B of room sets the cap to 479,171 B.
  */
 // #6575: verified runtime checkout display membership adds 79 B to the first screen on main at 2e57ac117
 // (ja 478,119 B to 478,198 B). Carry that measured feature allowance onto the current main budget.
@@ -255,7 +255,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #6753's stopped-Agent dismissal adds 131 B to each language (ja 478,888 B, en 475,191 B, zh-Hans 476,178 B).
 // #6759's Agent skills selection adds 49 B more to ja (478,937 B; en 475,240 B, zh-Hans 476,227 B).
 // The 31 B room covers the hub's small build-environment difference.
-export const FIRST_SCREEN_BUDGET = 479_160;
+// #6295: Paseo's workspaces add 11 B (ja 478,937 B on main at 8919ac022 to 478,948 B; en 475,240 B to 475,251 B,
+// zh-Hans 476,227 B to 476,238 B): New worktree on a Paseo Git row, the engine sent with an agent's worktree status, add
+// and remove, and no herdr ID to copy on a runtime's space. The budget moves by the same 11 B, keeping that 31 B room.
+export const FIRST_SCREEN_BUDGET = 479_171;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
