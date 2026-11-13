@@ -16,6 +16,37 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// A new hub uses the install language until the first full client establishes one; a saved language still wins.
+func TestInitialUserLocale(t *testing.T) {
+	ctx := context.Background()
+	h := newTestHub(t)
+	h.cfg.InitialLocale = i18n.En
+	store := &settingsStore{vals: map[string][]byte{}}
+	h.store = store
+	h.loadUserLang(ctx)
+	if h.userLang() != i18n.En {
+		t.Fatalf("install language: %s", h.userLang())
+	}
+	helloFrom(h, "dev_phone", `{"locale":"ja"}`)
+	if h.userLang() != i18n.Ja || string(store.vals[userLocaleSetting]) != `"ja"` {
+		t.Fatalf("first client: %s / %s", h.userLang(), store.vals[userLocaleSetting])
+	}
+
+	saved := newTestHub(t)
+	saved.cfg.InitialLocale = i18n.Ja
+	saved.store = &settingsStore{vals: map[string][]byte{userLocaleSetting: []byte(`"en"`)}}
+	saved.loadUserLang(ctx)
+	if saved.userLang() != i18n.En {
+		t.Fatalf("saved language must win: %s", saved.userLang())
+	}
+
+	invalid := newTestHub(t)
+	invalid.cfg.InitialLocale = "fr"
+	if invalid.userLang() != i18n.Default {
+		t.Fatalf("invalid install language: %s", invalid.userLang())
+	}
+}
+
 // The first full client's client_hello.locale becomes the user's language, and each one's its connection's; an
 // answer-only one (the watch) only its connection's; an invalid or missing one changes nothing.
 func TestClientHelloLocale(t *testing.T) {

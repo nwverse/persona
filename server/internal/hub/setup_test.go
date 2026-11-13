@@ -23,6 +23,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 var updateGolden = flag.Bool("update-hubjson-golden", false, "rewrite testdata/hubjson/*.golden.json")
@@ -120,8 +121,8 @@ func TestNewInstallDefaultsAreNotDefaults(t *testing.T) {
 		t.Fatalf("defaultConfig has new-install defaults: %+v %+v", d.Public, d.Admin)
 	}
 	lan := ip4(192, 168, 1, 20)
-	n := newInstallConfig(installInputs{lanIP: lan, listen: ":18660", tls: ":18662", agents: true})
-	if n.Public.TLSListen != lan+":18662" || n.PublicURL != "http://"+lan+":18660" || n.Admin.FirstSetup != "code" || len(n.Machines) != 1 {
+	n := newInstallConfig(installInputs{lanIP: lan, listen: ":18660", tls: ":18662", agents: true, locale: i18n.En})
+	if n.Public.TLSListen != lan+":18662" || n.PublicURL != "http://"+lan+":18660" || n.Admin.FirstSetup != "code" || n.InitialLocale != i18n.En || len(n.Machines) != 1 {
 		t.Fatalf("new install: %+v %s %+v %+v", n.Public, n.PublicURL, n.Admin, n.Machines)
 	}
 	if n := newInstallConfig(installInputs{lanIP: lan, listen: ":18660", tls: ":18662", outside: true}); n.Public.TLSListen != ":18662" || len(n.Machines) != 0 || n.Machines == nil {
@@ -129,6 +130,9 @@ func TestNewInstallDefaultsAreNotDefaults(t *testing.T) {
 	}
 	if n := newInstallConfig(installInputs{listen: ":18660", tls: ":18662"}); n.Public.TLSListen != "" || !strings.Contains(n.PublicURL, ":18660") {
 		t.Fatalf("no LAN address: TLS stays off: %+v %s", n.Public, n.PublicURL)
+	}
+	if n := newInstallConfig(installInputs{listen: ":18660", tls: ":18662", locale: "fr"}); n.InitialLocale != "" {
+		t.Fatalf("invalid initial locale: %q", n.InitialLocale)
 	}
 }
 
@@ -278,6 +282,12 @@ func TestSetupNewInstall(t *testing.T) {
 	}}
 	o := setupOptions{listen: ":" + strconv.Itoa(port), tls: ":18662", json: true}
 	e, out := testSetupEnv(t, home, o, cmds, "docker", "systemctl", "loginctl", "herdr")
+	e.getenv = func(name string) string {
+		if name == installLangEnv {
+			return "en"
+		}
+		return ""
+	}
 	// The hub "starts" when the units do: the token is what setup wrote.
 	e.pingDB = func(context.Context, string) error {
 		cfg, _ := readHubJSON(e.root)
@@ -294,7 +304,7 @@ func TestSetupNewInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	lan := ip4(192, 168, 1, 20)
-	if cfg.Public.TLSListen != lan+":18662" || cfg.PublicURL != "http://"+lan+":"+strconv.Itoa(port) || cfg.Admin.FirstSetup != "code" ||
+	if cfg.Public.TLSListen != lan+":18662" || cfg.PublicURL != "http://"+lan+":"+strconv.Itoa(port) || cfg.Admin.FirstSetup != "code" || cfg.InitialLocale != i18n.En ||
 		cfg.Token == "" || len(cfg.Machines) != 1 || !strings.HasPrefix(cfg.DatabaseURL, "postgres://persona:") || !strings.Contains(cfg.DatabaseURL, "@127.0.0.1:18661/persona") {
 		t.Fatalf("hub.json: %s", b)
 	}
@@ -401,6 +411,12 @@ func TestSetupKeepsAnExistingHubJSON(t *testing.T) {
 	port := fakeHub(t, &token, true)
 	cmds := &fakeCommands{replies: map[string]fakeReply{"loginctl show-user": {out: "yes\n"}}}
 	e, out := testSetupEnv(t, home, setupOptions{listen: ":18660", tls: ":18662", listenSet: true}, cmds, "systemctl", "loginctl")
+	e.getenv = func(name string) string {
+		if name == installLangEnv {
+			return "ja"
+		}
+		return ""
+	}
 	file := `{"token":"handwritten-token","listen":":` + strconv.Itoa(port) + `","public_url":"http://hub.example.com:1","database_url":"postgres://x"}`
 	if err := os.WriteFile(filepath.Join(e.root, "hub.json"), []byte(file), 0o600); err != nil {
 		t.Fatal(err)
@@ -423,6 +439,27 @@ func TestSetupKeepsAnExistingHubJSON(t *testing.T) {
 	}
 	if strings.Contains(text, "#setup=") {
 		t.Fatalf("a setup code with the password set:\n%s", text)
+	}
+}
+
+func TestSetupKeepsFreshConfiguredInitialLocale(t *testing.T) {
+	home := setupTestHome(t)
+	e, _ := testSetupEnv(t, home, setupOptions{listen: ":18660", tls: ":18662"}, &fakeCommands{})
+	e.getenv = func(name string) string {
+		if name == installLangEnv {
+			return "en"
+		}
+		return ""
+	}
+	if err := os.WriteFile(e.hubJSON(), []byte(`{"initial_locale":"ja"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := e.config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.InitialLocale != i18n.Ja {
+		t.Fatalf("configured initial locale was overwritten: %q", cfg.InitialLocale)
 	}
 }
 

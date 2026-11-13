@@ -79,7 +79,9 @@ class PersonaInstallTests(unittest.TestCase):
         name = (FORMER_NAME + 'd-' if legacy_artifacts else 'personad-') + target
         with tempfile.TemporaryDirectory() as directory:
             downloads = Path(directory)
-            data = gzip.compress(b'#!/bin/sh\necho "$*" >> "$HOME/personad-calls"\nif [ "$1" = version ]; then printf "fixture-version\\n"; fi\n', mtime=0)
+            data = gzip.compress(b'#!/bin/sh\necho "$*" >> "$HOME/personad-calls"\n'
+                                 b'if [ "$1 $2" = "hub setup" ]; then echo "${PERSONA_INSTALL_LANG:-}" >> "$HOME/hub-setup-langs"; fi\n'
+                                 b'if [ "$1" = version ]; then printf "fixture-version\\n"; fi\n', mtime=0)
             (downloads / (name + '.gz')).write_bytes(data)
             digest = '0' * 64 if corrupt else hashlib.sha256(data).hexdigest()
             sums = digest + '  ' + name + '.gz\n'
@@ -176,6 +178,17 @@ class PersonaInstallTests(unittest.TestCase):
                 result = self.run_install(home, extra=env, args=args)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(expected, result.stdout)
+
+    def test_installer_passes_language_to_new_hub(self):
+        for name, env, args, expected in (
+                ('environment', {'LANG': 'ja_JP.UTF-8', 'LC_ALL': ''}, (), 'ja'),
+                ('split override', {'LANG': 'ja_JP.UTF-8', 'LC_ALL': ''}, ('--lang', 'en'), 'en'),
+                ('equals override', {'LANG': 'en_US.UTF-8', 'LC_ALL': ''}, ('--lang=zh-Hans',), 'zh-Hans')):
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra=env, args=args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((home / 'hub-setup-langs').read_text().splitlines(), [expected])
 
     def test_invalid_installer_language_stops_before_installing(self):
         for args in (('--lang',), ('--lang', 'fr'), ('--lang=',)):
