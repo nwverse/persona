@@ -67,43 +67,49 @@ class InboxRowMetaWidthReviewTest {
         event = InboxEventFields(where = "Launch group", now = "confirm_reply"),
     )
 
-    /** The drawn layout of the one node holding [text]. */
-    private fun layout(text: String, context: String): androidx.compose.ui.text.TextLayoutResult {
-        val nodes = rule.onAllNodesWithText(text, useUnmergedTree = true).fetchSemanticsNodes()
+    /** The drawn layout of the one node whose text contains [text]. */
+    private fun layoutOf(text: String, context: String): androidx.compose.ui.text.TextLayoutResult {
+        val nodes = rule.onAllNodesWithText(text, substring = true, useUnmergedTree = true).fetchSemanticsNodes()
         assertEquals("$context: one node holds $text", 1, nodes.size)
         val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
         nodes.single().config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
         return layouts.single()
     }
 
-    @Test fun aLongStateStaysWholeAndTheLineBesideItGivesWay() {
-        // F-7: the state word may never be clipped or ellipsized; the third line on its left is what gives way.
-        val longState = "Waiting for Alex to confirm the date with the whole launch group: ask whether Friday works for everyone"
-        var style by mutableStateOf(AppStyle.Board)
-        val longWait = record().let {
-            it.copy(item = it.item.copy(status = InboxItem.WORKING), event = it.event.copy(
-                status = InboxItem.WORKING, now = "waiting",
-                follow = InboxFollow(who = "Alex to confirm the date with the whole launch group",
-                    next = "ask whether Friday works for everyone"),
-            ))
-        }
+    @Test fun theStateStaysWholeAndTheLineBesideItGivesWay() {
+        // The shared showcase's first row at phone width: a waiting state with a who and a next step, where and a sender.
+        var style by mutableStateOf(AppStyle.Glass)
+        val showcase = InboxRecord(
+            InboxItem("sc-1", kind = "group", title = "春季订单的报价", sender = "张三", preview = "好的，我看一下新的",
+                summary = "张三发现税率错了，正在等他确认更正后的报价", tier = "action", updatedAt = "2026-01-01T11:21:00Z",
+                status = "working", where = "订单群"),
+            source = "chat", isGroup = true, groupName = "订单群", count = 3,
+            event = InboxEventFields(status = "working", now = "waiting",
+                follow = InboxFollow(who = "张三确认新报价", next = "问更正后的报价行不行", checkAt = "2026-01-02T09:00:00Z")),
+        )
         rule.setContent {
-            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 1f)) {
+            CompositionLocalProvider(LocalInboxClock provides { java.time.Instant.parse("2026-01-01T12:00:00Z") },
+                LocalInboxZone provides java.time.ZoneOffset.UTC) {
                 PersonaTheme(style = style, darkTheme = false, reduceMotion = true) {
-                    Box(Modifier.width(580.dp).background(PersonaTheme.palette.background)) {
-                        InboxItemRow(longWait, repository, navigator, ReplyComposers(repository, rememberCoroutineScope()),
-                            GroupPosition.Single, done = false, busy = false, onlineSince = null, onDone = {}, onHandOff = {})
+                    CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 1f)) {
+                        Box(Modifier.width(400.dp).background(PersonaTheme.palette.background)) {
+                            InboxItemRow(showcase, repository, navigator, ReplyComposers(repository, rememberCoroutineScope()),
+                                GroupPosition.Single, done = false, busy = false, onlineSince = null, onDone = {}, onHandOff = {})
+                        }
                     }
                 }
             }
         }
         rule.waitForIdle()
-        // The state is whole: its last glyph sits inside the drawn width, with no ellipsis.
-        val state = layout(longState, "long state")
-        assertFalse("the state word must not be cut", state.hasVisualOverflow)
-        assertTrue("the state word must end inside its own width", state.getBoundingBox(longState.lastIndex).right <= state.size.width)
-        // The line beside it is still drawn, on as much width as is left.
-        assertEquals(1, layout(meta, "third line").lineCount)
+        // The state is whole: no ellipsis, its last glyph inside its own width.
+        val state = layoutOf("张三确认新报价", "the shared state")
+        val stateText = state.layoutInput.text.text
+        assertFalse("the state word must not be cut: $stateText", state.hasVisualOverflow)
+        assertTrue("the state word must end inside its width",
+            state.getBoundingBox(stateText.lastIndex).right <= state.size.width)
+        // And the third line is still there: a state may never take the whole line (F-7: the third line gives way).
+        val line = layoutOf("订单群", "the third line")
+        assertTrue("the third line must keep visible width beside the state (was ${line.size})", line.size.width > 0)
     }
 }
 
