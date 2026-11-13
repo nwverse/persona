@@ -148,7 +148,8 @@ struct AnswerPartsLift: View {
     @State private var near: Set<Int> = []
     #if DEBUG
     /// TEMP #6339: 0 as it was; 1 a held part turns into its words as it comes into view; 2 as 1, and the first frame
-    /// holds all of the parts above in one row.
+    /// holds all of the parts above in one row; 3 a plain stack (no lazy one), every part but the pressed one held
+    /// until it comes into view.
     static let variant = UserDefaults.standard.integer(forKey: "showLiftVariant")
     #else
     static let variant = 0
@@ -174,6 +175,20 @@ struct AnswerPartsLift: View {
             .onAppear {
                 if waits { frames.run { grown = true; return false } }
             }
+        } else if Self.variant == 3 {
+            let holds = tallerThanTheScreen(parts)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(parts.indices, id: \.self) { n in
+                    if holds && n != pressed && !near.contains(n) {
+                        held(parts, n).onScrollVisibilityChange(threshold: 0.01) { if $0 { near.insert(n) } }
+                    } else {
+                        words(parts, n)
+                    }
+                }
+            }
+            .scrollTargetLayout()
+            .markdownSoftBreakMode(.lineBreak)
+            .selectableInLift(item.text ?? "", as: .reply(quiet: false), parts: parts.map(\.line))
         } else {
             let holds = pressed > 0 && tallerThanTheScreen(parts)
             // Rows by id: a part's index, or -1 for all of the parts above the pressed one in one row (variant 2's first frame).
