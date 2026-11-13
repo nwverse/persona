@@ -142,7 +142,11 @@ class InboxGroupNameRowTest {
             rule.onNodeWithText(group, useUnmergedTree = true).assertDoesNotExist()
             rule.onNodeWithText(sender, useUnmergedTree = true).assertDoesNotExist()
             rule.onAllNodesWithText(record.item.title, useUnmergedTree = true).assertCountEquals(1)
+            if (kind == "dm") rule.onNodeWithText("私聊", useUnmergedTree = true).assertExists()
+            else rule.onNodeWithText("私聊", useUnmergedTree = true).assertDoesNotExist()
         }
+        rule.runOnIdle { shown = record.copy(isGroup = false) }
+        rule.onNodeWithText("私聊", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test fun eventWithWhereKeepsTheSummaryAndUsesTheSharedThreeContentLines() {
