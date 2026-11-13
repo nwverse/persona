@@ -818,8 +818,16 @@ func TestInboxRejectRecapOnlyReturnsToWaiting(t *testing.T) {
 	}
 }
 
-// TODO(4b): once the 4a package implements nowKey, a listed item waiting on the other side is the key "waiting"
-// with the follow's words. Until then nowKey is the stub, so this only records what it must be.
+// A listed item waiting on the other side exposes the shared state key from the real nowKey.
 func TestInboxWaitingListedAsWaiting(t *testing.T) {
-	t.Skip("nowKey is the 4a stub until that package lands")
+	h, _, it := handledHub(t)
+	if _, err := suggestTool(t, h, `{"recap":"等张三给报价","follow":{"who":"张三","next":"等他给报价","check_in":"4h"}}`); err != nil {
+		t.Fatal(err)
+	}
+	h.inbox.mu.Lock()
+	listed := it.listed()
+	h.inbox.mu.Unlock()
+	if listed.Now != NowWaiting {
+		t.Fatalf("listed now = %q, want %q", listed.Now, NowWaiting)
+	}
 }
