@@ -923,8 +923,8 @@ final class VNCTests: XCTestCase {
         let (app, _) = try signedInMachinePage()
         let on = app.descendants(matching: .any)["vnc-pip-on"].firstMatch, button = app.buttons["vnc-pip"].firstMatch
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let pip = springboard.otherElements.matching(NSPredicate(format: "identifier CONTAINS[c] 'pictureinpicture' OR label CONTAINS[c] '画中画' OR label CONTAINS[c] 'Picture in Picture'")).firstMatch
-        let restore = springboard.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'restore' OR label CONTAINS[c] '还原' OR identifier CONTAINS[c] 'restore'")).firstMatch
+        // SpringBoard's small window is a window of its own (identifier PIP-SBInteractionPassThroughView on iOS 27).
+        let pip = springboard.windows.matching(NSPredicate(format: "identifier BEGINSWITH 'PIP' OR label == 'Picture in Picture' OR label == '画中画'")).firstMatch
         XCTAssertTrue(button.waitForExistence(timeout: 10), "no Picture in Picture on this device:\n\(app.debugDescription)")
         sleep(2)
         hold("vnc-rec-start")
@@ -934,12 +934,26 @@ final class VNCTests: XCTestCase {
             XCTAssertTrue(pip.waitForExistence(timeout: 10), "round \(round): the system's small window:\n\(springboard.debugDescription)")
             sleep(3)
             pip.tap() // its controls
-            if restore.waitForExistence(timeout: 3) { restore.tap() } else { pip.doubleTap() }
+            restoreButton(springboard, in: pip.frame, round: round).tap()
             XCTAssertTrue(on.waitForNonExistence(timeout: 15), "round \(round): back on the page")
             XCTAssertTrue(live(app), "round \(round): the page, live")
             sleep(3)
         }
         hold("vnc-rec-end")
+    }
+
+    /// The small window's button back to the app, among the controls a tap on it shows (not Close, which ends it). Every
+    /// button there goes in the log, so a system that names it differently says what to look for.
+    @MainActor private func restoreButton(_ springboard: XCUIApplication, in frame: CGRect, round: Int) -> XCUIElement {
+        let back = NSPredicate(format: "label CONTAINS[c] 'restore' OR identifier CONTAINS[c] 'restore' OR label CONTAINS[c] '还原' OR label CONTAINS[c] 'full screen' OR label CONTAINS[c] '全屏'")
+        let match = springboard.buttons.matching(back).firstMatch
+        if match.waitForExistence(timeout: 3) { return match }
+        let near = springboard.buttons.allElementsBoundByIndex.filter { $0.exists && frame.insetBy(dx: -8, dy: -8).intersects($0.frame) }
+        let listed = near.map { "\($0.identifier) | \($0.label) | \($0.frame)" }.joined(separator: "\n")
+        print("PIP-CONTROLS round \(round):\n\(listed)")
+        let other = near.first { b in !["close", "关闭", "stop", "play", "pause", "skip", "播放", "暂停"].contains { b.label.lowercased().contains($0) || b.identifier.lowercased().contains($0) } }
+        XCTAssertNotNil(other, "round \(round): no button back to the app on the small window:\n\(listed)\n\(springboard.debugDescription)")
+        return other!
     }
 
     /// The DEBUG readout of the page's picture (VNCScreenUIView.place): its zoom (1: fitted) and where the pointer is
