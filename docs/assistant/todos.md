@@ -693,7 +693,8 @@ lists the user picked (Settings › Phone data › Reminders) and sends their in
 The import runs only while the app does (launch, return to the foreground, a change in the Reminders database while it
 is in front), since only the phone can read Reminders; it is not real time. There is no background refresh yet, which
 keeps it out of the battery budget (#1633). A batch the hub already took (same hash, same hub) is not sent again
-(`apple/Persona/PhoneTools/RemindersImport.swift`).
+(`apple/Persona/PhoneTools/RemindersImport.swift`). A request takes at most 1000 reminders; the phone sends more in
+several requests, in a stable order, and counts the set as sent only once every request was taken.
 
 ## Calendar
 

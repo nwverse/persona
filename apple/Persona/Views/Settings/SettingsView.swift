@@ -807,7 +807,8 @@ private struct RemindersImportSection: View {
     @Environment(AppModel.self) private var model
     @StoredValue(RemindersImport.enabledKey) private var importOn = false
     @State private var lists: [RemindersImport.ReminderList] = []
-    @State private var picked: Set<String>? = RemindersImport.lists
+    /// nil: every list. Read with the lists in `.task`, not as the initial value (P3).
+    @State private var picked: Set<String>?
 
     var body: some View {
         Section {
@@ -830,7 +831,10 @@ private struct RemindersImportSection: View {
         } footer: {
             Text("Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open.")
         }
-        .task { lists = await RemindersImport.availableLists() }
+        .task {
+            picked = RemindersImport.lists // before the rows, which only show once the lists are read
+            lists = await RemindersImport.availableLists()
+        }
     }
 
     private func choose(_ id: String, _ on: Bool) {

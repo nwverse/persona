@@ -6,7 +6,8 @@ import Foundation
 /// their title, notes and due date. Nothing is written back. Opt-in (Settings › Phone Data), off by default.
 ///
 /// It runs only while the app does: on launch and return to the foreground, and when the Reminders database changes
-/// while the app is in front. A batch the hub already has (same hash, same hub) is not sent again.
+/// while the app is in front. Reminders the hub already has (same hash, same hub) are not sent again; more than
+/// `batchMax` go in several requests.
 nonisolated enum RemindersImport {
     /// Settings › Phone Data › Import into To-dos.
     static let enabledKey = "reminders.importTodos"
@@ -44,17 +45,23 @@ nonisolated enum RemindersImport {
         return (f.string(from: date), nil)
     }
 
-    /// The batch for these reminders: in a stable order (so its hash only changes when a reminder does), at most the
-    /// hub's 1000.
-    static func batch(_ items: [Item]) -> Batch {
-        Batch(items: Array(items.sorted { $0.externalID < $1.externalID }.prefix(1000)))
+    /// What the hub takes in one request (`importBatchMax`, server/internal/assistant/todo_imports.go).
+    static let batchMax = 1000
+
+    /// The batches for these reminders: in a stable order (so the hash only changes when a reminder does), split
+    /// into requests the hub takes; every reminder is in one of them, however many there are.
+    static func batches(_ items: [Item]) -> [Batch] {
+        let sorted = items.sorted { $0.externalID < $1.externalID }
+        return stride(from: 0, to: sorted.count, by: batchMax).map {
+            Batch(items: Array(sorted[$0..<min($0 + batchMax, sorted.count)]))
+        }
     }
 
-    /// A stable hash of a batch (FNV-1a over its JSON), to tell whether it changed since it was last sent.
-    static func hash(_ batch: Batch) -> String {
+    /// A stable hash of the batches (FNV-1a over their JSON), to tell whether they changed since they were last sent.
+    static func hash(_ batches: [Batch]) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(batch) else { return "" }
+        guard let data = try? encoder.encode(batches) else { return "" }
         var h: UInt64 = 0xcbf2_9ce4_8422_2325
         for byte in data {
             h ^= UInt64(byte)
@@ -85,9 +92,29 @@ nonisolated enum RemindersImport {
         }.value
     }
 
-    /// The incomplete reminders of the picked lists, as items. EventKit calls back on its own queue, so the block is
-    /// `@Sendable` and turns its objects into values there.
-    static func read(lists picked: Set<String>?) async -> [Item] {
+    /// An event store made off the main thread (P1: making one is a call to EventKit's daemon). EKEventStore is safe to
+    /// use from any thread but not marked Sendable.
+    struct Store: @unchecked Sendable { let store: EKEventStore }
+
+    @concurrent static func makeStore() async -> Store { Store(store: EKEventStore()) }
+
+    /// Whether Persona may read Reminders now, asked off the main thread (P1, #1337).
+    static func mayRead() async -> Bool {
+        await CalendarAccess.statusesOffMain().reminders.isUsable
+    }
+
+    /// The hashes of what each hub took, read from disk off the main thread (P1).
+    @concurrent static func loadSent() async -> [String: String] {
+        StateCache.load(sentCache, as: [String: String].self) ?? [:]
+    }
+
+    @concurrent static func saveSent(_ sent: [String: String]) async {
+        StateCache.save(sentCache, sent)
+    }
+
+    /// The incomplete reminders of the picked lists, as items, read off the main thread (P1). EventKit calls back on its
+    /// own queue, so the block is `@Sendable` and turns its objects into values there.
+    @concurrent static func read(lists picked: Set<String>?) async -> [Item] {
         let store = EKEventStore()
         let all = store.calendars(for: .reminder)
         let chosen = picked.map { ids in all.filter { ids.contains($0.calendarIdentifier) } } ?? all
@@ -117,25 +144,36 @@ nonisolated enum RemindersImport {
     /// Kept while the import is on: EventKit posts `EKEventStoreChanged` only to a store that is alive.
     private var store: EKEventStore?
     private var observer: NSObjectProtocol?
-    private var sent: [String: String] = StateCache.load(RemindersImport.sentCache, as: [String: String].self) ?? [:]
+    private var watching = false
+    /// What each hub took (hash by hub group); nil until read from disk, on the first import.
+    private var sent: [String: String]?
 
     private init() {}
 
     /// Back in front (or turned on): follows changes of the Reminders database while the import is on, and imports now.
     func activate(_ app: AppModel, force: Bool = false) {
         self.app = app
-        if RemindersImport.isEnabled, observer == nil {
-            let store = EKEventStore()
-            self.store = store
-            observer = NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: store, queue: .main) { @Sendable _ in
-                Task { @MainActor in RemindersImporter.shared.changed() }
+        if RemindersImport.isEnabled {
+            if observer == nil, !watching {
+                watching = true
+                Task { await watch() }
             }
-        } else if !RemindersImport.isEnabled, let observer {
+        } else if let observer {
             NotificationCenter.default.removeObserver(observer)
             self.observer = nil
             store = nil
         }
         sync(app, force: force)
+    }
+
+    private func watch() async {
+        let made = await RemindersImport.makeStore()
+        watching = false
+        guard RemindersImport.isEnabled, observer == nil else { return } // turned off meanwhile
+        store = made.store
+        observer = NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: made.store, queue: .main) { @Sendable _ in
+            Task { @MainActor in RemindersImporter.shared.changed() }
+        }
     }
 
     private func changed() {
@@ -144,7 +182,7 @@ nonisolated enum RemindersImport {
 
     /// Imports now; `force` sends even a batch the hub already took (the user changed the lists or turned it on).
     func sync(_ app: AppModel, force: Bool = false) {
-        if force { sent.removeAll() }
+        if force { sent = [:] }
         if running != nil {
             again = true // the change lands after the batch on its way: one more
             return
@@ -162,15 +200,21 @@ nonisolated enum RemindersImport {
     }
 
     private func importOnce(_ app: AppModel) async {
-        guard RemindersImport.isEnabled, PhoneDataSource.reminders.isActive,
-              let link = app.hub, !link.isDemo, let api = app.api else { return }
-        let batch = RemindersImport.batch(await RemindersImport.read(lists: RemindersImport.lists))
-        let hash = RemindersImport.hash(batch)
-        guard sent[link.group] != hash else { return }
+        guard RemindersImport.isEnabled, PhoneDataSource.reminders.isEnabled,
+              let link = app.hub, !link.isDemo, let api = app.api,
+              await RemindersImport.mayRead() else { return }
+        let batches = await RemindersImport.batches(RemindersImport.read(lists: RemindersImport.lists))
+        let hash = RemindersImport.hash(batches)
+        if sent == nil { sent = await RemindersImport.loadSent() }
+        guard sent?[link.group] != hash else { return }
         do {
-            _ = try await api.post("/api/v1/todos/import/reminders", body: batch)
-            sent[link.group] = hash
-            StateCache.save(RemindersImport.sentCache, sent)
+            // One request per batch; the hash counts as sent only once all of them were taken, so a batch that
+            // failed is sent again next time (the ones before it change nothing then).
+            for batch in batches {
+                _ = try await api.post("/api/v1/todos/import/reminders", body: batch)
+            }
+            sent?[link.group] = hash
+            await RemindersImport.saveSent(sent ?? [:])
         } catch {
             // An older hub (404) or no connection: the next foreground or change tries again.
         }
