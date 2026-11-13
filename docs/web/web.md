@@ -1713,6 +1713,11 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   marks by output price (≤ 3 / ≤ 15 / > 15 per million tokens) and the flyout's "Per 1M tokens · Input · Output · Cache
   read" line. Unknown, inherited, malformed, regional-only and input-size-tiered prices draw nothing; a reference price is
   not a quote from the gateway and is never inherited by another model.
+- **Long lists** (#6478): the rail fades its top / bottom edge while more cells lie beyond it (it has no scrollbar). Not
+  searching, the All view shows each provider group's first 8 rows (and the one that runs now) when several providers
+  are listed, then **Show all N models** (显示全部 N 个; N 件をすべて表示), which opens that provider's view. A row whose name
+  is cut short shows the whole model ID as its second line (monospace, wrapping, two lines at most); on a touch screen,
+  which has no tooltips, every row whose name is not its ID shows the ID there instead of the provider's name.
 - **Context below the composer** (#5056): `ContextMeter` sits in its own right-aligned usage row below the composer card,
   not in the session header. Its existing tooltip / tap explanation, warning colors and "Show context as used" behavior are
   unchanged; unknown context mounts no row, so the default layout gains no gap.
