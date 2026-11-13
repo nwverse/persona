@@ -1465,6 +1465,9 @@ struct LarkChatView: View {
     }
 
     private func askPersona() async {
+        #if DEBUG
+        NSLog("IM-BACK summary pushNil=\(pushChat == nil)")
+        #endif
         guard let api = chatAPI else { return }
         let prompt = String(localized: "Read the recent messages in my Lark chat “\(conversation.name)” (Lark gateway feedId \(conversation.id)), summarize the key points, list what I need to reply to or handle, and suggest replies.")
         do {

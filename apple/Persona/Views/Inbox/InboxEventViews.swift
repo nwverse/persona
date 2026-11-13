@@ -541,6 +541,10 @@ struct InboxRelatedSection: View {
     /// `owner`: the item's manager, which a conversation not listed yet is read through (`InboxChatRoute`, or the
     /// Persona page's `assistantItemManagers`).
     static func session(_ key: SessionKey, manager: Bool, owner: String?, model: AppModel, push: ((InboxChatRoute) -> Void)? = nil) {
+        #if DEBUG
+        let branch = push != nil ? "push" : (manager && model.session(key) == nil ? "openAssistantConversation" : "model.open")
+        NSLog("IM-BACK chain session pushNil=\(push == nil) branch=\(branch)")
+        #endif
         if let push {
             push(InboxChatRoute(key: model.inHub(key), manager: owner))
         } else if manager && model.session(key) == nil {

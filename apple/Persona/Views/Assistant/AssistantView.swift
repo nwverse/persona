@@ -134,9 +134,9 @@ struct AssistantView: View {
                                     pending = nil
                                     drawer.close()
                                     // The conversation, not the page pushed over it (the same one open: no change to see).
-                                    if places { leavePlace() }
+                                    if places { leavePlace("sidebar-open") }
                                 },
-                                newConversation: { newConversation(); drawer.close(); if places { leavePlace() } },
+                                newConversation: { newConversation(); drawer.close(); if places { leavePlace("sidebar-new") } },
                                 // The iPad's column: places, each keeping its stack (`show`, docs/design/sidebar-navigation.md).
                                 openProfile: places ? { show(.profile) } : { drawer.close(); showProfile = true },
                                 openRoutines: places ? { show(.routines) } : { drawer.close(); showRoutines = true },
@@ -241,7 +241,7 @@ struct AssistantView: View {
                             openSidebar: toggleSidebar,
                             // In a health conversation New opens Health's new conversation page, whose list has the
                             // space's past ones (#4329); elsewhere the assistant's.
-                            newConversation: currentIsHealth ? { backToRoot(); showHealth = true } : newConversation,
+                            newConversation: currentIsHealth ? { backToRoot("health-topbar"); showHealth = true } : newConversation,
                             openKnowledge: { if placesByValue { show(.knowledge) } else { showKnowledge = true } },
                             openProfile: { if placesByValue { show(.profile) } else { showProfile = true } })
             #if os(macOS)
@@ -311,13 +311,13 @@ struct AssistantView: View {
                 // opening one: any page already pushed at launch stays. User-driven changes leave the conversation but
                 // keep the place's stack for a later return (`ShellPlaces`).
                 if AssistantCurrentNavigation.keepsPushedPages(old: old, new: new, main: model.assistantMain) { return }
-                leavePlace()
+                leavePlace("assistantCurrent")
             }
             .onChange(of: model.hub?.group) { old, new in
                 // A pushed inbox and its items belong to the old hub. Initial pairing (nil → a group) and reconnects stay.
                 if AssistantCurrentNavigation.clearsPushedPages(oldHub: old, newHub: new) {
                     places.forget()
-                    backToRoot()
+                    backToRoot("hub")
                 }
             }
             .onChange(of: model.assistantManagerID) {
@@ -327,10 +327,10 @@ struct AssistantView: View {
                 pending = nil
             }
             // A conversation from the sidebar: the place in front is kept, the page switches under the drawer, then it closes.
-            .onChange(of: model.assistantReveal) { leavePlace(); activeDrawer.close() }
+            .onChange(of: model.assistantReveal) { leavePlace("assistantReveal"); activeDrawer.close() }
             // Another assistant is current: a pushed page (the profile, scheduled tasks, memory…) read the one before and
             // would write to this one, so it closes.
-            .onChange(of: model.assistantSwitches) { places.forget(); backToRoot() }
+            .onChange(of: model.assistantSwitches) { places.forget(); backToRoot("switches") }
             #if DEBUG
             // `-openAssistantPage profile|avatars|routines|runs|…` (with `-tab assistant`): the profile and its pages;
             // `-openAssistantSidebar YES` (or a fraction): the sidebar is out; `-showDrawerAutoDrag <rounds>`: scripted drags, measured
@@ -371,7 +371,7 @@ struct AssistantView: View {
                 case "routines": show(.routines)
                 case "knowledge": show(.knowledge)
                 case "profile": show(.profile)
-                case "health": backToRoot(); showHealth = true // the page itself, for its screenshots
+                case "health": backToRoot("debug-health"); showHealth = true // the page itself, for its screenshots
                 case "recordings": show(.recordings)
                 default: break
                 }
@@ -409,10 +409,17 @@ struct AssistantView: View {
     /// Offered at the stack and registered with its destinations, so a wide split does not depend on the outer stack
     /// forwarding this environment value to its destination pages.
     private var inboxChatPush: ((InboxChatRoute) -> Void)? {
+        #if DEBUG
+        NSLog("IM-BACK push setup shellNil=\(shell == nil) width=\(String(describing: widthClass)) padPlaces=\(padPlaces) enabled=\(placesByValue) pushNil=\(!placesByValue)")
+        #if os(iOS)
+        NSLog("IM-BACK push setup padRouterNil=\(padRouter == nil)")
+        #endif
+        #endif
         guard placesByValue else { return nil }
         return { route in
             #if DEBUG
             ShellTrace.shared.note("inbox chat push place=\(String(describing: places.current))")
+            NSLog("IM-BACK push invoked pathCount=\(path.count)")
             #endif
             path.append(route)
         }
@@ -427,9 +434,10 @@ struct AssistantView: View {
         let kept = placesByValue ? places.enter(page, from: path) : nil
         #if DEBUG
         ShellTrace.shared.note("place \(page) \(kept == nil ? "root" : "kept") drawer=\(activeDrawer.isOut)")
+        NSLog("IM-BACK show page=\(page) pathCount=\(path.count) placesByValue=\(placesByValue)")
         #endif
         underDrawer {
-            backToRoot()
+            backToRoot("show")
             if let kept {
                 path = kept
                 return
@@ -451,9 +459,9 @@ struct AssistantView: View {
     }
 
     /// Leaves the place in front for the conversation, keeping its path (`ShellPlaces`).
-    private func leavePlace() {
+    private func leavePlace(_ reason: String) {
         places.leave(with: path)
-        underDrawer { backToRoot() }
+        underDrawer { backToRoot(reason) }
     }
 
     /// While the drawer is out the page is under it: it changes at once, and the drawer's closing is the only motion.
@@ -473,16 +481,19 @@ struct AssistantView: View {
         Task {
             switch await HealthModel.entry(deps: .live, live: model.healthConversations) {
             case .open(let key):
-                backToRoot()
+                backToRoot("health-open")
                 model.openAssistantConversation(key)
             case .new:
-                backToRoot()
+                backToRoot("health-new")
                 showHealth = true
             }
         }
     }
 
-    private func backToRoot() {
+    private func backToRoot(_ reason: String) {
+        #if DEBUG
+        NSLog("IM-BACK backToRoot reason=\(reason) pathCount=\(path.count)")
+        #endif
         if !path.isEmpty { path = NavigationPath() }
         showProfile = false
         showRoutines = false
@@ -574,7 +585,7 @@ struct AssistantView: View {
         model.readiness.failure = nil
         // From Health: back to the root, which shows the message coming as for any new conversation.
         if space != nil {
-            backToRoot()
+            backToRoot("start-health")
             model.assistantCurrent = nil
         }
         withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count) }
