@@ -351,13 +351,14 @@ struct ModelLaunchersView: View {
     /// draft, or say why it can't be opened. The link is dropped here, never shown or kept.
     private func openImport() async {
         guard let link = model.providerImport else { return }
-        // Clearing the id-keyed task's state before the await can cancel the parse. Clear on every exit instead.
-        defer { model.providerImport = nil }
+        // A newer link supersedes this task. Only this link's own task may clear it or show its result.
+        defer { if model.providerImport == link { model.providerImport = nil } }
         // The hello may not have arrived yet when a link opens the app. The parse route is the authority here;
         // an older hub answers 404, which is the same "can't open import links yet" the web shows.
         guard let api = requestScope.api(model) else { return }
         do {
             let result = try await api.parseProviderImport(text: link)
+            guard model.providerImport == link else { return }
             if let draft = result.drafts?.first {
                 let wizard = ProviderWizardModel()
                 wizard.applyImport(draft.provider)
@@ -366,9 +367,13 @@ struct ModelLaunchersView: View {
             } else {
                 importNote = result.notes?.first?.text ?? String(localized: "This import link has no provider to add.")
             }
+        } catch is CancellationError {
+            return
         } catch let error as APIError where error.status == 404 {
+            guard model.providerImport == link else { return }
             importNote = String(localized: "This hub can't open import links yet. Update the hub to open them.")
         } catch {
+            guard model.providerImport == link else { return }
             importNote = String(localized: "Couldn't read the import link: \(error.localizedDescription)")
         }
     }

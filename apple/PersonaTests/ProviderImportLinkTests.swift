@@ -28,4 +28,13 @@ struct ProviderImportLinkTests {
         #expect(input.customModelName == "Custom" && input.customModelDescription == "Synthetic")
         #expect(input.apiKey == "FAKE-EXAMPLE-KEY" && input.auth == "bearer")
     }
+
+    @Test func aSixtyCharacterDisplayNameIsAValidProviderID() throws {
+        let displayName = String(repeating: "a", count: 60) // cindy's link limit; Persona has no 40-character provider-ID limit.
+        let provider = try JSON.decoder.decode(ProviderImportProvider.self, from: Data(#"{"display_name":"\#(displayName)"}"#.utf8))
+        let wizard = ProviderWizardModel(deps: .init(api: { nil }))
+        wizard.applyImport(provider)
+        #expect(wizard.name == displayName)
+        #expect(wizard.nameProblem == nil)
+    }
 }
