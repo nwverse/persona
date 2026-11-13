@@ -123,8 +123,9 @@ final class PerfLaunchTests: PerfTestCase {
     }
 
     @MainActor func testWarmLaunch() throws {
-        removeSnapshot()
         prepareLaunch(pairing: true, probes: true, fresh: true)
+        app.terminate() // the final cold process (or an earlier test) can still have a detached snapshot writer
+        removeSnapshot()
         app.launchPinned()
         allowNotifications()
         acceptIconAlert()
