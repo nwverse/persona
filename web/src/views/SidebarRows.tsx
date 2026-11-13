@@ -115,17 +115,18 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
  *  as the section's own title, optionally with an icon before it and a ⋯ for the group's actions.
  *  With `onToggle` it folds the group it heads (Persona chats' 最近, #6228): the title is a button with the same
  *  chevron and `aria-expanded` as a section's, so the state is announced without extra words. */
+const SUB_HEADING_TYPE = "text-[11px] font-semibold text-ink-3";
 export function SubHeading({ label, icon, onMenu, menuLabel, folded, onToggle }: { label: string; icon?: IconName; onMenu?: (at: MenuAt) => void; menuLabel?: string; folded?: boolean; onToggle?: () => void }) {
   return (
     <div role="heading" aria-level={3} className="flex items-center gap-1 px-2 pt-0.5 pb-0.5" {...(onMenu ? contextMenuProps((at) => onMenu(at)) : {})}>
       {onToggle ? (
-        <button type="button" aria-expanded={!folded} onClick={onToggle} className="touch-hit flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap rounded-[5px] text-left text-[11px] font-semibold text-ink-3 hover:text-ink-2">
+        <button type="button" aria-expanded={!folded} onClick={onToggle} className={`touch-hit flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap rounded-[5px] text-left ${SUB_HEADING_TYPE} hover:text-ink-2`}>
           {icon && <Icon name={icon} size={10} stroke={2.2} className="shrink-0" />}
           <span className="min-w-0 truncate">{label}</span>
           <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
       ) : (
-        <span className="flex min-w-0 flex-1 items-center gap-1 truncate whitespace-nowrap text-[11px] font-semibold text-ink-3">
+        <span className={`flex min-w-0 flex-1 items-center gap-1 truncate whitespace-nowrap ${SUB_HEADING_TYPE}`}>
           {icon && <Icon name={icon} size={10} stroke={2.2} className="shrink-0" />}
           {label}
         </span>
