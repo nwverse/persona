@@ -1002,3 +1002,13 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - `testhome` now resolves `GOENV`, `GOPATH`, `GOMODCACHE` and `GOCACHE` with the real home before swapping it and pins
   them. Anything else that reads the home directory for its own config (git, ssh, a CLI's login) has the same problem
   under testhome: pin what the child needs, or give the test its own config.
+
+## A throw-away HOME also hides Docker's CLI plugins (2026-11-13, #6131)
+
+- The Compose config checks run `docker compose` under a temporary `HOME`, so Docker reads an empty config directory and
+  finds no `docker-compose` plugin where Docker Desktop and Colima register it (`cliPluginsExtraDirs` in the user's
+  `~/.docker/config.json`). The checks skipped only on the text `is not a docker command`; Docker 29 prints
+  `unknown shorthand flag: 'f' in -f` for the same missing plugin, so they failed instead, on `main` too.
+- Don't detect a missing tool by one wording of its error: ask it directly in the test's own environment
+  (`scripts/test/compose_cli.py` runs `docker compose version`) and skip with how to enable the check
+  (`PERSONA_TEST_DOCKER_CONFIG`, `docs/operations/hub-update.md`).
