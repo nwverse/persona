@@ -3,6 +3,9 @@ package assistant
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -120,9 +123,10 @@ const (
 	kbIndexEvery = time.Minute
 	// A run that failed (a full disk, a directory it may not write) is not tried again at the next kick: each try
 	// looks at every file and reads a batch before it fails. The next waits kbIndexRetry, twice as long after every
-	// failure in a row, up to kbIndexRetryMax, whatever is asked of it meanwhile. The first wait is short because
-	// one kind of failure mends itself: an index that fails a check while it is merged is built again by the run
-	// after, and search reads every file until then.
+	// failure in a row, up to kbIndexRetryMax, whatever is asked of it meanwhile. Nothing starts a run when the wait
+	// is over: it starts at the first round after that (a kick, or the loop's next tick, kbPoll at the latest). The
+	// first wait is short because one kind of failure mends itself: an index that fails a check while it is merged
+	// is built again by the run after, and search reads every file until then.
 	kbIndexRetry    = 15 * time.Second
 	kbIndexRetryMax = 5 * time.Minute
 	// An index run that read this many files, or took this long, is worth a log line (a first build, the catch-up
@@ -135,7 +139,7 @@ const (
 type kbIndexRuns struct {
 	last time.Time // when it last ran
 	// After a run that failed: how long the next one waits, how many failed in a row, and the failure the log has
-	// already (kbIndexCause), said once however often it comes back.
+	// last (kbIndexCause): not said again while the runs fail the same way, said when they fail another way.
 	wait   time.Duration
 	failed int
 	said   string
@@ -159,7 +163,11 @@ func (s *Service) kbIndexLane(ctx context.Context, e *kb.Engine, r *kbIndexRuns)
 		r.failed++
 		if cause := kbIndexCause(err); cause != r.said {
 			r.said = cause
-			s.logf("kb: search index: %v (search reads the files it does not have; trying again after %s, then less often, up to every %s; this failure is logged once)", err, r.wait, kbIndexRetryMax)
+			longer := ""
+			if r.wait < kbIndexRetryMax {
+				longer = fmt.Sprintf("; twice as long after each further failure in a row, up to %s", kbIndexRetryMax)
+			}
+			s.logf("kb: search index: %v (search reads the files it does not have; the next run is no sooner than %s from now, at the first round after that%s; not logged again while it fails the same way)", err, r.wait, longer)
 		}
 	default:
 		if r.failed > 0 {
@@ -174,16 +182,35 @@ func (s *Service) kbIndexLane(ctx context.Context, e *kb.Engine, r *kbIndexRuns)
 	return true
 }
 
-// kbIndexCause is what tells one failure of the index from another: the innermost error's text, without the file
-// it was met at (a new file of the index has another name at every try).
+// kbIndexCause is what tells one failure of the index from another: what was being done, to which kind of file
+// of the index, and what the system said. The operation and the file count: "permission denied" when the index's
+// directory is made and "permission denied" when its manifest is written are two failures, and the second is worth
+// a line after the first was put right. The file is its kind (kb.SearchIndexFileKind), not its name: a new segment,
+// log or temporary file has another name at every try, and the same failure would be another one each time. An
+// error that names no file is told by its innermost text.
 func kbIndexCause(err error) string {
-	for {
-		next := errors.Unwrap(err)
-		if next == nil {
-			return err.Error()
+	// the text of the error err wraps last
+	innermost := func(err error) string {
+		for {
+			next := errors.Unwrap(err)
+			if next == nil {
+				return err.Error()
+			}
+			err = next
 		}
-		err = next
 	}
+	var at *fs.PathError
+	var link *os.LinkError
+	var call *os.SyscallError
+	switch {
+	case errors.As(err, &at):
+		return at.Op + " " + kb.SearchIndexFileKind(at.Path) + ": " + innermost(at.Err)
+	case errors.As(err, &link):
+		return link.Op + " " + kb.SearchIndexFileKind(link.New) + ": " + innermost(link.Err)
+	case errors.As(err, &call):
+		return call.Syscall + ": " + innermost(call.Err)
+	}
+	return innermost(err)
 }
 
 // kbRunLane runs one go of l with e, under kbRun, and logs what it did when it called the model or took longer than a
