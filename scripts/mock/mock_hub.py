@@ -20155,7 +20155,9 @@ def zrle_rect(px, W, x, y, w, h, z):
 # (else 403, as the node's not_signed_in). GET /mock/screen-video says what the phone sent (`start`s, report count) and
 # how many streams are open; …?drop=1 closes them all, ?refuse=1 refuses new ones (503, ?refuse=0 back), ?pause=locked
 # sends `paused` with that reason (no frames and no heartbeats, as the helper), ?resume=1 sends `resumed` and starts over
-# with `hello`, `format` and the keyframe.
+# with `hello`, `format` and the keyframe. Once a second while frames go out it sends `timing` as the helper does: capture
+# 0 and encode 4.8 ms (made up: nothing is encoded here), the network as half the real round trip from a frame going out
+# to the phone's report on it.
 SCREEN_VIDEO = {"mode": os.environ.get("MOCK_SCREEN_VIDEO", ""), "pairs": set(), "streams": [], "starts": [], "reports": 0,
                 "refuse": False}
 _SCREEN_VIDEO_FIXTURE = []
@@ -20198,7 +20200,7 @@ def screen_video_connect(h, mid):
     h.send_response(101, "Switching Protocols")
     h.send_header("Upgrade", "websocket"); h.send_header("Connection", "Upgrade")
     h.send_header("Sec-WebSocket-Accept", accept); h.end_headers(); h.wfile.flush()
-    st = {"open": True, "pause": None, "resume": False, "started": threading.Event()}
+    st = {"open": True, "pause": None, "resume": False, "started": threading.Event(), "sent": {}, "rtts": []}
     SCREEN_VIDEO["streams"].append(st)
     lock = threading.Lock()
 
@@ -20216,6 +20218,7 @@ def screen_video_connect(h, mid):
         hello, fmt, frames = msgs[0], msgs[1], msgs[2:]
         if not st["started"].wait(10): st["open"] = False; return
         number, i, restart = 0, 0, True
+        second, count, size = time.monotonic(), 0, 0
         try:
             while st["open"]:
                 if st["pause"]:
@@ -20229,8 +20232,18 @@ def screen_video_connect(h, mid):
                 if restart: msg(*hello); msg(*fmt); i, restart = 0, False
                 body = frames[i][1]
                 number += 1
+                st["sent"][number] = time.monotonic()
+                st["sent"].pop(number - 256, None)
                 msg(3, struct.pack(">IQ", number, int(time.monotonic() * 1e6)) + body[12:])
+                count, size = count + 1, size + len(body)
                 i = (i + 1) % len(frames)
+                if time.monotonic() - second >= 1:
+                    took, rtts = time.monotonic() - second, sorted(st["rtts"])
+                    st["rtts"] = []
+                    network = round(rtts[len(rtts) // 2] / 2 * 1000, 1) if rtts else None
+                    msg(7, json.dumps({"capture_ms": 0.0, "encode_ms": 4.8, "network_ms": network,
+                                       "kbps": round(size * 8 / 1000 / took), "fps": round(count / took)}).encode())
+                    second, count, size = time.monotonic(), 0, 0
                 time.sleep(1 / 30)
         except OSError:
             pass
@@ -20260,6 +20273,8 @@ def screen_video_connect(h, mid):
                     st["started"].set()
                 elif t == 17:
                     SCREEN_VIDEO["reports"] += 1
+                    sent = st["sent"].pop(struct.unpack(">I", body[:4])[0], None) if len(body) >= 4 else None
+                    if sent is not None: st["rtts"].append(time.monotonic() - sent)
     except OSError:
         pass
     st["open"] = False
