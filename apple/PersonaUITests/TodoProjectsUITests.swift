@@ -42,7 +42,8 @@ final class TodoProjectsUITests: XCTestCase {
         guard todo("todo_weather")["project"] as? String == "weather-app" else {
             throw XCTSkip("needs MOCK_TODO_PROJECTS=1")
         }
-        let app = launch(["-tab", "assistant", "-openAssistantPage", "todos", "-todos.grouping", "project"])
+        // The list, whatever view an earlier test left (the calendar keeps itself per device).
+        let app = launch(["-tab", "assistant", "-openAssistantPage", "todos", "-todos.view", "list", "-todos.grouping", "project"])
         let header = app.descendants(matching: .any).matching(identifier: "todos.project")
         XCTAssertTrue(header.firstMatch.waitForExistence(timeout: 60), "no project sections:\n\(app.debugDescription)")
         let labels = header.allElementsBoundByIndex.map(\.label)
