@@ -104,7 +104,8 @@ class InboxNowComposeReviewTest {
         // The same day it is the clock alone, as the app's other short times are.
         val today = waiting(InboxFollow(checkAt = "2026-01-01T15:30:00Z"))
         assertTrue(inboxNowText(today, enRes, en, clock, zone)!!.startsWith("Waiting for a reply · look again 3:30"))
-        assertTrue(inboxNowText(today, zhRes, zh, clock, zone)!!.startsWith("等对方回复 · 15:30再看"))
+        // Chinese keeps a space between the number and the word (the wording every app writes; the shared fixture follows in its own change).
+        assertTrue(inboxNowText(today, zhRes, zh, clock, zone)!!.startsWith("等对方回复 · 15:30 再看"))
     }
 
     @Test fun aKeyTheWordsTableDoesNotKnowKeepsTheAppsOwnMark() {
