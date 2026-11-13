@@ -32,6 +32,8 @@
     <string name="assistant_voice_chat">音声チャット</string>
     <string name="assistant_compact">コンテキストを圧縮</string>
     <string name="assistant_new_main">新しいメインチャット</string>
+    <string name="assistant_clear_context">コンテキストをクリア</string>
+    <string name="assistant_clear_context_failed">コンテキストをクリアできませんでした：%1$s</string>
     <string name="assistant_archive">アーカイブ</string>
     <string name="assistant_archived">アーカイブ済み</string>
     <string name="assistant_copy_session_id">セッションIDをコピー</string>

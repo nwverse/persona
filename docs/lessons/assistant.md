@@ -1,5 +1,16 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A presence window is not an owner-turn guarantee (#6394). The two-minute `ownerPresentFor` hold and the
+  five-minute `relayDecisionMax` cap let queued relayed/decision messages start new rounds behind the owner's back
+  once the window expires, even while the owner is still waiting on their own round. Keep the ranked queue and the
+  presence window, but add an in-memory per-conversation gate armed when the owner speaks (`relayBook.ownerTurns`)
+  that holds every rank until a session list shows the round stopped. Give it two safety releases — a short
+  `ownerTurnStartWait` when the round is never seen working (refused send, dropped conversation) and a hard
+  `ownerTurnMax` once seen working but never stopped — and make an expired gate return immediately rather than fall
+  back onto the presence window, or the cap is not authoritative. The gate is memory-only on purpose: a restart
+  degrades to the persisted presence window. Update the time-window tests by shortening the new limits in lockstep
+  with the presence timers instead of waiting real minutes.
+
 - Inbox handling chats are implementation details, not user-created conversations (#5723). `Untitled` suppresses
   automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
   archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
@@ -10,13 +21,14 @@
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
   `DeviceAssistantSend` text. This proves literal deduplication, not a stable-policy refactor or provider-context savings.
 
-
 - Proven `prompt` source can describe either a terminal tool label or a first-message fallback (#5269).
   Ordinary Claude inventory falls back to the first message for a bare tool label but not its spinner-prefixed
   form, so spinner normalization alone still lets a generated name disappear. Accept recognizable bad fallback
   changes only with explicit Claude runtime and prompt provenance; reject other tool/runtime names, meaningful
   titles, manual/custom titles and unknown sources. Apply this comparison at display and late-result boundaries,
   and test both directions plus service reconstruction without a new model call or counter reset.
+
+- A to-do's PR reference may exist only in `PRURL`, without appearing in its title or notes (#5458). Duplicate hints must read that link too; an open to-do still represents ongoing work when its linked Agent is idle.
 
 - Terminal spinner frames are presentation, not native-title changes (#5254). Comparing a saved `raw_title`
   byte for byte with a later inventory hid a successful automatic name while leaving its one-shot count spent.
@@ -427,3 +439,11 @@ deadline), the record was gone and no later connection told the conversation: an
 waited forever. A record that exists only so something is said later is cleared after the saying succeeded, and only if it
 still holds what was said (the woken conversation may already have re-armed new tasks). Being told twice after a send
 that timed out but was delivered is the cheaper failure.
+
+## A "which of these is it" model picks one even when none is (#6424)
+
+The Inbox judge was asked which open task an item belonged to and answered with an id the code only checked was among
+the candidates. Given seven unrelated tasks, it linked a GitHub bug report to a broad task whose notes shared a few
+words with it, and the link stuck. A selection model needs two guards: narrow the candidates by something exact first
+(the repository, the thread), skipping the call when none is left, and accept an answer only with evidence the code can
+check, such as a verbatim quote from the chosen candidate.

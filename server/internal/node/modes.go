@@ -291,6 +291,21 @@ func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 	if n.codexPath(id) != "" || n.traexPath(id) != "" { // not driven through an app-server: no way to set either
 		return fmt.Errorf("Codex / TRAEX 的会话不支持在手机上改权限模式和思考强度")
 	}
+	if mode != "" {
+		// Allow All for a claude that has no bypass flag: no key reaches it, so it is restarted in it once its turn is
+		// over (mode_restart.go, #6476). Any other pick drops such a restart that waits.
+		if n.needsModeRestart(id, mode) {
+			if err := n.restartable(ctx, id); err == nil {
+				n.queueModeRestart(id, mode)
+				mode = ""
+				if effort == "" {
+					return nil
+				}
+			}
+		} else {
+			n.dropModeRestart(id)
+		}
+	}
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
 		return n.noPaneForModes(id)

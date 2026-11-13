@@ -96,8 +96,9 @@ const ROW_DETAIL = "block truncate text-[11.5px] text-ink-3";
 const ROW_END = "shrink-0 text-[11px] text-ink-3";
 
 /** A group's heading above its first row ("Inbox", "Go to"). */
+const groupHeadingClass = "px-2.5 pt-2 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase";
 function GroupHeading({ children }: { children: React.ReactNode }) {
-  return <div className="px-2.5 pt-2 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{children}</div>;
+  return <div className={groupHeadingClass}>{children}</div>;
 }
 
 /** One row of the list as drawn: the option, and the heading above it when a group starts there. */
