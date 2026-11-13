@@ -15,12 +15,16 @@ type Place struct{ Machine, Key string }
 // maxPlaces bounds Options.Places: the places of one project across a user's computers, not a list of everything.
 const maxPlaces = 64
 
+// PlaceCount is how many items are at a place, and how many of them need the user: by the state the options filter
+// by, the folded one with Options.Roots.
+type PlaceCount struct{ Total, NeedsYou int }
+
 // PlaceCounts is the filtered membership counted by machine and project, and by machine and group: what Counts'
 // Project and Group maps give, kept apart per machine. Items without the attribute are counted under the empty key.
 type PlaceCounts struct {
 	Total    int
-	Project  map[Place]int
-	Group    map[Place]int
+	Project  map[Place]PlaceCount
+	Group    map[Place]PlaceCount
 	Revision string
 }
 
@@ -44,14 +48,25 @@ func (i *Index) PlaceCounts(options Options) (PlaceCounts, error) {
 		}
 	}
 	f := o.filters()
-	out := PlaceCounts{Project: map[Place]int{}, Group: map[Place]int{}, Revision: i.revisionToken()}
+	out := PlaceCounts{Project: map[Place]PlaceCount{}, Group: map[Place]PlaceCount{}, Revision: i.revisionToken()}
 	count := func(r *record) {
 		if !f.matches(r) {
 			return
 		}
 		out.Total++
-		out.Project[Place{r.item.Machine, r.item.Project}]++
-		out.Group[Place{r.item.Machine, r.item.Group}]++
+		needs := 0
+		if stateOf(r.item, f.Roots) == "needs_you" {
+			needs = 1
+		}
+		for _, at := range [...]struct {
+			counts map[Place]PlaceCount
+			place  Place
+		}{{out.Project, Place{r.item.Machine, r.item.Project}}, {out.Group, Place{r.item.Machine, r.item.Group}}} {
+			c := at.counts[at.place]
+			c.Total++
+			c.NeedsYou += needs
+			at.counts[at.place] = c
+		}
 	}
 	if f.ID != "" {
 		count(i.items[f.ID])

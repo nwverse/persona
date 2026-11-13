@@ -2210,19 +2210,19 @@ GET /api/v1/sessions?counts=1&space=%5B%22mac%22%2C%22w1%22%5D
   "revision": "<opaque checkpoint>",
   "total": 5,
   "projects": [
-    {"id": "git:git.example.com/team/app", "name": "app", "origin": "git.example.com/team/app", "total": 3,
-     "places": [{"machine_id": "mac", "path": "/Users/me/code/app", "total": 2},
+    {"id": "git:git.example.com/team/app", "name": "app", "origin": "git.example.com/team/app", "total": 3, "needs_you": 1,
+     "places": [{"machine_id": "mac", "path": "/Users/me/code/app", "total": 2, "needs_you": 1},
                 {"machine_id": "pc", "path": "C:\\code\\app", "total": 1}]},
     {"id": "dir:notes", "name": "notes", "total": 2,
      "places": [{"machine_id": "mac", "path": "/Users/me/notes", "total": 1},
                 {"machine_id": "pc", "path": "D:\\work\\Notes", "total": 1}]}
   ],
-  "spaces": [{"machine_id": "mac", "id": "w1", "name": "Release", "total": 2},
+  "spaces": [{"machine_id": "mac", "id": "w1", "name": "Release", "total": 2, "needs_you": 1},
              {"machine_id": "pc", "id": "", "name": "", "total": 3}]
 }
 ```
 
-- **Membership.** `catalog=1` counts the same filtered rows as `counts=1` with the same keys (`state`, `machine_id`, `project`, `group`, `source`, `provider`, `q`, `pane_source`, `roots`, `parent_session_id`, `manager`, `place`, `space`), at the current `revision`: `total` is their number, every row is in exactly one project and one space entry, and each `total` is over them. `limit` and `since` do not change it (`since` is validated); a `cursor` is ignored, the catalog being of the current list. An extension token's manager-limited view has its own computers only.
+- **Membership.** `catalog=1` counts the same filtered rows as `counts=1` with the same keys (`state`, `machine_id`, `project`, `group`, `source`, `provider`, `q`, `pane_source`, `roots`, `parent_session_id`, `manager`, `place`, `space`), at the current `revision`: `total` is their number, every row is in exactly one project and one space entry, and each `total` is over them. A project, a place and a space also say how many of their rows need the user (`needs_you`, omitted when 0), by the state the `state` filter goes by: the folded state with `roots=1`. A client that folds a group shows that number on its heading from this one read. `limit` and `since` do not change it (`since` is validated); a `cursor` is ignored, the catalog being of the current list. An extension token's manager-limited view has its own computers only.
 - **A place** is one directory on one computer: `path` is the rows' project attribute there (`repo_root`, else `workspace_cwd`, else `cwd`), the value the `project` filter takes with that `machine_id`. The rows without one are the last project, with an empty `id` and `name` and a place with an empty `path` for each of their computers.
 - **A project** is a repository wherever it is checked out. The hub asks each place's computer what the directory holds (the node's `git.status` with `identity_only`, the same answer the Git routes give) and remembers it. Directories whose computers name the same network remote are one project: `id` is `git:` and the remote lowercased, `origin` the remote as the computer spelled it (`host/path`, never credentials; a non-default SSH account as a digest), `name` its last segment. A directory with no repository, no remote or only a local-path remote, and one whose computer has not said (offline since the hub started, a node from before `identity_only`), goes by its folder's name: `id` is `dir:` and the name lowercased, so `Notes` and `notes` are one project. The folder is the path's last segment by its computer's own separator: a path that starts with a drive letter or a UNC share is a Windows computer's, read by backslashes and slashes; any other by slashes only. A project's name and origin are as its first place has them.
 - **`pending`** (omitted when false): some places' computers were still being asked when the answer was written (the hub waits about 1.5 s). Those places go by their folder's name in this answer; read again a moment later. The hub asks a computer about a directory once, uses the answer for 30 minutes, and tries again after a minute when the computer could not be reached; nothing a page, a count or a push is built from waits for it.
