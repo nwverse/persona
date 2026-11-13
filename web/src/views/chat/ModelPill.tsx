@@ -12,7 +12,7 @@ import { agentName } from "../../lib/agent-kind";
 import { onModelPicker, sessionLauncher } from "../../lib/model-switch";
 import { modelSupportsFast } from "../../lib/launcher-models";
 import { effortTitle } from "../../lib/session-actions";
-import { dropPick, launcherOffered, pickServiceTier, usePickedEffort, usePickedLauncher, usePickedModel, usePickedServiceTier } from "../../lib/assistant-chat";
+import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
   assistantLaunchers, ENGINE_SWITCH_FEATURE, engineSwitchable, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
@@ -229,7 +229,7 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
   const picked = usePickedLauncher(key);
   usePickedModel(key);
   usePickedEffort(key);
-  const tier = usePickedServiceTier(key);
+  const tier = usePickedFast();
   const { info } = assistantLaunchers(mid);
   // the computer's default and what can run a Persona chat: once for the pill, again behind it on each opening
   useEffect(() => {
@@ -251,15 +251,17 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
     toast(t("chat-modelpill.pick_dropped", { launcher: picked }), "info");
   }, [key, picked, info, session, kept]);
   const setup = assistantSetup(chat, info);
+  // A hub or native catalog that can't honor Fast disarms the draft even while the lazy panel is closed. A manager
+  // change disarms it in the store, before this pill or its destination catalog answers.
   useEffect(() => {
     if (session || !tier) return;
     if (!startServiceTier) {
-      pickServiceTier(key, undefined);
+      pickFast(false);
       return;
     }
     const list = modelList(mid, setup.provider).list;
     if (!list) return;
-    if (!modelSupportsFast(currentModelRow(list.models, setup.model))) pickServiceTier(key, undefined);
+    if (!modelSupportsFast(currentModelRow(list.models, setup.model))) pickFast(false);
   }, [key, mid, session, setup.provider, setup.model, tier, startServiceTier, version]);
   useEffect(() => {
     if (mid) void readModels(mid, setup.provider, { first: true });

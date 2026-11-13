@@ -6,7 +6,7 @@
 // (lib/assistant-chat.ts), as before; the new-conversation page's pick goes with the conversation's start. First-screen
 // code: the panel's own data is lib/assistant-panel.ts, loaded with the panel.
 import { agentId } from "./agent-kind";
-import { conversationKey, launcherOffered, NEW_CONVERSATION, pickedEffort, pickedLauncher, pickedModel, pickedServiceTier } from "./assistant-chat";
+import { conversationKey, launcherOffered, NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel } from "./assistant-chat";
 import { modelName, modelSupportsFast } from "./launcher-models";
 import { providerTitle } from "./provider-names";
 import { currentModelRow, modelLabel, type AssistantLaunchers, type ModelList, type PillView } from "./session-models";
@@ -64,7 +64,7 @@ export function assistantPick(c: AssistantChat): ModelPick | undefined {
 export function assistantSetup(c: AssistantChat, info: AssistantLaunchers | undefined): AssistantSetup {
   const s = c.session;
   const pick = assistantPick(c);
-  const fast = s?.service_tier === "priority" || (!s && pickedServiceTier(assistantPickKey(c)) === "priority");
+  const fast = s?.service_tier === "priority" || (!s && pickedFast());
   if (pick) return { provider: pick.launcher, model: pick.model, effort: pick.effort ?? s?.effort, ...(fast ? { fast: true } : {}), source: "pick" };
   const def = info?.def;
   if (!s || c.isMain) {

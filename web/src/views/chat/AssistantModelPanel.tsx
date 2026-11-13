@@ -10,7 +10,7 @@ import { t } from "../../i18n";
 import { api, errorText, sessionPath } from "../../lib/api";
 import { assistantPickKey, assistantSetup, ASSISTANT_START_SERVICE_TIER_FEATURE, type AssistantChat, type AssistantSetup } from "../../lib/assistant-models";
 import { assistantPanel, assistantPickOf } from "../../lib/assistant-panel";
-import { pickEffort, pickLauncher, pickModel, pickServiceTier } from "../../lib/assistant-chat";
+import { pickEffort, pickFast, pickLauncher, pickModel } from "../../lib/assistant-chat";
 import { modelSupportsFast } from "../../lib/launcher-models";
 import { useChosenManager } from "../../lib/manager-choice";
 import type { PanelConfig } from "../../lib/model-panel";
@@ -137,7 +137,7 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
     }
     if (!chat.session) {
       const row = list?.models.find((m) => m.id === config.model);
-      pickServiceTier(key, startServiceTier && config.fast && modelSupportsFast(row) ? "priority" : undefined);
+      pickFast(Boolean(startServiceTier && config.fast && modelSupportsFast(row)));
     }
     return true;
   };
@@ -158,7 +158,7 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
           keepHere(pick);
           effortApplied = patch.effort !== undefined;
         }
-        pickServiceTier(key, patch.fast ? "priority" : undefined);
+        pickFast(patch.fast);
       } else {
         const speed = speedStep(s, patch.fast, true);
         if (!(speed && "service_tier" in speed && (await setServiceTier(s, speed.service_tier)))) return false;
@@ -174,7 +174,7 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
     else {
       pickLauncher(key, undefined);
       pickEffort(key, undefined);
-      pickServiceTier(key, undefined);
+      pickFast(false);
     }
   };
   const onReload = (provider: string) => void readModels(mid, provider, { again: true, first: provider === setup.provider });
