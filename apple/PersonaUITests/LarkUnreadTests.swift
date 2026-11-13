@@ -21,6 +21,14 @@ final class LarkUnreadUITests: XCTestCase {
         XCTAssertTrue(all.waitForExistence(timeout: 20))
         XCTAssertTrue(all.isSelected)
         XCTAssertTrue(app.buttons["feishu-chat-read-001"].firstMatch.waitForExistence(timeout: 15))
+        // The shelf precedes the header and scrolls away; the filter remains reachable below the page bar.
+        app.swipeUp(velocity: .slow)
+        XCTAssertTrue(unread.isHittable)
+        let pinnedY = unread.frame.minY
+        app.swipeUp(velocity: .slow)
+        XCTAssertTrue(unread.isHittable)
+        XCTAssertEqual(unread.frame.minY, pinnedY, accuracy: 2, "The filter must stay pinned while rows scroll")
+        XCTAssertGreaterThanOrEqual(unread.frame.height, 44)
         unread.tapCenter()
         if ProcessInfo.processInfo.environment["PERSONA_EXPECT_UNREAD_CONTINUE"] == "1" {
             let more = app.buttons["feishu-filter-continue"].firstMatch

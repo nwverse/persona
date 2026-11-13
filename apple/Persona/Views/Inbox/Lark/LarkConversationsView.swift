@@ -78,98 +78,90 @@ private struct LarkConversationsPage: View {
                         .listRowSeparator(.hidden)
                         .themedRow()
                 }
-                HStack(spacing: Theme.Space.s) {
-                    FilterChip(title: String(localized: "lark.filter.all"), on: store.filter == .all) { select(.all, proxy: proxy) }
-                        .tapTargetHeight()
-                        .contentShape(.rect)
-                        .accessibilityIdentifier("feishu-filter-all")
-                    FilterChip(title: String(localized: "lark.filter.unread"), on: store.filter == .unread) { select(.unread, proxy: proxy) }
-                        .tapTargetHeight()
-                        .contentShape(.rect)
-                        .accessibilityIdentifier("feishu-filter-unread")
-                }
-                .id("feishu-filters")
-                .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded(.up) } action: {
-                    scroll.filtersHeight = $0 + Theme.Space.s * 2
-                }
-                .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.page, bottom: Theme.Space.s, trailing: Theme.Space.page))
-                .listRowSeparator(.hidden)
-                .themedRow()
                 if store.filter == .all, query.isEmpty, !store.pinned.isEmpty {
                     LarkPinnedShelf(conversations: store.pinned, interaction: $pins, expandable: $canExpandPins) { path.append($0) }
+                        .id("feishu-pins")
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { scroll.shelfChanged($0) }
                         .background(LarkConversationScroll.Finder(scroll: scroll))
                         .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.page, bottom: 0, trailing: Theme.Space.page))
                         .listRowSeparator(.hidden)
                         .themedRow()
                 }
-                if store.conversations.isEmpty, store.nextCursor == nil {
-                    empty
-                        .listRowSeparator(.hidden)
-                } else {
-                    // Once per update: with a query it filters every loaded chat (`listed`), and three places read it.
-                    let rows = filtered
-                    if store.failed {
-                        Button { Task { await store.refresh() } } label: {
-                            Label(store.needsUpgrade ? String(localized: "Update the hub to sync pinned chats · Check Again") : String(localized: "Not updated · Retry"), systemImage: Theme.Icon.retry)
-                                .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        .listRowSeparator(.hidden)
-                    }
-                    let prefetch = query.isEmpty && store.filter == .all ? rows.dropLast(Self.prefetchRows).last?.id : nil
-                    ForEach(rows) { conversation in
-                        NavigationLink(value: conversation) { LarkConversationRow(conversation: conversation, display: display) }
-                            .accessibilityIdentifier("feishu-chat-" + conversation.id)
-                            .id(conversation.id)
-                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { scroll.reader.row(conversation.id, top: $0) }
-                            .onDisappear { scroll.reader.gone(conversation.id) }
-                            .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                if visible, conversation.id == prefetch { Task { await store.more() } }
-                            }
-                            .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.page, bottom: 0, trailing: Theme.Space.page))
-                            .themedRow()
-                    }
-                    if rows.isEmpty, !query.isEmpty, !searchingOn {
-                        EmptyStateView(symbol: Theme.Icon.search, title: String(localized: "No Results for “\(query)”"),
-                                       message: store.nextCursor == nil ? String(localized: "You can search chat names and recent messages. Try another word.")
-                                                                        : String(localized: "Searched the latest \(store.conversations.count) chats."))
+                Section {
+                    if store.conversations.isEmpty, store.nextCursor == nil {
+                        empty
                             .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                    }
-                    if store.nextCursor != nil {
-                        Group {
-                            if store.pageFailed {
-                                Button("Retry [Lark Conversations View 8924c7]") { Task { await store.more() } }.lineLimit(1)
-                            } else if scansPages, searchPages >= Self.searchPageLimit {
-                                Button(store.filter == .unread ? String(localized: "lark.filter.continue") : String(localized: "Search Older Chats")) {
-                                    searchPages = 0; endVisible = true; resumePaging()
-                                }.lineLimit(1)
-                                .accessibilityIdentifier("feishu-filter-continue")
-                            } else {
-                                VStack(spacing: Theme.Space.xs) {
-                                    ProgressView()
-                                    if !query.isEmpty {
-                                        Text("Searched \(store.conversations.count) chats, looking further back")
-                                            .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, Theme.Space.s)
-                                // Loads while it is on screen and goes on while it stays there (a short search's
-                                // results leave it in view); a task keyed on the cursor ran off screen too (#1034).
-                                .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                    endVisible = visible
-                                    if visible { resumePaging() }
-                                }
-                                .onDisappear { endVisible = false }
+                    } else {
+                        // Once per update: with a query it filters every loaded chat (`listed`), and three places read it.
+                        let rows = filtered
+                        if store.failed {
+                            Button { Task { await store.refresh() } } label: {
+                                Label(store.needsUpgrade ? String(localized: "Update the hub to sync pinned chats · Check Again") : String(localized: "Not updated · Retry"), systemImage: Theme.Icon.retry)
+                                    .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                             }
+                            .listRowSeparator(.hidden)
                         }
-                        .frame(maxWidth: .infinity)
-                        .listRowSeparator(.hidden)
+                        let prefetch = query.isEmpty && store.filter == .all ? rows.dropLast(Self.prefetchRows).last?.id : nil
+                        ForEach(rows) { conversation in
+                            NavigationLink(value: conversation) { LarkConversationRow(conversation: conversation, display: display) }
+                                .accessibilityIdentifier("feishu-chat-" + conversation.id)
+                                .id(conversation.id)
+                                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { scroll.reader.row(conversation.id, top: $0) }
+                                .onDisappear { scroll.reader.gone(conversation.id) }
+                                .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                    if visible, conversation.id == prefetch { Task { await store.more() } }
+                                }
+                                .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.page, bottom: 0, trailing: Theme.Space.page))
+                                .themedRow()
+                        }
+                        if rows.isEmpty, !query.isEmpty, !searchingOn {
+                            EmptyStateView(symbol: Theme.Icon.search, title: String(localized: "No Results for “\(query)”"),
+                                           message: store.nextCursor == nil ? String(localized: "You can search chat names and recent messages. Try another word.")
+                                                                            : String(localized: "Searched the latest \(store.conversations.count) chats."))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                        }
+                        if store.nextCursor != nil {
+                            Group {
+                                if store.pageFailed {
+                                    Button("Retry [Lark Conversations View 8924c7]") { Task { await store.more() } }.lineLimit(1)
+                                } else if scansPages, searchPages >= Self.searchPageLimit {
+                                    Button(store.filter == .unread ? String(localized: "lark.filter.continue") : String(localized: "Search Older Chats")) {
+                                        searchPages = 0; endVisible = true; resumePaging()
+                                    }.lineLimit(1)
+                                    .accessibilityIdentifier("feishu-filter-continue")
+                                } else {
+                                    VStack(spacing: Theme.Space.xs) {
+                                        ProgressView()
+                                        if !query.isEmpty {
+                                            Text("Searched \(store.conversations.count) chats, looking further back")
+                                                .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, Theme.Space.s)
+                                    // Loads while it is on screen and goes on while it stays there (a short search's
+                                    // results leave it in view); a task keyed on the cursor ran off screen too (#1034).
+                                    .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                        endVisible = visible
+                                        if visible { resumePaging() }
+                                    }
+                                    .onDisappear { endVisible = false }
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .listRowSeparator(.hidden)
+                        }
                     }
+                } header: {
+                    filters(proxy: proxy)
+                        .id("feishu-filters")
+                        .textCase(nil)
+                        .listRowInsets(EdgeInsets())
                 }
             }
             .listStyle(.plain)
+            .listSectionSpacing(0)
             .accessibilityIdentifier("feishu-conversations")
             .onAppear {
                 store.willChange = { [weak scroll] in scroll?.reader.willChange() }
@@ -296,12 +288,49 @@ private struct LarkConversationsPage: View {
         scroll.resetShelf()
         Task {
             await store.select(filter)
-            proxy.scrollTo("feishu-filters", anchor: .top)
+            let top = filter == .all && query.isEmpty && !store.pinned.isEmpty ? "feishu-pins" : "feishu-filters"
+            proxy.scrollTo(top, anchor: .top)
         }
     }
 
+    /// The section header pins below the page bar; the pinned shelf remains ordinary scrolling content above it.
+    private func filters(proxy: ScrollViewProxy) -> some View {
+        HStack(spacing: 0) {
+            filter(.all, title: String(localized: "lark.filter.all"), proxy: proxy)
+            filter(.unread, title: String(localized: "lark.filter.unread"), proxy: proxy)
+        }
+        .padding(Theme.Space.xxs)
+        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control))
+        .padding(.horizontal, Theme.Space.page)
+        .padding(.vertical, Theme.Space.s)
+        .background(Theme.pageBackground)
+    }
+
+    private func filter(_ value: LarkConversationsModel.Filter, title: String, proxy: ScrollViewProxy) -> some View {
+        let selected = store.filter == value
+        return Button {
+            select(value, proxy: proxy)
+            Haptics.tap()
+        } label: {
+            Text(title)
+                .font(selected ? Theme.Font.secondaryStrong : Theme.Font.secondary)
+                // Section headers supply a secondary foreground; explicit semantic colors keep these controls legible.
+                .foregroundStyle(selected ? Color.primary : Color.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, Theme.Space.s)
+                .padding(.vertical, Theme.Space.xs)
+                .tapTargetHeight()
+                .background(selected ? Theme.Fill.pressed : .clear, in: .rect(cornerRadius: Theme.Radius.control))
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("feishu-filter-" + value.rawValue)
+    }
+
     private func shelfPassed(_ offset: Double) -> Bool {
-        scroll.shelfHeight > 0 && offset >= Double(scroll.filtersHeight + scroll.shelfHeight) - LarkPinnedInteraction.topTolerance
+        scroll.shelfHeight > 0 && offset >= Double(scroll.shelfHeight) - LarkPinnedInteraction.topTolerance
     }
 
     private func updatePins(_ offset: Double) {
