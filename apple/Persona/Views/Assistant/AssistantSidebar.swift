@@ -792,6 +792,8 @@ struct AssistantSidebar: View {
     #endif
     @State private var ending: Session?
     @State private var renaming: Session?
+    /// The chat whose Pin / Unpin confirmation is open (#6214): the menu asks before the hub call.
+    @State private var leaderConfirm: Session?
     @State private var showArchived = false
     @State private var autoList: AutoConversationsRoute?
     @State private var feed = SidebarFeed()
@@ -873,6 +875,30 @@ struct AssistantSidebar: View {
         .task(id: out ? "\(all.count)|\(model.assistantManagerID ?? "")" : "") { if out { await taskChats.refresh(model.api) } }
         .confirmClose($ending)
         .renameSessionAlert($renaming)
+        .confirmationDialog(
+            leaderConfirm.map { session in
+                model.assistantLeaders.contains(session.sessionID)
+                    ? String(localized: "Unpin Confirmation Title [Leader Actions 6214]")
+                    : String(localized: "Pin Confirmation Title [Leader Actions 6214]")
+            } ?? "",
+            isPresented: Binding(get: { leaderConfirm != nil }, set: { if !$0 { leaderConfirm = nil } }),
+            titleVisibility: .visible, presenting: leaderConfirm) { session in
+            // The hub stays the only state source: only the second choice calls make/end (#6214).
+            let lead = model.assistantLeaders.contains(session.sessionID)
+            Button(lead ? String(localized: "Unpin [Assistant Sidebar b7c40e]")
+                       : String(localized: "Pin [Assistant Sidebar 6d1f2a]")) {
+                Task { await model.setDirectionLead(session.sessionID, !lead) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { session in
+            if model.assistantLeaders.contains(session.sessionID) {
+                let title = session.title.isEmpty || session.title == "Claude Code"
+                    ? String(localized: "New Chat [Quick Actions ea4b29]") : session.title
+                Text(String(localized: "Unpin Confirmation Message \(title) [Leader Actions 6214]"))
+            } else {
+                Text(String(localized: "Pin Confirmation Message [Leader Actions 6214]"))
+            }
+        }
         .sheet(item: $autoList) { route in
             AutoConversationsView(source: route.source) { key in
                 autoList = nil
@@ -1397,6 +1423,9 @@ struct AssistantSidebar: View {
         let counts: String? = model.assistantLeaders.contains(s.sessionID)
             ? model.directionCounts[s.sessionID].flatMap { DirectionCountsText.label(working: $0.working, needsYou: $0.needsYou) }
             : nil
+        // One activity mark for the whole row (#6230): it spins whether this conversation runs its own turn or only the
+        // Agents under it work; the row's own needs-you / unread dot still takes precedence.
+        let leadWorking = model.assistantLeaders.contains(s.sessionID) && ((model.directionCounts[s.sessionID]?.working ?? 0) > 0)
         // What opened it when Persona did (#5195): the rule All Chats' filters use, so its mark and its filter agree.
         let source = isMain ? nil : AutoConversations.source(of: s, tasks: taskChats.known(on: model.api))
         return Button { open(s.key) } label: {
@@ -1417,7 +1446,7 @@ struct AssistantSidebar: View {
                 if let counts {
                     Text(counts).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                 }
-                RowStateMark(state: s.state)
+                RowStateMark(state: s.state, working: leadWorking)
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Sidebar.rowPadding)
@@ -1452,10 +1481,10 @@ struct AssistantSidebar: View {
             if isMain { MainConversationMenu(key: s.key) } // Compact context, New Main Chat… (#1762)
             if !kept {
                 // A direction is the hub's, for every device (#4331): the long press makes a conversation one, or ends
-                // the direction there (#4331, `make` / `end`).
+                // the direction there (#4331, `make` / `end`). It asks a second time first (#6214).
                 let lead = model.assistantLeaders.contains(s.sessionID)
                 Button {
-                    Task { await model.setDirectionLead(s.sessionID, !lead) }
+                    leaderConfirm = s
                 } label: {
                     lead ? Label("Unpin [Assistant Sidebar b7c40e]", systemImage: Theme.Icon.unpin)
                         : Label("Pin [Assistant Sidebar 6d1f2a]", systemImage: Theme.Icon.pin)

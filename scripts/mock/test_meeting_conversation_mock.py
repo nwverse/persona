@@ -44,6 +44,81 @@ class Conversation(Hub):
         return self.wait(lambda: (r := self.live(rid).get("room")) and r["state"] == "ready" and r, "the room")
 
 
+def websocket(self, path="/api/v1/ws", headers=None, status=101):
+    """An app's socket: a function giving its next frame of `type` (None when none comes within `wait` seconds)."""
+    port = int(self.base.rsplit(":", 1)[1])
+    sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+    self.addCleanup(sock.close)
+    key = base64.b64encode(os.urandom(16)).decode()
+    sock.sendall((f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\n"
+                  f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
+                  + "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items()) + "\r\n").encode())
+    buf = bytearray()
+
+    def fill(n, end):
+        while len(buf) < n:
+            left = end - time.monotonic()
+            if left <= 0:
+                return False
+            sock.settimeout(left)
+            try:
+                chunk = sock.recv(65536)
+            except (socket.timeout, TimeoutError):
+                return False
+            if not chunk:
+                return False
+            buf.extend(chunk)
+        return True
+    end = time.monotonic() + 5
+    while b"\r\n\r\n" not in buf:
+        self.assertTrue(fill(len(buf) + 1, end), "no upgrade")
+    head, _, rest = bytes(buf).partition(b"\r\n\r\n")
+    self.assertIn(f" {status} ".encode(), head)
+    if status != 101: return head
+    buf[:] = rest
+
+    def frame(end):
+        if not fill(2, end):
+            return None
+        n, off = buf[1] & 0x7F, 2
+        if n == 126:
+            if not fill(4, end):
+                return None
+            n, off = int.from_bytes(buf[2:4], "big"), 4
+        elif n == 127:
+            if not fill(10, end):
+                return None
+            n, off = int.from_bytes(buf[2:10], "big"), 10
+        if not fill(off + n, end):
+            return None
+        op = buf[0] & 15
+        payload = bytes(buf[off:off + n])
+        del buf[:off + n]
+        if op == 8: return {"type": "close", "code": int.from_bytes(payload[:2], "big")}
+        if op == 10: return {"type": "pong"}
+        return json.loads(payload)
+
+    def next_of(kind, wait=3.0, where=lambda f: True):
+        end = time.monotonic() + wait
+        while True:
+            f = frame(end)
+            if f is None:
+                return None
+            if f.get("type") == kind and where(f):
+                return f
+    def send(value, op=None, claim=None):
+        """Sends value as one frame; claim: the length its header says instead (a frame over a limit, unsent)."""
+        payload = value if isinstance(value, bytes) else json.dumps(value).encode()
+        op = op if op is not None else 2 if isinstance(value, bytes) else 1
+        n = len(payload) if claim is None else claim
+        mask = os.urandom(4)
+        head = bytes([0x80 | op]) + (bytes([0x80 | n]) if n < 126 else b"\xfe" + n.to_bytes(2, "big") if n < 65536 else b"\xff" + n.to_bytes(8, "big"))
+        sock.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+    next_of.send = send
+    next_of.close = sock.close
+    return next_of
+
+
 class MeetingConversationMockTests(Conversation, unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -55,63 +130,7 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.call("POST", "/mock/meeting_conversation", {"room": "ok", "end_seconds": 180, "room_seconds": 2})
 
     def websocket(self):
-        """An app's socket: a function giving its next frame of `type` (None when none comes within `wait` seconds)."""
-        port = int(self.base.rsplit(":", 1)[1])
-        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
-        self.addCleanup(sock.close)
-        key = base64.b64encode(os.urandom(16)).decode()
-        sock.sendall((f"GET /api/v1/ws HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\n"
-                      f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
-        buf = bytearray()
-
-        def fill(n, end):
-            while len(buf) < n:
-                left = end - time.monotonic()
-                if left <= 0:
-                    return False
-                sock.settimeout(left)
-                try:
-                    chunk = sock.recv(65536)
-                except (socket.timeout, TimeoutError):
-                    return False
-                if not chunk:
-                    return False
-                buf.extend(chunk)
-            return True
-        end = time.monotonic() + 5
-        while b"\r\n\r\n" not in buf:
-            self.assertTrue(fill(len(buf) + 1, end), "no upgrade")
-        head, _, rest = bytes(buf).partition(b"\r\n\r\n")
-        self.assertIn(b" 101 ", head)
-        buf[:] = rest
-
-        def frame(end):
-            if not fill(2, end):
-                return None
-            n, off = buf[1] & 0x7F, 2
-            if n == 126:
-                if not fill(4, end):
-                    return None
-                n, off = int.from_bytes(buf[2:4], "big"), 4
-            elif n == 127:
-                if not fill(10, end):
-                    return None
-                n, off = int.from_bytes(buf[2:10], "big"), 10
-            if not fill(off + n, end):
-                return None
-            payload = bytes(buf[off:off + n])
-            del buf[:off + n]
-            return json.loads(payload)
-
-        def next_of(kind, wait=3.0, where=lambda f: True):
-            end = time.monotonic() + wait
-            while True:
-                f = frame(end)
-                if f is None:
-                    return None
-                if f.get("type") == kind and where(f):
-                    return f
-        return next_of
+        return websocket(self)
 
     def test_feature_and_the_uploads_room(self):
         self.assertIn("meeting_conversation", self.call("GET", "/api/v1/health")[1]["features"])
