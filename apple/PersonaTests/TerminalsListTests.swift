@@ -31,7 +31,7 @@ import Testing
         #expect(rows[1].pane.terminal == "pane:w1:p2", "a pane without its address gets the pane: one")
         #expect(rows[1].pane.foreground == "vim")
         #expect(TerminalsList.hasFinished(list))
-        #expect(TerminalsList.spaces(list).map(\.label) == ["app", "w2"], "a workspace without a label is named by its id")
+        #expect(TerminalsList.spaces(list, newSpace: true).map(\.label) == ["app", "w2"], "a workspace without a label is named by its id")
         #expect(TerminalsList.folder("/home/me/app") == "app")
         #expect(TerminalsList.folder(nil).isEmpty)
     }
@@ -49,15 +49,16 @@ import Testing
 
     @Test func noNewTerminalWhereTheHostCannotOpenOne() {
         let list = panes(#"{"hosts":[{"kind":"orca","new_tab":false,"workspaces":[{"id":"w1","label":"app"}],"panes":[]}]}"#)
-        #expect(TerminalsList.spaces(list).isEmpty)
+        #expect(TerminalsList.spaces(list, newSpace: true).isEmpty)
         #expect(!TerminalsList.hasFinished(list))
     }
 
     @Test func anEngineWithNoWorkspaceOffersTheHomeFolder() {
         let list = panes(#"{"hosts":[{"kind":"herdr","new_tab":true,"workspaces":[],"panes":[]},{"kind":"orca","new_tab":false,"workspaces":[],"panes":[]}]}"#)
-        let spaces = TerminalsList.spaces(list)
+        let spaces = TerminalsList.spaces(list, newSpace: true)
         #expect(spaces.map(\.id) == [""], "one home-folder entry, for the host that opens tabs only")
         #expect(spaces.first?.kind == "herdr")
+        #expect(TerminalsList.spaces(list, newSpace: false).isEmpty, "a hub without pane_new_space: the Agent line instead")
         #expect(TerminalsList.rows(list).isEmpty)
     }
 

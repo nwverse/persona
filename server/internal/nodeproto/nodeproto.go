@@ -105,6 +105,9 @@ const (
 	// PaneCwd: panes.new takes cwd, a folder to start the new terminal in (the file page's Open Terminal Here, #5832);
 	// without it the hub answers node_outdated rather than open the terminal somewhere else.
 	PaneCwd = "pane_cwd"
+	// PaneNewSpace: panes.new with cwd on a computer whose engine opens tabs but has no workspace opens a new workspace
+	// there (#6362). The hub answers node_outdated to a request that asks for this (new_space) when the node lacks it.
+	PaneNewSpace = "pane_new_space"
 	// NodeUpdateIdle: node.update.commit waits only for what the restart would interrupt, the conversations the node
 	// runs headless and launches still starting; terminal Agents and their background work do not hold it back
 	// (docs/operations/node-update.md "Usage"). The hub waits on the old rule for a node without it, which refuses
@@ -134,7 +137,7 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle}
+var Announced = []string{ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, AssistantConfigDir, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"
