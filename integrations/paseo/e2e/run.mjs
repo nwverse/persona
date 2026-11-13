@@ -308,6 +308,20 @@ check('resumed (session.start): the same agent, under the same id', resumed?.ses
 check('one row for the conversation throughout: never one under its transcript id', claudeSid && !underTranscript() &&
   node.sessions().filter((s) => s.cwd === work).length === 1, node.sessions().filter((s) => s.cwd === work).map((s) => s.session_id).join(','))
 
+// A branch of it (#6298): a copy of its transcript, a session not running; its first message continues it in Paseo.
+await until('idle for the branch', () => ['done', 'idle'].includes(listed()?.status), 60_000).catch(() => {})
+check('the session can be branched', listed()?.can_fork === true, JSON.stringify(listed()?.can_fork))
+const branch = (await tryCall('session.fork', { session_id: sid, at_item_id: '' }, 30_000))?.session_id
+await until('the branch listed', () => node.sessions().some((s) => s.session_id === branch), 30_000).catch(() => {})
+await tryCall('session.send', { session_id: branch, text: 'Branch E2E_HELLO', client_msg_id: 'cm-e2e-fork' }, 90_000)
+await until('the branch answered', async () => (await texts(branch)).some((i) => i.client_msg_id === 'cm-e2e-fork') &&
+  (await texts(branch)).filter((i) => i.text === 'Hello from the mock model, step by step.').length >= 2, 90_000).catch(() => {})
+const branchRow = node.sessions().find((s) => s.session_id === branch)
+const branchSaid = (await texts(branch)).filter((i) => i.role === 'user' && i.kind === 'text').map((i) => [i.text, i.client_msg_id ?? null])
+check('the branch goes on in Paseo under its own id, the original as it was', Boolean(branch) && branch !== sid && branchRow?.source_kind === 'runtime' &&
+  branchSaid.some(([t, cm]) => t === 'Branch E2E_HELLO' && cm === 'cm-e2e-fork') && branchSaid.some(([t]) => t === 'Back again E2E_HELLO') &&
+  !(await texts()).some((i) => i.text === 'Branch E2E_HELLO') && Boolean(listed()), `${branch} ${branchRow?.source_kind} ${JSON.stringify(branchSaid)}`)
+
 // ---- agents started in Paseo itself, never driven from the phone ----
 
 // Paseo runs Claude Code's command line itself, so such an agent's transcript reads like a script's one-shot run, which

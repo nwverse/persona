@@ -3,178 +3,274 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import worker from "./worker.mjs";
-import { RELEASES_URL, slimReleases, compareVersions, releaseExcerpt } from "./releases.mjs";
-import { directDownload, fileSize, latestRelease, partitionAssets } from "./public/releases/releases.js";
+import { RELEASES_API, FRESH_MS, classifyAsset, compareTags, slimReleases, summarizeNotes } from "./releases.mjs";
+import {
+  detectPlatform, downloadFor, formatSize, isDirectDownload, latestRelease, countsLine,
+} from "./public/releases/model.js";
+
+const DL = "https://github.com/nwverse/persona/releases/download/";
+const asset = (tag, name, size = 1000, extra = {}) => ({ name, size, state: "uploaded", browser_download_url: `${DL}${tag}/${name}`, ...extra });
+const release = (tag, extra = {}) => ({
+  tag_name: tag, draft: false, prerelease: false, published_at: "2026-11-12T05:00:00Z",
+  html_url: `https://github.com/nwverse/persona/releases/tag/${tag}`, body: "", assets: [], ...extra,
+});
+const full = (tag, v) => [
+  asset(tag, `Persona-${v}-android.apk`, 21111552, { digest: "sha256:" + "a".repeat(64) }),
+  asset(tag, `Persona-${v}-darwin-arm64.tar.gz`, 117300513),
+  asset(tag, `Persona-${v}-darwin-amd64.tar.gz`),
+  asset(tag, `Persona-${v}-linux-amd64.tar.gz`),
+  asset(tag, `Persona-${v}-linux-arm64.tar.gz`),
+  asset(tag, `Persona-${v}-windows-amd64.zip`),
+  asset(tag, `Persona-${v}-windows-arm64.zip`),
+  asset(tag, `Persona-${v}-web.tar.gz`),
+  asset(tag, "personad-darwin-arm64.gz"),
+  asset(tag, "SHA256SUMS"),
+];
+
+// ---------- metadata ----------
+
+test("only published semver product releases are kept, newest first, latest by version", () => {
+  const data = slimReleases([
+    release("promo-v1", { assets: [asset("promo-v1", "persona-en.mp4")] }),
+    release("v0.2.1", { published_at: "2026-11-11T08:00:00Z" }),
+    release("v0.10.0", { published_at: "2026-11-10T08:00:00Z" }), // older date, higher version
+    release("v0.3.0", { published_at: "2026-11-12T05:00:00Z" }),
+    release("v0.4.0-rc.1", { published_at: "2026-11-13T05:00:00Z", prerelease: true }),
+    release("v9.9.9", { draft: true }),
+    release("v1.0.0", { html_url: "https://example.com/elsewhere" }),
+    release("v0.3.0"), // duplicate
+  ], new Date("2026-11-13T06:00:00Z"));
+  assert.deepEqual(data.releases.map((r) => r.tag), ["v0.4.0-rc.1", "v0.3.0", "v0.2.1", "v0.10.0"]);
+  assert.equal(data.latest, "v0.10.0");
+  assert.equal(data.releases[0].prerelease, true);
+  assert.equal(data.fetched_at, "2026-11-13T06:00:00.000Z");
+  assert.equal(data.stale, false);
+});
+
+test("versions compare by semver, a prerelease before its release", () => {
+  const sorted = ["v1.0.0", "v0.9.10", "v1.0.0-rc.2", "v0.9.9", "v1.0.0-rc.10", "v1.0.0-beta"].sort(compareTags);
+  assert.deepEqual(sorted, ["v0.9.9", "v0.9.10", "v1.0.0-beta", "v1.0.0-rc.2", "v1.0.0-rc.10", "v1.0.0"]);
+});
+
+test("files are classified by name, with GitHub's checksum kept", () => {
+  const data = slimReleases([release("v0.3.0", { assets: full("v0.3.0", "0.3.0") })]);
+  const byName = Object.fromEntries(data.releases[0].assets.map((a) => [a.name, a]));
+  assert.deepEqual(byName["Persona-0.3.0-android.apk"], {
+    name: "Persona-0.3.0-android.apk", size: 21111552, url: `${DL}v0.3.0/Persona-0.3.0-android.apk`,
+    kind: "app", platform: "android", sha256: "a".repeat(64),
+  });
+  assert.equal(byName["Persona-0.3.0-darwin-arm64.tar.gz"].platform, "macos");
+  assert.equal(byName["Persona-0.3.0-darwin-arm64.tar.gz"].arch, "arm64");
+  assert.equal(byName["Persona-0.3.0-windows-amd64.zip"].kind, "computer");
+  assert.equal(byName["Persona-0.3.0-web.tar.gz"].kind, "web");
+  assert.deepEqual(classifyAsset("persona-node-linux-arm64.gz", "0.3.0"), { kind: "component", component: "persona-node", platform: "linux", arch: "arm64" });
+  assert.equal(classifyAsset("SHA256SUMS", "0.3.0").kind, "checksum");
+  assert.equal(classifyAsset("install.sh", "0.3.0").kind, "installer");
+  assert.equal(classifyAsset("personad-wechat-linux-amd64.gz", "0.3.0").kind, "other");
+  assert.equal(classifyAsset("Persona-0.2.0-android.apk", "0.3.0").kind, "other", "another version's file is not this one's app");
+});
+
+test("a file is dropped unless its address is exactly GitHub's download for this repository, tag and name", () => {
+  const tag = "v0.3.0";
+  const hostile = [
+    { ...asset(tag, "a.apk"), browser_download_url: "https://evil.example/nwverse/persona/releases/download/v0.3.0/a.apk" },
+    { ...asset(tag, "a.apk"), browser_download_url: `${DL}v0.2.0/a.apk` },
+    { ...asset(tag, "b.apk"), browser_download_url: `${DL}v0.3.0/a.apk` },
+    { ...asset(tag, "a.apk"), browser_download_url: `https://github.com/other/persona/releases/download/v0.3.0/a.apk` },
+    { ...asset(tag, "a.apk"), browser_download_url: `${DL}v0.3.0/a.apk?x=1` },
+    asset(tag, "../x.apk"),
+    asset(tag, "<script>.apk"),
+    asset(tag, "a.apk", -1),
+    asset(tag, "a.apk", 1.5),
+    asset(tag, "a.apk", 10, { state: "starter" }),
+    null,
+  ];
+  const data = slimReleases([release(tag, { assets: [...hostile, asset(tag, "ok.apk")] })]);
+  assert.deepEqual(data.releases[0].assets.map((a) => a.name), ["ok.apk"]);
+});
+
+test("the notes become counts and a few feature titles, without handles, links or PR numbers", () => {
+  const body = [
+    "## What's Changed",
+    "* feat(android): a new board home by @someone in https://github.com/nwverse/persona/pull/1",
+    "* feat(android): second android feature by @someone in https://github.com/nwverse/persona/pull/2",
+    "* feat(web): select skills from the mention menu (#5473) by @x-y in https://github.com/nwverse/persona/pull/3",
+    "* fix(ios): keep the list in place by @a in https://github.com/nwverse/persona/pull/4",
+    "* fix: thanks @helper, see https://example.com/x by @a in https://github.com/nwverse/persona/pull/5",
+    "* docs(site): words by @a in https://github.com/nwverse/persona/pull/6",
+    "* plain line without a type by @dependabot[bot] in https://github.com/nwverse/persona/pull/7",
+    "* feat(assistant): <b>bold</b> idea by @a in https://github.com/nwverse/persona/pull/8",
+    "* feat(kb): one more by @a in https://github.com/nwverse/persona/pull/9",
+    "* feat(tasks): and another by @a in https://github.com/nwverse/persona/pull/10",
+    "## New Contributors",
+    "* feat(never): counted by @new in https://github.com/nwverse/persona/pull/11",
+    "**Full Changelog**: https://github.com/nwverse/persona/compare/v0.2.1...v0.3.0",
+  ].join("\n");
+  const s = summarizeNotes(body);
+  assert.deepEqual(s.counts, { features: 6, fixes: 2, other: 2 });
+  assert.deepEqual(s.highlights, [
+    { scope: "android", title: "A new board home" },
+    { scope: "web", title: "Select skills from the mention menu" },
+    { scope: "assistant", title: "Bbold/b idea" },
+    { scope: "kb", title: "One more" },
+  ]);
+  const text = JSON.stringify(s);
+  assert.doesNotMatch(text, /@|https?:|#\d|</);
+});
+
+test("a release with no conventional features highlights its fixes; no notes give nothing", () => {
+  assert.deepEqual(summarizeNotes("* fix(web): one\n* fix: two").highlights, [{ scope: "web", title: "One" }, { title: "Two" }]);
+  assert.deepEqual(summarizeNotes(undefined), { counts: { features: 0, fixes: 0, other: 0 }, highlights: [] });
+});
+
+// ---------- the route ----------
 
 const assets = { fetch: async (request) => new Response("asset " + new URL(request.url).pathname) };
-const page = (path = "/releases/data.json", method = "GET") => worker.fetch(new Request("https://site.example" + path, { method }), { ASSETS: assets }, { waitUntil() {} });
-const url = (tag, name) => `https://github.com/nwverse/persona/releases/download/${tag}/${name}`;
-function release(tag, extra = {}) {
-  return {
-    tag_name: tag, name: tag, draft: false, prerelease: tag.includes("-"), published_at: "2026-11-12T05:06:33Z",
-    html_url: `https://github.com/nwverse/persona/releases/tag/${tag}`,
-    assets: [
-      { name: `Persona-${tag.slice(1)}-darwin-arm64.tar.gz`, size: 117300513, browser_download_url: url(tag, `Persona-${tag.slice(1)}-darwin-arm64.tar.gz`) },
-      { name: `Persona-${tag.slice(1)}-android.apk`, size: 21111552, browser_download_url: url(tag, `Persona-${tag.slice(1)}-android.apk`) },
-      { name: "SHA256SUMS", size: 1882, browser_download_url: url(tag, "SHA256SUMS") },
-      { name: "persona-hub-linux-amd64.gz", size: 28361964, browser_download_url: url(tag, "persona-hub-linux-amd64.gz") },
-    ],
-    body: "A huge release body is deliberately not copied to the website.", ...extra,
-  };
-}
-function edge() {
+const get = (path = "/releases/data.json", method = "GET") =>
+  worker.fetch(new Request("https://site.example" + path, { method }), { ASSETS: assets }, { waitUntil() {} });
+
+function fakeEdge(handler) {
   const store = new Map();
+  const calls = [];
+  const saved = { caches: globalThis.caches, fetch: globalThis.fetch };
   globalThis.caches = { default: {
     async match(key) { const r = store.get(String(key)); return r ? r.clone() : undefined; },
-    async put(key, r) { store.set(String(key), r.clone()); },
+    async put(key, res) { store.set(String(key), res.clone()); },
   } };
-  return store;
-}
-function upstream(handler) {
-  const calls = [];
-  globalThis.fetch = async (input, init) => { calls.push({ url: String(input), init }); return handler(String(input), init); };
-  return calls;
+  globalThis.fetch = async (url, init) => { calls.push({ url: String(url), init }); return handler(String(url), init); };
+  return { calls, restore() { globalThis.caches = saved.caches; globalThis.fetch = saved.fetch; } };
 }
 
-test("a short release summary is inert text without contributors or generated links", () => {
-  const summary = releaseExcerpt([
-    "## What's Changed",
-    "* feat(tasks): reuse a workspace by @someone in https://github.com/nwverse/persona/pull/1",
-    "* fix(ui): keep downloads readable (#123)",
-    "* feat(api): an addition (#99)",
-    "* feat(web): another addition",
-    "* feat(ios): not part of the short excerpt",
-    "**Full Changelog**: https://github.com/nwverse/persona/compare/v1...v2",
-  ].join("\n"));
-  assert.equal(summary, "新功能 · reuse a workspace\n新功能 · an addition\n新功能 · another addition\n修复 · keep downloads readable");
-  assert.ok(!summary.includes("@") && !summary.includes("http") && !summary.includes("Full Changelog"));
-  assert.equal(releaseExcerpt("<script>alert(1)</script>"), "");
-  assert.equal(releaseExcerpt("## What's Changed\n**Full Changelog**: https://example.com"), "");
+test("/releases/data.json reads GitHub once while fresh and serves only metadata", async (t) => {
+  const edge = fakeEdge(() => Response.json([release("v0.3.0", { assets: full("v0.3.0", "0.3.0"), body: "* feat(web): x by @a in https://x" })]));
+  t.after(edge.restore);
+  const first = await get();
+  assert.equal(first.status, 200);
+  assert.match(first.headers.get("cache-control"), /max-age=300/);
+  const data = await first.json();
+  assert.equal(data.latest, "v0.3.0");
+  assert.equal(data.releases[0].body, undefined, "the notes themselves are not passed on");
+  for (const a of data.releases[0].assets) assert.ok(a.url.startsWith(DL + "v0.3.0/"), a.url);
+  await get();
+  assert.equal(edge.calls.length, 1);
+  assert.equal(edge.calls[0].url, RELEASES_API);
+  assert.equal(edge.calls[0].init.headers["user-agent"], "persona-site");
 });
 
-test("only published semver releases appear; the newest stable semver is latest", () => {
-  const data = slimReleases([
-    release("v0.3.0"),
-    release("v0.10.0", { published_at: "2026-11-01T00:00:00Z" }),
-    release("v0.4.0-rc.1", { published_at: "2026-11-13T00:00:00Z" }),
-    release("promo-v1", { prerelease: false, published_at: "2026-11-14T00:00:00Z" }),
-    release("v9.0.0", { draft: true }),
-    release("v0.2.0", { prerelease: false, published_at: null }),
-    release("v0.1.0", { prerelease: true }),
-    release("v0.2.1", { published_at: "2026-11-11T00:00:00Z" }),
-  ]);
-  assert.equal(data.latest, "v0.10.0", "0.10 is newer than 0.3, even when its release was created earlier");
-  assert.deepEqual(data.releases.map((r) => r.tag), ["v0.4.0-rc.1", "v0.3.0", "v0.2.1", "v0.10.0"]);
-  assert.equal(data.releases[0].prerelease, true);
-  assert.equal(data.releases[1].body, undefined, "the huge generated GitHub release body is not sent to browsers");
-  assert.equal(data.releases[1].assets[0].url, url("v0.3.0", "Persona-0.3.0-darwin-arm64.tar.gz"));
-  assert.ok(compareVersions("v1.0.0", "v1.0.0-rc.1") > 0);
-  assert.ok(compareVersions("v1.0.0-rc.10", "v1.0.0-rc.2") > 0);
+test("a stale copy outlives GitHub, marked; with no copy the route answers 503", async (t) => {
+  let up = true;
+  const edge = fakeEdge(() => (up ? Response.json([release("v0.3.0")]) : new Response("down", { status: 502 })));
+  t.after(edge.restore);
+  const realNow = Date.now;
+  t.after(() => { Date.now = realNow; });
+  await get();
+  up = false;
+  Date.now = () => realNow() + FRESH_MS + 1000;
+  const stale = await get();
+  assert.equal(stale.status, 200);
+  const data = await stale.json();
+  assert.equal(data.stale, true);
+  assert.equal(data.latest, "v0.3.0");
+  assert.match(stale.headers.get("cache-control"), /max-age=60/);
+  edge.restore();
+
+  const empty = fakeEdge(() => { throw new Error("offline"); });
+  t.after(empty.restore);
+  const none = await get();
+  assert.equal(none.status, 503);
+  assert.equal(none.headers.get("cache-control"), "no-store");
+  assert.equal((await none.json()).releases_page, "https://github.com/nwverse/persona/releases");
 });
 
-test("a download is never a proxy, external host, malformed path or arbitrary scheme", () => {
-  const good = release("v0.3.0");
-  const bad = (name, browser_download_url) => release("v0.3.0", { assets: [{ name, size: 1, browser_download_url }] });
-  for (const item of [
-    bad("Persona-0.3.0-linux-amd64.tar.gz", "https://site.example/dl/personad.gz"),
-    bad("evil.gz", "https://example.com/nwverse/persona/releases/download/v0.3.0/evil.gz"),
-    bad("evil.gz", "https://github.com.evil.example/nwverse/persona/releases/download/v0.3.0/evil.gz"),
-    bad("evil.gz", "https://github.com/nwverse/persona/releases/download/v0.3.0/evil.gz?host=proxy"),
-    bad("evil.gz", "https://github.com/nwverse/persona/releases/download/v0.3.0/other.gz"),
-    bad("../evil.gz", url("v0.3.0", "../evil.gz")),
-    bad("evil.gz", "javascript:alert(1)"),
-  ]) {
-    const data = slimReleases([item]);
-    assert.deepEqual(data.releases[0].assets, [], JSON.stringify(item.assets));
-  }
-  assert.equal(slimReleases([good]).releases[0].assets.length, 4);
-  for (const a of slimReleases([good]).releases[0].assets) {
-    assert.ok(a.url.startsWith("https://github.com/nwverse/persona/releases/download/"));
-    assert.equal(a.url.startsWith("https://site.example"), false);
-  }
+test("a new release replaces the old copy after it expires, without a site deployment", async (t) => {
+  let list = [release("v0.3.0")];
+  const edge = fakeEdge(() => Response.json(list));
+  t.after(edge.restore);
+  const realNow = Date.now;
+  t.after(() => { Date.now = realNow; });
+  assert.equal((await (await get()).json()).latest, "v0.3.0");
+  list = [release("v0.4.0", { published_at: "2026-11-13T05:00:00Z" }), release("v0.3.0")];
+  assert.equal((await (await get()).json()).latest, "v0.3.0", "still fresh");
+  Date.now = () => realNow() + FRESH_MS + 1000;
+  assert.equal((await (await get()).json()).latest, "v0.4.0");
 });
 
-test("the page labels common packages and folds server / CLI artifacts", () => {
-  const data = slimReleases([release("v0.3.0")]);
-  const groups = partitionAssets(latestRelease(data));
-  assert.deepEqual(groups.android.map((a) => a.name), ["Persona-0.3.0-android.apk"]);
-  assert.deepEqual(groups.desktop.map((a) => a.name), ["Persona-0.3.0-darwin-arm64.tar.gz"]);
-  assert.deepEqual(groups.other.map((a) => a.name), ["persona-hub-linux-amd64.gz"]);
-  assert.equal(groups.checksums[0].name, "SHA256SUMS");
-  assert.equal(fileSize(117300513), "112 MB");
-  assert.equal(directDownload({ url: "/dl/a.gz" }), "");
-  assert.equal(directDownload({ url: "https://example.com/a.gz" }), "");
-});
-
-test("release metadata is fetched once while fresh, and a stale copy outlives GitHub", async () => {
-  const store = edge();
-  let fail = false;
-  const calls = upstream(() => fail ? new Response("down", { status: 502 }) : Response.json([release("v0.3.0")]));
-  let response = await page();
-  assert.equal(response.status, 200);
-  const first = await response.json();
-  assert.equal(first.latest, "v0.3.0");
-  assert.equal(first.stale, undefined);
-  assert.equal(calls[0].url, RELEASES_URL);
-  assert.equal(calls[0].init.headers.accept, "application/vnd.github+json");
-  assert.equal(calls[0].init.headers.authorization, undefined, "public metadata needs no token");
-  await page();
-  assert.equal(calls.length, 1);
-  const [key, cached] = [...store.entries()][0];
-  const old = await cached.json();
-  store.set(key, Response.json({ ...old, fetched_at: new Date(Date.now() - 3600_000).toISOString() }));
-  fail = true;
-  response = await page();
-  const stale = await response.json();
-  assert.equal(stale.stale, true);
-  assert.equal(stale.latest, "v0.3.0");
-  assert.equal(calls.length, 2);
-});
-
-test("a newly published release replaces the cached metadata after expiry", async () => {
-  const store = edge();
-  let current = [release("v0.3.0")];
-  upstream(() => Response.json(current));
-  assert.equal((await (await page()).json()).latest, "v0.3.0");
-  current = [release("v0.3.1", { published_at: "2026-11-13T05:06:33Z" }), ...current];
-  assert.equal((await (await page()).json()).latest, "v0.3.0", "fresh cache does not fetch again");
-  const [key, cached] = [...store.entries()][0];
-  const old = await cached.json();
-  store.set(key, Response.json({ ...old, fetched_at: new Date(Date.now() - 3600_000).toISOString() }));
-  const updated = await (await page()).json();
-  assert.equal(updated.latest, "v0.3.1");
-  assert.equal(updated.releases[1].tag, "v0.3.0");
-});
-
-test("without a cached list GitHub errors are recoverable and writes are refused", async () => {
-  edge();
-  upstream(() => { throw new Error("unreachable"); });
-  const response = await page();
-  assert.equal(response.status, 503);
-  assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.equal((await response.json()).releases_url, "https://github.com/nwverse/persona/releases");
-  upstream(() => Response.json([release("promo-v1", { prerelease: false })]));
-  assert.equal((await page()).status, 503, "a media-only list is not a product release history");
-  assert.equal((await page("/releases/data.json", "POST")).status, 405);
-  const head = await page("/releases/data.json", "HEAD");
-  assert.equal(head.status, 503);
-});
-
-test("the page itself is static and no release package route exists", async () => {
-  for (const path of ["/releases/", "/releases", "/releases/download/v0.3.0/personad.gz", "/releases/data.json.bak"]) {
-    const response = await worker.fetch(new Request("https://site.example" + path), { ASSETS: assets }, {});
-    assert.equal(await response.text(), "asset " + path, path);
-  }
-  const source = await readFile(new URL("./public/releases/index.html", import.meta.url), "utf8");
-  assert.ok(source.includes('fetch("/releases/data.json"'));
-  assert.ok(source.includes("下载，由 GitHub 直接提供"));
-  assert.ok(!source.includes('innerHTML = asset'), "upstream package metadata is not injected as HTML");
-  assert.ok(!source.includes('innerHTML = release'), "upstream release metadata is not injected as HTML");
-  for (const file of ["index.html", "extensions/index.html"]) {
-    const html = await readFile(new URL("./public/" + file, import.meta.url), "utf8");
-    assert.ok(html.includes('href="/releases/"'), file + " links to the release page");
-  }
+test("the route is GET / HEAD only, and no package path is served by the Worker", async (t) => {
+  const edge = fakeEdge(() => Response.json([release("v0.3.0")]));
+  t.after(edge.restore);
+  assert.equal((await get("/releases/data.json", "POST")).status, 405);
+  const head = await get("/releases/data.json", "HEAD");
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), "");
+  const before = edge.calls.length;
+  // anything else under /releases/ is a static file, never a proxy to GitHub
+  assert.equal(await (await get("/releases/download/v0.3.0/Persona-0.3.0-android.apk")).text(),
+    "asset /releases/download/v0.3.0/Persona-0.3.0-android.apk");
+  assert.equal(edge.calls.length, before);
   const wrangler = await readFile(new URL("./wrangler.jsonc", import.meta.url), "utf8");
-  assert.ok(wrangler.includes('"/releases/data.json"'));
-  assert.ok(!wrangler.includes('"/releases/download'), "only metadata runs through the Worker");
+  const first = /"run_worker_first":\s*\[([^\]]*)\]/.exec(wrangler)[1];
+  assert.deepEqual(first.match(/"\/releases[^"]*"/g), ['"/releases/data.json"']);
+});
+
+// ---------- the page's logic ----------
+
+const sample = () => slimReleases([
+  release("v0.4.0", { published_at: "2026-11-13T05:00:00Z", assets: [] }),
+  release("v0.3.0", { published_at: "2026-11-12T05:00:00Z", assets: full("v0.3.0", "0.3.0") }),
+  release("v0.2.1", { published_at: "2026-11-11T05:00:00Z", assets: full("v0.2.1", "0.2.1") }),
+  release("v0.5.0-rc.1", { published_at: "2026-11-14T05:00:00Z", prerelease: true, assets: full("v0.5.0-rc.1", "0.5.0-rc.1") }),
+]);
+
+test("each device gets the latest stable file, or the newest stable release that has one", () => {
+  const data = sample();
+  assert.equal(latestRelease(data).tag, "v0.4.0");
+  const mac = downloadFor(data, "macos", "arm64");
+  assert.equal(mac.tag, "v0.3.0", "v0.4.0 is still uploading; a prerelease is never offered");
+  assert.equal(mac.current, false);
+  assert.equal(mac.asset.name, "Persona-0.3.0-darwin-arm64.tar.gz");
+  assert.equal(downloadFor(data, "android", "").asset.name, "Persona-0.3.0-android.apk");
+  assert.equal(downloadFor(data, "web", "").asset.kind, "web");
+  assert.equal(downloadFor(data, "linux", "riscv64"), null);
+
+  const done = slimReleases([release("v0.4.0", { assets: full("v0.4.0", "0.4.0") }), release("v0.3.0", { assets: full("v0.3.0", "0.3.0") })]);
+  assert.deepEqual([downloadFor(done, "windows", "amd64").tag, downloadFor(done, "windows", "amd64").current], ["v0.4.0", true]);
+});
+
+test("the page links only to GitHub's own download addresses", () => {
+  assert.ok(isDirectDownload({ name: "a b.zip", url: `${DL}v0.3.0/a%20b.zip` }));
+  for (const url of [
+    "https://personaside.com/dl/a.zip", `${DL}v0.3.0/a.zip/extra`, `${DL}../a.zip`, `${DL}v0.3.0/b.zip`,
+    "javascript:alert(1)", `${DL}latest/a.zip`, `http://github.com/nwverse/persona/releases/download/v0.3.0/a.zip`,
+  ]) assert.equal(isDirectDownload({ name: "a.zip", url }), false, url);
+});
+
+test("the visitor's system is read from the browser", () => {
+  const mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15";
+  assert.deepEqual(detectPlatform({ userAgent: mac, maxTouchPoints: 0 }), { platform: "macos", arch: "arm64" });
+  assert.equal(detectPlatform({ userAgent: mac, maxTouchPoints: 5 }).platform, "ios", "an iPad asking for the desktop site");
+  assert.equal(detectPlatform({ userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X)" }).platform, "ios");
+  assert.equal(detectPlatform({ userAgent: "Mozilla/5.0 (Linux; Android 15; Pixel 9)" }).platform, "android");
+  assert.deepEqual(detectPlatform({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }), { platform: "windows", arch: "amd64" });
+  assert.deepEqual(detectPlatform({ userAgent: "Mozilla/5.0 (X11; Linux aarch64)" }), { platform: "linux", arch: "arm64" });
+  assert.deepEqual(detectPlatform({ userAgent: "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0)" }), { platform: null, arch: "" });
+  assert.deepEqual(detectPlatform({ userAgent: "" }), { platform: null, arch: "" });
+});
+
+test("sizes and counts read plainly", () => {
+  assert.equal(formatSize(117300513), "112 MB");
+  assert.equal(formatSize(8599801), "8.2 MB");
+  assert.equal(formatSize(1306), "1 KB");
+  assert.equal(formatSize(441), "441 B");
+  assert.equal(countsLine({ features: 166, fixes: 223, other: 110 }), "166 项新功能 · 223 项修复");
+  assert.equal(countsLine({ features: 0, fixes: 0, other: 3 }), "3 项改动");
+});
+
+test("the page draws data as text and never links packages through this site", async () => {
+  const page = await readFile(new URL("./public/releases/page.js", import.meta.url), "utf8");
+  assert.doesNotMatch(page, /\.innerHTML\s*=(?!\s*`<svg)/, "innerHTML only for the fixed icon markup");
+  assert.doesNotMatch(page, /insertAdjacentHTML|outerHTML|document\.write/);
+  assert.doesNotMatch(page, /\/dl\//);
+  const html = await readFile(new URL("./public/releases/index.html", import.meta.url), "utf8");
+  assert.match(html, /<noscript>[\s\S]*github\.com\/nwverse\/persona\/releases\/latest/);
+  assert.doesNotMatch(html, /href="\/dl\//);
 });

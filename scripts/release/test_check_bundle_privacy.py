@@ -162,6 +162,12 @@ class PublicConstantTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIn("email", self.kinds(text))
 
+    def test_adjacent_public_mail_field_is_not_an_email(self):
+        field = "title_mail@" + "gmail.com"
+        self.assertEqual(self.kinds("constant" + field + "nextConstant"), set())
+        self.assertIn("email", self.kinds(field + ".cn"))
+        self.assertIn(f"private value ({len(field)} chars)", self.kinds(field, words=(field,)))
+
     def test_full_rfc1918_networks_are_not_host_addresses(self):
         for network in NETWORKS:
             with self.subTest(network=str(network)):
