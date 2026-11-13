@@ -292,10 +292,22 @@ export function effortLabel(id?: string): string {
   return EFFORTS.find((e) => e.id === id)?.title ?? id;
 }
 
-/** What it runs with when that isn't the default, in a few words: "claude-fast · Auto · Low thinking"; `danger` for "Allow all".
+type TaskLauncherName = Named & { agent?: string; agent_type?: string };
+
+/** The same effective launcher/backend/model/effort line, with metadata from its execution computer. */
+export function taskExecutionSummary(ex: Pick<TaskExecution, "launcher" | "agent" | "model" | "effort">, names: readonly TaskLauncherName[] | undefined, fallback: string): string {
+  const title = launcherTitle(ex.launcher, names);
+  const known = names?.find((l) => l.name === ex.launcher);
+  const agent = ex.agent || known?.agent_type || known?.agent || (["claude", "codex"].includes(ex.launcher) ? ex.launcher : "");
+  return [title || fallback, agent !== title ? agent : "", ex.model || fallback, ex.effort || fallback].filter(Boolean).join(" · ");
+}
+
+/** The effective execution context, or a legacy task's explicit settings; `danger` for "Allow all".
  *  The launcher by its display name from `names` (#5029). */
-export function runsWith(task: Pick<Task, "launcher" | "permission_mode" | "effort">, names?: readonly Named[]): { text: string; danger: boolean } | null {
-  const parts = [task.launcher && launcherTitle(task.launcher, names), modeLabel(task.permission_mode), task.effort ? t("lib-routines.effort", { effort: effortLabel(task.effort) }) : ""].filter(Boolean);
+export function runsWith(task: Pick<Task, "launcher" | "model" | "permission_mode" | "effort" | "execution">, names?: readonly TaskLauncherName[]): { text: string; danger: boolean } | null {
+  const parts = (task.execution
+    ? [taskExecutionSummary(task.execution, names, t(task.launcher ? "assistant-taskeditor.follow_launcher" : "assistant-taskeditor.follow_assistant")), modeLabel(task.permission_mode)]
+    : [task.launcher && launcherTitle(task.launcher, names), task.model, modeLabel(task.permission_mode), task.effort ? t("lib-routines.effort", { effort: effortLabel(task.effort) }) : ""]).filter(Boolean);
   return parts.length ? { text: parts.join(" · "), danger: task.permission_mode === BYPASS } : null;
 }
 

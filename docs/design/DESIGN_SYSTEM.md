@@ -2271,11 +2271,14 @@ as finished without verifying a star, and opens GitHub outside the app.
 ## Scheduled task execution options
 
 The web task editor serves people scheduling specialist work as an optional **Execution options** group, closed by
-default and placed before the prompt. Its disclosure always shows the effective launcher name, agent backend,
+default and placed before the prompt. Its title and configuration share one compact line, with ellipsis and a full
+text tooltip when narrow. Its disclosure always shows the effective launcher name, agent backend,
 model and thinking effort; repeated launcher/backend names are shown once. It reuses `Field`, native selects,
 `ModelPicker`, semantic surface/text tokens and the existing dialog. Every untouched control explicitly follows
 Assistant, with known inherited values shown. Selecting another launcher uses that agent's defaults for model and
-effort. Empty choices retain dynamic inheritance rather than pinning a copied value. The selected computer is shown
+effort. Empty choices retain dynamic inheritance rather than pinning a copied value. Task list rows use the same
+formatter and resolved `execution` context, including inherited model and effort; older responses without that
+context keep their legacy display and need no new fields. The selected computer is shown
 inside the group. Launcher and model discovery use that computer's chat-compatible capabilities; the model catalog
 is only requested when the group opens. A working directory
 is an existing path on that computer, explained under the field. Switching execution context may start a new chat;

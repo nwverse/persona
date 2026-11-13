@@ -5,10 +5,11 @@ import { modelPurpose, type ModelPurpose } from "../../lib/model-config";
 import { defaultModel, effortChoices, machineLaunchers, providerModels, takesEffort, type MachineLaunchers } from "../../lib/launcher-models";
 import { launcherTitle } from "../../lib/provider-names";
 import { shownManager } from "../../lib/manager-choice";
-import type { Task } from "../../lib/routines";
+import { taskExecutionSummary, type Task } from "../../lib/routines";
 import { useStore } from "../../lib/store";
 import { ModelPicker, type ModelList } from "../../ui/ModelPicker";
 import { Button } from "../../ui/atoms";
+import { Icon } from "../../ui/icons";
 import { Field, inputClass } from "./parts";
 import { t } from "../../i18n";
 
@@ -58,16 +59,16 @@ export function TaskExecutionFields({ draft, disabled, onChange }: { draft: Task
   const known = launchers?.launchers ?? [];
   const knownLauncher = known.find((l) => l.name === launcher);
   const agent = knownLauncher?.agent_type || knownLauncher?.agent || list?.agent || (draft.execution?.launcher === launcher ? draft.execution.agent : "");
-  const title = launcherTitle(launcher, known);
   const defaultLabel = t(inheritsAssistant ? "assistant-taskeditor.follow_assistant" : "assistant-taskeditor.follow_launcher");
   const defaultEffort = inherited.effort || selectedModel?.default_effort;
   const defaultModelID = selectedModel?.resolved || (selectedModel?.id !== "default" ? selectedModel?.id : "");
-  const summary = [title || t("assistant-taskeditor.follow_assistant"), agent !== title ? agent : "", model || defaultModelID || defaultLabel, draft.effort || defaultEffort || defaultLabel].filter(Boolean).join(" · ");
+  const summary = taskExecutionSummary({ launcher, agent, model: model || defaultModelID, effort: draft.effort || defaultEffort }, known, defaultLabel);
   const incompatibleOrigin = !!draft.session_id && !!(draft.launcher || draft.model || draft.effort || draft.cwd || draft.execution_machine_id);
   return <details onToggle={(e) => setExpanded(e.currentTarget.open)} className="rounded-card bg-inset p-3 shadow-hairline">
-    <summary className="cursor-pointer text-[13px] font-medium text-ink">
-      <span>{t("assistant-taskeditor.execution_options")}</span>
-      <span className="mt-1 block break-words text-[12px] font-normal text-ink-2">{summary}</span>
+    <summary className="flex cursor-pointer list-none items-center gap-2 text-[13px] font-medium text-ink [&::-webkit-details-marker]:hidden">
+      <Icon name="chevron" size={13} className={expanded ? "shrink-0" : "shrink-0 -rotate-90"} />
+      <span className="shrink-0">{t("assistant-taskeditor.execution_options")}</span>
+      <span className="min-w-0 flex-1 truncate text-[12px] font-normal text-ink-2" title={summary}>{summary}</span>
     </summary>
     <div className="mt-3 flex flex-col gap-3">
       <p className="text-[11.5px] leading-relaxed text-ink-3">{t("assistant-taskeditor.execution_inheritance")}</p>

@@ -187,3 +187,50 @@ func TestTaskExecutionChecksAdvertisedModelEffort(t *testing.T) {
 		t.Fatalf("unsupported effort saved: %d %s", r.Code, r.Body.String())
 	}
 }
+
+func TestTaskExecutionLegacyDefaultsRemainInherited(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub().withMachine()
+	st := newSettingsFaultStore()
+	// Persist a pre-configuration record with none of the new execution fields.
+	legacy := []map[string]any{{"id": "legacy", "title": "Old task", "prompt": "Check files", "repeat": "interval", "every_minutes": 30, "enabled": true}}
+	if err := st.PutSetting(ctx, tasksKey, legacy); err != nil {
+		t.Fatal(err)
+	}
+	s := newServiceOn(t, f, st)
+	main, err := s.resolveModel(ctx, "assistant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, ok := s.taskView(ctx, "legacy")
+	if !ok || view.Execution == nil || view.Execution.Launcher != "claude" || view.Execution.Model != main.Model || view.Execution.Effort != main.Effort {
+		t.Fatalf("legacy defaults: %+v", view)
+	}
+	r := request(s, "PUT", "/api/v1/assistant/tasks/legacy", `{"title":"Edited old task","prompt":"Check files","repeat":"interval","every_minutes":30,"enabled":true}`)
+	if r.Code != http.StatusOK {
+		t.Fatalf("legacy edit: %s", r.Body.String())
+	}
+	var override modelRecord
+	if exists, err := st.Setting(ctx, modelRecordKey("task.legacy"), &override); err != nil || exists {
+		t.Fatalf("legacy edit created an override: %v %v %+v", exists, err, override)
+	}
+	first, err := runNow(t, s, "legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRuns(t, s, 1)
+	// An older stored conversation has no execution snapshot; defaults still resume it after a restart.
+	stored, _ := taskByID(s, "legacy")
+	stored.RunExecution = nil
+	if err := st.PutSetting(ctx, tasksKey, []Task{stored}); err != nil {
+		t.Fatal(err)
+	}
+	restarted := newServiceOn(t, f, st)
+	second, err := runNow(t, restarted, "legacy")
+	if err != nil || second.SessionID != first.SessionID {
+		t.Fatalf("legacy reuse: %+v %v", second, err)
+	}
+	if got := f.lastSend(t); got["launcher"] != "claude" {
+		t.Fatalf("legacy execution: %v", got)
+	}
+}
