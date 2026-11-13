@@ -2074,7 +2074,7 @@ ROUTINE_FIELDS = ("title", "prompt", "time", "weekdays", "enabled")
 SCHEDULE = [
     {"id": "morning", "title": "早报", "prompt": "给我今天的早报，一屏以内，结论先行。", "repeat": "daily", "time": "09:00",
      "weekdays": WEEKDAYS, "enabled": True, "last_run": prev_at("09:00", WEEKDAYS, late=timedelta(minutes=3)),
-     "last_session_id": ASK2, "last_status": "ok",
+     "last_session_id": ASK2, "last_status": "ok", "inbox": "every",
      "run_machine_id": "server", "run_session_id": ASK2, "run_launcher": "claude",  # its own conversation ("Morning briefing · Wednesday")
      "next_run": next_at("09:00", WEEKDAYS)},
     {"id": "fu_patrol", "title": "Agent 巡检", "prompt": "看看各台电脑上的 Agent：哪些在等我、哪些卡住了，有要我处理的就列出来；都正常就回一句。",
@@ -2087,7 +2087,7 @@ SCHEDULE = [
     {"id": "rt_patrol", "title": "项目巡检", "prompt": "看看各台电脑上的 Agent 和昨晚的 CI，有卡住的就告诉我。", "repeat": "daily",
      "time": "22:00", "weekdays": [], "enabled": True, "created_by": "assistant", "last_run": prev_at("22:00", []),
      "last_session_id": ASK4, "last_status": "ok", "next_run": next_at("22:00", []),
-     "push": "asked"},  # "Notify after a run": only what a run sends (#2396, #2676); the apps mark it on the row
+     "push": "asked", "inbox": "worthy"},  # "Notify after a run": only what a run sends (#2396, #2676); the apps mark it on the row
     {"id": "evening", "title": "晚间回顾", "prompt": "今天的晚间回顾。", "repeat": "daily", "time": "21:30", "weekdays": WEEKDAYS,
      "enabled": False, "last_run": prev_at("21:30", WEEKDAYS, back=1, late=timedelta(minutes=45)), "last_status": "skipped",
      "last_error": "Persona 停机，错过了时间"},
@@ -10242,16 +10242,16 @@ if os.environ.get("MOCK_ASSISTANT_INBOX"):
     _ASSISTANT_BASE = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")  # the hub's public_url
     INBOX[1:1] = [
         {"id": "assistant:s1", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
-         "title": "Morning briefing", "sender": "Assistant", "preview": "Three meetings today; the design review moved to 15:00",
+         "title": "Morning briefing", "preview": "Three meetings today; the design review moved to 15:00",
          "count": 1, "started_at": ago(minutes=30), "updated_at": ago(minutes=30), "tier": "fyi",
          "summary": "Three meetings today; the design review moved to 15:00", "reason": "Your morning briefing task puts every run here", "read": False,
-         "context": "Morning briefing\nThree meetings today; the design review moved to 15:00.",
+         "context": "Morning briefing\nThree meetings today; the design review moved to 15:00",
          "connector": {"thread": "assistant:macbook/" + BLOG, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + BLOG}},
         {"id": "assistant:s2", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "Assistant",
-         "title": "Price drop: the standing desk you watch", "sender": "Assistant", "preview": "Now 20% off until Sunday",
+         "title": "Price drop: the standing desk you watch", "preview": "The desk you asked me to watch is 20% off until Sunday",
          "count": 1, "started_at": ago(hours=3), "updated_at": ago(hours=3), "tier": "action",
          "summary": "The desk you asked me to watch is 20% off until Sunday", "reason": "You asked to be told about price drops", "read": False,
-         "context": "Price drop\nNow 20% off until Sunday.",
+         "context": "Price drop: the standing desk you watch\nThe desk you asked me to watch is 20% off until Sunday",
          "connector": {"thread": "assistant:macbook/" + TESTS, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + TESTS}},
     ]
 
