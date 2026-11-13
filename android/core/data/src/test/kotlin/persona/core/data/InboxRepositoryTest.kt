@@ -1488,7 +1488,7 @@ class InboxRepositoryTest {
             AssistantManagerChoice.choose("hub", null, "assistant")
             val transport = FakeTransport().apply {
                 items = JsonArray(listOf(singleItem("current")))
-                onDoneHistory = { manager -> buildJsonObject { put("items", JsonArray(listOf(singleItem("history"))) } }
+                onDoneHistory = { manager -> buildJsonObject { put("items", JsonArray(listOf(singleItem("history")))) } }
             }
             val repository = repository(transport, directory, owner, FakeHub())
             withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }

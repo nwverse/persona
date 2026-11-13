@@ -57,7 +57,7 @@ class InboxEventLookupTest {
     private fun record() = InboxRecord(
         InboxItem("history", kind = "group", title = "Historical event", preview = "Old preview",
             summary = "Historical summary", status = "action", doneAt = "2026-11-01T00:00:00Z", version = "v1"),
-        event = InboxEventFields(status = "action", recap = "What happened",
+        event = InboxEventFields(status = "action", recap = "The launch slipped a day",
             chain = listOf(InboxChainEntry("c1", kind = "received", text = "Received"))),
     )
 
@@ -99,7 +99,7 @@ class InboxEventLookupTest {
         rule.waitForIdle()
         rule.onNodeWithText("Historical event").assertExists()
         rule.onNodeWithText("Historical summary").assertExists()
-        rule.onNodeWithText("What happened").assertExists()
+        rule.onNodeWithText("The launch slipped a day").assertExists()
         assertEquals(listOf("history"), inbox.calls)
     }
 
