@@ -416,15 +416,19 @@ func (j *trJob) replyBegins(s *trSession, pos int64) {
 }
 
 // assign is the window of a reply that began when the session's audio was at pos. A reply writes one turn: the first
-// speech it had not covered yet that ended before then (a reply follows the sentence it writes; all of a forced
-// window's speech has ended once the session got its end and the silence after it), with the speech after it within a
-// turn's gap (trWindowGap: the service hears one turn there). Speech that ended more than trReplyWait before pos is
+// speech it had not covered yet that was over when it began, with the speech after it within a turn's gap
+// (trWindowGap: the service hears one turn there). A reply follows the sentence it writes at once or seconds later:
+// the measured service's came 0.05-0.3 s after it with the measured wording, 1.5-3 s with other wording. Over when it
+// began is ended by pos, or at most trAssignAhead after it (the job's speech detection hears the audio before the
+// session is sent it, and may hear a sentence run on a moment past where the service ended it); so a reply right
+// after its sentence is of that sentence, never of the one before it, which would leave the session a sentence behind
+// and, across a window's end, its text in the window before. Speech that ended more than trReplyWait before pos is
 // covered too: a reply that late is not coming, so what is left of it was in this one or never had one. The reply is
 // of the window of the first speech it covers; with none, of the window of what it covered last; -1 when that window
 // was sent already (a reply too late for it, never used). When none of its replies was of speech the adapter heard (a
 // quiet room its detection misses), a reply is of the window its audio was in.
 func (j *trJob) assign(s *trSession, pos int64) int {
-	cut := pos - trSamples(trAssignSlack)
+	limit := pos + trSamples(trAssignAhead)
 	stale := pos - trSamples(trReplyWait)
 	n, turnEnd := -1, int64(-1)
 claim:
@@ -432,11 +436,9 @@ claim:
 		if w.n < s.window {
 			continue
 		}
-		end, limit := w.to, cut
+		end := w.to
 		if end < 0 {
 			end = j.edge
-		} else if w.forced && pos >= w.to {
-			limit = max(cut, w.to)
 		}
 		for _, sp := range j.vad.speech(w.from, end) {
 			switch {
@@ -459,10 +461,10 @@ claim:
 	if n >= 0 {
 		return n
 	}
-	if len(j.windows) > 0 && s.claimed == s.feed && len(j.vad.speech(j.windows[0].from, max(cut, j.windows[0].from))) == 0 {
+	if len(j.windows) > 0 && s.claimed == s.feed && len(j.vad.speech(j.windows[0].from, max(pos, j.windows[0].from))) == 0 {
 		// None of its replies was of speech the adapter heard: a quiet room its detection misses. The reply is of the
 		// window its audio was in.
-		if n := j.windowAt(max(cut, j.windows[0].from)); n >= s.window {
+		if n := j.windowAt(max(pos, j.windows[0].from)); n >= s.window {
 			return n
 		}
 		return -1

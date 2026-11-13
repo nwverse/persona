@@ -114,3 +114,62 @@ func TestCaptionFinalRevises(t *testing.T) {
 		})
 	}
 }
+
+// trAssignStep is a reply that begins when the session's audio is at second at, while the job's audio (and its speech
+// detection) is ahead seconds further; window is the window it is of.
+type trAssignStep struct {
+	at, ahead float64
+	window    int
+}
+
+// assignReplies has a verbatim session begin a reply at each step, in order, in a live job whose speech is spans
+// (recording seconds) and whose first window closes at cut: at each step the job has heard what was said up to its
+// audio's end (a span going on then is open, up to there), and the windows are as far as that.
+func assignReplies(t *testing.T, spans [][2]float64, cut float64, steps []trAssignStep) {
+	t.Helper()
+	j := &trJob{}
+	s := &trSession{j: j, kind: trVerbatim, slot: &trSlot{kind: trVerbatim}, last: -1}
+	for _, st := range steps {
+		edge := trAt(st.at + st.ahead)
+		j.edge, j.vad = edge, trVAD{}
+		for _, sp := range spans {
+			from, to := trAt(sp[0]), trAt(sp[1])
+			switch {
+			case from >= edge:
+			case to+trMergeGap <= edge:
+				j.vad.spans = append(j.vad.spans, [2]int64{from, to})
+			default:
+				j.vad.open, j.vad.from, j.vad.last = true, from, min(to, edge)
+			}
+		}
+		j.windows, j.nextWin = []*trWin{{n: 0, from: 0, to: -1}}, 1
+		if edge >= trAt(cut) {
+			j.windows[0].to = trAt(cut)
+			j.windows, j.nextWin = append(j.windows, &trWin{n: 1, from: trAt(cut), to: -1}), 2
+		}
+		if got := j.assign(s, trAt(st.at)); got != st.window {
+			t.Errorf("a reply at %.2f s (the job %.1f s ahead): window %d, want %d", st.at, st.ahead, got, st.window)
+		}
+	}
+}
+
+// A reply is of the speech that ended before it began, however soon after: the measured service replied 0.05-0.3 s
+// after each sentence, and a reply that claimed the sentence before its own fell a sentence behind and, across a
+// window's end, landed in the window before. Replies 1.5-3 s after their sentence (the next one under way) are still
+// of their own; so is one whose sentence the job's speech detection, ahead of the session, heard run on a moment.
+func TestTrAssignReplies(t *testing.T) {
+	spans := [][2]float64{{1, 3}, {8, 14.8}, {16, 18}}
+	for _, tt := range []struct {
+		name  string
+		steps []trAssignStep
+	}{
+		{"0.1 s after", []trAssignStep{{3.1, 0, 0}, {14.9, 0, 0}, {18.1, 0, 1}}},
+		{"0.05 s after", []trAssignStep{{3.05, 0, 0}, {14.85, 0, 0}, {18.05, 0, 1}}},
+		{"0.3 s after", []trAssignStep{{3.3, 0, 0}, {15.1, 0, 0}, {18.3, 0, 1}}},
+		{"1.5 to 3 s after", []trAssignStep{{5.0, 0, 0}, {16.3, 0, 0}, {20.5, 0, 1}}},
+		{"3 s after, the next sentence under way", []trAssignStep{{6.0, 0, 0}, {17.8, 0, 0}, {21.0, 0, 1}}},
+		{"the detection ahead", []trAssignStep{{3.1, 0.1, 0}, {14.9, 0.1, 0}, {17.9, 0.2, 1}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) { assignReplies(t, spans, 15.5, tt.steps) })
+	}
+}

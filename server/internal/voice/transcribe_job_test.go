@@ -3,6 +3,7 @@ package voice
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"math"
@@ -497,6 +498,53 @@ func TestTranscriptionVerbatimSessionsAskForCaptions(t *testing.T) {
 			t.Errorf("a session did not ask for the caption extension: %v", s["instructions"])
 		}
 	}
+}
+
+// Replies that come 0.1 and 0.2 s after their sentence ends, as the measured service's per-sentence replies did
+// (0.05-0.3 s), and the stand-in's usual 0.5 s: each reply is of its own sentence's window, none a sentence behind,
+// so no sentence is sent twice or left to the captions and no healthy session is dropped or replaced. Accelerated
+// with the short settle times, and at real time with the production ones.
+func TestTranscriptionFastReplies(t *testing.T) {
+	gaps := []float64{0.1, 0.2, 0.5}
+	check := func(t *testing.T, frames []extwire.TranscriptionFrame, logs *lockedLog) {
+		t.Helper()
+		defer func() {
+			if t.Failed() {
+				t.Log(logs.String())
+			}
+		}()
+		sameTexts(t, frames, trScript)
+		for _, bad := range []string{"(dropped)", "the captions' text", ": replaced"} {
+			if strings.Contains(logs.String(), bad) {
+				t.Errorf("the log has %q", bad)
+			}
+		}
+	}
+	for _, gap := range gaps {
+		t.Run(fmt.Sprintf("accelerated, %.1f s", gap), func(t *testing.T) {
+			trFast(t)
+			_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript, CaptionNoise: 0.1, TurnGap: gap})
+			tc := startTr(t, srv, liveStart())
+			tc.next(extwire.TFReady)
+			tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 20)
+			tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+			check(t, tc.done(), logs)
+		})
+	}
+	t.Run("real time", func(t *testing.T) {
+		trProduction(t)
+		for _, gap := range gaps {
+			t.Run(fmt.Sprintf("%.1f s", gap), func(t *testing.T) {
+				t.Parallel()
+				_, srv, logs, _ := trLive(t, voicetest.Script{Sentences: trScript, CaptionNoise: 0.08, TurnGap: gap})
+				tc := startTr(t, srv, liveStart())
+				tc.next(extwire.TFReady)
+				tc.stream(voicetest.PCM(voicetest.Script{Sentences: trScript}, trScriptLength), 1)
+				tc.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+				check(t, tc.done(), logs)
+			})
+		}
+	})
 }
 
 // The instructions are in the recording's language when it is Chinese, English or Japanese (the language the model

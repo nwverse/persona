@@ -60,7 +60,7 @@ var (
 	trExpiryMargin  = 2 * time.Minute  // and at the latest this long before the session ends (its expires_at)
 	trRollOverlap   = 10 * time.Second // and the session rolled over runs beside the new one at least this long
 	trRollRetry     = 30 * time.Second
-	trAssignSlack   = 300 * time.Millisecond
+	trAssignAhead   = 300 * time.Millisecond // a reply may be of speech that ended this long after its position (assign)
 	trInterimLag    = time.Second            // a caption session this far behind the audio sends no interim captions
 	trCaptionLag    = 500 * time.Millisecond // a caption's first frame comes about this long after its sentence began
 	trCaptionFresh  = time.Second            // a caption's frames this soon after its first one revise it (captionOf)
