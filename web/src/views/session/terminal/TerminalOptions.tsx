@@ -14,23 +14,8 @@ import { t } from "../../../i18n";
 
 const ROW = "flex min-h-10 items-center gap-2.5 px-3";
 
-export function TerminalOptions({
-  anchor,
-  feed,
-  v,
-  keyBar,
-  onKeyBar,
-  onEditShortcuts,
-  onClose,
-}: {
-  anchor: HTMLElement;
-  feed: TerminalFeed;
-  v: FeedView;
-  keyBar: boolean;
-  onKeyBar: (on: boolean) => void;
-  onEditShortcuts: () => void;
-  onClose: () => void;
-}) {
+/** A gear's menu: a card under `anchor`, closed by a press outside it or Esc (Single pane's options, Full view's Appearance). */
+export function OptionsPopover({ anchor, label, onClose, children }: { anchor: HTMLElement; label: string; onClose: () => void; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<React.CSSProperties>({ visibility: "hidden" });
   const width = 280;
@@ -55,16 +40,41 @@ export function TerminalOptions({
     };
   }, [anchor, onClose]);
 
-  const driving = v.control === "active" || v.control === "starting";
-
   return createPortal(
     <div
       ref={ref}
       role="dialog"
-      aria-label={t("session-terminal-terminaloptions.title")}
+      aria-label={label}
       className="fixed z-50 overflow-hidden rounded-[10px] bg-surface py-1 shadow-overlay"
       style={{ ...pos, animation: `pop-in 160ms ${EASE} both`, transformOrigin: "top right" }}
     >
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
+export function TerminalOptions({
+  anchor,
+  feed,
+  v,
+  keyBar,
+  onKeyBar,
+  onEditShortcuts,
+  onClose,
+}: {
+  anchor: HTMLElement;
+  feed: TerminalFeed;
+  v: FeedView;
+  keyBar: boolean;
+  onKeyBar: (on: boolean) => void;
+  onEditShortcuts: () => void;
+  onClose: () => void;
+}) {
+  const driving = v.control === "active" || v.control === "starting";
+
+  return (
+    <OptionsPopover anchor={anchor} label={t("session-terminal-terminaloptions.title")} onClose={onClose}>
       <div className={ROW}>
         <Icon name="wrap" size={15} className="shrink-0 text-ink-3" />
         <div className="min-w-0 flex-1">
@@ -184,8 +194,7 @@ export function TerminalOptions({
         <Icon name="bolt" size={15} className="shrink-0 text-ink-3" />
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">{t("session-terminal-terminaloptions.edit_shortcuts")}</span>
       </button>
-    </div>,
-    document.body,
+    </OptionsPopover>
   );
 }
 

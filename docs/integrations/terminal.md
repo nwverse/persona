@@ -1059,7 +1059,7 @@ The herdr server is the one the computer's own herdr window uses too. iOS keeps 
 ### Setting
 
 - Terminal settings › **Appearance**: Match page (the default, no key stored) / Light / Dark, `persona.terminal.appearance`, kept in this browser (`web/src/lib/terminal-appearance.ts`). One setting for both surfaces.
-- Single pane's gear menu has it with the other options; it applies to Full view as well.
+- Single pane's gear menu has it with the other options. Full view's header has a gear with only this row: Full view is the default surface and the one herdr hears the answer from.
 - The row is the menu's segmented control with the icons Settings uses for the same choices (app window, sun, moon): the three words do not fit beside the label in the 280 px menu. Each choice is named for screen readers and on hover, and the line under the label says the one chosen.
 
 ### Colors: the page's tokens of the terminal's scheme
@@ -1080,4 +1080,4 @@ The herdr server is the one the computer's own herdr window uses too. iOS keeps 
 
 ### Tests
 
-- `cd web && npm test`: `lib/terminal-appearance.test.ts` (default, stored values, notifications), `terminal/colors.test.ts` (`styles.css` scopes every token the terminal reads; a dark terminal on a light page is Match page on a dark page, with a theme color and with an extension theme), `terminal/appearance.test.ts` (both feeds: palette; Full view's 996 answers and 2031 reports on page and setting changes), `terminal/TerminalOptions.test.tsx` (the row).
+- `cd web && npm test`: `lib/terminal-appearance.test.ts` (default, stored values, notifications), `terminal/colors.test.ts` (`styles.css` scopes every token the terminal reads; a dark terminal on a light page is Match page on a dark page, with a theme color and with an extension theme), `terminal/appearance.test.ts` (both feeds: palette; Full view's 996 answers and 2031 reports on page and setting changes), `terminal/TerminalOptions.test.tsx` (the row), `terminal/FullTerminal.test.tsx` (Full view's gear: only Appearance).
