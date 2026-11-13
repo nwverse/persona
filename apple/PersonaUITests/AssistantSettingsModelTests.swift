@@ -94,6 +94,83 @@ final class AssistantSettingsModelTests: XCTestCase {
         try setFlag(key, false)
     }
 
+    /// Settings › Assistant › Suggest the next message (#4696): a supporting hub's explicit off value is visible, and the
+    /// switch writes the sparse setting through the real profile page.
+    @MainActor func testNextSuggestionsSwitch() throws {
+        let key = "next_suggestions"
+        try setFlag(key, false)
+        defer { try? setFlag(key, false) }
+        let app = launch(["-openAssistantPage", "assistant"])
+        let toggle = app.switches["assistant-next-suggestions"].firstMatch
+        XCTAssertTrue(app.staticTexts["定时任务"].firstMatch.waitForExistence(timeout: 10))
+        for _ in 0..<8 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "0")
+        XCTAssertTrue(app.staticTexts["建议下一句"].firstMatch.exists)
+        shot(app, "assistant-next-suggestions-off")
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        let on = expectation(for: NSPredicate { _, _ in (try? self.hubFlag(key)) == true }, evaluatedWith: nil)
+        wait(for: [on], timeout: 10)
+        XCTAssertEqual(toggle.value as? String, "1")
+        shot(app, "assistant-next-suggestions-on")
+    }
+
+    /// A fresh supporting mock, with no earlier PUT, starts off. The dedicated runner opts in so an accidental on default fails
+    /// instead of silently skipping; the ordinary suite skips this separate-fixture case.
+    @MainActor func testNextSuggestionsDefaultOffOnFreshHub() throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_FRESH_SUPPORTING_HUB"] == "1" else {
+            throw XCTSkip("requires a fresh supporting mock with PERSONA_FRESH_SUPPORTING_HUB=1")
+        }
+        XCTAssertEqual(try hubFlag("next_suggestions"), false, "the untouched hub default must be off")
+        let app = launch(["-openAssistantPage", "assistant"])
+        let toggle = app.switches["assistant-next-suggestions"].firstMatch
+        XCTAssertTrue(app.staticTexts["定时任务"].firstMatch.waitForExistence(timeout: 10))
+        for _ in 0..<8 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "0")
+        XCTAssertTrue(app.staticTexts["建议下一句"].firstMatch.exists)
+        shot(app, "assistant-next-suggestions-default-off")
+    }
+
+    /// The row remains reachable and its switch hittable at the largest accessibility text size.
+    @MainActor func testNextSuggestionsLargeText() throws {
+        let key = "next_suggestions"
+        try setFlag(key, false)
+        defer { try? setFlag(key, false) }
+        let app = launch(["-openAssistantPage", "assistant", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
+        let toggle = app.switches["assistant-next-suggestions"].firstMatch
+        XCTAssertTrue(app.navigationBars["Persona"].waitForExistence(timeout: 10))
+        for _ in 0..<12 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertTrue(toggle.isHittable, "the largest text must leave the switch reachable")
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
+        let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
+        from.press(forDuration: 0.2, thenDragTo: to) // A full swipe can jump past the row; leave it wholly in view.
+        XCTAssertTrue(toggle.isHittable)
+        XCTAssertEqual(toggle.value as? String, "0")
+        shot(app, "assistant-next-suggestions-large-text")
+    }
+
+    /// An older hub omits the field. Scroll past the row's place before judging it absent, so an early query cannot pass.
+    @MainActor func testOldHubHidesNextSuggestions() throws {
+        guard try hubFlag("next_suggestions") == nil else { throw XCTSkip("requires MOCK_LEGACY_HUB=1") }
+        let app = launch(["-openAssistantPage", "assistant", "-probes", "YES"])
+        let toggle = app.switches["assistant-next-suggestions"].firstMatch
+        let workdir = app.staticTexts["工作目录"].firstMatch
+        eventually("the app's legacy assistant response", within: 10) {
+            app.probe("assistant-next-suggestions", as: [String: Bool].self)?["loaded"] == true ? [] : ["the successful read has not landed"]
+        }
+        XCTAssertEqual(app.probe("assistant-next-suggestions", as: [String: Bool].self)?["loaded"], true)
+        XCTAssertTrue(app.staticTexts["定时任务"].firstMatch.waitForExistence(timeout: 10))
+        var seen = toggle.exists
+        for _ in 0..<8 where !workdir.isHittable {
+            app.swipeUp()
+            seen = seen || toggle.exists
+        }
+        XCTAssertTrue(workdir.exists)
+        XCTAssertFalse(seen || toggle.exists, "a missing next_suggestions field must hide the row")
+    }
+
     private func hubQuiet() throws -> Bool? { try hubFlag("main_tasks_quiet") }
 
     private func setQuiet(_ on: Bool) throws { try setFlag("main_tasks_quiet", on) }
