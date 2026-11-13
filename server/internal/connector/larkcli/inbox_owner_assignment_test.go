@@ -19,10 +19,13 @@ func TestCardAssignsOwnerRequiresResponsibilityRole(t *testing.T) {
 		{"name prefix", `"Owner: Example Owner Assistant"`, false},
 		{"person in role row", `{"elements":[{"tag":"plain_text","text":"Owner:"},{"tag":"person","user_id":"ou_example_owner"}]}`, true},
 		{"at in role row", `{"elements":[{"tag":"plain_text","text":"On-call:"},{"tag":"at","user_id":"ou_example_owner"}]}`, true},
+		{"nested content role label", `{"elements":[{"tag":"div","text":{"tag":"plain_text","content":"On-call:"}},{"tag":"person","user_id":"ou_example_owner"}]}`, true},
+		{"multiple assigned identities", `{"elements":[{"tag":"plain_text","content":"Owner:"},{"tag":"at","user_id":"ou_someone_else"},{"tag":"at","user_id":"ou_example_owner"}]}`, true},
 		{"another person in role row", `{"elements":[{"tag":"plain_text","text":"On-call:"},{"tag":"at","user_id":"ou_someone_else"}]}`, false},
 		{"ordinary card mention", `{"elements":[{"tag":"at","user_id":"ou_example_owner"}]}`, false},
 		{"ordinary card person", `{"elements":[{"tag":"person","user_id":"ou_example_owner"}]}`, false},
 		{"role does not leak past text", `{"elements":[{"tag":"plain_text","text":"Owner:"},{"tag":"plain_text","text":"Other Person"},{"tag":"at","user_id":"ou_example_owner"}]}`, false},
+		{"completed other field does not cover later mention", `{"elements":[{"tag":"plain_text","content":"Owner: Other Person"},{"tag":"at","user_id":"ou_example_owner"}]}`, false},
 		{"mention all", `{"elements":[{"tag":"plain_text","text":"Owner:"},{"tag":"at","user_id":"all"}]}`, false},
 	}
 	for _, tc := range cases {

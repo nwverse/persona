@@ -72,7 +72,7 @@ func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRol
 	addressed = func(value any, role bool) bool {
 		switch v := value.(type) {
 		case map[string]any:
-			role = role || cardRoleElement(v)
+			role = role || cardRoleElement(v, false)
 			tag, _ := v["tag"].(string)
 			if tag == "at" && (!requireRole || role) || tag == "person" && role {
 				for _, key := range []string{"user_id", "open_id", "id"} {
@@ -93,8 +93,8 @@ func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRol
 				}
 				// A role label applies to the next value in this row, not to
 				// unrelated person elements elsewhere in the card.
-				if element, ok := child.(map[string]any); !ok || element["tag"] != "person" {
-					role = cardRoleElement(child)
+				if element, ok := child.(map[string]any); !ok || element["tag"] != "person" && element["tag"] != "at" {
+					role = cardRoleElement(child, requireRole)
 				}
 			}
 		}
@@ -126,17 +126,17 @@ func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRol
 	return false
 }
 
-func cardRoleElement(value any) bool {
+func cardRoleElement(value any, labelOnly bool) bool {
 	if element, ok := value.(map[string]any); ok {
-		value = element["text"]
+		if text, exists := element["text"]; exists {
+			return cardRoleElement(text, labelOnly)
+		}
+		return cardRoleElement(element["content"], labelOnly)
 	}
 	text, _ := value.(string)
-	return cardHasRole(text)
-}
-
-func cardHasRole(text string) bool {
 	for _, line := range strings.Split(text, "\n") {
-		if cardRole.MatchString(strings.TrimSpace(strings.ReplaceAll(line, "**", ""))) {
+		match := cardRole.FindStringSubmatch(strings.TrimSpace(strings.ReplaceAll(line, "**", "")))
+		if len(match) == 2 && (!labelOnly || strings.TrimSpace(match[1]) == "") {
 			return true
 		}
 	}
