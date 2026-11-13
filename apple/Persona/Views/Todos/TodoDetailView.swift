@@ -5,7 +5,6 @@ struct TodoDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.tabIsActive) private var inFront
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.dynamicTypeSize) private var typeSize
     var todoID: String
 
     @State private var store = TodoStore.shared
@@ -191,31 +190,19 @@ struct TodoDetailView: View {
                         .focused($titleFocused)
                         .onSubmit { commitTitle() }
 
-                    if typeSize.isAccessibilitySize {
-                        // One row squeezed each fact into a column a letter wide (#6151): here the row wraps, and each
-                        // fact goes to the next line whole, with its "·".
-                        FlowLayoutRow(spacing: Theme.Space.sm) {
-                            Chip(text: todo.statusLabel(status), look: .tone(todo.shownState(status).todoTone))
-                            statusFact(Text("\(activeAgents.count) agents"), id: "todo.status.agents")
-                            if let d = todo.createdAt {
-                                statusFact(Text("Created \(Fmt.relative(d))"), id: "todo.status.created")
-                            }
-                        }
-                    } else {
-                        HStack(spacing: Theme.Space.sm) {
-                            Chip(text: todo.statusLabel(status), look: .tone(todo.shownState(status).todoTone))
+                    HStack(spacing: Theme.Space.sm) {
+                        Chip(text: todo.statusLabel(status), look: .tone(todo.shownState(status).todoTone))
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                        Text("\(activeAgents.count) agents")
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(.secondary)
+                        if let d = todo.createdAt {
                             Text("·")
                                 .foregroundStyle(.secondary)
-                            Text("\(activeAgents.count) agents")
+                            Text("Created \(Fmt.relative(d))")
                                 .font(Theme.Font.caption)
                                 .foregroundStyle(.secondary)
-                            if let d = todo.createdAt {
-                                Text("·")
-                                    .foregroundStyle(.secondary)
-                                Text("Created \(Fmt.relative(d))")
-                                    .font(Theme.Font.caption)
-                                    .foregroundStyle(.secondary)
-                            }
                         }
                     }
 
@@ -495,31 +482,12 @@ struct TodoDetailView: View {
         #endif
     }
 
-    /// A fact in the status line at the accessibility sizes: its "·" before it, so the two wrap together, on the fact's
-    /// first line when the fact itself takes two.
-    private func statusFact(_ fact: Text, id: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
-            Text("·")
-                .foregroundStyle(.secondary)
-            fact
-                .font(Theme.Font.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier(id)
-        }
-    }
-
-    /// How large the bottom buttons' words get (#6151). Even across the page, Hand to Agent in English doesn't fit on
-    /// one line at the largest sizes; at this size every language's label fits whole on a 375 pt-wide iPhone. A long
-    /// press shows the label larger (the Large Content Viewer).
-    static let actionTypeSize: DynamicTypeSize = .accessibility1
-
     private func bottomBar(_ todo: TodoItem) -> some View {
         // Side by side while both labels fit whole, else one above the other, Hand to Agent first (#6151): side by side
-        // they were cut to "Hand to A…" from xxLarge and to a letter at the accessibility sizes.
+        // they were cut to "Hand to A…" from xxLarge.
         StackingButtonRow(spacing: Theme.Space.m, stackedSpacing: Theme.Space.s) {
             bottomButtons(todo)
         }
-        .dynamicTypeSize(...Self.actionTypeSize)
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, Theme.Space.s)
         .background(Theme.pageBackground)
@@ -541,7 +509,6 @@ struct TodoDetailView: View {
             }
             .themedButton(prominent: true)
             .controlSize(.large)
-            .accessibilityShowsLargeContentViewer()
             .accessibilityIdentifier("todo.handToAgent")
         }
 
@@ -557,7 +524,6 @@ struct TodoDetailView: View {
         }
         .themedButton(prominent: false)
         .controlSize(.large)
-        .accessibilityShowsLargeContentViewer()
         .accessibilityIdentifier("todo.toggleDone")
     }
 }
