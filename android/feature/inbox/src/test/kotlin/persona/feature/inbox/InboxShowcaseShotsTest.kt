@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -214,7 +215,7 @@ class InboxShowcaseShotsTest {
             rule.onNodeWithText("收到 2 条消息 · 张三", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("开了 Agent：核对报价单", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("Agent 停了：报价单第 3 行税率错了", useUnmergedTree = true).assertExists()
-            rule.onNodeWithText(if (english) "Needs you" else "需要你", useUnmergedTree = true).assertExists()
+            rule.onAllNodesWithText(if (english) "Needs you" else "需要你", useUnmergedTree = true).assertCountEquals(2)
             saveShot("detail-expanded-${if (english) "en" else "zh-Hans"}-${appearance.name.lowercase()}-${if (night) "dark" else "light"}", "showcase-detail")
         }
     }

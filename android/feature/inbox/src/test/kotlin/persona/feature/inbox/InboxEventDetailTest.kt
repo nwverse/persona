@@ -1,11 +1,8 @@
 package persona.feature.inbox
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.navigation3.runtime.NavKey
@@ -108,6 +105,6 @@ class InboxEventDetailTest {
         val done = tierOnly.copy(item = tierOnly.item.copy(doneAt = "2026-01-01T12:00:00Z", status = null),
             event = tierOnly.event.copy(status = null, doneBy = "user"))
         repository.snapshot.value = InboxSnapshot(records = listOf(done))
-        rule.onNodeWithText("Done", useUnmergedTree = true).assertExists()
+        rule.onAllNodesWithText("Done", useUnmergedTree = true).assertCountEquals(2)
     }
 }
