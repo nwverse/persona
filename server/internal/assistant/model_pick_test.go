@@ -551,7 +551,7 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 	})
 	t.Run("Fast and effort stay independent", func(t *testing.T) {
 		s, f := pickFixture(t)
-		code, got := start(t, s, `{"prompt":"hi","launcher":"cx","model":"vendor/typed-1","effort":"high","service_tier":"priority"}`)
+		code, got := start(t, s, `{"prompt":"hi","main":true,"launcher":"cx","model":"vendor/typed-1","effort":"high","service_tier":"priority"}`)
 		want := proto.ModelPick{Launcher: "cx", Model: "vendor/typed-1", Effort: "high"}
 		if code != 200 || got["pick"] != want {
 			t.Fatalf("%d %v", code, got)
