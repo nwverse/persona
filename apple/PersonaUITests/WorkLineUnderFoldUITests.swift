@@ -45,12 +45,12 @@ final class WorkLineUnderFoldUITests: XCTestCase {
         sleep(2) // the chat settles at its newest end
     }
 
-    private func head(_ which: NSPredicate) -> XCUIElement {
+    @MainActor private func head(_ which: NSPredicate) -> XCUIElement {
         app.buttons.matching(identifier: "work-head").matching(which).firstMatch
     }
 
     /// Where the element is on screen: rows of the flipped chat list may report flipped frames (`MessageLiftUITests`).
-    private func onScreen(_ e: XCUIElement) -> CGRect {
+    @MainActor private func onScreen(_ e: XCUIElement) -> CGRect {
         let window = app.windows.firstMatch.frame
         var f = e.frame
         if !window.contains(CGPoint(x: f.midX, y: f.midY)) { f.origin.y = window.height - f.maxY }
@@ -84,7 +84,7 @@ final class WorkLineUnderFoldUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: at.x, dy: at.y)).tap()
     }
 
-    private func isOpen(_ which: NSPredicate, timeout: TimeInterval = 4) -> Bool {
+    @MainActor private func isOpen(_ which: NSPredicate, timeout: TimeInterval = 4) -> Bool {
         let open = NSPredicate(format: "label == %@", "收起过程")
         let end = Date().addingTimeInterval(timeout)
         while Date() < end {
