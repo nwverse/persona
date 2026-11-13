@@ -117,9 +117,17 @@ func ownerActionLine(text string) string {
 			if !strings.Contains(lower, p.marker) {
 				continue
 			}
-			if (p.marker == "you need to" || p.marker == "you'll need to") &&
-				(strings.Contains(lower, "if "+p.marker) || strings.Contains(lower, "when "+p.marker) || strings.Contains(lower, "whenever "+p.marker)) {
-				continue // conditional guidance is not an owner-only next step (#5732)
+			if p.marker == "you need to" || p.marker == "you'll need to" {
+				// A direct owner requirement starts the line or a sentence/clause. Subordinate and narrative uses
+				// ("if …", "evaluates whether …") are not unambiguous owner-only next steps (#5732).
+				before := strings.TrimSpace(lower[:strings.Index(lower, p.marker)])
+				direct := before == ""
+				for _, end := range []string{".", "!", "?", ":", ","} {
+					direct = direct || strings.HasSuffix(before, end)
+				}
+				if !direct {
+					continue
+				}
 			}
 			negated := false
 			for _, n := range p.negations {

@@ -115,10 +115,13 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"English offer", "The spec is ready. Would you like me to start the implementation?", verdictNeedsUser, "Would you like me to"},
 		{"English proceed offer", "The spec is ready. Should I proceed with the implementation?", verdictNeedsUser, "Should I proceed"},
 		{"English shall offer", "The spec is ready. Shall I proceed with the implementation?", verdictNeedsUser, "Shall I proceed"},
+		{"English direct owner operation", "The spec is ready. You need to deploy it yourself.", verdictNeedsUser, "You need to"},
+		{"English direct owner operation after an introduction", "Next, you'll need to restart the service.", verdictNeedsUser, "you'll need to"},
 		{"negated manual operation", "不用你本人操作，已经全部完成。", verdictDone, ""},
 		{"negated owner start", "无需由你发起，已自动开始。", verdictDone, ""},
 		{"negated offer", "不需要你决定要不要继续，已按原方案完成。", verdictDone, ""},
 		{"conditional English guidance", "If you need to roll back, run make rollback.", verdictDone, ""},
+		{"English narrative about a choice", "The report evaluates whether you need to split the module and concludes no.", verdictDone, ""},
 		{"Chinese narrative about a choice", "评估了要不要拆分模块，结论是不拆。", verdictDone, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
