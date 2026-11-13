@@ -366,6 +366,22 @@ func TestWorktreeCreateFromLinkedCheckoutUsesMainRepository(t *testing.T) {
 			if got := runPullGit(t, dest, "rev-parse", "HEAD"); got != base {
 				t.Fatalf("the new worktree started at %s, want linked HEAD %s", got, base)
 			}
+
+			w.f.reset()
+			runPullGit(t, linked, "checkout", "--orphan", "unborn")
+			existingDest := filepath.Join(w.home, "trees", "existing-branch")
+			if _, err := request(t, w.n, "worktree.create", map[string]any{
+				"cwd": linked, "branch": "spare", "path": existingDest,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			existingWant := map[string]any{"branch": "spare", "path": existingDest, "focus": false}
+			if tc.mainWorkspace == "checkout" {
+				existingWant["workspace_id"] = "w-main"
+			} else {
+				existingWant["cwd"] = resolved(t, w.repo)
+			}
+			assertTrace(t, w.f.trace("worktree.create"), []string{call("worktree.create", existingWant)})
 		})
 	}
 }
