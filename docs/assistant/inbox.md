@@ -226,7 +226,7 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
 - **One ledger**: message-to-item membership is recorded only in that row's `meta`. For connectors declaring `meta`, their program writes it (`group.append`: one item at a time, submit meta plus messages, return appended meta).
   With only `group`, hub writes events from the batch itself (no meta; `context` is the text of messages assigned to the item; protocol "Two writing modes").
   **Hub does not parse meta**; it stores and passes it unchanged to the model and plugin. Initially, association stays within one chat.
-- **Capability negotiation**: hub declares `hub.capabilities: ["inbox_group"]` in plugin `initialize`; connectors declare `group` in the manifest. Those maintaining meta also declare `meta` and `meta_description`
+- **Capability negotiation**: hub declares `hub.capabilities` including `inbox_group` and `inbox_group_state` in plugin `initialize`; connectors declare `group` in the manifest. Those maintaining meta also declare `meta` and `meta_description`
   (prose explaining meta fields; disallowed without `meta`). `group.tool` and `group.fallback` need no declaration; if absent, return `unknown_method`. The model sees unavailable tools; with no fallback, an untriageable batch waits for the next round.
   If either side lacks support, retain one row per chat. Old hubs / plugins do not affect each other (old hubs do not recognize `group`; see protocol "Old hubs").
 - **Model behavior** (`inbox.triage`): prompt = generic association rules (`prompts/inbox/group.md`: replies / quotes, same topic, consecutive messages from one person belong together; a long gap plus new topic starts another;
