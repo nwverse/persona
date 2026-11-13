@@ -71,6 +71,7 @@ class InboxShowcaseMockTests(unittest.TestCase):
     def setUpClass(cls):
         cls.showcase = json.loads(SHOWCASE_PATH.read_text(encoding="utf-8"))
         cls.items = cls.showcase["items"]
+        cls.sessions = cls.showcase["sessions"]
 
     def serve(self, **env):
         hub = MockHub(**env)
@@ -97,6 +98,21 @@ class InboxShowcaseMockTests(unittest.TestCase):
             with self.subTest(item=expected["id"]):
                 self.assertEqual(hub.request("/api/v1/inbox/" + expected["id"]), expected)
 
+    def test_showcase_sessions_join_the_session_list_with_complete_rows(self):
+        hub = self.serve(MOCK_INBOX_SHOWCASE="1")
+        listed = hub.request("/api/v1/sessions")["sessions"]
+        for expected in self.sessions:
+            with self.subTest(session=expected["session_id"]):
+                actual = next(
+                    row for row in listed
+                    if row["machine_id"] == expected["machine_id"] and row["session_id"] == expected["session_id"]
+                )
+                for field, value in expected.items():
+                    self.assertEqual(actual[field], value, field)
+                for field in ("status", "agent", "launcher", "model", "space_kind", "space_id", "slot_id", "pane_id", "last_text"):
+                    self.assertIn(field, actual)
+        self.assertEqual(next(row for row in listed if row["session_id"] == "s-agent")["state"], "unread")
+
     def test_showcase_takes_precedence_over_inbox_events(self):
         hub = self.serve(MOCK_INBOX_SHOWCASE="1", MOCK_INBOX_EVENTS="legacy")
         self.assertEqual(hub.request("/api/v1/inbox")["items"], self.items)
@@ -116,6 +132,8 @@ class InboxShowcaseMockTests(unittest.TestCase):
         ids = [item["id"] for item in hub.request("/api/v1/inbox")["items"]]
         self.assertNotEqual(ids, [item["id"] for item in self.items])
         self.assertTrue(all(not item_id.startswith("sc-") for item_id in ids))
+        session_keys = {(row["machine_id"], row["session_id"]) for row in hub.request("/api/v1/sessions")["sessions"]}
+        self.assertTrue(all((row["machine_id"], row["session_id"]) not in session_keys for row in self.sessions))
 
 
 if __name__ == "__main__":

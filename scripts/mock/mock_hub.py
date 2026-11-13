@@ -12280,13 +12280,23 @@ if MOCK_INBOX_EVENTS:
 # MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
 # side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
 # fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
-# now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
+# now_clock themselves. Its sessions join the ordinary session list with the same row fields as the mock's other
+# sessions, so the timeline can show the Agent's live state. This takes precedence over MOCK_INBOX_EVENTS and leaves
+# every other switch unchanged.
 MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
 if MOCK_INBOX_SHOWCASE:
     _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
                                   "spec", "fixtures", "inbox", "showcase.json")
     with open(_showcase_path, encoding="utf-8") as _f:
-        INBOX[:] = json.load(_f)["items"]
+        _showcase = json.load(_f)
+    INBOX[:] = _showcase["items"]
+    for _i, _row in enumerate(_showcase.get("sessions", [])):
+        _state = _row["state"]
+        _status = {"working": "working", "needs_you": "blocked", "offline": "offline"}.get(_state, "idle")
+        _session = sess(_row["machine_id"], _row["session_id"], _row["title"], _row.get("cwd", ""),
+                        _status, _state, "Showcase", 90 + _i, "Inbox", 0, 0, "")
+        _session.update(_row)  # The fixture's exact timestamps and state win over the row defaults.
+        SESSIONS.append(_session)
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
