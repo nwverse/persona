@@ -127,7 +127,11 @@ func TestOrdinarySkillsRefuseUnboundCodexFirstMessage(t *testing.T) {
 
 func TestOrdinaryCodexSkillsUseOwningConnection(t *testing.T) {
 	n := remoteTestNode(t)
-	home := t.TempDir()
+	// The catalog reports resolved paths; on macOS t.TempDir() is under a symlink.
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	f, c := connectRemoteFixture(t, n, home, "one", remoteRaw)
 	id := n.registerCodex(home, remoteRaw, "")
 	file := filepath.Join(home, ".agents", "skills", "review", "SKILL.md")
