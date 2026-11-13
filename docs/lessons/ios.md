@@ -2228,9 +2228,10 @@ toasted and ended the hold, while the tap's dictation went on. The TLA+ model in
   and call Restore's completion only once the page has drawn its picture again (`VNCPiPRestore`, with a time limit
   on a timer off the main thread: a page opening under load held the main thread 10 s, so the system waited 10 s,
   and in that run the next start never reached `didStart`). Hide the page's picture with a short fade, not at once: the system's copy appears a few
-  frames after `willStart`. Give each start a new controller and source layer: a second start from the same ones drew
-  its first frames at the small window's last size (a magnified corner of the picture), and a fresh `contentSource`
-  on the same controller and layer did not change that.
+  frames after `willStart`. With the source that large, the system sometimes draws the small window's first frames
+  (about 0.1 s) at the size the window last had, in the top-left of the transition, before the picture fills it: a
+  fresh `contentSource`, or a new controller and layer for each start, did not change it (iPad simulator; the old
+  small source hid it). Look at a couple of round trips frame by frame before blaming the source.
 - `isPictureInPictureSupported()` is false on iPhone simulators, slim or stock, but true on a stock iPad simulator
   (`sim-boot.sh --profile stock`): record the system's transition there; how it feels on a phone still needs a device.
 - On an iPad simulator the hardware keyboard takes over once XCUITest types, hiding the on-screen keyboard: a form
