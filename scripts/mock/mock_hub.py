@@ -1118,7 +1118,10 @@ if os.environ.get("MOCK_PASEO"):
                    slot_index=None, pane_id=None, tab_id=None, workspace_id=None, host="paseo",
                    source_kind="runtime", source_instance_id="paseo", repo_root=_paseo_root, worktree=cwd, workspace_cwd=cwd,
                    branch=branch, launcher="claude" if agent == "claude" else "codex", started_by_persona=False,
-                   capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False})
+                   # Paseo declares rename and close: the node lists both, rename not on an agent another one started (#6294),
+                   # one that waits for the user included (listed without its parent meanwhile)
+                   capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False,
+                                 "close": True, "rename": not (kw.get("is_subagent") or kw.get("asking_parent_session_id"))})
         row.update(kw)
         return sess("server", sid, title, cwd, status, state, "", 0, "", 0, minutes, last, agent=agent, **row)
     SESSIONS += [

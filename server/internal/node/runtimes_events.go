@@ -152,9 +152,12 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		} else {
 			s.Host = ""
 		}
+		// Rename and rewind (#6294) are for the runtime's own top-level sessions, not a sub-Agent's row: a "<session>@<id>"
+		// is an agent inside a session, not one the runtime lists, and a session another one started folds under it.
+		sub := s.IsSubagent || strings.Contains(s.SessionID, subagentSep)
 		s.Capabilities = &proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true,
-			Close: &caps.Close, Modes: proto.CanModes(runtimeModes(caps.Modes, rt, s)),
-			Rewind: proto.CanModes(caps.Rewind && !s.IsSubagent && !strings.Contains(s.SessionID, subagentSep)), RewindCode: proto.CanModes(false),
+			Close: &caps.Close, Rename: proto.CanModes(caps.Rename && !sub), Modes: proto.CanModes(runtimeModes(caps.Modes, rt, s)),
+			Rewind: proto.CanModes(caps.Rewind && !sub), RewindCode: proto.CanModes(false),
 			Model: proto.CanModes(caps.Modes && caps.Model && !strings.Contains(s.SessionID, subagentSep))}
 		s.ReadOnlyReason, s.Attached, s.CodexRoute, s.CodexRouteNote = readOnly, false, "", ""
 		// The pane is the engine's to show (pi.go joins it with the engine's pane), not part of the runtime's row.
