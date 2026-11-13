@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -31,7 +32,12 @@ func githubDiagnostic(s string) string {
 		}
 	}
 	s = githubDiagnosticSecrets.ReplaceAllString(s, "[redacted]")
-	s = githubDiagnosticAddresses.ReplaceAllString(s, "[redacted]")
+	s = githubDiagnosticAddresses.ReplaceAllStringFunc(s, func(value string) string {
+		if net.ParseIP(value) != nil {
+			return "[redacted]"
+		}
+		return value
+	})
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > 512 {
 		s = s[:512] + "..."

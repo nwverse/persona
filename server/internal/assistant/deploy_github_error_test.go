@@ -30,7 +30,7 @@ func TestGitHubReadFailureDiagnostics(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("X-RateLimit-Remaining", tc.remaining)
 				w.Header().Set("X-RateLimit-Reset", "1800000000")
-				w.Header().Set("X-GitHub-Request-Id", "request-123")
+				w.Header().Set("X-GitHub-Request-Id", "ABCD:1234:5678:90AB")
 				w.WriteHeader(tc.status)
 				fmt.Fprint(w, `{"message":"Access denied private-test-token ghp_secret123 https://private.example/path me@example.com 192.0.2.10 2001:db8::1"}`)
 			}))
@@ -41,7 +41,7 @@ func TestGitHubReadFailureDiagnostics(t *testing.T) {
 				t.Fatal("expected failure")
 			}
 			text := err.Error()
-			for _, want := range []string{fmt.Sprint(tc.status), tc.kind, "Access denied", "X-RateLimit-Remaining=" + tc.remaining, "X-RateLimit-Reset=1800000000", "X-GitHub-Request-Id=request-123"} {
+			for _, want := range []string{fmt.Sprint(tc.status), tc.kind, "Access denied", "X-RateLimit-Remaining=" + tc.remaining, "X-RateLimit-Reset=1800000000", "X-GitHub-Request-Id=ABCD:1234:5678:90AB"} {
 				if !strings.Contains(text, want) {
 					t.Errorf("missing %q: %s", want, text)
 				}
