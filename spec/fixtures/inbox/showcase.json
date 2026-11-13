@@ -218,13 +218,19 @@
       "machine_id": "m1",
       "session_id": "s-agent",
       "title": "核对报价单",
-      "state": "unread"
+      "cwd": "/home/user/orders",
+      "state": "unread",
+      "updated_at": "2026-01-01T11:19:00Z",
+      "state_since": "2026-01-01T11:19:00Z"
     },
     {
       "machine_id": "m1",
       "session_id": "s-handling",
       "title": "春季订单的报价",
-      "state": "idle"
+      "cwd": "/home/user",
+      "state": "idle",
+      "updated_at": "2026-01-01T11:20:30Z",
+      "state_since": "2026-01-01T11:20:30Z"
     }
   ]
 }
