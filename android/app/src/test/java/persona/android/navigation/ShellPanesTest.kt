@@ -89,4 +89,24 @@ class ShellPanesTest {
         navigator.back()
         assertEquals("back returns to the space page", space, marked(AppTab.Agents))
     }
+
+    @Test fun aComputersProjectsOpenBesideTheListAndItsSpacesAndAgentsGoOnTopOfIt() {
+        val projects = MachineSpacesRoute("machine")
+        selected = AppTab.Agents
+        // From a space page's computer: the projects replace the space as the detail, and back returns to the space.
+        val space = SpaceRoute("machine/space")
+        navigator.navigate(space)
+        navigator.navigate(projects)
+        assertEquals(listOf(AgentsRoute, space, projects), stacks.getValue(AppTab.Agents))
+        assertEquals(projects, marked(AppTab.Agents))
+        navigator.navigate(SpaceRoute("machine/other"))
+        assertEquals(SpaceRoute("machine/other"), marked(AppTab.Agents))
+        navigator.back()
+        assertEquals("back returns to the projects", projects, marked(AppTab.Agents))
+        navigator.navigate(MachineDetailRoute("machine"))
+        assertEquals(MachineDetailRoute("machine"), marked(AppTab.Agents))
+        navigator.back()
+        navigator.back()
+        assertEquals(space, marked(AppTab.Agents))
+    }
 }

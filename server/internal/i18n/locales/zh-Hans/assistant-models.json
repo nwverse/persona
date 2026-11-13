@@ -89,7 +89,6 @@
   "err_purpose_not_found": "没有这个模型用途",
   "err_read_tasks": "读不到定时任务",
   "err_read_config": "读取模型配置失败: {error}",
-  "err_launcher_not_responses": "启动器不能作为此 API 接入使用",
   "err_key_decrypt": "供应商密钥解密失败",
   "err_not_callable": "这个供应商不能在 hub 上直接调用 API",
   "err_not_api": "不是 API 供应商",
@@ -124,5 +123,9 @@
   "err_model_invalid": "模型 ID {model} 不能用：要以字母或数字开头（或 ~ 后接字母或数字），只能有字母、数字和 . _ - / : @ [ ]，最多 256 个字符",
   "custom_model_description": "之前用过的模型 ID",
   "err_role_forget": "删除用过的模型 ID 需要完整权限。",
-  "err_via_offline": "{name} 不在线。这个接入要通过它发请求：让它上线，或在 设置 › 模型供应商 的「通过…发送」里换一台电脑"
+  "err_via_offline": "{name} 不在线。这个接入要通过它发请求：让它上线，或在 设置 › 模型供应商 的「通过…发送」里换一台电脑",
+  "err_run_no_machine": "这个供应商要在主对话的电脑上运行，但还没设置：在 设置 › 助手 里选一台",
+  "err_run_offline": "{name} 不在线。这项用途要在它上面运行 {launcher}：让它上线，或在 设置 › 模型配置 换一个供应商",
+  "err_run_logged_out": "{launcher} 在 {name} 上没有登录：到那台电脑上登录，或在 设置 › 模型配置 换一个供应商",
+  "err_run_timeout": "{name} 上的 {launcher} 没有及时回答"
 }

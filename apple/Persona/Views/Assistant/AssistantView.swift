@@ -257,7 +257,7 @@ struct AssistantView: View {
         .navigationDestination(isPresented: $showTodos) { TodosView() }
         .navigationDestination(item: $openedExtension) { ExtensionNavPage(route: $0) }
         .navigationDestination(isPresented: $showHealth) {
-            HealthView(disabled: shownStart != nil, launcher: healthLauncherPick) { text, images in
+            HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, mode: $starterMode, effort: $starterEffort) { text, images in
                 Task { await start(text, images, space: Session.healthSpace) }
             }
         }
@@ -618,7 +618,7 @@ struct AssistantHome: View {
     var body: some View {
         ScrollView {
             if let pending {
-                FirstMessagePending(pending: pending, name: model.persona.name, shell: false, resend: resend, delete: delete)
+                FirstMessagePending(pending: pending, name: model.assistantShownName, shell: false, resend: resend, delete: delete)
                     // The page's height inside its margins, the message at its bottom (a long one runs up out of it, as the
                     // chat shows its newest end).
                     .containerRelativeFrame(.vertical, alignment: .bottom)
@@ -790,29 +790,44 @@ struct AssistantWelcome: View {
                     .modifier(WelcomeFold.Mark(first: s.title == suggestions.first?.title))
                 }
             }
-        } else {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                ForEach(cardRows.map { Array(suggestions.prefix($0 * 2)) } ?? suggestions, id: \.title) { s in
-                    Button {
-                        ask(s)
-                    } label: {
-                        VStack(alignment: .leading, spacing: Theme.Space.m) {
-                            ThemedIcon(s.symbol)
-                                .font(Theme.Font.title)
-                                .foregroundStyle(Theme.accent)
-                            Text(s.title).font(Theme.Font.heading).foregroundStyle(Color.primary)
-                        }
-                        .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.box72, alignment: .topLeading)
-                        .card(padding: 14)
+        } else if let cardRows {
+            // The shell's few cards are all made, wherever they are (#4073): a lazy grid never makes the ones below the
+            // page, and at the largest text sizes the greeting already fills it, so the fold was never measured and
+            // Needs You took every row it had over the composer.
+            Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+                let shown = Array(suggestions.prefix(cardRows * 2))
+                let rows = stride(from: 0, to: shown.count, by: 2).map { Array(shown[$0..<min($0 + 2, shown.count)]) }
+                ForEach(rows, id: \.[0].title) { row in
+                    GridRow {
+                        ForEach(row, id: \.title) { card($0) }
                     }
-                    .buttonStyle(.plain)
-                    // Two cards a row, and the first two rows kept clear of Needs You: the fold is where the tallest
-                    // of the first four ends (#5648: English and Japanese titles run to two lines, and the second row
-                    // was half under the fade when the fold was the first row's end).
-                    .modifier(WelcomeFold.Mark(first: suggestions.prefix(WelcomeFold.cards).contains { $0.title == s.title }))
                 }
             }
+        } else {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                ForEach(suggestions, id: \.title) { card($0) }
+            }
         }
+    }
+
+    private func card(_ s: Suggestion) -> some View {
+        Button {
+            ask(s)
+        } label: {
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
+                ThemedIcon(s.symbol)
+                    .font(Theme.Font.title)
+                    .foregroundStyle(Theme.accent)
+                Text(s.title).font(Theme.Font.heading).foregroundStyle(Color.primary)
+            }
+            .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.box72, alignment: .topLeading)
+            .card(padding: 14)
+        }
+        .buttonStyle(.plain)
+        // Two cards a row, and the first two rows kept clear of Needs You: the fold is where the tallest of the first
+        // four ends (#5648: English and Japanese titles run to two lines, and the second row was half under the fade
+        // when the fold was the first row's end).
+        .modifier(WelcomeFold.Mark(first: suggestions.prefix(WelcomeFold.cards).contains { $0.title == s.title }))
     }
 
     private var header: some View {
@@ -934,6 +949,8 @@ struct StarterComposer: View {
         @Binding var launcher: String?
         @Binding var mode: String
         @Binding var effort: String
+        /// Health's new conversation (#3825): with none picked, the launcher is Health's (the default manager's).
+        var health = false
     }
 
     @State private var launchers: [Launcher] = []
@@ -1122,7 +1139,7 @@ struct StarterComposer: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if let shell {
-                ShellComposerBar(placeholder: String(localized: "Ask \(model.persona.name)"), text: textBinding, selection: $selection, focused: $focused,
+                ShellComposerBar(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)"), text: textBinding, selection: $selection, focused: $focused,
                                  canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty || !quotes.isEmpty,
                                  modesTitle: StarterModesMenu.title(modes: shell, launchers: launchers, model: model),
                                  quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener, send: submit) {
@@ -1143,7 +1160,7 @@ struct StarterComposer: View {
                 }
                 .task(id: machine) { launchers = (try? await model.launchers(machine))?.filter(\.runsAssistant) ?? [] }
             } else {
-                ComposerRow(placeholder: placeholder ?? String(localized: "Ask \(model.persona.name)…"), text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
+                ComposerRow(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)…"), text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                             send: submit, history: "assistant.new", gate: gate) {
                     attachments
                 }
@@ -1283,7 +1300,7 @@ struct BeautifulStarterComposer: View {
             #else
             if !images.isEmpty { ComposerImages.editable(draft.held) } // a tap marks it up, as in a conversation
             #endif
-            PromptComposer(placeholder: placeholder ?? String(localized: "Ask \(model.persona.name)…"), text: textBinding, selection: $selection, focused: $focused,
+            PromptComposer(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)…"), text: textBinding, selection: $selection, focused: $focused,
                            hasAttachments: !images.isEmpty || !videos.items.isEmpty || !quotes.isEmpty, disabled: disabled,
                            attach: PromptItems.attachments(camera: false),
                            mentions: { PromptItems.sessions(model.sessionsNow, except: nil) },
@@ -1527,6 +1544,11 @@ private extension AppModel {
         guard let name = defaultAssistant?.launcher, !name.isEmpty else { return nil }
         return name
     }
+
+    /// The launcher a new conversation starts with when none is picked: Health's on its page (#3825), else Persona's.
+    func launcherSetting(_ modes: StarterComposer.ShellModes) -> String? {
+        modes.health ? healthLauncherSetting : starterLauncherSetting
+    }
 }
 
 /// The shell composer's model menu for a conversation not started yet (#1091): the launcher it starts with (that is the
@@ -1541,7 +1563,7 @@ struct StarterModesMenu: View {
     /// menu's Reading / Couldn't Load Settings section is reachable on the iPhone path.
     @MainActor static func title(modes: StarterComposer.ShellModes, launchers: [Launcher], model: AppModel) -> SessionModes.ComposerTitle? {
         let effort = SessionModes.effort(modes.effort)?.title
-        guard let name = modes.launcher ?? model.starterLauncherSetting else {
+        guard let name = modes.launcher ?? model.launcherSetting(modes) else {
             return SessionModes.ComposerTitle(model: model.assistantConfigLoadFailed ? String(localized: "Couldn't Load Settings") : String(localized: "Reading"), effort: effort)
         }
         let launcher = launchers.first { $0.name == name }
@@ -1553,7 +1575,7 @@ struct StarterModesMenu: View {
         if modes.mode == "bypassPermissions" { // said first, as in a running conversation's menu (SessionModesMenu)
             Section { BypassWarning() }
         }
-        if modes.launcher ?? model.starterLauncherSetting == nil {
+        if modes.launcher ?? model.launcherSetting(modes) == nil {
             // Settings are not read yet: the menu says so (and offers a retry) instead of a launcher name (#4200).
             Section("Model [Assistant View c98e11]") {
                 if model.assistantConfigLoadFailed {
@@ -1576,21 +1598,22 @@ struct StarterModesMenu: View {
                 }
             }
         } else if !launchers.isEmpty {
-            Section("Model [Assistant View c98e11]") {
-                Picker("Launcher", selection: Binding(get: { modes.launcher ?? model.assistantConfig?.launcher ?? "" }, set: { modes.launcher = $0 })) {
-                    ForEach(launchers) { l in
-                        Text(SessionModes.modelName(l.model).map { "\(l.name) · \($0)" } ?? l.name).tag(l.name)
+            Section("Model [Assistant View c98e11]") { // switches, so the title is drawn (#4322, `MenuChoice`)
+                let current = modes.launcher ?? model.launcherSetting(modes) ?? ""
+                ForEach(launchers) { l in
+                    MenuChoice(id: l.name, selected: current, pick: { modes.launcher = $0 }) {
+                        Text(SessionModes.modelName(l.model).map { "\(l.name) · \($0)" } ?? l.name)
                     }
                 }
-                .pickerStyle(.inline)
             }
         }
-        Section("Thinking Effort") {
-            Picker("Thinking Effort", selection: modes.$effort) {
-                Text("Use Launcher's").tag("")
-                ForEach(SessionModes.startEffortLevels) { o in Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id) }
+        Section("Thinking Effort") { // switches, so the title is drawn (#4322, `MenuChoice`)
+            MenuChoice(id: "", selected: modes.effort, pick: { modes.effort = $0 }) { Text("Use Launcher's") }
+            ForEach(SessionModes.startEffortLevels) { o in
+                MenuChoice(id: o.id, selected: modes.effort, pick: { modes.effort = $0 }) {
+                    Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }
+                }
             }
-            .pickerStyle(.inline)
         }
         Picker(selection: modes.$mode) {
             Text("Use Launcher's").tag("")

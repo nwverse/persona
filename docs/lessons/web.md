@@ -1,14 +1,47 @@
 # Lessons: web UI and interactions
 
+## Pending cards need exact session metadata outside the loaded page (#6432)
+
+A task row can render from `taskRows` even when `getSession` has no row for its Agent. On a paging hub, hydrate every
+pending card's missing session, not only `folded_under` children, before checking approval capabilities. Keep missing
+and explicitly read-only sessions disabled. Test a root Agent outside the list window, and type without submitting.
+An expanded Needs you title opens the asking Agent; keep folding on its separate chevron, never on that title.
+
+## A grey text selection over sidebar rows reads as a stuck highlight (#6458)
+
+The theme paints `::selection` with `--accent-tint`, a neutral grey in the default theme close to the hover fill. A
+press-and-drag that started on a group's always-shown explanation (trying to drag an Agent onto a to-do) selected the
+group titles, state words and explanations below it, line by line, and pressing the fold buttons afterwards kept it
+(a press on a button does not move the selection), so the owner reported it as a highlight style leaking. Rows that
+fold or group (`Section`'s heading, `TreeBranch`) are `select-none`; a drag test in `web/e2e/todo-grouping.mjs` keeps
+it so. Before calling a stray grey block a style bug, check `String(getSelection())`.
+
+## Live acceptance must distinguish a lookup POST from a mutation (#5753)
+
+The live composer driver rejected the app's normal `POST /api/v1/launchers/catalog`, although the handler is a
+built-in metadata lookup that fetches and stores nothing. Permit that exact route, not every POST, while blocking
+main-chat records and mutations. Save a private test-session record and reuse it after a slow start; check the
+synthetic prompt and side-conversation URL before typing. Capture an expanded editor only after its finite
+animations finish: a half-transparent opening frame can look like text overlaps the chat behind it.
+
 ## The live screen's later words go in a lazy component, not in a startup namespace (#5685)
 
 `main.tsx` imports `screen/ScreenView` without waiting for the rest of the catalog, so the build counts every namespace
 ScreenView names as first-screen code, and a namespace in `src/i18n/startup-namespaces.json` ships in every page's first
 screen: the live screen and the App share that catalog. Four Displays-menu strings in `screen-screenview` took the ja first
-screen 49 B over its budget. Words the live screen needs only once it is connected go in a component ScreenView loads with
-`lazy()` (`screen/DisplayMenu.tsx`, namespace `screen-displays`): the build makes that import wait for the rest of the
+screen 49 B over its budget. Words the live screen needs only once it is connected go in a component ScreenView imports
+dynamically (`screen/DisplayMenu.tsx`, namespace `screen-displays`): the build makes that import wait for the rest of the
 catalog, so the first screen does not grow and nothing has to wait for it at run time. Gating ScreenView's own rendering
 on `i18nRest()` does not pass the build: the check reads which namespaces a chunk names, not when it reads them.
+
+## A mouse event sent again comes out on whole pixels (#5729)
+
+Keeping a drag inside a clipping box meant stopping a move outside it and dispatching a new `MouseEvent` at the nearest
+point inside. A centered box rarely has whole-pixel edges, and Chrome hands a constructed event's `clientX` / `clientY`
+back as whole pixels: kept at 81.5, the event read 81, outside again, and was sent again without end. The release never
+reached noVNC, so the Mac's button stayed down. Keep such a point on a whole pixel inside the edges (`ceil` the near edge,
+`floor` the far one), and guard the handler against the event it sends itself. Unit tests with whole-pixel boxes passed;
+`web/e2e/screen-displays.mjs` sizes its window so the edge is fractional.
 
 ## Check the keyboard-sized viewport before declaring that a composer grows (#5645)
 
@@ -71,6 +104,18 @@ every later alias moves on by one, the list reorders and every first-screen impo
 grew 9 B, but the ja count grew 255 B and `main` failed the build, with no first-screen code changed. `firstScreenBytes`
 now counts imported names as one fixed string and export lists as empty ones. To check a surprising move, compare the
 number of entries in each first-screen chunk's `export{…}` between the two builds.
+
+## A change's first-screen cost depends on the main it is measured on (#6348)
+
+The paged Agents list's groups measured +1,402 B for ja on one `main`, then +1,510 B, +1,396 B and +1,501 B on the
+next three, within two hours and with the change's own code untouched: brotli counts a change against everything around it,
+and each merge moved what it compresses against. For the same reason a lazy split saves far less than the module weighs
+alone: the sections' view is about 1.5 KB minified and compressed on its own, and moving it to its own chunk took 407 B
+off. Measure the branch and `main` at the same commit, after the last merge, and write that pair beside
+`FIRST_SCREEN_BUDGET`; never carry a delta over from an earlier base, and never estimate a split from a module's own
+size. A build under its budget prints no numbers: build a scratch checkout with the constant set to 1 B, and the error
+names every language's count. While the PR waits, `main` may raise the budget for its own changes: merge it, keep its
+note, and append yours with a new pair.
 
 ## An idle-contracted chunk's growth raises the idle budget, it cannot move to on-intent (#5386)
 
@@ -681,6 +726,11 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Machine details has three monitoring cells per row; at 390 width a subtitle gets about 94 px, while "56.5 GB / 64.0 GB" takes 92 px (2026-11-06, #3637). Headless Chrome at 390 just fits and hides truncation in screenshots; 15 px narrower (desktop scrollbar), or a slightly wider font, cuts the total. Measure natural text width (`Range.getBoundingClientRect`) against cell `clientWidth`, not just 390-wide screenshots. Show a shared unit once (`usedOfTotal`, "56.5 / 64.0 GB", 74 px).
 
 ### Terminal (xterm.js)
+
+- A Linux Fontconfig preference can substitute a missing desktop family such as Menlo with a proportional face
+  (#5768). Check W and i widths through the entire computed stack. Add explicit Linux monospace faces before
+  platform fallbacks. Put the unicode-range-limited CJK face first so substituted named fonts cannot shadow its
+  size adjustment. Verify the actual xterm row spacing after asynchronous CJK loading in both terminal surfaces.
 
 - DOM-renderer Chinese gaps come from `DomRendererRowFactory`: `spacing = width * cellWidth - measured glyph width`, written as `letter-spacing`. Make Chinese glyphs measure exactly two cells to eliminate gaps. `FontFace` `size-adjust`
   scales only this fallback font; restrict `unicode-range` to CJK, leaving English cell width unchanged.

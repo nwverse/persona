@@ -21,6 +21,10 @@ struct RecordingsSection: View {
     @State private var capture = RecordingCapture.shared
     /// Which day is today's and whether a paired watch has Persona, worked out outside `body` (P4).
     @State private var days = RecordingDayBoard.shared
+    #if os(iOS)
+    /// The start's choices when the page has none to share (Knowledge › Recordings): the line under Record reads them too.
+    @State private var ownForm = RecordingStartForm()
+    #endif
     /// The recording a swipe asked to delete (its row shows the confirmation), and why a delete failed.
     @State private var pendingDelete: UUID?
     @State private var failure: String?
@@ -37,16 +41,28 @@ struct RecordingsSection: View {
         let recents = library.entries.filter { !(capturing && $0.id == capture.recordingID) && $0.id != today }
         Section {
             #if os(iOS)
-            RecordingCaptureControls(part: startAtBottom ? .options : .inline, sharedForm: form)
+            RecordingCaptureControls(part: startAtBottom ? .options : .inline, sharedForm: form ?? ownForm)
             #else
             RecordingCaptureControls()
             #endif
         } footer: {
             // Read once, before a recording: not under the controls of one that runs.
             if capture.state == .idle {
+                #if os(iOS)
+                Text(startPrivacy)
+                    .accessibilityIdentifier("recording-start-privacy")
+                #else
                 Text("Audio stays on this device. Its text syncs to Knowledge and is kept for \(sync.store.days) days.")
+                #endif
             }
         }
+        #if os(iOS)
+        // Whether the hub's voice extension takes meeting calls, for the line under Record (#3862 phase 4).
+        .task(id: MeetingAttendees.conversation(model)) {
+            guard MeetingAttendees.conversation(model), let hub = model.hub else { return }
+            await VoiceSupport.shared.refresh(group: hub.group, api: hub.api)
+        }
+        #endif
         #if os(iOS)
         // All-day recording: with a paired watch that has Persona (it offers the mode whatever the hub supports: the
         // phone keeps the text until the hub takes it, docs/assistant/day-recap.md「Compatibility」), and once a day
@@ -125,6 +141,22 @@ struct RecordingsSection: View {
 }
 
 #if os(iOS)
+extension RecordingsSection {
+    /// The line under Record: what leaves the phone. Where the next meeting's Talk would send its spans to the voice
+    /// service (a room meeting taking part, on a hub whose voice extension takes meeting calls; #3862 phase 4), the
+    /// contract's Wording, before the meeting starts; elsewhere the audio stays on this device, as before.
+    private var startPrivacy: String {
+        let form = form ?? ownForm
+        let role = form.pickedRole ?? MeetingAttendees.defaultRole(model)
+        let voice = model.hub.flatMap { MeetingCall.shared.voiceExtension(group: $0.group) }
+        if form.pickedKind == .meeting,
+           MeetingCallRule.talkSendsAudio(conversation: MeetingAttendees.conversation(model), role: role, voice: voice) {
+            return String(localized: "Audio stays on this iPhone, except while you hold Talk: what is said then goes to the voice service. Its text syncs to Knowledge and is kept for \(sync.store.days) days.")
+        }
+        return String(localized: "Audio stays on this device. Its text syncs to Knowledge and is kept for \(sync.store.days) days.")
+    }
+}
+
 /// An option row's title with what it means under it, both starting at the title's edge (not the icon's).
 private struct RowTitle: View {
     var title: LocalizedStringKey
@@ -565,7 +597,8 @@ struct RecordingCaptureControls: View {
     /// Record: a meeting with the options shown, or a note when Note is picked. The picks are for this start only.
     private func record() {
         let start = RecordingStart.make(form.pickedKind, offered: MeetingAttendees.offered(model), conversation: MeetingAttendees.conversation(model),
-                                        photos: MeetingAttendees.photos(model), role: role, privateMark: form.pickedPrivate,
+                                        photos: MeetingAttendees.photos(model), liveView: MeetingAttendees.liveView(model),
+                                        role: role, privateMark: form.pickedPrivate,
                                         attendee: chosenAttendee)
         form.pickedRole = nil; form.pickedAttendee = nil; form.pickedPrivate = false; form.pickedKind = .meeting
         switch start {
@@ -677,6 +710,9 @@ struct RecordingsPage: View {
     private static var sampleOpened = false
     #endif
     #if os(iOS)
+    /// A meeting's thread asked for from outside (the minutes push, #3862 phase 6), pushed over this page.
+    @State private var opener = MeetingPageOpener.shared
+    @State private var openedMeeting: UUID?
     /// The next recording's choices, shared by the options in the list and Record in the bottom bar.
     @State private var form = RecordingStartForm()
     #endif
@@ -708,6 +744,12 @@ struct RecordingsPage: View {
             .navigationBarTitleDisplayMode(.inline)
             #if os(iOS)
             .recordingLiveSheet()
+            // Pushed over this list, not over the recording's page: its Open Minutes / Open Recording is the way there.
+            .navigationDestination(item: $openedMeeting) { MeetingPage(id: $0, mode: .after, opensRecording: true) }
+            // On appear too: a cold launch from the push asks before this page exists.
+            .onChange(of: opener.serial, initial: true) {
+                if let id = opener.take() { openedMeeting = id }
+            }
             #endif
             #if DEBUG
             .navigationDestination(item: $debugPage) { page in
@@ -754,6 +796,8 @@ struct RecordingDetailView: View {
     @State private var pendingPrivate: Bool?
     /// The hub said the recording isn't a meeting (`409 not_meeting`): it takes no private mark.
     @State private var notMeeting = false
+    /// Its transcript has words (`MeetingTalk.hasText`), worked out when it changes rather than on every pass (P4).
+    @State private var hasText = false
     #endif
     @Environment(\.dismiss) private var dismiss
     @State private var library = RecordingLibrary.shared
@@ -798,6 +842,10 @@ struct RecordingDetailView: View {
         }
         #if os(iOS)
         .onTabVisibility(appear: { watchMeeting() }, disappear: { unwatchMeeting() })
+        .onChange(of: library.entry(id)?.revision, initial: true) {
+            let next = library.entry(id).map(MeetingTalk.hasText) ?? false
+            if hasText != next { hasText = next }
+        }
         #endif
         .confirmationDialog("Delete This Recording?", isPresented: $deleting, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -979,14 +1027,16 @@ struct RecordingDetailView: View {
     // MARK: The meeting conversation (#3862)
 
     /// Private Meeting for any meeting (whatever recorded it: a meeting with no mark counts as private until it is turned
-    /// off), and Meeting Conversation for a room meeting, or one the hub says has a room or a follow-up. Only with a hub
-    /// that lists the meeting conversation.
+    /// off), and Talk about this meeting (#3862 phase 6) for any recording that ended with text or minutes, or one the hub
+    /// holds a conversation for (`MeetingTalk.offered`; past retention its transcript here doesn't count): it pushes the
+    /// meeting's one thread. Only with a hub that lists the meeting conversation.
     @ViewBuilder private func meetingSection(_ entry: RecordingEntry) -> some View {
         let meeting = conversation.meeting(id)
+        let offered = MeetingAttendees.conversation(model)
         let showsPrivate = entry.isMeeting && !notMeeting
-        let showsThread = entry.roomMeeting || meeting.followup != nil
-            || meeting.room.map { $0.known != MeetingRoom.State.none } == true
-        if MeetingAttendees.conversation(model), showsPrivate || showsThread {
+        let showsThread = MeetingTalk.offered(entry, conversation: offered, minutes: minutes.ready != nil, meeting: meeting,
+                                              text: hasText, expired: sync.isExpired(entry))
+        if offered, showsPrivate || showsThread {
             Section {
                 if showsPrivate {
                     Toggle(isOn: Binding(get: { pendingPrivate ?? MeetingPage.isPrivate(entry, meeting) }, set: { setPrivate($0) })) {
@@ -1007,9 +1057,11 @@ struct RecordingDetailView: View {
                 if showsThread {
                     NavigationLink { MeetingPage(id: id, mode: .after) } label: {
                         // Drawn as the Private Meeting row beside it: in the style's icon language.
-                        Label { Text("Meeting Conversation").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.meeting) }
+                        Label { Text("Talk about this meeting").lineLimit(1) } icon: {
+                            ThemedIcon(Theme.Icon.conversation)
+                        }
                     }
-                    .accessibilityIdentifier("recording-meeting-conversation")
+                    .accessibilityIdentifier("recording-talk")
                 }
             }
         }

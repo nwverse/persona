@@ -1,7 +1,10 @@
 package node
 
 import (
+	"context"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -60,6 +63,100 @@ func TestCodexStartLeavesOutAnEffortCodexAlreadyRuns(t *testing.T) {
 	}
 }
 
+func TestCodexStartKeepsTierEffortOverNativeShellFunction(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Codex starts do not resolve shell functions on Windows")
+	}
+	for _, shell := range []string{"bash", "zsh"} {
+		for _, flags := range []string{"-p fast", "-c model_reasoning_effort=low"} {
+			t.Run(shell+"/"+flags, func(t *testing.T) {
+				if _, err := exec.LookPath(shell); err != nil {
+					t.Skip("no " + shell)
+				}
+				withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
+				n, _, cwd, _ := codexStartHerdr(t, 0)
+				t.Setenv("HOME", n.home)
+				t.Setenv("SHELL", "/bin/"+shell)
+				writeFile(t, filepath.Join(n.home, "."+shell+"rc"),
+					`codex() { HTTPS_PROXY=http://proxy.example:8080 command codex `+flags+` "$@"; }`+"\n")
+				writeFile(t, filepath.Join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n")
+				writeFile(t, filepath.Join(n.codexHome(), "config.toml"), "model_reasoning_effort = \"high\"\n")
+				_, err := request(t, n, "session.start", map[string]any{
+					"cwd": "~/proj", "launcher": "codex", "prompt": "hello", "effort": "high",
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := []string{"codex", "-c", "model_reasoning_effort=high"}
+				if strings.Join(ran, "\x00") != strings.Join(want, "\x00") {
+					t.Fatalf("runs %q, want tier effort after the shell function's flags: %q", ran, want)
+				}
+			})
+		}
+	}
+}
+
+func TestCodexEffortInheritedKeepsTheFlagWhenShellResolutionIsUncertain(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Codex starts do not resolve shell functions on Windows")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	for _, tc := range []struct {
+		name, rc string
+		cancel   bool
+	}{
+		{name: "shell startup failed", rc: "exit 7\n"},
+		{name: "caller canceled", cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, home := testNode(t)
+			t.Setenv("HOME", home)
+			t.Setenv("SHELL", "/bin/bash")
+			writeFile(t, filepath.Join(home, ".bashrc"), tc.rc)
+			writeFile(t, filepath.Join(home, ".codex", "config.toml"), "model_reasoning_effort = \"high\"\n")
+			cwd := mkdir(t, filepath.Join(home, "repo"))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancel {
+				cancel()
+			}
+			if n.codexEffortInherited(ctx, []string{"codex"}, cwd, "high") {
+				t.Fatal("uncertain shell resolution dropped the tier effort")
+			}
+		})
+	}
+}
+
+func TestCodexEffortInheritedChecksTheLaunchEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Codex starts do not resolve shell functions on Windows")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	n, home := testNode(t)
+	t.Setenv("HOME", home)
+	t.Setenv("SHELL", "/bin/bash")
+	writeFile(t, filepath.Join(home, ".bashrc"), `
+if [ "${PERSONA_TEST_CODEX_FUNCTION-}" = yes ] && [ "$PWD" = "$HOME/repo" ]; then
+  codex() { command codex -p fast "$@"; }
+fi
+`)
+	writeFile(t, filepath.Join(home, ".codex", "config.toml"), "model_reasoning_effort = \"high\"\n")
+	cwd := mkdir(t, filepath.Join(home, "repo"))
+	for _, on := range []bool{false, true} {
+		argv := []string{"codex"}
+		if on {
+			argv = append([]string{"PERSONA_TEST_CODEX_FUNCTION=yes"}, argv...)
+		}
+		if inherited := n.codexEffortInherited(context.Background(), argv, cwd, "high"); inherited == on {
+			t.Fatalf("function enabled %v: inherited %v", on, inherited)
+		}
+	}
+}
+
 // codexEffortInherited holds only when nothing between the user's config.toml and a -c override could choose another
 // effort, and the launcher would otherwise run on the shared app-server; any doubt keeps the flag.
 func TestCodexEffortInherited(t *testing.T) {
@@ -90,6 +187,11 @@ func TestCodexEffortInherited(t *testing.T) {
 		{name: "--profile", argv: []string{"codex", "--profile", "deep"}, user: high},
 		{name: "--remote", argv: []string{"codex", "--remote", "ws://127.0.0.1:9"}, user: high},
 		{name: "its own CODEX_HOME", argv: []string{"CODEX_HOME=/elsewhere", "codex"}, user: high},
+		{name: "another home", argv: []string{"HOME=/elsewhere", "codex"}, user: high},
+		{name: "other shell startup files", argv: []string{"ZDOTDIR=/elsewhere", "codex"}, user: high},
+		{name: "another shell", argv: []string{"SHELL=/elsewhere", "codex"}, user: high},
+		{name: "another executable path", argv: []string{"PATH=/elsewhere", "codex"}, user: high},
+		{name: "another working directory environment", argv: []string{"PWD=/elsewhere", "codex"}, user: high},
 		{name: "a managed launcher", argv: []string{"/opt/persona/personad", "launch", "team-codex"}, user: high},
 		{name: "another agent", argv: []string{"traex"}, user: high},
 		{name: "the project's config sets an effort", argv: []string{"codex"}, user: high, files: low},
@@ -110,7 +212,7 @@ func TestCodexEffortInherited(t *testing.T) {
 			if tc.cwd != "" {
 				cwd = mkdir(t, filepath.Join(home, tc.cwd))
 			}
-			if got := n.codexEffortInherited(tc.argv, cwd, "high"); got != tc.inherit {
+			if got := n.codexEffortInherited(context.Background(), tc.argv, cwd, "high"); got != tc.inherit {
 				t.Fatalf("inherited %v, want %v", got, tc.inherit)
 			}
 		})
@@ -125,7 +227,7 @@ func TestCodexEffortInheritedWithoutAProjectRoot(t *testing.T) {
 	writeFile(t, filepath.Join(home, ".codex", "config.toml"), "model_reasoning_effort = \"high\"\n")
 	writeFile(t, filepath.Join(home, "loose", ".codex", "config.toml"), "model_reasoning_effort = \"low\"\n")
 	cwd := mkdir(t, filepath.Join(home, "loose", "dir"))
-	if n.codexEffortInherited([]string{"codex"}, cwd, "high") {
+	if n.codexEffortInherited(context.Background(), []string{"codex"}, cwd, "high") {
 		t.Fatal("a parent's effort did not keep the flag")
 	}
 }

@@ -2,12 +2,15 @@ package node
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/shellcmd"
@@ -23,18 +26,21 @@ import (
 var codexProfileKey = lazyre.New(`(?m)^[ \t]*"?profile"?[ \t]*=`)
 
 // codexEffortInherited: the Codex that argv starts in cwd already runs at effort without the flag. True only when sure:
-//   - argv runs codex itself (not a managed launcher), names no CODEX_HOME of its own, and would join the shared
-//     app-server (no own-process flag, no --remote);
+//   - argv runs codex itself (not a managed launcher), changes no home or shell lookup settings, and would join the shared
+//     app-server (no own-process flag, no --remote); a bare codex is not a shell function (#4876);
 //   - this node's Codex home sets effort at the top level of config.toml, selects no profile and keeps Codex's own
 //     project markers;
 //   - no project .codex/config.toml Codex may read for cwd names an effort or a profile.
 //
 // Between the user's file and a -c override, Codex has only the profile and project layers; its managed layers come
 // after both and apply either way (codex-rs config_layer_source.rs).
-func (n *Node) codexEffortInherited(argv []string, cwd, effort string) bool {
+func (n *Node) codexEffortInherited(ctx context.Context, argv []string, cwd, effort string) bool {
 	words := argv
 	for len(words) > 0 && shellcmd.AssignRe.MatchString(words[0]) {
-		if strings.HasPrefix(words[0], "CODEX_HOME=") {
+		key, _, _ := strings.Cut(words[0], "=")
+		switch key {
+		case "CODEX_HOME", "HOME", "ZDOTDIR", "SHELL", "PATH", "PWD":
+			// These can change which config, executable or shell startup files the pane reads.
 			return false
 		}
 		words = words[1:]
@@ -55,6 +61,28 @@ func (n *Node) codexEffortInherited(argv []string, cwd, effort string) bool {
 	}
 	for _, dir := range dirs {
 		if !n.noProjectEffort(dir) {
+			return false
+		}
+	}
+	if words[0] == "codex" && runtime.GOOS != "windows" {
+		// codex-start preserves a same-name shell function. Its flags are not in argv and may select another effort.
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		cmd := loginShell(ctx, `
+if [ -n "${ZSH_VERSION-}" ]; then
+  (( $+functions[codex] )) && exit 0
+elif [ -n "${BASH_VERSION-}" ]; then
+  builtin declare -F codex >/dev/null && exit 0
+else
+  exit 0
+fi
+printf '\001persona-codex-unshadowed\001'
+`)
+		cmd.Dir = cwd
+		cmd.Env = append(cmd.Environ(), argv[:len(argv)-len(words)]...)
+		killGroupOnCancel(cmd)
+		out, err := cmd.Output()
+		if err != nil || !bytes.Contains(out, []byte("\x01persona-codex-unshadowed\x01")) {
 			return false
 		}
 	}

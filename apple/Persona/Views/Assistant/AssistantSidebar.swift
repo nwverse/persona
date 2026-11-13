@@ -792,8 +792,12 @@ struct AssistantSidebar: View {
     #endif
     @State private var ending: Session?
     @State private var renaming: Session?
+    /// The chat whose Pin / Unpin confirmation is open (#6214): the menu asks before the hub call.
+    @State private var leaderConfirm: Session?
     @State private var showArchived = false
     @State private var autoList: AutoConversationsRoute?
+    /// Whether Recent is folded, kept on this device (#6228): default open, the choice survives relaunches.
+    @AppStorage("assistant.sidebar.recent.folded") private var recentFolded = false
     @State private var feed = SidebarFeed()
     private let taskChats = AssistantTaskChatsStore.shared
     @FocusState private var searching: Bool
@@ -873,6 +877,30 @@ struct AssistantSidebar: View {
         .task(id: out ? "\(all.count)|\(model.assistantManagerID ?? "")" : "") { if out { await taskChats.refresh(model.api) } }
         .confirmClose($ending)
         .renameSessionAlert($renaming)
+        .confirmationDialog(
+            leaderConfirm.map { session in
+                model.assistantLeaders.contains(session.sessionID)
+                    ? String(localized: "Unpin Confirmation Title [Leader Actions 6214]")
+                    : String(localized: "Pin Confirmation Title [Leader Actions 6214]")
+            } ?? "",
+            isPresented: Binding(get: { leaderConfirm != nil }, set: { if !$0 { leaderConfirm = nil } }),
+            titleVisibility: .visible, presenting: leaderConfirm) { session in
+            // The hub stays the only state source: only the second choice calls make/end (#6214).
+            let lead = model.assistantLeaders.contains(session.sessionID)
+            Button(lead ? String(localized: "Unpin [Assistant Sidebar b7c40e]")
+                       : String(localized: "Pin [Assistant Sidebar 6d1f2a]")) {
+                Task { await model.setDirectionLead(session.sessionID, !lead) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { session in
+            if model.assistantLeaders.contains(session.sessionID) {
+                let title = session.title.isEmpty || session.title == "Claude Code"
+                    ? String(localized: "New Chat [Quick Actions ea4b29]") : session.title
+                Text(String(localized: "Unpin Confirmation Message \(title) [Leader Actions 6214]"))
+            } else {
+                Text(String(localized: "Pin Confirmation Message [Leader Actions 6214]"))
+            }
+        }
         .sheet(item: $autoList) { route in
             AutoConversationsView(source: route.source) { key in
                 autoList = nil
@@ -922,14 +950,14 @@ struct AssistantSidebar: View {
             }
         } else {
             HStack {
-                if model.managerRoster?.isMulti == true, let current = model.currentAssistant {
-                    // Keep the current multi-assistant switcher; a sole assistant keeps the persona title.
+                if model.showsAssistantSwitcher, let current = model.currentAssistant {
+                    // One installed assistant uses the switcher too; only a missing roster or current assistant keeps the persona title.
                     AssistantSwitcherHeader(manager: current, nameFont: Theme.Font.title, compact: macTitleRow, openSettings: showSettings)
                 } else {
                     #if os(macOS)
-                    Text(model.persona.name).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
+                    Text(model.assistantShownName).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
                     #else
-                    Text(model.persona.name).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
+                    Text(model.assistantShownName).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
                     #endif
                 }
                 Spacer(minLength: Theme.Space.s)
@@ -1162,10 +1190,10 @@ struct AssistantSidebar: View {
         return Button { if let key { open(key) } else { newConversation() } } label: {
             HStack(spacing: Theme.Sidebar.gap) {
                 // Where the places below have their symbol, the same width (on the Mac's plain list, `macPlace`'s).
-                AppGlyph(size: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn, scaled: true)
+                PersonaAvatar(size: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn)
                 // The small "Main Chat" under the name keeps the row readable as a conversation, not a heading (#6328, as the web, #6293).
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(Self.mainTitle).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                    Text(mainDisplayName).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                     Text("Main Chat").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -1182,7 +1210,7 @@ struct AssistantSidebar: View {
         }
         .buttonStyle(.plain)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
-        .accessibilityLabel([Self.mainTitle, String(localized: "Main Chat"), main.flatMap(stateWord)].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityLabel([mainDisplayName, String(localized: "Main Chat"), main.flatMap(stateWord)].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("sidebar-main")
         .disabled(key == nil && model.assistantConfig == nil)
@@ -1205,8 +1233,15 @@ struct AssistantSidebar: View {
         }
     }
 
-    /// The main conversation's name in the sidebar (#2004; it was Main Chat before, and again in #4606).
-    static let mainTitle = "Persona"
+    /// The main conversation's name in the sidebar (#2004; it was Main Chat before, and again in #4606). The current
+    /// assistant's own name when the hub has a roster (#6401: the sidebar's head and this row name one identity),
+    /// else the look's name; "Persona" only as the last fallback.
+    static func mainDisplayName(_ model: AppModel) -> String {
+        model.currentAssistant?.name ?? model.persona.name
+    }
+
+    /// The main conversation's name on this sidebar.
+    private var mainDisplayName: String { Self.mainDisplayName(model) }
 
     @ViewBuilder private func action(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, run: @escaping () -> Void) -> some View {
         if AppStyle.current.usesBeautifulUI {
@@ -1250,13 +1285,21 @@ struct AssistantSidebar: View {
         let directions = AssistantSidebarGroups.directions(all, leaders: model.assistantLeaders, main: main)
         if !directions.isEmpty {
             heading(String(localized: "Directions")) { EmptyView() }
-            ForEach(directions) { row($0, named: model.directionNames[$0.sessionID]) }
+            // Each folds open to its to-dos (#4352, AssistantSidebarDirections.swift). The secretary group has no row
+            // here: the main conversation's own row stands for it (#4331).
+            ForEach(directions) { s in
+                AssistantSidebarDirection(direction: model.directionTree?.leader(s.sessionID), id: s.sessionID,
+                                          name: model.directionNames[s.sessionID] ?? s.title, isShell: isShell, drawer: drawer,
+                                          selected: s.key == current, selectedFill: Self.selectedFill) { shades in
+                    row(s, named: model.directionNames[s.sessionID], drawsShade: shades)
+                }
+            }
         }
         let recent = AssistantSidebarGroups.recent(all, leaders: model.assistantLeaders, main: main,
-                                                   background: model.assistantConfig?.backgroundSupervisor)
+                                                   background: model.assistantConfig?.backgroundSupervisor,
+                                                   tasks: taskChats.known(on: model.api))
         if !recent.isEmpty {
-            heading(String(localized: "Recent")) { EmptyView() }
-            ForEach(recent) { row($0) }
+            recentHeading(recent)
         }
         allChatsRow
         archivedRow(archived)
@@ -1364,6 +1407,43 @@ struct AssistantSidebar: View {
         .padding(.bottom, Theme.Space.xs)
     }
 
+    /// The Recent heading and its rows (#6228): the heading folds them, like the web's and Android's, and the choice is
+    /// kept on this device. The open conversation's row still shows while folded, so folding never hides where a
+    /// message lands.
+    @ViewBuilder private func recentHeading(_ recent: [Session]) -> some View {
+        let holdsCurrent = current.map { key in recent.contains { $0.key == key } } ?? false
+        let open = !recentFolded || holdsCurrent
+        Button {
+            withAnimation(Theme.Motion.state) { recentFolded.toggle() }
+            Haptics.tap()
+        } label: {
+            HStack {
+                Text("Recent").font(Theme.Font.caption).foregroundStyle(Color.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+                ThemedIcon(Theme.Icon.disclosure)
+                    .font(Theme.Font.captionStrong)
+                    .foregroundStyle(Color.secondary)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                    .animation(Theme.Motion.state, value: open)
+            }
+            .padding(.leading, Theme.Space.m)
+            .padding(.top, Theme.Space.l)
+            .padding(.bottom, Theme.Space.xs)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "Recent"))
+        .accessibilityValue(open ? String(localized: "Expanded") : String(localized: "Collapsed [Assistant Sidebar e64447]"))
+        .accessibilityAction(named: open ? String(localized: "Collapse") : String(localized: "Expand")) {
+            withAnimation(Theme.Motion.state) { recentFolded.toggle() }
+        }
+        .accessibilityIdentifier("sidebar-recent-fold")
+        if open {
+            ForEach(recent) { row($0) }
+        }
+    }
+
     /// A conversation's title on one line. A 「1101 | 修复 | 主题」 title (docs/assistant/assistant.md「Chat titles」) has its day and
     /// kind in the secondary color: the topic is what the eye finds, and what a narrow drawer cuts at the end.
     @ViewBuilder private func titleText(_ title: String, named: Bool) -> some View {
@@ -1377,17 +1457,21 @@ struct AssistantSidebar: View {
 
     /// A conversation: a round mark (Persona's face for the main one), its title on one line, its state on the right.
     /// `named`: a direction's name, shown instead of its leader conversation's title.
-    private func row(_ s: Session, named: String? = nil) -> some View {
+    /// `drawsShade` false: a direction's row with its fold chevron beside it, which draws the shade across both (#4352).
+    private func row(_ s: Session, named: String? = nil, drawsShade: Bool = true) -> some View {
         let selected = s.key == current
         let isMain = s.key == model.assistantMain
         // The main conversation and the hub's built-in background supervisor (#5083) stay: no Archive, Pin or End.
         let builtIn = model.isBackgroundSupervisor(s.sessionID)
         let kept = isMain || builtIn
-        let title = isMain ? Self.mainTitle : named ?? (s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title)
+        let title = isMain ? mainDisplayName : named ?? (s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title)
         let preview = s.lastText.map { Fmt.plain($0).replacingOccurrences(of: "\n", with: " ") } ?? ""
         let counts: String? = model.assistantLeaders.contains(s.sessionID)
             ? model.directionCounts[s.sessionID].flatMap { DirectionCountsText.label(working: $0.working, needsYou: $0.needsYou) }
             : nil
+        // One activity mark for the whole row (#6230): it spins whether this conversation runs its own turn or only the
+        // Agents under it work; the row's own needs-you / unread dot still takes precedence.
+        let leadWorking = model.assistantLeaders.contains(s.sessionID) && ((model.directionCounts[s.sessionID]?.working ?? 0) > 0)
         // What opened it when Persona did (#5195): the rule All Chats' filters use, so its mark and its filter agree.
         let source = isMain ? nil : AutoConversations.source(of: s, tasks: taskChats.known(on: model.api))
         return Button { open(s.key) } label: {
@@ -1395,7 +1479,7 @@ struct AssistantSidebar: View {
                 // The shell's list is ChatGPT's: titles only, all in one column (the marks made it busy); the main
                 // conversation (only in search results here) keeps the app's logo, as its first row has it (#2004).
                 if isMain {
-                    AppGlyph(size: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark, scaled: true)
+                    PersonaAvatar(size: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark)
                 } else if isShell {
                     EmptyView()
                 } else {
@@ -1408,17 +1492,17 @@ struct AssistantSidebar: View {
                 if let counts {
                     Text(counts).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                 }
-                RowStateMark(state: s.state)
+                RowStateMark(state: s.state, working: leadWorking)
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Sidebar.rowPadding)
             .scaledFrame(minHeight: Theme.Sidebar.row)
             .background {
-                if selected {
+                if selected && drawsShade {
                     RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous).fill(Self.selectedFill)
                 }
             }
-            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
+            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous), isEnabled: drawsShade)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1443,10 +1527,10 @@ struct AssistantSidebar: View {
             if isMain { MainConversationMenu(key: s.key) } // Compact context, New Main Chat… (#1762)
             if !kept {
                 // A direction is the hub's, for every device (#4331): the long press makes a conversation one, or ends
-                // the direction there (#4331, `make` / `end`).
+                // the direction there (#4331, `make` / `end`). It asks a second time first (#6214).
                 let lead = model.assistantLeaders.contains(s.sessionID)
                 Button {
-                    Task { await model.setDirectionLead(s.sessionID, !lead) }
+                    leaderConfirm = s
                 } label: {
                     lead ? Label("Unpin [Assistant Sidebar b7c40e]", systemImage: Theme.Icon.unpin)
                         : Label("Pin [Assistant Sidebar 6d1f2a]", systemImage: Theme.Icon.pin)
@@ -1747,13 +1831,17 @@ nonisolated enum AssistantSidebarGroups {
     static let recentLimit = 5
 
     /// The sidebar's Recent (#4873, #5195): the newest `recentLimit` conversations by last activity, whoever opened them
-    /// (the user, a scheduled task, Lark /agent, the Inbox…; a row says which with its source's mark), except the main
-    /// one and the directions (listed above it) and the hub's built-in background supervisor (#4927, listed with the
-    /// scheduled tasks' ones in All Chats only). `sessions` are the open ones (no archived). `leaders`: the directions'
-    /// session ids; `background`: the background supervisor's.
-    static func recent(_ sessions: [Session], leaders: [String], main: SessionKey?, background: String?) -> [Session] {
+    /// (the user, Lark /agent, the Inbox…; a row says which with its source's mark), except the main one, the
+    /// directions (listed above it), the hub's built-in background supervisor (#4927, listed with the scheduled tasks'
+    /// ones in All Chats only) and the scheduled tasks' own chats (#6228: those have their own Scheduled Tasks entry and
+    /// stay in All Chats). `tasks` also catches a task chat a hub did not mark with `origin` (#2838). `sessions` are the
+    /// open ones (no archived). `leaders`: the directions' session ids; `background`: the background supervisor's.
+    static func recent(_ sessions: [Session], leaders: [String], main: SessionKey?, background: String?, tasks: AssistantTaskChats = .none) -> [Session] {
         let lead = Set(leaders)
-        let rest = sessions.filter { $0.key != main && !lead.contains($0.sessionID) && $0.sessionID != background }
+        let rest = sessions.filter {
+            $0.key != main && !lead.contains($0.sessionID) && $0.sessionID != background
+                && AutoConversations.source(of: $0, tasks: tasks) != .task
+        }
         return Array(newestFirst(rest).prefix(recentLimit))
     }
 

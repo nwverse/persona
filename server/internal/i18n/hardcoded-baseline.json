@@ -104,7 +104,6 @@
   "internal/extmgr/channels_extension.go": 5,
   "internal/extmgr/computer.go": 3,
   "internal/extmgr/computer_apps.go": 5,
-  "internal/extmgr/extension_auth.go": 15,
   "internal/extmgr/extension_autoupgrade.go": 1,
   "internal/extmgr/extension_dev.go": 3,
   "internal/extmgr/extension_market.go": 1,
