@@ -14748,10 +14748,9 @@ def mock_peer_fold():
 
 
 # Also with MOCK_PEER_FOLD=1: work lines right under a long message from another session, folded to a few lines with Expand
-# (#6645: the folded words still took the taps and long presses below the card, so the work line under it never opened
-# and a long press on the answer lifted the card). A working Agent chat: a finished exchange under a 2 KB message, a
-# tool and a reply in its work line, 37 minutes long; one with tools only; one with a reply only; then the running one,
-# its last tool still going. Synthetic text.
+# (#6645: the folded words still took the long presses below the card, so a long press on the answer under it lifted the
+# card). A working Agent chat: the exchange reported (a tool and a reply in its work line, 37 minutes long, a 2 KB
+# answer); one with tools only; one with a reply only; then the running one, its last tool still going. Synthetic text.
 PEER_FOLD = "a1f3c2d4-0000-4000-8000-000000006645"
 PEER_REPORT = ("合并队列的进展：\n"
                "- 发布分支已经合上最新的主干，只有一个说明文件冲突，已经解决，不用变基。\n"
@@ -14761,29 +14760,33 @@ PEER_REPORT = ("合并队列的进展：\n"
                "- 截图在 PR 里，深浅色各一套。\n"
                "- 下一步：等界面测试跑完再报一次。\n"
                "最后一行在这里。")
-# The reported one was about 2 KB: folded, its hidden words ran on about a screen below the card.
-PEER_LONG_REPORT = ("今天的合并队列和发版准备，按顺序说一遍：\n\n"
-                    "**合并队列**\n"
-                    "- 发布分支已经合上最新的主干，只有一个说明文件冲突，已经按主干的写法解决，不用变基，也不用重跑前面的检查。\n"
-                    "- 打包脚本拆成构建和上传两步以后，构建在本机 3 分钟内跑完；上传失败只重试上传，不再从头构建。\n"
-                    "- 弹窗的单测现在是 62 个，全部通过；界面测试还差两条，一条是深色下的对比度，一条是横屏时按钮换行。\n"
-                    "- 设置页的两个改动排在队列第三、第四位，前面两个合完大约还要四十分钟。\n\n"
-                    "**发版准备**\n"
-                    "- 说明文字的中英日三份已经对齐，日文里有两处语气偏硬，改成了更口语的说法。\n"
-                    "- 截图在 PR 里，深浅色各一套，窄屏和宽屏各一套；旧截图里有一张还是上个版本的图标，已经换掉。\n"
-                    "- 崩溃统计里上周那条启动时的崩溃没有再出现，我把对应的修复也写进了说明。\n"
-                    "- 商店页的关键词按上次的数据调了三个，把搜索量最低的两个换掉了，标题和副标题没动。\n\n"
-                    "**要你定的事**\n"
-                    "- 要不要把弹窗的改动放进下一个小版本：放进去，发版要晚半天；不放，就等再下一个版本。\n"
-                    "- 设置页的新开关默认开还是关：我倾向默认关，第一次用到时再提示。\n\n"
+# The reported exchange as the real one was shaped: a message from another session in English, folded to three lines;
+# a reply and the turn's end; 37 minutes later a background agent's result woke the agent (a wake tool_result, its call
+# on an earlier page), it sent a message, and a long answer came (about 2 KB, drawn in several rows).
+PEER_EN_REPORT = ("Got feature-split 1a2b3c4d. It merges onto the new main with only a .lane/REPORT.md conflict, so no "
+                  "rebase is needed. Whether it ships in the next patch release is up to you and the lead; I queued it "
+                  "behind the two open fixes. The popup count in PopupTests is now 62, all passing; two UI tests are "
+                  "still running and I will report again when they finish. Screenshots for light and dark are in the PR.")
+PEER_LONG_ANSWER = ("已经回复 release-worker，等它的界面测试结果。构建脚本的新版本也做完了，在 `core` 的 `build-split` 分支上，"
+                    "提交 `5e6f7a8b`，没有推送或合并；分支已经交给 release-worker 排进合并队列。\n\n"
+                    "**做了什么**\n"
+                    "- **拆分**：`release.sh` 现在分成构建和上传两步，上传失败只重试上传，不再从头构建；两步之间的产物放在 `dist/`，带校验和。\n"
+                    "- **结果**：原来一次失败要重跑 12 分钟，现在重试上传只要 40 秒；三次模拟的上传失败都在第二次重试时成功。\n"
+                    "- **没改 core 以外的文件**：守护进程和配置都不用改，旧的一步式命令还能用，会打印一行提示换成新命令。\n\n"
+                    "**验证**\n"
+                    "- 离线：`go build` 和 `go vet` 干净，`go test ./...` 全过（含新加的 9 个用例）。\n"
+                    "- 本机：完整走了一遍构建、上传、校验，产物和旧脚本逐字节一致。\n"
+                    "- 失败注入：上传中途断网三次，每次都只重试了上传，日志里能看到重试次数和耗时。\n"
+                    "- 兼容：旧的一步式命令在三台不同的构建机上各跑了一遍，结果和新命令一致，提示行也都打印出来了。\n"
+                    "- 回滚：把分支回退到拆分前再跑一遍，产物和拆分后的逐字节一致，说明拆分没有改动构建本身。\n\n"
                     "**风险**\n"
-                    "- 上传那一步依赖的签名证书下个月到期，这次发版没问题，但下一次之前要换新的，我已经记进待办。\n"
-                    "- 横屏按钮换行那条如果改布局，可能会碰到另一个车道正在改的工具栏，合之前需要和它对一下。\n"
-                    "- 队列里有一个依赖升级的改动，单测全过，但还没有在真机上试过，建议这次先不放。\n\n"
-                    "**下一步**\n"
-                    "- 等界面测试跑完再报一次；如果那两条还是不过，我先把弹窗的改动从这次发版里拿出来。\n"
-                    "- 队列空了以后，我会把发布分支再和主干对一次，确认没有漏掉的提交。\n"
-                    "最后一行在这里。")
+                    "- 上传那一步换了重试的写法，网络特别慢的时候第一次重试会等满 30 秒才开始，日志里会多一行等待提示，不影响结果。\n"
+                    "- 产物目录 `dist/` 现在会留到下一次构建开始才清，磁盘紧张的机器上要注意，我在说明里写了一句。\n"
+                    "- 旧命令的提示只打印一次，长期跑在定时任务里的机器可能看不到，建议发版说明里专门提一下。\n\n"
+                    "**还没做**\n"
+                    "- 文档里的发布步骤还是旧的一步式写法，等合并后一起改。\n"
+                    "- 签名证书下个月到期，下一次发版前要换，已经记进待办。\n"
+                    "- 是否放进下一个小版本，等你和 release-worker 定。")
 
 
 def mock_peer_fold_work():
@@ -14791,11 +14794,16 @@ def mock_peer_fold_work():
              *tool("Edit", {"file_path": "/Users/me/code/shop-app/scripts/release.sh", "old_string": "build && upload",
                             "new_string": "build\nupload"}, "ok", 69),
              it("assistant", "text", 68, text="拆好了：构建和上传现在是两步，上传失败只重试上传。")]
-    # The case reported: a long message (about 2 KB), then a tool and a reply, and the answer 37 minutes after it.
-    items += [it("user", "text", 62, text=PEER_LONG_REPORT, **{"from": "release-worker"}),
-              it("assistant", "text", 61.8, text="先回它一句，说收到了。"),
-              *tool("SendMessage", {"to": "release-worker", "message": "收到，界面测试跑完再报。"}, "sent", 61.5),
-              it("assistant", "text", 24.6, text="已经回复 release-worker，等它的界面测试结果。")]
+    # The case reported, shaped as it was (see PEER_EN_REPORT): its work line reads "Tools 1 · Replies 1 · 37 min".
+    items += [it("user", "text", 62, text=PEER_EN_REPORT, **{"from": "release-worker"}),
+              it("assistant", "text", 61.9, text="先回它一句，说收到了；构建脚本那边还在后台跑，跑完再一起报。"),
+              it("system", "turn_duration", 61.9, turn_duration={"duration_ms": 7000}),
+              it("user", "tool_result", 25, tool_use_id="toolu_peer_fold_bg", text="构建脚本拆分完成，验证全过。", wake=True,
+                 task={"kind": "agent", "status": "completed", "title": "拆分构建脚本", "task_id": "bgsplit",
+                       "tool_use_id": "toolu_peer_fold_bg", "output_file": "/tmp/claude/bgsplit.output", "detail": "完成"}),
+              *tool("SendMessage", {"to": "release-worker", "message": "收到，界面测试跑完再报。"}, "sent", 24.8),
+              it("assistant", "text", 24.6, text=PEER_LONG_ANSWER),
+              it("system", "turn_duration", 24.6, turn_duration={"duration_ms": 26000})]
     # Tools only.
     items += [it("user", "text", 20, text=PEER_REPORT, **{"from": "docs-worker"}),
               *tool("Read", {"file_path": "/Users/me/code/shop-app/docs/release.md"}, "# 发布", 19.6),

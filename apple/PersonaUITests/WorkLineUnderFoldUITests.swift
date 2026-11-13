@@ -1,13 +1,14 @@
 import XCTest
 
-/// A work line right under a long message from another session opens when tapped (#6645), against
+/// The rows right under a long message from another session take their own touches (#6645), against
 /// scripts/mock/mock_hub.py with MOCK_PEER_FOLD=1 (PERSONA_MOCK_HUB). The message folds to a few lines with Expand; the
 /// rest of its words are still laid out under the fold, unseen, and the upside-down chat list draws an older row over the
-/// newer one below it: those words took the tap, and the work line never opened. Four work lines, each right under such
-/// a message: a tool and a reply (the one reported), tools only, a reply only, and the running one. A long press there is
-/// the pressed row's too: the message above does not lift.
-/// `testRecord` (PERSONA_RECORD=1) taps the reported one slowly for a screen recording, light then dark, and prints each
-/// tap ("FOLDTAP <epoch> <x> <y>") and each part ("FOLDSEG <scheme> <epoch>") so the recording can be cut and marked.
+/// newer ones below it: a long press on the answer under it lifted the message. Four work lines, each right under such
+/// a message: a tool and a reply (the one reported), tools only, a reply only, and the running one; each opens on a tap,
+/// and on a finger's press at its words or its chevron.
+/// `testRecord` (PERSONA_RECORD=1) taps the reported one and long-presses its answer for a screen recording, light then
+/// dark, and prints each touch ("FOLDTAP <epoch> <x> <y>") and each part ("FOLDSEG <scheme> <epoch>") so the recording
+/// can be cut and marked.
 final class WorkLineUnderFoldUITests: XCTestCase {
     private var app: XCUIApplication!
     private var hub = ""
@@ -57,41 +58,56 @@ final class WorkLineUnderFoldUITests: XCTestCase {
         return f
     }
 
-    /// Drags the chat toward older lines until the work line is in the middle of the screen, clear of the bars.
+    /// Drags the chat until the work line is on screen, clear of the top bar and the composer: toward older lines while
+    /// it is above that, toward newer ones while it is below.
     @MainActor private func reveal(_ which: NSPredicate) {
         let window = app.windows.firstMatch.frame
         for _ in 0..<12 {
             let e = head(which)
+            var older = true
             if e.exists {
                 let y = onScreen(e).midY
-                if y > window.height * 0.2, y < window.height * 0.75 { return }
+                if y > window.height * 0.18, y < window.height * 0.8 { return }
+                older = y <= window.height * 0.18
             }
             // Slowly, held at the end: a plain drag flings the upside-down list well past the line (docs/lessons/ios.md).
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
-                .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)),
+            let (from, to) = older ? (0.35, 0.6) : (0.6, 0.35)
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
+                .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to)),
                        withVelocity: .slow, thenHoldForDuration: 0.3)
             sleep(1)
         }
         XCTFail("work line \(which.predicateFormat) never came on screen")
     }
 
-    /// Taps the work line's words, where a person does, and prints where and when.
-    @MainActor private func tap(_ which: NSPredicate) {
+    /// Presses the work line where a person does, for `seconds` (nil: XCUITest's tap), at its words or at its chevron,
+    /// and prints where and when.
+    @MainActor private func tap(_ which: NSPredicate, seconds: Double? = nil, chevron: Bool = false) {
         let f = onScreen(head(which))
-        let at = CGPoint(x: f.minX + min(40, f.width / 2), y: f.midY)
+        let at = CGPoint(x: chevron ? f.maxX - 6 : f.minX + min(40, f.width / 2), y: f.midY)
         print(String(format: "FOLDTAP %.3f %.1f %.1f", Date().timeIntervalSince1970, at.x, at.y),
               "frame \(head(which).frame) shown \(f) window \(app.windows.firstMatch.frame)")
-        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: at.x, dy: at.y)).tap()
+        let spot = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: at.x, dy: at.y))
+        if let seconds { spot.press(forDuration: seconds) } else { spot.tap() }
     }
 
-    @MainActor private func isOpen(_ which: NSPredicate, timeout: TimeInterval = 4) -> Bool {
-        let open = NSPredicate(format: "label == %@", "收起过程")
+    /// Whether the line reads open (`true`) or folded (`false`) within the time.
+    @MainActor private func reads(_ which: NSPredicate, open: Bool, timeout: TimeInterval = 4) -> Bool {
+        let label = NSPredicate(format: "label == %@", open ? "收起过程" : "展开过程")
         let end = Date().addingTimeInterval(timeout)
         while Date() < end {
-            if head(NSCompoundPredicate(andPredicateWithSubpredicates: [which, open])).exists { return true }
+            if head(NSCompoundPredicate(andPredicateWithSubpredicates: [which, label])).exists { return true }
             usleep(200_000)
         }
         return false
+    }
+
+    /// What the lifted copy says: its label and its elements' (a short message's are one element there, combined).
+    @MainActor private func liftedWords() -> String {
+        let lifted = app.descendants(matching: .any)["message-lift"].firstMatch
+        guard lifted.waitForExistence(timeout: 3) else { return "" }
+        let inner = lifted.descendants(matching: .any).allElementsBoundByIndex.prefix(60).map(\.label)
+        return ([lifted.label] + inner).filter { !$0.isEmpty }.joined(separator: " | ")
     }
 
     /// Each of the four work lines opens on a tap, and folds again on another.
@@ -100,37 +116,63 @@ final class WorkLineUnderFoldUITests: XCTestCase {
         for (name, which) in [("running", running), ("reply only", replyOnly), ("tools only", toolsOnly), ("tool and reply", reported)] {
             reveal(which)
             tap(which)
-            XCTAssertTrue(isOpen(which), "the \(name) work line under the folded message did not open")
+            XCTAssertTrue(reads(which, open: true), "the \(name) work line under the folded message did not open")
             XCTAssertTrue(app.buttons["work-fold-bottom"].firstMatch.waitForExistence(timeout: 3), "no steps under the \(name) work line")
             reveal(which)
             tap(which)
-            XCTAssertFalse(isOpen(which, timeout: 2), "the \(name) work line did not fold again")
+            XCTAssertTrue(reads(which, open: false), "the \(name) work line did not fold again")
         }
     }
 
     /// A long press under the folded message is the row's under it, not the message's: on the work line nothing lifts
-    /// (it is no message), on the answer under that the answer lifts, not the message above.
+    /// (it is no message); on the answer under it, the answer lifts. The reported exchange and the one with a reply only.
     @MainActor func testBLongPressUnderAFoldedMessageLiftsWhatIsPressed() throws {
-        let lifted = { self.app.descendants(matching: .any)["message-lift"].firstMatch }
+        var wrong: [String] = []
         launch()
         reveal(reported)
-        let f = onScreen(head(reported))
-        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.minX + min(40, f.width / 2), dy: f.midY)).press(forDuration: 0.8)
-        XCTAssertFalse(lifted().waitForExistence(timeout: 2), "a long press on the work line lifted the message above it")
+        tap(reported, seconds: 0.8)
+        let onLine = liftedWords()
+        print("FOLDLIFT work line: \(onLine)")
+        if !onLine.isEmpty { wrong.append("a long press on the work line lifted: \(onLine.prefix(80))") }
 
-        launch()
-        reveal(reported)
-        let answer = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "等它的界面测试结果")).firstMatch
-        XCTAssertTrue(answer.waitForExistence(timeout: 5), "the answer under the work line shows")
-        let a = onScreen(answer)
-        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: a.minX + 40, dy: a.minY + 10)).press(forDuration: 0.8)
-        XCTAssertTrue(lifted().waitForExistence(timeout: 3), "a long press on the answer lifted nothing")
-        XCTAssertFalse(lifted().staticTexts["来自 release-worker"].exists, "a long press on the answer lifted the message above it")
-        XCTAssertTrue(lifted().staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "等它的界面测试结果")).firstMatch.exists,
-                      "the answer is not what lifted")
+        for (name, which, words) in [("reported", reported, "等它的界面测试结果"), ("reply only", replyOnly, "等它下一次报告")] {
+            launch()
+            reveal(which)
+            let answer = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
+            XCTAssertTrue(answer.waitForExistence(timeout: 5), "the \(name) answer under the work line shows")
+            let a = onScreen(answer)
+            print(String(format: "FOLDTAP %.3f %.1f %.1f", Date().timeIntervalSince1970, a.minX + 40, a.minY + 10), "press \(name) answer")
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: a.minX + 40, dy: a.minY + 10)).press(forDuration: 0.8)
+            let got = liftedWords()
+            print("FOLDLIFT \(name) answer: \(got)")
+            if got.isEmpty { wrong.append("a long press on the \(name) answer lifted nothing") }
+            else if got.contains("来自") || !got.contains(words) { wrong.append("a long press on the \(name) answer lifted: \(got.prefix(80))") }
+        }
+        XCTAssertEqual(wrong, [], "long presses under the folded message")
     }
 
-    /// For the recording, in light and then dark: the reported work line tapped every three seconds, four times.
+    /// A finger's tap lasts a tenth to a third of a second: the reported work line opens and folds on each, at its words
+    /// and at its chevron.
+    @MainActor func testCFingerTapsOpenTheWorkLine() throws {
+        launch()
+        var missed: [String] = []
+        for seconds in [0.08, 0.15, 0.25, 0.32] {
+            for chevron in [false, true] {
+                let spot = "\(chevron ? "chevron" : "words") \(seconds) s"
+                reveal(reported)
+                tap(reported, seconds: seconds, chevron: chevron)
+                guard reads(reported, open: true, timeout: 3) else { missed.append("open: " + spot); continue }
+                reveal(reported)
+                tap(reported, seconds: seconds, chevron: chevron)
+                if !reads(reported, open: false, timeout: 3) { missed.append("fold: " + spot) }
+            }
+        }
+        print("FOLDPRESSES missed \(missed)")
+        XCTAssertEqual(missed, [], "presses on the work line under the folded message that did nothing")
+    }
+
+    /// For the recording, in light and then dark: the reported work line tapped open and folded again, then a long press
+    /// on the answer under it.
     @MainActor func testRecord() throws {
         guard ProcessInfo.processInfo.environment["PERSONA_RECORD"] == "1" else { throw XCTSkip("PERSONA_RECORD=1 records") }
         for scheme in ["light", "dark"] {
@@ -139,9 +181,16 @@ final class WorkLineUnderFoldUITests: XCTestCase {
             sleep(1)
             print(String(format: "FOLDSEG %@ %.3f", scheme, Date().timeIntervalSince1970))
             sleep(1)
-            for _ in 0..<4 {
+            for _ in 0..<2 {
                 reveal(reported)
-                tap(reported)
+                tap(reported, seconds: 0.15)
+                sleep(3)
+            }
+            let answer = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "等它的界面测试结果")).firstMatch
+            if answer.exists {
+                let a = onScreen(answer)
+                print(String(format: "FOLDTAP %.3f %.1f %.1f", Date().timeIntervalSince1970, a.minX + 40, a.minY + 10), "press answer")
+                app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: a.minX + 40, dy: a.minY + 10)).press(forDuration: 0.8)
                 sleep(3)
             }
             print(String(format: "FOLDSEGEND %@ %.3f", scheme, Date().timeIntervalSince1970))
