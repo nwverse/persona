@@ -1150,13 +1150,29 @@ struct ResultBlock: View {
     }
 }
 
-/// A tool's whole output, fetched when opened (pages carry its first 4 KB). Monospaced, scrolls both ways.
+/// A tool's whole output, fetched when opened (pages carry its first 4 KB). Monospaced, scrolls both ways. A pending
+/// card's long command opens in it too, the text in hand (`init(text:title:)`, #6605).
 struct FullOutputSheet: View {
     var itemID: String
     var load: ((String) async throws -> String)?
+    /// The bar's title: Tool Output, or what the text is (a card's command: its tool's name).
+    var title: String = String(localized: "Tool Output")
     @Environment(\.dismiss) private var dismiss
     @State private var text: String?
     @State private var error: String?
+
+    init(itemID: String, load: ((String) async throws -> String)?) {
+        self.itemID = itemID
+        self.load = load
+    }
+
+    /// Text already in hand: nothing to fetch.
+    init(text: String, title: String) {
+        itemID = ""
+        load = nil
+        self.title = title
+        _text = State(initialValue: text)
+    }
 
     var body: some View {
         NavigationStack {
@@ -1170,7 +1186,7 @@ struct FullOutputSheet: View {
                 }
             }
             .background(Theme.codeBackground)
-            .navigationTitle("Tool Output")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .pageToolbar {
                 #if os(macOS)

@@ -25,7 +25,7 @@ struct CommandAskTests {
         let ask = try #require(d.commandAsk)
         #expect(ask.command == "cd ./dist && ls")
         #expect(ask.description == "Count the example names in first-screen chunks")
-        #expect(ask.risk == "delete" && !ask.deadlineAllows && !ask.folds(at: CommandAsk.foldedLines))
+        #expect(ask.risk == "delete" && !ask.deadlineAllows)
         #expect(ask.deadlineAt == ISO8601DateFormatter().date(from: "2026-11-12T03:00:00Z"))
         #expect(ask.riskLine == String(localized: "Can't confirm this command won't delete files"))
         // Claude Code's own words stay one tap away.
@@ -72,15 +72,40 @@ struct CommandAskTests {
         #expect(CommandAsk(command: "ls")?.countdownLine(now: now) == nil)
     }
 
-    @Test func aLongCommandFolds() {
-        let folded = CommandAsk.foldedLines
-        #expect(CommandAsk(command: "git status")?.folds(at: folded) == false)
-        #expect(CommandAsk(command: String(repeating: "echo one two three; ", count: 12))?.folds(at: folded) == true)
-        #expect(CommandAsk(command: (1...6).map { "step \($0)" }.joined(separator: "\n"))?.folds(at: folded) == true)
-        // Beautiful UI's card folds at two rows: three short rows fold there and not in the default style's card.
-        let three = CommandAsk(command: "cd ./dist\nls\nwc -l *.js")
-        #expect(three?.folds(at: CommandAsk.compactFoldedLines) == true)
-        #expect(three?.folds(at: folded) == false)
+    /// A long command folds in the card to its lines, fewer when the card is short, cut between lines, never under its
+    /// fewest (#6605); short words are drawn whole.
+    @Test func aLongCommandFoldsBetweenLines() {
+        let line: CGFloat = 16
+        let cut = line * CGFloat(CommandAsk.foldedLines)
+        let floor = line * 2
+        #expect(CardFoldCut.height(full: 40, cut: cut, line: line, floor: floor, offered: nil) == 40)
+        #expect(CardFoldCut.height(full: 900, cut: cut, line: line, floor: floor, offered: nil) == cut)
+        #expect(CardFoldCut.height(full: 900, cut: cut, line: line, floor: floor, offered: 1000) == cut)
+        // Offered less: the whole lines that fit.
+        #expect(CardFoldCut.height(full: 900, cut: cut, line: line, floor: floor, offered: 70) == line * 4)
+        // Never under its fewest lines; words shorter than those, whole.
+        #expect(CardFoldCut.height(full: 900, cut: cut, line: line, floor: floor, offered: 10) == floor)
+        #expect(CardFoldCut.height(full: 20, cut: cut, line: line, floor: floor, offered: 10) == 20)
+        // Not measured yet: whole.
+        #expect(CardFoldCut.height(full: 900, cut: 0, line: 0, floor: 0, offered: 70) == 900)
+    }
+
+    /// A terminal's Yes / No (or a command's Allow / Deny) stay under the card's scroll area, in view; a question's
+    /// options with descriptions, many options or ticks scroll with the question (#6605).
+    @Test func shortChoicesStayInView() throws {
+        #expect(ScreenForm.pinsChoices(try dialog(Self.hubJSON)))
+        func options(_ list: [(String, String?)], multi: Bool = false) -> ScreenParser.Dialog {
+            var d = ScreenParser.Dialog(header: nil, question: "Do you want to proceed?", detail: nil,
+                                        options: list.enumerated().map { i, o in
+                                            .init(key: "\(i + 1)", label: o.0, detail: o.1, kind: .plain, checked: false, text: nil)
+                                        })
+            d.multi = multi
+            return d
+        }
+        #expect(ScreenForm.pinsChoices(options([("Yes", nil), ("No", nil)])))
+        #expect(!ScreenForm.pinsChoices(options([("Yes", "Run it now"), ("No", nil)])))
+        #expect(!ScreenForm.pinsChoices(options((1...5).map { ("Option \($0)", nil) })))
+        #expect(!ScreenForm.pinsChoices(options([("A", nil), ("B", nil)], multi: true)))
     }
 
     /// The needs-you row and the folded card say what it is for, not "Do you want to proceed?".
