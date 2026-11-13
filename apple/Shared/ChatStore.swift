@@ -1665,8 +1665,11 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     /// How the app wrote it when the user did not type it (a card's button): sent with it, so it never counts as the
     /// user's own words for a secret hand-off's Always rule.
     var via: APIClient.MessageVia?
+    /// It was written while the agent worked (the composer's queue mode): the queue strip draws it, not the chat
+    /// (`QueuePlacement`, #1461). nil for one written while the agent was idle, and in outboxes saved before this.
+    var queuedMode: Bool?
 
-    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused, via }
+    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused, via, queuedMode }
 
     /// Only on this phone as far as it knows: failed, or waiting for the network. Deleting it (its long press, its mark's
     /// menu) drops the bubble and its outbox entry and sends nothing (#4626). One being sent may be arriving and a sent

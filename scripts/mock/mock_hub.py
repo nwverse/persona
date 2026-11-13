@@ -12030,6 +12030,10 @@ IMPORT_ONLY = ("aliases", "existing", "create_as", "sources", "differs", "varian
 PROVIDER_DISCOVERED = [{"id": "example-opus", "name": "Example Opus", "context_window": 1000000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
                        {"id": "example-sonnet", "name": "Example Sonnet", "context_window": 200000, "efforts": ["low", "medium", "high"]},
                        {"id": "example-haiku", "context_window": 200000}]
+# MOCK_DISCOVER_MODELS=<n>: "Fetch models" finds n models, the three above and then made-up ones, like a gateway that
+# lists dozens (more than the wizard checks by itself, AUTO_CHECK in web/src/lib/providers.ts).
+PROVIDER_DISCOVERED += [{"id": "example-model-%02d" % i, "context_window": 200000}
+                        for i in range(1, int(os.environ.get("MOCK_DISCOVER_MODELS") or 0) - len(PROVIDER_DISCOVERED) + 1)]
 if MOCK_PROVIDERS:
     LAUNCHERS[:0] = [
         {"name": "gw_full", "display_name": "Team gateway", "source": "persona", "base_url": "https://gw.example.com", "model": "example-opus", "has_key": True,
