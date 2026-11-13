@@ -72,7 +72,7 @@ func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRol
 	addressed = func(value any, role bool) bool {
 		switch v := value.(type) {
 		case map[string]any:
-			role = role || cardRoleElement(v, false)
+			role = role || cardRoleElement(v, requireRole)
 			tag, _ := v["tag"].(string)
 			if tag == "at" && (!requireRole || role) || tag == "person" && role {
 				for _, key := range []string{"user_id", "open_id", "id"} {

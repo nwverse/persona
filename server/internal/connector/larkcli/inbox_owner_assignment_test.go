@@ -26,6 +26,8 @@ func TestCardAssignsOwnerRequiresResponsibilityRole(t *testing.T) {
 		{"ordinary card person", `{"elements":[{"tag":"person","user_id":"ou_example_owner"}]}`, false},
 		{"role does not leak past text", `{"elements":[{"tag":"plain_text","text":"Owner:"},{"tag":"plain_text","text":"Other Person"},{"tag":"at","user_id":"ou_example_owner"}]}`, false},
 		{"completed other field does not cover later mention", `{"elements":[{"tag":"plain_text","content":"Owner: Other Person"},{"tag":"at","user_id":"ou_example_owner"}]}`, false},
+		{"completed container label does not cover unrelated mention", `{"tag":"div","text":{"tag":"plain_text","content":"Owner: Other Person"},"elements":[{"tag":"at","user_id":"ou_example_owner"}]}`, false},
+		{"empty container label covers its assigned person", `{"tag":"div","text":{"tag":"plain_text","content":"Owner:"},"elements":[{"tag":"person","user_id":"ou_example_owner"}]}`, true},
 		{"mention all", `{"elements":[{"tag":"plain_text","text":"Owner:"},{"tag":"at","user_id":"all"}]}`, false},
 	}
 	for _, tc := range cases {

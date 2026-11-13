@@ -54,6 +54,8 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 - A responsibility-card exception must be narrower than ordinary mentions. Carry the selected card's verified
   assignment through the wire and retained connector block; bypass only sender mutes for that built-in source.
   Test ordinary cards, unrelated card mentions, other assignees, context-only assignments and chat mutes as negatives.
+  Apply the same empty-label boundary to containers and sibling rows: a field already assigning somebody else
+  must not lend its role to an unrelated nested mention.
 
 - An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
 
