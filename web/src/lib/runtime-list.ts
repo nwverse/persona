@@ -44,6 +44,8 @@ export const runtimeNeedsYou = (s: Session) => foldedState(s) === "needs_you";
 export const runtimePlace = (s: Session): SessionPlace => ({ machine: s.machine_id, project: s.repo_root || s.workspace_cwd || s.cwd || "", group: s.space_id || s.workspace_id || "" });
 export const SESSIONS_LOOKUP_FEATURE = "sessions_lookup";
 export const SESSIONS_PAGE_COUNTS_FEATURE = "sessions_page_counts";
+export const SESSIONS_AGENTS_ONLY_FEATURE = "sessions_agents_only";
+export const RUNTIME_AGENTS_PATH = "/sessions?agents_only=1";
 let pageCounts = false;
 /** Set from hello: whether this hub reads a page's counts with it (`with_counts`, #4858). */
 export function setRuntimePageCounts(on: boolean) { pageCounts = on; }
@@ -54,5 +56,9 @@ export function onRuntimeChanges(listener: (upsert: Session[], remove: string[])
 }
 export const runtimeSessions = new SessionList<Session>("/sessions", runtimeIdentity, runtimeOrder, undefined, runtimeRemoval, {
   onDelta: (upsert, remove) => changeListeners.forEach((listener) => listener(upsert, remove)),
+  pageCounts: () => pageCounts,
+});
+// A scoped removal can mean that a row is still present in the all-sessions list.
+export const runtimeAgents = new SessionList<Session>(RUNTIME_AGENTS_PATH, runtimeIdentity, runtimeOrder, undefined, runtimeRemoval, {
   pageCounts: () => pageCounts,
 });

@@ -15,7 +15,7 @@ import (
 // machine_id filtering. Presence matters: malformed new parameters must be
 // parsed and rejected rather than silently falling back to the legacy API.
 func Enabled(v url.Values) bool {
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id", "place", "space", "catalog"} {
+	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id", "place", "space", "catalog", "agents_only"} {
 		if _, exists := v[key]; exists {
 			return true
 		}
@@ -28,7 +28,7 @@ func Enabled(v url.Values) bool {
 // Options fields: adapters choose those answers, while Query ignores the selectors.
 func Parse(v url.Values) (Options, error) {
 	o := Options{Limit: defaultLimit}
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "machine_id", "project", "group", "source", "provider", "q", "counts", "with_counts", "pane_source", "roots", "parent_session_id", "catalog"} {
+	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "machine_id", "project", "group", "source", "provider", "q", "counts", "with_counts", "pane_source", "roots", "parent_session_id", "catalog", "agents_only"} {
 		if values, exists := v[key]; exists && len(values) != 1 {
 			return Options{}, failure("invalid_query", key+" must have exactly one value")
 		}
@@ -60,6 +60,13 @@ func Parse(v url.Values) (Options, error) {
 			return Options{}, err
 		}
 		o.Roots = b
+	}
+	if values, exists := v["agents_only"]; exists {
+		b, err := boolean(values[0])
+		if err != nil {
+			return Options{}, err
+		}
+		o.AgentsOnly = b
 	}
 	if values, exists := v["parent_session_id"]; exists {
 		if values[0] == "" {
@@ -201,7 +208,7 @@ func normalizeQ(s string) string { return strings.ToLower(s) }
 
 func (o Options) filters() filters {
 	return filters{ID: o.ID, State: o.State, Machine: o.Machine, Project: o.Project, Group: o.Group, Source: o.Source, Provider: o.Provider, Q: o.Q, PaneSource: o.PaneSource, Manager: o.Manager,
-		Roots: o.Roots, Under: o.Under, NoPrivate: o.NoPrivate, Places: placesKey(o.Places), Spaces: placesKey(o.Spaces)}
+		Roots: o.Roots, Under: o.Under, NoPrivate: o.NoPrivate, AgentsOnly: o.AgentsOnly, Places: placesKey(o.Places), Spaces: placesKey(o.Spaces)}
 }
 
 func (o Options) binding() binding {
