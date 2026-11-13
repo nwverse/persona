@@ -492,6 +492,24 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 		case s.isWorkMachine(a.MachineID):
 			reason = i18n.T(s.lang(ctx), "assistant-start.work_machine")
 		case state == HandlingAgent:
+			link := inboxLatestAgentLink(it)
+			if link == nil {
+				continue // no session whose state can prove the Agent stopped
+			}
+			sess, ok := s.session(ctx, link.MachineID, link.SessionID)
+			if !ok {
+				continue // an offline or missing machine is unknown, not proof that the Agent stopped
+			}
+			sess.MachineID = link.MachineID
+			if !s.recordInboxAgentStops(ctx, sess) { // also repairs a stop report lost in a restart
+				continue // still working, starting, queued or running background work: wait, never time it out
+			}
+			b.mu.Lock()
+			stillAgent := it.Agent != nil && it.Agent.SessionID == a.SessionID && it.Handling != nil && it.Handling.State == HandlingAgent
+			b.mu.Unlock()
+			if !stillAgent {
+				continue // the stop returned the item to its processing conversation
+			}
 			if a.StartedAt != nil && now.Sub(*a.StartedAt) > 4*agentTimeout(cfg) {
 				reason = i18n.T(s.lang(ctx), "assistant-inbox_agent.timeout")
 			}
