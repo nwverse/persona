@@ -87594,6 +87594,52 @@
       },
       "extractionState" : "manual"
     },
+    "This Agent has no chat here" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Agent has no chat here"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このエージェントのチャットはここでは表示できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 Agent 在这里没有对话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Persona can't show it as a chat. Its terminal shows what it is doing." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona can't show it as a chat. Its terminal shows what it is doing."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チャットとして表示できません。ターミナルで動作状況を確認できます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 无法把它显示成对话，终端里能看到它在做什么。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "No messages yet" : {
       "localizations" : {
         "en" : {

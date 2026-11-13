@@ -1349,6 +1349,13 @@ if MOCK_CODEX_WAITING:
     SESSIONS.append(sess("macbook", CODEX_WAITING, "weather-app", "/Users/me/code/weather-app", "idle", "idle", "weather-app", 7, "codex", 3, 1,
                          "", agent="codex", launcher="codex", awaiting_first_message=True, capabilities=CODEX_WAITING_CAPS))
 
+# MOCK_TERMINAL_ONLY=1 (#6170): a Kiro CLI in a herdr pane, an Agent whose chat Persona cannot draw (no transcript): its empty
+# chat offers Open Terminal. Open it with -openSession macbook/<TERMINAL_ONLY>.
+TERMINAL_ONLY = "c0de0000-0000-4000-8000-000000000002"
+if os.environ.get("MOCK_TERMINAL_ONLY") == "1":
+    SESSIONS.append(sess("macbook", TERMINAL_ONLY, "kiro-demo", "/Users/me/code/kiro-demo", "idle", "idle", "kiro-demo", 8, "kiro", 1, 1,
+                         "", agent="kiro", launcher="kiro"))
+
 
 # MOCK_RUN_HERE_CODEX=<mid,…> (#5504): those computers start Codex in a shell pane the user picked and keep that pane when
 # the start fails (run_here), so Run agent here offers their Codex launchers; the others' stay out, as an older node's.
