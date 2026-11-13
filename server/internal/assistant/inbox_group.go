@@ -634,7 +634,10 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 	case prev.last != "" && it.handled():
 		// Messages that join an event being handled follow it: its tier, words and urgency stay; its processing
 		// conversation is told (inbox_handle.go).
-		it.Title, it.TriagedBy = title, cmp.Or(it.TriagedBy, "model")
+		it.Title, it.Summary, it.Tier, it.Reason = title, summary, tier, reason
+		it.TriagedBy = cmp.Or(it.TriagedBy, "model")
+		it.Urgent = urgent
+		tierBefore = tier // The fill's provisional rule tier is not a triage change.
 	case byModel:
 		it.Title, it.Summary, it.Tier, it.Reason, it.TriagedBy = clip(oneLine(e.title), 40), clip(oneLine(e.summary), 80), e.tier,
 			clip(oneLine(e.reason), 30), "model"
