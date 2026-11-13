@@ -25,8 +25,8 @@ final class ButtonContrastUITests: XCTestCase {
     @MainActor func testSecondaryButtonsReadOnEverySurface() throws {
         guard let hub = env["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)") }
         let url = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        let styles = env["PERSONA_CONTRAST_STYLES"]?.split(separator: ",").map(String.init) ?? ["glass", "beautiful", "lark", "clay", "island"]
-        let colors = env["PERSONA_CONTRAST_COLORS"]?.split(separator: ",").map(String.init) ?? ["default", "coral", "teal"]
+        let styles = list("PERSONA_CONTRAST_STYLES") ?? ["glass", "beautiful", "lark", "clay", "island"]
+        let colors = list("PERSONA_CONTRAST_COLORS") ?? ["default", "coral", "teal"]
         let measureOnly = env["PERSONA_PHASE"] == "before"
         var rows = ["look\tstyle\tcolor\tplace\ttint\tfill\tlabel\tratio"], low: [String] = []
         var first = true, lastLook = ""
@@ -83,6 +83,13 @@ final class ButtonContrastUITests: XCTestCase {
         if !measureOnly {
             XCTAssertTrue(low.isEmpty, "secondary buttons under \(Self.floor):1 against their own fill:\n\(low.joined(separator: "\n"))")
         }
+    }
+
+    /// A comma-separated list from the environment; unset or empty (a script passing an unset variable) is nil, so every
+    /// style or color runs rather than none.
+    private func list(_ key: String) -> [String]? {
+        guard let value = env[key], !value.isEmpty else { return nil }
+        return value.split(separator: ",").map(String.init)
     }
 
     /// One screenshot: every place's buttons that are on screen, each label against its own fill.
