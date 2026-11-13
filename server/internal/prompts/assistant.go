@@ -363,12 +363,6 @@ type AssistantContext struct {
 	BackgroundStarted string
 }
 
-// SupervisorStart is the message the background supervisor's conversation starts with (assistant/supervisor_start):
-// what it is for, before its first supervision message.
-type SupervisorStart struct{ Owner string }
-
-func RenderSupervisorStart(d SupervisorStart) string { return render("assistant/supervisor_start", d) }
-
 // ContextDirection is one current leader as the main conversation is told of it: its conversation id and name.
 type ContextDirection struct{ ID, Name string }
 

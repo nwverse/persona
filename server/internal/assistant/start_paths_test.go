@@ -58,7 +58,7 @@ var startOptOuts = map[string]string{
 }
 
 // supervisionCalls make or keep a ledger.
-var supervisionCalls = []string{"superviseTodo", "updateSupervision", "adoptAgent", "adoptAgentAs", "quietAgentTask", "ensureSupervisor"}
+var supervisionCalls = []string{"superviseTodo", "updateSupervision", "adoptAgent", "adoptAgentAs", "ensureSupervisor"}
 
 func TestEveryStartPathIsSupervisedOrOptedOut(t *testing.T) {
 	funcs := parsePackageFuncs(t)
@@ -75,7 +75,7 @@ func TestEveryStartPathIsSupervisedOrOptedOut(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		t.Errorf("these functions start an Agent or open a conversation but are neither supervised nor opted out: %s. "+
-			"Give the work a supervision ledger (superviseTodo / adoptAgent / quietAgentTask, or follow it like "+
+			"Give the work a supervision ledger (superviseTodo / adoptAgent / adoptAgentAs, or follow it like "+
 			"conversation_new) and add it to supervisedStarts, or add it to startOptOuts with the reason", strings.Join(missing, ", "))
 	}
 	for name, via := range supervisedStarts {

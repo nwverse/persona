@@ -712,7 +712,6 @@ func TestProviderUsesNameTheBackgroundSupervisor(t *testing.T) {
 // The legacy background supervisor's prompts cover only tasks assigned before #5732. New work is always supervised by
 // the main conversation, regardless of the old setting.
 func TestGoldenBackgroundSupervisor(t *testing.T) {
-	golden(t, "supervisor_start", prompts.RenderSupervisorStart(prompts.SupervisorStart{Owner: "Example user"}))
 	golden(t, "context.background", prompts.RenderAssistantContext(prompts.AssistantContext{Background: true, Owner: "Example user", Snapshot: "（快照）"}))
 	golden(t, "context.main_background_started", prompts.RenderAssistantContext(prompts.AssistantContext{Main: true, Owner: "Example user",
 		BackgroundStarted: "a1b2c3d4-0000-4000-8000-000000000009", Snapshot: "（快照）"}))

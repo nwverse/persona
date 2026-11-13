@@ -67,9 +67,6 @@ func TestJudgeCheckDeliversWithoutClosing(t *testing.T) {
 
 // A sampled task that passed still waits for task_review, its supervision message saying it is a spot check.
 func TestSampledTaskStillWaitsForReview(t *testing.T) {
-	old := spotCheck
-	spotCheck = func(string, string, int) bool { return true }
-	t.Cleanup(func() { spotCheck = old })
 	s, f, todo := newSupervisedService(t)
 	sampleAt(t, s, 20)
 	finishTurn(t, s, f, judgeWithChecks("live", true, true))
@@ -151,25 +148,6 @@ func TestJudgeAsksForChecksOnlyWhenSampling(t *testing.T) {
 	}
 	if c.Delivery != nil || c.Verdict != verdictDone {
 		t.Fatalf("checks changed the delivery gate's verdict: %+v", c)
-	}
-}
-
-func TestSpotCheckedShare(t *testing.T) {
-	n := 0
-	for i := range 2000 {
-		id := fmt.Sprintf("todo_%d", i)
-		if spotChecked(id, "w", 0) || !spotChecked(id, "w", 100) {
-			t.Fatalf("%s: 0%% or 100%% not absolute", id)
-		}
-		if spotChecked(id, "w", 25) {
-			n++
-		}
-		if spotChecked(id, "w", 25) != spotChecked(id, "w", 25) {
-			t.Fatal("not stable")
-		}
-	}
-	if n < 400 || n > 600 {
-		t.Fatalf("25%% sampled %d of 2000", n)
 	}
 }
 

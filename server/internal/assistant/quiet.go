@@ -295,21 +295,6 @@ func (s *Service) linkPreparedAgentTask(ctx context.Context, todo Todo, m Device
 	return nil
 }
 
-// quietAgentTask is the answered-start convenience wrapper: prepare the task, then link the session.
-func (s *Service) quietAgentTask(ctx context.Context, conversation string, m Device, cwd, prompt string, tab any, sid string) (told string, ok bool) {
-	if sid == "" {
-		return "", false
-	}
-	todo, told, ok := s.prepareAgentTask(ctx, conversation, m, cwd, prompt, tab)
-	if !ok {
-		return "", false
-	}
-	if err := s.linkPreparedAgentTask(ctx, todo, m, cwd, sid); err != nil {
-		return "", false
-	}
-	return told, true
-}
-
 // startToldHere / startToldMain: who hears of an agent_start task, in the tool's answer: the conversation that started it, or
 // the main conversation that supervises it for a conversation that does not supervise (agent_tasks.go).
 const (

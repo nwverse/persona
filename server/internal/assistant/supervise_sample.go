@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"hash/fnv"
 	"strings"
 )
 
@@ -72,21 +71,4 @@ func autoCheckOf(criteria []string, got []autoCheckItem, delivery string) *taskA
 // sameCriterion: the judge copied criterion want as got (spacing aside).
 func sameCriterion(got, want string) bool {
 	return strings.Join(strings.Fields(got), " ") == strings.Join(strings.Fields(want), " ")
-}
-
-// spotCheck is spotChecked; a variable for the tests.
-var spotCheck = spotChecked
-
-// spotChecked: of the tasks that passed, this stretch of work of task id is one the main conversation still reviews.
-// The same task and work always say the same, so a restart or a second judgment does not change it.
-func spotChecked(id, work string, pct int) bool {
-	if pct >= 100 {
-		return true
-	}
-	if pct <= 0 {
-		return false
-	}
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(id + "\x00" + work))
-	return int(h.Sum32()%100) < pct
 }

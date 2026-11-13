@@ -121,7 +121,7 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 
 // toolAgentSupervise takes agent machine/session under the main conversation's supervision: a task of it already
 // gets the new done_when / expect_minutes; an agent of no task becomes one (a todo of this conversation with the
-// agent on it, as quietAgentTask makes); another conversation's task, or the user's own todo, stays theirs.
+// agent on it, as an answered agent_start makes); another conversation's task, or the user's own todo, stays theirs.
 func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json.RawMessage) (string, error) {
 	var a struct {
 		Machine       string   `json:"machine"`
