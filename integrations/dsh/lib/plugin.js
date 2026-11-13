@@ -82,6 +82,7 @@ export function start(host) {
     on: (event, listener, options) => scope.on(event, listener, options),
     userQuestions: optional(scope, 'userQuestions'),
     workspace: optional(scope, 'workspaceRegistry'),
+    models: optional(scope, 'modelRegistry') ?? optional(scope, 'models') ?? optional(scope, 'providerRegistry'),
     registerTool: config.phoneTools === false ? undefined : (definition, opts) => {
       const tools = optional(scope, 'tools')
       return typeof tools?.register === 'function' ? tools.register(definition, opts) : undefined

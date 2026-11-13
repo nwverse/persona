@@ -68,4 +68,41 @@ import Testing
         #expect(!live.isStopped)
         #expect(live.canSend && live.canTerminal)
     }
+
+    /// #6153: a computer's section ends up listed, failed or late with its request's id, never on a bare spinner; an
+    /// answer to a request a newer one replaced is ignored, and a new request clears the old failure and lateness.
+    @Test func aComputerNeverSitsOnABareSpinner() {
+        let list = panes(#"{"hosts":[]}"#)
+        var load = TerminalsLoad()
+        #expect(load.shown == .waiting)
+        load.expire(nil) // the spinner showed with no request of this page's
+        #expect(load.shown == .late(nil))
+
+        load.start("aaaa1111")
+        #expect(load.shown == .waiting, "a new request clears lateness")
+        load.expire("old")
+        #expect(load.shown == .waiting, "another request's patience is not this one's")
+        load.expire("aaaa1111")
+        #expect(load.shown == .late("aaaa1111"))
+        load.answer("aaaa1111", list)
+        #expect(load.shown == .rows(list), "a late answer still lists")
+
+        load.start("bbbb2222")
+        #expect(load.shown == .rows(list), "the list stays while a refresh is on its way")
+        load.expire("bbbb2222")
+        #expect(load.shown == .rows(list))
+        load.fail("aaaa1111", "stale")
+        #expect(load.shown == .rows(list), "a replaced request's failure is ignored")
+        load.fail("bbbb2222", "The request timed out.")
+        #expect(load.shown == .failed("The request timed out."))
+        load.start("cccc3333")
+        #expect(load.shown == .rows(list), "a new request clears the failure")
+
+        #expect(TerminalsLoad(failure: "Not connected").shown == .failed("Not connected"))
+        let named = TerminalsLoad.withRequest("No answer", "cccc3333") // the tests run in zh-Hans
+        #expect(named.hasPrefix("No answer") && named.contains("cccc3333"))
+        #expect(TerminalsLoad.withRequest("Bad (request cccc3333)", "cccc3333") == "Bad (request cccc3333)", "said once")
+        #expect(TerminalsLoad.withRequest("No answer", nil) == "No answer")
+        #expect(TerminalsLoad.newRequest().count == 8)
+    }
 }

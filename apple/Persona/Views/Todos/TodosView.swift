@@ -445,8 +445,9 @@ struct TodosView: View {
         }
     }
 
+    /// Ends dictation, and a start still asking for permission with it (#3407).
     private func stopDictation() {
-        if dictation.isListening { dictation.stop() }
+        dictation.stop()
     }
 }
 
