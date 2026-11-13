@@ -1613,9 +1613,10 @@ page merges and cache serialization; the chat cache schema changes with these fi
 `ChatSupervisionTests` and `SupervisionRoundUITests`. Screenshots use `MOCK_TASKS=1 MOCK_SUPERVISION=1` on a fresh test device;
 `-showSupervisionOpen YES` opens the record, and `-openAllWork YES` exposes its internal work for inspection.
 
-## Background rounds (#4314)
+## Background rounds (#4314, leaders in #6595)
 
-In the assistant's **main** conversation, a round whose first input comes from another conversation (source kind
+In the assistant's **main** conversation and its **leader** conversations (`AppModel.assistantLeaders`,
+`ChatLines.foldsBackground(…leaders:)`), a round whose first input comes from another conversation (source kind
 `conversation`), a scheduled follow-up (`followup` with the task's title; not a usage-limit continuation, a wake-up or an
 untitled follow-up, which continue the user's own work) or a scheduled task (`patrol`) folds like a quiet supervision round: one muted
 line, `@<source> · Background round` (`@<source> · Running in the background` while it runs), drawn by the same
@@ -1623,7 +1624,9 @@ line, `@<source> · Background round` (`@<source> · Running in the background` 
 `MessageSource.of`: `Item.source`, then the `message-source` metadata block, then the hub's `injected` mark. The round
 lasts until the next actual input; recaps and compactions inside stay inside. A message the user queued while it runs
 joins the same transcript turn, so `ChatLines.lines` cuts the turn at each input: the user's message and what follows it
-are never folded in. Other conversations and Agent sessions are unchanged.
+are never folded in. Other side conversations and Agent sessions are unchanged. The hub's interject note
+(`prompts/assistant/interject.md`, `<persona-context kind="context" title="插话">`) is dropped in `ContextRef.scan`, so
+it never renders as an owner-bubble quote; `WatchText.shown` likewise leaves no 〔插话〕 mark on the watch.
 
 Opening the line shows the whole round, history included (super rule 2.4). Unlike a supervision record it shows the
 input as its source block, not as raw input: a supervising conversation's message shows its text; a scheduled task's or

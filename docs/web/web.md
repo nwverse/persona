@@ -1108,10 +1108,15 @@ a reply, user input or different source resets it. Long content folds to three l
 control. No group-chat header, member list or per-source avatar is added. Quiet supervision rounds retain their existing
 folded trace, now labeled with their source mention.
 
-**Background rounds** (#4314, `docs/assistant/assistant.md` "Background rounds"): in the main conversation, while
-`main_background_folded` is on (Settings › Assistant › **Fold background rounds**, `settings/AssistantSettings.tsx`), a round
-whose first input's source is `conversation`, `followup` or `patrol` folds into the same line as a quiet supervision round,
-`@<source> · Background round` (`chatLines`' `background` option, `lib/turns.ts`; `SupervisionLine` in `views/chat/Lines.tsx`).
+**Background rounds** (#4314, leaders in #6595, `docs/assistant/assistant.md` "Background rounds"): in the main
+conversation and the leader conversations (`AssistantInfo.leaders`), while `main_background_folded` is on
+(Settings › Assistant › **Fold background rounds**, `settings/AssistantSettings.tsx`; gate `lib/background-fold.ts`
+`foldsBackgroundRounds`), a round whose first input's source is `conversation`, `followup` or `patrol` folds into the
+same line as a quiet supervision round, `@<source> · Background round` (`chatLines`' `background` option, `lib/turns.ts`;
+`SupervisionLine` in `views/chat/Lines.tsx`). An ordinary side conversation keeps showing every round. The hub's
+interject note (`<persona-context kind="context" title="插话">`) is stripped in `parseUserText` and never becomes an
+owner-bubble quote chip; `e2e/leader-background-rounds.mjs` checks the leader chat with synthetic data and takes the
+before/after screenshots.
 Opened, its inputs are source blocks, not raw model input; a scheduled task's or follow-up's input shows only its line,
 never the prompt (`promptHidden`), folded or not. The supervision visibility rule (`supervisionVisible`) keeps rounds that
 asked or told the user shown. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
