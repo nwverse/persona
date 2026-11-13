@@ -1097,27 +1097,14 @@ struct InboxRow: View {
     /// The same state line as the other clients: waiting has a still clock, only AI work spins, and anything that
     /// needs the owner carries the existing Needs you mark. FYI and folded states do not spin.
     private func nowLine(_ words: String) -> some View {
-        HStack(spacing: Theme.Space.sm) {
-            nowSymbol
+        let symbol = InboxNow.symbol(for: item)
+        return HStack(spacing: Theme.Space.sm) {
+            InboxNowSymbol(symbol: symbol)
             Text(words).font(Theme.Font.label)
-                .foregroundStyle(item.now == "failed" ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
+                .foregroundStyle(symbol == .failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
                 .lineLimit(1)
         }
         .padding(.top, Theme.Space.xxs)
-    }
-
-    @ViewBuilder private var nowSymbol: some View {
-        switch item.now {
-        case "waiting":
-            ThemedIcon(Theme.Icon.time).font(Theme.Font.label).foregroundStyle(.secondary)
-        case "queued", "looking", "agent_working":
-            InboxSpinner()
-        case "confirm_reply", "confirm_agent", "decide", "follow_up_ask", "check_due", "needs_you", "failed":
-            ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.label)
-                .foregroundStyle(item.now == "failed" ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(StatusPalette.needsYou.text))
-        default:
-            EmptyView()
-        }
     }
 
     /// Who wrote what (under the AI's summary once it has one).
