@@ -249,6 +249,8 @@ fun AssistantScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     var ending by remember { mutableStateOf<Session?>(null) }
     var endingBusy by remember { mutableStateOf(false) }
+    // The 设为常驻 / 取消常驻 menu asks before the hub call (#6214).
+    var leaderConfirm by remember { mutableStateOf<Session?>(null) }
     var ended by remember(pageManagement) { mutableStateOf(emptySet<SessionKey>()) }
     var archived by remember(pageManagement) { mutableStateOf(emptySet<SessionKey>()) }
     // Rename… and Archived (N) (iOS `AssistantSidebar`): titles given here and the archived conversations.
@@ -786,7 +788,10 @@ fun AssistantScreen(
             onInbox = { drawerOpen = false; onOpenInbox?.invoke() ?: navigator.navigate(InboxRoute) },
             onCopy = { copyId(it.key) },
             onArchive = if (pageManagement != null && !demo) ::archive else null,
-            onLeader = if (pageManagement != null && !demo) ::setLeader else null,
+            onLeader = if (pageManagement != null && !demo) ({ session ->
+                // Open the confirmation first; setLeader runs only on the second choice.
+                leaderConfirm = session
+            }) else null,
             onRename = if (pageManagement != null && !demo) ({ history.renaming = it }) else null,
             onDiagnostics = ::copyDiagnostics,
             archivedCount = history.shownArchived(openKeys).size, onArchived = { history.archivedOpen = true },
@@ -1131,6 +1136,19 @@ fun AssistantScreen(
                     finally { endingBusy = false }
                 }
             }, dismiss = stringResource(R.string.assistant_cancel) to { if (!endingBusy) ending = null })
+    }
+    leaderConfirm?.let { session ->
+        val leader = session.sessionId in snapshot.leaders
+        val title = session.conversationTitle(words)
+        JDialog(onDismiss = { leaderConfirm = null },
+            title = stringResource(if (leader) R.string.assistant_end_leader_title else R.string.assistant_make_leader_title),
+            text = if (leader) stringResource(R.string.assistant_end_leader_text, title)
+                   else stringResource(R.string.assistant_make_leader_text),
+            confirm = stringResource(if (leader) R.string.assistant_end_leader else R.string.assistant_make_leader) to {
+                // setLeader owns the hub call, the refresh and the failure notice.
+                setLeader(session)
+                leaderConfirm = null
+            }, dismiss = stringResource(R.string.assistant_cancel) to { leaderConfirm = null })
     }
     readinessHelp?.let { help ->
         ReadinessHelpDialog(help, readiness?.machine?.name, onDismiss = { readinessHelp = null }, onAction = { runReadinessAction(it) })

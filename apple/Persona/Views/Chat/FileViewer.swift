@@ -221,6 +221,9 @@ struct FileViewer: View {
                 .onDisappear { FrameMeter.shared.stop() }
         }
         .environment(\.openLink, openLink)
+        // A picture in this sheet (the file itself, or one in a Markdown file) opens its own viewer on top of it: the chat
+        // page's (`viewImages`) cannot present while the sheet is up, so it would open only after the sheet closed (#1331).
+        .environment(\.viewImages, nil)
         .environment(\.openURL, OpenURLAction { url in
             guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
                 #if os(macOS)
@@ -310,7 +313,10 @@ struct FileViewer: View {
             case .image:
                 ScrollView {
                     meta(page).padding(.horizontal, Theme.Space.l)
-                    Base64Image(payload: ImagePayload(mime: file.mime ?? "image/png", data: file.data ?? ""), title: file.name).padding(Theme.Space.l)
+                    // Full width of the sheet (#1331).
+                    Base64Image(payload: ImagePayload(mime: file.mime ?? "image/png", data: file.data ?? ""), title: file.name, fillsWidth: true)
+                        .padding(Theme.Space.l)
+                        .accessibilityIdentifier("file-image")
                 }
             case .pdf:
                 if let data = file.data, let bytes = Data(base64Encoded: data), let doc = PDFDocument(data: bytes) {
