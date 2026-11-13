@@ -46,6 +46,8 @@ final class TerminalTakeoverHangTests: XCTestCase {
         // The node goes for good (a deploy's restart): the computer is offline, in the app's words.
         node("gone")
         text(app, "MacBook 不在线", "the computer offline unexplained", timeout: 8)
+        // Between tries the size chip still says it takes the terminal over (not Wrap, a mirror's control).
+        XCTAssertTrue(size.waitForExistence(timeout: 2) && size.label.contains("接管中"), "the chip gave up: \(app.debugDescription)")
         shot(app, "offline-\(scheme)")
 
         // It's back: the terminal subscribes and takes over again by itself, at the phone's size.

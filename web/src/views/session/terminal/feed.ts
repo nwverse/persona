@@ -548,9 +548,8 @@ export class TerminalFeed {
   /** Nothing answered the subscription within ANSWER_LIMIT_MS: it goes, at the hub too, and the terminal says why; the
    * next one goes at the backoff's turn, or at once when the computer comes back. */
   private unanswered() {
-    this.drop();
-    const c = this.view.control;
-    this.patch({ loaded: true, control: c === "starting" ? "off" : c }); // the reason, not a spinner
+    this.drop(); // still taking it over (the label says so): the next try asks again
+    this.patch({ loaded: true }); // the reason, not a spinner
     this.failed(this.notAnswering());
     this.inputMode();
   }
@@ -644,14 +643,16 @@ export class TerminalFeed {
     this.asked = null;
     this.order.reset();
     const c = this.view.control;
-    const control: Control = c === "active" || c === "starting" ? "off" : c; // it asks again when it subscribes again
+    const taking = c === "active" || c === "starting";
     if (unsupported) {
       this.unsupported = true;
       this.nextTry = 0;
-      this.patch({ mode: "poll", control });
+      this.patch({ mode: "poll", control: taking ? "off" : c }); // a screen read can't be driven: it only watches
     } else {
       const offline = error.includes("not running");
-      this.patch({ offline, loaded: true, control });
+      // Nothing runs it: nothing to take over. Otherwise it still takes the terminal over, and the label says so until the
+      // next try is answered ("View only" between tries read as a mirror that had given up, #6327).
+      this.patch({ offline, loaded: true, control: taking ? (offline ? "off" : "starting") : c });
       // An offline computer in the page's words, whatever the hub's error says (it may name the machine by id).
       this.failed(offline ? t("session-terminal-feed.not_in_herdr") : this.machine()?.online === false ? this.notAnswering() : error);
     }

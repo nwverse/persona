@@ -105,6 +105,8 @@ final class TerminalFeed {
             guard model.isLive(key.group) else {
                 subscribed = false // the connection's hello subscribes again
                 if failure == nil { failure = Self.linkDown }
+                // The hub no longer knows who drives it: taking it over again, no keys until it says so (as the web).
+                if control == .active { control = .starting }
                 return
             }
             if failure == Self.linkDown { failure = nil } // back: an idle pane sends nothing, that is not a failure
@@ -146,8 +148,7 @@ final class TerminalFeed {
     /// Nothing answered the subscription within `answerLimit`: it goes, at the hub too, and the terminal says why; the
     /// next one goes at the backoff's turn, or at once when the computer comes back.
     private func unanswered(_ model: AppModel) {
-        drop(model)
-        if control == .starting { control = .off } // it asks again when it subscribes again
+        drop(model) // still taking it over (the size chip says so): the next try asks again
         loaded = true // the reason, not a spinner
         failed(Self.notAnswering(model.machine(key.machineRef)))
     }
@@ -293,6 +294,7 @@ final class TerminalFeed {
                 self.unsupported = true
                 mode = .poll
                 nextTry = .distantPast
+                if control == .active || control == .starting { control = .off } // a screen read can't be driven: it only watches
                 return
             }
             offline = why.contains("not running")
@@ -300,7 +302,9 @@ final class TerminalFeed {
             // An offline computer in the app's words, whatever the hub's error says (it may name the machine by id).
             failed(offline ? String(localized: "The session isn't running in herdr") : machine?.online == false ? Self.notAnswering(machine) : why)
             loaded = true
-            if control == .active || control == .starting { control = .off } // it asks again when it subscribes again
+            // Nothing runs it: nothing to take over. Otherwise it still takes the terminal over, and the size chip says so
+            // until the next try is answered (with "Wrap" between tries, it read as a mirror that had given up, #6327).
+            if offline, control == .active || control == .starting { control = .off } else if control == .active { control = .starting }
         case .reconnected:
             if mode == .stream { subscribe(model, continuing: true) }
         case .control(let state, _, _, let why):

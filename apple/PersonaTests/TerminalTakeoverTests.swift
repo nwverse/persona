@@ -89,7 +89,7 @@ struct TerminalTakeoverTests {
         #expect(sent.of("terminal_unsubscribe").count == 1, "the hub drops it: the next subscribe has it ask the node again")
         #expect(feed.failure == TerminalFeed.notAnswering(nil))
         #expect(feed.loaded, "the reason, not a spinner")
-        #expect(feed.control == .off)
+        #expect(feed.control == .starting, "still taking it over between tries: the size chip says so, not Wrap")
 
         clock.advance(1.1) // the backoff's first second
         await feed.tick(model)
@@ -123,6 +123,7 @@ struct TerminalTakeoverTests {
         let machine = try #require(model.machine(pane.machineRef))
         #expect(!machine.online && feed.failure == TerminalFeed.notAnswering(machine), "in the app's words, not the hub's")
         #expect(feed.failure?.contains("Mac Studio") == true)
+        #expect(feed.control == .starting, "it takes the terminal over once the computer is back")
         sent.messages = []
         clock.advance(1)
         await feed.tick(model)

@@ -223,7 +223,7 @@ describe("the terminal when nothing answers its takeover", () => {
     vi.advanceTimersByTime(500);
     expect(feed.snapshot().failure).toBe(t("lib-terminal.not_answering", { name: "Mac Studio" }));
     expect(feed.snapshot().loaded).toBe(true); // the reason, not a spinner
-    expect(feed.snapshot().control).toBe("off");
+    expect(feed.snapshot().control).toBe("starting"); // still taking it over between tries, not "View only"
     expect(types()).toEqual(["terminal_unsubscribe"]); // the hub drops it: the next one has it ask the node again
 
     vi.advanceTimersByTime(1_250); // the backoff's first second
@@ -260,6 +260,7 @@ describe("the terminal when nothing answers its takeover", () => {
     }
     emit("terminal", { machine_id: "m1", session_id: "pane:w1:p3", error: "m1: offline" });
     expect(feed.snapshot().failure).toBe(t("lib-terminal.offline", { name: "Mac Studio" })); // in the page's words, not the hub's
+    expect(feed.snapshot().control).toBe("starting"); // it takes the terminal over once the computer is back
     hub.sent = [];
     vi.advanceTimersByTime(1_000);
     expect(subscribes()).toHaveLength(0); // the next try is 15 seconds away
