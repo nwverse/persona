@@ -2225,7 +2225,11 @@ toasted and ended the hold, while the tap's dictation went on. The TLA+ model in
   Restore's ends there. A source parked out of sight (VNC's sat behind the content in the bottom-left corner) shows as a
   small copy of the picture popping up there first. Keep the source exactly over the picture people are looking at
   while it is up (`VNCPiPPlacement`), close the page at `willStart` (not `didStart`) so the picture never shows twice,
-  and call Restore's completion only once the page has drawn its picture again (`VNCPiPRestore`, with a time limit).
+  and call Restore's completion only once the page has drawn its picture again (`VNCPiPRestore`, with a time limit
+  on a timer off the main thread: a page opening under load held the main thread 10 s, so the system waited 10 s,
+  and in that run the next start never reached `didStart`). Hide the page's picture with a short fade, not at once: the system's copy appears a few
+  frames after `willStart`. Give each start a fresh `contentSource`: the second start from the same one drew a
+  magnified corner of the picture at the small window's last size.
 - `isPictureInPictureSupported()` is false on iPhone simulators, slim or stock, but true on a stock iPad simulator
   (`sim-boot.sh --profile stock`): record the system's transition there; how it feels on a phone still needs a device.
 - On an iPad simulator the hardware keyboard takes over once XCUITest types, hiding the on-screen keyboard: a form
