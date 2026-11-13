@@ -251,10 +251,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #6753's stopped-Agent dismissal adds 131 B to each language (ja 478,888 B, en 475,191 B, zh-Hans 476,178 B).
 // #6759's Agent skills selection adds 49 B more to ja (478,937 B; en 475,240 B, zh-Hans 476,227 B).
 // The 31 B room covers the hub's small build-environment difference.
-// #6240's pre-start Fast choice adds 43 B to each language against #6759's merged base
-// (en 475,240 B to 475,283 B; ja 478,937 B to 478,980 B; zh-Hans 476,227 B to 476,270 B).
-// The existing 31 B of room absorbs part of it; the remaining 12 B is this feature's measured allowance.
-export const FIRST_SCREEN_BUDGET = 478_980;
+// #6295: Paseo's workspaces add 11 B (ja 478,937 B on main at 8919ac022 to 478,948 B; en 475,240 B to 475,251 B,
+// zh-Hans 476,227 B to 476,238 B): New worktree on a Paseo Git row, the engine sent with an agent's worktree status, add
+// and remove, and no herdr ID to copy on a runtime's space. The budget moves by the same 11 B, keeping that 31 B room.
+// #6240: Fast on a new conversation adds 180 B to each language, measured in one environment against main at
+// a8db36f9a (ja 478,898 B to 479,078 B; en 475,201 B to 475,381 B, zh-Hans 476,188 B to 476,368 B): the draft, its
+// place in the first request, and dropping it when the manager, the hub or the model can no longer honor it, which
+// has to run while the model panel (loaded on intent) is closed. The budget moves by the same 180 B.
+export const FIRST_SCREEN_BUDGET = 479_159;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

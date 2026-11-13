@@ -24,6 +24,7 @@ type suggestIn struct {
 	Summary  string      `json:"summary"`
 	Machine  string      `json:"machine"`
 	Cwd      string      `json:"cwd"`
+	Due      string      `json:"due"`
 	Related  []string    `json:"related"`
 	Changes  []DocChange `json:"changes"`
 	// Item names the event: needed from a conversation it was handed to (Hand to AI, inbox_handoff.go).
@@ -45,12 +46,12 @@ func (in *suggestIn) check() error {
 	switch in.Kind {
 	case "":
 		if strings.TrimSpace(in.Recap) == "" {
-			return errSuggestion{"give kind (reply, agent or conclusion) with text, or at least recap"}
+			return errSuggestion{"give kind (reply, agent, conclusion or todo) with text, or at least recap"}
 		}
 		return nil
-	case SuggestReply, SuggestAgent, SuggestConclusion:
+	case SuggestReply, SuggestAgent, SuggestConclusion, SuggestTodo:
 	default:
-		return errSuggestion{fmt.Sprintf("kind %q: one of reply, agent, conclusion", in.Kind)}
+		return errSuggestion{fmt.Sprintf("kind %q: one of reply, agent, conclusion, todo", in.Kind)}
 	}
 	if in.Text == "" {
 		return errSuggestion{"text is required"}
@@ -60,6 +61,17 @@ func (in *suggestIn) check() error {
 		if p := draftPlaceholder(in.Text); p != "" {
 			return errSuggestion{fmt.Sprintf("the reply leaves %s to fill in, and it goes out as it is: leave out what you could not find (say so in note) and submit again", p)}
 		}
+	}
+	in.Due = strings.TrimSpace(in.Due)
+	if in.Kind == SuggestTodo {
+		if in.Item != "" {
+			return errSuggestion{"a to-do is suggested by the conversation that processes the item, not one it was handed to"}
+		}
+		if err := checkSuggestedDue(in.Due); err != nil {
+			return err
+		}
+	} else if in.Due != "" {
+		return errSuggestion{"due goes with a to-do only"}
 	}
 	if in.Kind != SuggestReply && len(in.Changes) > 0 {
 		return errSuggestion{"changes go with a reply only"}
@@ -164,7 +176,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		}
 		it.SuggestSeq++
 		g := &InboxSuggestion{Version: it.SuggestSeq, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
-			Handback: in.Handback, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from}
+			Handback: in.Handback, Due: in.Due, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from}
 		if in.Kind == SuggestReply && !in.Handback {
 			g.MailTarget = mailTarget(*it)
 		}
@@ -202,6 +214,8 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 				key = "suggested_handback"
 			} else if in.Kind == SuggestAgent {
 				key = "suggested_agent"
+			} else if in.Kind == SuggestTodo {
+				key = "suggested_todo"
 			}
 			b.chainAdd(it, InboxChainEntry{Kind: ChainHandling, At: now, Text: i18n.T(l, "assistant-inbox_chain."+key), Detail: clip(in.Text, 600), Link: link})
 		}
