@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func TestBusFileCallCancelReachesManager(t *testing.T) {
@@ -97,6 +99,56 @@ func TestBusOrdinaryCallRunsOnAfterCallerCancel(t *testing.T) {
 			t.Fatal("manager's ordinary call did not finish")
 		}
 	})
+}
+
+func TestBusFileCallFallsBackOnlyForOldManager(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		method    string
+		firstErr  *rpc.Error
+		wantCalls []string
+		wantErr   bool
+	}{
+		{name: "old manager copy", method: "file.copy", firstErr: &rpc.Error{Code: bus.CodeUnknownMethod, Message: "unknown method devices.file_call"}, wantCalls: []string{devicewire.MethodFileCall, devicewire.MethodCall}},
+		{name: "old manager zip", method: "file.zip", firstErr: &rpc.Error{Code: bus.CodeUnknownMethod, Message: "unknown method devices.file_call"}, wantCalls: []string{devicewire.MethodFileCall, devicewire.MethodCall}},
+		{name: "other error is not retried", method: "file.copy", firstErr: &rpc.Error{Code: bus.CodeInvalidParams, Message: "bad file call"}, wantCalls: []string{devicewire.MethodFileCall}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				h := newTestHub(t)
+				calls := make(chan string, 2)
+				playManager(t, h, func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+					if method != devicewire.MethodFileCall && method != devicewire.MethodCall {
+						return map[string]any{}, nil
+					}
+					calls <- method
+					if method == devicewire.MethodFileCall {
+						return nil, tc.firstErr
+					}
+					return map[string]any{"ok": true}, nil
+				})
+				h.devices.mu.Lock()
+				h.devices.upOpen = true
+				h.devices.mu.Unlock()
+				var out map[string]any
+				err := (&busNode{h: h, id: "m1"}).Call(context.Background(), tc.method, map[string]any{}, &out)
+				if (err != nil) != tc.wantErr {
+					t.Fatalf("Call error = %v, wantErr %v", err, tc.wantErr)
+				}
+				if !tc.wantErr && out["ok"] != true {
+					t.Fatalf("Call result = %#v", out)
+				}
+				if len(calls) != len(tc.wantCalls) {
+					t.Fatalf("manager received %d calls, want %d", len(calls), len(tc.wantCalls))
+				}
+				for _, want := range tc.wantCalls {
+					if got := <-calls; got != want {
+						t.Errorf("manager call = %q, want %q", got, want)
+					}
+				}
+			})
+		})
+	}
 }
 
 func TestDeviceBusMethod(t *testing.T) {
