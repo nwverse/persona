@@ -21,6 +21,7 @@ import persona.core.navigation.MachineDetailRoute
 import persona.core.navigation.MachinesRoute
 import persona.core.navigation.RouteInput
 import persona.core.navigation.Router
+import persona.core.navigation.restore
 import persona.core.navigation.SettingsPage
 import persona.core.navigation.SettingsPageRoute
 import persona.core.navigation.SettingsRoute
@@ -203,7 +204,7 @@ class AssistantPanePolicyTest {
         val deepLinkStacks = AppTab.entries.associateWith { mutableListOf<NavKey>(tabRoot(it)) }
         val deepLink = Router().parse(RouteInput.DeepLink("persona://open?target=extension&extension=extension&ui=page"))!!
         deepLink.restore(deepLinkStacks)
-        assertEquals(listOf(AssistantRoute, extension), deepLinkStacks.getValue(AppTab.Persona))
+        assertEquals(listOf(AssistantRoute, deepLink.key), deepLinkStacks.getValue(AppTab.Persona))
         assertSingleRightStack(deepLinkStacks.getValue(AppTab.Persona))
     }
 

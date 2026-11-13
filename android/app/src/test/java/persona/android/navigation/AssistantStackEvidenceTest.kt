@@ -29,6 +29,8 @@ class AssistantStackEvidenceTest {
             AssistantStackEvidence("extension/extension/page", "extension/page"),
             assistantStackEvidence(ExtensionUiRoute("extension", "page", "Page")),
         )
+    }
+
     @Test
     fun chatRoutesKeepTheOriginalTabContract() {
         assertEquals(
