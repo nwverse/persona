@@ -2512,7 +2512,7 @@ A row's extra actions open from a right click, a half-second press on a touch sc
 The component showcase's version 6 pages are `web/src/showcase/v6` (with their pictures in `web/src/showcase/images`) until the showcase extension's own snapshots have them.
 
 **iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, the styles
-(the 45 icons, named colors, `title` / `headline`), row actions, charts and sparks, tiles (grid, carousel) and the new fields; see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+(the 45 icons, named colors, `title` / `headline`), row actions, charts and sparks, tiles (grid, carousel), the new fields and pictures, that is all of it; reporting 6 is the last step; see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)
 
@@ -2975,6 +2975,13 @@ Views, components, actions, responses, placements and context all use schema-gen
   rather than showing a date nobody chose, and a set one has a clear button. `multichoice`: a menu of toggles that stays open while picking, the chosen ones named beside the label, sent as a
   JSON array in the choices' order (anything else reads as none chosen). `multiline`: a field that grows from 3 to 8 lines. A field's `detail` is a line of help under it. Unit tests
   `ExtensionFieldValuesTests`; screenshots of `showcase › inputs-v6`.
+- UI version 6's pictures (#827, `ExtensionMedia.swift`): an `image` in its shape (`aspect`; `auto` from `width` / `height`), cropped or fitted (`fit`), its caption under it, VoiceOver
+  reading its `alt`; a tap opens the app's `ImageViewer` unless `no_zoom`. A tile's picture, a row's thumbnail and avatar likewise. A `url` loads without the app's credentials; a `path`
+  only when it is the hub's image route for the page's own extension (`ExtensionViewModel.isHubPicture`), through the page with the device's credentials and `w` about as many pixels as it
+  is drawn; when a hub picture fails (its token may have run out) the page is drawn again, at most once a minute. Not loaded: the plain fill; failed: the alt text over a broken-picture mark.
+  Mock: `showcase` pages get a `path` beside every `ref` and the route answers a made-up picture of its shape (`missing`: 404). Unit tests `ExtensionMediaTests`; screenshots of `showcase › image`.
+  A section whose every component this app leaves out (one it doesn't know) is not drawn, rather than its title alone over
+  nothing; a section sent with no components keeps its title (`ExtensionParts.of`).
 - UI version 5's code review (#827, "UI version 5: code review"), drawn in parts (pages send 4 until all of version 6 is drawn too, so the hub strips these fields for iOS meanwhile).
   Reading (`ExtensionCodeReview.swift`, the code page): the words that changed in a removed and added pair on a stronger fill (PersonaKit's `LineDiff` word comparison, worked out once per hunk);
   generated files and lockfiles (by the extension's `generated` or the web's path list), changes over 400 lines and viewed files start folded with a line saying why and **Show**; a generated

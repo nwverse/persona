@@ -63,6 +63,10 @@ const (
 	// day, POST …/segments, detail.recap, recap_state; #4741). The hub lists the recording_day feature only while the
 	// default manager names it.
 	CapabilityRecordingDay = "recording_day"
+	// CapabilityAssistantSearch: the manager answers GET /api/v1/assistant/search from its index of the chats' messages
+	// (#6282, docs/protocol/protocol.md "Assistant chat search"). The hub lists the assistant_search feature only while
+	// the default manager names it; the apps keep filtering titles and last messages without it.
+	CapabilityAssistantSearch = "assistant_search"
 )
 
 // The methods and events, by direction. The assistant's handshake is manager.hello {id, host, os, arch, deploy,
@@ -282,6 +286,8 @@ var Routes = []string{
 	"GET /api/v1/kb/chats/{id}/context",
 	"GET /api/v1/kb/chats/{id}/days/{day}",
 	"GET /api/v1/kb-search",
+	// The assistant's chat search (search_routes.go there, docs/protocol/protocol.md "Assistant chat search", #6282).
+	"GET /api/v1/assistant/search",
 	// The selection: what the knowledge base brings in and keeps (kb_selection.go there).
 	"GET /api/v1/kb/selection",
 	"PUT /api/v1/kb/selection",
