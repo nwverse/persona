@@ -1,9 +1,10 @@
 # Shared server test latency: fixed-revision verification (#5730)
 
-> Historical measurements: the comparisons below use the explicitly recorded November 12 sources, not the
+> Historical measurements: the November 12 comparisons use their explicitly recorded sources, not the
 > branch after synchronizing main on November 13. That synchronization incorporates main
 > `5474a23c63c7abd61a3d1126f675796987fc7bbe`, including later upstream test fixes. The old timing and failure
-> data remains evidence for those earlier sources only; it is not a current-head performance or verification claim.
+> data remains evidence for those earlier sources only. Current-source results are recorded in
+> "Main synchronization on November 13" below.
 
 Audience: contributors and maintainers running bounded server verification. This record concerns shared test cost,
 independently of the Web skill picker (#5473) and ZIP importer (#5581). It does not establish either feature's merge readiness.
@@ -314,3 +315,64 @@ Local failures and measured hotspots are investigated independently. Local direc
 - [Verifier report at the reply-event source, 2026-11-12T15:37:35Z](https://github.com/nwverse/persona/pull/5845#issuecomment-6828106659).
 
 No UI or native code changed: screenshots, native builds and online deployment verification are not applicable. Nothing was merged or deployed.
+
+## Main synchronization on November 13
+
+This update merges main `5474a23c63c7abd61a3d1126f675796987fc7bbe` into the existing PR branch. Merge commit
+`d875f617235a466d7a3a20fae3327443e450dc73` retains both that main commit and the previous PR head
+`fc534efd464c85a11f0c2fa077af577f18fd91ee` as parents. No feature branch was imported separately.
+
+The only manual conflict was the top of `docs/lessons/testing.md`: both fixture lessons and the upstream lesson
+about settling background list counters were retained. `node.go` merged automatically, retaining the existing
+fixture seams alongside main's changes. The four test files carrying #5939, #6039, #6133, #6141 and #6187 match
+this fixed main byte for byte, and all five commits remain ancestors. The diff against synchronized main contains
+only this PR's fixture changes, regressions and documentation.
+
+The following checks use Go 1.27.1 on Linux/amd64, 32 allowed CPUs, warm shared Go caches, fresh owned HOME/temp/runtime
+directories, no test database URL and a shared host. The baseline is an isolated export of the fixed main tree.
+The queue is serial across major Go jobs. Every supervised command retains a 600-second outer deadline; completion,
+nonzero failure and timeout remain separate outcomes. These measurements do not update or replace the November 12 samples.
+
+| Complete eight-package partitioned run | Wall time | Exit / outcome | Root terminals |
+| --- | --- | --- | --- |
+| Fixed main `5474a23c63c7` | 434.166 s | 1 / failure, no outer timeout | 7,047 pass / 405 existing skip / 1 fail = 7,453 |
+| Merge source `d875f617235a` | 299.227 s | 1 / failure, no outer timeout | 7,060 pass / 405 existing skip / 1 fail = 7,466 |
+
+The only failure on both sides is `TestPreviewDrivesARealBrowser`, `preview_live_test.go:149`, with
+`Google Chrome did not answer: the browser closed` (0.070 s on main, 1.640 s after merging). This comparison does
+not identify the external verifier's failure or establish that the external gate passes.
+
+All 17,418 common terminal identities have identical pass/fail/skip states. The merge adds 25 identities belonging
+to its 13 regression roots, with zero removed identities or changed common states. Both runs have zero missing or
+unexpected inventoried roots, duplicate runs/terminals or unfinished identities. Each supervisor records 0.026 s
+cleanup and zero remaining owned processes. These are complete failure outcomes, not passing suites.
+
+The complete command is run from each tree's `server/` directory:
+
+```sh
+python3 ../scripts/test/go_test_partitioned.py go test -json -count=1 \
+  ./internal/apierr ./internal/assistant ./internal/assistantskills ./internal/assistantwire \
+  ./internal/hub ./internal/i18n ./internal/node ./internal/prompts
+```
+
+The eight-package selection includes all roots in the reported five-package set. It is not a new direct `go test`
+five/eight-package sample. The existing partition runner and its parameter/failure behavior are unchanged. The
+[November 13 synchronization receipts](2026-11-13-server-test-sync-5730.json) contain exact argv, measured source
+SHAs, exits, load and cleanup data, inventory/terminal reconciliation, retained upstream fix hashes and check results.
+Raw output and dynamic subtest names remain private.
+
+- All 13 fixture/lifetime/readiness regression roots passed 20 repetitions: 25 identities, exactly 500 pass terminals.
+- The related 68-root selection passed `-race -count=3` (105.007 s test execution, 142.503 s wall).
+- The five targeted upstream roots ran five times. Workflow launch-line, idle-list counting and both widget-wake roots
+  passed. Codex continuation/paginated-history retained its existing skip because this Linux environment has no
+  `sqlite3` executable; that assertion was not exercised locally.
+- The complete server build lane passed (107.255 s wall): formatting, vet, Linux build, Windows build/vet,
+  release-tag programs on Linux/Darwin, tagged tunnel/build-tag tests, extension schema/SDK bundle and Go SDK tests.
+- Complete `herdrlive` node test compilation passed (12.264 s wall); no live agent was started.
+- Repository guards passed: privacy, frozen migrations (101 unchanged), sleep ratchet (322 files, no increase),
+  web font ratchet, path-case and external-reference checks. Four document guards and existing partition discovery,
+  runner and isolated-environment Python suites (6/9/6 tests) passed. Final publication privacy checks cover tracked,
+  staged and range contents; only two configured private values are available.
+- No shell/workflow/UI implementation differs from synchronized main, so additional shell/workflow lint or UI/native
+  screenshots are not applicable to this merge resolution. Nothing was merged upstream or deployed, and no new
+  GitHub comment/review was sent. External verification remains separate from the local results above.
