@@ -171,13 +171,17 @@ func RenderInboxAgent(a InboxAgent) string { return render("inbox/agent", a) }
 
 // InboxHandlingNote is what the program tells an event's processing conversation (inbox/handling/<name>): new
 // messages (Context), the user's confirmation, rejection or words (Text, Edited), the Agent it started (Machine,
-// Session), or that the event is closed (Text says how: self_replied, replied, dismissed, read, user).
+// Session), a due follow-up check (Who, Next and Checks), or that the event is closed (Text says how: self_replied,
+// replied, dismissed, read, user).
 type InboxHandlingNote struct {
 	Owner            string
 	Text             string
 	Edited           bool
 	Failed           bool
 	Context          string
+	Who              string // who or what a due check waits on; "" means the other side's reply
+	Next             string // the next step to consider on a due check
+	Checks           int    // the consecutive due check's number, starting at 1
 	Machine, Session string
 	Handoff          bool // the note goes to a conversation the event was handed to (wrapped by inbox/handoff_note)
 }
@@ -186,6 +190,7 @@ type InboxHandlingNote struct {
 const (
 	NoteNewMessages  = "inbox/handling/new_messages"
 	NoteSent         = "inbox/handling/sent"
+	NoteCheck        = "inbox/handling/check"
 	NoteAgentStarted = "inbox/handling/agent_started"
 	NoteAgentStopped = "inbox/handling/agent_stopped"
 	NoteHandback     = "inbox/handling/handback"
