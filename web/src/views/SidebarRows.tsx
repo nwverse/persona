@@ -19,7 +19,8 @@ import { StatusMark } from "../ui/StatusMark";
 import { runningWorkflows, workflowLine, workflowShortLine } from "../lib/workflows";
 import { ultracodeMarkShown } from "../lib/ultracode";
 import { Rolling } from "../ui/Rolling";
-import { AppMark } from "../ui/AppMark";
+import { PersonaAvatar, usePersona } from "./assistant/Persona";
+import { managerOf, useRoster } from "../lib/managers";
 import { BrandMark } from "../ui/BrandMark";
 import { OriginMark } from "../ui/ChannelMark";
 import { autoOrigin, originMarkLabel } from "../lib/conversation-origins";
@@ -58,6 +59,11 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
   const aside = onMenu && !active ? "group-hover/row:invisible" : undefined;
   // words left unsent in the main conversation's box, once you are not in it (#5568)
   const draft = draftLine(useLeftDraft(main ? `${main.machine_id}/${main.session_id}` : null));
+  // The main conversation is the default assistant itself: the look's face and the assistant's name, one source with
+  // the sidebar's head (#6401).
+  const persona = usePersona();
+  const roster = useRoster();
+  const mainName = (roster ? managerOf(roster, roster.default)?.name : "") || persona.name;
   const link = (
     <a
       ref={ref}
@@ -73,9 +79,9 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
       // pinned over the list (#5581), its own hover fill: the gliding highlight passes under the pinned box
       className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-[background-color,transform] duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active ? CURRENT_ROW : "hover:bg-hover focus-visible:bg-hover", onMenu && active && "pr-8", onMenu && "[@media(hover:none)]:pr-11")}
     >
-      <AppMark size={18} radius={5} className="shadow-hairline" />
+      <PersonaAvatar size={18} className="shadow-hairline" />
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-[13.5px] font-semibold text-ink">Persona</span>
+        <span className="truncate text-[13.5px] font-semibold text-ink">{mainName}</span>
         {draft ? <SecondLine line={draft} draft /> : <SecondLine line={{ text: t("sidebar.main_chat") }} draft={false} />}
       </span>
       {chord && <span aria-hidden data-persona-chord className={cx("hidden sm:inline-flex [@media(hover:none)]:hidden", aside)}><Kbd>{formatChord(chord)}</Kbd></span>}
