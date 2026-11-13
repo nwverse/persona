@@ -252,6 +252,11 @@ struct RootView: View {
             }
         }
         .screenProbe("connection", ConnectionShown(shown: "\(model.connection.shown)", network: model.connection.networkUp))
+        #if os(iOS)
+        // Hub transcription's store (#3862 phase 5): the mode, the socket, the hub's lines and the fallback, for UI tests;
+        // a view of its own, so its changes redraw only it.
+        .overlay(alignment: .topLeading) { if ScreenProbe.enabled { MeetingTranscriptionProbe() } }
+        #endif
         .htmlCardSample()
         .voiceOrbSample()
         .closeoutSample()

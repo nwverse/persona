@@ -410,7 +410,8 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   line of 13 px / 1.25 text, `ink-2` at rest and `ink` with the `hover` fill while hovered or focused; no visible
   number (labels carry the index). Left, a 20 px drag handle (`grip` icon, 12 px, `ink-3`) shown with the row's actions;
   right, 20 px round buttons with a `line` ring on `surface` (↑ Send now 12 px, pencil and trash 11 px), shown on hover
-  or focus and always on a screen without hover, a spinner in their place while the row's request is out. A row from
+  or focus and always on a screen without hover, a spinner in their place while the row's request is out. Send now acts
+  at one press (4.4), its tooltip saying what happens. A row from
   another conversation has a send mark and **Another chat** (semibold 13 px, at most 120 px) before its words and no
   handle or buttons. Four rows or fewer show in full; from five, three and a centered 12 px **N more** / **Show less**
   with a chevron under a `line` divider. On a phone on its side the queue is one "N queued" line beside the run's status
@@ -652,12 +653,13 @@ sending identity or confirmation behavior.
 - A grouping's top level is one kind of row (#6458): in the web's **By to-do** that is the to-do's row (chevron, mark, title, count, state word, each in the same place), and the groups beside the to-dos (Not on a to-do, Recent (not running)) are rows of that kind, never a heading of another look. Where an Agent came from is its row's source mark (Terminal, Lark, Desktop app), not a group of its own: the Agents opened by hand in a terminal are in Not on a to-do (#6591). A group's state is the most urgent of its sessions', after its count, as a to-do's is; a to-do's word is the one its own page uses (5.6). No grouping nests a location (repository, folder) under a grouping that is not by location. What a group holds, when its name does not say, is an ⓘ beside its title (3.8 "Info tips") and the group's empty state, never a line always shown under it. Rows that fold groups select no text (`select-none`): a drag over them painted the grey `::selection` behind each line.
 - A long list of records on a detail page (a to-do's Decisions, web and iOS, #6447): the first five show, with **Show all N** under them and **Show the first 5** to go back. The header carries the fold-all button with the Agents title row's meaning (the web's chevron icon, corners in to collapse and out to expand, and its name as the tooltip; iOS's Collapse All / Expand All symbols, `Theme.Icon.collapseAll` / `expandAll`): Collapse all while any record is shown folds the list away, Expand all shows it whole. The header's count is unchanged by what is shown. Nothing is stored: each to-do opens at the first five, and recording or revising one shows the whole list so the new one is in view. No button while the list is empty.
 - **Inbox matter detail** (#6611; web `InboxDetail.tsx` and `InboxEvent.tsx`): the title's small line says where and who, then the current state, any suggestion, the background and the timeline. The state sentence keeps the processing-conversation link and offers **Say something** when no suggestion is waiting, or **Try again** after a failure; the instruction field reuses the suggestion editor's input and standard small buttons. The timeline starts with the three newest steps and expands on request. A `reported` step always uses the reported icon and is distinguished from program-confirmed steps by the existing neutral **Tag** ("Assistant says") and secondary text, not a new surface, tint or token. Source and Agent states reuse the existing brand marks and shared state words; missing fields keep the old presentation.
-  - On iOS (`InboxEventViews.swift`), the same state row carries the instruction action; the input uses the suggestion editor's well and `InboxSuggestionButton`, and a stale answer or error uses `InboxSuggestionModel`'s existing notice and error. The timeline's three-step projection and `via` icon meaning are shared, fixture-checked logic. A source id draws its `BrandMark` when one exists, otherwise its generic `ThemedIcon`; `reported` uses `Theme.Icon.reported`, a neutral compact `Chip` ("Assistant says") and secondary text. Agent and Agent-stopped rows with a session link read that one session's `AgentState.label` and `tone`; an unlisted session shows no state. Three or fewer entries have no expander.
-- Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (what the user has to act on, then the unfinished work, then what just finished; only Shelved and Done start folded, Done last, #5707), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. A row that is only worth a look (Just finished) has a one-tap **Got it** under its words, the same secondary button as Restore (iOS: also a leading swipe action after the full swipe's own), which files it under Done at once with an Undo toast (4.4, reversible rung); opening the item counts as seeing it, without a word. Rules in `docs/assistant/todo-status-sop.md` ("Seen"). Why not the folder groups: they say where work lives, not who has to act. Why unfinished work above Just finished: what still has to be done should not take a scroll and a tap while finished work sits above it.
+  - On iOS (`InboxEventViews.swift`), the header uses `InboxNow.meta` when `where` exists and the old source line otherwise. `InboxNow.text(for:)` supplies the current sentence for every known state, including done states and states with a suggestion; a state key alone opens the event detail. Row and detail both render `InboxNow.symbol(for:)` through `InboxNowSymbol`: waiting has a still clock, only queued / looking / agent_working spin, Needs-you states use the existing mark (failed is red), and done / FYI / folded have no mark. The same state row carries the instruction action; the input uses the suggestion editor's well and `InboxSuggestionButton`, and a stale answer or error uses `InboxSuggestionModel`'s existing notice and error. The timeline's three-step projection and `via` icon meaning are shared, fixture-checked logic. A source id draws its `BrandMark` when one exists, otherwise its generic `ThemedIcon`; `reported` uses `Theme.Icon.reported`, a neutral compact `Chip` ("Assistant says") and secondary text; the row shows `detail` when present, otherwise `text`, so the server's older-app prefix is not repeated; inline detail is not repeated in an expansion, and detail alone offers no expander. Agent and Agent-stopped rows with a session link read that one session's `AgentState.label` and `tone`; an unlisted session shows no state. Three or fewer entries have no expander.
+- Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (what the user has to act on, then the unfinished work, then what just finished; only Shelved and Done start folded, Done last, #5707), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. A row that is only worth a look (Just finished) has a one-tap **Got it** at the end of its status line, under the time (#6578; Android: the end of its last line; iOS: still under its words, the same secondary button as Restore, and a leading swipe action after the full swipe's own, until #7148), which files it under Done at once with an Undo toast (4.4, reversible rung); opening the item counts as seeing it, without a word. On the web it is a small capsule, never a line of its own: the row is exactly as tall as without it and the title keeps its room. It is drawn 20 px tall with the check and the word in `--ink-2` on `bg-surface` with `shadow-btn` (hover `bg-hover`), hanging over the 18 px line by negative margins, a 44 px finger target through `touch-hit`. Its press stays its own: it never opens the item. Why not under the words: a button line made these rows taller than every other and left the room under the time empty. Rules in `docs/assistant/todo-status-sop.md` ("Seen"). Why not the folder groups: they say where work lives, not who has to act. Why unfinished work above Just finished: what still has to be done should not take a scroll and a tap while finished work sits above it.
   - Section titles are the Agents list's state headers (`SectionHeader`: the name and a `CountBadge` in the state's tone; `FoldButton` for the folding ones), and the count is the items listed under the title. No separate summary line repeats them (#3712).
   - "N related" sits inside the row it belongs to, under its words; opened, the related rows come under it a level in, with a line down their side.
   - A filter and a sort for such a list go in one button's menu next to the view switch (on the web, next to the search field), the active filter also as a chip that clears it ("List controls" below); the sort orders rows inside each section and never moves a section (To-dos on iOS, Android and the web, #3740).
-- A paged list drawn by group (web paged Agents list, #6348): choosing a grouping in **Browse by** (Computer, Project, Space; Account for personal agents) draws the list as the sidebar's folding sections, one per group, the busiest first, with the group's count on its heading and, while any do, how many of its sessions need the user in the attention tone (the Earlier header's badge). The first three start open on their newest six sessions and **Load more**; the rest are folded and read nothing until opened. A project that is checked out in several places lists them under its heading as quiet lines: its remote, then each directory with its computer and its own count; the same lines sit under the project's name in the value pill's menu, and each of its rows says its computer before its title. A space names its computer beside its own name when the list spans several. The sessions without the attribute are one last section (**No folder**, **No space**). Picking a value in the pill narrows the list to that group and draws it flat. Why sections and not only a filter: a grouping control says how the list is arranged ("List controls" below), so choosing one has to rearrange it; a pill alone left the list as it was until a second choice. Why only a few open: an open section keeps its own list up to date, and a hub can have dozens of projects.
+- One grouping control per list (#6662): the web sidebar's Agents block shows the same bar (To-do / Machine / Repo / Project / Status), the same quick filters under it and the same title whether its list is paged or complete, so a pin or an unpin changes nothing above the list; a thing has one name in every list (Machine, never Computer beside it; Project is the workspace, Repo the repository). A grouping that repeats a section above it is not offered (the Agents list's By pinned, which the 常驻 rows draw).
+- A paged list drawn by group (web paged Agents list, #6348): choosing a grouping in **Browse by** (Computer, Project, Space; Account for personal agents) draws the list as the sidebar's folding sections, one per group, the busiest first, with the group's count on its heading and, while any do, how many of its sessions need the user in the attention tone (the Earlier header's badge). The first three start open on their newest six sessions and **Load more**, a quiet line in the look of the sidebar's "Show N more" (`ShowMoreRow`, #6662), never a button pill; the rest are folded and read nothing until opened. A project that is checked out in several places lists them under its heading as quiet lines: its remote, then each directory with its computer and its own count; the same lines sit under the project's name in the value pill's menu, and each of its rows says its computer before its title. A space names its computer beside its own name when the list spans several. The sessions without the attribute are one last section (**No folder**, **No space**). Picking a value in the pill narrows the list to that group and draws it flat. Why sections and not only a filter: a grouping control says how the list is arranged ("List controls" below), so choosing one has to rearrange it; a pill alone left the list as it was until a second choice. Why only a few open: an open section keeps its own list up to date, and a hub can have dozens of projects.
 - Side sessions under their parent (web paged Agents list, #5935): a session started from another one that stays a session of its own (a Claude desktop app's side chat or /btw question, `parent_agent_id`) is drawn right under that session, a level in with a line down its side (`SESSION_LIST_STYLE.nestedRow`, the look of the sidebar tree's spawned agents and of To-dos' related rows), always open, with no disclosure. Its group sits where its most recently active member would. Nesting changes no count and hides nothing: each side session keeps its own row and state mark, so one that needs the user is in view as itself (below). Why not fold it as a child (#5120): a side session is a conversation the user opens and talks to, not work another Agent drives. Why always open: a fold would hide a waiting side session behind its parent's mark, and the list keeps its length, total and counts either way.
 - Older rows folded by activity (web paged Agents list, #4236): an "Active within" menu beside the list's count (Any time, the default, then 24 hours, 7 days, 30 days) folds the rows last active before the window into one Earlier group at the list's end, folded by default, with how many it holds and how many of them need the user on its header. It is a display choice ("List controls": grouping and display), not a filter: no row leaves the list, no count changes, and Any time undoes it. Why not a filter chip: a filter hides rows, and sessions that need the user must stay visible (below).
 
@@ -759,6 +761,10 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 - Buttons side by side in equal widths go in a `StackingButtonRow` (`apple/Persona/DesignSystem/StackingButtonRow.swift`, #6151). It keeps them in one row while every label fits its share whole, and stacks them otherwise, the first on top and each across the row (rule 3 (c) in 1.2). It decides by measured width, not by text size: a short label keeps its row at sizes where a long one, or a long translation, stacks. Each label is a `Text(…).buttonLabelLine()`, one line that may shrink to 0.8 for a small overflow, which tells the row how narrow its button can be with the words whole. A button whose label isn't one is taken to fit. First used by the to-do page's bottom buttons; other rows of equal buttons move to it when they are next touched.
 - Icon buttons use a 44 pt frame around a smaller visual (composer round button, viewer chrome).
 - Destructive actions use `role: .destructive`. Red is also used for risky-but-not-destructive actions (DS-24).
+  A secondary button with that role is red (`Theme.danger`) in every style (#7042): `.themedButton()` reads the role, so a
+  call site sets no tint of its own. The system's glass and bordered styles took the app's tint over the role, and the
+  soft style ignored it, so a Delete drew in the accent (blue, purple in Clay, teal in Island) like any other button.
+  The red label reads at 3:1 on every fill as the danger tint does (`ButtonContrastUITests` checks both).
 - `SystemPasteButton` (`apple/Persona/DesignSystem/ClipboardButtons.swift`) wraps the system `PasteButton` for anything that sends what is on the phone's clipboard: a capsule in the accent with the system's own icon and word. Why not `.themedButton`: only the system Paste button reads the clipboard without iOS asking "Allow Paste?" first (the tap is the permission), and the system draws it, so it can be tinted and shaped but not restyled. Place it beside a themed button that does the same thing by reading the clipboard, with one line saying it sends without the prompt (the computer page's Clipboard section, #3064).
 - Web buttons are 32 px tall (hit area expanded on touch). Android: Large 48, Medium 40, Small 32 dp drawn, each taking taps across 48 dp: Compose extends a smaller control's touch target to 48 dp unless a clipping parent cuts it off, so a frame around small controls clips with `clipDrawing`, not `clip` (DS-06; `TouchTargetTest` checks buttons, chips, switches and segments in every style).
 - A group of actions has at most one solid primary button. A recommended choice has an outline and a "Recommended" tag, not a second solid button. Red is for failure and destructive actions only.
@@ -1198,7 +1204,11 @@ Severity ladder to adopt:
 
 In-meeting typed questions (#4486) are the exception to rung 4: they use an inline input row in the live recording sheet's bottom bar (`apple/Persona/Recording/RecordingLiveBar.swift`), not a system text-entry alert. The question usually refers to what was just said, and a modal alert hid the live lines and the earlier answers while the user typed. It also allowed only one line and no reference back. The keyboard button beside Ask Persona opens the row (at accessibility sizes, More › Type a Question opens it). The row shows a hint, then a field and send button that reuse the composer's `ComposerSurface` and `ComposerRoundButton` (3.1); the two are one view, `MeetingQuestionField` (`apple/Persona/Recording/MeetingQuestionField.swift`), which the meeting page's composer reuses ("Meeting page (#3862)" below), so the two stay alike. The field grows to `Theme.Recording.askLines` lines (`askLinesLargeType` at accessibility sizes, where the hint also steps aside while the keyboard is up and the field's spoken hint carries it). Send stays in place but is dimmed and disabled until there is non-whitespace text, and Return sends too. While the row is open, the keyboard button becomes Cancel, which drops the draft as the alert's Cancel did. While the field has the keyboard, Pause, Stop and Bookmark step aside so the timeline keeps the room. Sending goes through the same `MeetingAsk.ask(_:text:)`, then clears the field and closes the row. It is not a fifth composer (DS-19): it has no attachments, dictation (the microphone is recording), model menu or full-page editor.
 
+**Send now** on the web's queued messages acts at one press, with no confirmation (#7155; it used to open a `Dialog`, and an in-place second press was tried and dropped). On this ladder it is not destructive: nothing is lost, since the messages go now rather than at the Agent's next step, and only the step under way is cut short. Next to it, Delete (which does lose the message) and the composer's Stop and Esc (which cut the whole turn) act at one press, and Claude Code's own send-now key asks nothing, so a confirmation here was the odd one out. What the dialog said (what the step under way does) is the button's tooltip and its accessible description; the toast that follows names who got them.
+
 The web Agent close action uses `capabilities.close`, with terminal-only closing retained for older nodes. A runtime that can close a conversation uses the existing close confirmation even when it has no terminal controls. The confirmation checks the current row before sending, so an already offline session simply dismisses it.
+
+An Agent has one close action in the web's menus, **Close…** (#7125), where **Close agent…** and **Archive and close…** used to sit side by side. It is rung 2: not busy, it archives and closes, the button says **Archive and close**, and the toast offers Undo. A busy Agent's Close… is not greyed out: the confirmation starts with one line in `--red` naming what closing interrupts (an answer it waits for, its work, a loop, a server), and the destructive button reads **Close anyway**. **Archive** stays separate and waits while the Agent is busy, saying why, because it only hides the Agent. A pane with an Agent closes through the same confirmation, so no second path closes a working Agent without the warning; Close pane sits with the pane's own actions (New pane, Git), not in a danger group of its own.
 
 Clearing the main chat's context (**Clear context** in its ⋯ menu and `/clear`, #5095; the web first, iOS and Android in #5100) is on the reversible rung without an Undo toast, a user-requested alignment with Cindy's `/clear`: it runs at once from the menu or the command, and its only feedback is the chat emptying in place (the same top bar, an empty middle, the composer still at the bottom; no jump to the centered new-chat page). Nothing is deleted: the old chat is archived as "Old main chat · until <date>" and comes back when it is sent to. Failure is a toast with the reason, and the `/clear` goes back into the box. **New main chat…** keeps its sheet, since it has a choice to make (carry a summary).
 
@@ -1969,6 +1979,27 @@ page the user watches during the meeting is the page they keep writing in after 
   never came up and no asks) there is no divider: the thread is the follow-up alone, and until it starts one secondary
   line says what to ask ("Ask Persona about this meeting: what was decided, who does what, or a follow-up email."),
   shown once the hub has answered for the meeting, so it never flashes over a follow-up or room made elsewhere.
+- **Hub transcription (phase 5)**: in a meeting the hub transcribes, the subtitle adds "Transcribed on the hub" (the
+  mode is said on the page, as the start chose it). The Live box keeps its look and shows what the hub has while its
+  audio socket is up and no problem other than captions missing stands: the hub's newest lines, then its caption being
+  said now under them in the secondary color (read as "Being said: …"; no "behind" figure while a caption shows, folded
+  to the caption alone while the keyboard is up). Otherwise it shows this iPhone's own lines with a notice under its
+  title: one caption line, the iPhone mark (`Theme.Icon.phone`) in `Theme.caution` and why in words (waiting for Wi-Fi,
+  the hub stopped transcribing this meeting, or it isn't transcribing right now), "Showing this iPhone's transcript". Not
+  a `NoticeBanner`: it is about the box's lines, so it sits in the box rather than pushing the page down, and goes by
+  itself when the hub is back. It never shows for what isn't a fallback: a pause, the end after Stop, or a reconnect of
+  up to 5 seconds (a notice that flashes on every blip teaches people to ignore it). With Persona off, the phone's own
+  lines and the hub's caption. With the Highlights card (phase 2b) on top, which shows no lines, the hub's lines are on
+  the Full Transcript page, in the timeline's rows in place of the phone's (no gap marker under them: the caption says
+  what is being said now), and its caption under the last row (never cut there); a fallback shows the phone's own lines
+  there with the same notice above them, and the notice also sits under the card's title, as in the Live box, so the
+  page says it without a tap. A highlight's time lights the hub's lines in its minute then. The Lock Screen's line is
+  the hub's latest, or "On iPhone: …" with the iPhone mark once it fell back (docs/apple/live-activity.md "Recording").
+  The recording's page says how it was transcribed in its header (`Theme.Icon.meetingTranscription`, a caption block:
+  "Transcribed on the hub", "The hub is finishing the transcript…" with a small spinner until final, the stretches the
+  hub has no audio for, the gap uploads), and its footer says the audio went through the hub, from what the phone knows
+  until the hub's word arrives (never "the original audio isn't uploaded" while it may have been). Reason: the owner chose
+  where the audio goes, so the page says it, and a fallback must never pass for the hub's text.
 - **Talk about this meeting (phase 6)**: on the recording's page one row, in the section under the header beside
   Private Meeting, drawn as that row (a `Label` with the style's `Theme.Icon.conversation`, one line), pushing the after
   mode; it shows for any recording that ended (not rolling or all-day) with text, minutes or a conversation the hub holds
@@ -1986,7 +2017,7 @@ page the user watches during the meeting is the page they keep writing in after 
   Persona heard nothing; both go after a few seconds. VoiceOver can't hold: its double tap opens a talk window (as the
   Lock Screen's tap), the next ends it; its hint says where the words go. Where a span goes to the voice service (taking
   part, the extension takes meeting calls) a caption line of its own under the caption shows the contract's privacy
-  Wording until a span went while it showed ("Audio stays on this iPhone, except while you hold Talk: what is said then
+  Wording (hub mode's in a meeting the hub transcribes, phase 5) until a span went while it showed ("Audio stays on this iPhone, except while you hold Talk: what is said then
   goes to the voice service."), beside a word after a span rather than replaced by it, and the line under Record says it
   before the meeting starts. Until a span went under it, a span from anywhere (held, VoiceOver's, the Lock Screen's) is
   asked without the call unless that line had been on screen for a second as it opened; the Lock Screen has no room for
@@ -2089,8 +2120,11 @@ page the user watches during the meeting is the page they keep writing in after 
   `meeting-ask-field`, `meeting-ask-send`
   (the two shared with the live bar's typed question), `meeting-ask-caption`, `meeting-ask-notice`, `recording-more`,
   `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`,
-  `meeting-followup-empty`, `meeting-voice` (and the chat's `voice-bar`, `voice-ended`); at the start
-  `meeting-private-start`; on the recording's page `recording-private` and `recording-talk`; the sheet's
+  `meeting-followup-empty`, `meeting-voice` (and the chat's `voice-bar`, `voice-ended`); hub transcription's
+  `meeting-live-hub-line`, `meeting-live-line` (the phone's own), `meeting-live-interim`, `meeting-transcription-fallback`,
+  and on the transcript `recording-timeline-hub-line` and `meeting-transcript-interim`;
+  at the start `meeting-private-start` and `meeting-transcription-start`; on the recording's page `recording-private`,
+  `recording-talk` and `recording-transcription`; the sheet's
   shared ones (`recording-now-title`, `recording-live-timer`, `recording-live-hide`, `recording-pause`,
   `recording-bookmark`, `recording-stop`, `recording-wrapup-title`, `recording-wrapup-open`, `recording-wrapup-done`)
   keep their names. UI tests: `MeetingConversationUITests`, `MeetingLiveViewUITests` (the topics),
@@ -2098,7 +2132,8 @@ page the user watches during the meeting is the page they keep writing in after 
   transcript lit, the keyboard, the waiting line before the first highlights and with the keyboard, a hub without the
   flag, a meeting started without it, a room that is unavailable, Persona turned off before any; no transcript on the
   card),
-  `TalkAboutMeetingUITests`.
+  `TalkAboutMeetingUITests`, `MeetingHubTranscriptionUITests` (hub transcription, in the Live box and with the
+  Highlights card).
 - Platforms: the web shows the same thread on the recording detail (**Conversation**, with **Talk about this meeting**
   from phase 6); Android has no meeting page yet.
 
@@ -2120,7 +2155,11 @@ to press; impromptu talks are meetings too (principles 1 and 4).
 - **The Recordings page**: Record is the one prominent button (`.themedButton(prominent: true)`, one line, the icon going
   at accessibility sizes), with the calendar line under it. The options follow as one row each: **Type**, a menu
   `Picker` (Meeting / Note, Meeting for every start, never remembered), then for a meeting Persona, Private Meeting or Who
-  Attends, then language and microphone. Note hides the meeting's options and the calendar line and shows one caption
+  Attends, **Transcription** (On This iPhone / On the Hub, a menu row with `Theme.Icon.meetingTranscription`, the hub's
+  default shown until picked, for that start only; only on a hub with hub transcription that can transcribe now, #3862
+  phase 5, so it never offers what can't be had), then language and microphone. The line under the options says what
+  the start sends: hub mode's privacy Wording (the extension named when the owner chose another) once On the Hub is
+  picked or is the default. Note hides the meeting's options and the calendar line and shows one caption
   ("No minutes, and Persona stays out."); the same Record button then records a note (progressive disclosure, principle 2).
   Note is never a second button (section 3.7).
 - **While it records**: the live sheet's page menu ends with the same choice, Meeting and Note with their marks (a menu
@@ -2128,6 +2167,15 @@ to press; impromptu talks are meetings too (principles 1 and 4).
   "Recording options" for VoiceOver, apart from the Persona strip's "Persona" and the bar's "More"). Turning a meeting into
   a note turns Persona off, and the sheet shows the live view; turning it back makes it a meeting with Persona's part as a
   start would get it, and a room meeting's page again.
+- **Settings › Meetings** (#3862 phase 5) adds, from a hub with hub transcription, a **Transcription** section: the
+  default as an inline picker (as Persona in Meetings is), what it sends in the footer; **Speech Service**, a menu row,
+  only when an extension beside the built-in one can transcribe; **Glossary**, a row with its count that pushes a list
+  page (a field with **Add** on its row, the newest term first, swipe to delete, a refused term said in `Theme.danger`
+  under the field; one change at a time: while one saves, Add, Return and swipe do nothing and the field keeps its text,
+  which empties only once the hub kept the term). **Hub Transcription on Wi-Fi Only**, a switch in a section of its own (it is this iPhone's, not the
+  hub's), with what it does in the footer. Identifiers: `settings-meeting-transcription` (the picker; its options go by
+  their words), `settings-meeting-transcription-service`, `settings-meeting-glossary`, `settings-meeting-wifi-only`,
+  `settings-meeting-transcription-not-ready`, `glossary-field`, `glossary-add`, `glossary-term`, `glossary-problem`.
 - Identifiers for tests: `recording-meeting-start` (Record), `recording-kind` and `recording-kind-detail` at the start,
   `recording-page-menu` and `recording-kind-now` while recording; `sidebar-meeting-recording` for the drawer's Recordings row. UI
   tests: `RecordEntryUITests`.
@@ -2259,7 +2307,81 @@ what was decided, and the transcript stays one tap away (principle 2) instead of
   `recording-sentence` and `recording-sentence-lit` keep their names. UI tests: `MinutesCardsUITests` (light and dark,
   the default and the largest text size, a cited photo) and `MeetingRecordingUITests` (to-dos, Regenerate, the date
   style).
-- Platforms: visionOS keeps the minutes' sections above the transcript; the web and Android have no Summary yet.
+- Platforms: visionOS keeps the minutes' sections above the transcript; the web shows minutes that carry an overview as
+  the summary card below and has no Summary | Transcript switch; Android has no Summary yet.
+
+### Web: the summary card (#6563)
+
+Who it serves: everyday people reading a meeting's minutes in the browser. Minutes that carry an `overview` read as one
+summary card (contract: `docs/assistant/meeting-minutes.md` "Summary card (#6563)"); the others look exactly as before,
+pixel for pixel. Reason: where the meeting landed and each workstream's state are what a reader looks for first, and
+the flat Key points / Decisions lists made them read every line (principle 2).
+
+- **Where.** `web/src/lib/minutes-overview.ts` reads the overview on its own (`minutesOverview`, the contract's
+  "Clients" cleaning) and finds the bold places (`boldParts`); `RecordingMinutes.tsx` chooses the layout once, when the
+  minutes change (a bullet left after cleaning), never while drawing; `web/src/views/knowledge/MinutesOverview.tsx` draws it.
+- **Card.** Still one `Card` in the recording page's column. Its first child holds the headline (or the minutes' title)
+  as the h3 in `text-card-title`, when · where · attendees on one line in `text-label` `--ink-2` (the dots are read out
+  too, so a screen reader keeps the facts apart), the partial note,
+  then **Core conclusions** on `bg-ai-tint` (`rounded-card`, the `light` icon in `--ai`, an h4; these are the AI's own
+  words), then the groups. The topic area is that one child, so no divider runs between topic cards. Action items (the
+  page's `ActionItems`, Add to to-dos / Added / Add all unchanged) and Open questions (`PointList`) follow as h4
+  sections, then the AI note (`sparkles` in `--ai`, `text-label` `--ink-3`). Key points and Decisions are not shown again.
+- **Groups.** A titled group is a `section` labelled by its h4 (`text-label` semibold `--ink-2`, a dot in its tint),
+  its topics h5. The single untitled group has no heading: a plain grid, each topic an h4. Each topic is an `article`
+  labelled by its title.
+- **Topic card.** `rounded-card` on `--topic-N-tint`, N by the group's position (the first group the first tint, four in
+  turn); a tile of `bg-surface` with the topic's glyph in `--topic-N`, its title in `text-meta` semibold. A bullet is a
+  dot in `--ink-3`, or for a decision the `flag` in `--ink-2` and the word **Decision** where a point shows its speaker
+  (`text-label` `--ink-3`), so nothing rests on the glyph or the color. That label goes to the next line whole when it
+  does not fit after the words, and only a name longer than the line wraps (an `inline-block` as wide as the line at
+  most). The words are `text-meta` `--ink` with the
+  `strong` places `font-semibold`; no text is read as Markdown. The time or the cited photo is the page's own
+  (`TranscriptTime`, `PhotoCite`): beside the words while they keep 12em, else under them on the right; disabled when
+  there is no transcript line (the trim), a kept photo still opens under Photos. After 4 bullets the card shows
+  **Show N more** / **Show less** (`Button` quiet, small, `aria-expanded`), which open the rest in place. The button
+  controls the topic's list (`controls`, aria-controls) and its name names the topic, its visible words first ("Show 2
+  more in Export", `label`), so several topics' buttons differ. A topic's fold is kept by the minutes' `version` and its
+  title: a confirmed to-do keeps it, rewritten minutes start folded.
+- **Grid.** `minutes-topic-grid`: wrapped rows of as many cards of `--minutes-card-min` as fit, never more than three
+  (a card is at least a third of the row), each card growing to fill its row and the cards of a row sharing its height.
+  Two in the 720 px column, at the Large text size and at 200% browser zoom too; one on a phone. A card alone in its
+  row (the third of three, a group's only one) takes the whole row, where a grid's `auto-fit` left it half a row beside
+  an empty cell. The reading order runs row by row.
+- **Text size.** Every size is a named one (`text-card-title`, `text-meta`, `text-label`); the card's own marks, tiles
+  and icons are sized in `em` and `--minutes-card-min` follows `--text-scale`, so they grow with the page's text.
+- **Tokens** in `web/src/views/knowledge/minutes-overview.css`, which loads with the Knowledge page: as Tailwind
+  utilities in `web/src/styles.css` they added 325 B to every language's first screen (`FIRST_SCREEN_BUDGET`) for a page
+  most visits never open, so the card's tokens and its few own rules (the tints by `data-minutes-tint`, the grid, the em
+  sizes) live there, as `web/src/ui/share-tokens.css` does for sharing; everything else is the usual utilities. Checked in
+  `web/src/ui/theme-contrast.test.ts` (`--ink`, `--ink-2`, `--ink-3` and `--accent-ink` at 4.5:1 on every tint, each hue
+  at 3:1 on its tile, `--ai` and the words at 4.5:1 on `--ai-tint`; the times for the page's own accent, every built-in
+  theme color, and a sweep of persona and extension accents through `accentTokens` and `meetContrast`):
+
+  | Token | Light | Dark | Use |
+  | --- | --- | --- | --- |
+  | `--topic-1` … `--topic-4` | `--hue-blue`, `--hue-teal`, `--hue-pink`, `--hue-gray` | same | a topic's glyph and its group's dot; never a status hue or `--ai` |
+  | `--topic-1-tint` … `--topic-4-tint` | `#ebf5ff` `#ecf6f7` `#fcf0f5` `#f5f5f5` (the hue at 8% over `--surface`) | `#26303d` `#263337` `#372d34` `#2f3034` (10%) | the topic cards (`.minutes-topic` under `data-minutes-tint="N"`) |
+  | `--minutes-card-min` | `calc(15.5rem * var(--text-scale, 1))` | same | a topic card's least width |
+  | `--minutes-card-gap` | `0.75rem` | same | the grid's gap |
+  | `--minutes-ai-accent-ink` | not set (`--accent-ink`) | `color-mix(in srgb, var(--accent-ink) 85%, var(--ink))` | a time in the core conclusions |
+
+  On `--ai-tint` dark `--ink-3` is under 4.5:1, so inside the conclusions it takes `--ink-2`
+  (`.dark [data-minutes-conclusions]`), as the dark user bubble does. The dark AI tint is also lighter than every page
+  background a theme color's `--accent-ink` is made readable on (`meetContrast`), so every built-in theme color's times
+  fell to about 4.3:1 there: inside the conclusions a time takes `--minutes-ai-accent-ink`, its `--accent-ink` 15% of the
+  way to `--ink` (4.6:1 at worst over the sweep; the page's own blue barely changes). The topic tints need nothing:
+  light they are lighter, dark darker, than the backgrounds `--accent-ink` is checked on.
+- **Topic glyphs** (`TOPIC_GLYPH`; any other value is `general`): progress `trendUp`, schedule `calendar`, release
+  `send`, performance `gauge`, metrics `chart`, tooling `tool`, quality `shield`, design `layers`, people `users`,
+  customer `person`, budget `money`, risk `shieldAlert`, general `list`.
+- **Copy** sends the hub's `markdown`, as it always did.
+- Checks: `web/src/lib/minutes-overview.test.ts` (the cleaning, `boldParts` and the shared
+  `spec/fixtures/minutes-overview/cases.json`), `RecordingMinutes.test.tsx` (order, heading levels, fallback, the fold,
+  to-dos, Copy, the trim), `RecordingPhotos.test.tsx` (a cited photo after the trim) and `web/e2e/recording-minutes.mjs`
+  (en, zh-Hans and ja at 1440 and 390, light and dark; the Large text size and a 1440 window at 200% zoom; a card
+  alone in its row and a long speaker name, with every topic card and line checked for running past its box; and the
+  legacy baseline).
 
 ## File page (#5827)
 

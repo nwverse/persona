@@ -28,6 +28,25 @@ before the fix and 448 KB after.
 
 A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a nested `Menu` and `ScrollView`, while the buttons inside the scroll view keep theirs. The Agents capsule looked correct and its filters remained queryable, but its grouping icon was exposed under the capsule's identifier instead of `agents.grouping`. Put identifiers on the actionable controls, not on their surrounding capsule, and test both the menu's identity and its fixed frame after a horizontal drag.
 
+## Words cut off by a clip still take touches, over the rows below them (2026-11-13, #6645)
+
+- `.clipped()`, `.clipShape` and `.mask` hide what is drawn, not what takes touches. A long message folded with
+  `.frame(height:)` + `.clipped()` still lays all of its words out, and the ones past the fold kept taking touches.
+  The chat's list is drawn upside down (newest first, flipped back), so an older row is drawn over the newer rows under
+  it: the message from another session folded to three lines (`LineFold`) took the taps meant for the work line right
+  under it, which never opened, and its long-press recognizer took the long presses on the answer under that, so the
+  card lifted instead. A message of about 2 KB can hide a screen of words.
+- Anything that cuts its content off by a clip takes `.contentShape(.rect)` right after the clip (`BubbleFold`,
+  `CardFold`, `LineFold`, `ReplyQuote`). Leave the words' accessibility alone while doing it: wrapping them in
+  `.accessibilityElement(children: .contain)` made the lifted copy of an open card (`MessageLift` combines a short
+  message's elements) read only its sender and Collapse, without its words.
+- Prove it with a touch at the row's own spot, not by its element: `WorkLineUnderFoldUITests` taps and long-presses
+  each row under a folded message (mock `MOCK_PEER_FOLD=1`). An element-based tap can't tell what lies on top.
+- Reproduce with the reported shape. Hidden words take touches only where their text lies: a fixture whose folded
+  message hid a bulleted list let the taps through between its items, and the work line opened on the unfixed build;
+  one English paragraph, as reported, took every tap. Get the shape from the real session (kinds, order, sizes; never
+  its words) before deciding a report does not reproduce.
+
 ## An edit menu needs the selection's rect, not just a point (#6005)
 
 - If `UIEditMenuInteraction.presentEditMenu(with:)` gets only a `sourcePoint` and its delegate has no
