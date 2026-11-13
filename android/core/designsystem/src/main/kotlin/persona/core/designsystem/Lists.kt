@@ -99,9 +99,8 @@ fun JSectionHeader(
             .heightIn(min = if (leading != null) 48.dp else 0.dp)
             .semantics { heading(); fold?.let { stateDescription = it.state } },
     ) { constraints ->
-        val density = this
-        fun titleGroup(wrap: Boolean, width: Int? = null): @Composable () -> Unit = {
-            Row(width?.let { Modifier.width(with(density) { it.toDp() }) } ?: Modifier, verticalAlignment = Alignment.CenterVertically) {
+        fun titleGroup(wrap: Boolean): @Composable () -> Unit = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     title,
                     style = if (sub) PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
@@ -159,7 +158,7 @@ fun JSectionHeader(
         val rightWidth = right.maxOfOrNull { it.width } ?: 0
         val bounded = constraints.maxWidth != Constraints.Infinity
         val titleWidth = if (bounded) (constraints.maxWidth - leadingWidth - rightWidth).coerceAtLeast(0) else fullTitleWidth
-        val title = subcompose("title") { titleGroup(overflow, titleWidth) }.map { it.measure(Constraints(maxWidth = titleWidth)) }
+        val title = subcompose("title") { titleGroup(overflow) }.map { it.measure(Constraints(maxWidth = titleWidth)) }
         val height = maxOf(leading.maxOfOrNull { it.height } ?: 0, title.maxOfOrNull { it.height } ?: 0, right.maxOfOrNull { it.height } ?: 0)
         val width = if (bounded) constraints.maxWidth else leadingWidth + titleWidth + rightWidth
         layout(width, height) {
