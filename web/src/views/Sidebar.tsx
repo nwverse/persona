@@ -574,12 +574,33 @@ function AgentsBlock(props: AgentsBlockProps) {
 const AGENTS_TITLE = "min-w-0 flex-1 text-[11px] font-semibold text-ink-3";
 
 /** The Agents title row's ⋯ (Agent list options): the sort and the archived Agents; the clock while sorted by update. */
-function ListMenuButton({ label, sorted, open, onClick }: { label: string; sorted: boolean; open: boolean; onClick: React.MouseEventHandler<HTMLButtonElement> }) {
+function ListMenuButton({ sorted, open, onClick }: { sorted: boolean; open: boolean; onClick: React.MouseEventHandler<HTMLButtonElement> }) {
+  const label = sorted ? t("sidebar.list_menu_sorted", { sort: AGENT_SORTS[1].label }) : t("sidebar.list_menu");
   return (
     <button type="button" title={label} aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={onClick} className={cx("touch-hit relative z-10 flex size-5 shrink-0 items-center justify-center rounded-[5px] hover:bg-hover hover:text-ink-2", sorted ? "text-accent" : "text-ink-3", open && "bg-hover")}>
       <Icon name={sorted ? "clock" : "more"} size={12} stroke={2} />
     </button>
   );
+}
+
+/** "State first" / "Recently updated" (iOS AgentSort, G099), as this browser chose last: one choice for the paged and
+ *  the complete list, so a pin or an unpin keeps it (#6662). */
+function useAgentSort() {
+  const [sort, setSort] = useState<AgentSort>(() => agentSort(localStorage.getItem(AGENT_SORT_KEY)));
+  const choose = useCallback((next: AgentSort) => { localStorage.setItem(AGENT_SORT_KEY, next); setSort(next); }, []);
+  return [sort, choose] as const;
+}
+
+/** The ⋯'s items, the paged list's as the complete list's (#6662): the sorts (none by state, whose sections are the
+ *  states already), then the archived Agents. Collapse all / Expand all are the title row's button alone (#6447). */
+function agentListItems({ sorts, sort, chooseSort, archives, hover, onNavigate }: { sorts: boolean; sort: AgentSort; chooseSort: (s: AgentSort) => void; archives: boolean; hover: (k: string | null) => void; onNavigate?: () => void }): MenuItem[] {
+  return [
+    ...(sorts ? AGENT_SORTS.map((o): MenuItem => ({
+      key: `sort:${o.key}`, label: o.label, icon: o.key === "updated" ? "clock" : "layers", checked: sort === o.key, onSelect: () => { chooseSort(o.key); hover(null); },
+    })) : []),
+    // the agents archived from a row's ⋯ (lib/agent-archives.ts), to find and restore
+    ...(archives ? [{ key: "archived", label: t("agentmenus.archived_agents"), icon: "archive" as const, divider: sorts, onSelect: () => { navigate({ name: "agent-archives" }); onNavigate?.(); hover(null); } }] : []),
+  ];
 }
 
 /** The groupings this hub offers: By to-do only where it has to-dos. */
@@ -653,7 +674,11 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     bar: (counts) => <FilterBar selection={filter} counts={counts ?? NO_COUNTS} onChoose={chooseFilter} botmux={(counts?.feishu ?? 0) > 0 || botmuxHidden ? { hidden: botmuxHidden, onToggle: toggleBotmux } : undefined} />,
   } : undefined, [quickFilters, filter, botmuxHidden, chooseFilter, toggleBotmux]);
   const groupsRef = useRef<HTMLDivElement>(null);
+  // the complete list's ⋯: its sorts order the sections here (the hub pages the rows newest first either way)
   const listMenu = useMenu();
+  const [sortChoice, chooseSort] = useAgentSort();
+  const byUpdate = sortChoice === "updated" && grouping !== "state";
+  const listItems = agentListItems({ sorts: grouping !== "state", sort: sortChoice, chooseSort, archives, hover, onNavigate });
   const pagedGrouping = useMemo(() => ({
     dimension: PAGED_DIMENSION[grouping],
     label: AGENT_GROUPINGS.find((g) => g.key === grouping)?.label ?? "",
@@ -661,18 +686,18 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     quick,
     // its sections follow the title row's fold-all, as the complete list's groups do
     foldScope: AGENTS_FOLD,
+    byUpdate,
     bar: <GroupingBar groupings={groupings} selection={grouping} onChoose={chooseGrouping} />,
-  }), [grouping, todoNames, groupings, chooseGrouping, quick]);
+  }), [grouping, todoNames, groupings, chooseGrouping, quick, byUpdate]);
   return <div data-sidebar-agents ref={groupsRef}>
-    {/* the complete list's title row (#6662): fold all, the ⋯ with the archived Agents (the paged list keeps the hub's
-        newest-first order, so no sort), and "+" */}
+    {/* the complete list's title row (#6662): fold all, the ⋯ with its sorts and the archived Agents, and "+" */}
     <div className={SESSION_LIST_STYLE.heading}>
       <span className={AGENTS_TITLE}>Agents</span>
       <GroupFoldButton groups={groupsRef} onAction={() => hover(null)} />
-      {archives && <ListMenuButton label={t("sidebar.list_menu")} sorted={false} open={Boolean(listMenu.anchor)} onClick={listMenu.open} />}
+      {listItems.length > 0 && <ListMenuButton sorted={byUpdate} open={Boolean(listMenu.anchor)} onClick={listMenu.open} />}
       {add && <SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}
     </div>
-    {listMenu.anchor && <Menu anchor={listMenu.anchor} onClose={listMenu.close} align="right" items={[{ key: "archived", label: t("agentmenus.archived_agents"), icon: "archive", onSelect: () => { navigate({ name: "agent-archives" }); onNavigate?.(); hover(null); } }]} />}
+    {listMenu.anchor && <Menu anchor={listMenu.anchor} onClose={listMenu.close} align="right" items={listItems} />}
     <HubNoticeLine />
     <HerdrNotices />
     <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={runtimeParentIdentity} event="sessions_list" grouping={pagedGrouping}
@@ -736,11 +761,10 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const shownGrouping = todosSupported === false && grouping === "todo" ? "machine" : grouping;
   const availableGroupings = useGroupings();
   // "State first" / "Recently updated" (iOS AgentSort, G099): not under "By status", whose sections are the states already
-  const [sortChoice, setSortChoice] = useState<AgentSort>(() => agentSort(localStorage.getItem(AGENT_SORT_KEY)));
+  const [sortChoice, chooseSort] = useAgentSort();
   const byUpdate = sortChoice === "updated" && shownGrouping !== "state";
   // the title row's ⋯ (#2812): what the grouping dropdown held besides the groupings, the sort and "Fold all" / "Unfold all"
   const listMenu = useMenu();
-  const listLabel = byUpdate ? t("sidebar.list_menu_sorted", { sort: AGENT_SORTS[1].label }) : t("sidebar.list_menu");
   // the quick filter ("All" / "Needs you" / "Unread" / "Working"), stacked on any grouping; what it showed when chosen stays (`kept`)
   const [filter, setFilter] = useState(() => agentFilter(storedValue("persona.agentFilter")));
   const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set());
@@ -892,18 +916,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const { active, idle } = arrangeSpaces(spaces, { pins, mutes, filtered, busy });
   const tree = { machines, reg, hover, activeKey, go, mutes, onSpaceMenu, onRowMenu, onNodeMenu, onNavigate };
 
-  // the list menu: the sorts (none by state), the archived agents, the way back to the paged list. Collapse all /
-  // Expand all are the title row's button alone (GroupFoldButton), not repeated here (#6447); with nothing left the
-  // menu's button goes too.
-  const listItems: MenuItem[] = [
-    ...(shownGrouping === "state" ? [] : AGENT_SORTS.map((o): MenuItem => ({
-      key: `sort:${o.key}`, label: o.label, icon: o.key === "updated" ? "clock" : "layers", checked: sortChoice === o.key,
-      onSelect: () => { localStorage.setItem(AGENT_SORT_KEY, o.key); setSortChoice(o.key); hover(null); },
-    }))),
-    // the agents archived from a row's ⋯ (lib/agent-archives.ts), to find and restore
-    ...(archives ? [{ key: "archived", label: t("agentmenus.archived_agents"), icon: "archive" as const, divider: shownGrouping !== "state", onSelect: () => { navigate({ name: "agent-archives" }); onNavigate?.(); hover(null); } }] : []),
-    // a hub with the paged list: return to it from a grouping chosen there (its Browse by offers By repo)
-  ];
+  // the list menu, the paged list's too (agentListItems); with nothing in it the menu's button goes
+  const listItems = agentListItems({ sorts: shownGrouping !== "state", sort: sortChoice, chooseSort, archives, hover, onNavigate });
 
   return (
     <div data-sidebar-agents ref={groupsRef}>
@@ -921,7 +935,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         {folded && <SessionTally sessions={live} folded />}
         <GroupFoldButton groups={groupsRef} onAction={() => hover(null)} block={foldable ? { folded, toggle: toggleBlock } : undefined} flat={chatList} />
         {listItems.length > 0 && (
-          <ListMenuButton label={listLabel} sorted={byUpdate} open={Boolean(listMenu.anchor)} onClick={listMenu.open} />
+          <ListMenuButton sorted={byUpdate} open={Boolean(listMenu.anchor)} onClick={listMenu.open} />
         )}
         {add && <SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}
       </div>

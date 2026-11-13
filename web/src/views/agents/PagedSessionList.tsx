@@ -5,7 +5,7 @@ import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
 import { onHubEvent } from "../../lib/store";
 import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
-import { groupMachines, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
+import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
 import { SearchField } from "../../ui/SearchField";
 import { STATE_LABEL } from "../../lib/state-labels";
@@ -64,7 +64,11 @@ export interface PagedSessionListProps<T> {
   grouping?: PagedGrouping;
 }
 
-export interface PagedGrouping { dimension: GroupDimension; bar: ReactNode; label: string; todos?: TodoNames; quick?: PagedQuickFilters; /** The sections follow this scope's fold-all (useFolded). */ foldScope?: string }
+export interface PagedGrouping {
+  dimension: GroupDimension; bar: ReactNode; label: string; todos?: TodoNames; quick?: PagedQuickFilters;
+  /** The sections follow this scope's fold-all (useFolded). */ foldScope?: string;
+  /** "Recently updated" (the title row's ⋯): the computers' and projects' sections by their newest session. */ byUpdate?: boolean;
+}
 
 /** The complete list's quick filters on the paged list (`sessions_quick_filters`, #6662), in place of its state chips:
  *  what the chosen chip selects, what every read leaves out (hidden botmux), and the chips, drawn from the counts of
@@ -229,7 +233,20 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const groupScope: ListFilters = useMemo(() => ({ ...facetFilters, ...chip }), [facetFilters, chip]);
   const scopeNeeds = scopeCounts?.state?.needs_you;
   const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos });
-  const allGroups = grouped.groups;
+  // "Recently updated" as the complete list orders its computers and spaces (lib/agent-sort.ts): by their newest session,
+  // as far as the root's newest page tells (the hub reads no group's time); the ones it has none of keep their order
+  // after them, and the sessions on no space stay last. Its to-dos keep the To-dos page's order there too.
+  const byUpdate = Boolean(grouping?.byUpdate) && (dimension === "machine" || dimension === "group");
+  const allGroups = useMemo(() => {
+    if (!byUpdate || !grouped.groups || !placeOf) return grouped.groups;
+    const places = rootPage.rows.map(placeOf);
+    const rank = (g: SessionGroup) => {
+      if (g.rest) return places.length + 1;
+      const at = places.findIndex((p) => holdsPlace(g, dimension as GroupDimension, p));
+      return at < 0 ? places.length : at;
+    };
+    return grouped.groups.map((g) => ({ g, at: rank(g) })).sort((a, b) => a.at - b.at).map(({ g }) => g);
+  }, [byUpdate, grouped.groups, placeOf, rootPage.rows, dimension]);
   // the picked group follows what the hub says of it now (a project gains a directory); gone from the scope, it stays picked
   useEffect(() => {
     if (!picked || !allGroups) return;

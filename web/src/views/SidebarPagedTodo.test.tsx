@@ -34,6 +34,7 @@ const row = (id: string, minute: number, todo?: { id: string; title: string }, s
 const SHIP = { id: "todo_ship", title: "Ship 1.3" }, REVIEW = { id: "todo_review", title: "Submit for review" };
 const ROWS = [row("Widget tests", 9, SHIP, "working"), row("Release notes", 8, REVIEW), row("Screenshots", 7, REVIEW), row("Sort downloads", 6),
   row("Waiting on CI", 5, undefined, "working", { background_waiting: true }), row("Weekly numbers", 4, undefined, "needs_you", { pane_id: "botmux:x" })];
+let rowsNow = ROWS;
 const origin = (r: Session) => (r.pane_id?.startsWith("botmux:") ? "feishu" : "terminal");
 const TODOS: Todo[] = [
   { id: SHIP.id, title: SHIP.title, created_at: at(1), updated_at: at(9), agents: [] },
@@ -49,17 +50,17 @@ async function render(features: string[]) {
     const q = url.searchParams;
     if (url.pathname.endsWith("/sessions")) {
       const todo = q.get("todo"), state = q.get("state"), waiting = q.get("waiting"), only = q.get("pane_source"), not = q.get("exclude_pane_source");
-      const rows = ROWS.filter((r) => (!todo || (todo === "none" ? !r.todo : r.todo?.id === todo)) && (!state || r.state === state) &&
+      const rows = rowsNow.filter((r) => (!todo || (todo === "none" ? !r.todo : r.todo?.id === todo)) && (!state || r.state === state) &&
         (!waiting || Boolean(r.background_waiting) === (waiting === "1")) && (!only || origin(r) === only) && (!not || origin(r) !== not));
       if (q.has("counts")) {
         const count = (key: (r: Session) => string) => rows.reduce<Record<string, number>>((m, r) => ({ ...m, [key(r)]: (m[key(r)] ?? 0) + 1 }), {});
-        return json({ total: rows.length, state: count((r) => r.state!), machine: { mac: rows.length }, group: {}, project: {}, todo: count((r) => r.todo?.id ?? ""),
+        return json({ total: rows.length, state: count((r) => r.state!), machine: count((r) => r.machine_id), group: {}, project: {}, todo: count((r) => r.todo?.id ?? ""),
           pane_source: count(origin), background_waiting: rows.filter((r) => r.background_waiting).length, revision: "r1" });
       }
       return json({ sessions: q.has("since") ? [] : rows, remove: [], has_more: false, revision: "r1", total: rows.length });
     }
     if (url.pathname.endsWith("/pins")) return json({ sessions: [], spaces: [] });
-    if (url.pathname.endsWith("/machines")) return json({ machines: [{ id: "mac", name: "MacBook", online: true }] });
+    if (url.pathname.endsWith("/machines")) return json({ machines: [{ id: "mac", name: "MacBook", online: true }, { id: "linux", name: "Linux box", online: true }] });
     if (url.pathname.endsWith("/todos")) return json({ todos: TODOS });
     return json({});
   });
@@ -83,6 +84,7 @@ const rowTexts = (section: HTMLElement) => [...section.querySelectorAll<HTMLElem
 const paths = (fetch: ReturnType<typeof vi.fn>) => fetch.mock.calls.map(([input]) => new URL(input as string, "http://hub.example.com")).filter((u) => u.pathname.endsWith("/api/v1/sessions"));
 
 beforeEach(() => {
+  rowsNow = ROWS;
   localStorage.clear();
   reset();
   FakeSocket.all = [];
@@ -156,7 +158,7 @@ describe("the sidebar's paged Agents by to-do", () => {
     expect(chips.some((c) => c!.startsWith("已看"))).toBe(true);
   });
 
-  it("has the complete list's title row: fold all acts on the paged sections, the ⋯ holds the archived Agents", async () => {
+  it("has the complete list's title row: fold all acts on the paged sections, the ⋯ holds its sorts and the archived Agents", async () => {
     await render(["sessions_list", "sessions_lookup", "sessions_todo", "agent_session_archives"]);
     const foldAll = () => host.querySelector<HTMLButtonElement>("[data-testid=agents-fold-all]")!;
     const open = () => sections().map((s) => heading(s).getAttribute("aria-expanded"));
@@ -174,6 +176,31 @@ describe("the sidebar's paged Agents by to-do", () => {
     const menu = host.querySelector<HTMLButtonElement>('button[aria-label="Agent 列表选项"]')!;
     await act(async () => menu.click());
     await flush();
-    expect([...document.querySelectorAll('[role="menuitem"], [role="menuitemradio"]')].map((el) => el.textContent)).toContain("已归档的 Agent");
+    expect(menuItems()).toEqual(["状态优先", "最近更新", "已归档的 Agent"]);
+  });
+
+  it("orders the computers by their newest Agent under Recently updated, and offers no sort By status, as the complete list", async () => {
+    rowsNow = [row("Nightly build", 10, undefined, "idle", { machine_id: "linux" }), ...ROWS];
+    await render(["sessions_list", "sessions_lookup", "sessions_todo", "agent_session_archives"]);
+    const choose = async (label: string) => {
+      await act(async () => [...bar()!.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === label)!.click());
+      await flush();
+    };
+    const keys = () => sections().map((s) => s.getAttribute("data-session-group"));
+    const menu = () => host.querySelector<HTMLButtonElement>('button[aria-label^="Agent 列表选项"]');
+    await choose("机器");
+    // State first: the busiest computer first
+    expect(keys()).toEqual(["mac", "linux"]);
+    await act(async () => menu()!.click());
+    await flush();
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find((el) => el.textContent === "最近更新")!.click());
+    await flush();
+    expect(keys()).toEqual(["linux", "mac"]);
+    expect(localStorage.getItem("persona.agentSort")).toBe("updated");
+    await choose("状态");
+    await act(async () => menu()!.click());
+    await flush();
+    expect(menuItems()).toEqual(["已归档的 Agent"]);
   });
 });
+const menuItems = () => [...document.querySelectorAll('[role^="menuitem"]')].map((el) => el.textContent);

@@ -1,6 +1,7 @@
 // The sidebar's Agents groupings on a paging hub (#6662, docs/web/web.md "Paging hubs"): one bar, 待办 / 机器 / 仓库 /
 // 项目 / 状态, and the same quick filters under it, whether the list is paged or complete. By to-do is paged as a section per open to-do, open, then 没挂待办的
-// folded; By machine and By state stay paged; By repository and a pin take the complete list, under the same bar.
+// folded; By machine and By state stay paged; By repository and a pin take the complete list, under the same bar. The
+// title row's ⋯ holds the same items either way (状态优先 / 最近更新 / the archived Agents).
 // Checked against the fake hub's own answers, with light and dark screenshots.
 //
 // Needs the web page against the fake hub with the paged list, and Chrome:
@@ -87,6 +88,19 @@ try {
       const top = Math.max(0, (await anchor.boundingBox()).y - 48);
       await page.screenshot({ path: join(out, `${before ? "before" : "after"}-${name}-${theme}.png`), clip: { x: side.x, y: top, width: side.width, height: Math.min(1150, 1600 - top) }, animations: "disabled" });
     };
+    // the title row's ⋯, opened, read and shot, then closed
+    const listMenu = async (name) => {
+      await page.locator('aside button[aria-label^="Agent 列表选项"]').first().click();
+      const menu = page.locator('[role="menu"]').first();
+      await menu.waitFor({ timeout: 5_000 });
+      const items = await menu.locator('[role^="menuitem"]').evaluateAll((els) => els.map((el) => (el.textContent ?? "").trim()));
+      const box = await menu.boundingBox();
+      const side = await page.locator("aside").first().boundingBox();
+      await page.screenshot({ path: join(out, `after-${name}-${theme}.png`), clip: { x: side.x, y: Math.max(0, box.y - 60), width: side.width, height: box.height + 120 }, animations: "disabled" });
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(200);
+      return items;
+    };
     const load = async () => {
       await page.goto(`${base}/`);
       await page.locator("aside").first().waitFor();
@@ -111,6 +125,8 @@ try {
     check((await bar.locator('[aria-checked="true"]').innerText()) === "待办", `${theme}: By to-do is the default`);
     const pagedChips = await chipNames();
     check(pagedChips[0] === "全部" && pagedChips.every((name) => QUICK.includes(name)), `${theme}: the paged list's chips are the complete list's quick filters`, pagedChips.join(" / "));
+    const pagedMenu = await listMenu("paged-menu");
+    check(pagedMenu[0] === "状态优先" && pagedMenu[1] === "最近更新", `${theme}: the paged list's ⋯ has the complete list's sorts`, pagedMenu.join(" / "));
     const sections = () => paged.locator("[data-session-group]").evaluateAll((els) => els.map((el) => ({
       name: el.querySelector("button[aria-expanded]")?.querySelector("span")?.textContent ?? el.querySelector("button[aria-expanded]")?.textContent ?? "",
       open: el.getAttribute("data-group-open") === "true",
@@ -132,6 +148,8 @@ try {
     check((await bar.locator('[role="radio"]').allInnerTexts()).join(" / ") === SEGMENTS.join(" / ") && (await bar.locator('[aria-checked="true"]').innerText()) === "待办", `${theme}: the same bar, still By to-do`);
     const completeChips = await chipNames();
     check(completeChips.every((name) => QUICK.includes(name)) && pagedChips.every((name) => completeChips.includes(name)), `${theme}: the same quick filters`, completeChips.join(" / "));
+    const completeMenu = await listMenu("pinned-menu");
+    check(completeMenu.join(" / ") === pagedMenu.join(" / "), `${theme}: the same ⋯ menu`, completeMenu.join(" / "));
     await shot("pinned");
     await setPins({ spaces: [], sessions: [] });
     await load();
