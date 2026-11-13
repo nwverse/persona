@@ -26,7 +26,7 @@ final class BubbleFoldUITests: XCTestCase {
 
     /// fresh: `-openChatsFresh` (no chat kept on disk, and every fold closed: `OpenReports`).
     @MainActor private func launch(_ chat: String, scheme: String = "light", largest: Bool = false, whole: Bool = false,
-                                   fresh: Bool = true) {
+                                   fresh: Bool = true, plain: Bool = false) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let open = chat == persona
@@ -35,7 +35,7 @@ final class BubbleFoldUITests: XCTestCase {
         app.launchArguments = ["-pairURL", pair, "-openChatsFresh", fresh ? "YES" : "NO", "-ui.scheme", scheme,
                                "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"] + open
             + (largest ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : [])
-            + (whole ? ["-showWholeBubbles", "YES"] : [])
+            + (whole ? ["-showWholeBubbles", "YES"] : []) + (plain ? ["-showPlainBubbleOpen", "YES"] : [])
         app.launchPinned()
         // The app's icon follows the appearance: switching it, the system says so in an alert over the chat (it covered
         // the first shot of a run).
@@ -73,6 +73,23 @@ final class BubbleFoldUITests: XCTestCase {
         if !window.insetBy(dx: 0, dy: window.height * 0.12).contains(CGPoint(x: f.midX, y: f.midY)) { f.origin.y = window.height - f.maxY }
         print("FOLD show-more frame \(expand.firstMatch.frame) tapped at y \(f.midY) in \(window)")
         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.minX + 24, dy: f.midY)).tap()
+    }
+
+    /// Taps the button of `query` that is on screen mid-list (the first match may be a row scrolled away): an element's frame
+    /// may come flipped (see `tapShowMore`), so each is tried as it is and flipped.
+    @MainActor private func tapVisible(_ query: XCUIElementQuery) {
+        _ = query.firstMatch.waitForExistence(timeout: 5)
+        let window = app.windows.firstMatch.frame
+        let band = window.minY + window.height * 0.1 ... window.minY + window.height * 0.9
+        for b in query.allElementsBoundByIndex {
+            let f = b.frame
+            print("FOLD button frame \(f) in \(window)")
+            for y in [f.midY, window.height - f.maxY + f.height / 2] where band.contains(y) {
+                app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.minX + 24, dy: y)).tap()
+                return
+            }
+        }
+        XCTFail("no such button on screen")
     }
 
     private var expand: XCUIElementQuery { app.buttons.matching(identifier: "bubble.expand") }
@@ -117,6 +134,57 @@ final class BubbleFoldUITests: XCTestCase {
         sleep(1)
         tapShowMore()
         XCTAssertTrue(collapse.waitForExistence(timeout: 5), "Show More did not open it")
+    }
+
+    /// Opens and folds the long message by Show More, with pauses, for a screen recording of the fold's frames
+    /// (`simctl io recordVideo` beside the run): the newest end of an Agent chat, light or dark by PERSONA_SCHEME.
+    @MainActor func testToggleForRecording() throws {
+        let env = ProcessInfo.processInfo.environment
+        let scheme = env["PERSONA_SCHEME"] ?? "light"
+        launch(agent, scheme: scheme, plain: env["PERSONA_PLAIN"] == "1")
+        XCTAssertTrue(expand.firstMatch.waitForExistence(timeout: 20), "not folded:\n\(app.debugDescription)")
+        sleep(3)
+        // PERSONA_MIDLIST=1 (the mock's perf chat, forty exchanges): one exchange up, so the message is mid-list and what
+        // opens runs on under the visible rows instead of below the screen.
+        if env["PERSONA_MIDLIST"] == "1" {
+            app.swipeUp(velocity: .slow)
+            sleep(2)
+        }
+        // Mid-list one round: folded, the bubble sits where the second Show More is off screen.
+        for _ in 0..<(env["PERSONA_MIDLIST"] == "1" ? 1 : 2) {
+            let mid = env["PERSONA_MIDLIST"] == "1"
+            if mid { tapVisible(expand) } else { tapShowMore() }
+            XCTAssertTrue(collapse.waitForExistence(timeout: 5), "Show More did not open it")
+            sleep(3)
+            if mid { tapVisible(app.buttons.matching(identifier: "bubble.collapse")) } else { collapse.tap() }
+            XCTAssertTrue(expand.firstMatch.waitForExistence(timeout: 5), "Show Less did not fold it")
+            sleep(3)
+        }
+        if env["PERSONA_MIDLIST"] == "1" { return }
+        let words = text(first)
+        press(words)
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5), "the long press did not open it")
+        sleep(3)
+    }
+
+    /// Opened by Show More and then lifted by a long press, the copy is the whole message, not its folded height cut to
+    /// "…" (#6481): words from past the folded ten lines show in the copy.
+    @MainActor func testLiftAfterShowMoreIsWhole() throws {
+        launch(agent)
+        XCTAssertTrue(expand.firstMatch.waitForExistence(timeout: 20), "not folded:\n\(app.debugDescription)")
+        sleep(2)
+        tapShowMore()
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5), "Show More did not open it")
+        sleep(1)
+        press(text(first))
+        XCTAssertTrue(bar.waitForExistence(timeout: 5), "the long press did not lift it")
+        sleep(1)
+        shot("lift-after-show-more")
+                // Its words are one element as tall as the whole message (more than the screen shows), so it is its height that
+        // tells: folded, the element is ten lines (about 280 pt), whole it is past the screen's height less its top.
+        let beyond = text("sheet-c-wide")
+        XCTAssertTrue(beyond.exists, "the lifted copy stops at the folded lines")
+        XCTAssertGreaterThan(beyond.frame.height, 600, "the lifted copy is as tall as the folded bubble: \(beyond.frame)")
     }
 
     /// Open is kept per message: the chat opened again shows it open.
