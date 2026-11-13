@@ -397,8 +397,8 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
         <button type="button" onClick={() => void startNewAgent()} disabled={busy || opening} data-testid="handoff-new-agent" className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover disabled:opacity-60">
           <span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="plus" size={12} /></span>
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[13px] text-ink">{t("inbox-inboxdialogs.target_new_agent")}</span>
-            <span className="block truncate text-[11.5px] text-ink-3">{t("inbox-inboxdialogs.target_new_agent_sub")}</span>
+            <span className="block truncate text-meta text-ink">{t("inbox-inboxdialogs.target_new_agent")}</span>
+            <span className="block truncate text-label text-ink-3">{t("inbox-inboxdialogs.target_new_agent_sub")}</span>
           </span>
           {opening ? <Spinner size={13} /> : <Icon name="chevronRight" size={13} className="shrink-0 text-ink-3" />}
         </button>

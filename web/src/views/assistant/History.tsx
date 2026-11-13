@@ -25,6 +25,7 @@ import { t } from "../../i18n";
 import { ASSISTANT_SEARCH_FEATURE, markParts, mergeSearch, useAssistantSearch, type AssistantSearchHit } from "../../lib/assistant-search";
 
 const NONE: Session[] = [];
+const conversationPreviewClass = "mt-0.5 block truncate text-label text-ink-3";
 
 export function History({ origin, onToggleSidebar }: { origin?: string; onToggleSidebar: () => void }) {
   const filter = parseOriginFilter(origin);
@@ -314,11 +315,11 @@ function ConvRow({ s, main, now, said, onRename, onArchive }: { s: Conversation;
             {origin ? <OriginMark origin={origin} size={16} /> : <ConvChannel ids={s.channels} />}
           </span>
           {said ? (
-            <span className="mt-0.5 block truncate text-[12px] text-ink-3" data-said>
+            <span className={conversationPreviewClass} data-said>
               {markParts(said.snippet, said.ranges).map(([words, match], k) => (match ? <mark key={k} className="rounded-[3px] bg-accent-tint text-ink">{words}</mark> : <span key={k}>{words}</span>))}
             </span>
           ) : (
-            last && <span className="mt-0.5 block truncate text-[12px] text-ink-3">{last}</span>
+            last && <span className={conversationPreviewClass}>{last}</span>
           )}
         </span>
         <span className="flex shrink-0 flex-col items-end gap-1">
