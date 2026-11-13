@@ -44,7 +44,7 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
         MessageItem(sender = item.sender.orEmpty().ifBlank { item.title }, title = translated?.subject?.ifBlank { null } ?: item.title,
             heading = item.title.takeIf { groupEvent },
             titleIcon = translated?.let { PhIcons.Translate }, titleIconLabel = translated?.let { stringResource(R.string.inbox_translated) },
-            titleTag = stringResource(R.string.inbox_kind_dm).takeIf { item.kind == "dm" },
+            titleTag = stringResource(R.string.inbox_kind_dm).takeIf { record.isLark && record.isGroup == false },
             unread = if (record.count > 1) record.count else 0,
             selected = isInboxItemSelected(LocalDetailKey.current, item.id, record.feedId),
             position = position, avatar = rememberLarkAvatar(record.avatar.takeIf { record.doc == null }, onlineSince), avatarIcon = record.doc?.let { docIcon(it.type) },

@@ -104,29 +104,25 @@ internal fun inboxFollowTime(value: String?, res: Resources, locale: Locale, now
     val time = clockTime(at, locale, zone)
     return when {
         days <= 0 -> time
-        days == 1 -> res.getString(R.string.inbox_time_tomorrow) + " " + time
+        days == 1L -> res.getString(R.string.inbox_time_tomorrow) + " " + time
         at.atZone(zone).year == now.atZone(zone).year -> LocalizedFormats.format(at, LocalizedFormats.MONTH_DAY, locale, zone) + " " + time
         else -> LocalizedFormats.format(at, LocalizedFormats.DATE, locale, zone) + " " + time
     }
 }
 
 /** A row's timestamp: clock today, yesterday, weekday within six days, then a short date, all in the injected zone. */
-internal fun displayTime(value: String, locale: Locale, res: Resources?, zone: ZoneId = ZoneId.systemDefault(), now: Instant = Instant.now()): String {
+internal fun displayTime(value: String, locale: Locale, res: Resources, zone: ZoneId = ZoneId.systemDefault(), now: Instant = Instant.now()): String {
     val at = runCatching { Instant.parse(value) }.getOrNull() ?: return ""
     if (at.atZone(zone).year < 2000) return ""
     val days = inboxDays(at, now, zone)
     return when {
         days <= 0 -> clockTime(at, locale, zone)
-        days == 1 -> res?.getString(R.string.inbox_time_yesterday) ?: LocalizedFormats.format(at, LocalizedFormats.MONTH_DAY, locale, zone)
-        now.toEpochMilli() - at.toEpochMilli() < 6 * 86_400_000 -> DateTimeFormatter.ofPattern("E", locale).withZone(zone).format(at)
+        days == 1L -> res.getString(R.string.inbox_time_yesterday)
+        now.toEpochMilli() - at.toEpochMilli() < 6 * 86_400_000 -> DateTimeFormatter.ofPattern("EEE", locale).withZone(zone).format(at)
         at.atZone(zone).year == now.atZone(zone).year -> LocalizedFormats.format(at, LocalizedFormats.MONTH_DAY, locale, zone)
         else -> at.atZone(zone).let { String.format(Locale.ROOT, "%04d-%02d-%02d", it.year, it.monthValue, it.dayOfMonth) }
     }
 }
-
-/** Source-compatible form for older tests; production passes Resources so Yesterday is localized too. */
-internal fun displayTime(value: String, locale: Locale, zone: ZoneId = ZoneId.systemDefault()): String =
-    displayTime(value, locale, null, zone, Instant.now())
 
 /** `where · sender: preview`, saying a direct chat's name once; null leaves the old row's preview untouched. */
 internal fun inboxRowMeta(where: String?, sender: String?, preview: String, res: Resources): String? {
