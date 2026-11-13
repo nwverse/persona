@@ -10,7 +10,8 @@ import (
 	"github.com/nwverse/persona/server/internal/procinfo"
 )
 
-// A claude killed but not reaped yet is a zombie whose /proc entry still has its start: that is gone, as is one reaped.
+// A claude killed but not reaped yet is a zombie whose /proc entry still has its start: that is gone, as is one reaped,
+// and no longer the same process for its hook turn.
 func TestProcGoneZombieAndReaped(t *testing.T) {
 	cmd := exec.Command("sleep", "60")
 	if err := cmd.Start(); err != nil {
@@ -31,6 +32,9 @@ func TestProcGoneZombieAndReaped(t *testing.T) {
 	})
 	if !procGone(pid, start) {
 		t.Fatal("a zombie reads as alive")
+	}
+	if sameProcess(pid, start) {
+		t.Fatal("a zombie is still the process its hook turn was seen with")
 	}
 	_ = cmd.Wait()
 	if !procGone(pid, start) {

@@ -30,11 +30,14 @@ mapping/fixture (only under app_store.provisioning_profiles), a config value mad
 private-words.txt takes back (an ordinary word, a machine id named after a room), the repo's own Go module path (it
 names the GitHub owner),
 CLAUDE.local.md spans that only name repo files, commands or config keys, a listed word of one case run where the text
-spells it only across a camel-case join ("fooBar", only_in_camel_joins), and in site/ the contact address and domain
-the App Store and the OAuth consent screen publish anyway.
+spells it only across a camel-case join ("fooBar", only_in_camel_joins), and in site/ and the public installation docs
+the contact address and domain the App Store and the OAuth consent screen publish anyway. Generic email-pattern
+hits are also exempt only in the hash-pinned Harmony SSH third-party license bundle; config values, private words,
+banned names and private IPs still scan.
 """
-import ast, io, ipaddress, json, os, plistlib, re, subprocess, sys
+import ast, hashlib, io, ipaddress, json, os, plistlib, re, stat, subprocess, sys
 from functools import lru_cache
+from pathlib import PurePosixPath
 from urllib.parse import unquote, urlsplit
 from xml.parsers.expat import ExpatError
 
@@ -47,6 +50,17 @@ CONFIG_ENV = ("PERSONA_CONFIG", "JARVIS_CONFIG")
 IGNORE = {"darwin", "linux", "local", "ssh", "true", "false", "server", "localhost"}
 # Files that may hold placeholders that look like the real thing.
 SKIP_FILES = {"scripts/privacy_check.py"}
+PUBLIC_ATTRIBUTION_MANIFEST = "harmony/native/ssh/licenses/public-attribution.json"
+PUBLIC_ATTRIBUTION_INVENTORIES = (
+    "harmony/native/ssh/licenses/locked-inventory.json",
+    "harmony/native/ssh/licenses/sdk-runtime/supplemental-inventory.json",
+)
+PUBLIC_ATTRIBUTION_HTML = "harmony/entry/src/main/resources/rawfile/native-ssh-licenses.html"
+PUBLIC_ATTRIBUTION_SUPPORT = (PUBLIC_ATTRIBUTION_MANIFEST, *PUBLIC_ATTRIBUTION_INVENTORIES,
+                              PUBLIC_ATTRIBUTION_HTML)
+SHA256 = re.compile(r"[0-9a-f]{64}")
+PUBLIC_CRATE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+PUBLIC_CRATE_VERSION = re.compile(r"[0-9][A-Za-z0-9.+-]*")
 # Config keys whose values are published on purpose (App Store contact, the site's address, where personad is published):
 # fine in PUBLIC_DIRS.
 PUBLIC_KEYS = {"feedback_email", "privacy_url", "site_url"}
@@ -313,6 +327,58 @@ def term_sources():
     return {v: sorted(found[v]) for v in sorted(found, key=len, reverse=True)}, public, waivable
 
 
+# Exact governance references, not a global waiver for an administrator's coincident private first name (#2568).
+# A changed line cannot approve itself: both the owner and each rendered line must already exist on origin/main.
+PUBLIC_ADMIN_LINES = {
+    ".github/CODEOWNERS": ("/docs/SUPER_RULES.md @{login}",),
+    "CLAUDE.md": ("GitHub issue and explicit approval from administrator `{login}` in that issue before editing or opening a PR.",),
+    "docs/README.md": ("file require explicit approval from administrator `{login}` in a GitHub issue before editing or opening a linked PR.",),
+    "docs/SUPER_RULES.md": (
+        "   Wait for administrator `{login}` to explicitly approve the proposed change in that issue. Only after that approval",
+        "   open the issue and wait for `{login}`'s explicit approval before proceeding.",
+    ),
+}
+PUBLIC_ADMIN_SOURCES = frozenset({"config app_store.external.review.first_name", "config app_store.testers.first_name"})
+
+
+def regular_governance_files(head=None):
+    """A symlink's target is not governance prose, even if its text equals an approved reference."""
+    args = ["ls-tree", "-z", head] if head else ["ls-files", "--stage", "-z"]
+    records = subprocess.run(["git", "-C", ROOT, *args, "--", *PUBLIC_ADMIN_LINES],
+                             capture_output=True, check=True, timeout=10).stdout.split(b"\0")
+    return {record.split(b"\t", 1)[1].decode("utf-8") for record in records
+            if b"\t" in record and record.split(b" ", 1)[0] in (b"100644", b"100755")}
+
+
+def public_admin_lines():
+    """Exact published references by path; missing/unreadable evidence grants no exception."""
+    try:
+        base = subprocess.run(["git", "-C", ROOT, "rev-parse", "--verify", "origin/main^{commit}"],
+                              capture_output=True, check=True, text=True, timeout=10).stdout.strip()
+        regular = regular_governance_files(base)
+        published = git_file_data(list(regular), base + ":")
+        owner = re.fullmatch(r"/docs/SUPER_RULES\.md @([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)",
+                             published.get(".github/CODEOWNERS", b"").decode("utf-8").strip())
+        if not owner:
+            return {}
+        login = owner.group(1)
+        return {path: {line: login for template in templates
+                       for line in (template.format(login=login),)
+                       if line in published.get(path, b"").decode("utf-8").splitlines()}
+                for path, templates in PUBLIC_ADMIN_LINES.items()}
+    except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return {}
+
+
+def governance_words(path, line, words, sources, published):
+    """Only the exact published login loses its first-name sources on an exact authorized line."""
+    login = published.get(path, {}).get(line)
+    if login is None:
+        return words
+    return [w for w in words if not (w == login and sources.get(w)
+                                    and set(sources[w]) <= PUBLIC_ADMIN_SOURCES)]
+
+
 def terms():
     """Words to look for, longest first, and those of them allowed in PUBLIC_DIRS."""
     found, public, _ = term_sources()
@@ -353,6 +419,9 @@ REAL_TLDS = {"com", "net", "org", "io", "cn", "dev", "app", "ai", "co", "me", "c
              "gov", "uk", "jp", "us", "de", "fr", "hk", "tw", "sg", "in", "ru", "kr", "tech", "cloud", "site", "work", "biz"}
 # The public site (site/) shows a contact address on purpose: the OAuth consent screen requires one.
 PUBLIC_DIRS = ("site/",)
+# The site's own address is also quoted by the public install and getting-started entry points. Keep its configured
+# value out of the private-word set in exactly these files; other config values and addresses remain private.
+PUBLIC_SITE_DOCS = {"README.md", "README.zh-CN.md", "docs/operations/getting-started.md"}
 
 # Names that are never in the repository, in any spelling (#4967): vendors and internal repositories Persona only
 # reaches through extensions, which bring their own names. Case-insensitive, with a hyphen, underscore, space or
@@ -504,16 +573,32 @@ def git(*args):
     return subprocess.run(["git", "-C", ROOT, *args], capture_output=True, check=True).stdout
 
 
+# Git's exit status for an option it does not know (parse-options' usage error).
+GIT_USAGE_ERROR = 129
+
+
+def git_batch(names, prefix):
+    """`git cat-file --batch` output for prefix + each name, in order (no name holds a line break). Requests are
+    NUL-separated with -z; Git before 2.36 has no -z for cat-file and refuses it as an unknown option (#3224), so
+    they then go one per line, which reads the same objects."""
+    for z in (True, False):
+        end = b"\0" if z else b"\n"
+        requests = b"".join((prefix + name).encode() + end for name in names)
+        try:
+            return subprocess.run(["git", "-C", ROOT, "cat-file", "--batch", *(["-z"] if z else [])],
+                                  input=requests, capture_output=True, check=True, timeout=120).stdout
+        except subprocess.CalledProcessError as e:
+            if not z or e.returncode != GIT_USAGE_ERROR:
+                raise
+
+
 def git_file_data(files, prefix):
     """Read the same index/commit blobs as git show, using one bounded Git process."""
     safe = [name for name in files if "\n" not in name and "\r" not in name]
     data = {}
     fallback = [name for name in files if "\n" in name or "\r" in name]
     if safe:
-        requests = b"".join((prefix + name).encode() + b"\0" for name in safe)
-        output = subprocess.run(["git", "-C", ROOT, "cat-file", "--batch", "-z"],
-                                input=requests, capture_output=True, check=True, timeout=120).stdout
-        stream = io.BytesIO(output)
+        stream = io.BytesIO(git_batch(safe, prefix))
         for name in safe:
             header = stream.readline()
             if header.endswith(b" missing\n"):
@@ -538,6 +623,200 @@ def git_file_data(files, prefix):
         except subprocess.CalledProcessError:
             pass
     return data
+
+
+def safe_public_path(value):
+    if (not isinstance(value, str) or not value or "\\" in value or
+            any(ord(char) < 32 or ord(char) == 127 for char in value)):
+        return None
+    path = PurePosixPath(value)
+    if (str(path) != value or path.is_absolute() or
+            any(part in ("", ".", "..") for part in path.parts)):
+        return None
+    return path
+
+
+def inventory_notice_records(data, inventory_path):
+    """Read only the pinned notice paths and hashes from the two exact SSH attribution inventories."""
+    try:
+        inventory = json.loads(data)
+    except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
+        return None
+    expected = {}
+    if inventory_path == PUBLIC_ATTRIBUTION_INVENTORIES[0]:
+        if not isinstance(inventory, list) or not inventory:
+            return None
+        entries = inventory
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return None
+            name, version = entry.get("name"), entry.get("version")
+            if (not isinstance(name, str) or not PUBLIC_CRATE_NAME.fullmatch(name) or
+                    not isinstance(version, str) or not PUBLIC_CRATE_VERSION.fullmatch(version)):
+                return None
+            identity = name + "-" + version
+            prefix = "licenses/" + identity + "/"
+            notices = entry.get("notices")
+            if not isinstance(notices, list) or not notices:
+                return None
+            for notice in notices:
+                if not isinstance(notice, dict):
+                    return None
+                raw_path, digest = notice.get("path"), notice.get("sha256")
+                relative = safe_public_path(raw_path)
+                if (relative is None or len(relative.parts) < 3 or relative.parts[0] != "licenses" or
+                        relative.parts[1] != identity or not raw_path.startswith(prefix) or
+                        not isinstance(digest, str) or not SHA256.fullmatch(digest)):
+                    return None
+                path = "harmony/native/ssh/" + raw_path
+                if path in expected:
+                    return None
+                expected[path] = digest
+    elif inventory_path == PUBLIC_ATTRIBUTION_INVENTORIES[1]:
+        if (not isinstance(inventory, dict) or type(inventory.get("schema_version")) is not int or
+                inventory.get("schema_version") != 1 or not isinstance(inventory.get("items"), list) or
+                not inventory["items"]):
+            return None
+        for entry in inventory["items"]:
+            if not isinstance(entry, dict) or not isinstance(entry.get("notices"), list) or not entry["notices"]:
+                return None
+            for notice in entry["notices"]:
+                if not isinstance(notice, dict):
+                    return None
+                raw_path, digest = notice.get("path"), notice.get("sha256")
+                relative = safe_public_path(raw_path)
+                if (relative is None or len(relative.parts) < 3 or
+                        relative.parts[:2] != ("licenses", "sdk-runtime") or
+                        not isinstance(digest, str) or not SHA256.fullmatch(digest)):
+                    return None
+                path = "harmony/native/ssh/" + raw_path
+                if path in expected:
+                    return None
+                expected[path] = digest
+    else:
+        return None
+    return expected or None
+
+
+def public_attribution_records(manifest_data, support_data):
+    """Validate the fixed public bundle and return only its exact, inventory-backed files."""
+    try:
+        manifest = json.loads(manifest_data)
+    except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
+        return {}
+    if (not isinstance(manifest, dict) or type(manifest.get("schema_version")) is not int or
+            manifest.get("schema_version") != 1 or
+            set(manifest) != {"schema_version", "inventories", "notices", "generated_html"}):
+        return {}
+
+    inventory_records = manifest.get("inventories")
+    if not isinstance(inventory_records, list) or len(inventory_records) != len(PUBLIC_ATTRIBUTION_INVENTORIES):
+        return {}
+    inventory_hashes = {}
+    for record in inventory_records:
+        if not isinstance(record, dict) or set(record) != {"path", "sha256"}:
+            return {}
+        path, digest = record.get("path"), record.get("sha256")
+        if path not in PUBLIC_ATTRIBUTION_INVENTORIES or not isinstance(digest, str) or not SHA256.fullmatch(digest):
+            return {}
+        if path in inventory_hashes:
+            return {}
+        data = support_data.get(path)
+        if not isinstance(data, bytes) or hashlib.sha256(data).hexdigest() != digest:
+            return {}
+        inventory_hashes[path] = digest
+    if set(inventory_hashes) != set(PUBLIC_ATTRIBUTION_INVENTORIES):
+        return {}
+
+    html_record = manifest.get("generated_html")
+    if not isinstance(html_record, dict) or set(html_record) != {"path", "sha256"}:
+        return {}
+    if html_record.get("path") != PUBLIC_ATTRIBUTION_HTML:
+        return {}
+    html_hash = html_record.get("sha256")
+    html_data = support_data.get(PUBLIC_ATTRIBUTION_HTML)
+    if (not isinstance(html_hash, str) or not SHA256.fullmatch(html_hash) or not isinstance(html_data, bytes) or
+            hashlib.sha256(html_data).hexdigest() != html_hash):
+        return {}
+
+    expected_notices = {}
+    for path in PUBLIC_ATTRIBUTION_INVENTORIES:
+        expected = inventory_notice_records(support_data[path], path)
+        if expected is None or expected_notices.keys() & expected.keys():
+            return {}
+        expected_notices.update(expected)
+    manifest_notices = manifest.get("notices")
+    if not isinstance(manifest_notices, list) or not manifest_notices:
+        return {}
+    noticed = {}
+    paths = []
+    for record in manifest_notices:
+        if not isinstance(record, dict) or set(record) != {"path", "sha256"}:
+            return {}
+        path, digest = record.get("path"), record.get("sha256")
+        relative = safe_public_path(path)
+        if (relative is None or not path.startswith("harmony/native/ssh/licenses/") or
+                path == PUBLIC_ATTRIBUTION_MANIFEST or not isinstance(digest, str) or not SHA256.fullmatch(digest) or
+                path in noticed):
+            return {}
+        noticed[path] = digest
+        paths.append(path)
+    if paths != sorted(paths) or noticed != expected_notices:
+        return {}
+
+    return {**noticed, **inventory_hashes, PUBLIC_ATTRIBUTION_HTML: html_hash}
+
+
+def repo_regular_file(path):
+    """Whether a safe repository path is a regular, nonsymlink worktree file."""
+    relative = safe_public_path(path)
+    if relative is None:
+        return False
+    current = ROOT
+    try:
+        for part in relative.parts:
+            current = os.path.join(current, part)
+            mode = os.lstat(current).st_mode
+            if stat.S_ISLNK(mode):
+                return False
+        return stat.S_ISREG(mode)
+    except OSError:
+        return False
+
+
+def git_regular_files(files, prefix):
+    """The regular-file paths in the same index or commit snapshot as a staged/range scan."""
+    if not files:
+        return set()
+    if prefix == ":":
+        output = git("ls-files", "--stage", "-z", "--", *files)
+        groups = {}
+        for record in output.split(b"\0"):
+            if not record:
+                continue
+            header, separator, raw_path = record.partition(b"\t")
+            fields = header.split()
+            if not separator or len(fields) != 3:
+                raise ValueError("invalid staged file mode output")
+            name = raw_path.decode("utf-8")
+            groups.setdefault(name, []).append((fields[0], fields[2]))
+        return {name for name, entries in groups.items()
+                if len(entries) == 1 and entries[0][0] in (b"100644", b"100755") and entries[0][1] == b"0"}
+    if not prefix.endswith(":"):
+        raise ValueError("invalid attribution snapshot")
+    head = prefix[:-1]
+    output = git("ls-tree", "-r", "-z", "--full-tree", head, "--", *files)
+    regular = set()
+    for record in output.split(b"\0"):
+        if not record:
+            continue
+        header, separator, raw_path = record.partition(b"\t")
+        fields = header.split()
+        if not separator or len(fields) != 3:
+            raise ValueError("invalid commit file mode output")
+        if fields[0] in (b"100644", b"100755") and fields[1] == b"blob":
+            regular.add(raw_path.decode("utf-8"))
+    return regular
 
 
 GIT_OID = re.compile(rb"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -638,6 +917,13 @@ def main():
     span = commit_range(option("--range")) if "--range" in sys.argv else None
     sources, public_words, waivable = term_sources()
     words = list(sources)
+    governance = public_admin_lines() if any(set(where) <= PUBLIC_ADMIN_SOURCES for where in sources.values()) else {}
+    if governance:
+        try:
+            regular = regular_governance_files(span[1] if span and not staged else None)
+            governance = {path: lines for path, lines in governance.items() if path in regular}
+        except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            governance = {}
     modules = module_paths()
     if staged:
         files = git("diff", "--cached", "--name-only", "--diff-filter=ACMRT", "-z").decode().split("\0")
@@ -654,10 +940,44 @@ def main():
     snapshots = {}
     if from_git:
         try:
-            snapshots = git_file_data(from_git, span[1] + ":" if span and not staged else ":")
+            snapshot_prefix = span[1] + ":" if span and not staged else ":"
+            snapshots = git_file_data(list(dict.fromkeys(from_git + list(PUBLIC_ATTRIBUTION_SUPPORT))), snapshot_prefix)
         except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             sys.exit("privacy_check: cannot read Git objects; scan did not complete")
     from_git = set(from_git)
+
+    snapshot_prefix = span[1] + ":" if span and not staged else ":"
+    if staged or span:
+        attribution_support = {path: snapshots.get(path) for path in PUBLIC_ATTRIBUTION_INVENTORIES +
+                              (PUBLIC_ATTRIBUTION_HTML,)}
+        attribution_manifest = snapshots.get(PUBLIC_ATTRIBUTION_MANIFEST)
+    else:
+        attribution_support = {}
+        for path in PUBLIC_ATTRIBUTION_INVENTORIES + (PUBLIC_ATTRIBUTION_HTML,):
+            if repo_regular_file(path):
+                try:
+                    with open(os.path.join(ROOT, path), "rb") as source:
+                        attribution_support[path] = source.read()
+                except OSError:
+                    pass
+        attribution_manifest = None
+        if repo_regular_file(PUBLIC_ATTRIBUTION_MANIFEST):
+            try:
+                with open(os.path.join(ROOT, PUBLIC_ATTRIBUTION_MANIFEST), "rb") as source:
+                    attribution_manifest = source.read()
+            except OSError:
+                pass
+    attribution = public_attribution_records(attribution_manifest, attribution_support)
+    if attribution:
+        try:
+            regular_paths = git_regular_files(list(attribution) + [PUBLIC_ATTRIBUTION_MANIFEST], snapshot_prefix) \
+                if staged or span else {
+                    path for path in list(attribution) + [PUBLIC_ATTRIBUTION_MANIFEST] if repo_regular_file(path)
+                }
+        except (OSError, UnicodeDecodeError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            regular_paths = set()
+        if regular_paths != (set(attribution) | {PUBLIC_ATTRIBUTION_MANIFEST}):
+            attribution = {}
     bad, hit = [], set()
 
     def report(f, where, w):
@@ -666,7 +986,8 @@ def main():
 
     for f in files:
         public = f.startswith(PUBLIC_DIRS)
-        allowed = [w for w in words if w not in public_words] if public else words
+        allowed = ([w for w in words if w not in public_words]
+                   if public or f in PUBLIC_SITE_DOCS else words)
         for w in problems(f, words):
             report(f, "path", w)
         if f in SKIP_FILES:
@@ -696,8 +1017,11 @@ def main():
                 bad.extend((f, n, kind) for n, kind in npm_lock_problems(lock_text))
         if modules:
             text = modules.sub("", text)
+        published_lines = governance if f in from_git or not os.path.islink(path) else {}
+        public_attribution = (f in attribution and hashlib.sha256(data).hexdigest() == attribution[f])
         for n, line in enumerate(text.splitlines(), 1):
-            for w in problems(line, allowed, emails=not public):
+            line_words = governance_words(f, line, allowed, sources, published_lines)
+            for w in problems(line, line_words, emails=not public and not public_attribution):
                 report(f, n, w)
     if span:
         try:

@@ -155,12 +155,16 @@ func (s *Service) healthChanged(ctx context.Context, r LauncherHealth, before st
 	s.event(ctx, map[string]any{"type": "launcher_health", "record": r})
 }
 
-// recordStartFailure: an agent did not start with launcher on machine. A dropped link says nothing about the
-// launcher, nor does a start the node turned down before running it (startRefused); anything else counts, and a
-// check follows at once to tell a blink from a broken launcher. Not after a start the terminal could not run
-// (errKindNotInTerminal): the check runs where it works.
+// recordStartFailure: a dropped link, refused request, stalled agent or a start whose own wait ran out says nothing
+// about launcher health. Other failures count, with one shared follow-up check to tell a blink from a broken launcher.
+// A terminal-shell failure (errKindNotInTerminal) skips the check: the login shell is where the launcher already works.
 func (s *Service) recordStartFailure(ctx context.Context, machine, launcher string, err error) {
-	if err == nil || launcher == "" || transientStartErr(err) || errors.Is(err, ErrNoDevice) || startRefused(err) {
+	if err == nil || launcher == "" || transientStartErr(err) || errors.Is(err, ErrNoDevice) || startRefused(err) || startStalled(err) {
+		return
+	}
+	if startWaitEnded(err) {
+		// A failing record here would stand until someone rechecked by hand, and refuse every fixed-machine start.
+		s.logf("launcher health: %s on %s: start ended without an answer (%v); not counted against the launcher", launcher, machine, err)
 		return
 	}
 	if terminalMissing(err) {
@@ -168,12 +172,10 @@ func (s *Service) recordStartFailure(ctx context.Context, machine, launcher stri
 		return
 	}
 	s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart})
-	go func() {
-		ctx := context.WithoutCancel(ctx)
-		if res, ok := s.probeLauncherHealth(ctx, machine, launcher); ok {
-			s.recordHealth(ctx, machine, launcher, res)
-		}
-	}()
+	// Reserve before launching the goroutine: a task's immediate detour must join this check, even before it runs.
+	if rc, run := s.claimHealthRecheck(ctx, machine, launcher); run {
+		go s.runHealthRecheck(context.WithoutCancel(ctx), machine, launcher, rc, true)
+	}
 }
 
 // recordStartSuccess: an agent started with launcher on machine, so the terminal there runs it: a record saying it
@@ -202,10 +204,11 @@ func (s *Service) recordTestPassed(ctx context.Context, machine, launcher string
 }
 
 // launcherSetupChanged: a save of a managed launcher changed what decides whether its requests get through (its key,
-// gateway, auth, model, headers or environment), so how it failed before says nothing of it now.
+// gateway, auth, model, headers, environment or the computer it sends through), so how it failed before says nothing
+// of it now.
 func launcherSetupChanged(old, saved storedLauncher) bool {
 	return old.KeySealed != saved.KeySealed || old.BaseURL != saved.BaseURL || old.Auth != saved.Auth || old.Model != saved.Model ||
-		old.HeadersSealed != saved.HeadersSealed || old.EnvSealed != saved.EnvSealed
+		old.HeadersSealed != saved.HeadersSealed || old.EnvSealed != saved.EnvSealed || old.ViaMachine != saved.ViaMachine
 }
 
 // forgetLauncherFailures drops launcher's failure records on every machine after its setup changed (#1838): it counts
@@ -262,6 +265,12 @@ func (s *Service) launcherLimitTurnEnded(ctx context.Context, machine, sid strin
 	// Once the turn stayed still, as a task's end is judged (settleDelay): right after a write the node's list may not
 	// have read the transcript yet (its meta is read again at most every few seconds), and says no error meanwhile.
 	time.Sleep(s.settleDelay(ctx))
+	s.launcherLimitTurnSettled(ctx, machine, sid)
+}
+
+// launcherLimitTurnSettled is launcherLimitTurnEnded once the turn stayed still: after its sleep, or afterSettle's
+// timer.
+func (s *Service) launcherLimitTurnSettled(ctx context.Context, machine, sid string) {
 	// As the node lists it, when the fleet is here: the fields below are the node's, and the decorated copy
 	// session.get answers with costs a pass over the machine's whole list.
 	sess, ok := s.nodeSession(machine, sid)
@@ -315,7 +324,7 @@ var startRequestErr = lazyre.New(`^directory .* does not exist$|^invalid launche
 // node/codex_start.go, node/openelsewhere.go…). Codes about the machine's state (engine_missing, runtime_away,
 // not_running, orca_not_registered) are not here: the launcher cannot run there now, and a task may go elsewhere.
 var startRefusalCodes = []string{"codex_needs_prompt", "codex_resume", "codex_read_only", "orca_resume", "open_elsewhere", "runtime_session",
-	"identity_conflict", "ultracode_unsupported", "readonly_unsupported", proto.CodeNodeOutdated}
+	"identity_conflict", "ultracode_unsupported", "readonly_unsupported", proto.CodeDirectoryUntypable, proto.CodeNodeOutdated}
 
 // startRefused: the start failed on the request, not the launcher: the node checked it and said no before running
 // anything (one of startRefusalCodes, or of startRequestErr).
@@ -328,4 +337,27 @@ func startRefused(err error) bool {
 		return slices.Contains(startRefusalCodes, re.Code)
 	}
 	return startRequestErr.MatchString(re.Message)
+}
+
+// startWaitEnded: the start's own context ran out or was cancelled before the node answered (its link stuck, a node
+// that never replied within taskStartTimeout), here or on the hub that relayed the call (an uncoded rpc.Error with the
+// context's words). The hub stopped waiting and learned nothing of the launcher. A node's own words about a timeout
+// ("session.start: context deadline exceeded", errKindTimeout) are not this and still count.
+func startWaitEnded(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var re *rpc.Error
+	return errors.As(err, &re) && re.Code == "" &&
+		(re.Message == context.DeadlineExceeded.Error() || re.Message == context.Canceled.Error())
+}
+
+// startStalled is a node's coded timeout after opening the agent, or a start that ended in the new tab's shell before
+// the launcher ran (a startup question, a start line the shell did not take; node/shellsettle.go, #2570): none says
+// anything of the launcher. Text from older nodes deliberately keeps the previous failure handling; guessing from
+// translated messages could suppress genuine launcher failures.
+func startStalled(err error) bool {
+	var re *rpc.Error
+	return errors.As(err, &re) && (re.Code == proto.CodeAgentStartStalled || re.Code == proto.CodeShellWaiting ||
+		re.Code == proto.CodeStartLineRejected)
 }

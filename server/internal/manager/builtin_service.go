@@ -16,6 +16,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/update"
@@ -57,10 +58,14 @@ WantedBy=default.target
 `
 }
 
-// builtinPlist is the built-in manager's launchd agent, with the hub's agent's PATH; its log is manager.log in its
-// own directory.
-func builtinPlist(bin, home, userHome string) string {
+// builtinPlist is the built-in manager's launchd agent, with the hub's agent's PATH, keeping update.SplitEnv 0 when
+// splitOff; its log is manager.log in its own directory.
+func builtinPlist(bin, home, userHome string, splitOff bool) string {
 	x := html.EscapeString
+	keep := ""
+	if splitOff {
+		keep = "    <key>" + update.SplitEnv + "</key><string>0</string>\n"
+	}
 	path := strings.Join([]string{filepath.Join(userHome, ".local", "bin"), filepath.Join(userHome, "bin"),
 		filepath.Join(userHome, ".orbstack", "bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"}, ":")
 	log := filepath.Join(managerconf.DefaultDir(home), "manager.log")
@@ -73,7 +78,7 @@ func builtinPlist(bin, home, userHome string) string {
     <key>PERSONA_ASSISTANT_DEPLOY</key><string>` + assistant.DeployService + `</string>
     <key>PERSONA_HOME</key><string>` + x(home) + `</string>
     <key>PATH</key><string>` + x(path) + `</string>
-  </dict>
+` + keep + `  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>5</integer>
@@ -219,32 +224,18 @@ func (e *env) installBuiltin(ctx context.Context, home string, j builtinJoin) er
 	return e.builtinService(ctx, home, bin, traded)
 }
 
-// builtinBinary is what the built-in manager's service runs: on Linux persona-manager beside bin when it is bin's
-// build (docs/server/server.md "Programs"), else bin. A unit under its former name, or update.SplitEnv 0 (splitOff),
-// keeps bin. A Mac stays on personad, for now (macPersonad): bin, or, when bin is persona-manager (the running program,
-// with no personad in the data directory), the personad of its build beside it; with none it runs persona-manager and
-// says why.
+// builtinBinary is what the built-in manager's service runs: persona-manager beside bin when it is bin's build
+// (docs/server/server.md "Programs"), else bin. A unit or agent under its former name, or update.SplitEnv 0
+// (splitOff), keeps bin, and so does a Mac's agent that ran personad before (macKeepsPersonad).
 func (e *env) builtinBinary(ctx context.Context, bin string) string {
+	id := assistantwire.AssistantID
 	if e.goos == "darwin" {
-		if filepath.Base(bin) == "persona-manager" {
-			p, why := update.SplitBeside(ctx, bin, nodeproto.ProgramPersonad, e.version)
-			if p == "" {
-				if why == "" {
-					why = "none is beside it"
-				}
-				dir := filepath.Join(dataDir(), "bin")
-				fmt.Fprintf(e.stdout, "Program: %s (%s has no personad and %s, so the agent runs persona-manager; on macOS it is meant to stay on personad for now: put a personad of this build in %s and install again).\n",
-					bin, dir, why, dir)
-				return bin
-			}
-			bin = p
+		if p, ok := e.macKeepsPersonad(id, bin); ok {
+			return p
 		}
-		if fileExists(update.ProgramBeside(bin, "persona-manager")) {
-			fmt.Fprintf(e.stdout, "Program: %s (%s).\n", bin, macPersonad)
-		}
-		return bin
 	}
-	if id := assistantwire.AssistantID; e.splitOff() || e.compatUnit(id) != unitName(id) {
+	former := (e.goos == "linux" && e.compatUnit(id) != unitName(id)) || (e.goos == "darwin" && e.compatLabel(id) != launchdLabel(id))
+	if e.splitOff() || former {
 		return bin
 	}
 	pm, note := update.SplitBeside(ctx, bin, "persona-manager", e.version)
@@ -257,14 +248,63 @@ func (e *env) builtinBinary(ctx context.Context, bin string) string {
 	return pm
 }
 
+// hubLaunchdLabels are the hub's launchd agent's labels, today's (hub setup's hubLaunchdLabel) and the former one.
+var hubLaunchdLabels = []string{"com.persona.hub", compat.HubLabel}
+
+// macKeepsPersonad: this Mac was installed with personad, so the built-in manager's agent stays on it. That is the
+// manager's own agent when it runs personad, or, before it has one, the hub's agent running personad: with the hub
+// starting the manager as its child, the node of this computer runs under the hub's agent, so the user already allowed
+// personad in Full Disk Access (macOS holds an agent and what it starts to the agent's program; the node of this
+// computer runs under the manager's own agent once it has one). Staying keeps that entry; moving would need another
+// one added. It stays on bin, or on the personad the agent ran when bin is persona-manager; when that one is gone it
+// does not stay. Said when a persona-manager is beside it. An agent that runs personad for the opt-out keeps
+// update.SplitEnv, and so is not that: it follows splitOff, as on Linux.
+func (e *env) macKeepsPersonad(id, bin string) (string, bool) {
+	was, ok := macPersonadAgent(e.plistPath(id))
+	if !ok {
+		if fileExists(e.plistPath(id)) {
+			return "", false
+		}
+		for _, label := range hubLaunchdLabels {
+			if was, ok = macPersonadAgent(filepath.Join(e.home, "Library", "LaunchAgents", label+".plist")); ok {
+				break
+			}
+		}
+		if !ok {
+			return "", false
+		}
+	}
+	p := bin
+	if filepath.Base(bin) == "persona-manager" {
+		if !fileExists(was) {
+			return "", false
+		}
+		p = was
+	}
+	if fileExists(update.ProgramBeside(p, "persona-manager")) {
+		fmt.Fprintf(e.stdout, "Program: %s (this Mac was installed with personad, which Full Disk Access allows for this computer's "+
+			"node; it stays on it, so no new program has to be added there).\n", p)
+	}
+	return p, true
+}
+
+// macPersonadAgent is the personad a launchd agent's plist at path runs, true when it runs one (or the former name)
+// without update.SplitEnv in it.
+func macPersonadAgent(path string) (string, bool) {
+	text, err := os.ReadFile(path)
+	if err != nil || strings.Contains(string(text), "<key>"+update.SplitEnv+"</key>") {
+		return "", false
+	}
+	was := serviceProgram(string(text))
+	if name := filepath.Base(was); was == "" || name != nodeproto.ProgramPersonad && name != compat.DaemonBinary {
+		return "", false
+	}
+	return was, true
+}
+
 // splitOff says update.SplitEnv is 0 here. The unit written then keeps it, so the manager and the node it starts stay
 // on personad too, until install --builtin runs again without it.
 func (e *env) splitOff() bool { return strings.TrimSpace(e.getenv(update.SplitEnv)) == "0" }
-
-// macPersonad is why a Mac's agent stays on personad when persona-manager is beside it. macOS holds a LaunchAgent's
-// children (the node of the hub's computer) to the agent's program for its privacy permissions (Full Disk Access), so
-// the agents move together with that node, later.
-const macPersonad = "on macOS the built-in manager and the hub stay on personad until a later change moves them, together with this computer's node, to persona-manager and persona-hub"
 
 // serviceProgram is the program a unit's or an agent's text runs: its first ExecStart with a value, or the first
 // string of its ProgramArguments; "" when it has neither.
@@ -382,7 +422,7 @@ func (e *env) builtinService(ctx context.Context, home, bin string, bounce bool)
 	case "darwin":
 		path := e.plistPath(id)
 		label := e.compatLabel(id)
-		want := e.compatLabelText(id, builtinPlist(bin, home, e.home))
+		want := e.compatLabelText(id, builtinPlist(bin, home, e.home, e.splitOff()))
 		before, _ := os.ReadFile(path)
 		changed := string(before) != want
 		if err := os.MkdirAll(managerconf.DefaultDir(home), 0o700); err != nil { // its log's directory
@@ -412,8 +452,13 @@ func (e *env) builtinService(ctx context.Context, home, bin string, bounce bool)
 			}
 			what = "restarted"
 		}
+		moved := programSwitch("the agent", string(before), bin)
 		fmt.Fprintf(e.stdout, "Service: launchd agent %s, %s%s; it runs whenever you are logged in.\n  Log: %s\n", label, what,
-			programSwitch("the agent", string(before), bin), filepath.Join(managerconf.DefaultDir(home), "manager.log"))
+			moved, filepath.Join(managerconf.DefaultDir(home), "manager.log"))
+		if moved != "" {
+			fmt.Fprintf(e.stdout, "  Full Disk Access: this computer's node now reads with %s's permissions (macOS holds what an agent "+
+				"starts to its program); add it there if the node needs Desktop, Documents, Downloads or Messages.\n", filepath.Base(bin))
+		}
 		return nil
 	}
 	return fmt.Errorf("no service for it on %s", e.goos)

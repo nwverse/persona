@@ -10,7 +10,9 @@ export const KNOWN_ENGINES: { id: string; name: string; detail: string }[] = [
   { id: "herdr-core", name: "Herdr App", detail: t("lib-engines.detail_herdr_core") },
   { id: "herdr-both", name: "herdr + Herdr App", detail: t("lib-engines.detail_herdr_both") },
   { id: "orca", name: "Orca", detail: t("lib-engines.detail_orca") },
+  { id: "tern", name: "Tern", detail: t("lib-engines.detail_tern") },
   { id: "paseo", name: "Paseo", detail: t("lib-engines.detail_paseo") },
+  { id: "cindy", name: "Cindy", detail: t("lib-engines.detail_cindy") },
 ];
 
 const known = (id: string) => KNOWN_ENGINES.find((e) => e.id === id);
@@ -73,7 +75,7 @@ export function engineSaveError(message: string): string {
 // ---- Host sets (#2576, docs/integrations/engines.md "Host sets"): several engines enabled side by side plus a default one. ----
 
 /** The hosts a set may hold, in the hub's canonical order (proto.EngineHostIDs); herdr-both is a set, not a member. */
-export const ENGINE_HOSTS = ["herdr", "herdr-core", "orca", "paseo"];
+export const ENGINE_HOSTS = ["herdr", "herdr-core", "orca", "tern", "paseo", "cindy"];
 
 export interface HostChoice {
   hosts: string[];
@@ -121,14 +123,10 @@ export function hostOptions(m: Pick<Machine, "engines">): DetectedEngine[] {
   return ENGINE_HOSTS.map((id) => ({ id, name: known(id)?.name ?? id, available: false }));
 }
 
-/** Herdr App cannot start sessions from the phone; the others can (the capability table in docs/integrations/engines.md). */
-export function canStartIn(id: string): boolean {
-  return id !== "herdr-core";
-}
-
-/** The enabled hosts a new session may be opened in: offered as a choice only when there is more than one. */
+/** The enabled hosts a new session may be opened in (every host can start one, the capability table in
+ * docs/integrations/engines.md): offered as a choice only when there is more than one. */
 export function startHosts(m: Pick<Machine, "engine" | "engine_hosts" | "engine_default">): string[] {
-  return currentHosts(m).hosts.filter(canStartIn);
+  return currentHosts(m).hosts;
 }
 
 /** The line under the set picker. */

@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Focus sync for the web's full herdr view (docs/integrations/terminal.md "Focus sync"). herdr's focus (workspace, tab, pane) is one
+// Focus sync for the web's full herdr view (docs/integrations/terminal.md "Focus synchronization"). herdr's focus (workspace, tab, pane) is one
 // state shared by all its clients, and its events do not say which client moved it. The node
 //
 //   - reports every change to the hub (herdr.focus.changed) with where it came from: the focus Persona asked for itself

@@ -3,7 +3,7 @@ import PersonaKit
 import Testing
 @testable import Persona
 
-/// Extensions that install command-line programs and sign in (#4507, docs/extensions/extensions.md「命令行程序（tools）」「登录（auth）」):
+/// Extensions that install command-line programs and sign in (#4507, docs/extensions/extensions.md「Command-line programs」「登录（auth）」):
 /// the sign-in decodes from the hub's views and its `extension_auth` push (a state this app does not know reads as not
 /// known), the install's `tools` step carries its programs and `next: "auth"`, the words of the list's row, the
 /// permission and the About lines, and a sign-in a step at a time against a fake hub: a QR code asked again until done,
@@ -33,17 +33,44 @@ struct ExtensionAuthTests {
 
     @Test func thePushDecodes() {
         let event = #"{"type":"extension_auth","extension":"lookup","auth":{"title":"登录","state":"pending"}}"#
-        guard case .extensionAuth(let id, let auth)? = ServerEvent.decode(Data(event.utf8)) else {
+        guard case .extensionAuth(let id, let auth, _)? = ServerEvent.decode(Data(event.utf8)) else {
             Issue.record("not an extension_auth")
             return
         }
         #expect(id == "lookup" && auth?.state == .pending)
+        // Another manager's says whose it is (none: the hub's own assistant's).
+        let theirs = #"{"type":"extension_auth","manager":"m2","extension":"lookup","auth":{"title":"x","state":"signed_in"}}"#
+        guard case .extensionAuth(_, _, let manager)? = ServerEvent.decode(Data(theirs.utf8)) else {
+            Issue.record("not an extension_auth")
+            return
+        }
+        #expect(manager == "m2")
         // Something else under `auth` does not lose the event.
-        guard case .extensionAuth(_, let none)? = ServerEvent.decode(Data(#"{"type":"extension_auth","extension":"x","auth":"?"}"#.utf8)) else {
+        guard case .extensionAuth(_, let none, _)? = ServerEvent.decode(Data(#"{"type":"extension_auth","extension":"x","auth":"?"}"#.utf8)) else {
             Issue.record("lost the event")
             return
         }
         #expect(none == nil)
+    }
+
+    @Test func anExplicitDefaultPageFollowsAnUnscopedAuthPush() {
+        let store = ExtensionAuthStore()
+        store.received("lookup", ExtensionAuth(title: "", state: .pending), manager: "assistant")
+        #expect(store.auth("lookup", manager: "assistant", else: nil)?.state == .pending)
+        #expect(store.auth("lookup", else: nil)?.state == .pending)
+        #expect(store.byKey.count == 1, "the explicit default id is stored under the default key")
+
+        store.received("lookup", ExtensionAuth(title: "", state: .signedIn, account: "me@example.com"))
+        #expect(store.auth("lookup", manager: "assistant", else: nil)?.account == "me@example.com",
+                "a nil-tagged push updates the explicitly routed default page")
+        #expect(store.auth("lookup", else: nil)?.state == .signedIn)
+        #expect(store.byKey.count == 1)
+
+        store.received("lookup", ExtensionAuth(title: "", state: .pending), manager: "work")
+        #expect(store.auth("lookup", manager: "work", else: nil)?.state == .pending)
+        #expect(store.auth("lookup", manager: "assistant", else: nil)?.state == .signedIn,
+                "a non-default assistant stays separate")
+        #expect(store.byKey.count == 2)
     }
 
     @Test func theToolsStepAndNext() throws {

@@ -52,7 +52,7 @@ private class FakeMarket : ExtensionApiStub() {
     override suspend fun previewFromMarket(market: String, extension: String): ExtensionPreview { calls += "preview $market/$extension"; check(); return preview }
     override suspend fun install(preview: ExtensionPreview): ExtensionDetail { calls += "install ${preview.previewId} ${preview.permissionsDigest}"; check(); return installed }
     override suspend fun upgrade(id: String, preview: ExtensionPreview): ExtensionDetail { calls += "upgrade $id ${preview.previewId}"; check(); return installed }
-    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean) { calls += "uninstall $id keep=$keepData"; check() }
+    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean, members: Boolean): ExtensionRemoval { calls += "uninstall $id keep=$keepData"; check(); return ExtensionRemoval() }
     override suspend fun markets(): List<ExtensionMarket> { check(); return markets }
     override suspend fun addMarket(spec: String, token: String?): ExtensionMarket {
         calls += "add $spec token=${token != null}"; check()
@@ -68,6 +68,45 @@ private class FakeMarket : ExtensionApiStub() {
 @Config(sdk = [35])
 class ExtensionMarketStateTest {
     private val res get() = ApplicationProvider.getApplicationContext<android.content.Context>().resources
+
+    @Test fun catalogMetadataNeverInventsCountsOrLoadsInvalidLogoAddresses() {
+        assertNull(catalogDownloads(res, null))
+        assertNull(catalogDownloads(res, -1))
+        assertEquals(2, installedSubtitleLines(catalogDownloads(res, null)))
+        assertEquals(2, installedSubtitleLines(catalogDownloads(res, -1)))
+        assertEquals(3, installedSubtitleLines(catalogDownloads(res, 0)))
+        assertEquals("下载 0 次", catalogDownloads(res, 0))
+        assertEquals("下载 4,294,967,296 次", catalogDownloads(res, 4294967296))
+        assertEquals("https://extensions.example.com/logo.png", catalogLogoUrl("https://extensions.example.com/logo.png"))
+        for (url in listOf(null, "", "http://example.com/logo.png", "/logo.png", "//example.com/logo.png", "https:///logo.png",
+            "https://", "https://bad host/logo.png", "https://user:password@example.com/logo.png", "https://example.com:99999/logo.png")) {
+            assertNull("Invalid URL must use the generic icon: $url", catalogLogoUrl(url))
+        }
+    }
+
+    @Test fun downloadCountWordsFollowTheAppLanguageAndEnglishPluralRules() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        fun localized(tag: String) = context.createConfigurationContext(android.content.res.Configuration(res.configuration).apply {
+            setLocale(java.util.Locale.forLanguageTag(tag))
+        }).resources
+        assertEquals("1 download", catalogDownloads(localized("en"), 1))
+        assertEquals("0 downloads", catalogDownloads(localized("en"), 0))
+        assertEquals("2 downloads", catalogDownloads(localized("en"), 2))
+        assertEquals("下载 1 次", catalogDownloads(localized("zh-Hans"), 1))
+        assertEquals("1回ダウンロード", catalogDownloads(localized("ja"), 1))
+    }
+
+    @Test fun catalogKeepsPopularityOrderThroughOfficialMarketNaming() = runBlocking {
+        val popular = fresh.copy(name = "Zeta", downloads = 20)
+        val lessPopular = fresh.copy(id = "alpha", name = "Alpha", downloads = 10)
+        val zero = fresh.copy(id = "zero", downloads = 0)
+        val old = fresh.copy(id = "old")
+        val api = FakeMarket().apply { catalog = listOf(popular, lessPopular, zero, old); markets[0] = markets[0].copy(official = true) }
+        val model = CatalogModel(api, res)
+        model.load()
+        assertEquals(listOf("example-calendar", "alpha", "zero", "old"), model.state.value.extensions.map { it.id })
+        assertEquals(listOf(20L, 10L, 0L, null), model.state.value.extensions.map { it.downloads })
+    }
 
     @Test fun whereEachExtensionStandsAndWhatThePageOffers() {
         assertEquals(CatalogStanding.Available, CatalogText.standing(fresh))
@@ -216,6 +255,27 @@ class ExtensionMarketStateTest {
         model.preview()
         model.confirm()
         assertTrue("upgrade example-gateway pv1" in api.calls)
+    }
+
+    /** A rename (#2511): a page opened under the old ID (the upgrade row, a link from before) finds the extension
+     *  under its new one and upgrades the installed extension through the old ID, which the hub resolves. */
+    @Test fun aRenamedExtensionIsFoundUnderItsOldId() = runBlocking {
+        val api = FakeMarket()
+        api.catalog = api.catalog.map { if (it.id == "example-gateway") it.copy(id = "example-panel", replaces = "example-gateway", renameFrom = "example-gateway") else it }
+        api.preview = api.preview.copy(upgrade = true, from = "1.0.0")
+        val model = CatalogExtensionModel(api, marketA.id, "example-gateway", res)
+        model.load()
+        assertFalse(model.state.value.missing)
+        assertEquals("example-panel", model.state.value.extension?.id)
+        model.preview()
+        model.confirm()
+        assertTrue("upgrade example-gateway pv1" in api.calls)
+        val up = ExtensionUpgrade(id = "example-gateway", market = marketA.id, from = "1.0.0", to = "1.1.0", state = "needs_permission", renameTo = "example-panel")
+        assertEquals("example-panel", up.marketId)
+        assertEquals("example-gateway", up.copy(renameTo = null).marketId)
+        // The row says the ID changes: the hub's words, or the app's for a version Check for updates found.
+        assertEquals("ID changes", ExtensionText.upgradeDetail(res, up.copy(detail = "ID changes")))
+        assertEquals(res.getString(R.string.settings_ext_upgrade_rename, "example-gateway", "example-panel"), ExtensionText.upgradeDetail(res, up))
     }
 
     @Test fun failuresKeepThePageAndSayWhy() = runBlocking {

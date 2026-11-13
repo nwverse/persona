@@ -7,7 +7,7 @@ import persona.core.contracts.Item
 
 // Messages Persona types into a conversation for the model (a task's notice, a scheduled run, a wake-up, the
 // background tasks a node restart stopped): the chat shows one line instead of a user bubble, never the instructions
-// inside (docs/protocol/protocol.md "Messages Persona injects"). The hub marks them (Item.injected); an older hub does not, so the
+// inside (docs/protocol/protocol.md "Messages injected by Persona"). The hub marks them (Item.injected); an older hub does not, so the
 // text is read the same way it does (prompts.ParseInjected; spec/fixtures/injected is shared with it).
 
 private val noticeHead = Regex("^🔔 任务「(.+)」(做完了|在等用户|被模型服务出错打断了|没开起来)(?:（(.+)）)?$") // i18n-ignore: the injected text it reads (prompts.ParseInjected)

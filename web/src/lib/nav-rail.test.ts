@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chatLines } from "./turns";
 import type { Item } from "./types";
-import { NAV_RAIL_PREVIEW_MAX, activeNavRailOffset, navRailExcerpt, navRailMark, navRailPreview, navRailTicks, pickActiveTick, planNavRailTicks } from "./nav-rail";
+import { NAV_RAIL_PREVIEW_MAX, activeNavRailOffset, navRailExcerpt, navRailMark, navRailPreview, navRailTicks, planNavRailTicks } from "./nav-rail";
 import { NAV_RAIL_METRICS as M } from "../ui/nav-rail-metrics";
 
 const u = (seq: number, text: string, extra: Partial<Item> = {}): Item => ({ id: `u${seq}#0`, seq, role: "user", kind: "text", text, ...extra });
@@ -136,11 +136,17 @@ describe("navRailMark", () => {
     expect(previous.opacity).toBeLessThan(0.42);
   });
 
-  it("moves the bell with hover while preserving the viewport owner's marker", () => {
+  it("moves the bell with hover without independently widening the viewport owner's marker", () => {
     const hover = navRailMark(8, 25, 12, 8);
     expect(hover.state).toBe("hover");
     expect(hover.width).toBe(M.hoverWidth);
-    expect(navRailMark(12, 25, 12, 8).width).toBeGreaterThanOrEqual(M.currentWidth);
+    for (const current of [0, 7, 9, 12, 24]) {
+      const mark = navRailMark(current, 25, current, 8);
+      expect(mark.state).toBe("current");
+      expect(mark.opacity).toBe(1);
+      expect(mark.width).toBe(navRailMark(current, 25, null, 8).width);
+    }
+    expect(navRailMark(24, 25, 24, 8).width).toBeCloseTo(M.tickWidth);
     expect(navRailMark(12, 25, 12, 12).width).toBe(M.currentHoverWidth);
     expect(navRailMark(12, 25, 12, 12).height).toBeGreaterThan(M.currentHeight);
   });
@@ -169,23 +175,6 @@ describe("planNavRailTicks", () => {
       expect(plan.start).toBeLessThanOrEqual(focus);
       expect(plan.start + plan.count).toBeGreaterThan(focus);
     }
-  });
-});
-
-describe("pickActiveTick", () => {
-  const tops = [100, 200, 300, 400];
-  const at = (i: number) => tops[i];
-
-  it("is the last question that started above the threshold", () => {
-    expect(pickActiveTick(4, 250, at)).toBe(1);
-    expect(pickActiveTick(4, 1000, at)).toBe(3);
-  });
-
-  it("the first above the view, without treating missing anchors as already read", () => {
-    expect(pickActiveTick(4, 50, at)).toBe(0);
-    expect(pickActiveTick(4, 250, (i) => (i < 2 ? null : tops[i]))).toBe(2);
-    expect(pickActiveTick(4, 250, (i) => (i === 3 ? null : tops[i]))).toBe(1);
-    expect(pickActiveTick(4, 250, () => null)).toBeNull();
   });
 });
 

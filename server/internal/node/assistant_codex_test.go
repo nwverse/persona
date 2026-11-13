@@ -30,11 +30,14 @@ type fakeAppServer struct {
 	mu      sync.Mutex
 	got     []codexMessage // requests and notifications from the node
 	replies map[string]codexMessage
+	waiting map[string]chan codexMessage
+	ended   chan struct{}
 	results map[string]any    // method → result
 	errors  map[string]string // method → error message, instead of a result
 }
 
 func (f *fakeAppServer) serve(r io.Reader) {
+	defer close(f.ended)
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 16<<20)
 	for sc.Scan() {
@@ -45,6 +48,12 @@ func (f *fakeAppServer) serve(r io.Reader) {
 		f.mu.Lock()
 		if m.Method == "" { // the node answering one of our requests
 			f.replies[string(m.ID)] = m
+			if waiting := f.waiting[string(m.ID)]; waiting != nil {
+				select {
+				case waiting <- m:
+				default: // a duplicate response cannot hold the fixture's reader
+				}
+			}
 			f.mu.Unlock()
 			continue
 		}
@@ -65,9 +74,13 @@ func (f *fakeAppServer) serve(r io.Reader) {
 	}
 }
 
-func (f *fakeAppServer) push(v any) {
-	b, _ := json.Marshal(v)
-	_, _ = f.out.Write(append(b, '\n'))
+func (f *fakeAppServer) push(v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	_, err = f.out.Write(append(b, '\n'))
+	return err
 }
 
 func (f *fakeAppServer) sent(method string) []codexMessage {
@@ -85,19 +98,53 @@ func (f *fakeAppServer) sent(method string) []codexMessage {
 // request sends a request to the node and waits for its answer.
 func (f *fakeAppServer) request(id int, method string, params any) map[string]any {
 	f.t.Helper()
-	f.push(map[string]any{"id": id, "method": method, "params": params})
-	key, _ := json.Marshal(id)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r, err := f.requestReply(ctx, id, method, params)
+	if err != nil {
+		f.t.Fatalf("%s not answered: %v", method, err)
+	}
 	var res map[string]any
-	waitFor(f.t, method+" answered", func() bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		r, ok := f.replies[string(key)]
-		if ok {
-			_ = json.Unmarshal(r.Result, &res)
-		}
-		return ok
-	})
+	_ = json.Unmarshal(r.Result, &res)
 	return res
+}
+
+// requestReply observes the actual response, including an error, without a polling
+// timer. Register before writing so a response that arrives at once cannot be lost.
+func (f *fakeAppServer) requestReply(ctx context.Context, id int, method string, params any) (codexMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return codexMessage{}, err
+	}
+	key, _ := json.Marshal(id)
+	waiting := make(chan codexMessage, 1)
+	f.mu.Lock()
+	if f.waiting[string(key)] != nil {
+		f.mu.Unlock()
+		return codexMessage{}, fmt.Errorf("fixture request %d is already waiting", id)
+	}
+	f.waiting[string(key)] = waiting
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		delete(f.waiting, string(key))
+		f.mu.Unlock()
+	}()
+	if err := f.push(map[string]any{"id": id, "method": method, "params": params}); err != nil {
+		return codexMessage{}, err
+	}
+	select {
+	case reply := <-waiting:
+		return reply, nil
+	case <-ctx.Done():
+		return codexMessage{}, ctx.Err()
+	case <-f.ended:
+		select { // the final response is still usable when EOF immediately follows it
+		case reply := <-waiting:
+			return reply, nil
+		default:
+			return codexMessage{}, io.EOF
+		}
+	}
 }
 
 func newFakeCodex(t *testing.T, n *Node, cwd string) (*assistantProc, *codexConn, *fakeAppServer) {
@@ -109,24 +156,27 @@ func newFakeCodex(t *testing.T, n *Node, cwd string) (*assistantProc, *codexConn
 	c := &codexConn{n: n, p: p, key: "proc-test", pending: map[int64]chan codexReply{}, asks: map[string]context.CancelFunc{},
 		files: map[string][]string{}}
 	p.cx = c
-	f := &fakeAppServer{t: t, out: outW, replies: map[string]codexMessage{}, results: map[string]any{}}
+	f := &fakeAppServer{t: t, out: outW, replies: map[string]codexMessage{}, results: map[string]any{},
+		waiting: map[string]chan codexMessage{}, ended: make(chan struct{})}
 	go f.serve(inR)
 	go c.read(outR)
-	t.Cleanup(func() { _ = inW.Close(); _ = outW.Close() })
+	t.Cleanup(func() { _ = inW.Close(); _ = outW.Close(); <-f.ended })
 	return p, c, f
 }
 
 // fakeHub answers the node's calls the way the hub would: the Feishu gate config, the snapshot, and the phone's answers.
 type fakeHub struct {
-	mu      sync.Mutex
-	asked   []proto.Interaction
-	answer  func(proto.Interaction) proto.Resolution
-	deltas  []string
-	model   map[string]any    // assistant.model's answer; nil: an older hub without it
-	queried map[string]string // the session id the node asked about, by method
-	context map[string]any    // assistant.context's answer; nil: just a snapshot
-	acks    []json.RawMessage // assistant.context calls that acked view errors
-	mcp     []map[string]any  // the mcp.tools / mcp.call params relayed ("method" says which)
+	mu        sync.Mutex
+	asked     []proto.Interaction
+	answer    func(proto.Interaction) proto.Resolution
+	deltas    []string
+	model     map[string]any        // assistant.model's answer; nil: an older hub without it
+	queried   map[string]string     // the session id the node asked about, by method
+	context   map[string]any        // assistant.context's answer; nil: just a snapshot
+	acks      []json.RawMessage     // assistant.context calls that acked view errors
+	mcp       []map[string]any      // the mcp.tools / mcp.call params relayed ("method" says which)
+	onModel   func()                // called as assistant.model is asked, before it answers (model_restore_test.go)
+	onContext func(context.Context) // optional isolated snapshot delay (assistant_send_latency_test.go)
 }
 
 func (h *fakeHub) interactions() []proto.Interaction {
@@ -140,7 +190,10 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 	ctx, cancel := context.WithCancel(context.Background())
 	n2hR, n2hW := io.Pipe()
 	h2nR, h2nW := io.Pipe()
-	n.peer = rpc.New("n", n2hW)
+	// The goroutine below serves this peer, not whatever n.peer holds when it runs: a test may put its own hub in
+	// front afterwards (TestCodexRemoteTurnBegunBeforeJoining), and reading the field there would race that write.
+	peer := rpc.New("n", n2hW)
+	n.peer = peer
 	hub := rpc.New("h", h2nW)
 	fh := &fakeHub{answer: func(proto.Interaction) proto.Resolution { yes := true; return proto.Resolution{Allow: &yes} }}
 	hub.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -152,6 +205,12 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 				Ack json.RawMessage `json:"ack"`
 			}
 			_ = json.Unmarshal(params, &p)
+			fh.mu.Lock()
+			onContext := fh.onContext
+			fh.mu.Unlock()
+			if len(p.Ack) == 0 && onContext != nil {
+				onContext(ctx)
+			}
 			fh.mu.Lock()
 			defer fh.mu.Unlock()
 			if len(p.Ack) > 0 {
@@ -167,6 +226,12 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 				SessionID string `json:"session_id"`
 			}
 			_ = json.Unmarshal(params, &p)
+			fh.mu.Lock()
+			onModel := fh.onModel
+			fh.mu.Unlock()
+			if onModel != nil {
+				onModel()
+			}
 			fh.mu.Lock()
 			defer fh.mu.Unlock()
 			if fh.queried == nil {
@@ -214,7 +279,7 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 		fh.mu.Unlock()
 	}
 	go func() { _ = hub.Serve(ctx, n2hR) }()
-	go func() { _ = n.peer.Serve(ctx, h2nR) }()
+	go func() { _ = peer.Serve(ctx, h2nR) }()
 	t.Cleanup(func() { cancel(); _ = n2hW.Close(); _ = h2nW.Close() })
 	return fh
 }
@@ -262,6 +327,8 @@ func TestCodexTurnWithoutEffortOnAuto(t *testing.T) {
 
 func TestCodexStartAndTurns(t *testing.T) {
 	n := codexTestNode(t)
+	// Notifications read this directory too; configure it before starting the transport.
+	n.dir = t.TempDir()
 	fh := withFakeHub(t, n)
 	cwd := t.TempDir()
 	rollout := filepath.Join(t.TempDir(), "rollout-2026-11-01T01-27-25-"+testThread+".jsonl")
@@ -284,7 +351,8 @@ func TestCodexStartAndTurns(t *testing.T) {
 	}
 	b, _ := json.Marshal(f.sent("thread/start")[0])
 	_ = json.Unmarshal(b, &start)
-	if start.Params.ApprovalPolicy != "untrusted" || start.Params.Sandbox != "workspace-write" || !strings.HasPrefix(start.Params.DeveloperInstructions, "# 记忆") ||
+	// No mode selected: keep the launcher's policy until the app makes an explicit choice below.
+	if start.Params.ApprovalPolicy != "" || start.Params.Sandbox != "" || !strings.HasPrefix(start.Params.DeveloperInstructions, "# 记忆") ||
 		strings.Contains(start.Params.DeveloperInstructions, "snapshot") { // the snapshot goes with each message, not here
 		t.Fatalf("thread/start params %+v", start.Params)
 	}
@@ -356,7 +424,6 @@ func TestCodexStartAndTurns(t *testing.T) {
 	})
 
 	// A photo goes in as a local file the rollout records (and the app shows as a thumbnail).
-	n.dir = t.TempDir()
 	if err := c.deliver(ctx, "", "", []proto.Image{{Mime: "image/png", Data: "iVBORw0KGgo="}}); err != nil {
 		t.Fatal(err)
 	}
@@ -742,11 +809,17 @@ func TestCodexGetsRealWritableRoots(t *testing.T) {
 // starts (#2571).
 func TestAssistantCodexTurnError(t *testing.T) {
 	n := codexTestNode(t)
+	probedLaunchers(t, map[string]string{"cx_test": "codex"})
+	models := assistantRecoveryModels
+	assistantRecoveryModels = func(context.Context, *Node, string) (proto.LauncherModels, error) {
+		return proto.LauncherModels{Agent: "codex", Models: []proto.AgentModel{}}, nil // no fallback after the same-model retry
+	}
+	t.Cleanup(func() { assistantRecoveryModels = models })
 	cwd := t.TempDir()
 	p, c, f := newFakeCodex(t, n, cwd)
-	p.id = "proc-err"
+	p.id = testThread
 	c.threadID = testThread
-	n.procs["proc-err"] = p
+	n.procs[testThread] = p
 
 	turn := func(id string) {
 		f.push(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": testThread, "turn": map[string]any{"id": id, "status": "inProgress"}}})
@@ -768,7 +841,7 @@ func TestAssistantCodexTurnError(t *testing.T) {
 	session := func() proto.Session {
 		list := n.assistantSessions()
 		for _, s := range list {
-			if s.SessionID == "proc-err" {
+			if s.SessionID == testThread {
 				return s
 			}
 		}
@@ -777,9 +850,17 @@ func TestAssistantCodexTurnError(t *testing.T) {
 	}
 
 	turn("t1")
-	end("t1", "failed", map[string]any{"message": "unexpected status 503", "codexErrorInfo": map[string]any{"httpConnectionFailed": map[string]any{"httpStatusCode": 503}}})
+	transient := map[string]any{"message": "unexpected status 503", "codexErrorInfo": map[string]any{"httpConnectionFailed": map[string]any{"httpStatusCode": 503}}}
+	f.push(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": testThread,
+		"turn": map[string]any{"id": "t1", "status": "failed", "error": transient}}})
+	waitFor(t, "the same-model Codex retry", func() bool { return len(f.sent("turn/start")) == 1 })
+	if got := f.sent("turn/start"); len(got) != 1 || !strings.Contains(string(got[0].Params), "persona-context") {
+		t.Fatalf("the retry did not resume with hidden context: %+v", got)
+	}
+	turn("t1-retry")
+	end("t1-retry", "failed", transient) // no next model: the second failure is final
 	if s := session(); s.TurnError != "unexpected status 503" || s.TurnErrorKind != proto.TurnErrorTransient {
-		t.Fatalf("failed turn: %q, %q", s.TurnError, s.TurnErrorKind)
+		t.Fatalf("failed turn after its bounded recovery: %q, %q", s.TurnError, s.TurnErrorKind)
 	}
 
 	turn("t2")

@@ -6,7 +6,7 @@ import XCTest
 /// field stays as it was, and the navigation container keeps its frame and safe area. The shell's room for its top bar
 /// was padding around the navigation container, taken away for the chat and given back on the way back: the list came
 /// back 36 pt down, the search field opened, and everything sprang up 52 pt after the pop (#340). Read from
-/// `probe.agents-scroll` (docs/apple/ios-state.md「探针」).
+/// `probe.agents-scroll` (docs/apple/ios-state.md「Probes and assertions」).
 final class AgentsReturnTests: XCTestCase {
     private var app: XCUIApplication!
     private var page: String?

@@ -3,6 +3,7 @@ package persona.feature.inbox
 import persona.core.contracts.api.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -13,6 +14,21 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class LarkConversationTest {
+    /** #576 G134: a chat the hub answers as a topic group is read again as its topics (`topic=1`), and says it is one. */
+    @Test fun aTopicGroupIsReadAsItsTopics() = runTest {
+        val transport = FakeLarkTransport()
+        transport.pages += JsonObject(page(1, older = false, newer = false) + ("topic" to JsonPrimitive(true)))
+        transport.pages += page(2, older = false, newer = false)
+        val repository = LarkInboxRepository(FakeInboxRepository(), MutableStateFlow(transport),
+            MutableStateFlow(ConnectionState.Online), MutableSharedFlow(), MemoryLarkCache(page(1, older = false, newer = false)))
+        var state = LarkConversation()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { repository.conversation("feed", null).collect { state = it } }
+        runCurrent()
+        assertEquals("the topics were asked for once, from the newest", listOf<String?>(null), transport.topicRequests)
+        assertTrue(state.isTopic)
+        assertEquals(listOf("m2"), state.messages.map { it.id })
+    }
+
     @Test fun visibleReceiptPublishesSharedReadsOnlyAfterSuccessfulTransport() = runTest {
         val transport = FakeLarkTransport()
         transport.pages += page(1, older = false, newer = false)
@@ -55,6 +71,44 @@ class LarkConversationTest {
         assertTrue(repository.markVisible("feed", app.messages))
         assertEquals(setOf("m1", "m2"), repository.messageReads.value.map { it.id }.toSet())
         assertEquals(listOf(1L, 2L), transport.reads.map { it.first })
+    }
+
+    @Test fun aDefaultsPinnedPageSharesTheWindowOfTheUnpinnedOnes() = runTest {
+        AssistantManagerChoice.reset()
+        val transport = FakeLarkTransport()
+        val repository = LarkInboxRepository(FakeInboxRepository(), MutableStateFlow(transport),
+            MutableStateFlow(ConnectionState.Online), MutableSharedFlow(), MemoryLarkCache(page(10, older = true, newer = false)))
+        transport.pages += page(10, older = true, newer = false)
+        var list = LarkConversation()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { repository.conversation("feed", null).collect { list = it } }
+        runCurrent()
+        // The default's own item page, pinned to the default.
+        val pins = ManagerPins.of(listOf(listOf("lark", "conversations", "feed")), ManagerRoster.ASSISTANT_MANAGER)!!
+        transport.pages += page(10, older = true, newer = false)
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { repository.conversation("feed", null).flowOn(pins).collect {} }
+        runCurrent()
+        transport.pages += page(9, older = false, newer = true)
+        repository.loadOlder("feed")
+        runCurrent()
+        assertEquals(listOf(9L, 10L), list.messages.map { it.position })
+    }
+
+    @Test fun aReadFromTheDefaultsCopyGoesAsTheDefaultWhenTheOtherCopyOpenedLast() = runTest {
+        AssistantManagerChoice.reset()
+        val transport = FakeLarkTransport()
+        val repository = LarkInboxRepository(FakeInboxRepository(), MutableStateFlow(transport),
+            MutableStateFlow(ConnectionState.Online), MutableSharedFlow(), MemoryLarkCache(page(1, older = false, newer = false)))
+        transport.pages += page(1, older = false, newer = false)
+        var mine = LarkConversation()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { repository.conversation("feed", null).collect { mine = it } }
+        runCurrent()
+        // The same chat, listed by m-3 too, opened last on its own page.
+        val theirs = ManagerPins.of(listOf(listOf("lark", "conversations", "feed")), "m-3")!!
+        transport.pages += page(1, older = false, newer = false)
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { repository.conversation("feed", null).flowOn(theirs).collect {} }
+        runCurrent()
+        assertTrue(repository.markVisible("feed", mine.messages))
+        assertEquals(listOf<String?>(null), transport.readManagers)
     }
 
     @Test fun readGateRequiresEveryVisibilityCondition() {
@@ -177,9 +231,17 @@ private class FakeLarkTransport : LarkConversationTransport {
         requests += Triple(around, before, after)
         return pages.removeFirst()
     }
+    val topicRequests = mutableListOf<String?>()
+    override suspend fun topics(feedId: String, before: String?): JsonObject {
+        topicRequests += before
+        return pages.removeFirst()
+    }
+    /** The manager each read named (RequestManager). */
+    val readManagers = mutableListOf<String?>()
     override suspend fun markRead(feedId: String, position: Long, badgeCount: Long?, messageIds: List<String>) {
         assertEquals(position, badgeCount)
         reads += position to messageIds
+        readManagers += currentCoroutineContext()[RequestManager]?.id
         readGate?.await()
         if (failRead) throw java.io.IOException("Synthetic receipt failure")
     }

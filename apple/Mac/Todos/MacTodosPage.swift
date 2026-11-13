@@ -9,15 +9,29 @@ struct MacTodosPage: View {
     @State private var showCreate = false
     @State private var creatingTitle = ""
     @State private var creatingNotes = ""
-    @State private var expandedDone = false
+    /// Folded sections the user opened (#3206: Other open, Shelved, Done start folded).
+    @State private var unfolded: Set<TodoSection> = []
+    /// Restores from Shelved kept on this device (`TodoRestores`), and the moment the sections are read at.
+    @State private var restored = TodoRestores.load()
+    @State private var clock = Date.now
 
     @AppStorage("mac.todos.listWidth") private var listWidth: Double = Theme.Size.macTodosListIdeal
+    /// List or calendar, and the calendar's day / week / month (#2029): the Mac starts on the week.
+    @StoredValue("todos.view") private var viewMode = TodosViewMode.list
+    @StoredValue("todos.calendar.mode") private var calendarMode = TodoCalendarMode.week
+    /// The list by status section (default) or by Pinned direction (#4352), as on the phone; only a hub with the
+    /// direction tree offers the second.
+    @StoredValue("todos.grouping") private var grouping = TodosGrouping.status
+    @State private var calendarAnchor = Date.now
+    @State private var quickAdd: TodoCalendarSlot?
+    /// The calendar shows the selected to-do beside it once one is opened from it, until closed.
+    @State private var calendarDetail = false
     @State private var dragging: Double?
     @Environment(\.tabIsActive) private var inFront
 
     private var allTodos: [TodoItem] {
-        let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
-        return TodosLogic.sortTodos(store.todos, lookup: lookup)
+        let lookup = TodosLogic.makeSessionLookup(AppModel.shared.sessionsNow)
+        return TodosLogic.sortTodos(store.scopedTodos, lookup: lookup)
     }
 
     private var openList: [TodoItem] {
@@ -26,6 +40,19 @@ struct MacTodosPage: View {
 
     private var doneList: [TodoItem] {
         allTodos.filter { $0.isDone && matchesQuery($0) }
+    }
+
+    /// The list by status section (docs/assistant/todo-status-sop.md), related to-dos merged into one row.
+    private var triaged: TodoTriageResult {
+        let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
+        return TodoTriageLogic.triageTodos(store.scopedTodos.filter(matchesQuery), lookup: lookup, now: clock, restored: restored)
+    }
+
+    /// A folded section is open when the user opened it, while searching, or (Other open) when nothing above it shows.
+    private func isFolded(_ section: TodoSection, _ result: TodoTriageResult) -> Bool {
+        guard section.startsFolded, !unfolded.contains(section), !isSearching else { return false }
+        let openEmpty = [TodoSection.waiting, .working, .justDone, .pr].allSatisfy { result.groups($0).isEmpty }
+        return !(section == .other && openEmpty)
     }
 
     /// Whether the query narrows the list. The field keeps the raw text verbatim; a whitespace-only
@@ -64,21 +91,15 @@ struct MacTodosPage: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            listColumn
-                .frame(width: min(max(dragging ?? listWidth, Theme.Size.macTodosListMin), Theme.Size.macTodosListMax))
-            MacPanelResizeHandle { delta in
-                dragging = min(max((dragging ?? listWidth) + delta, Theme.Size.macTodosListMin), Theme.Size.macTodosListMax)
-            } ended: {
-                if let dragging { listWidth = dragging }
-                dragging = nil
-            }
-            detailColumn
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Group {
+            if viewMode == .calendar { calendarPage } else { listPage }
         }
         .background(Theme.pageBackground)
         .sheet(isPresented: $showCreate) {
             createSheet
+        }
+        .sheet(item: $quickAdd) { slot in
+            TodoQuickAddSheet(slot: slot)
         }
         .task {
             await store.refresh()
@@ -93,10 +114,13 @@ struct MacTodosPage: View {
                 selectedTodoID = openList.first?.id ?? doneList.first?.id
             }
         }
-        .onChange(of: store.todos) { _, todos in
+        .onChange(of: store.scopedTodos) { _, todos in
             // The selected todo can vanish from any path: the row menu, the detail page's delete (its dismiss
             // runs on the page's own stack root and does nothing here), or a push delete from another device.
             // Without this the id keeps pointing at the gone todo and the detail shows its tombstone forever.
+            if calendarDetail, let id = selectedTodoID, !todos.contains(where: { $0.id == id }) {
+                calendarDetail = false
+            }
             selectedTodoID = MacTodosSelection.resolve(
                 selectedID: selectedTodoID,
                 existing: todos,
@@ -106,31 +130,75 @@ struct MacTodosPage: View {
         }
     }
 
+    /// The calendar (#2029), and the to-do opened from it beside it.
+    private var calendarPage: some View {
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                TodosModeBar(view: $viewMode, mode: $calendarMode)
+                TodoCalendarView(todos: store.scopedTodos, mode: $calendarMode, anchor: $calendarAnchor,
+                                 open: { id in
+                                     selectedTodoID = id
+                                     calendarDetail = true
+                                 },
+                                 showList: { viewMode = .list })
+            }
+            .overlay(alignment: .topTrailing) {
+                MacTitleRowButton(String(localized: "New To-Do"), symbol: Theme.Icon.add) {
+                    quickAdd = TodoCalendarSlot(day: calendarAnchor, time: nil)
+                }
+                .padding(.trailing, Theme.Space.l)
+                .frame(height: Theme.Size.macToolbarHeight)
+                .ignoresSafeArea(.container, edges: .top)
+            }
+            if calendarDetail, let id = selectedTodoID {
+                Divider()
+                NavigationStack {
+                    TodoDetailView(todoID: id)
+                        .id(id)
+                }
+                .frame(width: Theme.Size.sidebar)
+                .overlay(alignment: .topLeading) {
+                    Button { calendarDetail = false } label: { ThemedIcon(Theme.Icon.close) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .padding(Theme.Space.s)
+                        .accessibilityLabel(Text("Close"))
+                }
+            }
+        }
+    }
+
+    private var listPage: some View {
+        HStack(spacing: 0) {
+            listColumn
+                .frame(width: min(max(dragging ?? listWidth, Theme.Size.macTodosListMin), Theme.Size.macTodosListMax))
+            MacPanelResizeHandle { delta in
+                dragging = min(max((dragging ?? listWidth) + delta, Theme.Size.macTodosListMin), Theme.Size.macTodosListMax)
+            } ended: {
+                if let dragging { listWidth = dragging }
+                dragging = nil
+            }
+            detailColumn
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
     private var listColumn: some View {
         VStack(spacing: 0) {
+            TodosModeBar(view: $viewMode, mode: $calendarMode, grouping: model.directionTree == nil ? nil : $grouping)
             searchField
+            let result = triaged
             List(selection: $selectedTodoID) {
-                if !(openList.isEmpty && doneList.isEmpty) {
-                    if !openList.isEmpty {
-                        Section("Open · \(openList.count)") {
-                            ForEach(openList) { todo in
-                                row(todo)
-                            }
-                        }
-                    }
-
-                    if !doneList.isEmpty {
-                        Section {
-                            DisclosureGroup(isExpanded: $expandedDone) {
-                                ForEach(doneList) { todo in
-                                    row(todo)
-                                }
-                            } label: {
-                                Text("Done · \(doneList.count)")
-                                    .font(Theme.Font.sectionHeader)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
+                if !result.isEmpty {
+                    Text("\(result.open) open · \(result.shelved) shelved · \(result.finished) done")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if TodosGrouping.resolved(grouping, hasTree: model.directionTree != nil) == .direction,
+                       let tree = model.directionTree {
+                        directionSections(tree, result)
+                    } else {
+                        ForEach(TodoSection.allCases, id: \.self) { section in statusSection(section, result) }
                     }
                 }
             }
@@ -138,7 +206,10 @@ struct MacTodosPage: View {
             .scrollContentBackground(.hidden)
             // Over the list, not a row of it: a sidebar list's row is one line, and the message was cut to it.
             .overlay(alignment: .top) {
-                if openList.isEmpty && doneList.isEmpty {
+                // The hub's merged list has nothing of an assistant that is offline: said so, not offered as a first to-do.
+                if openList.isEmpty && doneList.isEmpty, let offline = model.assistantManagerOffline {
+                    AssistantOfflineNotice(manager: offline)
+                } else if openList.isEmpty && doneList.isEmpty {
                     EmptyStateView(
                         symbol: Theme.Icon.todo,
                         title: isSearching ? String(localized: "No matching to-dos") : String(localized: "No to-dos yet"),
@@ -147,9 +218,12 @@ struct MacTodosPage: View {
                     )
                 }
             }
-            // A done-only search must not leave the matching group hidden behind the collapsed disclosure (#3474).
-            .onChange(of: query) { _, _ in
-                expandedDone = SearchExpansion.doneExpanded(query: query, hasDoneMatches: !doneList.isEmpty, current: expandedDone)
+            // a minute's tick moves to-dos across the 24 h / 48 h lines (a search opens folded sections, #3474)
+            .task(id: inFront) {
+                while inFront, !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(60))
+                    clock = .now
+                }
             }
         }
         // In the list column's own title row, at its trailing edge, as the Agents list's buttons (#1223, #2318): as a
@@ -166,7 +240,81 @@ struct MacTodosPage: View {
         }
     }
 
-    private func row(_ todo: TodoItem) -> some View {
+    /// One status section (docs/assistant/todo-status-sop.md): its to-dos, related ones under their lead; folded ones
+    /// show only the header, which opens them.
+    @ViewBuilder private func statusSection(_ section: TodoSection, _ result: TodoTriageResult) -> some View {
+        let groups = result.groups(section)
+        if !groups.isEmpty {
+            let folded = isFolded(section, result)
+            Section {
+                if !folded {
+                    ForEach(groups) { group in
+                        if group.related.isEmpty {
+                            row(group.lead, section: group.section)
+                        } else {
+                            DisclosureGroup {
+                                ForEach(group.related) { row($0, section: group.triage[$0.id]?.section) }
+                            } label: {
+                                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                                    row(group.lead, section: group.section)
+                                    Text("\(group.related.count) related")
+                                        .font(Theme.Font.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Button {
+                    guard section.startsFolded else { return }
+                    if unfolded.contains(section) { unfolded.remove(section) } else { unfolded.insert(section) }
+                } label: {
+                    HStack(spacing: Theme.Space.xs) {
+                        Text("\(section.title) · \(result.todoCounts[section] ?? groups.count)")
+                            .font(Theme.Font.sectionHeader)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        if section.startsFolded {
+                            Image(systemName: folded ? Theme.Icon.disclosure : Theme.Icon.expand)
+                                .font(Theme.Font.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    /// By Pinned direction (#4352): a section per direction of the hub's tree with a to-do, in its order (the
+    /// secretary's last), headed by its name and its counts, its to-dos in the tree's order; then Done, as by status.
+    @ViewBuilder private func directionSections(_ tree: DirectionTree, _ result: TodoTriageResult) -> some View {
+        let triage = result.sections.values.joined().reduce(into: [String: TodoTriage]()) { all, g in
+            all.merge(g.triage) { first, _ in first }
+        }
+        ForEach(DirectionTodoSections.build(tree, todos: store.byID, keep: matchesQuery)) { d in
+            Section {
+                ForEach(d.todos) { todo in row(todo, section: triage[todo.id]?.section) }
+            } header: {
+                HStack(spacing: Theme.Space.s) {
+                    Text(model.directionTitle(d.direction))
+                        .font(Theme.Font.sectionHeader)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: Theme.Space.s)
+                    DirectionCountsLine(direction: d.direction)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("todos.direction")
+            }
+        }
+        statusSection(.done, result)
+    }
+
+    private func row(_ todo: TodoItem, section: TodoSection? = nil) -> some View {
         let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
         let status = TodosLogic.todoStatus(todo, lookup: lookup)
         let urgent = TodosLogic.mostUrgentAgent(todo, lookup: lookup)
@@ -207,7 +355,7 @@ struct MacTodosPage: View {
                         StatusDot(state: urgent?.status ?? (status == .done ? .idle : .unknown), size: Theme.Size.dotS)
                         Text(todo.statusLabel(status))
                             .font(Theme.Font.labelStrong)
-                            .foregroundStyle(status.todoTone.text)
+                            .foregroundStyle(todo.shownState(status).todoTone.text)
                         if !activeAgents.isEmpty {
                             Text("· \(activeAgents.count) agents")
                                 .font(Theme.Font.caption)
@@ -238,6 +386,12 @@ struct MacTodosPage: View {
         .buttonStyle(.plain)
         .tag(todo.id)
         .contextMenu {
+            if section == .shelved {
+                Button(String(localized: "Restore")) {
+                    clock = .now
+                    restored = TodoRestores.restore([todo.id], now: clock)
+                }
+            }
             Button(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")) {
                 store.toggleDone(todo)
             }

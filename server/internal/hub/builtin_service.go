@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/clitext"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/managerconf"
 )
 
 // The built-in manager as a service of its own (docs/assistant/managers.md "The built-in manager as its own
@@ -20,8 +23,16 @@ import (
 
 // ManagerMode is `persona-hub manager-mode [child|service]`: hub.json's assistant.mode, shown, or set (the other keys
 // as they were). A running hub reads it when it starts: the change takes effect with `persona-hub switch` (or a
-// restart of its service).
+// restart of its service). Help asked for prints the usage on out (exit 0); a usage mistake is a clitext.UsageError
+// (exit 2), found before the state directory is made.
 func ManagerMode(args []string, out io.Writer) error {
+	if slices.ContainsFunc(args, isManagerModeHelp) {
+		_, err := fmt.Fprintln(out, clitext.Named(managerModeUsage))
+		return err
+	}
+	if err := checkManagerModeArgs(args); err != nil {
+		return err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -33,9 +44,29 @@ func ManagerMode(args []string, out io.Writer) error {
 	return managerMode(dir, args, out)
 }
 
+// managerModeUsage is `hub manager-mode`'s usage (clitext.Named puts the program's name in).
+const managerModeUsage = `usage: personad hub manager-mode [child|service]
+  (nothing)  show hub.json's assistant.mode
+  child      the hub starts the built-in manager (the default)
+  service    the built-in manager is a service of its own
+  A change is taken at the hub's next start: personad hub switch (or restart its service).`
+
+func isManagerModeHelp(a string) bool { return a == "help" || clitext.IsHelpArg(a) }
+
+// checkManagerModeArgs refuses anything but child, service or nothing.
+func checkManagerModeArgs(args []string) error {
+	switch {
+	case len(args) > 1:
+		return clitext.UsageError("manager-mode takes child, service or nothing\n" + clitext.Named(managerModeUsage))
+	case len(args) == 1 && args[0] != AssistantModeChild && args[0] != AssistantModeService:
+		return clitext.UsageError(fmt.Sprintf("manager-mode %q: child or service\n%s", args[0], clitext.Named(managerModeUsage)))
+	}
+	return nil
+}
+
 func managerMode(dir string, args []string, out io.Writer) error {
-	if len(args) > 1 {
-		return errors.New("manager-mode takes child, service or nothing")
+	if err := checkManagerModeArgs(args); err != nil {
+		return err
 	}
 	if len(args) == 0 {
 		cfg, err := readHubJSON(dir)
@@ -59,9 +90,6 @@ func managerMode(dir string, args []string, out io.Writer) error {
 		return err
 	}
 	mode := args[0]
-	if mode != AssistantModeChild && mode != AssistantModeService {
-		return fmt.Errorf("manager-mode %q: child or service", mode)
-	}
 	err := editHubJSON(dir, func(o *jsonObject) error {
 		a, err := o.Object("assistant")
 		if err != nil {
@@ -110,7 +138,7 @@ func ManagerCode(ctx context.Context, out io.Writer) error {
 func writeManagerCode(out io.Writer, code string, until time.Time, listen string) error {
 	_, err := fmt.Fprintf(out, "%s\n\nGood until %s, once. On this machine (where the built-in manager's service runs), with "+
 		"the code in the environment, where other users of the machine cannot read it:\n"+
-		"  PERSONA_MANAGER_CODE=<the code> persona-manager join --builtin %s --install\n", code, until.UTC().Format("2006-01-02 15:04 MST"), hubLocalURL(listen))
+		"  PERSONA_MANAGER_CODE=<the code> persona-manager join --builtin %s --install\n", code, until.UTC().Format("2006-01-02 15:04 MST"), managerconf.LocalHubURL(listen))
 	return err
 }
 

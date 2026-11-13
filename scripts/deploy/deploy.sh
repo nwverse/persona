@@ -21,8 +21,10 @@ fi
 source "$PWD/scripts/deploy/default-branch.sh"
 # Normalize caller overrides before reading deployment options; never print their values.
 eval "$(python3 scripts/persona_identity.py --env)"
-# The question and its explanations live in install.sh (the public installer asks the same).
-eval "$(sed -n '/^# >>> admin access/,/^# <<< admin access/p' scripts/deploy/install.sh)"
+# The question, its explanations and their language catalog live in install.sh (the public installer asks the same).
+eval "$(sed -n -e '/^# >>> install language/,/^# <<< install language/p' \
+  -e '/^# >>> admin access/,/^# <<< admin access/p' scripts/deploy/install.sh)"
+INSTALL_LANG=$(install_language)
 ADMIN_ACCESS="${PERSONA_ADMIN_ACCESS:-}"
 ADMIN_CIDRS="${PERSONA_ADMIN_CIDRS:-}"
 ARGS=()
@@ -127,21 +129,43 @@ $command"
 }
 mkdir -p bin
 # The commit it is built from, "-dirty" after it with changes in server/ not committed: a release installs itself over
-# this build only when its code contains that commit (docs/operations/hub-update.md "No rollback").
+# this build only when its code contains that commit (docs/operations/hub-update.md "No regression").
 COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 [ -n "$COMMIT" ] && [ -n "$(git status --porcelain -- . 2>/dev/null)" ] && COMMIT="$COMMIT-dirty"
-LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$COMMIT${PERSONA_PUBLISH_URL:+ -X main.updateURL=$PERSONA_PUBLISH_URL/dl}"
+# The update source built in: the config's publish.update_url, else publish.site_url's dl/ (scripts/persona_config.py
+# update_url); none without either. hub.json's update.url replaces it at run time (docs/operations/hub-update.md "Update source").
+UPDATE_URL="${PERSONA_UPDATE_URL:-${PERSONA_PUBLISH_URL:+$PERSONA_PUBLISH_URL/dl}}"
+LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$COMMIT${UPDATE_URL:+ -X main.updateURL=$UPDATE_URL}"
 # The runtime packages personad carries (the DSH plugin's code, docs/integrations/runtimes.md "Auto-update"), from integrations/.
 go generate ./internal/runtimepkg
+# The release's tags (server/build-tags.txt): without the tailscale.com features persona never uses.
+TAGS="$(cat build-tags.txt)"
 # Every platform a machine can run, the same four the release and the Docker image build (docs/operations/release.md): each
 # machine gets the one it runs (machine_platform), and the hub keeps all four for "Redeploy" (#3103).
 PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64)
 # persona-node is the device's own program (cmd/persona-node): the hub keeps it beside personad, and "Redeploy" gives it
 # to a machine whose node runs it (devices/deploy.go nodeBinary). Machines this script installs get personad.
 for plat in "${PLATFORMS[@]}"; do
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "bin/personad-$plat" ./cmd/personad
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "bin/persona-node-$plat" ./cmd/persona-node
+  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/personad-$plat" ./cmd/personad
+  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/persona-node-$plat" ./cmd/persona-node
 done
+# adhoc_identifiers <dir>: the darwin builds in dir, signed ad hoc again under their program's identifier
+# (com.nwverse.personad, com.nwverse.persona-node, ...) in place of the a.out Go's linker always writes. Only the name
+# changes: an ad-hoc signature's designated requirement stays the build's cdhash, so keeping macOS privacy permissions
+# across updates takes a certificate on the node's Mac (docs/operations/mac-node-signing.md). Only on a Mac, which has
+# codesign; builds made elsewhere keep a.out.
+adhoc_identifiers() {
+  local f prog
+  [ "$(uname -s)" = Darwin ] && command -v codesign >/dev/null 2>&1 || return 0
+  for f in "$1"/*-darwin-amd64 "$1"/*-darwin-arm64; do
+    [ -f "$f" ] || continue
+    prog=${f##*/}
+    prog=${prog%-darwin-*}
+    codesign --force --sign - --identifier "com.nwverse.$prog" "$f" 2>/dev/null ||
+      echo "note: $f keeps the Go linker's ad-hoc identifier a.out (codesign failed)" >&2
+  done
+}
+adhoc_identifiers bin
 echo "built $VERSION"
 # The web client goes with the hub: built here with the binaries, uploaded after the hub restarts.
 if [[ " ${TARGETS[*]} " == *" $HUB "* ]]; then build_web; fi
@@ -225,7 +249,7 @@ install_bin() {
     root=$(state_root "$role")
     mkdir -p "$root/bin" || return 1
     # The hub's binary before it is replaced: hub-systemd.sh switches the running edge to the new one and goes back
-    # to this one if it fails while taking over (docs/operations/hub-restart.md "Blue-green switch").
+    # to this one if it fails while taking over (docs/operations/hub-restart.md "Blue-green switching: the hub's edge").
     if [ "$role" = hub ]; then
       local previous
       previous=$(python3 ../scripts/persona_identity.py --service hub --shell) || return 1
@@ -262,16 +286,12 @@ $command")
   fi
 }
 
-# install_program <hub machine id> <os-arch> <program>: a program released with personad (update.ProgramNames) next to
-# the hub's personad, the same build as personad: personad-wechat (the WeChat bot, docs/extensions/wechat.md; the hub
-# starts it only when `version -v` matches; Telegram's connector is an extension now, #1704), and persona-hub and
-# persona-manager, the hub's and the manager's own programs (docs/server/server.md "Programs"). Those two keep a .prev
-# of the one replaced (none when there was none, so no older one is left there): a hub run as persona-hub goes back
-# on them with personad when the switch fails (hub-systemd.sh).
+# install_program <hub machine id> <os-arch> <program>: the hub and manager programs released with personad
+# (update.ProgramNames; docs/server/server.md). Keep a .prev for rollback after a failed switch.
 install_program() {
   local id=$1 plat=$2 name=$3 bin keep=
   bin="bin/$name-$plat"
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
+  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
   case $name in persona-hub | persona-manager)
     keep="{ if [ -f \"\$PERSONA_HOME/bin/$name\" ]; then cp -p \"\$PERSONA_HOME/bin/$name\" \"\$PERSONA_HOME/bin/$name.prev\"; else rm -f \"\$PERSONA_HOME/bin/$name.prev\"; fi; } && " ;;
   esac
@@ -336,7 +356,7 @@ for t in "${TARGETS[@]}"; do
     "$HUB")
       python3 ../scripts/persona_identity.py --service hub --prepare --prefix ../scripts/deploy/db.sh | ssh "$PERSONA_HUB_SSH" 'bash -s'
       for plat in "${PLATFORMS[@]}"; do
-        remote_state "$PERSONA_HUB_SSH" 'mkdir -p "$PERSONA_HOME/bin/nodes"; n="$PERSONA_HOME/bin/nodes/'"personad-$plat"'"; rm -f "$n.version"; cat > "$n"' < "bin/personad-$plat"
+        remote_state "$PERSONA_HUB_SSH" 'mkdir -p "$PERSONA_HOME/bin/nodes"; n="$PERSONA_HOME/bin/nodes/'"personad-$plat"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/personad-$plat"
         # This deploy's personad is the hub's version: a version file beside it (a release's build put there by hand,
         # docs/operations/docker.md "Node builds") would say it is another, so it went above.
         # persona-node says which build it is in a file beside it, and Redeploy sends it only while that is the hub's
@@ -349,7 +369,15 @@ for t in "${TARGETS[@]}"; do
       remote_state "$PERSONA_HUB_SSH" 'persona_alias_binaries "$PERSONA_HOME/bin/nodes"'
       hub_plat=$(machine_platform "$t") || exit 2
       install_bin "$t" "bin/personad-$hub_plat"
-      for p in personad-wechat persona-hub persona-manager; do install_program "$t" "$hub_plat" "$p"; done
+      for p in persona-hub persona-manager; do install_program "$t" "$hub_plat" "$p"; done
+      # What this build contains, beside its binary: the hub's deploy checks read it before asking GitHub, and it names
+      # the open PRs the build runs (docs/assistant/todo-status-sop.md "Without GitHub"). Never fails the deploy.
+      if python3 ../scripts/deploy/deployed_commits.py ${COMMIT:+--commit "${COMMIT%-dirty}"} --out bin/deployed-commits.txt; then
+        remote_state "$PERSONA_HUB_SSH" 'cat > "$PERSONA_HOME/bin/deployed-commits.txt.new" && mv "$PERSONA_HOME/bin/deployed-commits.txt.new" "$PERSONA_HOME/bin/deployed-commits.txt"' < bin/deployed-commits.txt ||
+          echo "hub: deployed-commits.txt not written; its deploy checks ask GitHub" >&2
+      else
+        echo "hub: deployed-commits.txt not made; its deploy checks ask GitHub" >&2
+      fi
       ensure_herdr "$t"
       hub_admin_access
       python3 ../scripts/persona_identity.py --service hub --prepare --prefix ../scripts/deploy/hub-systemd.sh | ssh "$PERSONA_HUB_SSH" 'bash -s'

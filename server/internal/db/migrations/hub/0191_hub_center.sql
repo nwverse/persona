@@ -1,4 +1,4 @@
--- One center hub per mesh group (hub/mesh_group.go, docs/server/mesh.md "Center"): every hub keeps which hub it takes for the
+-- One center hub per mesh group (hub/mesh_group.go, docs/server/mesh.md "Primary"): every hub keeps which hub it takes for the
 -- center and the term that made it so (a larger term wins: changing the center adds one). Keyed by the hub's own
 -- hub_id: a database restored on, or shared with, another hub does not make that one a member.
 CREATE TABLE IF NOT EXISTS mesh_group (

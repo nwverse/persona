@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 #endif
 
-/// Settings › Appearance › Light & Dark (docs/apple/ios.md「设计语言」): the app light or dark whatever the system is, or following it (the
+/// Settings › Appearance › Light & Dark (docs/apple/ios.md「Design language」): the app light or dark whatever the system is, or following it (the
 /// default: what the app always did). Set on the app's windows (`overrideUserInterfaceStyle`) rather than with
 /// `preferredColorScheme`: sheets, alerts, the keyboard and web pages follow a window's style, and going back to nil
 /// through `preferredColorScheme` does not always bring an open sheet back to the system's. The Live Activity,

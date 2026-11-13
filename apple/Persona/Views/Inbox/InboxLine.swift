@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Thread (#2128, docs/assistant/inbox.md「线索」), as on the web (#2352): under an opened item's summary, what it grew out of (its
+// Thread (#2128, docs/assistant/inbox.md「Relationships: parents and children」), as on the web (#2352): under an opened item's summary, what it grew out of (its
 // parent's chain, up to a todo or an agent session) and what grew out of it (the items right under it). Each row opens
 // where it lives: another item, the todo, the agent's chat. Nothing is drawn when the item has neither, nor from a hub
 // without GET /api/v1/inbox/tree.
@@ -68,14 +68,28 @@ nonisolated enum InboxLine {
     }
 }
 
+/// Opens an Agent linked by an item's Thread, preserving the old destination where no inbox stack is available.
+@MainActor enum InboxLineOpen {
+    static func agent(_ key: SessionKey, owner: String?, model: AppModel, push: ((InboxChatRoute) -> Void)? = nil) {
+        if let push {
+            push(InboxChatRoute(key: model.inHub(key), manager: owner))
+        } else {
+            openTodoAgentChat(model.inHub(key), in: model)
+        }
+    }
+}
+
 /// The Thread section of an opened item (iPhone's action bar, the Mac's actions column): the rows of `tree`, which the
 /// host loads with `.inboxLine(_:tree:)` (on a view that is always there: on this section, which is empty until it has
 /// rows, the answer never showed). `openItem`: how another item opens here; nil pushes it on the stack the section is in.
 struct InboxLineSection: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.pushInboxChat) private var pushChat
     var tree: InboxTree?
     var openItem: ((InboxItem) -> Void)?
     @State private var todo: TodoDetailRoute?
+    /// An Agent chosen inside the to-do sheet: its chat pushes only after that sheet has finished closing.
+    @State private var pendingAgent: SessionKey?
 
     var body: some View {
         let rows = tree.map {
@@ -90,9 +104,16 @@ struct InboxLineSection: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("inbox.line")
-            .sheet(item: $todo) { r in
+            .sheet(item: $todo, onDismiss: {
+                guard let key = pendingAgent else { return }
+                pendingAgent = nil
+                InboxLineOpen.agent(key, owner: tree?.item?.manager, model: model, push: pushChat)
+            }) { r in
                 NavigationStack {
-                    TodoDetailView(todoID: r.id).macSheetDone { todo = nil }
+                    TodoDetailView(todoID: r.id, openAgent: pushChat == nil ? nil : { key in
+                        pendingAgent = key
+                        todo = nil
+                    }).macSheetDone { todo = nil }
                 }
                 #if os(macOS)
                 .macSheet()
@@ -112,7 +133,7 @@ struct InboxLineSection: View {
         case .todo(let id)?:
             Button { todo = TodoDetailRoute(id: id) } label: { label(r) }.buttonStyle(.plain)
         case .session(let key)?:
-            Button { openTodoAgentChat(model.inHub(key), in: model) } label: { label(r) }.buttonStyle(.plain)
+            Button { InboxLineOpen.agent(key, owner: tree?.item?.manager, model: model, push: pushChat) } label: { label(r) }.buttonStyle(.plain)
         case nil:
             label(r)
         }
@@ -157,7 +178,7 @@ private struct InboxLineLoader: ViewModifier {
 
     func body(content: Content) -> some View {
         content.task(id: item.id + "|" + (item.parent.map { $0.kind + ":" + $0.id } ?? "")) {
-            guard let api = model.api, let t = try? await api.inboxTree("inbox", item.id) else { return }
+            guard let api = model.api?.manager(model.itemManager(item.manager)), let t = try? await api.inboxTree("inbox", item.id) else { return }
             withAnimation(Theme.Motion.layout) { tree = t }
         }
     }

@@ -38,10 +38,11 @@ func Parent(pid int) (int, error) {
 
 // StartMark is when pid started as "linux:<starttime>" (clock ticks since boot, field 22 of /proc/<pid>/stat), the
 // same number Claude Code writes as procStart in its sessions/<pid>.json. A reused pid has another one. "" when the
-// process is gone.
+// process is gone, and also when it is a zombie (state Z or X: killed or exited, not reaped by its parent yet), whose
+// stat still reads with the old start: it no longer runs, as on Windows once a process has exited.
 func StartMark(pid int) string {
 	f, err := Stat(pid)
-	if err != nil || len(f) < 20 {
+	if err != nil || len(f) < 20 || f[0] == "Z" || f[0] == "X" {
 		return ""
 	}
 	return "linux:" + f[19] // field 22

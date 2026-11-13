@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The hub's `notice` feed line (docs/protocol/protocol.md「任务和对话动态」, #4305): no ref, a body with the text the hub wrote in
+/// The hub's `notice` feed line (docs/protocol/protocol.md「Tasks and the chat feed」, #4305): no ref, a body with the text the hub wrote in
 /// the user's language, drawn as one small centered line where it happened. A kind this client does not know stays
 /// unknown (and is drawn as nothing).
 @MainActor

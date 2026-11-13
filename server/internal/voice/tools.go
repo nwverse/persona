@@ -16,7 +16,7 @@ import (
 var toolNames = []string{"search_knowledge", "list_agents", "send_to_agent", "ask_persona"}
 
 // boundTools are a call bound to a conversation's (protocol 2): the two that only read, and delegate_task, which hands
-// work to that conversation (docs/assistant/voice.md "Sending, the gate and 409").
+// work to that conversation (docs/assistant/voice.md "Sending, gates, and 409").
 var boundTools = []string{"search_knowledge", "list_agents", "delegate_task"}
 
 // toolLabels are what the app shows while a tool runs.
@@ -28,15 +28,20 @@ var toolLabels = map[string]string{
 	"delegate_task":    "交给对话",
 }
 
-// toolDecls declares the named tools, in toolNames' order (delegate_task last).
-func toolDecls(names []string) []toolDecl {
+// toolDecls declares the named tools, in toolNames' order (delegate_task last). meeting: a meeting call's, whose
+// delegate_task is described as asking the meeting conversation (mcp/voice/meeting_delegate_task: none of the bound
+// call's marks, which a meeting call does not read, meeting.go).
+func toolDecls(names []string, meeting bool) []toolDecl {
 	out := make([]toolDecl, 0, len(names))
 	for _, n := range append(slices.Clone(toolNames), "delegate_task") {
 		if !slices.Contains(names, n) {
 			continue
 		}
 		t := prompts.Tool(n)
-		out = append(out, toolDecl{Type: "function", Name: t.Name, Description: t.Description, Parameters: t.InputSchema})
+		if meeting && n == "delegate_task" {
+			t = prompts.Tool("meeting_delegate_task")
+		}
+		out = append(out, toolDecl{Type: "function", Name: n, Description: t.Description, Parameters: t.InputSchema})
 	}
 	return out
 }
@@ -47,6 +52,7 @@ func runTool(ctx context.Context, hub *hubClient, l i18n.Lang, name, args string
 	res := prompts.VoiceToolResult{Lang: string(l), Tool: name}
 	var in struct {
 		Query     string `json:"query"`
+		Kind      string `json:"kind"` // search_knowledge: one kind only, as kb_search takes it (recordings for meetings)
 		MachineID string `json:"machine_id"`
 		SessionID string `json:"session_id"`
 		Text      string `json:"text"`
@@ -61,7 +67,7 @@ func runTool(ctx context.Context, hub *hubClient, l i18n.Lang, name, args string
 			res.Code = "bad_args"
 			break
 		}
-		hits, err := hub.searchKnowledge(ctx, in.Query)
+		hits, err := hub.searchKnowledge(ctx, in.Query, strings.TrimSpace(in.Kind))
 		if err != nil {
 			res.Code, res.Reason = "failed", hubReason(err)
 			break

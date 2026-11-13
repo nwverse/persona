@@ -1,6 +1,6 @@
 package node
 
-// Plugins' programs on this computer (docs/plans/plan-extensions.md "Seven", #1830). The hub sends a package
+// Plugins' programs on this computer (docs/plans/plan-extensions.md "Running an extension on selected computers", #1830). The hub sends a package
 // (plugin.node.put.*), says what should run (plugin.node.start, …sync), renews the lease (…renew), and relays calls
 // (…call); the programs' events go back as plugin.node.event. They belong to this process, not to one connection: a
 // hub that reconnects finds them running; one gone longer than their lease finds them stopped (keep "always": still

@@ -4,6 +4,7 @@
 package manager
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -16,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerupdate"
 	"github.com/nwverse/persona/server/internal/terminalmaintenance"
+	"github.com/nwverse/persona/server/internal/textfmt"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -28,11 +30,11 @@ const Usage = `usage:
   personad manager update inventory --plan PATH --main ID --machine ID --machine-uid UID
                        read persisted main identity and two complete local node activity snapshots; writes nothing
   personad manager join <hub 地址> <安装码> [--dir 目录] [--database-url URL] [--fingerprint 指纹] [--install]
-                       用 App 里「新建管理者」给的安装码换这个管理者的 token，写进目录里的 manager.json
+                       用 App 里「新建助手」给的安装码换这个助手的 token，写进目录里的 manager.json
                        （默认 ~/.persona/managers/<id>）；数据库是它自己的 Postgres：install 时在 Docker 里建
                        （容器 persona-mgr-<id>-pg），或者 --database-url 给一个
   personad manager join --builtin <hub address> [<code>] [--fingerprint <fingerprint>] [--install]
-                       bind the built-in manager's own service to the hub with a code from personad hub manager-code
+                       bind the built-in manager's own service to the hub with a code from persona-hub manager-code
                        (given, or in PERSONA_MANAGER_CODE, which other users of the machine cannot read; the binding
                        goes into ~/.persona/managers/assistant/manager.json); --install: then install its service
   personad manager run [--dir 目录] [--join <hub 地址> <安装码>]
@@ -42,10 +44,13 @@ const Usage = `usage:
                        停掉并去掉常驻服务；它的数据库容器停掉、数据卷留着（--purge：连容器和数据卷一起删掉）
   personad manager capabilities [--json]   只读列出这个程序支持的管理者能力
   personad manager status [--dir 目录]      这台电脑上的管理者和它们的服务
+  personad manager search-reindex [--dir <directory>]
+                       empty this manager's chat search index in its database: it reads its chats again from the
+                       start
   personad manager install --builtin [--join <hub address>] | --check
                        install the built-in manager's own service (Linux: systemd user unit persona-manager-assistant;
                        Mac: launchd); --join: bind it first with the code in PERSONA_MANAGER_CODE, unless its binding
-                       works (personad hub setup does this); --check: only say whether it can be installed here
+                       works (persona-hub setup does this); --check: only say whether it can be installed here
   personad manager uninstall --builtin    stop and remove that service; its binding and data stay
   personad manager status --builtin       the built-in manager's binding and service
 `
@@ -85,6 +90,8 @@ func Main(ctx context.Context, build update.Build, args []string, stdout io.Writ
 		return cmdUninstall(ctx, e, args[1:])
 	case "status":
 		return cmdStatus(ctx, e, args[1:])
+	case "search-reindex":
+		return cmdSearchReindex(ctx, e, args[1:])
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, clitext.Named(Usage)) // as the program was run (persona-manager, personad)
 		return nil
@@ -94,15 +101,23 @@ func Main(ctx context.Context, build update.Build, args []string, stdout io.Writ
 
 // --- helpers ------------------------------------------------------------------------------------------------------
 
-// parseInterleaved parses flags that may come before, between or after the positional arguments.
+// parseInterleaved parses flags that may come before, between or after the positional arguments. What the flag package
+// prints waits in a buffer: -h writes the flags' help to the flag set's output (stdout) and returns errHelp; a flag
+// mistake writes nothing there and returns a usageMistake with the flag's message, which the caller prints with Usage on
+// stderr.
 func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
+	out := fs.Output()
+	var printed bytes.Buffer
+	fs.SetOutput(&printed)
+	defer fs.SetOutput(out)
 	var pos []string
 	for {
 		if err := fs.Parse(args); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
+				_, _ = io.Copy(out, &printed)
 				return nil, errHelp
 			}
-			return nil, errUsage
+			return nil, usageMistake{err.Error()}
 		}
 		args = fs.Args()
 		if len(args) == 0 {
@@ -112,6 +127,12 @@ func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
 		args = args[1:]
 	}
 }
+
+// usageMistake is errUsage that says what was wrong (the flag package's "flag provided but not defined: -json").
+type usageMistake struct{ msg string }
+
+func (e usageMistake) Error() string { return e.msg }
+func (e usageMistake) Unwrap() error { return errUsage }
 
 // ConfigError is a mistake in the manager's configuration (no manager.json, no database to use): personad exits 2,
 // which its systemd service does not restart on (RestartPreventExitStatus=2; a container's restart policy does, so
@@ -137,10 +158,7 @@ func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
-	if len(s) > 200 {
-		s = s[:200]
-	}
-	return s
+	return textfmt.Cut(s, 200)
 }
 
 // shellQuote makes s one word for sh.

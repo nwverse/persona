@@ -7,7 +7,7 @@ struct AutoConversationsRoute: Identifiable, Hashable {
     var id: String { source ?? "" }
 }
 
-/// All Chats (#3264, docs/protocol/protocol.md「侧边栏」): the assistant's conversations, newest first, filtered along the top by
+/// All Chats (#3264, docs/protocol/protocol.md「Sidebar」): the assistant's conversations, newest first, filtered along the top by
 /// who opened them: All, Mine (the user's own), then each source of Auto Chats that has any. The sidebar's Auto Chats opens
 /// it on a source. A tap opens one; a swipe or a long press archives it, as in the sidebar.
 struct AutoConversationsView: View {
@@ -28,6 +28,8 @@ struct AutoConversationsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var filter: Filter
+    /// The chat whose Pin / Unpin confirmation is open (#6214): the menu asks before the hub call.
+    @State private var leaderConfirm: Session?
     private let taskChats = AssistantTaskChatsStore.shared
     var open: (SessionKey) -> Void
 
@@ -38,9 +40,9 @@ struct AutoConversationsView: View {
 
     var body: some View {
         let everyone = model.assistantConversations.filter { $0.key != model.assistantMain }
-        let split = AutoConversations(everyone, tasks: taskChats.known, current: nil,
+        let split = AutoConversations(everyone, tasks: taskChats.known(on: model.api), current: nil,
                                       hubSays: model.hubFeatures.contains(AutoConversationSource.feature))
-        let groups = split.bySource(tasks: taskChats.known)
+        let groups = split.bySource(tasks: taskChats.known(on: model.api))
         let shown = AssistantSidebarGroups.newestFirst(Self.list(filter, all: everyone, mine: split.mine, groups: groups))
         NavigationStack {
             List {
@@ -111,52 +113,82 @@ struct AutoConversationsView: View {
 
     private func row(_ s: Session) -> some View {
         let title = s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title
-        let from = AutoConversations.source(of: s, tasks: taskChats.known)
+        let from = AutoConversations.source(of: s, tasks: taskChats.known(on: model.api))
         let detail = [filter == .all ? from?.name : nil, [.working, .needsYou, .unread].contains(s.state) ? s.state.label : s.updatedAt.map { Fmt.relative($0) }]
             .compactMap { $0 }.joined(separator: " · ")
+        // The hub's built-in background supervisor (#5083) stays listed: no Archive, no Pin.
+        let builtIn = model.isBackgroundSupervisor(s.sessionID)
         return Button { open(s.key) } label: {
             HStack(spacing: Theme.Space.m) {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    if let t = ConversationTitle(title) {
-                        Text("\(Text(t.head).foregroundStyle(Color.secondary))\(t.topic)")
-                            .font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
-                    } else {
-                        Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                    HStack(spacing: Theme.Space.xs) {
+                        if let t = ConversationTitle(title) {
+                            Text("\(Text(t.head).foregroundStyle(Color.secondary))\(t.topic)")
+                                .font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                        } else {
+                            Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                        }
+                        if let from { AutoSourceMark(source: from) } // what opened it, as in the sidebar (#3758, #5195)
                     }
                     if !detail.isEmpty {
                         Text(detail).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 Spacer(minLength: Theme.Space.xs)
-                mark(s)
+                RowStateMark(state: s.state)
             }
             .padding(.vertical, Theme.Space.xs)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel([title, detail.isEmpty ? nil : detail].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between the parts of a VoiceOver label")))
+        .accessibilityLabel([title, filter == .all ? nil : from?.markLabel, detail.isEmpty ? nil : detail].compactMap { $0 }
+            .joined(separator: String(localized: ", ", comment: "Separator between the parts of a VoiceOver label")))
         .accessibilityIdentifier("auto-conversation")
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            Button { Task { await model.archiveConversation(s.key, true) } } label: {
-                Label("Archive", systemImage: Theme.Icon.archive)
+            if !builtIn {
+                Button { Task { await model.archiveConversation(s.key, true) } } label: {
+                    Label("Archive", systemImage: Theme.Icon.archive)
+                }
+                .tint(Theme.accent)
             }
-            .tint(Theme.accent)
         }
         .contextMenu {
-            Button { Task { await model.archiveConversation(s.key, true) } } label: {
-                Label("Archive", systemImage: Theme.Icon.archive)
+            if !builtIn {
+                // A direction is the hub's, for every device (#4331): a long press makes a conversation one, or ends it.
+                // It asks a second time first (#6214).
+                let lead = model.assistantLeaders.contains(s.sessionID)
+                Button {
+                    leaderConfirm = s
+                } label: {
+                    lead ? Label("Unpin [Assistant Sidebar b7c40e]", systemImage: Theme.Icon.unpin)
+                        : Label("Pin [Assistant Sidebar 6d1f2a]", systemImage: Theme.Icon.pin)
+                }
+                Button { Task { await model.archiveConversation(s.key, true) } } label: {
+                    Label("Archive", systemImage: Theme.Icon.archive)
+                }
             }
         }
-    }
-
-    /// Waiting for you, working or unread, as the sidebar's rows mark it.
-    @ViewBuilder private func mark(_ s: Session) -> some View {
-        switch s.state {
-        case .working: ProgressView().controlSize(.mini)
-        case .needsYou: Circle().fill(Theme.needsYou).scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
-        case .unread: Circle().fill(Theme.accent).scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
-        default: EmptyView()
+        .confirmationDialog(
+            leaderConfirm.map { session in
+                model.assistantLeaders.contains(session.sessionID)
+                    ? String(localized: "Unpin Confirmation Title [Leader Actions 6214]")
+                    : String(localized: "Pin Confirmation Title [Leader Actions 6214]")
+            } ?? "",
+            isPresented: Binding(get: { leaderConfirm != nil }, set: { if !$0 { leaderConfirm = nil } }),
+            titleVisibility: .visible, presenting: leaderConfirm) { session in
+            let lead = model.assistantLeaders.contains(session.sessionID)
+            Button(lead ? String(localized: "Unpin [Assistant Sidebar b7c40e]")
+                       : String(localized: "Pin [Assistant Sidebar 6d1f2a]")) {
+                Task { await model.setDirectionLead(session.sessionID, !lead) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { session in
+            if model.assistantLeaders.contains(session.sessionID) {
+                Text(String(localized: "Unpin Confirmation Message \(title) [Leader Actions 6214]"))
+            } else {
+                Text(String(localized: "Pin Confirmation Message [Leader Actions 6214]"))
+            }
         }
     }
 }

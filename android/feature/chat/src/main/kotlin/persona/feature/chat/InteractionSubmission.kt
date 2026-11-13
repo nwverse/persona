@@ -7,12 +7,13 @@ import persona.core.contracts.api.ResolveOutcome
 import persona.core.contracts.api.InteractionGoneException
 import persona.core.contracts.api.InteractionPromptChangedException
 import persona.core.contracts.api.hubCodedFailure
+import persona.core.domain.CardAnswer
 import persona.core.domain.answer.AnswerDraft
 import kotlinx.coroutines.CancellationException
 
 /** Sensitive forms (a terminal's or a password card's password) must never enter saved request drafts, even after submission. */
 internal fun AnswerDraft.forStorage(interaction: Interaction): AnswerDraft =
-    if (interaction.secret == true) AnswerDraft() else copy(openedElicitationUrl = null, password = "", fields = kotlinx.serialization.json.JsonObject(fields.filterKeys { key ->
+    if (interaction.secret == true) AnswerDraft() else copy(openedElicitationUrl = null, password = "", values = emptyMap(), fields = kotlinx.serialization.json.JsonObject(fields.filterKeys { key ->
         persona.core.domain.answer.ElicitationForm.fields(interaction.elicitation?.requestedSchema).none { it.key == key && it.secret }
     }))
 
@@ -51,6 +52,16 @@ internal data class InteractionReply(
     val reason: String? = null,
 ) {
     val withdraw: Boolean get() = submission.withdraw
+
+    /**
+     * What it did to the card on the page: gone when withdrawn, locked while unconfirmed; refused, nothing was done, so
+     * the card stays answerable, with the hub's reason (#1881).
+     */
+    val card: CardAnswer get() = when {
+        withdraw -> CardAnswer.Withdrawn
+        submission == InteractionSubmission.Unknown -> CardAnswer.Unconfirmed
+        else -> CardAnswer.Refused
+    }
 
     /**
      * The words the chat shows for it: what [sent] answered (#4740), the answer that took effect, or why this one was

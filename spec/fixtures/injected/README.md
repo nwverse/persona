@@ -1,6 +1,6 @@
 # Persona 注入的消息夹具
 
-hub 以用户输入的身份发给模型的消息（任务通知、定时任务、叫醒、node 重启）怎么认、认出什么，规则见 [docs/protocol/protocol.md「Persona 注入的消息」](../../../docs/protocol/protocol.md)。
+hub 以用户输入的身份发给模型的消息（任务通知、定时任务、叫醒、node 重启）怎么认、认出什么，规则见 [docs/protocol/protocol.md「Messages injected by Persona」](../../../docs/protocol/protocol.md)。
 
 | 文件 | 覆盖内容 |
 | --- | --- |

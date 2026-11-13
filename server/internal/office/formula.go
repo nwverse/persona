@@ -188,7 +188,11 @@ func (e binExpr) eval(b *xbook, sh *xsheet) (value, error) {
 	}
 	switch e.op {
 	case "&":
-		return value{kind: 's', str: toText(l) + toText(r)}, nil
+		s := toText(l) + toText(r)
+		if excelLen(s) > maxCellChars {
+			return errv("#VALUE!"), nil // as Excel: text longer than a cell holds
+		}
+		return value{kind: 's', str: s}, nil
 	case "=", "<>", "<", ">", "<=", ">=":
 		c := compare(l, r)
 		return boolv(map[string]bool{"=": c == 0, "<>": c != 0, "<": c < 0, ">": c > 0, "<=": c <= 0, ">=": c >= 0}[e.op]), nil

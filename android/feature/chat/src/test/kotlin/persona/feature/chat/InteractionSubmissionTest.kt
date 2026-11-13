@@ -6,6 +6,7 @@ import persona.core.contracts.api.InteractionPromptChangedException
 import persona.core.contracts.Resolution
 import persona.core.contracts.api.HubCodedFailure
 import persona.core.contracts.api.ResolveOutcome
+import persona.core.domain.CardAnswer
 import persona.core.domain.answer.AnswerAction
 import persona.core.domain.answer.AnswerBuilder
 import persona.core.domain.answer.AnswerDraft
@@ -69,6 +70,18 @@ class InteractionSubmissionTest {
                 java.io.IOException("reset"), IllegalStateException(HubAnswer(504))))
             assertEquals(InteractionSubmission.Unknown, submitInteraction { throw lost }.submission)
         assertEquals(InteractionSubmission.Refused, submitInteraction { throw IllegalStateException(HubAnswer(409, "x", "no")) }.submission)
+    }
+
+    // What the page's taps (ChatTaps) make of each outcome: only a withdrawn card goes, only a lost reply locks it.
+    @Test fun eachOutcomeTellsTheCardWhatHappened() {
+        assertEquals(mapOf(
+            InteractionSubmission.Answered to CardAnswer.Withdrawn,
+            InteractionSubmission.AlreadyAnswered to CardAnswer.Withdrawn,
+            InteractionSubmission.ResolvedElsewhere to CardAnswer.Withdrawn,
+            InteractionSubmission.PromptChanged to CardAnswer.Withdrawn,
+            InteractionSubmission.Refused to CardAnswer.Refused,
+            InteractionSubmission.Unknown to CardAnswer.Unconfirmed,
+        ), InteractionSubmission.entries.associateWith { InteractionReply(it).card })
     }
 
     @Test fun passwordPreservesWhitespaceOnTheWireButNeverEntersSavedDrafts() {

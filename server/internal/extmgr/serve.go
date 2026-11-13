@@ -54,6 +54,7 @@ func (h *Manager) Run(ctx context.Context) error {
 	h.startTokenRecord(ctx) // before any extension starts with a token (extension_scopes.go)
 	h.startConnectors(ctx)  // the extensions' connectors join here (attachExtensions)
 	h.startExtensions(ctx)
+	h.startSubscriptions(ctx) // after the connectors it pulls from
 	go h.extensionUpgradeLoop(ctx)
 	go h.extensionMetricsLoop(ctx)
 	go h.pageLoop(ctx)
@@ -119,7 +120,12 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	h.extensionRoutes(api)
 	h.messagingRoutes(api)
 	h.adminExtensionRoutes(api) // with the old /api/v1/admin/plugins paths
+	h.subscriptionRoutes(api)
 	api.HandleFunc("POST /api/v1/error-reports", h.postErrorReports)
+	// The assistant's WebSocket routes, relayed like the extensions' (a relay stream), are the assistant's to answer.
+	for _, pattern := range assistantwire.SocketRoutes {
+		api.HandleFunc(pattern, h.assistantSocket)
+	}
 	withMachine := func(fn func(http.ResponseWriter, *http.Request, *Machine)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			m := h.localMachine(r.PathValue("mid"))
@@ -144,6 +150,11 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/machines/{mid}/browser/cookies", withMachine(h.browserCookies))
 	api.HandleFunc("POST /api/v1/machines/{mid}/browser/cookies", withMachine(h.browserCookies))
 	api.HandleFunc("DELETE /api/v1/machines/{mid}/browser/cookies", withMachine(h.browserCookies))
+	api.HandleFunc("GET /api/v1/machines/{mid}/iphone", withMachine(h.getIPhone))
+	api.HandleFunc("PUT /api/v1/machines/{mid}/iphone", withMachine(h.putIPhone))
+	api.HandleFunc("POST /api/v1/machines/{mid}/iphone/{action}", withMachine(h.postIPhoneJob))
+	api.HandleFunc("GET /api/v1/iphone", h.getIPhoneList)
+	api.HandleFunc("PUT /api/v1/iphone/consent", h.putIPhoneConsent)
 	if h.mail != nil {
 		api.Handle("/api/v1/mail/", h.mail.Handler())
 	} else {
@@ -153,11 +164,22 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	}
 }
 
+// assistantSocket hands one of assistantwire.SocketRoutes to the assistant in this process (Options.AssistantSocket).
+func (h *Manager) assistantSocket(w http.ResponseWriter, r *http.Request) {
+	if h.opts.AssistantSocket == nil {
+		writeErr(w, http.StatusNotFound, errors.New(http.StatusText(http.StatusNotFound)))
+		return
+	}
+	h.opts.AssistantSocket(w, r)
+}
+
 // ServeHTTP serves one request the hub relayed: who asked is in the hub's headers (principalFrom); the extensions'
 // parts of the API (extension_api.go) come before the rest, as at the hub.
 func (h *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.serving.Add(1)
-	defer h.serving.Add(-1)
+	if !isAssistantSocket(r) {
+		h.serving.Add(1)
+		defer h.serving.Add(-1)
+	}
 	if !h.ready(r.Context()) {
 		writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
 		return
@@ -179,8 +201,25 @@ func (h *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // Serving is how many requests the hub relayed to the extensions are being served now; a WebSocket (a voice call, an
-// extension's live view) counts for as long as it is open.
+// extension's live view) counts for as long as it is open. A meeting's audio socket (assistantwire.SocketRoutes) does
+// not: it is open for as long as the meeting records, and a redeploy may end it (the phone sends again from where the
+// hub's audio ends, docs/assistant/meeting-minutes.md "Audio from the phone").
 func (h *Manager) Serving() int64 { return h.serving.Load() }
+
+// socketRoutes matches assistantwire.SocketRoutes, as the manager's own mux does.
+var socketRoutes = sync.OnceValue(func() *http.ServeMux {
+	mux := http.NewServeMux()
+	for _, pattern := range assistantwire.SocketRoutes {
+		mux.HandleFunc(pattern, func(http.ResponseWriter, *http.Request) {})
+	}
+	return mux
+})
+
+// isAssistantSocket says whether r is one of assistantwire.SocketRoutes.
+func isAssistantSocket(r *http.Request) bool {
+	_, pattern := socketRoutes().Handler(r)
+	return pattern != ""
+}
 
 // localeWriter lets apierr translate errors after the hub has relayed the request to this process.
 type localeWriter struct {
@@ -469,6 +508,23 @@ func (h *Manager) hubCall(ctx context.Context, method string, params json.RawMes
 	case extwire.HubSettingsTool:
 		text, err := h.toolPersonaSettings(ctx, a.MachineID, a.SessionID, a.Arguments)
 		return map[string]any{"text": text}, err
+	case extwire.HubAudit:
+		var au extwire.Audit
+		if err := json.Unmarshal(params, &au); err != nil || au.Extension == "" ||
+			au.Action != extwire.AuditPermissionModeRefused && au.Action != extwire.AuditTerminalControlRefused &&
+				au.Action != extwire.AuditSecretHandoffRefused {
+			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "extensions: not an audit the hub records"}
+		}
+		actor := "extension:" + au.Extension
+		if au.Action == extwire.AuditSecretHandoffRefused { // the provider's record of someone else's try
+			id, ok := h.extensions.secretProviderID(au.Extension)
+			if !ok {
+				return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "extensions: " + au.Extension + " is no secret provider here"}
+			}
+			au.Extension, actor = id, handoffActor(au.Actor) // under its current id, where its page reads it
+		}
+		h.audit(ctx, au.Extension, au.Action, actor, au.Detail)
+		return map[string]any{}, nil
 	}
 	return nil, fmt.Errorf("extensions: no hub call %q", method)
 }
@@ -572,7 +628,10 @@ func (h *Manager) report() extwire.Report {
 			x.Browser, _ = json.Marshal(b)
 			x.ScreenPort = x.ScreenPort || b.Enabled
 		}
-		if x.Computer != nil || x.Browser != nil {
+		if p := h.iphoneOf(m); p != nil {
+			x.IPhone, _ = json.Marshal(p)
+		}
+		if x.Computer != nil || x.Browser != nil || x.IPhone != nil {
 			r.Machines[m.cfg.ID] = x
 		}
 	}
@@ -627,6 +686,8 @@ func (h *Manager) AgentTools(ctx context.Context, assistant bool) (agents, assis
 	if assistant {
 		assistantOnly = append(assistantOnly, h.computerTools()...)
 		assistantOnly = append(assistantOnly, h.browserTools()...)
+		assistantOnly = append(assistantOnly, h.iphoneTools()...)
+		assistantOnly = append(assistantOnly, h.subscriptionTools()...)
 		assistantOnly = append(assistantOnly, h.connectors.ToolsFor(ctx, false)...)
 	}
 	return agents, assistantOnly
@@ -645,6 +706,10 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 		return h.callComputerTool(ctx, session, name, args), true
 	case assistant && isBrowserTool(name):
 		return h.callBrowserTool(ctx, session, name, args), true
+	case assistant && isIPhoneTool(name):
+		return h.callIPhoneTool(ctx, session, name, args), true
+	case assistant && isSubscriptionTool(name):
+		return h.callSubscriptionTool(ctx, asker{machine, session}, name, args), true
 	}
 	return proto.ToolResult{}, false
 }
@@ -702,4 +767,27 @@ func (h *Manager) extensionLooks() []extwire.LookPackage {
 		}
 	})
 	return out
+}
+
+// secretProviderID is the current id of installed extension id (an old alias's too) when it contributes a secret
+// provider, switched on or not.
+func (ps *extensions) secretProviderID(id string) (string, bool) {
+	if ps == nil || ps.reg == nil {
+		return "", false
+	}
+	p := ps.reg.Snapshot(id)
+	if p == nil || p.Full == nil || len(p.Full.SecretProviders()) == 0 {
+		return "", false
+	}
+	return p.Record.ID, true
+}
+
+// handoffActor is who the hub says tried to approve a hand-off card, as the other records name an actor ("device:<id>",
+// "extension:<id>", "hub token"); anything else is "unknown". Clipped: it is a column a page lists.
+func handoffActor(a string) string {
+	if a == "hub token" || (strings.HasPrefix(a, "device:") || strings.HasPrefix(a, "extension:")) && len(a) <= 160 &&
+		!strings.ContainsFunc(a, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return a
+	}
+	return "unknown"
 }

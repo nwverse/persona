@@ -15,6 +15,19 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+// connect makes one connection through the machine's own hub.json entry and serves it until it ends (tests drive a
+// machine this way, without the run loop).
+func (m *Machine) connect(ctx context.Context) error {
+	c, err := m.establish(ctx, cfgPath(m))
+	if err != nil {
+		return err
+	}
+	err = m.serve(ctx, c)
+	c.close()
+	m.detach(err, false)
+	return err
+}
+
 // silentNode answers node.info and then nothing: a connection whose other end went away without a word (a
 // machine asleep or off the network: tailcat's userspace TCP has no keepalive).
 func silentNode(context.Context) (net.Conn, error) {

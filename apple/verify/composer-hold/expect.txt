@@ -1,0 +1,7 @@
+# cols: owner listening turns holding locked run down pending decided wantOn toasts
+r1_current_one_touch PASS
+r2_stop_keeps_start_send FAIL
+r3_current_two_touches_toast PASS
+r4_current_send_settled PASS
+r5_current_three_touches_mic PASS
+r6_no_takeover_two_touches_toast FAIL

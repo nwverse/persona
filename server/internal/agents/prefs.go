@@ -34,7 +34,7 @@ type Prefs struct {
 	Assign   map[string]string `json:"assign"`
 	// Hidden is what the user removed from the list (a session id → when): the source keeps the conversation, it
 	// only leaves Persona's list and unread counts until it gets a new message after that time (hidden.go). An app
-	// that does not know the field sends it back empty; put keeps the stored ones then (keepHidden).
+	// that does not know the field sends it back empty; PutPrefs keeps the stored ones then.
 	Hidden    map[string]int64 `json:"hidden,omitempty"`
 	UpdatedAt time.Time        `json:"updatedAt,omitzero"`
 }

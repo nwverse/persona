@@ -30,6 +30,7 @@ type clientOpResult struct {
 
 func (h *Hub) withClientOp(kind string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
 		// Only clients that send X-Persona-Op-Id use receipts. Messages without it (today's iOS) are deduplicated by
 		// client_msg_id in sendMessage (sent_messages), so a non-UUID client_msg_id must still go through.
 		id := r.Header.Get("X-Persona-Op-Id")
@@ -68,9 +69,15 @@ func (h *Hub) withClientOp(kind string, next http.HandlerFunc) http.HandlerFunc 
 		valid := len(bytes.TrimSpace(raw)) == 0 || json.Valid(raw)
 		canonical, _ := json.Marshal([]any{kind, json.RawMessage(target), valid, opDigestParams(kind, raw, params)})
 		sum := sha256.Sum256(canonical)
+		var timing *sendTiming
+		if kind == "message" {
+			timing = &sendTiming{hub: h, id: proto.SendTraceID(id), start: started}
+			timing.mark("admission_started", true)
+		}
 		op, claimed, err := h.store.BeginClientOp(r.Context(), db.ClientOp{
 			ID: id, DeviceID: principalOf(r.Context()).ID, Kind: kind, Target: target, Digest: hex.EncodeToString(sum[:]),
 		})
+		timing.mark("admission_done", err == nil && op != nil)
 		if err != nil || op == nil {
 			writeErr(w, http.StatusServiceUnavailable, errors.New("operation receipt unavailable"))
 			return
@@ -80,6 +87,10 @@ func (h *Hub) withClientOp(kind string, next http.HandlerFunc) http.HandlerFunc 
 			return
 		}
 		if !claimed {
+			if h.rerunClientOp(op) { // a meeting follow-up's call a restart cut off (meeting_receipts.go)
+				h.executeClientOp(w, r, kind, id, next)
+				return
+			}
 			h.waitClientOp(w, r, op)
 			return
 		}
@@ -147,6 +158,13 @@ type clientOpForgetter interface {
 // coming back for good. A notification choice and a conversation's start only release a definitely offline receipt;
 // uncertain delivery stays recorded.
 func clientOpRetry(kind string, body []byte) bool {
+	if kind == meetingJustMeOp || kind == meetingFollowupOp { // never reached the manager: the same call runs again
+		var res struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(body, &res)
+		return res.Code == assistantwire.CodeAssistantOffline
+	}
 	if kind != "inbox_reply" && kind != "inbox_handoff" && kind != "choose" && kind != "assistant_start" {
 		return false
 	}
@@ -249,8 +267,10 @@ func (h *Hub) waitClientOp(w http.ResponseWriter, r *http.Request, op *db.Client
 			return
 		case "unknown":
 			// Start, checkout and reply retries must not repeat side effects or replace a recorded HTTP outcome.
-			// A recovered pending operation has no result and remains explicitly unknown.
-			if op.Kind == "start" || op.Kind == "assistant_start" || op.Kind == "worktree_create" || op.Kind == "lark_send" || op.Kind == "inbox_reply" || op.Kind == "inbox_handoff" || op.Kind == "lark_thread_reply" {
+			// A recovered pending operation has no result and remains explicitly unknown. A meeting's Just me or
+			// follow-up call replays what it answered, a definite failure too (meeting_receipts.go).
+			if op.Kind == "start" || op.Kind == "assistant_start" || op.Kind == "worktree_create" || op.Kind == "lark_send" || op.Kind == "inbox_reply" || op.Kind == "inbox_handoff" || op.Kind == "lark_thread_reply" ||
+				op.Kind == meetingJustMeOp || op.Kind == meetingFollowupOp {
 				var result clientOpResult
 				if json.Unmarshal(op.Result, &result) == nil && result.Status >= 200 && result.Status <= 599 {
 					writeClientOpResult(w, result)

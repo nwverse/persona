@@ -1,7 +1,7 @@
 // Package extension is the extension base (docs/extensions/extensions.md, docs/plans/plan-extensions.md): the manifest
 // (persona-extension.json, formerly persona-plugin.json) and its rules, the configuration form's JSON Schema subset,
 // permissions, the registry of installed extensions, and the wire types of the process extension protocol. Running
-// extensions is extension/host's; a program's side is extension/serve.
+// extensions is extension/host's; a program's side is the Go SDK (sdk/go/ext), which extension/serve wraps for tests.
 package extension
 
 import (
@@ -123,7 +123,7 @@ type HubInfo struct {
 	// (its status, sign-in hints, a bot's replies) reads in it. Read at each start; empty means zh-Hans.
 	Locale string `json:"locale,omitempty"`
 	// Capabilities are what this hub does that a plugin may go by ("inbox_group": it relates a connector's batches of
-	// new messages to inbox events, docs/assistant/inbox.md "Event synthesis"). Absent or without one: the hub does not do it.
+	// new messages to inbox events, docs/assistant/inbox.md "Event grouping"). Absent or without one: the hub does not do it.
 	Capabilities []string `json:"capabilities,omitempty"`
 	// URL and Token are the hub's API on this machine and a token of the scopes it was granted (permissions.hub; also
 	// PERSONA_HUB_URL / PERSONA_HUB_TOKEN when the hub runs it): a new one each start, revoked when it stops for good.
@@ -141,10 +141,14 @@ type HubInfo struct {
 // Hub capabilities (HubInfo.Capabilities).
 const (
 	HubInboxGroup = "inbox_group"
+	// HubInboxGroupState: the hub also takes a grouped conversation's read and replied state for its events (a thing
+	// with an empty batch and the event's id), and a fallback plan's messages for events already handled
+	// (docs/assistant/inbox.md "Following up"). It is listed in HubCapabilities.
+	HubInboxGroupState = "inbox_group_state"
 )
 
 // HubCapabilities are this hub's.
-func HubCapabilities() []string { return []string{HubInboxGroup} }
+func HubCapabilities() []string { return []string{HubInboxGroup, HubInboxGroupState} }
 
 // ExtensionInfo is the plugin as the hub installed it.
 type ExtensionInfo struct {

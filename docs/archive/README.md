@@ -9,6 +9,10 @@ Place necessary historical text under its module directory and list it below.
 
 | File | Contents |
 | --- | --- |
+| `operations/2026-11-12-skill-zip-timeout-5581.md` | Skill ZIP import five-package 600-second timeout reproduction, exact main comparison, fixture boundaries and unresolved verification (#5478 / #5581) |
+| `operations/2026-11-12-server-test-latency-5730.md` | Fixed-revision shared node fixture latency, bounded package-set comparisons, terminal accounting, verifier adoption limits and November 13 main synchronization (#5730) |
+| `operations/cpu-memory-2026-11-13.md` | CPU and memory optimization measurements, equivalence checks and independent round reviews |
+| `operations/2026-11-09-client-error-semantics.md` | Cross-client error classification audit, narrow legacy compatibility, recording retry boundaries and unverified native/UI gates (#1915) |
 | `android/2026-11-09-inbox-completion-section-read.md` | Completion projection, assistant-section read controls and synthetic UI/API checks (#1807) |
 | `android/2026-11-08-inbox-conversation-identity.md` | Grouped inbox chat-kind and sender identity loss, historical negative controls and native render checks (#1583) |
 | `android/2026-11-08-android-inbox-swipe.md` | Grouped inbox swipe regression, historical cause, synthetic pointer and reconciliation checks (#1491) |
@@ -28,6 +32,9 @@ Place necessary historical text under its module directory and list it below.
 | `apple/persona-native-6152-acceptance.md` | Apple native naming migration acceptance (#6152) |
 | `apple/persona-native-6152-reversible-acceptance.md` | Apple reversible native-state compatibility acceptance (#6152) |
 | `assistant/assistant-rich-ui-predeployment-2026-11-06.md` | Main chat rich UI: pre-deployment acceptance |
+| `assistant/assistant-records.md` | Main chat before the 2026-10-26 capability upgrade, the tests added for it, and the capability measurements and retest on the production hub (2026-10-26 to 2026-10-31) |
+| `assistant/voice-plan.md` | Voice mode phase one: work breakdown, acceptance and test plan, risks and the design-review answers (2026-11-05 / 06) |
+| `extensions/feishu-records.md` | Lark gateway topic paging: read-only review of the gateway's source (2026-10-31) |
 | `extensions/plan-telegram.md` | Plan: Telegram connector (the user's own account) |
 | `extensions/source-extension-migration-2026-11-07.md` | Server-rendered source extensions: migration and acceptance record |
 | `integrations/codex-project-hierarchy-verification.md` | Codex project and task hierarchy verification |
@@ -36,6 +43,7 @@ Place necessary historical text under its module directory and list it below.
 | `integrations/session-verify.md` | Real-data verification of session reading and message sending (2026-10-31) |
 | `integrations/terminal-records.md` | Terminal measurements: latency and frame intervals, phone control, pane streams, two full clients, CJK widths and focus-sync runs (2026-10-29 to 2026-11-05) |
 | `integrations/codex-app-server-records.md` | Codex app-server first implementation: acceptance record (2026-11-02) |
+| `integrations/codex-app-server-research.md` | Codex app-server: source research behind the integration, pinned upstream and Persona line references (2026-11-01 to 2026-11-07) |
 | `operations/tab-switch-performance-739.md` | Persona/Agents switching CPU and request measurements, targeted fixes and the separate Mac/TestFlight acceptance boundary (#739) |
 | `operations/apple-tab-switch-validation-739.md` | Original Apple 240-sample matrix, cadence/payload observations, hidden HTTP follow-up and open acceptance gates (#739 / #1159) |
 | `operations/node-link-update-validation.md` | Persona Link node update acceptance (#1158) |
@@ -62,6 +70,8 @@ Place necessary historical text under its module directory and list it below.
 | `redesign/research/public-direct-ipv6.md` | Direct public connectivity, IPv6, TLS, and persistent-connection keepalive: research notes |
 | `redesign/ux.md` | Interaction and UI specification (shared by both platforms) |
 | `apple/2026-11-09-ios-idle-energy.md` | Six synthetic before/after energy-workload windows, single-flight boundaries, lifecycle regressions and preserved Instruments/device acceptance gaps (#1634 / #1633) |
+| `native-rewind-5878/acceptance.md` | Native conversation rewind for Codex and Antigravity in the web app: native runtime runs, browser checks in both themes at large text, and synthetic completion latency (#5878 / #5919) |
+| `worktree-mark-6644/acceptance.md` | Worktree rows in the By-repository sidebar without the bare branch glyph: web browser and Android Robolectric screenshots in both themes; iOS not captured (#6644 / #6701) |
 
 The [historical redesign index](redesign/README.md) groups the retained interaction drafts and research.
 The retained [chat-header prototype](apple/prototypes/chat-topbar.html) is a text-only historical design, not a production screen.

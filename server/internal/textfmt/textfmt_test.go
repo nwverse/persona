@@ -8,13 +8,31 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// Clip and Cut count runes, not bytes; a cut replaces invalid bytes the way []rune does, an uncut string keeps them.
+func TestClipAndCut(t *testing.T) {
+	for _, c := range []struct {
+		name, s   string
+		n         int
+		clip, cut string
+	}{
+		{"ascii", "abcdef", 3, "abc…", "abc"},
+		{"cjk", "一二三四五", 3, "一二三…", "一二三"},
+		{"exactly n runes", "一二三", 3, "一二三", "一二三"},
+		{"invalid utf-8 cut", "a\xffbcd", 3, "a\uFFFDb…", "a\uFFFDb"},
+		{"invalid utf-8 kept", "a\xff", 3, "a\xff", "a\xff"},
+		{"n=0", "abc", 0, "…", ""},
+		{"n=0 empty", "", 0, "", ""},
+	} {
+		if got := Clip(c.s, c.n); got != c.clip {
+			t.Errorf("%s: Clip(%q, %d) = %q, want %q", c.name, c.s, c.n, got, c.clip)
+		}
+		if got := Cut(c.s, c.n); got != c.cut {
+			t.Errorf("%s: Cut(%q, %d) = %q, want %q", c.name, c.s, c.n, got, c.cut)
+		}
+	}
+}
+
 func TestFormatting(t *testing.T) {
-	if got := Clip("一二三四五", 3); got != "一二三…" {
-		t.Errorf("Clip = %q", got)
-	}
-	if got := Clip("一二三", 3); got != "一二三" {
-		t.Errorf("Clip kept = %q", got)
-	}
 	if got := OneLine("  a\n\tb   c \n"); got != "a b c" {
 		t.Errorf("OneLine = %q", got)
 	}
@@ -30,6 +48,25 @@ func TestFormatting(t *testing.T) {
 	}
 	if StateNames[proto.StateNeedsYou] != "需要你" {
 		t.Error("StateNames")
+	}
+}
+
+func TestFirstNonEmpty(t *testing.T) {
+	for _, c := range []struct {
+		in   []string
+		want string
+	}{
+		{nil, ""},
+		{[]string{""}, ""},
+		{[]string{"", " \t\n", ""}, ""},
+		{[]string{"a", "b"}, "a"},
+		{[]string{"", "b", "c"}, "b"},
+		{[]string{"  ", " b "}, " b "}, // as given, not trimmed
+		{[]string{"\u00a0", "x"}, "x"}, // a no-break space is white space too
+	} {
+		if got := FirstNonEmpty(c.in...); got != c.want {
+			t.Errorf("FirstNonEmpty(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 
@@ -153,5 +190,35 @@ func TestPlainMarkdownAndPlanTitleUnchanged(t *testing.T) {
 		if got := PlainMarkdown(in); got != want {
 			t.Errorf("PlainMarkdown(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Text outside code gives the character a backslash escape or a character reference stands for, as a CommonMark
+// renderer writes it, so a push or a one-line title shows "snake_case", not "snake\_case". Code spans and code blocks
+// keep their text as it is; an escaped & starts no reference; what is not an escape or a known reference stays.
+func TestPlainMarkdownResolvesEscapesAndReferences(t *testing.T) {
+	for _, c := range []struct{ name, md, want string }{
+		{"escaped punctuation", `Use snake\_case and 1\. step and \#tag and \*not bold\* done`, "Use snake_case and 1. step and #tag and *not bold* done"},
+		{"escaped backslash", `a \\ b`, `a \ b`},
+		{"escaped bracket", `a \[link\](x)`, "a [link](x)"},
+		{"named references", `5 &lt; 6 &amp; 7 &gt; 3, &quot;q&quot; &copy; 2026`, `5 < 6 & 7 > 3, "q" © 2026`},
+		{"numeric references", `&#39;x&#39; &#x7B;y&#x7D; &#169;`, "'x' {y} ©"},
+		{"escaped ampersand", `\&amp; and \&lt;`, "&amp; and &lt;"},
+		{"not an escape", `C:\Users \a`, `C:\Users \a`},
+		{"not a reference", `AT&T &nosuchname; & &#; &lt`, `AT&T &nosuchname; & &#; &lt`},
+		{"in a link text", `[a\_b &amp; c](https://example.com/x)`, "a_b & c"},
+		{"in a heading and a list", "# a\\_b\n\n- c &amp; d\n- e\\*", "a_b\nc & d\ne*"},
+		{"code span keeps its text", "`a\\_b &amp; c` and d\\_e &amp; f", "a\\_b &amp; c and d_e & f"},
+		{"code block keeps its text", "```\na\\_b &amp; c\n```\n\nd\\_e", "a\\_b &amp; c\nd_e"},
+	} {
+		if got := PlainMarkdown(c.md); got != c.want {
+			t.Errorf("%s: PlainMarkdown(%q) = %q, want %q", c.name, c.md, got, c.want)
+		}
+	}
+	if got, want := PushText(`done: snake\_case &amp; 1\. step`), "done: snake_case & 1. step"; got != want {
+		t.Errorf("PushText = %q, want %q", got, want)
+	}
+	if got, want := PlanTitle("## Plan for snake\\_case &amp; more\n\nbody"), "Plan for snake_case & more"; got != want {
+		t.Errorf("PlanTitle = %q, want %q", got, want)
 	}
 }

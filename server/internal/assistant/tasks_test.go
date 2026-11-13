@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,11 @@ import (
 
 // The hub's end-to-end tests of tasks (real todos, a real node) are hub/tasks_test.go; these need the assistant's own
 // state or timing.
+
+// toolTaskPlan is task_plan from the conversation sessionID on the main machine.
+func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.RawMessage) (string, error) {
+	return s.toolTaskPlanFrom(ctx, s.mainMachine(ctx), sessionID, args)
+}
 
 // newTaskService is an assistant on a fake hub with machine box, whose task agents are followed at once.
 func newTaskService(t *testing.T) (*Service, *fakeHub) {
@@ -40,7 +46,7 @@ func newTaskServiceOn(t *testing.T, st Store) (*Service, *fakeHub) {
 }
 
 func planArgs(readonly bool) json.RawMessage {
-	permission := "acceptEdits"
+	permission := "bypassPermissions"
 	if readonly {
 		permission = "plan"
 	}
@@ -358,7 +364,10 @@ func TestTaskTrust(t *testing.T) {
 	}
 	h := newServiceOn(t, newFakeHub(), database)
 	h.trustKinds(context.Background(), []PlanTask{{Machine: "box", Cwd: "/code/app"}, {Machine: "box", Cwd: "/code/docs", Readonly: true}})
-	list := h.trustList(context.Background())
+	list, err := h.trustList(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(list) != 2 || list[0].Key != "box|/code/app|edit" || list[1].Readonly != true {
 		t.Fatalf("list = %+v", list)
 	}
@@ -373,6 +382,104 @@ func TestTaskTrust(t *testing.T) {
 	}
 	if ok, _ := h.forgetTrust(context.Background(), "nope"); ok {
 		t.Fatal("forgot a kind that was never remembered")
+	}
+}
+
+// storedTrust is tasks.trust as st keeps it.
+func storedTrust(t *testing.T, st *memStore) []string {
+	t.Helper()
+	var keys []string
+	if _, err := st.Setting(context.Background(), trustSetting, &keys); err != nil {
+		t.Fatal(err)
+	}
+	return keys
+}
+
+// Remembering a kind while tasks.trust cannot be read remembers nothing rather than replacing the kinds remembered
+// before with the new plan's; once the read works again the kind is added to them.
+func TestTrustFailedReadKeepsRememberedKinds(t *testing.T) {
+	ctx := context.Background()
+	st := &memStore{}
+	s := newServiceOn(t, newFakeHub(), st)
+	s.trustKinds(ctx, []PlanTask{{Machine: "m1", Cwd: "/a"}, {Machine: "m1", Cwd: "/b", Readonly: true}})
+
+	st.failKey(trustSetting, errors.New("db blip"))
+	s.trustKinds(ctx, []PlanTask{{Machine: "m2", Cwd: "/c"}})
+	if s.planStartsAtOnce(ctx, []PlanTask{{Machine: "m1", Cwd: "/a"}}) {
+		t.Fatal("a plan started at once on a trust list that could not be read")
+	}
+	st.failKey(trustSetting, nil)
+
+	want := []string{"m1|/a|edit", "m1|/b|read"}
+	if got := storedTrust(t, st); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after a failed read: %q, want %q", got, want)
+	}
+	s.trustKinds(ctx, []PlanTask{{Machine: "m2", Cwd: "/c"}})
+	want = append(want, "m2|/c|edit")
+	if got := storedTrust(t, st); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after the read works again: %q, want %q", got, want)
+	}
+}
+
+// Plans remembered at the same time, and a forget racing them, keep every kind the others remembered.
+func TestTrustConcurrentChangesKeepEveryKind(t *testing.T) {
+	ctx := context.Background()
+	st := &memStore{}
+	s := newServiceOn(t, newFakeHub(), st)
+	s.trustKinds(ctx, []PlanTask{{Machine: "box", Cwd: "/gone"}})
+
+	const n = 16
+	done := make(chan error, n+1)
+	for i := range n {
+		go func() {
+			s.trustKinds(ctx, []PlanTask{{Machine: "box", Cwd: fmt.Sprintf("/p%02d", i)}})
+			done <- nil
+		}()
+	}
+	go func() {
+		ok, err := s.forgetTrust(ctx, "box|/gone|edit")
+		if err == nil && !ok {
+			err = errors.New("not remembered")
+		}
+		done <- err
+	}()
+	for range n + 1 {
+		if err := <-done; err != nil {
+			t.Fatalf("forget: %v", err)
+		}
+	}
+
+	want := make([]string, n)
+	for i := range want {
+		want[i] = fmt.Sprintf("box|/p%02d|edit", i)
+	}
+	if got := storedTrust(t, st); !reflect.DeepEqual(got, want) {
+		t.Fatalf("kept %d kinds: %q, want %q", len(got), got, want)
+	}
+}
+
+// Forgetting a kind while tasks.trust cannot be read is an error (the route answers 503) and keeps every kind.
+func TestTrustForgetWithFailedReadKeepsTheList(t *testing.T) {
+	ctx := context.Background()
+	st := &memStore{}
+	s := newServiceOn(t, newFakeHub(), st)
+	s.trustKinds(ctx, []PlanTask{{Machine: "box", Cwd: "/a"}, {Machine: "box", Cwd: "/b"}})
+
+	st.failKey(trustSetting, errors.New("db blip"))
+	if ok, err := s.forgetTrust(ctx, "box|/a|edit"); err == nil || ok {
+		t.Fatalf("forget on a failed read: %v %v, want an error", ok, err)
+	}
+	st.failKey(trustSetting, nil)
+
+	want := []string{"box|/a|edit", "box|/b|edit"}
+	if got := storedTrust(t, st); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after a failed forget: %q, want %q", got, want)
+	}
+	if ok, err := s.forgetTrust(ctx, "box|/a|edit"); !ok || err != nil {
+		t.Fatalf("forget: %v %v", ok, err)
+	}
+	if got, want := storedTrust(t, st), []string{"box|/b|edit"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after the forget: %q, want %q", got, want)
 	}
 }
 
@@ -462,7 +569,9 @@ func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 
 // Only a task the hub judged done or its supervisor accepted opens again, and only for an agent that still belongs to it: not
 // a cancelled task or one the user closed (done by hand while its agent still started, #2954), not one whose start failed (that goes
-// through Retry), not one the agent was released or dismissed from, and not when the agent works for an open todo now.
+// through Retry), not one the agent was released or dismissed from, and not when the agent works for an open todo now. An
+// accepted one whose agent its plan did not start only when its conversation or supervisor sent the agent more since:
+// any other turn of such an agent is other work (#6726).
 func TestWhichClosedTaskReopens(t *testing.T) {
 	done := time.Now().Add(-time.Hour)
 	released := done.Add(time.Minute)
@@ -476,27 +585,44 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 	accepted.Supervision = &Supervision{State: reviewAccepted}
 	legacyCancelled := task(db.DoneByReview, s1)
 	legacyCancelled.Supervision = &Supervision{State: reviewCancelled}
+	handedOn := task(db.DoneByReview, s1) // its supervision moved to conv2
+	handedOn.Supervision = &Supervision{Supervisor: "conv2", State: reviewAccepted}
+	planned := task(db.DoneByReview, s1) // its plan started the agent
+	planned.PlanID, planned.Supervision = "plan_1", &Supervision{State: reviewAccepted}
+	since, before := done.Add(time.Minute), done.Add(-time.Minute)
 	for _, c := range []struct {
 		name    string
 		todos   []Todo
+		sent    *agentSent // the agent's last send for a conversation, if any
 		reopens bool
 	}{
-		{"judged done", []Todo{task(db.DoneByAuto, s1)}, true},
-		{"reviewed", []Todo{task(db.DoneByReview, s1)}, true},
-		{"accepted", []Todo{accepted}, true},
-		{"cancelled", []Todo{task(db.DoneByCancelled, s1)}, false},
-		{"legacy cancelled", []Todo{legacyCancelled}, false},
-		{"closed by the user", []Todo{task("", s1)}, false},
-		{"start failed", []Todo{failed}, false},
-		{"released", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", ReleasedAt: &released})}, false},
-		{"dismissed", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", DismissedAt: &released})}, false},
-		{"works for an open todo", []Todo{task(db.DoneByAuto, s1), {ID: "todo_h", Title: "自己记的事", CreatedAt: done, Agents: []TodoAgent{s1}}}, false},
-		{"another agent", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s2"})}, false},
+		{"judged done", []Todo{task(db.DoneByAuto, s1)}, nil, true},
+		{"accepted, its plan started the agent", []Todo{planned}, nil, true},
+		{"reviewed, other work", []Todo{task(db.DoneByReview, s1)}, nil, false},
+		{"accepted, other work", []Todo{accepted}, nil, false},
+		{"accepted, its conversation sent more", []Todo{accepted}, &agentSent{"conv1", since}, true},
+		{"reviewed, its conversation sent more", []Todo{task(db.DoneByReview, s1)}, &agentSent{"conv1", since}, true},
+		{"accepted, its supervisor sent more", []Todo{handedOn}, &agentSent{"conv2", since}, true},
+		{"accepted, another conversation sent", []Todo{accepted}, &agentSent{"conv9", since}, false},
+		{"accepted, sent before the acceptance", []Todo{accepted}, &agentSent{"conv1", before}, false},
+		{"cancelled", []Todo{task(db.DoneByCancelled, s1)}, nil, false},
+		{"legacy cancelled", []Todo{legacyCancelled}, nil, false},
+		{"closed by the user", []Todo{task("", s1)}, nil, false},
+		{"start failed", []Todo{failed}, nil, false},
+		{"released", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", ReleasedAt: &released})}, nil, false},
+		{"dismissed", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", DismissedAt: &released})}, nil, false},
+		{"works for an open todo", []Todo{task(db.DoneByAuto, s1), {ID: "todo_h", Title: "自己记的事", CreatedAt: done, Agents: []TodoAgent{s1}}}, nil, false},
+		{"another agent", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s2"})}, nil, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, f := newTaskService(t)
 			for _, td := range c.todos {
 				putTodo(s, td)
+			}
+			if c.sent != nil {
+				s.tasks.mu.Lock()
+				s.tasks.sentBy[[2]string{"box", "s1"}] = *c.sent
+				s.tasks.mu.Unlock()
 			}
 			agentTurn(s, f, proto.StatusWorking, "", 0)
 			got := todoNow(s, "todo_a")
@@ -504,6 +630,72 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 				t.Fatalf("reopened = %v, want %v: %+v", reopened, c.reopens, got)
 			}
 		})
+	}
+}
+
+// An accepted task whose agent goes on with other work stays accepted (#6726): a turn nobody sent it, and one another
+// conversation's agent_send started, leave it closed; its own conversation's agent_send, or the owner's message on its
+// card (routeToTask), open it again.
+func TestAcceptedTaskReopensOnlyForItsOwnWork(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	const sid = "s1abcdef"
+	turn := func(state string) {
+		status := proto.StatusIdle
+		if state == proto.StateWorking {
+			status = proto.StatusWorking
+		}
+		f.setSessions("box", proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status,
+			State: state, UpdatedAt: time.Now()})
+		if state == proto.StateWorking {
+			s.taskWorking(ctx, "box", sid)
+		}
+	}
+	accept := func() {
+		done := time.Now()
+		putTodo(s, Todo{ID: "todo_a", Title: "写方案", Origin: "conv1", CreatedAt: done.Add(-time.Hour), DoneAt: &done,
+			DoneBy: db.DoneByReview, Supervision: &Supervision{Supervisor: "conv1", State: reviewAccepted},
+			Agents: []TodoAgent{{MachineID: "box", SessionID: sid}}})
+		s.todos.mu.Lock()
+		delete(s.todos.activeBySession, [2]string{"box", sid}) // closed again: as setTodoRow does
+		s.todos.mu.Unlock()
+		turn(proto.StateIdle)
+		time.Sleep(5 * time.Millisecond)
+	}
+	open := func() bool { return todoNow(s, "todo_a").DoneAt == nil }
+	send := func(from, text string) {
+		t.Helper()
+		if _, err := runJSON(t, s, from, "agent_send", map[string]any{"machine": "box", "session_id": sid, "text": text}); err != nil {
+			t.Fatalf("agent_send from %s: %v", from, err)
+		}
+	}
+
+	accept()
+	turn(proto.StateWorking) // its own timer, a message from another session, the owner in its own session
+	if open() {
+		t.Fatal("a turn nobody sent for the task reopened it")
+	}
+	turn(proto.StateIdle)
+	send("conv7", "顺便看下 520 的盯盘")
+	turn(proto.StateWorking)
+	if open() {
+		t.Fatal("another conversation's agent_send reopened it")
+	}
+	turn(proto.StateIdle)
+	send("conv1", "第三节再补一张表")
+	turn(proto.StateWorking)
+	if got := todoNow(s, "todo_a"); got.DoneAt != nil || got.ReopenedAt == nil {
+		t.Fatalf("its own conversation's agent_send did not reopen it: %+v", got)
+	}
+
+	accept()
+	turn(proto.StateIdle)
+	if _, err := s.routeToTask(ctx, "conv1", "todo_a", "结论那段再短一点"); err != nil {
+		t.Fatalf("the owner's message on the card: %v", err)
+	}
+	turn(proto.StateWorking)
+	if !open() {
+		t.Fatal("the owner's message on its card did not reopen it")
 	}
 }
 
@@ -648,7 +840,7 @@ func TestTaskPlanStartsWhatTheUserAskedFor(t *testing.T) {
 	plan := func(requested bool) json.RawMessage {
 		raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
 			"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
-			"readonly": false, "user_requested": requested, "why": "这个仓库最近在 box 上",
+			"readonly": false, "permission": "bypassPermissions", "user_requested": requested, "why": "这个仓库最近在 box 上",
 		}}})
 		return raw
 	}
@@ -672,8 +864,8 @@ func TestTaskPlanStartsWhatTheUserAskedFor(t *testing.T) {
 	}
 	// One inferred task keeps the whole plan waiting.
 	mixed, _ := json.Marshal(map[string]any{"tasks": []map[string]any{
-		{"title": "修登录崩溃", "prompt": "修", "machine": "box", "cwd": "/code/app", "user_requested": true, "why": "-"},
-		{"title": "顺便升级依赖", "prompt": "升级", "machine": "box", "cwd": "/code/app", "user_requested": false, "why": "-"},
+		{"title": "修登录崩溃", "prompt": "修", "machine": "box", "cwd": "/code/app", "permission": "bypassPermissions", "user_requested": true, "why": "-"},
+		{"title": "顺便升级依赖", "prompt": "升级", "machine": "box", "cwd": "/code/app", "permission": "bypassPermissions", "user_requested": false, "why": "-"},
 	}})
 	if res, err := s2.toolTaskPlan(context.Background(), "conv1", mixed); err != nil || !strings.Contains(res, "nothing has started") {
 		t.Fatalf("a mixed plan: %q %v", res, err)
@@ -683,7 +875,7 @@ func TestTaskPlanStartsWhatTheUserAskedFor(t *testing.T) {
 	if res, err := s2.toolTaskPlan(context.Background(), "conv1", plan(true)); err != nil || !strings.Contains(res, "nothing has started") {
 		t.Fatalf("with the setting off: %q %v", res, err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, "the start reservation to settle", func() bool { return s2.taskStarting.Load() == 0 })
 	f2.mu.Lock()
 	defer f2.mu.Unlock()
 	if len(f2.starts) != 0 {
@@ -709,7 +901,7 @@ func TestTaskFinishedWhileItsAgentStarts(t *testing.T) {
 	}
 	// ... and the start finishes after it.
 	s.startPlanTask("plan_x", "conv1", 0, PlanTask{Title: todo.Title, Prompt: "修好并补测试", Machine: "box",
-		Cwd: "/code/app", TodoID: todo.ID}, false)
+		Cwd: "/code/app", Permission: "bypassPermissions", TodoID: todo.ID}, false)
 
 	f.mu.Lock()
 	starts := len(f.starts)
@@ -802,8 +994,13 @@ func TestTodayCardListsOnlyFinishedTasks(t *testing.T) {
 // no agent for ever (#4510).
 func TestTaskStartTimingOutStillEndsTheTask(t *testing.T) {
 	old := taskStartTimeout
+	oldAdoptWait, oldAdoptPoll := taskStartAdoptWait, taskStartAdoptPoll
 	taskStartTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { taskStartTimeout = old })
+	taskStartAdoptWait, taskStartAdoptPoll = 300*time.Millisecond, 10*time.Millisecond // #6540: reconcile, then fail at once
+	t.Cleanup(func() {
+		taskStartTimeout = old
+		taskStartAdoptWait, taskStartAdoptPoll = oldAdoptWait, oldAdoptPoll
+	})
 	todoStores(t, func(t *testing.T, _ *todoEnv, database *db.DB) {
 		ctx := context.Background()
 		f := newFakeHub()
@@ -819,7 +1016,7 @@ func TestTaskStartTimingOutStillEndsTheTask(t *testing.T) {
 			t.Fatal(err)
 		}
 		s.startPlanTask("plan_x", "conv1", 0, PlanTask{Title: todo.Title, Prompt: "全仓清理", Machine: "box", Cwd: "/code/app",
-			TodoID: todo.ID}, false)
+			Permission: "bypassPermissions", TodoID: todo.ID}, false)
 		got := todoNow(s, todo.ID)
 		if got.DoneAt == nil || !strings.Contains(got.StartError, "deadline") {
 			t.Fatalf("the timed-out start left the task open: done %v, error %q", got.DoneAt, got.StartError)
@@ -831,6 +1028,272 @@ func TestTaskStartTimingOutStillEndsTheTask(t *testing.T) {
 			}
 		}
 	})
+}
+
+// gatedPlanStore holds each read of a started plan until all n writers of its tasks have come: n reads held together
+// (writers that do not lock the plan, each about to write back a copy without the others' fields), or every writer not
+// through yet holding or waiting on the plan's lock (patchPlanTask). Either way the writes overlap as much as they can.
+type gatedPlanStore struct {
+	*profileTaskStore
+	s        *Service
+	mu       sync.Mutex
+	n        int // the reads to hold (0: none)
+	reading  int // held now
+	released int // let through
+	timedOut bool
+	// then runs once, right after the next read of a started plan: another writer landing before the reader writes.
+	then func(id string)
+}
+
+func newGatedPlanStore() *gatedPlanStore {
+	return &gatedPlanStore{profileTaskStore: &profileTaskStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+}
+
+// hold makes the next n reads of a started plan wait for each other (gatedPlanStore).
+func (st *gatedPlanStore) hold(n int) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.n, st.reading, st.released, st.timedOut = n, 0, 0, false
+}
+
+// done is whether all the held reads were let through, and whether one of them waited in vain.
+func (st *gatedPlanStore) done() (bool, bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.released >= st.n, st.timedOut
+}
+
+func (st *gatedPlanStore) TaskPlan(ctx context.Context, id string) (*db.TaskPlanRow, error) {
+	row, err := st.profileTaskStore.TaskPlan(ctx, id)
+	if err != nil || row.State != planStarted {
+		return row, err
+	}
+	st.mu.Lock()
+	then, held := st.then, st.reading+st.released < st.n
+	st.then = nil
+	if held {
+		st.reading++
+	}
+	st.mu.Unlock()
+	if then != nil {
+		then(id)
+	}
+	if !held {
+		return row, nil
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) { // sleep-ok: polls the plan lock's waiter count, which nothing signals, until the deadline
+		st.mu.Lock()
+		left, late := st.n-st.released, time.Now().After(deadline)
+		if st.reading >= left || st.s.tasks.planEdits.waiting(id) >= left || late {
+			st.timedOut = st.timedOut || late
+			st.reading--
+			st.released++
+			st.mu.Unlock()
+			return row, nil
+		}
+		st.mu.Unlock()
+	}
+}
+
+// setTask changes task i of plan id as another writer would, past the assistant.
+func (st *gatedPlanStore) setTask(id string, i int, change func(*PlanTask)) {
+	st.planMu.Lock()
+	defer st.planMu.Unlock()
+	row := st.plans[id]
+	p := planFromRow(row)
+	change(&p.Tasks[i])
+	row.Tasks, _ = json.Marshal(p.Tasks)
+	st.plans[id] = row
+}
+
+// startTogetherHub is a fake hub whose machines answer no session.start until n have come: starts that fail together,
+// each past the launcher's health check before the first failure counts against it. It keeps the last plan the apps
+// were told of.
+type startTogetherHub struct {
+	*fakeHub
+	mu       sync.Mutex
+	n, came  int
+	all      chan struct{} // closed when n came
+	lastPlan *TaskPlan
+}
+
+func (h *startTogetherHub) Broadcast(ctx context.Context, b Broadcast) {
+	var ev struct {
+		Type string    `json:"type"`
+		Plan *TaskPlan `json:"plan"`
+	}
+	if json.Unmarshal(b.Message, &ev) == nil && ev.Type == "task_plan" {
+		h.mu.Lock()
+		h.lastPlan = ev.Plan
+		h.mu.Unlock()
+	}
+	h.fakeHub.Broadcast(ctx, b)
+}
+
+func (h *startTogetherHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceSessionStart {
+		h.mu.Lock()
+		if h.came++; h.came == h.n {
+			close(h.all)
+		}
+		h.mu.Unlock()
+		select {
+		case <-h.all:
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+		}
+	}
+	return h.fakeHub.DeviceCall(ctx, p)
+}
+
+// planTasks is a plan of n read-only tasks on box, task i titled "task i".
+func planTasks(n int) json.RawMessage {
+	var tasks []map[string]any
+	for i := range n {
+		tasks = append(tasks, map[string]any{"title": fmt.Sprintf("task %d", i), "prompt": fmt.Sprintf("look at part %d", i),
+			"machine": "box", "cwd": "/code/app", "readonly": true})
+	}
+	raw, _ := json.Marshal(map[string]any{"tasks": tasks})
+	return raw
+}
+
+// storedPlan is the one plan st has.
+func storedPlan(t *testing.T, st *gatedPlanStore) *TaskPlan {
+	t.Helper()
+	st.planMu.Lock()
+	defer st.planMu.Unlock()
+	if len(st.plans) != 1 {
+		t.Fatalf("%d plans", len(st.plans))
+	}
+	for _, row := range st.plans {
+		return planFromRow(row)
+	}
+	return nil
+}
+
+// Tasks of one plan whose starts fail together each keep their error, with its code for the card's remedy: each failed
+// start wrote back the plan it read before the others wrote theirs, so only the last one's error stayed (#2192).
+func TestPlanTasksFailingTogetherAllKeepTheirError(t *testing.T) {
+	const n = 4
+	st := newGatedPlanStore()
+	f := newFakeHub()
+	f.sessions["box"] = nil
+	f.settings = &Settings{Timezone: "Asia/Shanghai"}
+	f.failStart = &rpc.Error{Code: proto.CodeLauncherMissing, Message: "terminal has no launcher", Data: json.RawMessage(`{"where":"terminal","launcher":"work"}`)}
+	h := &startTogetherHub{fakeHub: f, n: n, all: make(chan struct{})}
+	s := withSettings(t, f, New(Options{Hub: h, Store: func() Store { return st }, Logf: testLogf(t)}))
+	st.s = s
+	st.hold(n)
+	if _, err := s.toolTaskPlan(context.Background(), "conv1", planTasks(n)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "every start's failure to be written", func() bool {
+		done, _ := st.done()
+		return done && s.tasks.planEdits.len() == 0
+	})
+	if _, timedOut := st.done(); timedOut {
+		t.Fatal("the plan's writers did not all come")
+	}
+	h.mu.Lock()
+	told := h.lastPlan
+	h.mu.Unlock()
+	for what, p := range map[string]*TaskPlan{"stored": storedPlan(t, st), "told to the apps last": told} {
+		if p == nil || len(p.Tasks) != n {
+			t.Fatalf("%s plan: %+v", what, p)
+		}
+		for i, task := range p.Tasks {
+			if task.TodoID == "" || task.Error == "" || task.ErrorCode != proto.CodeLauncherMissing || task.ErrorArgs["launcher"] != "work" {
+				t.Errorf("%s plan: task %d lost its start error: %+v", what, i, task)
+			}
+		}
+	}
+}
+
+// Tasks moved to another machine and their plan's other tasks failing to start at the same time all keep what they
+// recorded: where the moved ones run and why the others did not start (#2192).
+func TestPlanTaskMovesAndFailuresAllStay(t *testing.T) {
+	const n = 4
+	ctx := context.Background()
+	st := newGatedPlanStore()
+	s, f := newTaskServiceOn(t, st)
+	st.s = s
+	f.failStart = errors.New("Failed to authenticate")
+	p := &TaskPlan{ID: "plan_rmw", Conversation: "conv1", State: planStarted, CreatedAt: time.Now().UTC()}
+	for i := range n {
+		todo, err := s.createTodo(ctx, fmt.Sprintf("task %d", i), "look", p.Conversation, p.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Tasks = append(p.Tasks, PlanTask{Title: todo.Title, Prompt: "look", Machine: "box", Cwd: "/code/app", Readonly: true,
+			TodoID: todo.ID})
+	}
+	if err := s.savePlan(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	st.hold(n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			if i%2 == 0 { // moved: where it runs now
+				s.updatePlanTask(ctx, p.ID, i, PlanTask{Machine: fmt.Sprintf("mac%d", i), Cwd: "/work", Why: "box is busy"})
+				return
+			}
+			s.startPlanTask(p.ID, p.Conversation, i, p.Tasks[i], false)
+		})
+	}
+	wg.Wait()
+	if _, timedOut := st.done(); timedOut {
+		t.Fatal("the plan's writers did not all come")
+	}
+	for i, task := range storedPlan(t, st).Tasks {
+		switch {
+		case i%2 == 0 && (task.Machine != fmt.Sprintf("mac%d", i) || task.Cwd != "/work" || task.Error != ""):
+			t.Errorf("moved task %d: %+v", i, task)
+		case i%2 == 1 && (task.Machine != "box" || !strings.Contains(task.Error, "Failed to authenticate")):
+			t.Errorf("failed task %d: %+v", i, task)
+		}
+	}
+	if s.tasks.planEdits.len() != 0 {
+		t.Fatalf("%d plan locks kept", s.tasks.planEdits.len())
+	}
+}
+
+// A retried task clears only its own error on the plan card: what another task of the plan recorded while the retry
+// looked up the machine and reopened the todo stays. The retry wrote back the plan as it had read it (#2192).
+func TestRetryKeepsWhatTheOtherTasksRecorded(t *testing.T) {
+	ctx := context.Background()
+	st := newGatedPlanStore()
+	s, f := newTaskServiceOn(t, st)
+	st.s = s
+	f.failStart = &rpc.Error{Code: "open_elsewhere", Message: "open elsewhere"} // not held against the launcher: the retry goes
+	if _, err := s.toolTaskPlan(ctx, "conv1", planTasks(2)); err != nil {
+		t.Fatal(err)
+	}
+	var p *TaskPlan
+	waitFor(t, "both starts to fail", func() bool {
+		p = storedPlan(t, st)
+		for _, task := range p.Tasks {
+			if task.Error == "" || todoNow(s, task.TodoID).StartError == "" {
+				return false
+			}
+		}
+		return s.tasks.planEdits.len() == 0
+	})
+	f.mu.Lock()
+	f.failStart = nil
+	f.mu.Unlock()
+	st.mu.Lock()
+	st.then = func(id string) {
+		st.setTask(id, 1, func(task *PlanTask) { task.Error = "open elsewhere again" })
+	}
+	st.mu.Unlock()
+	if _, err := s.retryTask(ctx, p.Tasks[0].TodoID); err != nil {
+		t.Fatal(err)
+	}
+	if got := storedPlan(t, st).Tasks; got[0].Error != "" || got[1].Error != "open elsewhere again" {
+		t.Fatalf("retried task's error %q, the other task's %q", got[0].Error, got[1].Error)
+	}
+	waitFor(t, "the retried agent", func() bool { return len(todoNow(s, p.Tasks[0].TodoID).Agents) == 1 })
 }
 
 // A plan card in the main conversation waiting for the user's "Start" has no todo yet, so nothing else in the snapshot
@@ -870,8 +1333,101 @@ func TestSnapshotListsPlansWaitingToStart(t *testing.T) {
 	}
 }
 
-// A task opened from a side conversation (neither quiet nor supervised) pushes a failure notification
-// when its agent cannot start, with reason and next steps, unless muted (#5081).
+// The conversation that put up a plan card withdraws it while nothing of it has started (#6739): with a reason, kept as
+// a work event; the card no longer waits for Start, and the snapshot no longer lists it. Another conversation's plan, an
+// empty reason, an unknown plan, and one already started or withdrawn are refused, and nothing changes.
+func TestTaskPlanWithdraw(t *testing.T) {
+	s, _ := newTaskService(t)
+	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) { v.Main, v.MachineID = "main1", "box" })
+	plan := func() string {
+		t.Helper()
+		if _, err := s.toolTaskPlan(ctx, "main1", planArgs(false)); err != nil { // edits code: waits for "Start"
+			t.Fatal(err)
+		}
+		items, _, _ := s.feed(ctx, "main1", time.Time{})
+		return items[len(items)-1].Ref
+	}
+	withdraw := func(self, id, reason string) (string, error) {
+		return runJSON(t, s, self, "task_plan_withdraw", map[string]any{"plan_id": id, "reason": reason})
+	}
+	state := func(id string) string {
+		p, err := s.loadPlan(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.State
+	}
+	id := plan()
+	loc := s.location(ctx)
+	if plans, _ := s.snapshotPlans(ctx, loc, time.Now()); len(plans) != 1 || plans[0].ID != id ||
+		!strings.Contains(prompts.RenderSnapshot(prompts.Snapshot{Now: time.Now().In(loc), Zone: loc.String(), Plans: plans,
+			PlansTotal: 1}), "（"+id+"）") {
+		t.Fatalf("the snapshot does not name plan %s: %+v", id, plans)
+	}
+	for _, c := range []struct{ name, self, id, reason string }{
+		{"another conversation's", "conv1", id, "别处做完了"},
+		{"no reason", "main1", id, "  "},
+		{"unknown plan", "main1", "plan_nope", "别处做完了"},
+	} {
+		if _, err := withdraw(c.self, c.id, c.reason); err == nil {
+			t.Fatalf("%s: withdrawn", c.name)
+		}
+		if got := state(id); got != planOpen {
+			t.Fatalf("%s: plan is %s", c.name, got)
+		}
+	}
+	if len(testEvents(s)) != 0 {
+		t.Fatalf("a refusal recorded: %+v", testEvents(s))
+	}
+	out, err := withdraw("main1", id, "三件都已由别的任务做完")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state(id); got != planDismissed || !strings.Contains(out, "修登录崩溃") {
+		t.Fatalf("withdrawn: plan %s, answer %q", got, out)
+	}
+	if ev := testEvents(s); len(ev) != 1 || ev[0].Kind != taskPlanWithdrawnEvent || ev[0].Detail["plan"] != id ||
+		ev[0].Detail["reason"] != "三件都已由别的任务做完" || ev[0].Detail["conversation"] != "main1" {
+		t.Fatalf("record: %+v", ev)
+	}
+	if plans, total := s.snapshotPlans(ctx, loc, time.Now()); total != 0 || len(plans) != 0 {
+		t.Fatalf("a withdrawn plan still waits: %+v", plans)
+	}
+	if _, err := withdraw("main1", id, "再撤一次"); err == nil {
+		t.Fatal("a withdrawn plan withdrawn again")
+	}
+	started := plan()
+	if _, err := s.startPlan(ctx, started, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := withdraw("main1", started, "不做了"); err == nil || state(started) != planStarted {
+		t.Fatalf("a started plan: %v, %s", err, state(started))
+	}
+	if len(testEvents(s)) != 1 {
+		t.Fatalf("records: %+v", testEvents(s))
+	}
+}
+
+// A plan its own conversation withdrew is no answer of the owner's (#6739): the owner's starts before and after it count
+// as a run, as if it had never been put up; one the owner dismissed starts the count again.
+func TestWithdrawnPlanIsNoOwnerAnswer(t *testing.T) {
+	task := PlanTask{Title: "改代码", Machine: "box", Cwd: "/code/app", OwnerStarted: true}
+	plan := func(id, state string) *TaskPlan { return &TaskPlan{ID: id, State: state, Tasks: []PlanTask{task}} }
+	plans := []*TaskPlan{plan("plan_a", planStarted), plan("plan_w", planDismissed), plan("plan_b", planStarted)}
+	k := trustKey(task)
+	if runs, _ := rulePlanRuns(plans); runs[k] != 1 {
+		t.Fatalf("dismissed by the owner: run %d, want 1", runs[k])
+	}
+	withdrawn := []db.WorkEvent{{Kind: taskPlanWithdrawnEvent, Detail: map[string]any{"plan": "plan_w"}},
+		{Kind: taskReviewedEvent, Detail: map[string]any{"plan": "plan_a"}}}
+	if runs, _ := rulePlanRuns(withoutWithdrawn(plans, withdrawn)); runs[k] != 2 {
+		t.Fatalf("withdrawn by its conversation: run %d, want 2", runs[k])
+	}
+}
+
+// A task opened from a side conversation (not quiet; supervised by the main conversation since #4669) pushes a
+// failure notification when its agent cannot start, with reason and next steps, unless muted (#5081).
 func TestSideConversationTaskFailedToStartPushes(t *testing.T) {
 	ctx := context.Background()
 	s, f := newTaskService(t)

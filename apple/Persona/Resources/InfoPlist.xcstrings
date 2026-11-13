@@ -1,25 +1,71 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "NSAlarmKitUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona sets alarms and timers only when you ask and approve it on your iPhone, for example to wake you at 6:40 or to start a 25-minute focus timer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "依頼してiPhoneで承認したときだけ、Personaがアラームやタイマーを設定します。たとえば6時40分に起こしたり、25分の集中タイマーを始めたりします。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你让 Persona 设闹钟或计时器、并在 iPhone 上同意后，它才会设置，比如 6:40 叫你起床，或开一个 25 分钟的专注计时器。"
+          }
+        }
+      }
+    },
+    "NSAppleMusicUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona plays Apple Music when you ask, for example a playlist for focused work, and can pause or skip what the Music app is playing."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "依頼したときにPersonaがApple Musicを再生します。たとえば集中作業向けのプレイリストを流したり、ミュージックAppで再生中の曲を一時停止やスキップしたりします。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你让 Persona 放歌时，它会播放 Apple Music，比如适合专注工作的歌单，也能暂停或切换「音乐」App 正在放的歌。"
+          }
+        }
+      }
+    },
     "NSCalendarsFullAccessUsageDescription": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona lets Claude read and add calendar events when you ask, for example to check whether you are free on Friday afternoon or to book a meeting."
+            "value": "Persona lets Claude read and add calendar events when you ask, for example to check whether you are free on Friday afternoon or to book a meeting. It also names a meeting recording after the event happening now."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "依頼したときにClaudeがカレンダーの予定を読み取り、追加できるようにします。たとえば金曜の午後が空いているか確認したり、会議を入れたりします。"
+            "value": "依頼したときにClaudeがカレンダーの予定を読み取り、追加できるようにします。たとえば金曜の午後が空いているか確認したり、会議を入れたりします。会議の録音には進行中の予定の名前を付けます。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "你让 Claude 看日程时，Persona 允许它读取和添加日历事件，比如看看周五下午有没有空，或者约一个会。"
+            "value": "你让 Claude 看日程时，Persona 允许它读取和添加日历事件，比如看看周五下午有没有空，或者约一个会。会议录音也会用正在进行的日程命名。"
           }
         }
       }
@@ -53,19 +99,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona uses the camera to scan the pairing QR code printed by `personad hub pair`, for example when you first connect to your hub."
+            "value": "Persona uses the camera to scan the pairing QR code printed by `personad hub pair`, and to take a photo you add to a chat or a meeting, for example a whiteboard during a meeting."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Personaはカメラで`personad hub pair`が表示するペアリング用QRコードを読み取ります。たとえば初めてハブに接続するときに使います。"
+            "value": "Personaはカメラで`personad hub pair`が表示するペアリング用QRコードを読み取り、チャットや会議に追加する写真を撮ります。たとえば会議中のホワイトボードを撮るときに使います。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona 用相机扫描 `personad hub pair` 打印的配对二维码，比如第一次连接你的 hub 时。"
+            "value": "Persona 用相机扫描 `personad hub pair` 打印的配对二维码，也用来拍你要加到聊天或会议里的照片，比如会上的白板。"
           }
         }
       }
@@ -122,19 +168,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona lets Claude read health summaries when you ask, for example how many steps you walked this week or how long you slept last night."
+            "value": "Persona lets Claude read health summaries when you ask, for example how many steps you walked this week or how long you slept last night. With rolling recording on, Persona also checks heart rate, HRV, steps, workouts and the moods you log, on your iPhone only, to keep the minutes around them."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "依頼したときにClaudeがヘルスケアの概要を読み取れるようにします。たとえば今週の歩数や昨夜の睡眠時間です。"
+            "value": "依頼したときにClaudeがヘルスケアの概要を読み取れるようにします。たとえば今週の歩数や昨夜の睡眠時間です。ローリング録音をオンにすると、心拍、HRV、歩数、ワークアウト、記録した気分もiPhone上だけで確認し、その前後の数分を残します。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "你让 Claude 看健康数据时，Persona 允许它读取健康摘要，比如这周走了多少步、昨晚睡了多久。"
+            "value": "你让 Claude 看健康数据时，Persona 允许它读取健康摘要，比如这周走了多少步、昨晚睡了多久。开启滚动录音后，还会在 iPhone 本机查看心率、HRV、步数、锻炼和你记下的心境，用来保留这些信号前后几分钟。"
           }
         }
       }
@@ -158,6 +204,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Persona 只在你在 iPhone 上逐条批准后才写入健康数据，比如你告诉 Claude 的体重或昨晚的睡眠。"
+          }
+        }
+      }
+    },
+    "NSHomeKitUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona controls your Home accessories and scenes only when you ask and approve each change on your iPhone, for example to turn off the living room light."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "依頼してiPhoneで変更ごとに承認したときだけ、Personaがホームのアクセサリやシーンを操作します。たとえばリビングの照明を消します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你让 Persona 控制家居、并在 iPhone 上逐项同意后，它才会操作配件和场景，比如关掉客厅的灯。"
           }
         }
       }
@@ -237,19 +306,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona lets Claude look at recent photos when you ask, for example to read a screenshot you took or describe a whiteboard photo."
+            "value": "Persona shows your recent photos under the + button so you can attach them to a message, and lets Claude look at recent photos when you ask, for example to read a screenshot you took."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "依頼したときにClaudeが最近の写真を見られるようにします。たとえば撮ったスクリーンショットを読んだり、ホワイトボードの写真を説明したりします。"
+            "value": "＋ボタンの下に最近の写真を表示してメッセージに添付できるようにします。また依頼したときにClaudeが最近の写真を見られるようにします。たとえば撮ったスクリーンショットを読みます。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "你让 Claude 看照片时，Persona 允许它查看最近的照片，比如读一张截图，或者描述一张白板照片。"
+            "value": "Persona 会在 + 按钮下列出你最近的照片，方便附到消息里；你让 Claude 看照片时，也允许它查看最近的照片，比如读一张截图。"
           }
         }
       }

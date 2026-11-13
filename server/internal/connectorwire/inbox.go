@@ -67,7 +67,7 @@ type InboxThing struct {
 	// taking over one of the hub's own (MigratableConnectors) sends it, and only for it does the hub read it.
 	Extra *ThingExtra `json:"extra,omitempty"`
 	// Group makes the thing a batch of a conversation's new messages to relate to its events (a connector that
-	// declares CapGroup, docs/assistant/inbox.md "Event synthesis"): the hub never makes it an item. Thread, Context (the new messages'
+	// declares CapGroup, docs/assistant/inbox.md "Event grouping"): the hub never makes it an item. Thread, Context (the new messages'
 	// text), Rules and Last go with it.
 	Group *ThingGroup `json:"group,omitempty"`
 	// ID and Meta are an event's (Grouper.GroupAppend's answer): the item's id, and what the connector keeps about the

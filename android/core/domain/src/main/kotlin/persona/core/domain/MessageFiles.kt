@@ -3,7 +3,7 @@ package persona.core.domain
 import persona.core.contracts.ProtocolCompatibility
 
 /**
- * One `<persona-file kind="video" path="…" name="…" size="…" duration="…"/>` tag of a message (docs/protocol/protocol.md "Sending video",
+ * One `<persona-file kind="video" path="…" name="…" size="…" duration="…"/>` tag of a message (docs/protocol/protocol.md "Sending videos",
  * iOS `AttachedFile`, web `parseUserText`): a file the phone uploaded to the session's machine. [kind] is `video`,
  * `audio` or `file`; [size] 0 and [duration] null when the tag does not say.
  */

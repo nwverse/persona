@@ -45,7 +45,7 @@ App 的 `InboxModule` 已按配对注入 `RealInboxRepository`、共享偏好／
 
 - 创建与当前配对绑定的 `HttpMailTransport(scope, baseUrl, token, client, isCurrent)`。`client` 使用现有 `HubHttpClient.client`，切换或断开配对时替换实例，并让旧实例的 `isCurrent` 返回 false。通过 `inboxEntries(mailTransport = …)` 或 `LocalMailTransport` 注入。
 - 传入 `onMailAskAi`，把 `MailAiContext.text` 作为完整邮件上下文带到 Persona 助手。上下文包含收发件人、正文和附件清单，不含附件内容。回调只准备助手上下文，不应直接发送邮件；当前默认 AI 操作已通过共享 sendToMain 发送。
-- 页面底部是「回复」「交给 AI」和「AI 草拟」（`InboxAiActions`），和飞书会话页一致；原来的「总结 / 拟回复」（走 `askPersona`）已换成交给 AI 浮层和原地草拟，见 `docs/android/android.md`「收件箱的 AI 草拟、交给 AI，知识库的六类、条目页和打标」。
+- 页面底部是「回复」「交给 AI」和「AI 草拟」（`InboxAiActions`），和飞书会话页一致；原来的「总结 / 拟回复」（走 `askPersona`）已换成交给 AI 浮层和原地草拟，见 `docs/android/android.md`「Inbox AI drafting and handoff」。
 - 传入 `onMailOpenLink`，通过现有应用内网页容器打开 HTTP／HTTPS 链接。邮件 WebView 不加载这些链接，不携带配对 token。
 
 详情按事项的 `mail.uids` 显示最新一封，可切换到同事项其他邮件。HTML 经标签白名单过滤，移除原始样式与图片，再用主题前景色、背景色和链接色渲染。WebView 禁用脚本、网络资源和文件访问，按内容高度展开并在退出时销毁。邮件链接只由用户点击后交给 App。未做深浅色截图，实际布局和 WebView 高度仍待真机验收。

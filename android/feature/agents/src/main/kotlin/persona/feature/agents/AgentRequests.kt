@@ -1,5 +1,6 @@
 package persona.feature.agents
 
+import persona.core.designsystem.dense
 import persona.core.designsystem.text
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -43,14 +44,21 @@ internal fun RequestCard(
     val answer: (AnswerAction) -> Unit = { onAnswer(request, it, AnswerDraft(), false) }
     val res = agentResources()
     val cardSummary = request.cardSummary(res)
+    // Why its buttons are greyed out (#2483): the computer must approve it, or offline, as the full page says.
+    val blockedNote = when {
+        readOnly -> null
+        !approvable -> stringResource(R.string.agents_approve_blocked)
+        !online && !expired -> stringResource(R.string.agents_request_offline)
+        else -> null
+    }
     DecisionCard(
         kind = request.decisionKind, headline = request.cardTitle(res), title = request.sessionTitle ?: stringResource(R.string.agents_request_session),
-        modifier = Modifier.padding(bottom = 12.dp), source = source.takeIf { it.isNotBlank() },
+        modifier = Modifier.padding(bottom = 12.dp.dense), source = source.takeIf { it.isNotBlank() },
         expires = if (readOnly) stringResource(R.string.agents_request_handled) else countdown(request.expiresAt, now),
         summary = markdownPreview(cardSummary).lineSequence().firstOrNull(), onOpen = onOpen,
-        expandedByDefault = false,
+        note = blockedNote, expandedByDefault = false,
         body = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp.dense)) {
                 when (request.kind) {
                     // A password card (#1137), as in the chat: why, and every command exactly as it will run.
                     "permission" -> if (request.isSecretRun) SecretRunSummary(request) else {
@@ -82,8 +90,7 @@ internal fun RequestCard(
                 }
                 request.sourceLabel(res, metadata)?.let { Text(it.replaceFirst("来自子 Agent · ", "来自子 Agent，"), // i18n-ignore: rewrites core:domain's source line
                     style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
-                if (!approvable && !readOnly) Text(stringResource(R.string.agents_approve_blocked),
-                    style = PersonaTheme.type.caption, color = PersonaTheme.palette.cautionText)
+                blockedNote?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.cautionText) }
                 if (request.needsFieldValues && !request.isSecretRun && approvable && !readOnly) Text(stringResource(R.string.agents_request_fields_elsewhere),
                     style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                 delivery?.let { RequestDeliveryStatus(it) }
@@ -136,15 +143,15 @@ internal fun RequestsDialog(
     val shown = if (showHistory) history else requests
     JSheet(onDismiss, title = stringResource(R.string.agents_requests_sheet_title)) {
         JSegmented(listOf(JSegment(stringResource(R.string.agents_requests_pending), requests.size), JSegment(stringResource(R.string.agents_requests_history_tab), history.size)), if (showHistory) 1 else 0, { showHistory = it == 1 }, Modifier.fillMaxWidth())
-        LazyColumn(Modifier.weight(1f, fill = false), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(Modifier.weight(1f, fill = false), contentPadding = PaddingValues(bottom = 16.dp.dense)) {
             if (showHistory) item("history-note") {
-                Text(stringResource(R.string.agents_requests_history_note), Modifier.padding(vertical = 12.dp), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
+                Text(stringResource(R.string.agents_requests_history_note), Modifier.padding(vertical = 12.dp.dense), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
             }
             itemsIndexed(shown, key = { _, request -> request.id }) { index, request ->
                 JGroupItem(GroupPosition.of(index, shown.size)) {
                     JRow(request.cardTitle(agentResources()), subtitle = request.sessionTitle ?: stringResource(R.string.agents_request_session), leadingIcon = request.decisionKind.icon,
                         value = if (showHistory) stringResource(R.string.agents_request_handled) else countdown(request.expiresAt, now), onClick = { onOpen(request) })
-                    names[request.machineId]?.let { Text(it, Modifier.padding(horizontal = 14.dp, vertical = 4.dp), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
+                    names[request.machineId]?.let { Text(it, Modifier.padding(horizontal = 14.dp.dense, vertical = 4.dp.dense), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
                     delivery[request.id]?.let { RequestDeliveryStatus(it) }
                 }
             }
@@ -175,8 +182,8 @@ internal fun RequestDetail(
             persona.feature.chat.ChatLinkHost(Modifier.weight(1f),
                 onContext = { feedback?.notice(openForContext) },
                 onEdit = { _, _ -> feedback?.notice(openForEdit) },
-                onVisibilityChanged = { linkVisible = it }) { inset ->
-                Column(Modifier.fillMaxSize().padding(bottom = inset).imePadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                onVisibilityChanged = { linkVisible = it }, manager = request.manager) { inset ->
+                Column(Modifier.fillMaxSize().padding(bottom = inset).imePadding(), verticalArrangement = Arrangement.spacedBy(8.dp.dense)) {
                     JRow(request.headline.text(), subtitle = request.sessionTitle, leadingIcon = request.decisionKind.icon)
                     // The editor below announces "Sending" itself; announcing it here too would say it twice.
                     delivery?.let { RequestDeliveryStatus(it, live = false) }
@@ -187,7 +194,7 @@ internal fun RequestDetail(
                             blockedReason = blockedReason, terminalHelp = terminalHelp,
                             onAnswer = { action, draft, read -> if (!readOnly) onAnswer(request, action, draft, read) })
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp.dense)) {
                         JButton(stringResource(R.string.agents_action_open_session), { onOpenChat(request) }, Modifier.weight(1f), kind = JButtonKind.Secondary)
                         // A session without a terminal (a Codex thread, an agent runtime's) has none to open; nor has the
                         // assistant's own password card (#1137).

@@ -1,6 +1,6 @@
 package node
 
-// Keeping a Mac awake while it is operated or watched (docs/extensions/computer-use.md "Lock screen, staying awake, approval per app"): one
+// Keeping a Mac awake while it is operated or watched (docs/extensions/computer-use.md "Locking, preventing sleep and per-App approval"): one
 // caffeinate -dimsu at a time, held for awakeAfter past the last operation and for as long as its live screen is
 // open, then let go. macOS locks when the display dims from idleness; Cua Driver holds that off itself for its own
 // calls (0.37+), but not while someone only watches the screen. No system setting is changed: the assertion is

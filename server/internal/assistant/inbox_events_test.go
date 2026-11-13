@@ -160,25 +160,26 @@ func TestInboxChainSynthesizedForOldItems(t *testing.T) {
 	}
 }
 
-// A mail batch: the new mails only, linked at the first new one.
+// A mail batch after triage: the new mails only, linked at the first new one.
 func TestInboxChainMail(t *testing.T) {
 	now := time.Now()
 	date := func(d time.Duration) string { return now.Add(d).Format(time.RFC3339) }
 	a := assistantwire.InboxMailAccount{ID: "a1", Email: "me@example.com"}
 	b := newInbox()
 	b.applyMail(a, []assistantwire.InboxMailSummary{{UID: 3, Subject: "周报", From: MailAddress{Name: "李四"}, Snippet: "第一封", Date: date(-2 * time.Hour)}}, now)
+	var it *InboxItem
+	for _, x := range b.items {
+		it = x
+		b.noteTriaged(x)
+	}
 	b.applyMail(a, []assistantwire.InboxMailSummary{
 		{UID: 3, Subject: "周报", From: MailAddress{Name: "李四"}, Snippet: "第一封", Date: date(-2 * time.Hour)},
 		{UID: 5, Subject: "Re: 周报", From: MailAddress{Email: "wang@example.com"}, Snippet: "补充", Date: date(-time.Hour)},
 	}, now)
-	var it *InboxItem
-	for _, x := range b.items {
-		it = x
-	}
-	if len(it.Chain) != 2 {
+	if len(it.Chain) != 3 {
 		t.Fatalf("chain: %+v", it.Chain)
 	}
-	e := it.Chain[1]
+	e := it.Chain[2]
 	if e.Count != 1 || e.Link.UID != 5 || len(e.Messages) != 1 || e.Messages[0].Sender != "wang@example.com" || e.Messages[0].Text != "补充" ||
 		e.Text != "收到 1 封邮件 · wang@example.com" {
 		t.Fatalf("second batch: %+v", e)
@@ -290,5 +291,30 @@ func TestInboxChainKeepsTheNewest(t *testing.T) {
 	}
 	if i18n.T(i18n.En, "assistant-inbox_chain.received_from", i18n.Args{"count": 1, "sender": "A"}) != "1 new message · A" {
 		t.Fatal("en plural")
+	}
+}
+
+// A context line ends in the notes the plugin gives the AI ("(id=…)", with the message it replies to and its topic):
+// the chain's messages are for people and leave them out; text in parentheses of its own stays.
+func TestContextMessagesDropTheIDNote(t *testing.T) {
+	ctx := "飞书群「Team」里的一件事：\n" +
+		"[11-05 10:00] Alice：[Sticker] (id=om_1)\n" +
+		"[11-05 10:01] Bob（@了我）：can you check this (today) (id=om_2, 回复 om_1)\n" +
+		"[11-05 10:02] Alice：thread reply (id=om_3, 回复 om_2, 话题 om_0)\n" +
+		"[11-05 10:03] Bob：no notes here (just text)"
+	got := contextMessages(ctx, 4)
+	want := []InboxChainMessage{
+		{Sender: "Alice", Text: "[Sticker]"},
+		{Sender: "Bob", Text: "can you check this (today)"},
+		{Sender: "Alice", Text: "thread reply"},
+		{Sender: "Bob", Text: "no notes here (just text)"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("messages: %+v", got)
+	}
+	for i := range want {
+		if got[i].Sender != want[i].Sender || got[i].Text != want[i].Text {
+			t.Fatalf("message %d: %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }

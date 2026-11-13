@@ -57,6 +57,10 @@ func TestTaskReceiptReview(t *testing.T) {
 			session := proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
 				Status: proto.StatusDone, State: proto.StateUnread, LastText: "Work checked.", UpdatedAt: time.Now()}
 			wantState, wantJudgments := "done", 1
+			if c.verdict == "" {
+				fastJudgeRetry(t)
+				wantJudgments = 2 // a failed judgment is asked once more (#3111)
+			}
 			if c.interrupted || c.silent {
 				wantState, wantJudgments = "interrupted", 0
 				if c.interrupted {
@@ -198,7 +202,7 @@ func TestTaskReceiptReviewOmittedForFailedStart(t *testing.T) {
 	}
 	s.superviseTodo(ctx, todo.ID, "conv1", []string{"Tests pass"}, 0)
 	f.failStart = errors.New("launcher unavailable")
-	s.startPlanTask("", "conv1", 0, PlanTask{TodoID: todo.ID, Title: todo.Title, Prompt: todo.Notes, Machine: "box", Cwd: "/code/app"}, false)
+	s.startPlanTask("", "conv1", 0, PlanTask{TodoID: todo.ID, Title: todo.Title, Prompt: todo.Notes, Machine: "box", Cwd: "/code/app", Permission: "bypassPermissions"}, false)
 	items, _, err := s.feed(ctx, "conv1", time.Time{})
 	if err != nil {
 		t.Fatal(err)

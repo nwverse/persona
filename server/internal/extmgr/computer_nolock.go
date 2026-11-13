@@ -1,6 +1,6 @@
 package extmgr
 
-// "Don't auto-lock while the extension is on" (docs/extensions/computer-use.md "Lock screen, staying awake, per-app approval" b2,
+// "Don't auto-lock while the extension is on" (docs/extensions/computer-use.md "Locking, preventing sleep and per-App approval" b2,
 // #1507): the plugin cua's no_auto_lock, per Mac and off by default, asked about before it is turned on (x-confirm).
 // While it is on for a Mac (and the plugin and that Mac are), its node holds caffeinate -dims; the hub says so again
 // every noLockEvery, and the node's hold runs out by itself 30 minutes after the last word, so a Mac the hub no longer

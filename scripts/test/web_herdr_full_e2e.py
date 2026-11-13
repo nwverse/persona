@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end check of the terminal's "Full view" (herdr's own client in the browser, docs/integrations/terminal.md "Full herdr view")
+"""End-to-end check of the terminal's "Full view" (herdr's own client in the browser, docs/integrations/terminal.md "Full herdr UI")
 against the fake hub's made-up herdr client, and screenshots of both surfaces and of the switch between them.
 
 Checks, one line each: a terminal opens as "Full view" by default and the sidebar / tab bar / panes are drawn; what is

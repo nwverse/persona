@@ -4,7 +4,7 @@ Agents in Persona come from two kinds of places, integrated differently:
 
 | | Host | Runtime |
 | --- | --- | --- |
-| What it is | Where the terminal lives: herdr, Herdr App, Orca (`docs/integrations/engines.md`) | An Agent runtime that manages its own sessions and has no terminal: DSH (`docs/integrations/dsh.md`), later the pi extension, platforms built on DSH… |
+| What it is | Where the terminal lives: herdr, Herdr App, Orca, Tern (`docs/integrations/engines.md`) | An Agent runtime that manages its own sessions and has no terminal: DSH (`docs/integrations/dsh.md`), later the pi extension, platforms built on DSH… |
 | Where sessions come from | node reads panes, recognizes sessions by process, reads Claude / Codex transcripts | The runtime reports its sessions and provides their content |
 | Interactions (questions / plans / permissions) | Claude Code hooks | The runtime asks itself (`interaction.create`) |
 | Where the code lives | One host implementation in Persona (`internal/host`, `node/host*.go`) | **No code added to Persona**: the runtime implements the same protocol with the SDK |
@@ -39,7 +39,7 @@ With the SDK (`integrations/runtime-sdk`, Node 22+, no dependencies) you only wr
 
 | Driver method | Returns |
 | --- | --- |
-| `listSessions()` | Session rows: `session_id`, `title`, `cwd`, `status` (`working` / `blocked` / `done` / `idle` / `offline`), `updated_at`, `rev` (changes whenever content changes; the App fetches new content based on it), `last_text`, `space_id` / `space_name` (sessions in the same space are grouped together in the App), `model`; optionally `permission_mode` / `effort` (the current mode) and `transcript` (this session's chat is a local Claude transcript: the content belongs to node, see "Runtimes that run Claude Code" below) |
+| `listSessions()` | Session rows: `session_id`, `title`, `cwd`, `status` (`working` / `blocked` / `done` / `idle` / `offline`), `updated_at`, `rev` (changes whenever content changes; the App fetches new content based on it), `last_text`, `space_id` / `space_name` (sessions in the same space are grouped together in the App), `model`; optionally `permission_mode` / `effort` (the current mode), `transcript` (this session's chat is a local Claude transcript: the content belongs to node, see "Runtimes that run Claude Code" below), `codex_thread` (this session's chat is a local Codex thread, see "Runtimes that run Codex" below), `is_subagent` / `parent_session_id` (another of the runtime's sessions started this one, see "Sub-Agents and background tasks" below) and `started_at` (when the session began: a child's card counts its running time from it) |
 | `items(params)` | One page of items (same params and result as `session.items`: from the end backwards by `turns` / `limit`, `before_seq` to page back, `after_seq` to catch up, `from_seq` + `through_seq` for a range), with `history` and `to_seq` |
 
 Optional (for each one present, the SDK declares the capability in `runtime.hello`; for those missing, node answers "not supported" for you and the App displays as usual):
@@ -49,16 +49,24 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `cursor(sessionId)` | The current `to_seq`, or `{to_seq, history}` (with history, a rewrite with the same item count can still be detected; if omitted, the `to_seq` and `history` of a `turns: 1` page are used) |
 | `image(params)` / `item(params)` | Raw image data / the full text of a truncated item |
 | `send({session_id, text, images, client_msg_id})` | Sending a message from the phone. **Dedup by `client_msg_id`**: the App resends on reconnect |
-| `interrupt` / `rename` / `close` / `start({cwd, prompt})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field) |
+| `interrupt` / `rename` / `close` / `start({cwd, prompt})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field). The apps offer Rename and Close on its rows from `capabilities.rename` / `capabilities.close`, which carry `caps.rename` (not on a sub-Agent's row) and `caps.close` (#6294) |
 | `hasLocalClient()` | Whether this runtime's own UI is open (decides who gets permission requests first, see below) |
-| `modes({session_id, permission_mode, effort})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`) |
+| `unlistedTranscripts()` | The Claude session ids of sessions of its own that `listSessions()` no longer lists (archived in the runtime), or nothing while it cannot say yet; no capability is declared. See "Runtimes that run Claude Code" below |
+| `modes({session_id, permission_mode, effort, model})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; optional model changes require `createRuntime` option `modelSwitch: true`, advertised as `caps.model`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`). The apps show the mode chips on its rows whose agent is `claude` or the runtime's own, never Paseo's catch-all `paseo` (`capabilities.modes`, `docs/protocol/protocol.md` "Codex sources and capabilities") |
+| `rewind({session_id, prompt, occurrence, prompts_after, restore})` | Rewinding a conversation to before one of the user's messages (`caps.rewind`): find the message by its text, its occurrence counting from the end and how many of the user's came after it, and refuse (`rewind_mismatch`) rather than cut elsewhere. Its rows may narrow it per session in their own `capabilities` (`rewind: false`), and only a row's `rewind_code: true` lets `restore: "code_and_conversation"` through (`docs/protocol/protocol.md` "Codex sources and capabilities") |
+| `models({launcher, refresh})` / `check({launcher, cwd, prompt})` | The launcher's models as the runtime has them now (`caps.models`, the pickers' refresh) / Settings › Models "Test" run through the runtime with its own login (`caps.check`): one real prompt in the node's empty check directory, answered as `{ok, model, answer, error}` |
+| `seen({session_id})` | The user saw the session in Persona (`caps.seen`, #6299): a runtime that keeps an unread mark of its own clears it, so the session is not unread in its own app too. The manager tells the node only while the runtime lists the session as `done` (unread), best effort |
 | `archive({session_id})` / `unarchive({session_id})` | The runtime's own reversible archive (`caps.archive`, declared only when both exist): when the user archives a session in Persona, it is archived in the runtime too, and restored with it. Archive an idle session without stopping or closing anything (Persona refuses busy sessions first) and keep it restorable; both must be idempotent (already archived / restored is success). A runtime whose archive also stops the session, or that has no way back, leaves them out: the archive is then Persona's alone (`docs/protocol/protocol.md`, "Agent session archives") |
+| `createWorkspace({cwd, workspace_id, branch, create_branch, base, name, key})` / `prepareWorkspace({cwd, repo_root})` | Workspaces of its own (`caps.workspaces`, declared only when both exist: the node asks where the worktrees go before each one it has made): a worktree it makes as a workspace of its own / the folder it puts a repository's worktrees in. With them it lists its workspaces through `rt.workspacesChanged(list)`. Only an engine's are used; see "Workspaces" below |
+| `renameWorkspace({workspace_id, title})` / `renameWorkspace({space_id, title})`, `archiveWorkspace({workspace_id})` | With `caps.workspaces`: a workspace's title (resolves to `{workspace}`, its row now) or a space's name (resolves to `{space_name}`, the name it shows now) / the workspace archived, a worktree it made removed from the disk (its branch kept). Without them those requests are `unsupported`; see "Workspaces" below |
 | `watchChanged(id, watching, {transcript})` | The phone starts / stops watching a session (when a new node connects or the runtime stops, all stop): for runtimes that only follow a session while someone is watching (Paseo subscribes to the timeline per session) |
 
 In `createRuntime`'s options, a runtime that runs several Agents can also pass `launchers: [{name, model, agent, models}]`: besides `launcher`, the new-session form then has these entries, one per provider,
 each with the Agent and models it starts; when they change later, call `rt.launchersChanged(list)`. `resume: true`: `start` accepts `{resume: <Claude session id>}` to take over a Claude session it doesn't have
 and keep that id (`caps.resume`, for runtimes acting as the engine to continue "Not running" sessions). `start` also receives the form's choices (`launcher`, `model`, `permission_mode`, `effort`,
-`workspace_id`); see `docs/protocol/protocol.md` ("Runtime ↔ node").
+`workspace_id`); see `docs/protocol/protocol.md` ("Runtime ↔ node"). `readonly: true` (`caps.readonly`): a `start` with `permission_mode: "plan"` (an ordinary
+plan-mode start, or a read-only task on a non-Claude runtime, #3238) runs in a read-only mode before its first prompt, or throws `readonly_unsupported` — never falling back to a writable
+provider, and a takeover that cannot set the mode refuses too. Without it the node refuses plan starts for the runtime itself. Claude task dispatches use `bypassPermissions` and do not require this capability.
 
 Call the SDK when things happen:
 
@@ -68,10 +76,15 @@ Call the SDK when things happen:
 | `rt.sessionsChanged()` | Sessions added or removed, a turn started / ended, a rename |
 | `rt.append(id, {items, fromSeq, toSeq, history})` | New content was persisted (when no one is watching, the SDK just has the list refresh `rev`). `items` can be empty: content not shown in the chat must still advance seq |
 | `rt.stream(id, text)` / `rt.streamEnd(id)` | The full text being generated / that segment ended (the SDK throttles to at most once every 120 ms) |
+| `rt.workspacesChanged(list)` | Its workspaces changed (one made, renamed or archived, a branch moved): the whole list, which the SDK also tells every node it connects to later. Only with `createWorkspace` and `prepareWorkspace` ("Workspaces" below) |
 | `rt.ask(interaction, {signal})` | A person must decide: the card goes to the phone and waits for an answer. Returns a `Resolution`; `{dismiss: true}` = handed back to the computer (tapped on the phone, expired, no hub), for the runtime's own UI. Meanwhile the session shows "Needs you" automatically |
 | `rt.phoneFirst(id)` | Whether to ask the phone or the local UI first |
 | `rt.tools()` / `rt.callTool({name, args, session_id})` | The hub's tools (the phone's `phone_*`, `mail_*`) for your own Agent: list them and register as your own tools; calls go through node to the hub (`createRuntime`'s `onHub` is called after hello and whenever the hub comes and goes, which is the right time to fetch tools) |
 | Throw `RpcError(…, 'handover', {delivered: 'none'})` on send | A disk-only companion process: the session doesn't run here, and the program that can run it has been started; node hands the message to the runtime taking over (`requires: ['handover']`, DSH's `dsh-files`) |
+
+`rt.streamEnd(id)` retires a published live text even after the final viewer leaves. It cancels pending text and
+sends the empty boundary to the node while a stream entry exists, so the Hub clears its cached reply before a later
+viewer subscribes. Call it whenever the generated segment ends, including while the session is unwatched.
 
 What the SDK handles (no runtime needs to write it again): connect / reconnect / `runtime.hello` (with this process's `instance`: if another process uses the same runtime id, node refuses the connection; the SDK logs one line and retries every 30 seconds, without taking over), list pushes, watch backfill and continuity (marking honestly when `from_seq` / `to_seq` don't line up,
 so the phone fills the gap), byte-by-byte streaming, the session turning "Needs you" while asking the phone, asking again with the same id for the same interaction when node restarts (`interactionId(...)`, waits up to 2 minutes),
@@ -94,13 +107,21 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
 - **seq**: each session has one monotonically increasing sequence number, starting at 1 (0 means "nothing yet"). An item's seq is the number of the record that produced it; one record can yield several items,
   with ids `<seq>#<index>`. DSH's event seq starts at 0, so it maps to seq + 1. **Ids are unique only within a session**: across sessions, and especially across two branches split from the same session,
   the same id is different content. Anything a client caches by id (render results, parse results) must key on the session too (#372).
-- **history**: the identity of the session's content (`docs/protocol/protocol.md` ("Item continuity")). It changes when content is rewritten (branch, reset), and the App refetches the whole page; it stays the same on pure appends. A batch with a new history doesn't need a larger seq (switching back to a branch with the same count, shorter after a rollback); the SDK pushes it anyway and continues from its `toSeq`.
+- **history**: the identity of the session's content (`docs/protocol/protocol.md` ("Continuity of items")). It changes when content is rewritten (branch, reset), and the App refetches the whole page; it stays the same on pure appends. A batch with a new history doesn't need a larger seq (switching back to a branch with the same count, shorter after a rollback); the SDK pushes it anyway and continues from its `toSeq`.
 - **Item kinds** follow what the App already has: `text` (user / assistant), `thinking`, `tool_use` (`tool_name`, `tool_input`, `tool_use_id`), `tool_result`
   (`tool_use_id`, `is_error`), `image` (`lazy: true` placeholder, data via `image`), `notice` (system: interrupt, error, compaction).
 - **Tool names match Claude's**: the App draws commands, diffs and files for `Bash`, `Read`, `Edit`, `Write`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `TodoWrite`,
   and parameter names are Claude's too (`command`, `file_path`, `old_string` / `new_string`, `pattern`). Unrecognized names are shown as is.
 - **Length**: in a page, at most 24 KB of text per item and 4 KB of tool output, cut with the SDK's `light(item)` (with the "truncated" note the App recognizes and `full_size`); the full text goes via `item`.
-  Long strings in tool input use `clipInput`.
+  Tool input objects use `clipInput`, which clips long strings at any depth, including arrays such as MultiEdit's `edits[]`,
+  while preserving keys and structure. For inputs over 24 KB it follows the hub's `clipJSON`: first keep at most 12 KB per string, then, if the
+  input still exceeds the 24 KB budget, share the remaining budget among strings longer than 256 bytes, accounting for
+  JSON escapes and the truncation note. Cuts respect UTF-8 boundaries and the second pass only cuts when the string becomes
+  strictly shorter as JSON. A plain ASCII tail of at most the note's encoded size stays whole (37 bytes for a three-digit
+  original length); a longer or more heavily escaped tail may be cut. Each implementation measures its own wire encoding:
+  both leave `<>&` raw, but `JSON.stringify` also leaves U+2028/U+2029 raw while the hub's Go encoder escapes them, so their shares can differ.
+  Top-level arrays and other non-object inputs stay unchanged. This is still **not a total input size limit**: many short
+  values, large keys, or enough strings at the 256-byte floor can exceed 24 KB. Bounding those inputs remains open in #2907.
 - **Only what people need to see**: context injected for the model (time, skill list, system instructions) and internal scheduling events don't become items.
 
 ## Interactions
@@ -155,6 +176,39 @@ with the same parsing and the same look as Claude sessions in herdr; the transcr
 on watch it receives `transcript: true` and only pushes streaming text (the SDK automatically drops `append` for such sessions). Sessions whose transcript hasn't been written yet get content from the runtime as usual,
 and node switches over automatically once the file appears. A daemon can't do this (it would read other sessions on the machine).
 
+Two things stay the runtime's word on such a row. Its own `background` list is kept beside the background tasks the transcript shows (#4494): work the runtime started for the
+session outside Claude Code. And its `model` decides the context window when it names a 1M variant (`…[1m]`, #4496): Claude Code writes the id without the suffix into the
+transcript, and a gateway writes an id of its own, so the transcript alone reads as 200K, or as no window. A window the transcript records itself keeps the transcript's word,
+and so does a session answering as another model: after a refusal's fallback, or when the reply came from a Claude model that is not the one the runtime names.
+
+**Sessions the runtime no longer lists** (#4521). A runtime that starts Claude Code's command line itself (Paseo does; a host on the Agent SDKs does not) writes transcripts
+that say `sdk-cli`, like a script's one-shot `claude -p` run, and node leaves those out of the sessions not running. While the runtime lists a session, its row is the session.
+Once it stops listing it (archived in the runtime), only the transcript is left and nothing in it says whose it was. So the runtime names them: `unlistedTranscripts()` returns
+their Claude session ids, the SDK sends them with every list (`unlisted_transcripts` beside `sessions`, the feature `unlisted_transcripts`), and node lists those transcripts as
+sessions not running, under the usual limits (7 days, the 80 newest). Name only the user's own sessions: not the ones another session started, not ones the user deleted. At
+most 2000 count, the last ones named; a transcript that a row also names is that row. A message to one starts it in the engine again (`start({resume})`).
+
+- An empty list says there are none. While the runtime cannot say (it was just started and has not read its archive), `unlistedTranscripts()` returns nothing, the SDK leaves
+  the field out, and node keeps what the runtime named before. If the method throws, the list still goes out, with the ones named last.
+- Node keeps them for ten minutes after the runtime disconnects, so a runtime that restarts does not take its archived sessions off the list and bring them back. One that
+  stays away takes them with it, as it takes the sessions it lists.
+- Name only a session whose id is its transcript's. Node lists a named transcript under the transcript's id, so a session the runtime lists under an id of its own (a session
+  Persona started before Claude Code had a session id, as Paseo's `paseo-<agent id>`) would come back under another id once archived, and everything Persona keeps under
+  its id (a to-do's link, a pin, an archive mark, its read state) would be left behind (#4771). Keep listing such a session yourself instead: an `offline` row under the same
+  id, with `transcript`, bounded like node's own list (Paseo: the latest 80 of the last 7 days, beside its other rows). Node reads its content from the transcript and lists
+  no second row for it, as for any row naming a transcript, so this needs nothing new from node. A message to it reaches the runtime, which continues it under that id.
+
+## Runtimes that run Codex (optional)
+
+When a runtime runs Codex itself (e.g. Paseo), each of its sessions is also a Codex thread with a rollout on this computer, which node finds on its own and would list a second
+time as Codex history. If the session row carries `codex_thread: <thread id>` (the feature `codex_thread`, #4495), node lists the chat once, as the runtime's session: the
+thread's history row is not listed, and the thread's own sub-Agents (Codex thread spawns) carry the runtime's session as `parent_session_id` and sit in its space. Content,
+sending and state stay the runtime's. When two rows name one thread, the one that is not `offline` counts, then the one used last. A thread is matched by its id, in whichever
+Codex home its rollout is. A daemon can't do this: its threads are on another computer.
+
+While the runtime's session is `offline`, another program may take the thread up (the Codex App runs it, a shared app-server has it loaded). That program's row is then listed
+as well, with the thread's sub-Agents under it, so a message from the phone goes where the thread is open. Once the runtime's session runs again, the chat is that session alone.
+
 ## Sub-Agents and background tasks (optional)
 
 When an Agent hands work off and ends the turn (background sub-Agents, workflows, commands running in the background), the session is "done" after the turn while the work isn't. The runtime reports them on the session row,
@@ -169,8 +223,64 @@ with the same fields as Claude sessions (`Session.subagents` / `background` in `
 - While any are running, the session counts as Working (#2228), and the hub's "done" push waits until they finish and the turn in which the session is woken up ends. Re-push `runtime.sessions` when they start and end.
 - At most 50 sub-Agents and 50 background tasks per row, text cut to 500 characters; invalid ids are dropped. A daemon's sub-Agent ids are prefixed the same way: `<daemon>.<session>@<id>`.
 - Controls such as messaging or renaming a sub-Agent: if the runtime doesn't support them, it returns `unsupported` (DSH doesn't: sub-Agents are managed by the parent session).
+- **A session of its own that another session started** (Paseo's Agents created by another Agent, #4494) is not a `subagents` entry: it is opened, sent to and can need the user
+  like any session. List it as its own row with `is_subagent: true` and `parent_session_id: <the starting session's id>`; node fills in `root_session_id`, and a daemon's
+  parent ids get the daemon's prefix like its session ids. The hub sends no "done" push for it and holds its parent's while it runs or has background work. It is its parent's
+  subtask: an App that folds subtasks lists it under its parent, and the fleet counts (the Live Activity, a phone's notification and widget) count the parent, not it.
+  - While its `status` is `blocked` (it waits for the user) node lists it without its parent, so it is a row of its own in every App that folds subtasks by those fields: it
+    shows it and counts it under Needs you, whatever it folds. Node names the parent in `asking_parent_session_id` meanwhile, so the Apps that show children as cards in
+    their parent's chat keep it there (`docs/protocol/protocol.md` ("Session hierarchy")). It is listed under its parent again once it was answered.
+  - List every session between a listed one and the session the line starts at: a row whose parent is not listed hangs nowhere.
+  - Give the parent's row a `background` entry of kind `agent` for each one that has not finished (running, or waiting for an answer), so the parent reads Working until they
+    report back. A parent that is `offline` meanwhile is left out of lists of what runs, and its subtasks with it: do not list it as `offline` while they run.
 
-DSH's approach is in `docs/integrations/dsh.md` ("Sub-Agents and background tasks").
+DSH's approach is in `docs/integrations/dsh.md` ("Subagents and background tasks").
+
+## Workspaces (optional)
+
+A runtime with workspaces of its own (Paseo's checkouts, worktrees and folders, #6295) can make them the computer's: the
+workspace catalog lists them with or without sessions in them, its sessions sit in them, and "New worktree…" makes a
+worktree as one of them. It implements `createWorkspace` and `prepareWorkspace` (the SDK then declares `caps.workspaces`)
+and calls `rt.workspacesChanged(list)` with the whole list whenever it changes (`docs/protocol/protocol.md` ("Runtime ↔ node")).
+
+- **A row** is `{workspace_id, title?, cwd, kind, branch?, space_id?, space_name?, repo_root?, owned?}`. `workspace_id` is
+  what its sessions name in their own `workspace_id` (the session id rule); `cwd` is absolute; `kind` is `checkout` (a
+  repository's main checkout), `worktree` (a linked worktree) or `folder` (no repository; anything else counts as one);
+  `space_id` / `space_name` are the space its sessions are grouped in; `repo_root` is the repository's main checkout;
+  `owned` says the runtime made the checkout and removes it with the workspace. At most 2000 rows; invalid ones are dropped.
+- **Only an engine's count**: the node uses the list while the runtime is one of the computer's enabled engines (Paseo) on
+  its own socket; a runtime that is connected but not enabled makes, lists and deletes no workspaces. Its rows are then `workspaces.list` rows whose `source` is the runtime id (`project_id` its `space_id`, `is_main`
+  true for a checkout, `workspace_kind` `git` or `folder`), and its session rows keep their `workspace_id`. Any other
+  runtime's `workspace_id` is cleared, as before, and a daemon never gets the feature.
+- **Starting in one**: `start` gets the catalog row's id as `workspace_id`, sessions in it or not. One the runtime no longer
+  has is refused (`workspace_missing`) rather than the session going elsewhere; a space id or a folder names no workspace.
+- **Making a worktree** (`workspace.create`: "New worktree…", a new Agent's own worktree and the assistant's `agent_start`
+  with a worktree): the node first checks what it checks for a terminal host (the source in a repository with a commit,
+  a valid branch not checked out in another worktree, a folder that holds nothing), then asks for `{cwd, workspace_id?,
+  branch?, create_branch, base?, name?, key}`: an existing branch checked out as it is (`create_branch: false`), else a new
+  one cut from `base` (the source checkout's branch, or its commit when detached), `name` the folder's name; with neither
+  branch nor name, the runtime names both. `key` is the same for a retried call. It answers `{workspace}`, the new
+  workspace's row with the folder and branch it actually has, once the checkout exists; the node lists it at once.
+  `name` comes as Paseo names a folder (`[a-z0-9]` runs joined by single hyphens, at most 50 characters), and the node
+  has checked that nothing is at `<checkouts>/<name>`, an empty folder included: make the worktree there, never beside it,
+  so the path the user was shown is the one made. The node gives the whole create one deadline (145 s, inside the hub's
+  150 s), the time `workspace.prepare` took included.
+- **Where** (`workspace.prepare {cwd, repo_root}` → `{checkouts}`): the folder the runtime puts that repository's worktrees
+  in. The dialog's path must be in it; only the worktree's own folder name can be chosen.
+- **Deleting one** (`workspace.archive`, #6297): only a worktree the runtime made (`owned`, which the catalog row carries
+  too), and only when nothing could be lost that the user did not confirm: the node refuses while one of the workspace's
+  sessions is at work (starting, working, waiting for the user, a state it does not say) or an Agent of another engine
+  runs in the folder, and checks the changes the preview showed. Archive the workspace and its sessions, remove the
+  folder, keep the branch; answer once it is done. A closed Agent's own worktree (`worktree/remove`) goes the same way,
+  refused while a session in the workspace still runs.
+- **Renaming** (`workspace.rename`, #6297): "Rename" on a catalog row sends `{workspace_id, title}` (its title only), and
+  "Rename space" `{space_id, title}`: the space its sessions are grouped in, also when the apps named it by one of its
+  workspaces. Answer `{workspace}` / `{space_name}`, and list the new names (rows and workspaces) at once.
+- **Deleting** (`workspace.archive {workspace_id}`, #6297): sent only for a worktree the runtime made (`owned`), once the
+  user confirmed the node's preview (the changes it showed, the sessions in it, the checkout's identity). Archive the
+  workspace and its sessions, remove the worktree from the disk and keep its branch; answer once that is done. The node
+  counts it deleted when the workspace has left the list and the folder is gone. Closing a workspace (archiving it and
+  keeping its folder) is not asked of a runtime.
 
 ## Auto-update (optional)
 
@@ -183,7 +293,8 @@ To avoid going to the computer and clicking every time, the plugin is split into
   an unchanged path means the old code. The store sits next to node's socket: `~/.persona/runtime-packages/<package name>/`, with `current.json` recording which one is running.
 - **Package**: a set of files and their hash (sorted by path, one `path\0sha256 of content\n` per file, then a sha256 over the whole). Which files belong to a package is listed twice, in Go
   (`Packages` in `server/internal/runtimepkg`) and JS (`PACKAGES` in `runtime-sdk/lib/package.js`), and the two must match
-  (guarded by `TestPackagesMatchTheLoader`). Before building personad, run `go generate ./internal/runtimepkg`, which copies these files from `integrations/` and embeds them in the binary
+  (guarded by `TestPackagesMatchTheLoader`). Before building personad, run `go generate ./internal/runtimepkg`, which packs these files from `integrations/` and embeds them in the binary
+  (gzipped, a directory several packages share stored once; a package is unpacked the first time node needs it)
   (the Dockerfile, `deploy.sh` and `publish.sh` all run it), so node always carries the plugin from the same build as itself. A build that skipped generation carries no package and offers nothing.
 - **Flow**: hello carries `package: {name, hash}`; when node carries a package with the same name and a different hash, the reply includes `update: {name, hash, version}`.
   The SDK passes it to `onUpdate`; the loader fetches the files with `runtime.package`, checks paths, sizes and hashes, and writes them to `<store>/<hash>/` (written alongside and then renamed, so there's never a half-written version).
@@ -198,7 +309,7 @@ To avoid going to the computer and clicking every time, the plugin is split into
   `<store>/current/…` (`current` is a symlink to `<hash>`, replaced by rename via `installCurrent`). On an offer it fetches the package, installs it as the new `current`,
   and when idle asks the host to reload (pi uses a command the extension registers itself); the new version's host connects to node with the same process identity (`createRuntime`'s `instance`) and replaces the old one.
   A long-running standalone process (pi's companion process) exits after installing and is brought back up by launchd / systemd. `selfPackage(import.meta.url, name)` tells a module which package it's running from
-  and whether it's inside the store (if not, it doesn't update). Details in `docs/integrations/pi.md` ("Auto-update").
+  and whether it's inside the store (if not, it doesn't update). Details in `docs/integrations/pi.md` ("Automatic updates").
 - An implementation module that can be swapped exports `api` (`LOADER_API`, currently 1) and `start(host)`, returning `{stop, busy, fetchPackage}` (the methods of the same name on `createRuntime`).
   `host` holds the loader's `context` (for DSH, `{ctx, config}`) plus the `package` and `onUpdate` to pass to `createRuntime`. To add such a runtime: register its files in both lists,
   and change the entry point the host loads to `createLoader`.
@@ -231,9 +342,13 @@ Lark tokens and gates. node drives it with calls the protocol already has:
 
 | node sends | With (all optional fields; runtimes that don't declare `caps.assistant` never receive them) |
 | --- | --- |
-| `session.start {cwd, assistant: true}` | `cwd` is the assistant directory (`~/.persona/assistant`, containing `AGENTS.md` / `CLAUDE.md` and `.agents/skills/`); no `prompt` |
-| `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory |
+| `session.start {cwd, assistant: true}` | `cwd` is the assistant directory (`~/.persona/assistant`, containing `AGENTS.md` / `CLAUDE.md` and `.agents/skills/`); no `prompt`. The runtime reports this `cwd` for the chat's whole life (`runtime.sessions`, its cards), not where a tool's `cd` left the shell: the hub places assistant and health chats by that directory exactly (#2368) |
+| `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory; `client_msg_id`: the id the message came with (the App's, a channel's), absent when it came without one: put it on the message's item, or leave the item without one, never another (`docs/protocol/protocol.md` "Matching pending messages") |
 | `session.interrupt` | Stop on the phone; closing the assistant chat = stopping the running turn, the chat stays in the runtime |
+
+For sessions it starts, the node restores persisted ownership and launcher metadata before publishing runtime rows.
+The original assistant or health directory identifies the conversation after rediscovery and reconnects. Runtime
+status, model, permissions and capabilities continue to describe the running session.
 
 A runtime that declares `caps.assistant` must:
 
@@ -259,8 +374,73 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | --- | --- | --- |
 | DSH (`dsh`, configurable) | `integrations/dsh`: a Cordis plugin for `dsh web`; companion process `companion.mjs` (`dsh-files`) for when DSH isn't running | `docs/integrations/dsh.md` |
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
+| omp (`omp-<pid>`) | `integrations/omp`: the pi host under omp's identity (agent and name `omp`); no companion and no auto-update | `docs/integrations/omp.md` |
 | opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
+| Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
+
+### Antigravity CLI
+
+The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
+input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty
+until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
+preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
+
+Native model errors can be omitted from the JSONL export even when ACP reports a completed prompt. When an idle
+summary has unexported steps, the companion reads at most the final eight native steps with `GetCascadeTrajectorySteps`.
+The result is cached against the summary and exported branch. Discovery opens the native service through read-only
+session listing. An omitted terminal error uses the shared assistant-text `API Error:` representation for the existing error card
+and populates the session's `turn_error`
+fields, including a subscription reset timestamp supplied in native quota metadata. New input and rewinds invalidate
+that result. Rejected ACP prompts also publish their failure through the session's error state.
+The history token includes the error format so connected clients refresh items cached before this representation.
+
+The implemented integration is for the **Antigravity CLI (`agy`)**, not the Antigravity desktop app. With the node running,
+start `node integrations/antigravity/companion.mjs` from the repository root. The companion connects to the node's runtime
+socket, lists CLI transcripts, and uses `agy acp` for terminal-less session creation, sending and interruption. It can also
+serve as an assistant backend through the optional assistant contract above. It requires an installed, authenticated `agy`
+with ACP support; `--agy-bin`, `--agy-dir` and `--socket` override the executable, CLI data directory and node socket.
+Models come from authenticated `agy models` discovery and ACP session metadata. The companion refreshes the catalog every
+five minutes, and the picker's refresh requests a fresh catalog through optional `models({launcher, refresh})`
+(`caps.models`, `launchers.models`). Discovery never sends a prompt. The native settings file determines the advertised
+default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
+settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
+their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
+
+Idle sessions can switch model, thinking level and permission mode through ACP. Native configuration updates determine
+the displayed model and effort. Each accepted field is published even if another field fails, and failures reach the caller.
+`auto` keeps native safe-operation approval, while Persona's explicit full bypass answers permission requests automatically.
+External session models stay unspecified until native metadata is available. Session discovery does not resume them.
+
+Availability checks use optional `check({launcher, cwd, prompt})` (`caps.check`) through the companion's authenticated
+ACP client. They run the existing one-word probe, cancel tool permission requests, and close their temporary session
+on success, failure or timeout. Completed probe workspaces stay out of the user inventory after companion restarts.
+The runtime bounds native calls to a 75-second budget, followed by bounded session cleanup. Older runtimes keep the
+node's shell check. Shell and managed launchers keep their own execution context.
+
+Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/antigravity/lib/acp.js`.
+
+Live text belongs to the ACP prompt currently executing. Queued prompts acquire the stream when they start, with an
+empty boundary. A tool call ends the current text message, so the next message replaces its words in the live slot.
+Each prompt clears its live text on completion, including when another prompt is queued.
+
+Session inventory, watch cursors, item pages and live item pushes read `transcript_full.jsonl` when available.
+Antigravity declares `caps.rewind` for idle Agent conversations. The selected message, duplicate occurrence from the
+end, and following user-input count are checked against `GetCascadeTrajectory`. The owned ACP process's private log
+identifies its loopback native service. `RevertToCascadeStep` receives `conversationOnly: true` and the preceding step
+index, including `-1` for an empty conversation. Native refusal propagates to the caller. The bridge uses the current
+native summary and replacement step indices to discard the abandoned export tail, then publishes a changed history
+token. This survives companion restarts without modifying native transcript files.
+
+The compact `transcript.jsonl` export can contain native `<truncated N bytes>` placeholders and can be ahead of
+the complete export. Use one source for sequences and content so a watch cannot advance past unread complete items.
+Older histories fall back to the compact export when the complete file is unavailable. Persona applies the SDK's
+normal page limits to complete native records and serves larger items through the full-item endpoint. The history
+scope includes `:full` to invalidate previously cached compact pages. Parsed files are cached by file identity, size
+and nanosecond modification/change times, bounded to 16 files and 64 MiB of source data. Files modified within the
+last second bypass the cache because rapid same-size writes can share a filesystem timestamp tick.
+
+### Shared runtime behavior
 
 When two runtimes list the same session (pi's companion lists it from disk while pi-web or a pi terminal is running it), node makes the one running it responsible (ones listing it as `offline` go after),
 and on a tie the newer connection wins. Listing a session as `offline` tells node "I can open it, but it isn't running here".
@@ -271,7 +451,7 @@ A runtime that depends on a new node capability uses `createRuntime(…, {requir
 and retries when the socket file is replaced (the resident node restarted, e.g. after an upgrade) or after 10 minutes; `rt.nodeHas(feature)` checks the current node. Sessions started via node that run elsewhere (pi's companion creating one in pi-web) are reported as `offline`,
 and `session.start` returns the row of the runtime actually running it.
 
-**An Agent in a host paired with a runtime plugin** (pi, opencode): panes, state and terminal belong to the host (herdr), chat and control to the runtime. When the runtime's session row has the same `session_id` as the session id the host reports,
+**An Agent in a host paired with a runtime plugin** (pi and its family, omp, opencode): panes, state and terminal belong to the host (herdr), chat and control to the runtime. When the runtime's session row has the same `session_id` as the session id the host reports,
 node merges the two rows into one (`mergePiRow`, `mergeOpencodeRow`: title, last line, model, context usage and revision come from the runtime, state from the host, and the runtime saying `blocked` counts as "Needs you").
 Without the runtime, the row is terminal-only: the chat is a single note and sending is refused (`terminalOnly`, `server/internal/node/opencode.go`). Agents herdr reports that Persona has no way to read are listed as terminal-only rows too.
 Don't put host pane information in the runtime id: panes are matched on node's side, and `pane_id` in a runtime row is only an optional hint.

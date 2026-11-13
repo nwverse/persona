@@ -3,9 +3,12 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -104,6 +107,128 @@ func newPairCode(t *testing.T, h *Hub) pairCode {
 		t.Fatal(err)
 	}
 	return p
+}
+
+func TestNewPairCodeAddressFamilies(t *testing.T) {
+	for _, tc := range []struct {
+		name, machine, host string
+	}{
+		{"app", "", "pair"},
+		{"machine", "laptop", "link"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPublicTestHub(t)
+			h.store = newPairStore()
+			h.public.endpoints = []Endpoint{
+				{URL: "https://[2001:db8::a]:19443", Kind: "ipv6", Scheme: "https"},
+				{URL: "https://[2001:db8::b]:19443", Kind: "ipv6", Scheme: "https"},
+				{URL: "https://example.com:443", Kind: "name", Scheme: "https"},
+				{URL: "https://203.0.113.10:19443", Kind: "ipv4", Scheme: "https"},
+			}
+			p, err := h.newPairCode(context.Background(), tc.machine)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"https://[2001:db8::a]:19443", "https://203.0.113.10:19443"}
+			if !slices.Equal(p.Alt, want) {
+				t.Fatalf("pair code alternates = %v, want %v", p.Alt, want)
+			}
+			u, err := url.Parse(p.PairURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := u.Query()["alt"]; !slices.Equal(got, want) {
+				t.Fatalf("pair URL alternates = %v, want %v", got, want)
+			}
+			if u.Host != tc.host || p.Machine != tc.machine || u.Query().Get("machine") != tc.machine {
+				t.Fatal("pairing target changed")
+			}
+		})
+	}
+}
+
+func TestAppPairCodeOnIPv6LAN(t *testing.T) {
+	const defaultURL = "http://hub-test:18660"
+	lan := testLocalAddress("lan6")
+	second := lan
+	second.Addr = lan.Addr.Next()
+	otherSubnet := lan
+	otherSubnet.Addr = netip.MustParseAddr("fd00:0:0:1::1")
+	lanURL := "http://" + net.JoinHostPort(lan.Addr.String(), "18660")
+	for _, tc := range []struct {
+		name      string
+		addresses []localAddress
+		configure func(*Config)
+		want      string
+		envURL    string
+		container bool
+		remote    string
+	}{
+		{name: "IPv6 LAN", addresses: []localAddress{lan}, want: lanURL},
+		{name: "one subnet", addresses: []localAddress{second, lan}, want: lanURL},
+		{name: "separate subnets", addresses: []localAddress{lan, otherSubnet}, want: defaultURL},
+		{name: "dual stack", addresses: []localAddress{lan, testLocalAddress("lan4")}, want: defaultURL},
+		{name: "only global IPv6", addresses: []localAddress{testLocalAddress("ipv6")}, want: defaultURL},
+		{name: "IPv4 listener", addresses: []localAddress{lan}, configure: func(c *Config) { c.Listen = "0.0.0.0:18660" }, want: defaultURL},
+		{name: "different port", addresses: []localAddress{lan}, configure: func(c *Config) { c.Listen = ":19443" }, want: defaultURL},
+		{name: "TLS configured", addresses: []localAddress{lan}, configure: func(c *Config) { c.Public.TLSListen = ":19443" }, want: defaultURL},
+		{name: "proxy protocol", addresses: []localAddress{lan}, configure: func(c *Config) { c.Security.ProxyProtocol = &ProxyProtocolConfig{} }, want: defaultURL},
+		{name: "LAN opted out", addresses: []localAddress{lan}, configure: func(c *Config) { c.Public.AdvertiseLAN = new(bool) }, want: defaultURL},
+		{name: "LAN alternate configured", configure: func(c *Config) { c.Public.Advertise = []string{lanURL} }, want: defaultURL},
+		{name: "custom URL", addresses: []localAddress{lan}, configure: func(c *Config) { c.PublicURL = "https://hub.example.com/persona" }, want: "https://hub.example.com/persona"},
+		{name: "environment override", addresses: []localAddress{lan}, envURL: defaultURL, want: defaultURL},
+		{name: "container", addresses: []localAddress{lan}, container: true, want: defaultURL},
+		{name: "remote device", addresses: []localAddress{lan}, remote: "[fd00::2]:1", want: defaultURL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PERSONA_PUBLIC_URL", tc.envURL)
+			h := newTestHub(t)
+			h.store = newPairStore()
+			h.hostname = func() (string, error) { return "hub-test", nil }
+			h.admin.container = func() bool { return tc.container }
+			h.cfg.PublicURL = defaultURL
+			if tc.configure != nil {
+				tc.configure(h.cfg)
+			}
+			h.public.addresses = func() ([]localAddress, error) { return tc.addresses, nil }
+			if err := h.refreshEndpoints(time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			mux := h.routes()
+			token, remote := h.cfg.Token, "127.0.0.1:1"
+			if tc.remote != "" {
+				status, device := call(t, mux, "POST", "/api/v1/auth/tokens", token, `{"kind":"phone"}`)
+				if status != 200 {
+					t.Fatalf("create device token: HTTP %d", status)
+				}
+				token, remote = device["token"].(string), tc.remote
+			}
+			w := securityRequest(mux, "POST", "/api/v1/auth/pair-codes", token, `{"web":"http://hub-test:18660/settings"}`, remote, false)
+			requireCode(t, w, 200, "")
+			p := pairCodeReply{pairCode: &pairCode{}}
+			if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil {
+				t.Fatal(err)
+			}
+			u, err := url.Parse(p.PairURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.URL != tc.want || u.Query().Get("url") != tc.want {
+				t.Fatalf("app QR URL = %q, response URL = %q, want %q", u.Query().Get("url"), p.URL, tc.want)
+			}
+			if u.Host != "pair" || u.Query().Get("token") != p.Token || !slices.Equal(u.Query()["alt"], h.pairCandidates()) {
+				t.Fatal("unexpected app pairing QR parameters")
+			}
+			if p.WebURL != "http://hub-test:18660/settings#token="+p.Token {
+				t.Fatal("browser sign-in URL changed")
+			}
+			requireCode(t, securityRequest(mux, "GET", "/api/v1/machines", p.Token, "", "[fd00::2]:1", false), 200, "")
+			link, err := h.newPairCode(context.Background(), "computer")
+			if err != nil || link.URL != h.cfg.PublicURL {
+				t.Fatalf("Link pairing did not retain public_url: %v", err)
+			}
+		})
+	}
 }
 
 func TestPairTokenLifecycle(t *testing.T) {

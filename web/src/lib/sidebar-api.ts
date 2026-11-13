@@ -1,7 +1,8 @@
 import { storedValue, storeValue } from "./compatibility";
 // What the sidebar offers the keyboard shortcuts (docs/web/web.md "Keyboard shortcuts"): fold or open every group, switch how Agents are
-// grouped, walk the rows. Sidebar.tsx subscribes (`onFoldAll`, `onGrouping`) and marks its list `data-sidebar-rows`; the
-// shortcuts call the rest. Kept out of Sidebar.tsx so that file only gains the few lines that listen.
+// grouped, walk the rows. The sidebar's groups subscribe through useFolded (`onFoldAll`), Sidebar.tsx subscribes to
+// `onGrouping` and marks its list `data-sidebar-rows`, and the shortcuts call the rest. Kept out of the sidebar's views
+// so they only gain the few lines that listen.
 import { AGENT_GROUPINGS, agentGrouping, type AgentGrouping } from "./agent-groups";
 
 export const GROUPING_KEY = "persona.agentGrouping";
@@ -39,6 +40,24 @@ export function setAgentsFolded(folded: boolean, store: Pick<Storage, "length" |
   setAllFolded(folded, AGENTS_FOLD);
 }
 
+/** What the Agents title row's fold-all button does now (#6447): a click always changes what is on screen. */
+export type AgentsFoldAction = "open-block" | "fold-groups" | "open-groups";
+
+/** `blockFolded`: the list is folded under the Agents title (its own click, #2524); `flat`: the list is drawn without
+ *  groups (the chat-list view; its Pinned and Recent sections at the ends are not the list); `groups` / `open`: the group
+ *  headings on screen and whether any is open. The button acts on the list under the controls only: Collapse all folds
+ *  the groups to their headings while any is open, Expand all opens them when none is, and the Agents title, grouping
+ *  tabs, quick filters, search and Filter stay. Folded under its title, the list opens with every group in it. A flat
+ *  list, or one with no groups (a grouping still loading, nothing listed), has nothing to fold to, so there is no button:
+ *  folding its rows would leave a blank under the search that reads as an empty list, and the design system invents no
+ *  heading over a flat list (docs/design/DESIGN_SYSTEM.md 3.4). Before #6447 it acted on the groups alone, so there a
+ *  click only flipped its label or opened a section out of sight; a first fix folded the whole block, controls too. */
+export function agentsFoldAction({ blockFolded, flat = false, groups, open }: { blockFolded: boolean; flat?: boolean; groups: number; open: boolean }): AgentsFoldAction | null {
+  if (blockFolded) return "open-block";
+  if (flat || groups === 0) return null;
+  return open ? "fold-groups" : "open-groups";
+}
+
 // ── how Agents are grouped ───────────────────────────────
 
 const groupingListeners = new Set<(g: AgentGrouping) => void>();
@@ -55,11 +74,16 @@ export function nextGrouping(current: AgentGrouping, offered: readonly AgentGrou
   return offered[(i + 1) % offered.length] ?? current;
 }
 
+/** Choose a grouping from another navigation surface, keeping mounted sidebar and phone views in sync. */
+export function setAgentGrouping(grouping: AgentGrouping): void {
+  storeValue(GROUPING_KEY, grouping);
+  groupingListeners.forEach((listener) => listener(grouping));
+}
+
 /** Switches the sidebar to its next grouping (kept in this browser, as the menu's choice is); returns it. */
 export function cycleGrouping(offered?: readonly AgentGrouping[]): AgentGrouping {
   const next = nextGrouping(agentGrouping(storedValue(GROUPING_KEY)), offered);
-  storeValue(GROUPING_KEY, next);
-  groupingListeners.forEach((f) => f(next));
+  setAgentGrouping(next);
   return next;
 }
 

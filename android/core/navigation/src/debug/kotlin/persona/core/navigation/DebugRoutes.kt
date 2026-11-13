@@ -11,9 +11,7 @@ fun Router.parseDebug(arguments: Map<String, String>): ResolvedRoute? {
         else -> return null
     }
     val key = when {
-        "debug.openTab" in arguments -> tabRoot(AppTab.entries.firstOrNull {
-            it.name.equals(arguments["debug.openTab"], ignoreCase = true)
-        } ?: return null)
+        "debug.openTab" in arguments -> linkedPage(arguments.getValue("debug.openTab")) ?: return null
         "debug.openSession" in arguments -> sessionPath(arguments.getValue("debug.openSession"), kind) ?: return null
         "debug.openRequest" in arguments -> InteractionRoute(
             sessionPath(arguments["debug.session"] ?: return null, kind) ?: return null,

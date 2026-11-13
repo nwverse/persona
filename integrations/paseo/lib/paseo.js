@@ -1,6 +1,6 @@
 // The bridge's connection to the Paseo daemon (its WebSocket API, protocol 1): the hello, requests matched to their
 // replies, the subscriptions this socket owns, the keepalive, and connecting again after the daemon restarts. Only
-// what the bridge uses; the shapes are Paseo's (packages/protocol messages.ts), docs/integrations/paseo.md "Paseo's API".
+// what the bridge uses; the shapes are Paseo's (packages/protocol messages.ts), docs/integrations/paseo.md.
 
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'

@@ -10,7 +10,8 @@ nonisolated enum ExtensionSurfaceSync {
                        answerOnly: Bool = false, capabilities: [String: [String]] = [:]) -> [String: ExtensionSurfaceCredential] {
         Dictionary(uniqueKeysWithValues: configs.map { group, config in
             (group, ExtensionSurfaceCredential(url: config.url, token: config.token, deviceID: devices[group], name: names[group] ?? group,
-                                               answerOnly: answerOnly, capabilities: capabilities[group].map { Array(Set($0)).sorted() }))
+                                               answerOnly: answerOnly, capabilities: capabilities[group].map { Array(Set($0)).sorted() },
+                                               access: config.access))
         })
     }
 
@@ -20,24 +21,24 @@ nonisolated enum ExtensionSurfaceSync {
         let credentials = export(configs, names: names, devices: devices, answerOnly: answerOnly, capabilities: capabilities)
         guard store.read().groups.mapValues(\.credential) != credentials else { return }
         try store.replaceCredentials(credentials)
-        #if os(iOS) || os(watchOS)
+        #if os(iOS) || os(watchOS) || os(visionOS)
         WidgetCenter.shared.reloadTimelines(ofKind: ExtensionSystemWidget.kind)
         #endif
     }
 
     static func refresh(store: ExtensionSurfaceStore = .shared) async {
-        #if os(iOS) || os(watchOS)
+        #if os(iOS) || os(watchOS) || os(visionOS)
         // Failure to enumerate means unknown, not empty: do not clear the hub's previous full report.
         let configurations = try? await ExtensionWidgetReconciliation.configurations()
         #endif
         for (group, state) in store.read().groups {
-            let api = APIClient(config: ServerConfig(url: state.credential.url, token: state.credential.token), group: group)
+            let api = APIClient(config: ServerConfig(url: state.credential.url, token: state.credential.token, access: state.credential.access), group: group)
             do {
                 let features = try await ExtensionSurfaceClient(credential: state.credential)
                     .refreshCatalog(group: group, expected: state, store: store)
                 guard let catalog = store.read().groups[group], catalog.generation == state.generation else { continue }
                 let w = catalog.widgets
-                #if os(iOS) || os(watchOS)
+                #if os(iOS) || os(watchOS) || os(visionOS)
                 guard features.contains("extension_widgets") else { continue }
                 if let configurations, let current = store.read().groups[group], current.generation == state.generation {
                     for (key, family) in configurations where key.group == group {
@@ -69,7 +70,7 @@ nonisolated enum ExtensionSurfaceSync {
                 }
             }
         }
-        #if os(iOS) || os(watchOS)
+        #if os(iOS) || os(watchOS) || os(visionOS)
         WidgetCenter.shared.reloadTimelines(ofKind: ExtensionSystemWidget.kind)
         #endif
     }

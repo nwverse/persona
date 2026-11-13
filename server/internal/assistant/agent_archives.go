@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -26,6 +27,9 @@ type agentArchive struct {
 	// ClosedAt: "Archive and close" closed its agent then (agent_archive_close.go). Whatever the agent wrote while it
 	// was being closed is not new activity: only activity after this moment restores the session.
 	ClosedAt time.Time `json:"closed_at,omitempty"`
+	// wrote is the archive's write that last changed the record (agentArchiveBook.writes), kept in memory only: 0 for
+	// a record as loaded, written before anything this process read.
+	wrote uint64
 }
 
 // activeAfter is the moment after which source activity restores the archived session.
@@ -34,6 +38,20 @@ func (rec agentArchive) activeAfter() time.Time {
 		return rec.ClosedAt
 	}
 	return rec.Session.UpdatedAt
+}
+
+// A just-closed confirmation can remain in a node's cached list until its next push.
+// New work or a newer transcript still restores it; the old blocked snapshot cannot undo the close.
+//
+// mark is the archive's write count when s was read from the node's list (archiveMark). A row read before the
+// record last changed says nothing about activity after that: a reader that read the list while the agent still
+// worked or waited on the user, then waited for the archive's lock while the agent was closed and archived, would
+// otherwise restore it for good (#4372). The next list read weighs it again.
+func (rec agentArchive) active(s proto.Session, mark uint64) bool {
+	if rec.wrote > mark {
+		return false
+	}
+	return s.UpdatedAt.After(rec.activeAfter()) || agentArchiveBusy(s) && (rec.ClosedAt.IsZero() || s.Status != proto.StatusBlocked)
 }
 
 type agentArchiveBook struct {
@@ -45,7 +63,13 @@ type agentArchiveBook struct {
 	// Pending automatic restores survive subsequent idle snapshots if a database
 	// write fails. They are retried; they are never reported as persisted success.
 	pending map[string]bool
+	// writes counts the record writes (saveAgentArchivesLocked), which stamp each record they change.
+	writes atomic.Uint64
 }
+
+// archiveMark is taken before reading a list the archive is applied to (archivedSessions): the records written
+// after it are newer than anything the list shows.
+func (svc *Service) archiveMark() uint64 { return svc.agentArchives.writes.Load() }
 
 // Archive mutations serialize through a cancellable gate. Readers of published
 // visibility metadata do not wait for a database operation holding the gate.
@@ -89,6 +113,14 @@ func (svc *Service) saveAgentArchivesLocked(ctx context.Context, records map[str
 	store := svc.archiveStore()
 	if store == nil {
 		return errors.New("no database")
+	}
+	n := svc.agentArchives.writes.Add(1)
+	for key, rec := range records {
+		if old, ok := svc.agentArchives.records[key]; !ok || old.Archived != rec.Archived ||
+			!old.ChangedAt.Equal(rec.ChangedAt) || !old.ClosedAt.Equal(rec.ClosedAt) {
+			rec.wrote = n
+			records[key] = rec
+		}
 	}
 	if err := store.PutSetting(ctx, agentArchivesKey, records); err != nil {
 		return err
@@ -139,13 +171,28 @@ func archiveSnapshot(s proto.Session) proto.Session {
 // inventory and retains old archived/restored rows beyond its seven-day window.
 // Observed new activity permanently restores a row, including a busy-to-idle
 // transition with no timestamp change. Only that transition writes the database.
-func (svc *Service) archivedSessions(ctx context.Context, machine string, list []proto.Session) ([]proto.Session, bool, error) {
+// mark is archiveMark taken before list was read: a record changed after it is not
+// weighed against the list (agentArchive.active).
+func (svc *Service) archivedSessions(ctx context.Context, machine string, list []proto.Session, mark uint64) ([]proto.Session, bool, error) {
+	return svc.applyArchives(ctx, machine, list, mark, true)
+}
+
+// archivedListed is archivedSessions without the rows only the archive keeps: list's own rows with the archive's
+// marks, and its restores, for a reader of rows the node lists (listedSession, listedSessions). The records the
+// machine has gathered over months are not copied for it.
+func (svc *Service) archivedListed(ctx context.Context, machine string, list []proto.Session, mark uint64) ([]proto.Session, error) {
+	list, _, err := svc.applyArchives(ctx, machine, list, mark, false)
+	return list, err
+}
+
+// applyArchives is archivedSessions; rest: the archive's rows list does not have are appended.
+func (svc *Service) applyArchives(ctx context.Context, machine string, list []proto.Session, mark uint64, rest bool) ([]proto.Session, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, agentArchiveTimeout)
 	defer cancel()
 	b := &svc.agentArchives
 	if err := b.lock(ctx); err != nil {
 		if records := b.snapshot.Load(); records != nil {
-			list = overlayAgentArchives(machine, list, *records, nil)
+			list = overlayAgentArchives(machine, list, *records, nil, mark, rest)
 		}
 		return list, false, err
 	}
@@ -163,7 +210,7 @@ func (svc *Service) archivedSessions(ctx context.Context, machine string, list [
 		if !ok || !rec.Archived {
 			continue
 		}
-		if agentArchiveBusy(s) || s.UpdatedAt.After(rec.activeAfter()) {
+		if rec.active(s, mark) {
 			b.pending[key] = true
 		}
 		if b.pending[key] {
@@ -187,21 +234,79 @@ func (svc *Service) archivedSessions(ctx context.Context, machine string, list [
 			}
 		}
 	}
-	return overlayAgentArchives(machine, list, b.records, b.pending), next != nil && saveErr == nil, saveErr
+	return overlayAgentArchives(machine, list, b.records, b.pending, mark, rest), next != nil && saveErr == nil, saveErr
 }
 
-func overlayAgentArchives(machine string, list []proto.Session, records map[string]agentArchive, pending map[string]bool) []proto.Session {
-	seen := make(map[string]bool, len(list))
+// archivedInventory is machine's whole list with the archive applied (archivedSessions), its children folded under
+// their parents among the rows left listed (foldInventory).
+func (svc *Service) archivedInventory(ctx context.Context, machine string) ([]proto.Session, bool, error) {
+	mark := svc.archiveMark()
+	list, changed, err := svc.archivedSessions(ctx, machine, svc.decoratedUnarchived(machine), mark)
+	svc.foldInventory(machine, list)
+	return list, changed, err
+}
+
+// archivedRow is the row machine's whole list (archivedInventory) has for session sid when its node does not list it:
+// its archive record's, found by its key instead of by building the list with every record of the machine. Its fold
+// is the caller's (foldSubset).
+func (svc *Service) archivedRow(ctx context.Context, machine, sid string) (proto.Session, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, agentArchiveTimeout)
+	defer cancel()
+	b := &svc.agentArchives
+	if err := b.lock(ctx); err != nil { // as archivedSessions: the records last published
+		if records := b.snapshot.Load(); records != nil {
+			row, ok := archiveRowOf(machine, sid, *records)
+			return row, ok, err
+		}
+		return proto.Session{}, false, err
+	}
+	defer b.unlock()
+	if err := svc.loadAgentArchivesLocked(ctx); err != nil {
+		return proto.Session{}, false, err
+	}
+	row, ok := archiveRowOf(machine, sid, b.records)
+	return row, ok, nil
+}
+
+// archiveRowOf is the row overlayAgentArchives appends for machine's session sid, when records has one.
+func archiveRowOf(machine, sid string, records map[string]agentArchive) (proto.Session, bool) {
+	rec, ok := records[runtimeListID(machine, sid)]
+	if !ok || rec.Session.MachineID != machine {
+		return proto.Session{}, false
+	}
+	return archiveRow(rec), true
+}
+
+// archiveRow is a record's row in its machine's list.
+func archiveRow(rec agentArchive) proto.Session {
+	s := rec.Session
+	s.Archived = rec.Archived
+	s.ArchiveChangedAt = archiveChangedAt(rec.ChangedAt)
+	return s
+}
+
+// overlayAgentArchives puts the archive's marks on list's rows and, rest, appends the rows of the machine's records
+// list does not have.
+func overlayAgentArchives(machine string, list []proto.Session, records map[string]agentArchive, pending map[string]bool, mark uint64, rest bool) []proto.Session {
+	var seen map[string]bool // the keys list has, when the rest are appended
+	if rest {
+		seen = make(map[string]bool, len(list))
+	}
 	for i := range list {
 		key := runtimeListID(machine, list[i].SessionID)
-		seen[key] = true
+		if rest {
+			seen[key] = true
+		}
 		if rec, ok := records[key]; ok && !list[i].Assistant {
 			// A storage timeout must neither reveal unrelated archived rows nor hide
 			// new work. The durable restore remains pending until its write succeeds.
-			active := agentArchiveBusy(list[i]) || list[i].UpdatedAt.After(rec.activeAfter())
+			active := rec.active(list[i], mark)
 			list[i].Archived = rec.Archived && !pending[key] && !active
-			list[i].ArchiveChangedAt = rec.ChangedAt
+			list[i].ArchiveChangedAt = archiveChangedAt(rec.ChangedAt)
 		}
+	}
+	if !rest {
+		return list
 	}
 	keys := make([]string, 0, len(records))
 	for key, rec := range records {
@@ -211,29 +316,9 @@ func overlayAgentArchives(machine string, list []proto.Session, records map[stri
 	}
 	sort.Strings(keys) // stable inventories avoid needless delta/list revisions
 	for _, key := range keys {
-		rec := records[key]
-		s := rec.Session
-		s.Archived = rec.Archived
-		s.ArchiveChangedAt = rec.ChangedAt
-		list = append(list, s)
+		list = append(list, archiveRow(records[key]))
 	}
 	return list
-}
-
-// A later archive/restore supersedes an older delete tombstone. A subsequent
-// explicit delete still works, without a non-atomic write to two settings keys.
-func (svc *Service) agentArchiveChanges(machine string) map[string]time.Time {
-	out := map[string]time.Time{}
-	records := svc.agentArchives.snapshot.Load()
-	if records == nil {
-		return out
-	}
-	for _, rec := range *records {
-		if rec.Session.MachineID == machine {
-			out[rec.Session.SessionID] = rec.ChangedAt
-		}
-	}
-	return out
 }
 
 func (svc *Service) archiveStore() Store {
@@ -250,7 +335,7 @@ func runtimeListID(machine, session string) string {
 
 // decorated applies manager-owned archive visibility to its final agent states.
 func (svc *Service) decorated(machine string) []proto.Session {
-	list, _, err := svc.archivedSessions(context.Background(), machine, svc.decoratedUnarchived(machine))
+	list, _, err := svc.archivedInventory(context.Background(), machine)
 	if err != nil {
 		svc.logf("load agent archives: %v", err)
 	}
@@ -270,11 +355,12 @@ func (svc *Service) listArchivedSessions(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	out := []proto.Session{}
+	ext := r.Header.Get(RoleHeader) == roleExtension // never a health-space conversation (docs/extensions/extensions.md)
 	for _, m := range svc.fleetMachines() {
 		if mid != "" && mid != m.ID {
 			continue
 		}
-		list, changed, err := svc.archivedSessions(ctx, m.ID, svc.decoratedUnarchived(m.ID))
+		list, changed, err := svc.archivedInventory(ctx, m.ID)
 		if err != nil {
 			apierr.Write(w, http.StatusInternalServerError, i18n.Err("hub-agent_archives.storage"))
 			return
@@ -283,7 +369,7 @@ func (svc *Service) listArchivedSessions(w http.ResponseWriter, r *http.Request)
 			svc.publishList(m.ID)
 		}
 		for _, row := range list {
-			if row.Archived && !row.Assistant {
+			if row.Archived && !row.Assistant && !(ext && (row.Space == SpaceHealth || identity.InHealthSpace(row.Cwd))) {
 				row.Manager = svc.id
 				row.NativeArchive = svc.nativeArchiveView(m.ID, row.SessionID)
 				out = append(out, row)
@@ -332,7 +418,7 @@ func (svc *Service) agentArchiveTarget(ctx context.Context, mid, sid string) (pr
 	if !ok {
 		return proto.Session{}, archiveRefusal(http.StatusNotFound, "", i18n.Err("devices-api.unknown_machine"))
 	}
-	list, _, err := svc.archivedSessions(ctx, m.ID, svc.decoratedUnarchived(m.ID))
+	list, _, err := svc.archivedInventory(ctx, m.ID)
 	if err != nil {
 		return proto.Session{}, err
 	}
@@ -372,6 +458,14 @@ func (svc *Service) setAgentArchive(ctx context.Context, mid, sid string, archiv
 func (svc *Service) setAgentSessionArchive(w http.ResponseWriter, r *http.Request, mid string, archived bool) {
 	if !fullRole(r) {
 		apierr.Write(w, http.StatusForbidden, i18n.Err("hub-agent_archives.forbidden"))
+		return
+	}
+	if archived && r.URL.Query().Get("force") == "1" {
+		if err := svc.forceArchiveConfirmation(r.Context(), mid, r.PathValue("sid")); err != nil {
+			svc.writeAgentArchiveError(w, err)
+			return
+		}
+		apierr.WriteJSON(w, map[string]any{"ok": true, "archived": true, "close": map[string]any{"closed": true, "outcome": archiveCloseClosed}})
 		return
 	}
 	if archived && r.URL.Query().Get("close") == "1" {
@@ -416,4 +510,12 @@ func (svc *Service) agentArchiveRoutes() {
 	svc.handle("POST /api/v1/sessions/{mid}/{sid}/unarchive", func(w http.ResponseWriter, r *http.Request) {
 		svc.setAgentSessionArchive(w, r, r.PathValue("mid"), false)
 	})
+}
+
+// archiveChangedAt is a record's change time as a session carries it (proto.Session.ArchiveChangedAt): nil for none.
+func archiveChangedAt(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }

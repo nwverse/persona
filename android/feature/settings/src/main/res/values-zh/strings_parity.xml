@@ -8,6 +8,8 @@
     <string name="settings_ext_themes_extension">扩展主题</string>
     <string name="settings_scheme">深浅色</string>
     <string name="settings_scheme_note">只对这台手机生效。跟随系统时随系统的深色模式切换。</string>
+    <string name="settings_density">布局密度</string>
+    <string name="settings_density_note">只对这台手机生效。紧凑会收窄边距和间距，一屏能看到更多；文字和图标大小不变。</string>
     <string name="settings_providers_title">模型供应商</string>
     <string name="settings_row_providers_subtitle">网关、Key 和 ~/.zshrc 里的 claude 函数</string>
     <string name="settings_providers_demo">体验模式没有 hub 的模型供应商。配对 hub 后再看。</string>
@@ -150,7 +152,7 @@
     <string name="settings_storage_clear_all_title">清除全部 %1$s 缓存？</string>
     <string name="settings_storage_clear_text">设置和配对信息会保留。</string>
     <string name="settings_row_storage">存储空间</string>
-    <string name="settings_row_assistant">助手</string>
+    <string name="settings_row_assistant">助手资料</string>
     <string name="settings_row_assistant_subtitle">运行在哪、了解你的内容、时区和通知</string>
     <string name="settings_notify_system_off">通知没有打开</string>
     <string name="settings_notify_system_off_text">下面的设置要在系统设置里允许 Persona 发通知后才生效。</string>

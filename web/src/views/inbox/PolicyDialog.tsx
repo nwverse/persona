@@ -7,12 +7,13 @@ import {
   type InboxItem, type InboxMuteOption, type InboxPolicy, type PolicyTier, type PolicyTwin,
 } from "../../lib/inbox";
 import { errorText } from "../../lib/api";
-import { managerOrder, multiManager, useRoster, type Manager } from "../../lib/managers";
+import { otherManager } from "../../lib/manager-choice";
+import { type Manager } from "../../lib/managers";
 import { t } from "../../i18n";
 import { Button, Dialog, Loading, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Segmented } from "../assistant/parts";
-import { ManagerHeading } from "../ManagerParts";
+import { useScope } from "../../lib/current-assistant";
 
 /** What the dialog is about: a new rule from an item's option, or an existing one. Each manager keeps its own rules:
  *  the rule is the item's (or the rule's) manager's. */
@@ -59,7 +60,7 @@ export function PolicyDialog({ target, onClose }: { target: PolicyTarget; onClos
   useEffect(() => {
     if (target.policy) return;
     // the item's manager's rules: a rule of the same chat under another manager is not this one
-    listInboxPolicies(ownerOf(target)).then(
+    listInboxPolicies(otherManager(ownerOf(target))).then(
       (list) => {
         const same = list.find((p) => p.source === target.source && p.tag === target.option.tag && p.value === target.option.value);
         setPolicy(same);
@@ -72,7 +73,9 @@ export function PolicyDialog({ target, onClose }: { target: PolicyTarget; onClos
   }, [target]);
   const save = async (nextTier: PolicyTier, nextTwin: PolicyTwin) => {
     setBusy(true);
-    const ok = await saveInboxPolicy({ item: target.item, option: target.option, source: target.source, id: policy?.id, manager: ownerOf(target) }, nextTier, nextTwin);
+    // removing a rule opened from the Rules list names the manager the list read it from, even when that is the default now
+    const stamped = !target.item && !nextTier && !nextTwin;
+    const ok = await saveInboxPolicy({ item: target.item, option: target.option, source: target.source, id: policy?.id, manager: ownerOf(target), stamped }, nextTier, nextTwin);
     setBusy(false);
     if (ok !== null) onClose();
   };
@@ -117,11 +120,12 @@ async function rulesByManager(managers: Manager[]): Promise<RuleGroup[]> {
   });
 }
 
-/** "Rules" (the Inbox's ⋯ menu): every source's rules, newest first, each with Edit and Remove. With several managers,
- *  each one's under its name. */
+/** "Rules" (the Inbox's ⋯ menu): every source's rules, newest first, each with Edit and Remove. With several assistants,
+ *  the current one's. */
 export function RulesDialog({ onClose }: { onClose: () => void }) {
-  const roster = useRoster();
-  const managers = multiManager(roster) ? managerOrder(roster) : null;
+  // several assistants: the current one's rules, asked of it by name
+  const mine = useScope().manager;
+  const managers = mine ? [mine] : null;
   const several = managers?.map((m) => m.id).join(",") ?? "";
   const [list, setList] = useState<InboxPolicy[] | null>(null);
   const [groups, setGroups] = useState<RuleGroup[] | null>(null);
@@ -185,7 +189,6 @@ export function RulesDialog({ onClose }: { onClose: () => void }) {
       ) : shownGroups ? (
         shownGroups.map((g) => (
           <section key={g.manager.id} data-rules-manager={g.manager.id} className="mb-2">
-            <ManagerHeading manager={g.manager} className="px-1 pt-1 pb-0.5" />
             {g.error ? (
               <p className="px-1 py-1.5 text-[12px] break-words text-ink-3">{g.manager.online ? t("inbox-policydialog.load_failed", { error: g.error }) : t("inbox-policydialog.rules_offline")}</p>
             ) : (

@@ -10,9 +10,13 @@ import { api, ApiError, enc } from "./api";
 import { itemHeaders } from "./manager-choice";
 import { extRoot } from "./extension-api";
 import { areaBands, colorOf, hue, imageLoadable, readV6 } from "./extension-ui-v6";
+import { isHttps, isObject, readAction, readPush } from "./extension-ui-read";
 import { t } from "../i18n";
 import type { Comment, Hunk, Thread, TreeEntry } from "./code-view";
 import type { UIColor, UIImageSource, UIRowAction, UIRowControl, UISpark, UITile } from "./extension-ui-v6";
+import { SUBSCRIPTIONS_UI } from "./subscriptions-ui";
+
+export { isHttps };
 
 /** The UI version the web draws (context.ui_version). */
 export const UI_VERSION = 6;
@@ -297,6 +301,9 @@ export interface UIContext {
   machine?: string;
   item?: string;
   size?: "compact" | "full";
+  /** The assistant's name as the composer shows it ("Ask {name}…"), sent only to the manager's own subscription pages,
+   *  which name their Set Up with … after it (docs/extensions/subscriptions.md "Pages"). */
+  assistant?: string;
 }
 
 /** What the web says with every render and action (docs/extensions/extensions.md "Context"): time zone, language, platform, UI version. */
@@ -323,6 +330,7 @@ export function uiContext(context?: UIContext): UIContextSent {
   if (context?.machine) out.machine = context.machine;
   if (context?.item) out.item = context.item;
   if (context?.size) out.size = context.size;
+  if (context?.assistant) out.assistant = context.assistant;
   return out;
 }
 
@@ -344,7 +352,9 @@ export function placeOf(u: UIPlace & { plugin?: string; plugin_name?: string }):
   return { ...rest, extension: u.extension ?? plugin ?? "", ...((u.extension_name ?? plugin_name) ? { extension_name: u.extension_name ?? plugin_name } : {}) };
 }
 
-const uiPath = (extension: string, ui: string) => `${extRoot()}/${enc(extension)}/-/ui/${enc(ui)}`;
+// The subscription pages (#2041) are the manager's own, drawn and pressed like an extension's page under a reserved id.
+const uiPath = (extension: string, ui: string) =>
+  extension === SUBSCRIPTIONS_UI ? "/subscriptions/-/ui" : `${extRoot()}/${enc(extension)}/-/ui/${enc(ui)}`;
 
 /** Draws the view (no action). A view that does not read at all is an error; unknown items are left out. `manager`:
  *  whose extension it is (another manager's inbox item, or computer); none: the default's. */
@@ -381,16 +391,6 @@ export const toneOf = (t?: string): UITone => (t && TONES.includes(t) ? (t as UI
 export function percent(ratio?: number): number {
   if (typeof ratio !== "number" || !Number.isFinite(ratio)) return 0;
   return Math.round(Math.min(1, Math.max(0, ratio)) * 1000) / 10;
-}
-
-/** Only https links open (the hub checks too). */
-export function isHttps(url?: string): boolean {
-  if (!url) return false;
-  try {
-    return new URL(url).protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 /** The fields of a view, by name, as they start: what the extension filled in (never a secret's), toggles "true" / "false". */
@@ -446,15 +446,19 @@ export function blocks(items: UIItem[]): UIBlock[] {
 /**
  * What to do after a press: the view to show (new, or "reload" to draw again), a word to say, a link to open; `source`:
  * open the inbox item's own source page (an inbox_item's open_url persona://inbox/<item>/source, for the item it is
- * drawn for); `settings`: the in-app path of an extension's own settings (open_url persona://settings/extensions/<id>).
+ * drawn for); `settings`: the in-app path of an extension's own settings (open_url persona://settings/extensions/<id>);
+ * `ask`: the text for the assistant's main conversation (open_url persona://ask?text=…), taken only from the manager's
+ * own subscription pages (`extension` SUBSCRIPTIONS_UI, docs/extensions/subscriptions.md "Pages").
  */
 export function outcome(
   r: UIActionResult,
   item?: string,
-): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; push?: UIPush; pop?: true } {
+  extension?: string,
+): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; ask?: string; push?: UIPush; pop?: true } {
   const url = r.open_url && isHttps(r.open_url) ? r.open_url : undefined;
   const source = !!item && !!r.open_url && inboxSourceItem(r.open_url) === item;
   const settings = r.open_url ? extensionSettingsHref(r.open_url) : undefined;
+  const ask = extension === SUBSCRIPTIONS_UI && r.open_url ? askText(r.open_url) : undefined;
   const push = readPush(r.push);
   const pop = r.pop === true && !push;
   return {
@@ -466,9 +470,19 @@ export function outcome(
     url,
     ...(source ? { source: true as const } : {}),
     ...(settings ? { settings } : {}),
+    ...(ask ? { ask } : {}),
     ...(push ? { push } : {}),
     ...(pop ? { pop: true as const } : {}),
   };
+}
+
+/** The text of a persona://ask?text=… link (an older name's scheme too, as other in-app links); undefined for any other
+ *  link or an empty text. At most 8000 characters: the pages name a source, they don't carry its content. */
+export function askText(link: string): string | undefined {
+  const c = canonicalAppURL(link);
+  if (!c.startsWith("persona://ask?")) return undefined;
+  const text = new URLSearchParams(c.slice("persona://ask?".length)).get("text") ?? "";
+  return text.trim() && text.length <= 8000 ? text : undefined;
 }
 
 /** How deep the pages pushed on one another go (docs/extensions/extensions.md "Page navigation"): a push past it replaces the top one. */
@@ -491,7 +505,7 @@ export function pushPage(stack: readonly UIPage[], push: UIPush, ui: string): UI
 /** The icons UI version 6 adds (docs/extensions/extensions.md "UI version 6"), on a row, a metric, a tile, a row action and a nav_page. */
 export const NEW_ICONS_6 = [
   "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play",
-  "pause", "stop", "speaker", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car",
+  "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car",
   "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit",
   "refresh", "share", "info",
 ] as const;
@@ -567,8 +581,6 @@ export const KNOWN_ITEMS: readonly string[] = [
   "image", "grid", "carousel", // UI version 6
 ];
 
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-
 /** An item the web can draw: a known type with what it needs to be drawn at all (a chart with points, a grid with stats). */
 function drawable(it: unknown): it is UIItem {
   if (!isObject(it) || typeof it.type !== "string" || !KNOWN_ITEMS.includes(it.type)) return false;
@@ -615,13 +627,16 @@ function drawable(it: unknown): it is UIItem {
  * The view as the web draws it: items it does not know left out, a section they emptied gone (one with a footer
  * stays), like the hub does for an older app. Only a view that does not read at all is an error.
  */
-export function readView(raw: unknown): UIView {
+/** `html`: keep html components (an assistant card that runs them, #4215); an extension's view never draws one. */
+export function readView(raw: unknown, opts: { html?: boolean } = {}): UIView {
   if (!isObject(raw) || !Array.isArray(raw.sections)) throw new Error(t("lib-extension-ui.unreadable_view"));
   const sections: UISection[] = [];
+  // an html component's own checks are the card's (ui/HtmlCard.tsx)
+  const keeps = (it: unknown): it is UIItem => drawable(it) || (!!opts.html && (it as UIItem)?.type === "html");
   for (const s of raw.sections) {
     if (!isObject(s)) continue;
     const items = Array.isArray(s.items) ? s.items : [];
-    const kept = items.filter(drawable).map(readItem);
+    const kept = items.filter(keeps).map(readItem);
     const footer = typeof s.footer === "string" ? s.footer : undefined;
     const more = isObject(s.more) && readAction(s.more.action) ? { ...(typeof s.more.title === "string" && s.more.title ? { title: s.more.title } : {}), action: readAction(s.more.action)! } : undefined;
     if (items.length > 0 && kept.length === 0 && !footer && !more) continue;
@@ -682,33 +697,6 @@ export function readView(raw: unknown): UIView {
     }
   }
   return view;
-}
-
-/** An action as the web uses it (an id at least), its push read too; undefined when it is not one. */
-export function readAction(raw: unknown): UIAction | undefined {
-  if (!isObject(raw) || typeof raw.id !== "string" || !raw.id) return undefined;
-  const a: UIAction = { id: raw.id };
-  if (typeof raw.confirm === "string") a.confirm = raw.confirm;
-  if (raw.submit === true) a.submit = true;
-  const p = readPush(raw.push);
-  if (p) a.push = p;
-  if (isObject(raw.values)) {
-    const values = Object.fromEntries(Object.entries(raw.values).filter((e): e is [string, string] => typeof e[1] === "string"));
-    if (Object.keys(values).length) a.values = values;
-  }
-  return a;
-}
-
-/** A push as the web keeps it: the state as text (an extension may send an object: it gets it back as JSON). */
-export function readPush(raw: unknown): UIPush | undefined {
-  if (raw === true) return {};
-  if (!isObject(raw)) return undefined;
-  const p: UIPush = {};
-  if (typeof raw.state === "string") p.state = raw.state;
-  else if (raw.state !== undefined && raw.state !== null) p.state = JSON.stringify(raw.state);
-  if (typeof raw.title === "string" && raw.title) p.title = raw.title;
-  if (typeof raw.ui === "string" && raw.ui) p.ui = raw.ui;
-  return p;
 }
 
 /** An item with its actions read; an empty's button (`action: {title, action}`) under `button`. */
@@ -936,4 +924,28 @@ export function seriesColors(series: ChartSeries[]): string[] {
 export function sliceColors(n: number): string[] {
   const more = ["teal", "amber", "indigo", "orange"];
   return Array.from({ length: n }, (_, i) => (i < 4 ? `var(--series-${i + 1})` : `var(--hue-${more[(i - 4) % more.length]})`));
+}
+
+/** One segment of a single category's horizontal share bar: its series index, value and share of the total (0…1). */
+export interface SharePart {
+  series: number;
+  value: number;
+  ratio: number;
+}
+
+/**
+ * Whether a stacked bar chart is one category's shares — every series holds exactly one point, all values finite and
+ * non-negative and the total positive. A persona-card stacked_bar is always this shape (a single day's parts), so it
+ * reads as a horizontal segmented bar rather than a lone column; a chart with two or more categories stays columns for
+ * the comparison. The same rule on every app (docs/extensions/extensions.md "New items" chart; issue #5386).
+ */
+export function stackedShare(item: Pick<UIItem, "kind" | "stacked" | "series">): SharePart[] | null {
+  const series = item.series ?? [];
+  if (item.kind !== "bar" || !item.stacked || series.length === 0) return null;
+  if (series.some((s) => s.points.length !== 1)) return null;
+  const values = series.map((s) => s.points[0].value);
+  if (values.some((v) => !Number.isFinite(v) || v < 0)) return null;
+  const total = values.reduce((a, b) => a + b, 0);
+  if (total <= 0) return null;
+  return values.map((value, i) => ({ series: i, value, ratio: value / total }));
 }

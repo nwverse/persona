@@ -1,6 +1,6 @@
 import Foundation
 
-/// A Jupyter notebook (.ipynb, nbformat 4) as the file viewer shows it (docs/apple/ios.md「Jupyter 笔记本」): its cells in
+/// A Jupyter notebook (.ipynb, nbformat 4) as the file viewer shows it (docs/apple/ios.md「File viewer」): its cells in
 /// order, each code cell with what it printed. Fields an older or hand-written file leaves out read as empty.
 public nonisolated struct Notebook: Sendable, Equatable {
     public var language: String

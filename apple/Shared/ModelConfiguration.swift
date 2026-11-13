@@ -35,14 +35,23 @@ nonisolated struct ModelPurpose: Codable, Hashable, Identifiable, Sendable {
     var providerIDs: [String]?
     /// The runtimes Main Chat can run on (`cli`, `agentsdk`); nil for every other use and on an older hub.
     var runtimes: [String]?
+    /// What the use is for, in a sentence in the request's language (#5086, #5806): wording only. Every built-in use
+    /// has one; a task's, an extension's and a voice plugin's have none, and a hub from before sends none.
+    var description: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, group, kind, parent, override, effective, revision, status, limit, fields, uses, runtimes
+        case id, name, group, kind, parent, override, effective, revision, status, limit, fields, uses, runtimes, description
         case categoryID = "category_id"
         case machineID = "machine_id", inheritedFrom = "inherited_from", providerIDs = "provider_ids"
     }
 
     func supports(_ field: String) -> Bool { (fields ?? ["provider", "model"]).contains(field) }
+
+    /// The sentence to draw under the name; nil when the hub sent none or only blanks.
+    var purposeNote: String? {
+        guard let text = description?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
+    }
 
     /// Explicit capabilities allow a child to own a binding without pretending to be a category.
     var hasWritableFields: Bool {
@@ -51,7 +60,7 @@ nonisolated struct ModelPurpose: Codable, Hashable, Identifiable, Sendable {
 }
 
 /// The hub stopped calling a connection after the upstream said its quota is used up or it is busy, until `until`
-/// (docs/assistant/model-config.md「上游限流」).
+/// (docs/assistant/model-config.md「Upstream rate limits」).
 nonisolated struct ModelLimit: Codable, Hashable, Sendable {
     var reason: String // quota | busy
     var until: Date

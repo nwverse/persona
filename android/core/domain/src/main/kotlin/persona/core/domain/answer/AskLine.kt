@@ -18,8 +18,8 @@ import java.time.Instant
 private const val AskMax = 160
 
 /**
- * What a card asks, in one line for a row that waits on it (#3964; the web's `taskAsk` / `rowLine`): "Asking you: which framework?",
- * "Needs permission: swift test", "Plan awaiting approval", "Terminal dialog: …", "MCP request: …"; the kind alone when the card carries no
+ * What a card asks, in one line for a row that waits on it (#3964; the web's `taskAsk` / `rowLine`): "Has a question: which framework?",
+ * "Needs your permission: swift test", "Plan awaiting approval", "Terminal needs you: …", "MCP request: …"; the kind alone when the card carries no
  * words. Null for a card of a kind this app does not know with nothing to say.
  */
 fun Interaction.askLine(): CoreText? {
@@ -31,8 +31,21 @@ fun Interaction.askLine(): CoreText? {
         "elicitation" -> Key.AskElicitation
         else -> null
     }
+    val ask = askWords()
+    return when {
+        kicker == null -> ask
+        ask == null -> CoreText.of(kicker)
+        else -> CoreText.of(Key.AskLine, CoreText.of(kicker), ask)
+    }
+}
+
+/**
+ * What a card asks in its own words, without the kind [askLine] puts first: the question, the command, the dialog's
+ * question, the form's message, a plan's summary. A folded card shows it after its title (iOS `InteractionPanel.previewText`).
+ */
+fun Interaction.askWords(): CoreText? {
     fun words(text: String?) = text?.let(::plainMarkdown)?.trim()?.takeIf(String::isNotEmpty)?.take(AskMax)?.let(CoreText::plain)
-    val ask: CoreText? = when (kind) {
+    return when (kind) {
         "question" -> words(questions?.firstOrNull()?.question?.takeIf(String::isNotBlank) ?: summary)
         // A command keeps its backticks and stars: only its lines are folded into one. With nothing to go on, the tool's name.
         "permission" -> if (summary.isNullOrBlank() && toolInput == null) toolDisplayName(toolName)?.let(CoreText::plain)
@@ -45,11 +58,6 @@ fun Interaction.askLine(): CoreText? {
         "screen" -> words(dialog?.question?.takeIf(String::isNotBlank) ?: summary)
         "elicitation" -> words(elicitation?.message?.takeIf(String::isNotBlank) ?: summary)
         else -> words(summary)
-    }
-    return when {
-        kicker == null -> ask
-        ask == null -> CoreText.of(kicker)
-        else -> CoreText.of(Key.AskLine, CoreText.of(kicker), ask)
     }
 }
 
@@ -80,6 +88,7 @@ fun Session.askingLine(card: Interaction?): CoreText? =
  * its work stands once the hub triaged its turn (docs/assistant/agent-work.md), else its last words.
  */
 fun Session.rowLine(card: Interaction?, now: Instant, muted: Boolean = false): CoreText? = askingLine(card)
+    ?: CoreText.of(Key.CodexWaiting).takeIf { awaitingFirstMessage && agentState == AgentState.Idle }
     ?: reasonPreview?.let(CoreText::plain)
     ?: replyLine?.takeIf { awaitsReply && agentState == AgentState.Idle && !muted }?.let(CoreText::plain)
     ?: workLine(now) ?: lastText?.takeIf(String::isNotBlank)?.let(CoreText::plain)

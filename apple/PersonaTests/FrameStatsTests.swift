@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// FrameStats writes its numbers as JSON for the measuring scripts (docs/operations/testing.md「卡顿测量」).
+/// FrameStats writes its numbers as JSON for the measuring scripts (docs/operations/testing.md「Jank measurement」).
 @MainActor struct FrameStatsTests {
     @Test func stopWritesItsNumbersAsJSON() async throws {
         let dir = try #require(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)

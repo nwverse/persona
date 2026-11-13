@@ -15,7 +15,7 @@ import org.junit.Test
 class NextWaitingRouteTest {
     private val stacks = mapOf<AppTab, MutableList<NavKey>>(
         AppTab.Agents to mutableListOf(AgentsRoute, ChatRoute("m", "other", ConversationKind.Agent)),
-        AppTab.Inbox to mutableListOf(InboxRoute),
+        AppTab.Persona to mutableListOf(AssistantRoute),
     )
 
     @Test fun theNextSessionlessCardOpensOnAgentsWithItsSheet() {

@@ -2,7 +2,7 @@ package extension
 
 import "strings"
 
-// OfficialMarket is the market every hub has without adding it (docs/extensions/extensions.md "Official market", #2351): the public
+// OfficialMarket is the market every hub has without adding it (docs/extensions/extensions.md "Official marketplace", #2351): the public
 // repository nwverse/persona-extensions. Its public key is pinned at compile time, never trusted on first use.
 // Signatures embedded in persona-extensions.json cover the exact UTF-8 bytes of its decoded payload string,
 // without trimming or re-marshaling.

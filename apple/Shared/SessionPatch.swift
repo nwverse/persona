@@ -1,6 +1,6 @@
 import Foundation
 
-/// How a machine's session list is kept from what the hub sends (docs/protocol/protocol.md「会话增量」). An older hub sends the
+/// How a machine's session list is kept from what the hub sends (docs/protocol/protocol.md「Session deltas」). An older hub sends the
 /// whole list each time; a hub with `sessions_delta` sends it once on connect, then the sessions that changed (whole)
 /// and the ids that went, and leaves the Codex history out of both: the app has that from GET /api/v1/sessions.
 nonisolated enum SessionPatch {

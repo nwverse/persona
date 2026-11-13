@@ -22,8 +22,8 @@ func (s *Service) decorateWork(mid string, sess *proto.Session, asking map[strin
 	on := r.workOn
 	reported, ok := r.work[[2]string{mid, sess.SessionID}]
 	r.mu.RUnlock()
-	if !on {
-		return
+	if !on && !(ok && transientPending(reported) && sess.Status != proto.StatusWorking && sameTurn(*sess, reported.TurnAt)) {
+		return // the triage off: only a "Continue" on its way after a transient error is told (transient_retry, #3208)
 	}
 	var e *proto.WorkState
 	if ok {
@@ -49,7 +49,7 @@ func workOf(l i18n.Lang, sess proto.Session, reported *proto.WorkState, asking m
 	if sess.Status == proto.StatusBlocked && !asks {
 		return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, Line: i18n.T(l, "hub-agents_link.screen")}
 	}
-	if reported == nil || reported.Phase == "" || !sameTurn(sess, reported.TurnAt) {
+	if reported == nil || !workShown(reported) || !sameTurn(sess, reported.TurnAt) {
 		return nil
 	}
 	w := *reported
@@ -64,7 +64,23 @@ func workOf(l i18n.Lang, sess proto.Session, reported *proto.WorkState, asking m
 		// itself): it names what it waits for, so the lists keep it for the user, not as a wait that ends by itself.
 		w.Wait = w.Line
 	}
+	if sess.Status == proto.StatusInterrupted && selfWakes(&w) {
+		// Its process is gone (a node restart is behind it, node/interrupted.go): a wait only that process ends (its
+		// background tasks, a /loop, its CLI going on after a limit) never ends, and the task would read "waiting"
+		// forever instead of stopped (#5124).
+		return nil
+	}
 	return &w
+}
+
+// selfWakes: w is a wait the agent ends by itself, with nothing the manager sends: managerWaits without a wake.
+func selfWakes(w *proto.WorkState) bool {
+	return managerWaits(w) && w.WakeAt == nil
+}
+
+// transientPending: w is a transient model error whose "Continue" the manager sends by itself (wake_at).
+func transientPending(w proto.WorkState) bool {
+	return w.Phase == proto.WorkBlocked && w.On == proto.WaitTransient && w.WakeAt != nil
 }
 
 // wakeGrace is how late a reported wake may be and still count: the Agents business sends what is due within its

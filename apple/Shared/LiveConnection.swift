@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// One message of a terminal stream (docs/protocol/protocol.md「终端流」).
+/// One message of a terminal stream (docs/protocol/protocol.md「Terminal stream」).
 nonisolated enum TerminalEvent: Sendable {
     /// VT bytes for a cols × rows grid; a full one is the whole screen.
     case frame(epoch: String, seq: Int, full: Bool, cols: Int, rows: Int, data: Data)
@@ -22,7 +22,7 @@ nonisolated enum ServerEvent: Sendable {
     case machines([Machine])
     case sessions(machineID: String, [Session])
     /// What changed in a machine's list since the last (a hub that has `sessions_delta`, asked for on connect): the
-    /// sessions new or different, whole, and the ids gone (docs/protocol/protocol.md「会话增量」).
+    /// sessions new or different, whole, and the ids gone (docs/protocol/protocol.md「Session deltas」).
     case sessionsDelta(machineID: String, upsert: [Session], remove: [String])
     /// A lightweight hint, never an authoritative row checkpoint.
     case sessionsList(revision: String)
@@ -43,7 +43,7 @@ nonisolated enum ServerEvent: Sendable {
     /// Feishu conversations with new or changed messages (the Lark gateway's realtime events, relayed by the hub); account:
     /// the Feishu account they are in when it is not the hub's own (`ol_account`).
     case lark(feedIDs: [String], settingsChanged: Bool, account: Int?)
-    /// A messaging source's changes (#2138, docs/extensions/extension-messaging.md「九」): its conversations, of `account` (nil: the
+    /// A messaging source's changes (#2138, docs/extensions/extension-messaging.md「Live events and the Inbox」): its conversations, of `account` (nil: the
     /// default one).
     case messaging(source: String, conversations: [String], settingsChanged: Bool, account: String?)
     /// Personal agent sessions (the gateway's agent-bridge, hub/agents.go) that changed: `<source>:<sessionKey>` ids, empty
@@ -55,10 +55,12 @@ nonisolated enum ServerEvent: Sendable {
     case fleet(FleetState)
     /// The hub updating itself: checking, downloading, waiting for idle, restarting… (docs/operations/hub-update.md).
     case hubUpdate(HubUpdateStatus)
-    /// An extension install / upgrade / removal moved on (#3307): the whole operation as it stands.
-    case extensionOperation(ExtensionOperation)
+    /// An extension install / upgrade / removal moved on (#3307): the whole operation as it stands. `manager`: the
+    /// manager whose extension it is, as the event says (nil: the hub's own assistant, docs/assistant/managers.md
+    /// "Clients"); the same for the two below.
+    case extensionOperation(ExtensionOperation, manager: String?)
     /// An extension's sign-in changed (#4507): signed in, out, expired; nil, it no longer signs in.
-    case extensionAuth(extension: String, ExtensionAuth?)
+    case extensionAuth(extension: String, ExtensionAuth?, manager: String?)
     /// The desktop apps connected to the hub now (sent on connect and whenever one comes or goes).
     case desktops([DesktopDevice])
     /// Tasks from an assistant conversation (docs/assistant/unified-entry.md): the todos changed (pull them), a conversation's
@@ -66,9 +68,15 @@ nonisolated enum ServerEvent: Sendable {
     case todos
     /// The personas the hub offers changed, e.g. a tiered look moved to another tier (docs/apple/persona.md): list them again.
     case personas
+    /// The avatar chosen on the hub changed (another device chose one, or the hub went back to the default when its
+    /// package or extension went; docs/apple/persona.md): `effective` is the one to show, `id` the one chosen.
+    case look(id: String?, effective: String?)
     /// The hub's roster of managers changed (docs/assistant/managers.md): Settings › Managers reads it again. Sent only to a
     /// socket that asked for feature `managers` (`queryItems`).
     case managers
+    /// The direction tree changed on the hub (#4352): a to-do, an Agent's session, a direction or its name. No payload:
+    /// the clients read `GET /api/v1/assistant/directions/tree` again, and on every (re)connect.
+    case directions
     case assistantFeed(FeedItem)
     case assistantView(ExtensionAssistantView)
     case assistantViewAction(conversation: String, action: ExtensionViewAction)
@@ -76,14 +84,20 @@ nonisolated enum ServerEvent: Sendable {
     case taskPlan(TaskPlan)
     case terminal(SessionKey, TerminalEvent)
     /// Folders a Files / Git pane watches (`fs_watch`) changed on the computer, or the Git status of `cwd` did (#2439,
-    /// docs/protocol/protocol.md「文件自动刷新」).
+    /// docs/protocol/protocol.md「File auto-refresh」).
     case fsChanged(machineID: String, cwd: String, dirs: [String], git: Bool)
-    /// A plugin changed the badge on one of its main-navigation entries (docs/extensions/extensions.md「UI 插槽」 badges): nil clears it.
-    case pluginBadge(plugin: String, id: String, badge: ExtensionBadge?)
+    /// A plugin changed the badge on one of its main-navigation entries (docs/extensions/extensions.md「UI slots」 badges): nil clears it.
+    case pluginBadge(plugin: String, id: String, badge: ExtensionBadge?, manager: String?)
     /// An extension's data changed (`ui.invalidate`, docs/extensions/extensions.md「ui.invalidate」): its interface `id` (nil: all of
     /// them) is drawn again where it is shown.
     case extensionInvalidate(extension: String, id: String?)
+    /// A meeting's conversation changed (#3862, docs/assistant/meeting-minutes.md「The `meeting_live` event」): content-free,
+    /// only the parts that changed (an open set) and their revisions; the app reads the newer parts with `GET …/live?parts=`.
+    case meetingLive(recordingID: String, changed: [String], revs: [String: Int64])
     case error(SessionKey?, String)
+
+    private struct EventType: Decodable { var type: String }
+    private static let subscriptionType = Data(#""type":"subscription""#.utf8)
 
     private struct Envelope: Decodable {
         var type: String
@@ -152,6 +166,8 @@ nonisolated enum ServerEvent: Sendable {
         var key: String?
         var conversation: String?
         var plan: TaskPlan?
+        /// look's: the avatar to show (`id` is the one chosen).
+        var effective: String?
         var plugin: String?
         /// extension_ui's (plugin_ui says `plugin`).
         var extensionID: String?
@@ -166,12 +182,20 @@ nonisolated enum ServerEvent: Sendable {
         var answers: JSONValue?
         /// interaction_reanswered's.
         var resolution: JSONValue?
+        /// The manager a manager's own message is from, when not the hub's own assistant (docs/protocol/protocol.md
+        /// "Messages to the App"); raw, so another event's `manager` of another shape cannot break the envelope.
+        var manager: JSONValue?
+        /// meeting_live's.
+        var recordingID: String?
+        /// meeting_live's list of parts; raw, since other messages use `changed` for other shapes.
+        var changed: JSONValue?
 
         enum CodingKeys: String, CodingKey {
             case type, machines, sessions, upsert, remove, revision, items, backlog, text, status, interaction, id, name, args, event, message, error, revs, fleet, history
             case features, epoch, seq, full, cols, rows, data, unsupported, state, desktops, mesh, channel, build, update, item, view, action, key, conversation, plan
-            case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution
-            case answeredBy = "answered_by"
+            case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution, manager
+            case effective, changed
+            case answeredBy = "answered_by", recordingID = "recording_id"
             case extensionID = "extension"
             case hubID = "hub_id", hubName = "hub_name", protocolVersion = "protocol", minAppBuild = "min_app_build", publicURL = "public_url"
             case settingsChanged = "settings_changed", olAccount = "ol_account"
@@ -197,6 +221,12 @@ nonisolated enum ServerEvent: Sendable {
     }
 
     static func decode(_ data: Data) -> ServerEvent? {
+        // A source subscription was saved, ran or was deleted (#2041): its pages are drawn again, as an invalidate of theirs.
+        // Read before the envelope, whose `revision` is a string where this event's is a number; the hub's compact JSON is
+        // looked for first, so every other message skips the extra decode.
+        if data.range(of: subscriptionType) != nil, (try? JSON.decoder.decode(EventType.self, from: data))?.type == "subscription" {
+            return .extensionInvalidate(extension: SubscriptionsUI.id, id: nil)
+        }
         guard let e = try? JSON.decoder.decode(Envelope.self, from: data) else { return nil }
         let key = e.machineID.flatMap { m in e.sessionID.map { SessionKey(machineID: m, sessionID: $0) } }
         switch e.type {
@@ -204,8 +234,8 @@ nonisolated enum ServerEvent: Sendable {
                                              channel: e.channel, build: e.build, protocolVersion: e.protocolVersion,
                                              minAppBuild: e.minAppBuild, publicURL: e.publicURL.flatMap { URL(string: $0) }))
         case "hub_update": return e.update.map { .hubUpdate($0) }
-        case "extension_operation", "plugin_operation": return e.operation.map { .extensionOperation($0) }
-        case "extension_auth": return e.extensionID.map { .extensionAuth(extension: $0, e.auth?.value) }
+        case "extension_operation", "plugin_operation": return e.operation.map { .extensionOperation($0, manager: e.manager?.string) }
+        case "extension_auth": return e.extensionID.map { .extensionAuth(extension: $0, e.auth?.value, manager: e.manager?.string) }
         case "machines": return e.machines.map { .machines($0) }
         case "sessions":
             guard let m = e.machineID else { return nil }
@@ -224,7 +254,7 @@ nonisolated enum ServerEvent: Sendable {
         case "delta":
             guard let key else { return nil }
             return .delta(key, text: e.text ?? "")
-        case "interaction": return e.interaction.map { .interaction($0) }
+        case "interaction": return e.interaction.map { .interaction(Elicitation.withFieldOrder($0, from: data)) }
         case "interaction_resolved":
             guard let id = e.id else { return nil }
             let assistant = e.answeredBy?.string == AssistantAnswer.assistant
@@ -254,7 +284,11 @@ nonisolated enum ServerEvent: Sendable {
         case "inbox": return .inbox
         case "todos": return .todos
         case "personas": return .personas
+        case "look":
+            guard (e.effective ?? e.id).map({ !$0.isEmpty }) == true else { return nil }
+            return .look(id: e.id, effective: e.effective)
         case "managers": return .managers
+        case "directions": return .directions
         case "assistant_feed": return e.item.map { .assistantFeed($0) }
         case "assistant_view":
             guard let view = e.view, !view.id.isEmpty, view.version > 0,
@@ -283,13 +317,20 @@ nonisolated enum ServerEvent: Sendable {
             // An invalidate comes as extension_ui only (an older app would take a plugin_ui for a badge).
             if e.invalidate == true, let ext = e.extensionID ?? e.plugin { return .extensionInvalidate(extension: ext, id: e.id) }
             guard let plugin = e.extensionID ?? e.plugin, let id = e.id else { return nil }
-            return .pluginBadge(plugin: plugin, id: id, badge: e.badge.flatMap { $0.text.isEmpty ? nil : $0 })
+            return .pluginBadge(plugin: plugin, id: id, badge: e.badge.flatMap { $0.text.isEmpty ? nil : $0 }, manager: e.manager?.string)
         case "fs_changed":
             guard let m = e.machineID, let cwd = e.cwd, !cwd.isEmpty else { return nil }
             return .fsChanged(machineID: m, cwd: cwd, dirs: e.dirs ?? [], git: e.git ?? false)
         case "terminal_control":
             guard let key, let state = e.state else { return nil }
             return .terminal(key, .control(state: state, cols: e.cols, rows: e.rows, why: e.error))
+        case "meeting_live":
+            guard let id = e.recordingID, !id.isEmpty else { return nil }
+            let changed = (e.changed?.array ?? []).compactMap { part -> String? in
+                if case .string(let name) = part { return name }
+                return nil
+            }
+            return .meetingLive(recordingID: id, changed: changed, revs: e.revs ?? [:])
         default: return nil
         }
     }
@@ -316,8 +357,8 @@ nonisolated extension ServerEvent {
         case .sessionsDelta(let machine, let upsert, let remove):
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
-             .personas, .managers, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
-             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth: return self
+             .personas, .look, .managers, .directions, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
+             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive: return self
         }
     }
 }
@@ -409,6 +450,9 @@ final class LiveConnection {
     /// tries again only slowly (`rejectedRetry`). Cleared once a socket opens, and by `connect` (paired again).
     private(set) var rejected = false { didSet { if rejected != oldValue { onChange?() } } }
     static let rejectedRetry: TimeInterval = 60
+    /// Cloudflare Access in front of the hub turned the last handshake away (docs/operations/network.md "Behind
+    /// Cloudflare Access"); kept through the retries, cleared once a socket opens or by `connect`.
+    private(set) var accessBlocked: CloudflareAccessError?
     /// When the next attempt starts while the hub is out of reach.
     private(set) var nextTry: Date?
     /// The socket went while connected and is not back yet (docs/operations/hub-restart.md): nil once it is, or after
@@ -438,7 +482,7 @@ final class LiveConnection {
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored var prepareEvent: (@Sendable (ServerEvent) -> Void)?
     @ObservationIgnored var onConnected: (() -> Void)?
-    /// Picks where each attempt goes when a group has several hubs (HubRoute, docs/protocol/multi-hub.md「选路」): asked before
+    /// Picks where each attempt goes when a group has several hubs (HubRoute, docs/protocol/multi-hub.md「Connections and routing」): asked before
     /// every attempt; nil keeps the config given to `connect`.
     @ObservationIgnored var route: (@MainActor () async -> ServerConfig?)?
     /// The credential each attempt goes with (AppModel.currentCredential): a pairing token this device already traded
@@ -486,6 +530,7 @@ final class LiveConnection {
         self.config = config
         backoff = 1
         rejected = false
+        accessBlocked = nil
         open()
     }
 
@@ -589,12 +634,13 @@ final class LiveConnection {
         comps.scheme = config.url.scheme == "https" ? "wss" : "ws"
         comps.queryItems = Self.queryItems(cursor, sessionList: usesSessionList, extensionStream: usesExtensionUIStream)
         var req = URLRequest(url: HubTransport.resolve(comps.url!, hub: config.url))
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         RequestClientMetadata.current.apply(to: &req)
         req.timeoutInterval = 15
         resumed = false // until this socket's hello says so
         let t = session.webSocketTask(with: req)
+        t.delegate = HubRedirects.shared
         t.maximumMessageSize = 64 << 20
         task = t
         state = .connecting
@@ -607,9 +653,10 @@ final class LiveConnection {
 
     /// The socket URL's query: session lists as deltas (an older hub ignores the question and sends whole lists), the
     /// extensions' install steps (`extension_operation`, #3307), the managers' roster changes (`managers`,
-    /// docs/assistant/managers.md), and where to resume the broadcasts from once a hello gave a stream.
+    /// docs/assistant/managers.md), Persona Link entries in the `desktops` event (`desktops_link`, `DesktopDevice`), and
+    /// where to resume the broadcasts from once a hello gave a stream.
     static func queryItems(_ cursor: EventCursor, sessionList: Bool = false, extensionStream: Bool = false) -> [URLQueryItem] {
-        [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionList ? "sessions_list," : "") + "sessions_delta,extension_operations,managers," + HubNaming.feature)] + cursor.queryItems
+        [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionList ? "sessions_list," : "") + "sessions_delta,extension_operations,managers,desktops_link," + HubNaming.feature)] + cursor.queryItems
     }
 
     private func heartbeat(_ t: URLSessionWebSocketTask, _ gen: Int) {
@@ -677,6 +724,7 @@ final class LiveConnection {
                         self.sayHello()
                         self.backoff = 1
                         self.rejected = false
+                        self.accessBlocked = nil
                         self.onConnected?()
                     }
                     self.extensionStreamFrame(data, event: event)
@@ -689,7 +737,11 @@ final class LiveConnection {
                     // The handshake's answer: 401 is the hub refusing this credential, not the hub being away.
                     let refused = (t.response as? HTTPURLResponse)?.statusCode == 401
                     if refused != self.rejected { self.rejected = refused }
-                    self.state = .failed(refused ? String(localized: "The hub doesn't accept this device's credentials (401)") : err.localizedDescription)
+                    // Cloudflare Access in front of the hub turned the handshake away: say so, not a generic failure.
+                    let access = CloudflareAccess.blocked(t.response) ? CloudflareAccessError(tokenSent: self.config?.access != nil) : nil
+                    if access != self.accessBlocked { self.accessBlocked = access }
+                    self.state = .failed(refused ? String(localized: "The hub doesn't accept this device's credentials (401)")
+                                         : access?.localizedDescription ?? err.localizedDescription)
                     self.stalled = false
                     self.scheduleReconnect(gen)
                 }
@@ -813,12 +865,31 @@ final class LiveConnection {
         }
     }
 
-    /// client_hello (docs/protocol/protocol.md, docs/protocol/i18n.md「协议」): this connection's interface language, so the hub's
+    /// client_hello (docs/protocol/protocol.md, docs/protocol/i18n.md「Protocol: telling hub the language」): this connection's interface language, so the hub's
     /// notices and errors on it, and the user's language for what it produces later, match the app. The naming
-    /// contract is also advertised here; older hubs ignore unknown fields and keep their existing defaults.
+    /// contract and MCP forms and links are advertised here (`helloFeatures`), with the platform and version this app's
+    /// requests carry (`X-Persona-Client`): the hub lists those cards in a REST answer only to a client whose hello
+    /// matches it. The version ("1.4.0+52": the app's version and build) and `os` are also what the hub keeps of this
+    /// device for the assistant (`AppVersion`). Older hubs ignore unknown fields and keep their existing defaults.
     private func sayHello() {
-        send(["type": "client_hello", "locale": LanguageStore.shared.launched, "features": [HubNaming.feature]])
+        let client = RequestClientMetadata.current
+        send(["type": "client_hello", "locale": LanguageStore.shared.launched, "features": Self.helloFeatures(client),
+              "platform": client.platform, "version": client.version, "os": AppVersion.helloOS])
     }
+
+    /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS
+    /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open.
+    /// `persona_card_ring` (```persona-card rings, `PersonaCard.swift`) from the apps that build the chat (iOS, Mac,
+    /// visionOS), not the watch or the extensions: a client without it gets each ring as a stacked bar (the hub's
+    /// card_compat.go), which every build before the ring draws.
+    nonisolated static func helloFeatures(_ client: RequestClientMetadata) -> [String] {
+        let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
+        let chatApps = [RequestClientMetadata.Platform.iOS, .macOS, .visionOS].map { $0.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue }
+        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation"] : []) + (chatApps.contains(client.platform) ? [cardRingFeature] : [])
+    }
+
+    /// The client_hello feature that says this app draws ```persona-card rings (#3068).
+    nonisolated static let cardRingFeature = "persona_card_ring"
 
     func send(_ object: [String: Any]) {
         if let local {

@@ -15,7 +15,7 @@ func TestExtensionAuthLanguageAndReplay(t *testing.T) {
 	for _, l := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 		c := &client{hub: h, out: make(chan []byte, 8), acceptLang: l}
 		clients[l] = c
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 	}
 	canonical, _ := json.Marshal(map[string]any{"type": "extension_auth", "extension": "example", "hub_auth_message": true,
 		"auth": map[string]any{"title": "Author title", "state": "error", "message": "not answering"}})

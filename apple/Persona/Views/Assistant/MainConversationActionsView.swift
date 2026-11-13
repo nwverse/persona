@@ -1,6 +1,6 @@
 import SwiftUI
 
-// The main conversation's Compact context and New Main Chat (#1762, the hub's side in #1727; docs/assistant/assistant.md「手动压缩」
+// The main conversation's Compact context and New Main Chat (#1762, the hub's side in #1727; docs/assistant/assistant.md「Manual compaction」
 // 「新建主对话」): the menu entries, the note above the composer while it compacts, and the question before a new one.
 
 extension AppModel {

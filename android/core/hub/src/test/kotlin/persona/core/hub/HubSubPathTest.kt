@@ -29,7 +29,7 @@ import okhttp3.tls.HeldCertificate
 import org.junit.Assert.*
 import org.junit.Test
 
-/** A hub behind a reverse proxy at a sub-path, without its own TLS (no `fp`): docs/operations/network.md "Reverse proxy sub-paths". */
+/** A hub behind a reverse proxy at a sub-path, without its own TLS (no `fp`): docs/operations/network.md "Reverse-proxy subpaths". */
 class HubSubPathTest {
     private val session = SessionKey("machine", "session/encoded")
     private val pairing = HubScope("test-hub", "generation")

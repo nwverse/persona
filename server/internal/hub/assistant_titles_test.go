@@ -124,6 +124,63 @@ func TestAConversationIsNamedOnceAfterItsFirstTurn(t *testing.T) {
 	}
 }
 
+// An extension's rename (its own token, as the hub's auth found it) reaches the assistant as a hint: the conversation
+// is still named after its first turn, with the hint in what the model reads. A client that says it is an extension,
+// in a header or in the body, renames as the user (#3758).
+func TestAnExtensionsRenameIsOnlyAHint(t *testing.T) {
+	h := newTestHub(t)
+	putAssistantSettings(t, h, assistant.Settings{Timezone: "Asia/Shanghai"})
+	n := newAssistantNode(t, h)
+	n.m.info.Home = "/home/me"
+	n.items = []proto.Item{{Role: "user", Kind: proto.KindText, Text: "帮我查一下竞品的定价"},
+		{Role: "assistant", Kind: proto.KindText, Text: "查到三家……"}}
+	model, calls := replies(t, "研究 | 竞品定价")
+	useModel(t, h, model)
+	connectAssistant(t, h)
+	started := time.Now() // a save forgets a conversation still waiting for its title a day on
+	day := started.In(h.userLocation()).Format("0102")
+	noteStarted(t, h, "server", "ext", started)
+	noteStarted(t, h, "server", "app", started)
+	n.m.setSessions([]proto.Session{{SessionID: "ext", Cwd: "/home/me/.persona/assistant"}, {SessionID: "app", Cwd: "/home/me/.persona/assistant"}})
+	srv := httptest.NewServer(func() http.Handler {
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /ext/{sid}", func(w http.ResponseWriter, r *http.Request) {
+			p := principal{ID: "extension:larkext", Role: roleExtension, Extension: "larkext"}
+			h.renameSession(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)), n.m)
+		})
+		mux.HandleFunc("POST /app/{sid}", func(w http.ResponseWriter, r *http.Request) {
+			p := principal{ID: "d1", Role: roleFull}
+			h.renameSession(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)), n.m)
+		})
+		return mux
+	}())
+	defer srv.Close()
+	post := func(path, body string) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(body))
+		req.Header.Set("X-Persona-Extension", "larkext")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil || res.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %v %v", path, res, err)
+		}
+		_ = res.Body.Close()
+	}
+	post("/ext/ext", `{"title":"/agent · 示例群 · 查竞品定价"}`)
+	post("/app/app", `{"title":"我起的","extension":"larkext"}`)
+
+	turnEnded(t, h, "server", "ext")
+	if got := shown(h, "ext").Title; got != day+" | 研究 | 竞品定价" {
+		t.Fatalf("an extension's conversation is named like any other: %q", got)
+	}
+	if c := calls(); len(c) != 1 || !strings.Contains(c[0].User, "/agent · 示例群 · 查竞品定价") {
+		t.Fatalf("the model reads the extension's title: %+v", c)
+	}
+	turnEnded(t, h, "server", "app")
+	if got := shown(h, "app").Title; got != "我起的" || len(calls()) != 1 {
+		t.Fatalf("a client's word makes no extension: %q, %d calls", got, len(calls()))
+	}
+}
+
 // A scheduled task's conversation is "MMDD | scheduled | task name" (in Chinese) from its first run, with no model call, and keeps it.
 func TestATaskConversationIsTitledAfterTheTask(t *testing.T) {
 	h := newTestHub(t)

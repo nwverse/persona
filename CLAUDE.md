@@ -1,4 +1,17 @@
 # CLAUDE.md
+## Product positioning: an Agent product for everyone
+
+Persona is an Agent product for everyone, not a tool built only for software developers.
+
+- **Assistant** is for everyday people: plain language, simple defaults, no engineering jargon.
+- **Agents** is for people who collaborate directly with tools such as Claude Code; specialist workflows, engineering terminology, and advanced configuration belong here or in advanced settings.
+
+Every design names its intended audience and answers "who does this serve?". Public-facing experiences stay simple; complexity lives in Agents or advanced settings.
+
+**Fast, local-first and stateful:** show local feedback immediately and Processing as soon as the hub receives a message,
+not after scheduling or model output. Keep receipt, delivery and execution distinct, make failures recoverable, and measure
+feedback latency separately from execution latency (`docs/design/PRINCIPLES.md`, principle 7; super rule 5).
+
 
 ## Highest-priority rules
 
@@ -7,10 +20,19 @@ other repository documentation. Changes to the super-rules file, including addit
 GitHub issue and explicit approval from administrator `chyroc` in that issue before editing or opening a PR.
 The PR must link the approved issue. No Agent or delegated task may bypass this requirement, even to fix a failing check.
 
+**Product positioning: Persona is an Agent product for everyone, not only software developers.**
+
+- **Assistant** is for everyday people, with no programming or Agent-tool knowledge required.
+- **Agents** is for people who want to collaborate directly with Claude Code and other Agents.
+- Before every design decision, ask **who it serves**. Keep Assistant and other everyday-facing interfaces simple and
+  understandable; do not let developer terminology, engineering details or accumulating options make them harder to use.
+  Put specialist workflows in Agents or advanced settings, and disclose details only when needed. For example, asking
+  Assistant to organize a trip should not require choosing an Agent runtime or a repository.
+
 Persona is a self-hosted personal SuperAgent. A Go server, `personad`, runs as the **hub** on an always-on machine and holds all state;
 the clients (iPhone, Apple Watch, Mac, Vision Pro, Android and the web) talk only to the hub. Each of your computers runs a **node**
 (connected to the hub through Persona Link), where coding Agents (Claude Code, Codex, pi, opencode and other runtimes) run in an engine
-(herdr, Orca or Paseo); any client can watch them live, answer their questions and approve plans and tools.
+(herdr, Orca, Tern or Paseo); any client can watch them live, answer their questions and approve plans and tools.
 The assistant's main chat (the **Persona** tab) hands work to those Agents and draws on the knowledge base (`~/.persona/data`), the Inbox,
 mail, phone data tools and extensions (connectors, channels, voice). Overview: `README.md`, `docs/server/architecture.md`.
 
@@ -99,6 +121,35 @@ This is a public open-source repository; everyone and every Agent maintains it t
   first, and into Persona Link only when the browser cannot meet it (`docs/apple/mac.md`, `docs/operations/link.md`). Why: the web app
   already is the desktop UI and Persona Link already holds the native connection on computers that run Agents, so a second UI only adds upkeep.
 
+### Design spec for UI changes
+
+- **Design principles**: `docs/design/PRINCIPLES.md` holds the seven product principles (defaults first, progressive disclosure,
+  user control, consistency first, model and product separate, checkable rules, fast/local-first/stateful), each with how to check it. They apply to UI,
+  settings and defaults, and how numbers are counted; acceptance criteria and the PR template's self-check are written against them.
+- **Read the spec first**: before adding or changing any UI or interaction (any client, watch and web included), read
+  `docs/design/PRINCIPLES.md` and the sections of `docs/design/DESIGN_SYSTEM.md` your change touches. Follow them; they win over
+  habits copied from other screens. Known gaps against Apple's guidelines are in `docs/design/HIG_AUDIT.md`; don't add new ones.
+- **Structure rules** (`docs/design/DESIGN_SYSTEM.md` sections 3.4, 4.8 and 5.6): in every grouping a session that needs the user is
+  visible without opening anything; each pending request has one home, and every place that collects requests shows the same
+  number; primary screens use the session's title and plain state words, never raw model IDs, session IDs, paths or engine names;
+  a large UI change needs a person to look at its screenshots (section 1.4).
+- **Say what you followed**: a PR that changes UI or interactions lists the principles and rules it followed, and for every
+  deviation the reason. Run the "UI change self-check" in `docs/design/DESIGN_SYSTEM.md` and put the result in the PR.
+- **Spec and code change together**: a new component, token or interaction pattern updates `docs/design/DESIGN_SYSTEM.md` in the same PR.
+
+### Performance (Apple clients)
+
+- **Read `docs/apple/performance.md` before changing `apple/` code.** Its rules P1–P12 cover main-thread IO, `@State`
+  initial values, work in `body`, narrow reads, list identity, coalescing, images, background work, launch and memory,
+  with budgets (no main-thread block over 100 ms, nothing over 16 ms while scrolling or typing).
+- **A PR that touches `apple/` names the rules it followed** and the reason for any deviation (its review checklist).
+  A performance-sensitive change (chat list, composer, Agents list, push handling, launch, images) attaches before and
+  after measurements from an optimized build ("Measuring" there).
+- `scripts/test/isolation-lint.sh` reads where each blocking call runs (Photos fetches, keychain and file reads, directory
+  listings, image decodes) and counts it only on the main actor or where it cannot tell; no comment clears one.
+  `scripts/test/test_apple_perf_patterns.py` keeps per-call localization lookups and unpaused animation timelines from
+  growing per file. Neither takes a raised baseline.
+
 ## Development workflow
 
 People and Agents follow the same steps, each with their own GitHub account. Templates and copyable `gh` commands: `docs/operations/collaboration.md`.
@@ -108,11 +159,14 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
 2. **Claim the existing issue, or create one** (`enhancement` for features, `bug` for fixes) saying what and why.
 3. **Claim before you start**: comment `Claim:` / `Plan:` / `ETA:`; an Agent adds `Agent: yes (<machine id> / <branch or session>)`,
    using the config's machine id, never the host name. The author of the latest claim owns the work; nobody is assigned.
+   Work that touches UI, settings or defaults, or how something is counted adds `Acceptance:`, criteria written against
+   `docs/design/PRINCIPLES.md` (which principles, and what evidence shows each is met).
 4. **Claimed by someone else**: if the owner updated it in the last 24 hours, leave it alone (adding information is fine). After 24 hours
    without an update, comment `Take over:` with the reason. Renew your own claim with `Progress:`.
 5. **Work on your own branch / worktree** named with the issue number (`fix/123-xxx`). Bring it up to date by merging `origin/main`
    (preferred over a rebase; never force-push). Giving up: comment `Abandon:` with how far you got.
-6. **Open one PR per issue**, in English, with `Fixes #N` / `Closes #N` (or `Refs #N` to link without closing) in the body.
+6. **Open one PR per issue**, in English, with `Fixes #N` / `Closes #N` (or `Refs #N` to link without closing) in the body. Fill in
+   `.github/pull_request_template.md`, including the principles self-check when the change touches UI, settings, defaults or counts.
    `.github/workflows/pr-needs-issue.yml` closes PRs that link no issue and reopens them once the link is added.
 7. **Merge after local verification passes**: run the checks in "Build and verify" for every affected area, including workflow lint for
    CI changes, and look at screenshots for UI changes. Opening or updating a PR does not run hosted CI. A scheduler dispatches full CI
@@ -132,8 +186,11 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
   run `python3 scripts/persona_config.py xcconfig`; before a manual `xcodebuild`, `eval "$(python3 scripts/persona_config.py env)"` or an
   old Xcode reports errors that look like someone else's breakage.
 - Android: `scripts/app/android.sh [install|apk|test|lint|shots]` (`docs/android/android.md`).
+- Shared Rust core: `scripts/ci/core.sh` (needs rustup); a change to a wire type regenerates the clients' codecs (`native/app-core/README.md`).
+- HarmonyOS: from `harmony/`, run `node --test tests/*.test.mjs` and `node tests/run-domain.mjs` (Node.js 24+), then `devecocli build --build-mode release` with the API 26 SDK and locked native SSH core. Native device checks and fixture setup: `docs/harmony/harmony.md` ("Verification").
 - Web: `cd web && npm test && npm run build`; deploy with `scripts/deploy/deploy.sh web` (`docs/web/web.md`).
-- Docs: `python3 scripts/test/test_doc_paths.py`, `python3 scripts/test/test_doc_go_paths.py` and `python3 scripts/test/test_doc_wire.py`
+- Docs: `python3 scripts/test/test_doc_paths.py`, `python3 scripts/test/test_doc_go_paths.py`, `python3 scripts/test/test_doc_sections.py`
+  (a section name quoted after a doc path names a current heading) and `python3 scripts/test/test_doc_wire.py`
   (every WebSocket type, feature flag, extension point and manifest field has its row). Every change: `python3 scripts/privacy_check.py`.
 - Releases: `docs/operations/release.md`. After `scripts/release/release.sh` uploads, run `python3 scripts/release/asc_testflight.py wait 45 <build number>`:
   it adds the build to the internal group and to the external group with Beta App Review. Report the build number and review status only after both.
@@ -174,6 +231,8 @@ The full list is in `docs/lessons/`; read the file for the area you touch first.
 - Claude Code's config directory isn't always `~/.claude` (`CLAUDE_CONFIG_DIR`), and one session id can exist in two; take the most
   recently modified. Verify transcript or sync changes against real transcripts and bump the app's `ChatCache` version when items change
   (`docs/lessons/agents.md`, `docs/lessons/transcript.md`).
+- Claude Code's transcript and hook `cwd` follow the model's Bash `cd`: place assistant and health conversations by the directory they
+  started in, never their latest cwd (`docs/lessons/transcript.md`, #2368).
 
 ## Design system (iOS)
 
@@ -207,11 +266,13 @@ Tokens live in `apple/Shared/Design` (also compiled for the watch and widgets); 
 
 | Path | Contents |
 | --- | --- |
-| `server/` | Go module: `personad` (hub / node / hook / mcp and helper commands), `persona-link`, `personad-wechat`; `docs/server/server.md` |
+| `server/` | Go module: `personad` (hub / node / hook / mcp and helper commands), `persona-link`; `docs/server/server.md` |
 | `apple/` | XcodeGen project (`apple/project.yml`): iOS, watchOS, macOS (`Mac/`) and visionOS (`Vision/`) apps, extensions, shared code in `Shared/`, tests; `apple/PersonaLink/` is the separate Mac menu bar app (`docs/operations/link.md`) |
 | `android/` | Kotlin + Compose: `app`, `core/*`, `feature/*`, `platform/*` (`docs/android/android.md`) |
 | `web/` | Web app (Vite + React + Tailwind) served by the hub (`docs/web/web.md`) |
 | `integrations/` | Agent runtime integrations and the runtime SDK (`docs/integrations/runtimes.md`) |
+| `native/iphone-bridge/` | Optional Rust bridge a node runs to operate a paired iPhone, built on its own (`docs/extensions/iphone-bridge.md`) |
+| `native/app-core/` | The shared Rust core under the iOS, Android and HarmonyOS clients (`docs/plans/plan-rust-core.md`); `scripts/ci/core.sh` |
 | `sdk/`, `schema/`, `spec/` | Extension SDK, extension JSON Schemas, shared behavior specs and fixtures |
 | `scripts/` | Build, test, deploy, release, mock hub and config tools (`scripts/README.md`) |
 | `deploy/docker/`, `Dockerfile` | Docker deployment of the hub (`docs/operations/docker.md`) |
@@ -226,13 +287,17 @@ Every maintained doc under `docs/` (lessons excluded) must be listed here.
 | --- | --- |
 | Super rules | `docs/SUPER_RULES.md` highest-priority rules and prior administrator approval for changes |
 | Start | `docs/README.md` navigation · `docs/operations/getting-started.md` setup without a terminal · `docs/assistant/onboarding.md` new-user onboarding · `docs/operations/config.md` config.json and hub.json · `docs/operations/collaboration.md` claims, PRs, templates · `docs/protocol/i18n.md` localization |
-| Architecture and protocol | `docs/server/architecture.md` · `docs/protocol/protocol.md` HTTP / WebSocket API and node RPC · `docs/protocol/agent-states.md` · `docs/protocol/multi-hub.md` one device, several hubs · `docs/protocol/connector-protocol.md` · `docs/protocol/rolling-upgrade-compatibility.md` old / new name interop · `docs/operations/rename.md` naming contract · `docs/operations/persona-cutover.md` approval-gated naming cutover tool |
-| Server | `docs/server/server.md` modes and operations · `docs/server/mesh.md` linked hubs · `docs/server/machines.md` monitoring · `docs/server/usage-windows.md` subscription usage · `docs/server/launcher-health.md` · `docs/server/agent-sandbox.md` macOS agent sandbox |
-| Operations | `docs/operations/network.md` direct connection, TLS, pinning · `docs/operations/docker.md` · `docs/operations/hub-restart.md` seamless restarts · `docs/operations/hub-update.md` · `docs/operations/upgrade.md` moving an install to the split hub and manager · `docs/operations/push-relay.md` · `docs/operations/admin.md` admin UI · `docs/operations/ports.md` port forwarding · `docs/operations/link.md` Persona Link and the node service · `docs/operations/persona-link-install.md` · `docs/operations/node-update.md` · `docs/operations/windows.md` · `docs/operations/auth-relay.md` · `docs/operations/site.md` website · `docs/operations/testing.md` tests, simulators, privacy scan · `docs/operations/runtime-cli.md` DEBUG command channel · `docs/operations/release.md` signing and TestFlight |
-| Agents and runtimes | `docs/integrations/engines.md` herdr / Orca / Paseo · `docs/integrations/claude-integration.md` · `docs/integrations/codex.md` · `docs/integrations/codex-app-server.md` · `docs/integrations/runtimes.md` runtime spec · `docs/integrations/daemons.md` · `docs/integrations/dsh.md` · `docs/integrations/pi.md` · `docs/integrations/opencode.md` · `docs/integrations/paseo.md` · `docs/integrations/agent-goal.md` · `docs/integrations/terminal.md` · `docs/integrations/launchers.md` model providers · `docs/integrations/script-cli.md` `personad ask` / `notify` |
-| Assistant | `docs/assistant/assistant.md` main chat · `docs/assistant/managers.md` · `docs/assistant/assistant-views.md` rich UI · `docs/assistant/unified-entry.md` · `docs/assistant/agent-work.md` work state and triage · `docs/assistant/todos.md` · `docs/assistant/voice.md` · `docs/assistant/health.md` · `docs/assistant/knowledge.md` knowledge base · `docs/assistant/inbox.md` · `docs/assistant/model-config.md` · `docs/assistant/model-profiles.md` · `docs/assistant/prompts.md` · `docs/assistant/office.md` Word / PowerPoint / Excel |
-| Extensions and sources | `docs/extensions/extensions.md` extension system · `docs/extensions/extension-settings.md` host-owned settings layout · `docs/extensions/connectors.md` · `docs/extensions/subscriptions.md` · `docs/extensions/channels.md` · `docs/extensions/extension-messaging.md` · `docs/extensions/computer-use.md` · `docs/extensions/mail.md` · `docs/extensions/wechat.md` · `docs/extensions/bots.md` Lark bot · `docs/extensions/feishu.md` · `docs/extensions/lark-agent.md` · `docs/extensions/lark-migration.md` · `docs/extensions/lark-attachments.md` · `docs/extensions/lark-encryption.md` |
-| Apple | `docs/apple/ios.md` iOS / watchOS, design language · `docs/apple/icons.md` icons · `docs/apple/sidebar.md` sidebar rows · `docs/apple/ios-state.md` state and redraws · `docs/apple/shell.md` · `docs/apple/mac.md` (frozen) · `docs/apple/mac-design.md` · `docs/apple/vision.md` · `docs/apple/live-activity.md` · `docs/apple/intents.md` · `docs/apple/siri.md` · `docs/apple/carplay.md` · `docs/apple/persona.md` avatars · `docs/apple/phone-tools.md` · `docs/apple/recording.md` · `docs/apple/meta-glasses.md` |
-| Android and web | `docs/android/android.md` · `docs/android/android-design.md` · `docs/web/web.md` · `docs/web/workspace-board.md` · `docs/web/review.md` reviewing a session's changes · `docs/web/preview.md` dev server previews |
-| Plans (open decisions) | `docs/plans/plan-extensions.md` · `docs/plans/plan-connectors.md` · `docs/plans/plan-orca-support.md` · `docs/plans/plan-tmux-support.md` · `docs/plans/plan-lark-cli.md` · `docs/plans/plan-discord.md` · `docs/plans/plan-x.md` · `docs/plans/plan-ego-browser.md` · `docs/plans/plan-antigravity.md` |
+| Architecture and protocol | `docs/server/architecture.md` · `docs/protocol/protocol.md` HTTP / WebSocket API and node RPC · `docs/protocol/file-transfer.md` receive folder and computer to computer transfers · `docs/protocol/agent-states.md` · `docs/protocol/multi-hub.md` one device, several hubs · `docs/protocol/connector-protocol.md` · `docs/protocol/rolling-upgrade-compatibility.md` old / new name interop · `docs/operations/rename.md` naming contract · `docs/operations/persona-cutover.md` approval-gated naming cutover tool |
+| Server | `docs/server/server.md` modes and operations · `docs/server/mesh.md` linked hubs · `docs/server/machines.md` monitoring · `docs/server/usage-windows.md` subscription usage · `docs/server/launcher-health.md` · `docs/server/agent-sharing.md` trusted ownership and public sharing contract · `docs/server/agent-sandbox.md` macOS agent sandbox |
+| Operations | `docs/operations/network.md` direct connection, TLS, pinning · `docs/operations/docker.md` · `docs/operations/hub-restart.md` seamless restarts · `docs/operations/hub-update.md` · `docs/operations/upgrade.md` moving an install to the split hub and manager · `docs/operations/push-relay.md` · `docs/operations/admin.md` admin UI · `docs/operations/ports.md` port forwarding · `docs/operations/clipboard.md` clipboard sharing with the phone · `docs/operations/link.md` Persona Link and the node service · `docs/operations/persona-link-install.md` · `docs/operations/node-update.md` · `docs/operations/mac-node-signing.md` signing a Mac's node with its own certificate so privacy permissions survive updates · `docs/operations/windows.md` · `docs/operations/auth-relay.md` · `docs/operations/site.md` website · `docs/operations/testing.md` tests, simulators, privacy scan · `docs/operations/runtime-cli.md` DEBUG command channel · `docs/operations/pr-review-automation.md` maintainer-side semantic PR review and exact-head merging · `docs/operations/release.md` signing and TestFlight |
+| Agents and runtimes | `docs/integrations/engines.md` herdr / Orca / Paseo · `docs/integrations/claude-integration.md` · `docs/integrations/codex.md` · `docs/integrations/codex-app-server.md` · `docs/integrations/runtimes.md` runtime spec · `docs/integrations/daemons.md` · `docs/integrations/dsh.md` · `docs/integrations/pi.md` · `docs/integrations/omp.md` Oh My Pi (pi family) · `docs/integrations/opencode.md` · `docs/integrations/paseo.md` · `docs/integrations/agent-goal.md` · `docs/integrations/terminal.md` · `docs/integrations/launchers.md` model providers · `docs/integrations/script-cli.md` `personad ask` / `notify` |
+| Assistant | `docs/assistant/assistant.md` main chat · `docs/assistant/managers.md` · `docs/assistant/assistant-views.md` rich UI · `docs/assistant/unified-entry.md` · `docs/assistant/agent-work.md` work state and triage · `docs/assistant/north-star.md` interruption and availability metrics · `docs/assistant/todos.md` · `docs/assistant/todo-status-sop.md` to-do status sections · `docs/assistant/voice.md` · `docs/assistant/health.md` · `docs/assistant/knowledge.md` knowledge base · `docs/assistant/meeting-minutes.md` minutes from recorded meetings · `docs/assistant/day-recap.md` all-day recording and the daily recap · `docs/assistant/inbox.md` · `docs/assistant/model-config.md` · `docs/assistant/model-profiles.md` · `docs/assistant/prompts.md` · `docs/assistant/office.md` Word / PowerPoint / Excel |
+| Extensions and sources | `docs/extensions/extensions.md` extension system · `docs/extensions/extension-settings.md` host-owned settings layout · `docs/extensions/secret-providers.md` secret values from provider extensions (references, resolution, records) · `docs/extensions/connectors.md` · `docs/extensions/subscriptions.md` · `docs/extensions/channels.md` · `docs/extensions/extension-messaging.md` · `docs/extensions/computer-use.md` · `docs/extensions/iphone.md` phone control · `docs/extensions/iphone-bridge.md` operating a paired iPhone · `docs/extensions/iphone-control.md` element numbers, results, limits and approval for the iPhone · `docs/extensions/iphone-pairing.md` iPhone control: pairing and sessions · `docs/extensions/mail.md` · `docs/extensions/wechat.md` · `docs/extensions/bots.md` Lark bot · `docs/extensions/feishu.md` · `docs/extensions/lark-agent.md` · `docs/extensions/lark-migration.md` · `docs/extensions/lark-attachments.md` · `docs/extensions/lark-encryption.md` |
+
+| Apple | `docs/apple/ios.md` iOS / watchOS, design language · `docs/apple/icons.md` icons · `docs/apple/sidebar.md` sidebar rows · `docs/apple/ios-state.md` state and redraws · `docs/apple/performance.md` performance rules, budgets and measuring (read before changing `apple/`) · `docs/apple/shell.md` · `docs/apple/mac.md` (frozen) · `docs/apple/mac-design.md` · `docs/apple/vision.md` · `docs/apple/live-activity.md` · `docs/apple/home-widgets.md` Home Screen and Lock Screen widgets · `docs/apple/intents.md` · `docs/apple/siri.md` · `docs/apple/carplay.md` · `docs/apple/persona.md` avatars · `docs/apple/phone-tools.md` · `docs/apple/recording.md` · `docs/apple/recording-rolling.md` · `docs/apple/meta-glasses.md` |
+| Design | `docs/design/PRINCIPLES.md` the seven product design principles, how to check each, cases · `docs/design/DESIGN_SYSTEM.md` tokens, components, interaction and content rules (read before any UI change) · `docs/design/HIG_AUDIT.md` Apple HIG audit of the Apple clients, findings by severity · `docs/design/DECISIONS.md` the history of the design rules: what was decided when, and what it replaced · `docs/design/sidebar-navigation.md` the iPhone drawer and iPad sidebar: places keep their stacks, tasks open over the drawer, options compared · `docs/design/proposals/owner-at-a-glance.md` proposal: secretary → leaders (directions) → tasks in one view, New chat as a direction, leaders' reports to a work-log extension, one Needs you · `docs/design/proposals/continuous-improvement-loop.md` proposal: Opus plans and verifies, cheaper execution models by task type, the relay's hybrid mode, cadence and rollback · `docs/design/proposals/meeting-recording.md` proposal: the iPhone meeting recording page, live view, wrap-up, motion, haptics, Live Activity layout · `docs/design/proposals/main-chat-availability.md` proposal: a background supervisor for the main chat's tasks, the owner's message first, `ask_user` without holding the turn, reply-wait metrics, fewer asks · `docs/design/proposals/hub-token-boundary.md` proposal: a token on the hub machine is not the owner's approval; what the hub's account can reach, agent isolation vs a terminal-bound token vs person-confirmed changes · `docs/design/proposals/assistant-instructions.md` proposal: one home for each assistant instruction (shared core, role blocks, tool descriptions, skills), behaviour checks before cuts · `docs/design/proposals/inbox-sources-migration.md` proposal: built-in Inbox sources become an extension's read tools plus a default subscription; what subscription items lack, the per-source switch, rollback and order · `docs/design/proposals/assistant-search.md` proposal: find an assistant chat by what was said in it (a manager-side index of the user's messages and the replies, `GET /api/v1/assistant/search`, opening at the hit) and one rule for search in chat (no hidden tags, quoted contexts, injected lines as shown, folded work) |
+| Android and web | `docs/android/android.md` · `docs/android/android-design.md` · `docs/web/web.md` · `docs/web/workspace-board.md` · `docs/web/review.md` reviewing a session's changes · `docs/web/preview.md` dev server previews · `docs/web/screenshots/task-workspace/README.md` workspace policy browser fixture and captures · `docs/design/task-cards.md` task cards on iOS and Web compared, the merged design, a shared token table and the product calls open (#5569) |
+| HarmonyOS | `docs/harmony/harmony.md` native API 26 phone and foldable client: product, design, interaction, architecture and verification · `docs/harmony/prototype.html` self-contained interactive design projection · `docs/harmony/device-validation.md` environment, measured windows and physical-device procedures; build entry `harmony/README.md` |
+| Plans (open decisions) | `docs/plans/plan-extensions.md` · `docs/plans/plan-connectors.md` · `docs/plans/plan-orca-support.md` · `docs/plans/plan-tmux-support.md` · `docs/plans/plan-lark-cli.md` · `docs/plans/plan-discord.md` · `docs/plans/plan-x.md` · `docs/plans/plan-ego-browser.md` · `docs/plans/plan-antigravity.md` · `docs/plans/plan-agent-dispatch.md` · `docs/plans/plan-rust-core.md` one Rust core for the iOS, Android and HarmonyOS clients (#6793): crate layout, bindings, phases, go / no-go · `docs/plans/android-ios-alignment/README.md` aligning the Android app with iOS (#4194): decisions and phases, each phase's requirements and technical design in `docs/plans/android-ios-alignment/phase-0-decisions-and-baseline.md` · `docs/plans/android-ios-alignment/phase-1-tokens-and-guards.md` · `docs/plans/android-ios-alignment/phase-2-interactions.md` · `docs/plans/android-ios-alignment/phase-3-feature-gaps.md` · `docs/plans/android-ios-alignment/phase-4-staying-aligned.md`, and the areas compared as whole screens in `docs/plans/android-ios-alignment/agents-page.md` · `docs/plans/android-ios-alignment/chats.md` |
+| Inbox UI evidence | `docs/web/screenshots/lark-inbox/README.md` synthetic Lark Inbox review captures |
 | Lessons and archive | `docs/lessons/` pitfalls by topic (index `docs/lessons/README.md`) · `docs/archive/` dated records, evidence only (index `docs/archive/README.md`) |

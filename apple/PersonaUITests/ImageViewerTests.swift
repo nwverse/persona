@@ -1,7 +1,7 @@
 import Darwin
 import XCTest
 
-/// The image viewer (docs/apple/ios.md「图片查看器」): every button of its bars inside the screen (they ran off both sides on an
+/// The image viewer (docs/apple/ios.md「Information architecture」): every button of its bars inside the screen (they ran off both sides on an
 /// iPhone, 2026-11-05), a tap hides and shows the bars, a pull down closes it. Run it on the narrowest phone too (SE).
 ///   PORT=18831 MOCK_TURN_IMAGES=many python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18831 xcodebuild test … -only-testing:PersonaUITests/ImageViewerTests

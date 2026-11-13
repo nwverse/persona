@@ -148,7 +148,7 @@ nonisolated struct SkillsResponse: Codable, Sendable {
 
 // What the hub said it is in its hello (its build and protocol): `HubHello` (Hubs.swift), with who the hub is.
 
-/// Whether this app and the hub go together (docs/operations/hub-update.md「兼容」).
+/// Whether this app and the hub go together (docs/operations/hub-update.md「Compatibility」).
 nonisolated enum HubCompat: Equatable, Sendable {
     case ok
     case hubTooOld // its protocol is older than this app needs (a hub from before protocols says none)
@@ -165,7 +165,7 @@ nonisolated enum HubCompat: Equatable, Sendable {
     }
 }
 
-/// The one quiet line over the Agents list about the hub (docs/operations/hub-update.md「App 里」), the most pressing first.
+/// The one quiet line over the Agents list about the hub (docs/operations/hub-update.md「In the App」), the most pressing first.
 nonisolated enum HubNotice: Equatable, Sendable {
     case appTooOld
     case hubTooOld

@@ -63,7 +63,7 @@ func TestLiveWorktree(t *testing.T) {
 	if err != nil || len(list.Hosts) != 1 || !list.Hosts[0].Worktree {
 		t.Fatalf("the host does not advertise worktrees: %+v %v", list.Hosts, err)
 	}
-	prep, err := n.worktreePrepare(ctx, host.Herdr, wsID)
+	prep, err := n.worktreePrepare(ctx, host.Herdr, wsID, repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestLiveWorktree(t *testing.T) {
 	}
 
 	dest := filepath.Join(tmp, "checkouts", "live-checkout")
-	res, err := n.worktreeCreate(ctx, host.Herdr, wsID, "persona-live/worktree", dest)
+	res, err := n.worktreeCreate(ctx, host.Herdr, wsID, repo, "persona-live/worktree", dest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,68 @@ func TestLiveWorktree(t *testing.T) {
 	if err != nil || !strings.Contains(string(out), res.WorkspaceID) || !strings.Contains(string(out), "persona-live/worktree") {
 		t.Errorf("herdr does not list the worktree as open: %v %s", err, out)
 	}
-	if _, err := n.worktreeCreate(ctx, host.Herdr, wsID, "persona-live/other", dest); err == nil {
+	if _, err := n.worktreeCreate(ctx, host.Herdr, wsID, repo, "persona-live/other", dest); err == nil {
 		t.Error("created a second worktree over the first one's directory")
+	}
+}
+
+func TestLiveHerdrWorkspaceActions(t *testing.T) {
+	if os.Getenv("PERSONA_LIVE_WORKTREE") != "1" {
+		t.Skip("PERSONA_LIVE_WORKTREE=1 enables temporary native workspace actions")
+	}
+	t.Setenv("GIT_AUTHOR_NAME", "Sample Dev")
+	t.Setenv("GIT_AUTHOR_EMAIL", "dev@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "Sample Dev")
+	t.Setenv("GIT_COMMITTER_EMAIL", "dev@example.com")
+	ctx := t.Context()
+	directory := t.TempDir()
+	repo := mkdir(t, filepath.Join(directory, "repo"))
+	runPullGit(t, repo, "init", "--initial-branch=main")
+	if err := os.WriteFile(filepath.Join(repo, "app.txt"), []byte("kept\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runPullGit(t, repo, "add", "app.txt")
+	runPullGit(t, repo, "commit", "-m", "initial")
+	client := herdr.New()
+	base, err := client.WorkspaceCreate(ctx, repo, "persona-check-workspace-actions")
+	if err != nil || base.Workspace == nil {
+		t.Fatalf("workspace create: %+v %v", base, err)
+	}
+	baseID := base.Workspace.ID
+	childID := ""
+	t.Cleanup(func() {
+		if childID != "" {
+			_ = client.WorktreeRemove(context.Background(), childID, true)
+		}
+		if baseID != "" {
+			_ = client.WorkspaceClose(context.Background(), baseID)
+		}
+	})
+	path := filepath.Join(directory, "checkout")
+	child, err := client.WorktreeCreate(ctx, baseID, "persona-check/actions", path)
+	if err != nil || child.Workspace == nil {
+		t.Fatalf("native worktree create: %+v %v", child, err)
+	}
+	childID = child.Workspace.ID
+	home, _ := os.UserHomeDir()
+	n := &Node{hosts: herdrHosts(client), agents: map[string]host.Agent{}, home: home, state: newState()}
+	w := worktreeFixture{n: n}
+	token := herdrDeletionPreview(t, w, childID, false)
+	res, err := request(t, n, "worktree.delete", map[string]any{"kind": "herdr", "workspace_id": childID, "preview_token": token})
+	if err != nil || res["removed"] != true {
+		t.Fatalf("native checkout removal: %v %v", res, err)
+	}
+	childID = ""
+	if _, err := os.Stat(path); !os.IsNotExist(err) || !branchExists(ctx, repo, "persona-check/actions") {
+		t.Fatalf("checkout/branch after native removal: %v", err)
+	}
+	token = herdrDeletionPreview(t, w, baseID, true)
+	res, err = request(t, n, "worktree.delete", map[string]any{"kind": "herdr", "workspace_id": baseID, "preview_token": token, "close_only": true})
+	if err != nil || res["removed"] != true {
+		t.Fatalf("native workspace close: %v %v", res, err)
+	}
+	baseID = ""
+	if data, err := os.ReadFile(filepath.Join(repo, "app.txt")); err != nil || string(data) != "kept\n" {
+		t.Fatalf("files after close: %q %v", data, err)
 	}
 }

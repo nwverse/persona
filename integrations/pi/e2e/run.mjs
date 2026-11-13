@@ -1,4 +1,4 @@
-// End-to-end check of the pi runtime (docs/integrations/pi.md "Verification"): a real `pi --mode rpc` with this extension (isolated agent
+// End-to-end check of the pi runtime (docs/integrations/pi.md "Validation"): a real `pi --mode rpc` with this extension (isolated agent
 // directory, the model played by DSH's llm-mock-server over Anthropic's API) and a real `personad node --stdio` started
 // by the runtime SDK's harness, which plays the hub. It sends from the "phone", streams, answers an approval and an
 // ask_user question there, and interrupts.

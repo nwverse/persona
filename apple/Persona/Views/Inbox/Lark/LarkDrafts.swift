@@ -13,21 +13,29 @@ nonisolated struct LarkDraft: Codable, Hashable, Sendable {
 }
 
 /// Unsent Feishu drafts, one per chat (keyed by the chat's feed id) and one per thread sheet (keyed by the thread's
-/// root message id). Leaving a chat keeps what was typed and the quote it answers; opening it again puts them back;
-/// sending clears them. Kept in memory for the run and on disk across launches (StateCache: drafts change on every
-/// keystroke, which UserDefaults must not see), written a moment after the last change and when the box goes away.
+/// root message id), a named manager's apart from the default's. Leaving a chat keeps what was typed and the quote it
+/// answers; opening it again puts them back; sending clears them. Kept in memory for the run and on disk across launches
+/// (StateCache: drafts change on every keystroke, which UserDefaults must not see), written a moment after the last
+/// change and when the box goes away.
 @MainActor
 final class LarkDrafts {
+    /// `manager`: the chat's when it is a named manager's (the same chat can be open through two managers); nil: the
+    /// default's.
     enum Key: Hashable, Sendable {
-        case chat(String)
-        case thread(String)
+        case chat(String, manager: String? = nil)
+        case thread(String, manager: String? = nil)
 
-        /// The key on disk.
+        /// The key on disk. The default's are the names drafts were kept under before there were managers.
         var name: String {
             switch self {
-            case .chat(let id): "chat:\(id)"
-            case .thread(let id): "thread:\(id)"
+            case .chat(let id, let manager): "chat:\(id)" + Self.suffix(manager)
+            case .thread(let id, let manager): "thread:\(id)" + Self.suffix(manager)
             }
+        }
+
+        private static func suffix(_ manager: String?) -> String {
+            guard let manager, !manager.isEmpty else { return "" }
+            return "@" + manager
         }
     }
 

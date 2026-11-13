@@ -11,7 +11,7 @@ import kotlinx.serialization.json.intOrNull
 import java.util.Locale
 
 /**
- * Jupyter notebooks for the file viewer (docs/android/android.md "File viewer"; web `lib/notebook.ts`, iOS `Notebook.swift`):
+ * Jupyter notebooks for the file viewer (docs/android/android.md "Files and Git in chat"; web `lib/notebook.ts`, iOS `Notebook.swift`):
  * nbformat 4 (and 3's worksheets) into cells, each output reduced to the one representation the viewer shows. Pure.
  */
 internal object Notebooks {

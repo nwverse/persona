@@ -1,7 +1,7 @@
 # Generating Office files (`personad office`, #1300)
 
 The command the assistant and Agents use to generate Word, PowerPoint and Excel files; it is M9 of #1289. The file is generated on that machine. When the reply contains its absolute path, the App shows it as a card under the reply
-(a thumbnail of the first page, the file name, a type such as "Word document", #1543, see `docs/apple/ios.md` ("Image and document cards seen in this turn")); tapping it opens the M1–M3 preview.
+(a thumbnail of the first page, the file name, a type such as "Word document", #1543, see `docs/apple/ios.md` ("File viewer (2026-10-31)", **Images viewed this turn and document cards**)); tapping it opens the M1–M3 preview.
 The assistant and Agents started by Persona use it through the skill `persona-office` (see "skill" below).
 
 ## Why it lives in personad
@@ -50,6 +50,7 @@ Why it works this way (tried on real claude on 2026-11-04):
 | `personad office check <file.docx\|.xlsx\|.pptx>` | Reads the structure back, ours or anyone else's |
 
 - Without `-o`, the output goes next to the input with the matching extension. After writing, it prints JSON: `file` (absolute path), `bytes`, `check` (same as the check result).
+- It never writes over its input and takes no Office file as input (`docx notes.docx`, or `-o` naming the input by any path, exits 2). It replaces the output in one step (a temporary file beside it, renamed over it), so a failed write leaves the earlier file as it was; the output's folder must be writable. A link at `-o` is replaced, not written through. A new output gets 0644 less the umask; a replaced one keeps its mode, and one you cannot write (made read-only, say) is left alone and the command exits 1.
 - Exit codes: 0 success, 1 failure (one line of reason on stderr, e.g. image not found), 2 bad usage.
 
 ## What to write
@@ -62,7 +63,7 @@ Why it works this way (tried on real claude on 2026-11-04):
 - Slides: if there is `---`, split on it; otherwise each `#` / `##` heading starts a slide. The first heading on a slide is its title.
 - Cover: if the first slide has only a `#` heading and paragraphs, it becomes a cover, with the paragraphs as subtitle.
 - Body: lists are bullet points (numbered lists keep their numbers); other paragraphs are lines without bullets.
-- Images and tables: one image or one table per slide. With text, the image goes on the right and the table below.
+- Images and tables: one image and one table per slide (later ones are left out). With text, the image goes on the right and the table below. With both, the picture is on the right and the words and the table share the left column.
 - Font size: shrinks automatically with the amount of text on the slide (24 → 20 → 18 → 14 pt). Many viewers do not auto-shrink text the way PowerPoint does while editing.
 
 **xlsx (JSON or CSV)**:
@@ -78,7 +79,9 @@ Why it works this way (tried on real claude on 2026-11-04):
 - `formats` are per-column Excel number formats. When a format looks like a date (contains `yy`, `dd` or `mmm`), text like `"2026-01-31"` becomes a real date.
 - The 1900 date system starts at `1900-01-01`; earlier or invalid date strings stay text.
 - Sheet names have characters Excel rejects removed, are truncated to 31 characters, and duplicates get a sequence number.
+- Excel's limits: 32,767 characters of text in a cell (counted in UTF-16 as Excel does, so most emoji count two), 8,192 characters in a formula after its `=`, 16,384 columns (A to XFD) and 1,048,576 rows with the header. Past them the command writes nothing and names the sheet and the cell or row count (`sheet "Data": A1: 40000 characters, an Excel cell holds at most 32767`) rather than leave Excel to truncate or drop data; this applies to CSV too. Text that `&` joins past a cell's limit is `#VALUE!`, as in Excel.
 - CSV: the first row is the header. Numeric-looking fields become numbers when the workbook keeps their value: integers such as long IDs must survive exactly, while decimals and exponents may round to the 15 significant digits a spreadsheet keeps (a float written as `0.30000000000000004` becomes `0.3`). IDs with leading zeros such as `007`, non-finite values, integers that would lose digits and decimals that would change further (underflow, subnormals) stay as their original text.
+  Text that starts with `=` stays text, header included (an exported `=HYPERLINK(…)` must not run when the file opens); write formulas in the JSON form.
 
 ## Formula values
 

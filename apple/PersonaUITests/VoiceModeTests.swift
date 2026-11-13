@@ -16,7 +16,7 @@ final class VoiceModeTests: XCTestCase {
     private static let samples: [(name: String, shows: String)] = [
         ("listening", "voice-bar"), ("working", "voice-line-stop"), ("asking", "voice-asking"), ("approval", "voice-bar"),
         ("refused", "voice-line-clear"), ("plan_feedback", "voice-line-plan"), ("paused", "voice-bar"), ("speaking", "voice-bar"),
-        ("ended", "voice-continue"), ("setup", "去设置"),
+        ("ended", "voice-continue"), ("setup", "去设置"), ("unprompted", "voice-line-anyway"),
     ]
 
     private var hub: String {
@@ -79,8 +79,9 @@ final class VoiceModeTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
-    /// The real path against the mock's script (docs/assistant/voice.md 7「#3508 验收」): connected → handed over → run → paused →
-    /// asked → refused, Clear and Send → done → Stop; then the background, another page and leaving each end the call.
+    /// The real path against the mock's script (docs/archive/assistant/voice-plan.md ("Acceptance", #3508)): connected →
+    /// handed over → run → paused → asked → refused, Clear and Send → done → Stop; then the background, another page and
+    /// leaving each end the call.
     @MainActor func testOpenVoiceWalksTheScript() throws {
         let hub = try hub
         let app = try launch(Self.agent + ["-openVoice", "silent"])

@@ -1,12 +1,14 @@
-// Claude Code's ultracode switch in the chat and in "New agent" (#3428, docs/web/web.md "ultracode"): the row under the
-// thinking effort, the workflow mark beside the thinking chip, on agent rows and on to-dos, the plan card's chip (#12) and
-// the line above the composer after a resume turned it off. The rules and the request are lib/ultracode.ts.
+// Claude Code's ultracode switch in the chat and in "New agent" (#3428, docs/web/web.md "ultracode"): the row in the model
+// panel's flyout of the model that runs (#5032), the workflow mark on the model pill, on agent rows and on to-dos, the plan
+// card's chip (#12) and the line above the composer after a resume turned it off. The rules and the request are
+// lib/ultracode.ts.
 import { useState } from "react";
 import { t } from "../../i18n";
 import { useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import {
-  dismissUltracodeLost, lostShown, quotaText, quotaWarnShown, setUltracode, shownOn, ULTRACODE, ultracodeQuota, ultracodeSwitch, useUltracodeAsk,
+  dismissUltracodeLost, lostShown, quotaAge, quotaText, quotaWarnShown, setUltracode, shownOn, ULTRACODE, ultracodeQuota, ultracodeSwitch, useUltracodeAsk,
+  type UltracodeQuota,
 } from "../../lib/ultracode";
 import { useUsageWindows } from "../../lib/usage-windows";
 import { cx, IconButton, Spinner, Switch, toast } from "../../ui/atoms";
@@ -26,11 +28,18 @@ export function UltraMark({ size = 11, label = t("ultracode.on"), title = t("ult
  *  warning when `warn` (a switch that is on or can simply be turned on; not under a reason it can't, nor while it is
  *  being turned off). Nothing without data. */
 export function UltracodeQuotaLine({ warn = true, className }: { warn?: boolean; className?: string }) {
-  const quota = ultracodeQuota(useUsageWindows());
+  return <QuotaLine quota={ultracodeQuota(useUsageWindows())} warn={warn} className={className} />;
+}
+
+/** The line itself. Numbers the hub marked out of date fade and say so with their age, as the usage bars do (#1906):
+ *  use only grows, so an old 62% may be past 80% by now. */
+export function QuotaLine({ quota, warn, className, now }: { quota: UltracodeQuota | null; warn: boolean; className?: string; now?: number }) {
   if (!quota) return null;
+  const age = quotaAge(quota, now);
   return (
     <div data-ultracode-quota className={cx("flex flex-col gap-0.5 text-[11px] leading-snug", className)}>
-      <span className="truncate text-ink-3 tabular-nums">{t("ultracode.quota", { name: quota.name, windows: quotaText(quota) })}</span>
+      <span className={cx("truncate text-ink-3 tabular-nums", quota.stale && "opacity-70")}>{t("ultracode.quota", { name: quota.name, windows: quotaText(quota) })}</span>
+      {age && <span data-ultracode-quota-stale className="truncate text-ink-3 opacity-70">{age}</span>}
       {warn && quota.warn && <span data-ultracode-quota-warn className="text-orange">{t("ultracode.quota_warn")}</span>}
     </div>
   );
@@ -49,8 +58,8 @@ function SwitchHead({ on, disabled, busy, onChange }: { on: boolean; disabled: b
   );
 }
 
-/** The row under the thinking effort in the chat's model and effort popover: the switch applies at once (its own
- *  request, not the popover's "Apply"); Enter / Space on it are its own, not the popover's. A failure, a refusal too,
+/** The row under the controls of the model panel's flyout for the model that runs (its `currentExtra`, #5032): the switch
+ *  applies at once (its own request, never part of a pick); Enter / Space on it are its own. A failure, a refusal too,
  *  puts it back and says why under it until the next try; the node's own reason (`ultracode_note`) is already the line,
  *  so a failure that only repeats it is not said twice. */
 export function UltracodeSwitchRow({ session }: { session: Session }) {

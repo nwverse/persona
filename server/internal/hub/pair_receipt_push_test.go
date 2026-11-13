@@ -9,7 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// The pairing receipts' payloads (docs/protocol/protocol.md "Pairing receipt pushes"): the category picks the buttons, `pair` carries
+// The pairing receipts' payloads (docs/protocol/protocol.md "Computer pairing codes"): the category picks the buttons, `pair` carries
 // the ids they act on, and the alert text never has an id.
 func TestPairReceiptPayloads(t *testing.T) {
 	for _, tc := range []struct {

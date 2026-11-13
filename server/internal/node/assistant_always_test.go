@@ -85,7 +85,7 @@ func TestLarkGateAlwaysKeys(t *testing.T) {
 	}
 }
 
-// A health conversation's Feishu writes are confirmed each time (docs/assistant/health.md "Outgoing"): a rule that allows the
+// A health conversation's Feishu writes are confirmed each time (docs/assistant/health.md "Outbound"): a rule that allows the
 // route still asks, the card offers no "Always allow in this session", and a yes with always is not remembered. Reads still go.
 func TestLarkGateHealthAsksEachTime(t *testing.T) {
 	n := codexTestNode(t)

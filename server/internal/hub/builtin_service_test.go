@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -201,37 +202,32 @@ func (failingLookup) ManagerInstallCodeByHash(context.Context, string) (*db.Mana
 	return nil, errors.New("the database is away")
 }
 
-// assistant-token would replace the bound service's token: refused in service mode.
-func TestAssistantTokenRefusedInServiceMode(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("PERSONA_HOME", filepath.Join(home, ".persona"))
-	if err := os.MkdirAll(filepath.Join(home, ".persona"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".persona", "hub.json"), []byte(`{"token":"t","assistant":{"mode":"service"}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := AssistantToken(context.Background(), &out); err == nil || !strings.Contains(err.Error(), "manager-code") {
-		t.Fatalf("service mode: %v", err)
-	}
-}
-
-// manager-code prints a code only in service mode.
-func TestManagerCodeNeedsServiceMode(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("PERSONA_HOME", filepath.Join(home, ".persona"))
-	if err := os.MkdirAll(filepath.Join(home, ".persona"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".persona", "hub.json"), []byte(`{"token":"t"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := ManagerCode(context.Background(), &out); err == nil || !strings.Contains(err.Error(), "manager-mode service") {
-		t.Fatalf("child mode: %v", err)
+// Each CLI command that only fits one assistant mode refuses the other: assistant-token would replace the bound
+// service's token (refused in service mode), and manager-code prints a code only in service mode.
+func TestCommandsRefusedInTheOtherMode(t *testing.T) {
+	for _, c := range []struct {
+		name, hubJSON string
+		run           func(context.Context, io.Writer) error
+		want          string
+	}{
+		{"assistant-token in service mode", `{"token":"t","assistant":{"mode":"service"}}`, AssistantToken, "manager-code"},
+		{"manager-code in child mode", `{"token":"t"}`, ManagerCode, "manager-mode service"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("PERSONA_HOME", filepath.Join(home, ".persona"))
+			if err := os.MkdirAll(filepath.Join(home, ".persona"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".persona", "hub.json"), []byte(c.hubJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			if err := c.run(context.Background(), &out); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("%v", err)
+			}
+		})
 	}
 }
 

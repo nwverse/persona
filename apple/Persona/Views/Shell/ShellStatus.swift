@@ -2,7 +2,7 @@ import BeautifulUI
 import SwiftUI
 
 #if os(iOS) || os(visionOS)
-/// The hub's link in the shell (docs/apple/shell.md「连接状态和 toast」): Waiting for Network / Connecting… / Updating…, floating just under
+/// The hub's link in the shell (docs/apple/shell.md「Connection status and toasts」): Waiting for Network / Connecting… / Updating…, floating just under
 /// the top bar like a toast, in the toast window (`ToastWindow`): it takes no touches and moves nothing (#413). It used
 /// to take a row of room under the status bar through the window's safe area, and folding that row made SwiftUI lay
 /// Agents' navigation stack out again: the list jumped some 210 pt for a few frames and, 2 times in 12, the navigation
@@ -230,7 +230,7 @@ private struct ToastWindowRoot: View {
     let onActionFrame: (CGRect) -> Void
 
     var body: some View {
-        let size = model.textSize.applied(to: systemTypeSize)
+        let size = Theme.interfaceTypeSize(model.textSize.applied(to: systemTypeSize))
         VStack(spacing: Theme.Space.s) {
             if let phase = notices?.pill {
                 ShellLinkPill(phase: phase)

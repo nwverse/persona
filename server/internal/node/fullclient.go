@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The web's full herdr view (docs/integrations/terminal.md "Full herdr view"): on request the node runs the host's own client in a
+// The web's full herdr view (docs/integrations/terminal.md "Full herdr UI"): on request the node runs the host's own client in a
 // PTY (herdr: `herdr session attach`) and relays its bytes to the hub (herdr.client.data); keys, resizes and acks come
 // back as events. One client per browser view. Whatever ends a view — the hub says so, its lease runs out, this
 // connection to the hub ends, the browser stops reading, the client quits — ends the client process too; nothing is
@@ -170,8 +170,9 @@ func (f *fullClient) emit(b []byte) {
 			return
 		}
 	}
+	b = f.n.scrubBytes(b) // base64 below: the connection's own hiding cannot see into it (secretenv.go)
 	f.mu.Lock()
-	f.sent += int64(len(b))
+	f.sent += int64(len(b)) // what goes, as the browser counts it
 	f.mu.Unlock()
 	if f.n.peer != nil {
 		_ = f.n.peer.Notify("herdr.client.data", map[string]any{"client_id": f.id, "data": base64.StdEncoding.EncodeToString(b)})

@@ -102,7 +102,7 @@ final class AssistantProfileTests: XCTestCase {
         XCTAssertTrue(try ran().contains("fu_ci"), "the follow-up was not run")
     }
 
-    /// A task with no conversation of its own to go into runs in its own one (docs/assistant/assistant.md「定时任务」): its page
+    /// A task with no conversation of its own to go into runs in its own one (docs/assistant/assistant.md「Scheduled tasks」): its page
     /// says Runs in the Same Chat and opens it; New Chat Next Time lets the next run start over, and that run's conversation is the
     /// task's again. Reached from the shell's drawer.
     @MainActor func testATaskOpensItsOwnConversationInTheShell() throws { try ownConversation() }

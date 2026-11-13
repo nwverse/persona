@@ -1,4 +1,4 @@
-// Files a message carries as <persona-file> tags (docs/protocol/protocol.md "Sending video"; iOS draws the same cards), and files an
+// Files a message carries as <persona-file> tags (docs/protocol/protocol.md "Sending videos"; iOS draws the same cards), and files an
 // answer names by path that exist on the machine: videos and audio play in place, documents are cards with their first
 // page (iOS DocumentCards), other files open in the file viewer.
 import { useMemo, useRef, useState } from "react";

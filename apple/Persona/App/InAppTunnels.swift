@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// The in-app tunnels the app runs, one per paired hub that has one (docs/operations/network.md「经 App 内隧道连 hub」): the
+/// The in-app tunnels the app runs, one per paired hub that has one (docs/operations/network.md「Connecting to hub through an in-app tunnel」): the
 /// core's tunnel up, and a loopback forward to the hub's address inside the tunnel's network. A tunnel that is up
 /// routes its hub's requests through it (HubTransport), as SSHTunnels does; closing the last one takes the core's
 /// tunnel down again, so it is up only while the app needs it.
@@ -47,6 +47,10 @@ final class InAppTunnels {
     /// (a page open in the in-app browser) stay good.
     @ObservationIgnored private var ports: [String: Int] = [:]
     @ObservationIgnored private var directWatch: [String: Task<Void, Never>] = [:]
+    /// SSH tunnels that dial their server through the core, by paired hub id: the server (`host:port`) and the
+    /// loopback port of its forward (`relay`).
+    @ObservationIgnored private var relays: [String: String] = [:]
+    @ObservationIgnored private var relayPorts: [String: Int] = [:]
     /// Closing forwards and taking the core's tunnel down, in order: a start waits for it, so a disconnect that was
     /// still on its way never takes down the tunnel just brought up.
     @ObservationIgnored private var cleanup: Task<Void, Never>?
@@ -86,7 +90,7 @@ final class InAppTunnels {
             // Kept as it is when it is up already; brought up again when a node change or the server ended it.
             try await InAppTunnel.connect(route, timeout: Self.connectTimeout)
             guard current() else { throw CancellationError() }
-            let local = try await InAppTunnel.forward(route, port: ports[id] ?? 0)
+            let local = try await InAppTunnel.forward(route.target, port: ports[id] ?? 0, probe: route)
             forwarded = true
             guard current() else { throw CancellationError() }
             if let p = local.port { ports[id] = p }
@@ -104,7 +108,7 @@ final class InAppTunnels {
             }
             if current(), !(error is CancellationError) { states[id] = .down(error.localizedDescription) }
             let target = route.target
-            let unused = forwarded && !tunnels.values.contains { $0.route.target == target }
+            let unused = forwarded && !inUse(target)
             enqueue { if unused { await InAppTunnel.stopForward(target) } }
             disconnectWhenUnused()
             throw error
@@ -116,7 +120,8 @@ final class InAppTunnels {
         close(id, forget: true)
     }
 
-    private func close(_ id: String, forget: Bool) {
+    /// `forget`: no longer the way to start first next time (`recent`).
+    func close(_ id: String, forget: Bool) {
         epochs[id, default: 0] += 1
         starting[id] = nil
         directWatch.removeValue(forKey: id)?.cancel()
@@ -126,10 +131,46 @@ final class InAppTunnels {
         if let t = tunnels.removeValue(forKey: id) {
             HubTransport.unroute(t.hub, from: t.local)
             let target = t.route.target
-            let shared = tunnels.values.contains { $0.route.target == target }
+            let shared = inUse(target)
             enqueue { if !shared { await InAppTunnel.stopForward(target) } }
         }
         disconnectWhenUnused()
+    }
+
+    /// A forward through the core to an SSH server for that hub's SSH tunnel (`SSHRoute.viaInAppTunnel`): the core's
+    /// tunnel up through `carrier` (a hub's own in-app route: its probe, its sign-in), then a loopback forward to
+    /// `server`; its port, the same one again while it is kept. The core's tunnel stays up while any such forward is
+    /// kept, and the hub's own in-app tunnel coming or going leaves it alone. Released by `releaseRelay`.
+    func relay(_ id: String, to server: String, carrier: InAppTunnelRoute) async throws -> Int {
+        inFlight += 1
+        defer {
+            inFlight -= 1
+            disconnectWhenUnused()
+        }
+        await cleanup?.value
+        // Kept as it is when it is up already; brought up again when the network or the server ended it.
+        try await InAppTunnel.connect(carrier, timeout: Self.connectTimeout)
+        if relays[id] == server, let p = relayPorts[id] { return p }
+        let local = try await InAppTunnel.forward(server, port: relayPorts[id] ?? 0, probe: carrier)
+        guard let p = local.port else { throw InAppTunnel.Failure(message: String(localized: "The tunnel core returned an invalid address")) }
+        if relays[id] != nil { releaseRelay(id) }
+        relays[id] = server
+        relayPorts[id] = p
+        return p
+    }
+
+    /// The SSH tunnel of hub `id` no longer needs its forward: it closes unless something else goes to the same
+    /// server, and the core's tunnel with the last user.
+    func releaseRelay(_ id: String) {
+        guard let server = relays.removeValue(forKey: id) else { return }
+        let shared = inUse(server)
+        enqueue { if !shared { await InAppTunnel.stopForward(server) } }
+        disconnectWhenUnused()
+    }
+
+    /// A forward to `target` is still kept by a hub's in-app tunnel or an SSH tunnel's relay.
+    private func inUse(_ target: String) -> Bool {
+        tunnels.values.contains { $0.route.target == target } || relays.values.contains(target)
     }
 
     /// Every tunnel closes and the core's tunnel goes down (the app went to the background on the phone: iOS would
@@ -142,7 +183,7 @@ final class InAppTunnels {
     /// that gives up queues this again itself).
     private func disconnectWhenUnused() {
         enqueue { @MainActor [weak self] in
-            guard let self, self.tunnels.isEmpty, self.inFlight == 0 else { return }
+            guard let self, self.tunnels.isEmpty, self.relays.isEmpty, self.inFlight == 0 else { return }
             await InAppTunnel.disconnect()
         }
     }
@@ -186,7 +227,7 @@ final class InAppTunnels {
         }
         await cleanup?.value
         try await InAppTunnel.connect(route, timeout: Self.connectTimeout)
-        let local = try await InAppTunnel.forward(route, port: 0)
+        let local = try await InAppTunnel.forward(route.target, port: 0, probe: route)
         var req = URLRequest(url: local.appending(path: "api/v1/health"), timeoutInterval: 10)
         req.httpMethod = "GET"
         RequestClientMetadata.current.apply(to: &req)
@@ -199,15 +240,15 @@ final class InAppTunnels {
 }
 
 extension AppModel {
-    // MARK: In-app tunnel (docs/operations/network.md「经 App 内隧道连 hub」)
+    // MARK: In-app tunnel (docs/operations/network.md「Connecting to hub through an in-app tunnel」)
 
     /// After a group's hello: the paired hub the socket is on takes its in-app tunnel from the hub's extension that
-    /// contributes one (docs/extensions/extensions.md「App 内隧道」), kept for the times its own addresses do not answer (when the
+    /// contributes one (docs/extensions/extensions.md「In-App tunnels」), kept for the times its own addresses do not answer (when the
     /// tunnel is needed, the hub cannot be asked). No such extension switched on: the tunnel goes. A request that
     /// fails, or a device that may not read the extension's settings, leaves what was there.
     func refreshInAppTunnel(_ group: String) async {
         guard let link = link(group), !link.isDemo, link.features.contains("extensions"), let on = link.live.currentConfig,
-              let hub = registry.members(group).first(where: { $0.config == on }) else { return }
+              let hub = registry.members(group).first(where: { $0.configs.contains(on) }) else { return }
         let api = link.api
         guard let list = try? await api.plugins() else { return }
         guard let id = InAppTunnelRoute.extensionOn(list) else {
@@ -241,7 +282,7 @@ extension AppModel {
     /// details and Settings › hub say.
     func inAppTunnelState(_ group: String) -> (hub: PairedHub, route: InAppTunnelRoute, routed: Bool, state: InAppTunnels.State?)? {
         guard let link = link(group), let on = link.live.currentConfig,
-              let hub = registry.members(group).first(where: { $0.config == on }), let route = hub.inAppTunnel, route.isUsable else { return nil }
+              let hub = registry.members(group).first(where: { $0.configs.contains(on) }), let route = hub.inAppTunnel, route.isUsable else { return nil }
         let tunnels = InAppTunnels.shared
         return (hub, route, tunnels.routed.contains(hub.id), tunnels.states[hub.id])
     }
@@ -254,7 +295,7 @@ extension InAppTunnelRoute {
     }
 
     /// The tunnel an extension's detail says: its first tunnel contribution, switched on, gives the name, and its
-    /// settings (`target_host`, `target_port`) where the tunnel goes; with this phone's 「总是走隧道」. Nil when it has
+    /// settings (`target_host`, `target_port`, optional `ssh_port`) where the tunnel goes; with this phone's 「总是走隧道」. Nil when it has
     /// no tunnel switched on or names no host.
     nonisolated init?(extension detail: HubExtensionDetail, always: Bool) {
         let tunnels = (detail.contributions ?? []).filter { $0.point == "tunnels" }
@@ -271,6 +312,8 @@ extension InAppTunnelRoute {
         guard !host.isEmpty else { return nil }
         var port = Self.defaultTargetPort
         if case .number(let n)? = config["target_port"], let p = Int(exactly: n) { port = p }
-        self.init(targetHost: host, targetPort: port, always: always)
+        var ssh: Int?
+        if case .number(let n)? = config["ssh_port"], let p = Int(exactly: n), (1...65535).contains(p) { ssh = p }
+        self.init(targetHost: host, targetPort: port, always: always, sshPort: ssh)
     }
 }

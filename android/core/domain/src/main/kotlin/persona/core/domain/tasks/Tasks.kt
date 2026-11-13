@@ -21,6 +21,8 @@ import persona.core.domain.lines.ApiErrorInfo
 import persona.core.domain.lines.ChatLine
 import persona.core.domain.lines.ToolCall
 import persona.core.domain.lines.WorkItem
+import persona.core.domain.sort.AgentSession
+import persona.core.domain.sort.foldedSubtasks
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; iOS TasksStore / Shared/Tasks.swift, web
 // lib/feed.ts): the todos that are tasks, the plans, each conversation's feed, and where those go among the chat's lines.
@@ -36,7 +38,7 @@ class DraftPlaceholderLeft(val placeholder: String) : IllegalStateException("dra
     override val message: String get() = CoreText.words(text)
 }
 
-/** Where a task is, from its todo and its agents' states (docs/assistant/todos.md "State rules"). */
+/** Where a task is, from its todo and its agents' states (docs/assistant/todos.md "State calculation rules"). */
 enum class TaskState(val label: CoreText, val rank: Int) {
     NeedsYou(CoreText.of(Key.TaskNeedsYou), 0),
     /** An agent's turn was cut off by the model service (#1516): not done; "Continue" tells it to go on. */
@@ -68,6 +70,10 @@ fun receiptState(item: FeedItem): String = when (val st = item.field("state")) {
     else -> if (ApiErrorInfo.parse(item.field("summary")) != null) "interrupted" else "done"
 }
 
+/** The task's name on its receipt (#3036): its to-do's title now, so a rename shows on every receipt as on the card and
+ *  lines beside it; the receipt's own title (the name when it was written) once the to-do is gone; else null. */
+fun receiptTitle(item: FeedItem, todo: Todo?): String? = todo?.title?.trim()?.ifEmpty { null } ?: item.field("title")
+
 /** Why the model service cut the agent off (#1516), in words, and whether "Continue" can help; null when it was not. */
 data class Interruption(val reason: CoreText, val canContinue: Boolean) {
     companion object {
@@ -79,7 +85,7 @@ data class Interruption(val reason: CoreText, val canContinue: Boolean) {
     }
 }
 
-/** What a task's lead agent says or does now (iOS TaskNow, web taskNow; docs/assistant/unified-entry.md "Task card progress", #1583). */
+/** What a task's lead agent says or does now (iOS TaskNow, web taskNow; docs/assistant/unified-entry.md "Task cards", #1583). */
 sealed interface TaskNow {
     val text: String
 
@@ -198,6 +204,8 @@ object AssistantLines {
     private fun inputTime(line: ChatLine): Instant? = when (line) {
         is ChatLine.Row -> if (line.row.type == "user") line.row.start else null
         is ChatLine.UserImages -> line.images.firstOrNull()?.time
+        // A folded background round (#4314) stands where its first input is: what came before it stays before it.
+        is ChatLine.Extra -> (line.payload as? BackgroundRound)?.lines?.firstNotNullOfOrNull(::inputTime)
         else -> null
     }
 
@@ -206,6 +214,7 @@ object AssistantLines {
         is ChatLine.Work -> line.start
         is ChatLine.ApiError -> line.item.time
         is ChatLine.Extra -> (line.payload as? AssistantExtra.Feed)?.item?.at?.let(::time)
+            ?: (line.payload as? BackgroundRound)?.lines?.firstNotNullOfOrNull(::lineTime)
         else -> null
     }
 
@@ -227,13 +236,20 @@ object AssistantLines {
  * The agents going on that no task stands for, in the main conversation's dock (#1113; iOS `DockAgent.shown`): working
  * or waiting for the user, not Persona's own, not an agent of a task not done; one the hub tags with a to-do only when
  * that to-do was made by hand. Waiting first, then the newest. Elsewhere none.
+ *
+ * A subtask the Agents list folds under its parent is not one of them while the dock shows its parent, or a session
+ * above that: as one of these agents, or as an agent of a task not done, whose task the dock shows (#4769,
+ * [foldedSubtasks]). One that needs the user stays, and so does a working one whose creator the dock does not show.
  */
 fun dockAgents(conversation: String, main: String?, sessions: List<Session>, todos: List<Todo>): List<Session> {
     if (main.isNullOrBlank() || conversation != main) return emptyList()
     val taskAgents = todos.filter { !it.origin.isNullOrBlank() && !it.isDone }.flatMap { t -> t.activeAgents.map { it.key } }.toSet()
     val manual = todos.filter { it.origin.isNullOrBlank() }.map { it.id }.toSet()
-    return sessions.filter { !it.assistant && (it.agentState == AgentState.NeedsYou || it.agentState == AgentState.Working) }
+    val going = sessions.filter { !it.assistant && (it.agentState == AgentState.NeedsYou || it.agentState == AgentState.Working) }
         .filter { it.key !in taskAgents && (it.todo?.id?.takeIf(String::isNotBlank)?.let { id -> id in manual } ?: true) }
+    val shown = going.mapTo(HashSet()) { it.key } + taskAgents
+    val folded = foldedSubtasks(sessions.map(::AgentSession)) { it.session.key in shown }
+    return going.filterNot { it.key.path in folded }
         .sortedWith(compareBy<Session> { it.agentState.priority }.thenByDescending { it.stateSince.orEmpty() }.thenBy { it.key.path })
 }
 

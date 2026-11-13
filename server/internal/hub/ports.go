@@ -58,12 +58,28 @@ func (o *portOpens) has(mid string, port int) bool {
 	return ok && time.Since(at) < portOpenedFor
 }
 
-var streamSeq atomic.Int64
+// streamIDs names the hub's streams to nodes (forwarded ports "p", previews "v"). A node's Mux belongs to its
+// connection with the manager and outlives a hub restart, and it refuses for a while an id it heard closed before
+// it opened (streams.Mux.Open): so the ids carry a token of this hub process and are never used twice.
+type streamIDs struct {
+	token string
+	seq   atomic.Int64
+}
+
+func newStreamIDs() *streamIDs { return &streamIDs{token: randomHex(6)} }
+
+// next is a new id starting with kind.
+func (s *streamIDs) next(kind string) string {
+	return kind + s.token + "-" + strconv.FormatInt(s.seq.Add(1), 10)
+}
+
+var hubStreamIDs = newStreamIDs()
 
 func (h *Hub) portRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/machines/{mid}/ports/{port}", h.withMachine(h.probePort))
 	api.HandleFunc("POST /api/v1/machines/{mid}/ports/{port}/open", h.withMachine(h.openPort))
 	api.HandleFunc("GET /api/v1/machines/{mid}/ports/{port}/connect", h.withMachine(h.connectPort))
+	api.HandleFunc("GET /api/v1/machines/{mid}/screen/video/connect", h.withMachine(h.screenVideoConnect)) // #3954
 }
 
 func pathPort(r *http.Request) (int, error) {
@@ -179,7 +195,7 @@ func (h *Hub) connectPort(w http.ResponseWriter, r *http.Request, m *Machine) {
 		callErr(w, err)
 		return
 	}
-	id := "p" + strconv.FormatInt(streamSeq.Add(1), 10)
+	id := hubStreamIDs.next("p")
 	if err := mux.Open(id); err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
@@ -188,6 +204,11 @@ func (h *Hub) connectPort(w http.ResponseWriter, r *http.Request, m *Machine) {
 	dial := map[string]any{"id": id, "port": port}
 	if port == screenPort && h.extReport().ScreenKeepAwake {
 		dial["keep_awake"] = true // someone is watching the Mac: it stays awake until this closes (node/awake.go)
+	}
+	if port == screenPort {
+		if pair := r.URL.Query().Get("pair"); pair != "" {
+			dial["pair"] = pair // ties this 5900 stream to a later screen/video/connect for the video channel (#3954)
+		}
 	}
 	err = m.call(dctx, "port.dial", dial, nil)
 	cancel()
@@ -201,7 +222,13 @@ func (h *Hub) connectPort(w http.ResponseWriter, r *http.Request, m *Machine) {
 		callErr(w, err)
 		return
 	}
-	// noVNC may ask for the "binary" subprotocol (its frames are binary either way).
+	h.bridgeStream(w, r, mux, id)
+}
+
+// bridgeStream upgrades the request to a binary WebSocket and pumps it against stream `id` on `mux` until it ends.
+// The stream must already be Open on the mux and dialed on the node. Shared by the port relay and the live-screen
+// video relay (#3954). noVNC may ask for the "binary" subprotocol (its frames are binary either way).
+func (h *Hub) bridgeStream(w http.ResponseWriter, r *http.Request, mux *streams.Mux, id string) {
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true, Subprotocols: []string{"binary"}})
 	if err != nil {
 		mux.Abort(id, err)

@@ -47,8 +47,10 @@ PY
 }
 trap cleanup EXIT
 
+# personad is built as the release is (server/build-tags.txt).
+TAGS="$(cat server/build-tags.txt)"
 if command -v go >/dev/null; then
-  (cd server && go test -c -tags codexlive -o "$WORK/node.test" ./internal/node/ && go build -o "$WORK/personad" ./cmd/personad) || exit 1
+  (cd server && go test -c -tags codexlive -o "$WORK/node.test" ./internal/node/ && go build -tags "$TAGS" -o "$WORK/personad" ./cmd/personad) || exit 1
 else
   eval "$(python3 scripts/persona_config.py env)"
   d=".cache/persona-test-$(basename "$PWD")"
@@ -56,7 +58,7 @@ else
   rsync -a --delete --exclude bin server/ "$PERSONA_HUB_SSH":"$d/server/" || exit 1
   ssh "$PERSONA_HUB_SSH" "cd ~/$d/server && export GOOS=$(uname -s | tr A-Z a-z) GOARCH=$(uname -m | sed s/x86_64/amd64/) \
     CGO_ENABLED=0 && /usr/local/go/bin/go test -c -tags codexlive -o /tmp/persona-$$-node.test ./internal/node/ && \
-    /usr/local/go/bin/go build -o /tmp/persona-$$-personad ./cmd/personad" || exit 1
+    /usr/local/go/bin/go build -tags $TAGS -o /tmp/persona-$$-personad ./cmd/personad" || exit 1
   scp -q "$PERSONA_HUB_SSH:/tmp/persona-$$-node.test" "$WORK/node.test" && scp -q "$PERSONA_HUB_SSH:/tmp/persona-$$-personad" "$WORK/personad" &&
     ssh "$PERSONA_HUB_SSH" "rm -f /tmp/persona-$$-node.test /tmp/persona-$$-personad"
 fi

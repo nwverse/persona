@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// The inbox (docs/plans/plan-connectors.md "4 · Inbox"): GitHub's unread notifications that ask something of the user —
+// The inbox (docs/plans/plan-connectors.md "Inbox"): GitHub's unread notifications that ask something of the user —
 // a review request, an @, a new comment or review on their PR / issue, their CI failing, an assignment — one thing
 // per PR / issue. Polled (the hub has no public address for webhooks) at the pace GitHub asks for.
 
@@ -513,7 +513,13 @@ func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
 	for _, t := range st.things {
 		out = append(out, *t)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
+	// Oldest first; rows at the same time by thread, so reading again gives the same list (the map has no order).
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].At.Equal(out[j].At) {
+			return out[i].At.Before(out[j].At)
+		}
+		return out[i].Thread < out[j].Thread
+	})
 	return out, nil
 }
 

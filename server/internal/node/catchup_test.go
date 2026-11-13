@@ -77,7 +77,11 @@ func testNode(t testing.TB) (*Node, string) {
 	t.Helper()
 	home := t.TempDir()
 	n := &Node{home: home, paths: map[string]string{}, files: map[string]*transcript.File{}, procs: map[string]*assistantProc{},
-		agents: map[string]host.Agent{}, watches: map[string]*watch{}, state: &stateFile{Sessions: map[string]sessionState{}}}
+		agents: map[string]host.Agent{}, watches: map[string]*watch{}, state: &stateFile{Sessions: map[string]sessionState{}},
+		// The scripted shell is ready as soon as the fake creates it. Tests of shell readiness opt back into
+		// observation with watchShell (shellsettle_test.go).
+		shellSettled: true, readyPoll: 20 * time.Millisecond}
+	t.Cleanup(n.starts.close)
 	return n, home
 }
 
@@ -96,7 +100,13 @@ func writeCodexToolLines(t *testing.T, path string, from, n int) {
 
 func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	waitWithin(t, 5*time.Second, what, ok)
+}
+
+// waitWithin is waitFor with its own limit, for waits on real programs (the live tests) that take longer.
+func waitWithin(t *testing.T, d time.Duration, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
 	for !ok() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)

@@ -47,7 +47,7 @@ export function startPWA() {
   matchMedia("(display-mode: standalone)").addEventListener("change", changed);
   // Service workers need a secure context; over the LAN's plain http the page stays a plain page. Not in dev: Vite's
   // modules aren't the build's.
-  // Not under a sub-path (lib/base.ts): the worker's routes and caches are the root's (docs/web/web.md "Sub-path").
+  // Not under a sub-path (lib/base.ts): the worker's routes and caches are the root's (docs/web/web.md "Subpaths").
   if (import.meta.env.PROD && !BASE && isSecureContext && "serviceWorker" in navigator) {
     afterLoad(() => void navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(() => {}));
   }

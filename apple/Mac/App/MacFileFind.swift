@@ -1,6 +1,6 @@
 import Foundation
 
-/// ⌘K's Files (docs/apple/mac.md「快速打开、新建」): the files under the open conversation's directory, listed by the node
+/// ⌘K's Files (docs/apple/mac.md「Quick Open and New」): the files under the open conversation's directory, listed by the node
 /// (`GET /machines/{mid}/fs/find`, one request when the panel opens) and matched here as the user types. The same
 /// matcher as the web's (`web/src/lib/file-find.ts`): every word has to match in order; word starts, path separators,
 /// camelCase humps, consecutive characters and the file's own name score higher; of two equal matches the shorter

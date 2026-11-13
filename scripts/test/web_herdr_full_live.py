@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live check of the terminal's "Full view" against a REAL herdr client (docs/integrations/terminal.md "Full herdr view"): the fake hub runs
+"""Live check of the terminal's "Full view" against a REAL herdr client (docs/integrations/terminal.md "Full herdr UI"): the fake hub runs
 `herdr session attach <name>` in a PTY (MOCK_TERMINAL_FULL_EXEC) and relays its bytes the way the node does; Chrome draws
 them in xterm; a mouse selection in herdr's own screen must come out as OSC 52 and land on the browser's clipboard.
 

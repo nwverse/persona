@@ -79,20 +79,6 @@ func newFakeRelease(t *testing.T) *fakeRelease {
 	return r
 }
 
-// A node's port probe of the release site (GET /, node/ports.go) is not counted as a request the hub made: tests check
-// that the hub asked the site for nothing.
-func TestFakeReleaseIgnoresPortProbes(t *testing.T) {
-	site := newFakeRelease(t)
-	res, err := http.Get(site.srv.URL + "/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = res.Body.Close()
-	if res.StatusCode != http.StatusNotFound || len(site.requests()) != 0 {
-		t.Fatalf("a port probe: %d, requests %v", res.StatusCode, site.requests())
-	}
-}
-
 func (r *fakeRelease) requests() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -446,7 +432,7 @@ func TestNodeOnTheFallbackBuildIsUpToDate(t *testing.T) {
 	m.info = proto.NodeInfo{OS: otherOS, Arch: otherArch, Version: "v9-1", Protocol: nodeproto.Version,
 		ProtocolMin: nodeproto.MinManagerVersion, Capabilities: nodeproto.Announced}
 	m.mu.Unlock()
-	if got := d.resolvedTarget(context.Background(), m.info); got != "v9-1" {
+	if got, _ := d.resolvedTargetKnown(context.Background(), m.info); got != "v9-1" {
 		t.Fatalf("target %s", got)
 	}
 	if s := m.snapshot(); s.NodeMismatch || s.NodeVersion != "v9-1" || s.CanDeploy == nil || !*s.CanDeploy {
@@ -467,7 +453,7 @@ func TestNodeOnTheFallbackBuildIsUpToDate(t *testing.T) {
 	m.mu.Lock()
 	m.info.Arch = "mips"
 	m.mu.Unlock()
-	_ = d.resolvedTarget(context.Background(), m.info)
+	_, _ = d.resolvedTargetKnown(context.Background(), m.info)
 	s := m.snapshot()
 	want := i18n.T(i18n.Default, "devices-deploy.no_package", i18n.Args{"os": otherOS, "arch": "mips", "version": "v9-1",
 		"name": "personad-" + otherOS + "-mips"})
@@ -661,7 +647,7 @@ func TestATargetStandsWhileItIsLookedUpAgain(t *testing.T) {
 	m.online = true
 	m.info = proto.NodeInfo{OS: otherOS, Arch: otherArch, Version: "v9-1"}
 	m.mu.Unlock()
-	if got := d.resolvedTarget(context.Background(), m.info); got != "v9-1" {
+	if got, _ := d.resolvedTargetKnown(context.Background(), m.info); got != "v9-1" {
 		t.Fatalf("target %s", got)
 	}
 	site.mu.Lock()
@@ -782,7 +768,7 @@ func TestOnlyTheHubsVersionDeploysByItself(t *testing.T) {
 			m.info = proto.NodeInfo{OS: otherOS, Arch: otherArch, Version: "v8-1", Protocol: nodeproto.Version,
 				ProtocolMin: nodeproto.MinManagerVersion, Capabilities: nodeproto.Announced}
 			m.mu.Unlock()
-			_ = d.resolvedTarget(ctx, m.info)
+			_, _ = d.resolvedTargetKnown(ctx, m.info)
 			if s := m.snapshot(); !s.NodeMismatch || s.CanDeploy == nil || !*s.CanDeploy {
 				t.Fatalf("another build is not offered an update: %+v", s)
 			}

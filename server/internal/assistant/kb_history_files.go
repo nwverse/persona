@@ -220,7 +220,7 @@ func readHistoryStop(data string) (historyStop, bool) {
 	}
 	var st historyStop
 	if json.Unmarshal(raw, &st) != nil {
-		st = historyStop{historyReason: historyReason{Code: "stop_file", Text: clipRunes(strings.TrimSpace(string(raw)), 200)}}
+		st = historyStop{historyReason: historyReason{Code: "stop_file", Text: clip(strings.TrimSpace(string(raw)), 200)}}
 	}
 	if st.Code == "" {
 		st.Code = "stop_file"

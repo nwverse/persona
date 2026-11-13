@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,6 +37,10 @@ type Client struct {
 
 	seq   atomic.Int64
 	trips episode
+	// noServer backs off the CLI while it, too, finds no server (call).
+	noServer cliBackoff
+	// lists keeps a `herdr session list` that found nothing running while that cannot have changed (sessionlist.go).
+	lists listMemo
 	// snapshotCut is separate from transport failures: successful smaller calls do not end a truncation streak.
 	snapshotCut atomic.Bool
 	now         func() time.Time // the clock note reads; nil: time.Now (tests set it)
@@ -136,7 +141,7 @@ const worktreeTimeout = 2 * time.Minute
 
 // timeoutOf is how long a call may take: a worktree checkout is slow, everything else is one quick request.
 func timeoutOf(method string) time.Duration {
-	if method == "worktree.create" {
+	if method == "worktree.create" || method == "worktree.remove" || method == "workspace.close" {
 		return worktreeTimeout
 	}
 	return rpcTimeout
@@ -147,12 +152,87 @@ var errNoSocket = errors.New("herdr socket unavailable")
 
 // call runs one API method and decodes its result into out. cli is the same call as herdr CLI arguments, used when
 // the socket is not reachable or does not know the method (an older herdr); nil means there is no CLI equivalent.
+//
+// With no socket, the CLI is run only while it may find a server the socket does not: once it says there is none
+// (server_not_running), calls without a socket get that answer again, without running herdr, for 1 s, then 2 s, …
+// up to 30 s (cliBackoff). A node polls herdr about twice a second, so a computer with herdr installed and no server
+// running used to start two herdr processes a second. A socket that answers, or a CLI that does, ends the backoff: a
+// server the CLI reaches and the socket does not is never backed off.
 func (c *Client) call(ctx context.Context, method string, params any, out any, cli ...string) error {
 	err := c.rpc(ctx, method, params, out)
-	if err == nil || len(cli) == 0 || !fallback(err) {
+	if err == nil {
+		c.noServer.reset()
+		return nil
+	}
+	if len(cli) == 0 || !fallback(err) {
 		return err
 	}
-	return c.run(ctx, out, cli...)
+	noSocket := errors.Is(err, errNoSocket)
+	if noSocket {
+		if last := c.noServer.skip(c.clock()); last != nil {
+			return last
+		}
+	}
+	err = c.run(ctx, out, cli...)
+	if err == nil {
+		c.noServer.reset()
+	} else if noSocket && serverNotRunning(err) {
+		c.noServer.failed(err, c.clock())
+	}
+	return err
+}
+
+// clock is the time call and note read: c.now when a test set it.
+func (c *Client) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// serverNotRunning: the CLI found no herdr server to talk to.
+func serverNotRunning(err error) bool {
+	var he *Error
+	return errors.As(err, &he) && he.Code == "server_not_running"
+}
+
+// cliBackoff is how long the CLI is not run again after it found no server: the gap doubles from cliBackoffFirst to
+// cliBackoffMax with each such answer, and err is that answer, returned meanwhile.
+type cliBackoff struct {
+	mu    sync.Mutex
+	until time.Time
+	gap   time.Duration
+	err   error
+}
+
+const (
+	cliBackoffFirst = time.Second
+	cliBackoffMax   = 30 * time.Second
+)
+
+// skip is the CLI's last answer while it is backed off at now, nil when it may run.
+func (b *cliBackoff) skip(now time.Time) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.err != nil && now.Before(b.until) {
+		return b.err
+	}
+	return nil
+}
+
+// failed records that the CLI found no server at now (err): it is not run again for a gap twice the last one.
+func (b *cliBackoff) failed(err error, now time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.gap = min(max(2*b.gap, cliBackoffFirst), cliBackoffMax)
+	b.until, b.err = now.Add(b.gap), err
+}
+
+// reset: herdr answered, so the next call without a socket tries the CLI again at once.
+func (b *cliBackoff) reset() {
+	b.mu.Lock()
+	b.until, b.gap, b.err = time.Time{}, 0, nil
+	b.mu.Unlock()
 }
 
 // fallback: errors the CLI might not have (no socket here, a method this herdr does not know).
@@ -191,20 +271,38 @@ func (c *Client) rpcOnce(ctx context.Context, method string, params any, out any
 	if params == nil {
 		params = struct{}{}
 	}
-	id := fmt.Sprintf("persona:%d", c.seq.Add(1))
-	req, err := json.Marshal(map[string]any{"id": id, "method": method, "params": params})
+	req, err := json.Marshal(request{ID: "persona:" + strconv.FormatInt(c.seq.Add(1), 10), Method: method, Params: params})
 	if err != nil {
 		return err
 	}
 	if _, err := conn.Write(append(req, '\n')); err != nil {
 		return fmt.Errorf("herdr %s: %w", method, err)
 	}
-	line, err := readLine(bufio.NewReaderSize(conn, 64<<10), maxLine)
+	r := answerReaders.Get().(*bufio.Reader)
+	r.Reset(conn)
+	line, err := readLine(r, maxLine) // a copy: r goes back to the pool
+	r.Reset(nil)
+	answerReaders.Put(r)
 	if err != nil {
 		return fmt.Errorf("herdr %s: %w", method, err)
 	}
 	return decodeResponse(method, line, out)
 }
+
+// request is one call as herdr reads it: the bytes json.Marshal made of a map of the same three keys (sorted, so in this
+// order), without building the map.
+type request struct {
+	ID     string `json:"id"`
+	Method string `json:"method"`
+	Params any    `json:"params"`
+}
+
+// answerReaders are the readers calls read herdr's answer through. Every call is a connection of its own, and a node
+// makes about 15 a minute for each resting Claude (pane.read every 5 s, pane.process_info every 15 s): a new 64 KiB
+// reader each was most of what the node allocated at rest. 16 KiB holds a pane read or process info whole; a bigger
+// answer (a snapshot) only grows the copy readLine makes. Small, because the resting reads of many agents come due
+// together and the pool keeps a reader for each.
+var answerReaders = sync.Pool{New: func() any { return bufio.NewReaderSize(nil, 16<<10) }}
 
 // ErrTruncated: herdr's answer stopped short. herdr 0.9.4 on macOS writes an answer to its socket in one go, and
 // past the socket's 8192-byte buffer the rest is lost: a big answer (60 colored lines of a wide pane, a session
@@ -401,12 +499,17 @@ func (c *Client) AgentGet(ctx context.Context, target string) (*Agent, error) {
 }
 
 type Workspace struct {
-	ID      string `json:"workspace_id"`
-	Label   string `json:"label"`
-	Number  int    `json:"number"`
-	Cwd     string `json:"cwd,omitempty"`
-	Branch  string `json:"branch,omitempty"`
-	Focused bool   `json:"focused,omitempty"`
+	ID       string `json:"workspace_id"`
+	Label    string `json:"label"`
+	Number   int    `json:"number"`
+	Cwd      string `json:"cwd,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	Focused  bool   `json:"focused,omitempty"`
+	Worktree *struct {
+		RepoRoot         string `json:"repo_root"`
+		CheckoutPath     string `json:"checkout_path"`
+		IsLinkedWorktree bool   `json:"is_linked_worktree"`
+	} `json:"worktree,omitempty"`
 }
 
 type Tab struct {
@@ -469,12 +572,30 @@ type WorktreeCreated struct {
 
 // WorktreeCreate has herdr make a Git worktree checkout at path (an absolute path) from the repository of a workspace
 // and open it as a workspace grouped under that one, without moving the computer's focus. An existing local branch is
-// checked out; any other name becomes a new branch from the workspace's HEAD. herdr never forces anything: a branch
+// checked out; any other name becomes a new branch from base when given, else from the workspace's HEAD. herdr never forces anything: a branch
 // checked out elsewhere, or a path git refuses, is an error.
-func (c *Client) WorktreeCreate(ctx context.Context, workspace, branch, path string) (*WorktreeCreated, error) {
+func (c *Client) WorktreeCreate(ctx context.Context, workspace, branch, path string, base ...string) (*WorktreeCreated, error) {
+	params := map[string]any{"workspace_id": workspace, "branch": branch, "path": path, "focus": false}
+	args := []string{"worktree", "create", "--workspace", workspace, "--branch", branch, "--path", path}
+	if len(base) > 0 && base[0] != "" {
+		params["base"] = base[0]
+		args = append(args, "--base", base[0])
+	}
 	var res WorktreeCreated
-	err := c.call(ctx, "worktree.create", map[string]any{"workspace_id": workspace, "branch": branch, "path": path, "focus": false}, &res,
-		"worktree", "create", "--workspace", workspace, "--branch", branch, "--path", path, "--no-focus")
+	err := c.call(ctx, "worktree.create", params, &res, append(args, "--no-focus")...)
+	return &res, err
+}
+
+// WorktreeCreateFromCwd is WorktreeCreate from a main checkout that has no open workspace.
+func (c *Client) WorktreeCreateFromCwd(ctx context.Context, cwd, branch, path string, base ...string) (*WorktreeCreated, error) {
+	params := map[string]any{"cwd": cwd, "branch": branch, "path": path, "focus": false}
+	args := []string{"worktree", "create", "--cwd", cwd, "--branch", branch, "--path", path}
+	if len(base) > 0 && base[0] != "" {
+		params["base"] = base[0]
+		args = append(args, "--base", base[0])
+	}
+	var res WorktreeCreated
+	err := c.call(ctx, "worktree.create", params, &res, append(args, "--no-focus")...)
 	return &res, err
 }
 
@@ -492,6 +613,18 @@ func (c *Client) TabRename(ctx context.Context, tab, label string) error {
 func (c *Client) WorkspaceRename(ctx context.Context, workspace, label string) error {
 	return c.call(ctx, "workspace.rename", map[string]any{"workspace_id": workspace, "label": label}, nil,
 		"workspace", "rename", workspace, label)
+}
+
+func (c *Client) WorkspaceClose(ctx context.Context, workspace string) error {
+	return c.call(ctx, "workspace.close", map[string]any{"workspace_id": workspace}, nil, "workspace", "close", workspace)
+}
+
+func (c *Client) WorktreeRemove(ctx context.Context, workspace string, force bool) error {
+	args := []string{"worktree", "remove", "--workspace", workspace}
+	if force {
+		args = append(args, "--force")
+	}
+	return c.call(ctx, "worktree.remove", map[string]any{"workspace_id": workspace, "force": force}, nil, args...)
 }
 
 func (c *Client) TabClose(ctx context.Context, tab string) error {
@@ -709,22 +842,60 @@ func (c *Client) PaneReportMetadata(ctx context.Context, paneID, source string, 
 }
 
 // PaneReportResume tells herdr how to resume the pane's agent after a server restart: argv replaces herdr's
-// built-in resume command (`claude --resume <id>`) for this pane while source holds it. herdr only takes resume_argv
-// from the reporter holding the pane, so a pane.report_agent comes first (herdr's own screen detection still decides
-// the pane's state). herdr types argv into the restored pane's shell, quoting elements that need it; no element may
-// contain an apostrophe. Older herdr ignores resume_argv.
+// built-in resume command (`claude --resume <id>`) for this pane. When herdr already detects the agent process in
+// the pane (Claude, Codex, pi…), pane.report_agent_session accepts resume_argv without claiming lifecycle authority,
+// so herdr's own screen and OSC detection continues to decide agent_status; pane.clear_agent_authority drops any stale
+// authority an older node left for source without clearing another integration's (such as herdr:pi). Only when herdr
+// rejects the session report with resume_not_accepted (an agent process herdr does not detect natively, such as a
+// compatible CLI) does it claim the pane with pane.report_agent first. herdr types argv into the restored pane's
+// shell, quoting elements that need it; no element may contain an apostrophe. Older herdr ignores resume_argv.
 func (c *Client) PaneReportResume(ctx context.Context, pane, source, agent, sessionID string, argv []string) error {
 	seq := ReportSeq()
-	if err := c.rpc(ctx, "pane.report_agent", map[string]any{
-		"pane_id": pane, "source": source, "agent": agent, "state": "idle", "seq": seq,
-	}, nil); err != nil {
-		return err
-	}
-	return c.rpc(ctx, "pane.report_agent_session", map[string]any{
+	_ = c.rpc(ctx, "pane.clear_agent_authority", map[string]any{
+		"pane_id": pane, "source": source, "seq": seq,
+	}, nil)
+	err := c.rpc(ctx, "pane.report_agent_session", map[string]any{
 		"pane_id": pane, "source": source, "agent": agent, "seq": seq + 1,
 		"agent_session_id": sessionID, "resume_argv": argv,
 	}, nil)
+	var he *Error
+	if errors.As(err, &he) && he.Code == "resume_not_accepted" {
+		if rerr := c.rpc(ctx, "pane.report_agent", map[string]any{
+			"pane_id": pane, "source": source, "agent": agent, "state": "idle", "seq": seq + 2,
+		}, nil); rerr != nil {
+			return rerr
+		}
+		return c.rpc(ctx, "pane.report_agent_session", map[string]any{
+			"pane_id": pane, "source": source, "agent": agent, "seq": seq + 3,
+			"agent_session_id": sessionID, "resume_argv": argv,
+		}, nil)
+	}
+	return err
+}
+
+// ServerID names the server instance listening on c's socket: every server start (a restart, a live handoff, an
+// upgrade) binds the socket anew, so its modification time changes. "" when there is no socket. A reporter compares it
+// to the one it reported to: state a server keeps only in memory (or an older herdr ignored, such as resume_argv
+// before 0.9.2) has to be reported again to a new one.
+func (c *Client) ServerID() string {
+	if c.Socket == "" {
+		return ""
+	}
+	fi, err := os.Stat(c.Socket)
+	if err != nil {
+		return ""
+	}
+	return strconv.FormatInt(fi.ModTime().UnixNano(), 10)
 }
 
 // ReportSeq orders a reporter's reports (herdr drops one older than the last it took); tests fix it.
 var ReportSeq = func() int64 { return time.Now().UnixNano() }
+
+// Panes lists all panes in a workspace, including panes with no detected agent.
+func (c *Client) Panes(ctx context.Context, workspace string) ([]Agent, error) {
+	var res struct {
+		Panes []Agent `json:"panes"`
+	}
+	err := c.call(ctx, "pane.list", map[string]any{"workspace_id": workspace}, &res, "pane", "list", "--workspace", workspace)
+	return res.Panes, err
+}

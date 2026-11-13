@@ -11,7 +11,7 @@
           "#638"
         ],
         "code": {
-          "web": "web/src/lib/turns.ts collectWakeRuns",
+          "web": "web/src/lib/turns.ts buildBlocks",
           "ios": "Turn.pickAnswerAcrossWakes",
           "android": "RawTurn.finish"
         }
@@ -309,10 +309,6 @@
                   "from": "user",
                   "text": "Will it rain this weekend?",
                   "state": "shown"
-                },
-                {
-                  "from": "agent",
-                  "text": "The forecast check is running in the background; I will look at Saturday's and Sunday's hourly rain chances and the wind at the trailhead, and tell you whether to swap the days."
                 }
               ]
             }

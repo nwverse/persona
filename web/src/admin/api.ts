@@ -4,7 +4,7 @@ import { CSRF_HEADERS } from "../lib/compatibility";
 import { currentLanguage, t } from "../i18n";
 import { previewConsent } from "../lib/extension-model";
 import { catalogOf, catalogQuery, marketView, type Catalog, type Market, type ExtensionRemovalResult } from "../lib/extension-market";
-import type { AddedMachine, AdminExtension, AdminExtensions, AssistantCards, ConnectorRepair, ExtensionMetrics, ExtensionPreview, LinkPair, LogLine, LogsPage, MeshView, MetricsOverview, MetricsWindow, UsageSource, UsageSourceInput, UsageSources, UsageSourceType, UsageTestResult } from "./types";
+import type { AddedMachine, AdminExtension, AdminExtensions, ConnectorRepair, ExtensionMetrics, ExtensionPreview, LinkPair, LogLine, LogsPage, MeshView, MetricsOverview, MetricsWindow, UsageSource, UsageSourceInput, UsageSources, UsageSourceType, UsageTestResult } from "./types";
 
 export class AdminError extends Error {
   status: number;
@@ -154,11 +154,6 @@ export const linkPair = (id: string) => adminApi<LinkPair>(`/machines/${enc(id)}
 export const repairConnector = (id: string, pairLink: string, address?: string) =>
   adminApi<ConnectorRepair>(`/machines/${enc(id)}/connector`, "POST", { pair_link: pairLink, address: address || undefined });
 
-// ── the assistant's cards (docs/operations/admin.md "Assistant cards"): one switch, live at once; the preview never calls the hub ──
-
-export const getAssistantCards = () => adminApi<AssistantCards>("/assistant");
-export const setPersonaView = (on: boolean) => adminApi<AssistantCards>("/assistant", "PUT", { persona_view: on });
-
 // ── extensions (docs/operations/admin.md "Extensions"): install, upgrade, roll back, uninstall, switch ──
 
 // The routes' root: /extensions, or /plugins on a hub from before #1844 (docs/extensions/extensions.md "Naming and compatibility"). Found out once,
@@ -216,11 +211,16 @@ export const upgradeExtension = async (id: string, pv: ExtensionPreview) =>
 export const rollbackExtension = async (id: string) => adminApi<AdminExtension>(`${await extRoot()}/${enc(id)}/rollback`, "POST");
 
 export const setExtensionEnabled = async (id: string, enabled: boolean) => adminApi<AdminExtension>(`${await extRoot()}/${enc(id)}/enabled`, "PUT", { enabled });
+/** On, off, or null back to the default for its source (docs/extensions/extensions.md "Sandbox"); the answer is the extension. */
+export const setExtensionSandbox = async (id: string, enabled: boolean | null) => adminApi<AdminExtension>(`${await extRoot()}/${enc(id)}/sandbox`, "PUT", { enabled });
+/** Let a sandboxed extension reach one more host (#5697): host, host:port or an http(s) URL; the answer is the extension. */
+export const allowExtensionHost = async (id: string, host: string) => adminApi<AdminExtension>(`${await extRoot()}/${enc(id)}/egress/allow`, "POST", { host });
+export const revokeExtensionHost = async (id: string, host: string) => adminApi<AdminExtension>(`${await extRoot()}/${enc(id)}/egress/allow?host=${enc(host)}`, "DELETE");
 
 export const uninstallExtension = async (id: string, keepData: boolean) =>
   adminApi<ExtensionRemovalResult>(`${await extRoot()}/${enc(id)}`, "DELETE", { keep_data: keepData });
 
-// ── extension markets (docs/extensions/extensions.md "Extension markets"): the apps' routes under /extensions/-/, behind the admin session. Installing
+// ── extension markets (docs/extensions/extensions.md "Extension marketplace"): the apps' routes under /extensions/-/, behind the admin session. Installing
 // and upgrading from a market's preview go through installExtension / upgradeExtension above (the preview's id and digest).
 
 const markets = async () => `${await extRoot()}/-/markets`;
@@ -235,7 +235,7 @@ export const getCatalog = async (q?: string, market?: string, refresh?: boolean)
 export const previewFromMarket = async (market: string, extension: string) =>
   adminApi<ExtensionPreview>(`${await extRoot()}/-/catalog/preview`, "POST", { market, extension, plugin: extension });
 
-// ── how the extensions run (docs/extensions/extensions.md "Activity"): counts and logs, on a hub from #1857 on (older ones 404) ──
+// ── how the extensions run (docs/extensions/extensions.md "Runtime status"): counts and logs, on a hub from #1857 on (older ones 404) ──
 
 export const getMetricsOverview = (window: MetricsWindow = "24h") => adminApi<MetricsOverview>(`/extensions/-/metrics?window=${window}`);
 

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Mute from an inbox row's long-press menu (docs/assistant/inbox.md「静音」): the menu offers what the item can be muted by
+/// Mute from an inbox row's long-press menu (docs/assistant/inbox.md「Muting」): the menu offers what the item can be muted by
 /// (a GitHub item's repository and sender, a Feishu group's chat and sender, a mail's sender), muting files the item
 /// and says so, and More › Muted lists the mutes. Against scripts/mock/mock_hub.py with MOCK_GITHUB_INBOX=1
 /// MOCK_MUTES=1 (PERSONA_MOCK_HUB), which keeps the mutes at GET /api/v1/inbox/mutes.

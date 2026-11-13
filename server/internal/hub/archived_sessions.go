@@ -48,14 +48,9 @@ func (h *Hub) archiveManagers(ctx context.Context) []string {
 	return ids
 }
 
-// A Hub-wide feature cannot promise support for only part of its fleet. Mixed
-// versions or an offline owner disable the controls until every owner is ready.
-func (h *Hub) agentSessionArchivesSupported() bool {
-	return slices.Contains(h.agentSessionArchiveFeatures(), featureAgentSessionArchives)
-}
-
 // agentSessionArchiveFeatures are the archive features every owner supports now: archives, and "Archive and close"
-// with them (one look at the managers for both).
+// with them (one look at the managers for both). A Hub-wide feature cannot promise support for only part of its
+// fleet: mixed versions or an offline owner disable the controls until every owner is ready.
 func (h *Hub) agentSessionArchiveFeatures() []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

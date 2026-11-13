@@ -2,7 +2,7 @@ import BeautifulUI
 import SwiftUI
 
 #if os(iOS) || os(visionOS)
-/// The iPhone's ChatGPT-style shell (docs/apple/ios.md「新外壳」): no tab bar. Assistant (the Persona assistant) and Agents (the Agents
+/// The iPhone's ChatGPT-style shell (docs/apple/ios.md「New shell」): no tab bar. Assistant (the Persona assistant) and Agents (the Agents
 /// list) are two pages under the top switch, both kept alive like tabs (switching keeps each one's place); the drawer
 /// slides both aside; Inbox / Scheduled Tasks / Knowledge / Machines push onto Assistant; Settings is a sheet.
 ///
@@ -59,7 +59,7 @@ struct ShellView: View {
             }
             .onDisappear { shell.detach(from: model) }
             // Waiting for Network / Connecting… / Updating… and the toasts float in a window of their own above the shell's, moving nothing
-            // (docs/apple/shell.md「连接状态和 toast」).
+            // (docs/apple/shell.md「Connection status and toasts」).
             .background { ShellWindowHooks(notices: shell.notices, pager: shell.pager) }
     }
 
@@ -93,36 +93,53 @@ struct ShellView: View {
     private var sidebar: some View {
         AssistantSidebar(current: model.assistantCurrent,
                          open: { key in
+                             // Under the open drawer: no slide; the page switches, then closes the drawer (AssistantView).
+                             shell.select(0, animated: false)
                              model.assistantCurrent = key
-                             model.selectedTab = .assistant
                              model.assistantReveal += 1
-                             shell.drawer.close()
+                             closeIfLeftOpen()
                          },
                          newConversation: { go(.newConversation) },
                          openProfile: { go(.profile) },
                          openRoutines: { go(.routines) },
                          openKnowledge: { go(.knowledge) },
-                         openSettings: {
-                             shell.drawer.close()
-                             model.shellSettings = true
-                         },
+                         // A task: over the open drawer, which is where Done comes back to (docs/design/sidebar-navigation.md).
+                         openSettings: { model.shellSettings = true },
                          drawer: shell.drawer,
                          openInbox: { go(.inbox) },
                          openTodos: { go(.todos) },
                          onMachines: { go(.machines) },
                          onOpenExtension: { go(.extensionPage($0)) },
-                         openHealth: { go(.health) })
+                         openHealth: { go(.health) },
+                         openRecordingsPage: openRecordingsPage)
     }
 
+    /// The drawer's Recordings: the page, which shows the recording running, else Record to start one.
+    private var openRecordingsPage: (() -> Void)? {
+        #if os(iOS)
+        return { go(.recordings) }
+        #else
+        return nil
+        #endif
+    }
+
+    /// A place from the drawer (docs/design/sidebar-navigation.md): the strip snaps to Assistant under the open drawer, the page
+    /// switches there without animation and then closes the drawer (`AssistantView.show`). Before, the strip slid, the stack
+    /// pushed and the drawer closed in the same moment (#6599).
     private func go(_ page: ShellPage) {
-        model.selectedTab = .assistant
+        shell.select(0, animated: false)
         shell.show(page)
-        shell.drawer.close()
+        closeIfLeftOpen()
+    }
+
+    /// The Assistant page closes the drawer once it has switched; should nothing have taken the request, this still does.
+    private func closeIfLeftOpen() {
+        DispatchQueue.main.async { if shell.drawer.isOut { shell.drawer.close() } }
     }
 }
 
 #if DEBUG
-/// What the strip shows, for UI tests (`probe.shell`, docs/apple/ios-state.md「探针」; read by `ShellPageProbe.swift`): the page
+/// What the strip shows, for UI tests (`probe.shell`, docs/apple/ios-state.md「Probes and assertions」; read by `ShellPageProbe.swift`): the page
 /// the strip rests on (`assistant` / `agents` / `feishu`, `moving` while it slides), the page in front (`ShellState.page`, what the
 /// switch shows), the app's tab, the drawer and the pages' roots, the status row, and the latest `ShellTrace`. Pixels
 /// told which page was drawn before; both pages stay built, so `exists` cannot.
@@ -211,7 +228,7 @@ private struct ShellMovingBar: View {
             .padding(.top, Theme.Space.xxs)
             .shellTopBarScaled()
             .background(alignment: .top) {
-                BarFog(solid: AssistantTopBar.height - Theme.Space.sm, fade: AssistantTopBar.fade)
+                BarFog(solid: AssistantTopBar.fogSolid, fade: AssistantTopBar.fade)
                     .opacity(max(0, 1 - p))
                     .allowsHitTesting(false)
             }

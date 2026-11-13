@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -142,6 +143,72 @@ func TestStopCardPressWithNothingToStopSaysSo(t *testing.T) {
 			}
 			if got := f.interrupted()[before:]; len(got) != 0 {
 				t.Fatalf("interrupted %v, want none", got)
+			}
+		})
+	}
+}
+
+// A conversation whose last turn is over has nothing to stop: /stop and the progress card's Stop button answer that
+// nothing is running and send no interrupt, which for an ordinary agent presses Escape in its terminal (a keystroke in
+// an idle window) and tells the owner a turn was stopped that had already finished. One on a turn, waiting on the owner
+// or just being opened still stops, and so does one whose state cannot be told at all, or that this chat just sent a
+// message into that was not seen working yet (its state may just not have caught up): the owner asked, so it is tried.
+func TestStopWithNoTurnRunningSaysSo(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		sess proto.Session
+		sent bool // this chat sent a message into it that was not seen working yet
+		runs bool // there is a turn to stop
+	}{
+		{"finished, result unseen", proto.Session{State: proto.StateUnread}, false, false},
+		{"finished, result seen", proto.Session{State: proto.StateIdle}, false, false},
+		{"finished, this chat's message not seen working yet", proto.Session{State: proto.StateIdle}, true, true},
+		{"on a turn", proto.Session{State: proto.StateWorking, Status: proto.StatusWorking}, false, true},
+		{"waiting on the owner", proto.Session{State: proto.StateNeedsYou, Status: proto.StatusBlocked}, false, true},
+		{"being opened", proto.Session{State: proto.StateIdle, Starting: true}, false, true},
+		{"state cannot be told", proto.Session{}, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, f := stopCardHub(t, FeishuFeatures{Main: true})
+			var notes []string
+			f.answerApp(AppFeishu, FeishuText, func(p json.RawMessage) (any, error) {
+				var m map[string]any
+				_ = json.Unmarshal(p, &m)
+				if text, ok := m["text"].(string); ok {
+					notes = append(notes, text)
+				}
+				return map[string]any{}, nil
+			})
+			sess := c.sess
+			sess.SessionID, sess.MachineID, sess.Assistant = "main0000", "server", true
+			f.setSessions("server", sess)
+			setSettings(t, s, func(v *Settings) { v.MachineID = "server"; v.Main = "main0000" })
+			if c.sent {
+				s.chans.st.Runs = append(s.chans.st.Runs, &channel.Run{ID: "fb_om", Channel: channel.Feishu,
+					MachineID: "server", SessionID: "main0000", Started: time.Now().UTC()})
+			}
+			ctx := context.Background()
+			target := botTarget{Kind: targetMain}
+			stopped := i18n.T("", "assistant-feishu_cards.stopped", i18n.Args{"label": "主对话"})
+			none := i18n.T("", "assistant-feishu_cards.nothing_running")
+
+			if h, _ := s.botCommand(ctx, FeishuFeatures{Main: true}, "om", "/stop", "", ""); !h {
+				t.Fatal("/stop was not handled")
+			}
+			r := s.botCardAction(ctx, stopCardAction(target), "")
+			want := map[bool]int{true: 2, false: 0}[c.runs] // /stop and the press, each with its own call
+			if got := f.interrupted(); len(got) != want {
+				t.Fatalf("interrupts %v, want %d", got, want)
+			}
+			wantNote, wantToast, wantKind := stopped, stopped, "success"
+			if !c.runs {
+				wantNote, wantToast, wantKind = none, none, "info"
+			}
+			if len(notes) != 1 || notes[0] != wantNote {
+				t.Fatalf("/stop answered %v, want [%q]", notes, wantNote)
+			}
+			if r.Toast == nil || r.Toast.Content != wantToast || r.Toast.Type != wantKind {
+				t.Fatalf("press toast %+v, want %s %q", r.Toast, wantKind, wantToast)
 			}
 		})
 	}

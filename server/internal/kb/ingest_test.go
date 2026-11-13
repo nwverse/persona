@@ -174,6 +174,11 @@ func TestIngestRecoversEveryWriteBoundary(t *testing.T) {
 						if strings.Count(text, m.Text) != 1 {
 							t.Fatalf("missing or repeated %q: %q", m.ID, text)
 						}
+						day := m.At.In(s.Zone()).Format("2006-01-02")
+						lines, _, _, identity, err := e.DayWithIdentity(c.ID, day)
+						if err != nil || len(lines) != 1 || identity.Messages[lines[0].N].Ref != m.ID {
+							t.Fatalf("recovered message identity %q: %+v, %v", m.ID, identity, err)
+						}
 					}
 					cur, _ := s.Chat(c.ID)
 					if cur.Pinned != c.Pinned || cur.Name != "Example" {
@@ -285,6 +290,35 @@ func TestIngestFilesystemRecoveryWaitsForRepair(t *testing.T) {
 		t.Fatal(err)
 	}
 	ingestMessages(t, &Engine{Store: s}, "example", "thread", 0, m)
+	assertArchiveCounts(t, s, "example-thread", 1, 1)
+}
+
+func TestSettleIngestWaitsForJournalRecovery(t *testing.T) {
+	s, e := replayStore(t)
+	m := SourceMessage{ID: "one", At: time.Now().Add(-time.Hour), Text: "Synthetic recovery message"}
+	s.ingestWrite = func(path string, raw []byte) error {
+		if filepath.Base(path) == "meta.json" {
+			return errors.New("synthetic metadata write failure")
+		}
+		return archiveWrite(path, raw)
+	}
+	if _, err := e.Ingest(context.Background(), named("example"), SourceChat{ID: "thread"}, []SourceMessage{m}); err == nil {
+		t.Fatal("metadata replacement did not fail")
+	}
+	if err := s.SettleIngest("example", "thread"); err == nil {
+		t.Fatal("settlement ignored the unfinished journal")
+	}
+	if _, err := os.Stat(s.path(KindChat, "example-thread", ingestJournal)); err != nil {
+		t.Fatalf("unfinished journal was lost: %v", err)
+	}
+	s.ingestWrite = nil
+	if err := s.SettleIngest("example", "thread"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleIngest("example", "thread"); err != nil {
+		t.Fatalf("settlement should be idempotent: %v", err)
+	}
+	ingestMessages(t, e, "example", "thread", 0, m)
 	assertArchiveCounts(t, s, "example-thread", 1, 1)
 }
 
@@ -502,7 +536,7 @@ func TestIngestRetentionAndForgetReceipts(t *testing.T) {
 	if n := s.Prune(now, 1, 30); n != 2 {
 		t.Fatalf("pruned %d days, want 2", n)
 	}
-	if r, err := s.receipts("example", "thread", "example-thread"); err != nil || len(r.IDs) != 0 {
+	if r, err := s.receipts("example", "thread", "example-thread"); err != nil || len(r.IDs) != 0 || len(r.Lines) != 0 {
 		t.Fatalf("retained expired receipts: %+v, %v", r, err)
 	}
 	old.At, old.Text = now.Add(-time.Hour), "New synthetic message with reused ID"

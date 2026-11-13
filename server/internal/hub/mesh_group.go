@@ -9,7 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// One center per group (docs/archive/operations/plan-hub-center.md 2, docs/server/mesh.md "Center"): every hub of a mesh group keeps which hub
+// One center per group (docs/archive/operations/plan-hub-center.md 2, docs/server/mesh.md "Primary"): every hub of a mesh group keeps which hub
 // it takes for the center and a term; the larger term wins wherever records meet, so the whole group comes to agree.
 // A hub alone is its own center. Using another hub's code joins this hub (with its whole group) to that hub's group:
 // the center becomes that group's, under a term larger than both had. "Set as center" in the admin page adds one to

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -48,6 +49,9 @@ func reportLive(t *testing.T, h *Hub, st FleetState, stats FleetStats) {
 	b, _ := json.Marshal(assistantwire.FleetLive{State: st, Stats: stats})
 	busEvents[assistantwire.EventFleetLive](h, nil, b)
 }
+
+// applyDeviceStates is applyDeviceStatesFrom the manager that carries hub.json's machines.
+func (h *Hub) applyDeviceStates(st devicewire.States) { h.applyDeviceStatesFrom(devicesOwner, st) }
 
 // testAsks plays the manager for the hub's own cards in the hub's tests (Hub.askVia): a card is shown to the apps
 // (fleet.interaction) and waits for h.resolve.

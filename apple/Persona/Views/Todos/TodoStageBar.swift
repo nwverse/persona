@@ -4,6 +4,9 @@ import SwiftUI
 /// hub sends the stage on the todo (`TodoItem.stage`); a todo without one, or with a name this build does not know,
 /// draws nothing, so the page only shows this when `TodoItem.todoStage` is set. The steps before the current one are
 /// done, the ones after it are still ahead — the same reading as the stage bar in the Feishu report (#2768).
+///
+/// The interface stops at xxxLarge (`docs/design/DESIGN_SYSTEM.md`, "Dynamic Type"), so the six names always fit their
+/// sixth of the width; the AX-size layout (dots without names, a "Step 2 of 6" line) is gone.
 struct TodoStageBar: View {
     var stage: TodoStage
 
@@ -33,6 +36,21 @@ struct TodoStageBar: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Stage: \(stage.label) (step \(stage.stepNumber) of \(TodoStage.stepCount))")
         .accessibilityIdentifier("todo.stage")
+    }
+
+    /// The line under the dots at the accessibility sizes: the current step and where it is among the six. Each
+    /// language's value has a no-break space before the "·", so a wrapped line keeps it at the end of the first line.
+    nonisolated static func summary(_ stage: TodoStage) -> String {
+        String(localized: "Step \(stage.stepNumber) of \(TodoStage.stepCount) · \(stage.label) [Todo Stage Bar]")
+    }
+
+    /// What VoiceOver says for one dot at the accessibility sizes: its name, its place, and whether it is done, the
+    /// current step or still ahead of `current`.
+    nonisolated static func dotLabel(_ step: TodoStage, current: TodoStage) -> String {
+        let n = step.stepNumber, of = TodoStage.stepCount
+        if n < current.stepNumber { return String(localized: "\(step.label), step \(n) of \(of), done [Todo Stage Bar]") }
+        if n == current.stepNumber { return String(localized: "\(step.label), step \(n) of \(of), current step [Todo Stage Bar]") }
+        return String(localized: "\(step.label), step \(n) of \(of), still ahead [Todo Stage Bar]")
     }
 
     /// The line from a step to its neighbour: colored once the neighbour is reached. The first step's line to its left

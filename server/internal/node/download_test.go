@@ -2,12 +2,14 @@ package node
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func TestDownloadFileChunks(t *testing.T) {
@@ -71,5 +73,27 @@ func TestDownloadFileRefusesInvalidInput(t *testing.T) {
 	end, err := n.readFileChunk(proto.FileChunkRequest{Path: path, Offset: 4, Length: 10})
 	if err != nil || len(end.Data) != 0 {
 		t.Fatal("EOF is not empty", err)
+	}
+}
+
+// A chunk asked at a revision the file no longer has says so with a code, which a transfer reports as such.
+func TestDownloadChunkOfAChangedFileHasACode(t *testing.T) {
+	dir := t.TempDir()
+	n := &Node{home: dir}
+	path := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(path, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := n.readFileChunk(proto.FileChunkRequest{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("second, longer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = n.readFileChunk(proto.FileChunkRequest{Path: path, Length: 4, Revision: info.Revision})
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != proto.CodeFileChanged {
+		t.Fatalf("err %v", err)
 	}
 }

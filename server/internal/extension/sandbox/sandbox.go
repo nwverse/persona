@@ -46,7 +46,8 @@ type Plan struct {
 	// Tools are its command-line programs (manifest.tools), read-only; "" when it has none.
 	Tools       string
 	ProxySocket string
-	// ProxyURL (macOS) is the hub's proxy on loopback with the extension's credential; HubPort the hub's own port.
+	// ProxyURL (macOS) is the hub's proxy on loopback with the extension's credential; its port is the only one the
+	// profile lets the program reach (Darwin).
 	ProxyURL string
 	// Self is personad (Linux: the sandbox's first process).
 	Self string

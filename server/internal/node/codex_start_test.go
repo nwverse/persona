@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -153,16 +154,149 @@ func TestCodexStartUsesThePurposeModel(t *testing.T) {
 	}
 }
 
+func TestCodexStartPermissionModes(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode string
+		args, want []string
+		managed    bool
+	}{
+		{"bypass", "bypassPermissions", nil, []string{"--dangerously-bypass-approvals-and-sandbox"}, false},
+		{"alias bypass", "bypassPermissions", []string{"--model", "sample-model"}, []string{"--model", "sample-model", "--dangerously-bypass-approvals-and-sandbox"}, false},
+		{"existing bypass", "bypassPermissions", []string{"--dangerously-bypass-approvals-and-sandbox"}, []string{"--dangerously-bypass-approvals-and-sandbox"}, false},
+		{"existing yolo", "bypassPermissions", []string{"--yolo"}, []string{"--yolo"}, false},
+		{"managed bypass", "bypassPermissions", nil, []string{"--dangerously-bypass-approvals-and-sandbox"}, true},
+		{"managed existing bypass", "bypassPermissions", []string{"--dangerously-bypass-approvals-and-sandbox"}, nil, true},
+		{"managed existing yolo", "bypassPermissions", []string{"--yolo"}, nil, true},
+		{"plan", "plan", nil, []string{"--sandbox", "read-only", "--ask-for-approval", "never"}, false},
+		{"managed plan", "plan", nil, []string{"--sandbox", "read-only", "--ask-for-approval", "never"}, true},
+		{"default", "default", []string{"--model", "sample-model"}, []string{"--model", "sample-model"}, false},
+		{"unspecified", "", nil, nil, false},
+		{"other mode", "acceptEdits", []string{"--full-auto"}, []string{"--full-auto"}, false},
+		{"managed default", "default", nil, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withCodexLaunchers(t, map[string][]string{})
+			n, _, _, _ := codexStartHerdr(t, 0)
+			launcher := "code-alias"
+			base := []string{"codex"}
+			if tc.managed {
+				launcher = "managed-codex"
+				n.setManaged([]proto.ManagedLauncher{{Name: launcher, Agent: "codex", Args: tc.args}})
+				base = []string{n.bin, "launch", launcher}
+			} else {
+				withCodexLaunchers(t, map[string][]string{launcher: append([]string{"codex"}, tc.args...)})
+			}
+			_, err := request(t, n, "session.start", map[string]any{
+				"cwd": "~/proj", "launcher": launcher, "permission_mode": tc.mode, "prompt": "Inspect the project",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append(base, tc.want...)
+			if !slices.Equal(ran, want) {
+				t.Fatalf("started with %q, want %q", ran, want)
+			}
+		})
+	}
+}
+
+// Execute the captured start through codex-start and, for managed launchers, the real launch socket path.
+func TestCodexStartBypassLauncherArguments(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("requires a POSIX shell")
+	}
+	for _, tc := range []struct {
+		name, mode string
+		alias      bool
+		args       []string
+		managed    []string
+		want       []string
+	}{
+		{"alias shadows managed yolo", "bypassPermissions", true, nil, []string{"--yolo"}, []string{"--dangerously-bypass-approvals-and-sandbox"}},
+		{"alias shadows managed bypass", "bypassPermissions", true, nil, []string{"--dangerously-bypass-approvals-and-sandbox"}, []string{"--dangerously-bypass-approvals-and-sandbox"}},
+		{"alias separator", "bypassPermissions", true, []string{"--"}, nil, []string{"--dangerously-bypass-approvals-and-sandbox", "--"}},
+		{"alias prompt yolo", "bypassPermissions", true, []string{"--", "--yolo"}, nil, []string{"--dangerously-bypass-approvals-and-sandbox", "--", "--yolo"}},
+		{"alias prompt bypass", "bypassPermissions", true, []string{"--", "--dangerously-bypass-approvals-and-sandbox"}, nil, []string{"--dangerously-bypass-approvals-and-sandbox", "--", "--dangerously-bypass-approvals-and-sandbox"}},
+		{"alias existing option", "bypassPermissions", true, []string{"--yolo", "--", "--yolo"}, nil, []string{"--yolo", "--", "--yolo"}},
+		{"alias first separator", "bypassPermissions", true, []string{"--model", "sample-model", "--", "--", "--yolo"}, nil, []string{"--model", "sample-model", "--dangerously-bypass-approvals-and-sandbox", "--", "--", "--yolo"}},
+		{"managed separator", "bypassPermissions", false, nil, []string{"--"}, []string{"--dangerously-bypass-approvals-and-sandbox", "--"}},
+		{"managed prompt yolo", "bypassPermissions", false, nil, []string{"--", "--yolo"}, []string{"--dangerously-bypass-approvals-and-sandbox", "--", "--yolo"}},
+		{"managed prompt bypass", "bypassPermissions", false, nil, []string{"--", "--dangerously-bypass-approvals-and-sandbox"}, []string{"--dangerously-bypass-approvals-and-sandbox", "--", "--dangerously-bypass-approvals-and-sandbox"}},
+		{"managed existing option", "bypassPermissions", false, nil, []string{"--yolo", "--", "--yolo"}, []string{"--yolo", "--", "--yolo"}},
+		{"managed first separator", "bypassPermissions", false, nil, []string{"--model", "sample-model", "--", "--", "--yolo"}, []string{"--model", "sample-model", "--dangerously-bypass-approvals-and-sandbox", "--", "--", "--yolo"}},
+		{"alias default separator", "default", true, []string{"--", "--yolo"}, nil, []string{"--", "--yolo"}},
+		{"managed default separator", "default", false, nil, []string{"--", "--yolo"}, []string{"--", "--yolo"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withCodexLaunchers(t, map[string][]string{})
+			n, _, _, _ := codexStartHerdr(t, 0)
+			launchKeyHome(t)
+			dir := t.TempDir()
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			n.bin = filepath.Join(dir, "personad")
+			writeFile(t, n.bin, "#!/bin/sh\nNODE_TEST_LAUNCH=1 exec "+shellQuote(self)+" \"$@\"\n")
+			if err := os.Chmod(n.bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			program := filepath.Join(dir, "codex")
+			writeFile(t, program, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$OUT\"\nprintf '%s' \"${PERSONA_CODEX_BYPASS_PERMISSIONS-unset}\" > \"$OUT_ENV\"\n")
+			if err := os.Chmod(program, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("OUT", filepath.Join(dir, "args"))
+			t.Setenv("OUT_ENV", filepath.Join(dir, "env"))
+			launcher := "code-launcher"
+			n.setManaged([]proto.ManagedLauncher{{Name: launcher, Agent: "codex", Args: tc.managed}})
+			if tc.alias {
+				withCodexLaunchers(t, map[string][]string{launcher: append([]string{"codex"}, tc.args...)})
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			ln, err := n.listenOnce(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			_, err = request(t, n, "session.start", map[string]any{
+				"cwd": "~/proj", "launcher": launcher, "permission_mode": tc.mode, "prompt": "Inspect the project",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(dir, "start.json")
+			b, _ := json.Marshal(codexStartFile{Argv: ran, Prompt: "Inspect the project"})
+			writeFile(t, file, string(b))
+			args, _ := json.Marshal([]string{file})
+			cmd := exec.CommandContext(ctx, self, "-test.run=^TestCodexStartHelper$")
+			cmd.Env = append(os.Environ(), "PERSONA_CODEX_START_HELPER=1", "PERSONA_CODEX_START_ARGS="+string(args))
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("codex-start: %v: %s", err, out)
+			}
+			got, err := os.ReadFile(os.Getenv("OUT"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append(slices.Clone(tc.want), "--", "Inspect the project")
+			if string(got) != strings.Join(want, "\n")+"\n" {
+				t.Errorf("executed args %q, want %q", strings.Split(strings.TrimSuffix(string(got), "\n"), "\n"), want)
+			}
+			if got, err := os.ReadFile(os.Getenv("OUT_ENV")); err != nil || string(got) != "unset" {
+				t.Errorf("internal permission marker reached Codex: %q, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestCodexStartRefusals(t *testing.T) {
 	withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
 	n, _, _, cmds := codexStartHerdr(t, 0)
 	_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hi", "async": true})
 	if code, _ := refusalOf(t, err); code != "codex_needs_prompt" {
 		t.Errorf("async: %v", err)
-	}
-	_, err = request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "  "})
-	if code, _ := refusalOf(t, err); code != "codex_needs_prompt" {
-		t.Errorf("no message: %v", err)
 	}
 	if len(*cmds) != 0 {
 		t.Errorf("ran %q", *cmds)
@@ -190,21 +324,115 @@ func TestCodexStartFailures(t *testing.T) {
 	}
 }
 
-// Codex's trust dialog for the folder the user chose is answered (enter: the selected trust option).
-func TestCodexStartTrustsTheFolder(t *testing.T) {
-	withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
-	n, f, _, _ := codexStartHerdr(t, 2*time.Second)
-	f.screenSteps("w1:p2", isKeys("enter"), "  Trust this folder? Codex can read, edit, and run files here.\n\n› 1. Trust and continue\n  2. Quit\n\n  enter continue · esc quit\n",
-		"› Ask Codex to do anything\n")
-	res, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hello"})
+// codexTrustDialogs are Codex's folder trust dialogs by version: 0.167's as `herdr pane read --source visible` read it
+// off a new tab (Codex 0.167.0 in a fresh git repository, 2026-11-09), 0.163's, and 0.153's as the earlier match knew it.
+func codexTrustDialogs(t *testing.T) map[string]string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "codexstart", "trust-0.167.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s := decodeSessions(t, []any{res["session"]})[0]; s.SessionID != startThread {
-		t.Errorf("answered %+v", s)
+	return map[string]string{
+		"0.167": string(b),
+		"0.163": "  Trust this folder? Codex can read, edit, and run files here.\n\n› 1. Trust and continue\n  2. Quit\n\n  enter continue · esc quit\n",
+		"0.153": "> You are in /tmp/proj\n\n  Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.\n\n" +
+			"› 1. Yes, continue\n  2. No, quit\n\n  Press enter to continue\n",
 	}
-	if keys := f.trace("pane.send_keys"); len(keys) == 0 || !strings.Contains(keys[0], `"enter"`) {
-		t.Errorf("keys %v", keys)
+}
+
+// tallPane answers pane.read the way herdr does for a pane rows tall whose screen is drawn from its top (fakeHerdr's
+// screen): "visible" leaves out the blank rows under it, "recent" counts them, so the last 40 recent rows of a 51-row
+// pane showing Codex 0.167's trust dialog are all blank (#2351).
+func tallPane(f *fakeHerdr, rows int) {
+	f.handle("pane.read", func(p map[string]any) any {
+		f.mu.Lock()
+		text := f.screen[str(p["pane_id"])]
+		f.mu.Unlock()
+		all := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+		for len(all) < rows {
+			all = append(all, "")
+		}
+		if p["source"] == "visible" {
+			for len(all) > 0 && strings.TrimSpace(all[len(all)-1]) == "" {
+				all = all[:len(all)-1]
+			}
+		}
+		if lines, _ := p["lines"].(float64); lines > 0 && int(lines) < len(all) {
+			all = all[len(all)-int(lines):]
+		}
+		return map[string]any{"read": map[string]any{"text": strings.Join(all, "\n") + "\n"}}
+	})
+}
+
+// Codex's trust dialog for the folder the user chose is answered in a pane taller than the dialog (enter: the selected
+// trust option), whatever its other option says.
+func TestCodexStartTrustsTheFolder(t *testing.T) {
+	for name, dialog := range codexTrustDialogs(t) {
+		t.Run(name, func(t *testing.T) {
+			withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
+			n, f, _, _ := codexStartHerdr(t, 2*time.Second)
+			tallPane(f, 51)
+			// The rollout only comes 2 s after the command: the start waits on, and the dialog stays until it is answered.
+			f.screenSteps("w1:p2", isKeys("enter"), dialog, "› Ask Codex to do anything\n")
+			res, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hello"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s := decodeSessions(t, []any{res["session"]})[0]; s.SessionID != startThread {
+				t.Errorf("answered %+v", s)
+			}
+			if keys := f.trace("pane.send_keys"); len(keys) != 1 || !strings.Contains(keys[0], `["enter"]`) {
+				t.Errorf("keys %v", keys)
+			}
+			if closed := f.trace("tab.close", "pane.close"); len(closed) != 0 {
+				t.Fatalf("closed a start whose thread appeared after trusting the folder: %v", closed)
+			}
+		})
+	}
+}
+
+// A start that gives up on a dialog drawn from the top of a tall pane says what the tab shows, not its blank bottom rows.
+func TestCodexStartFailureShowsATopDialog(t *testing.T) {
+	withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
+	old := codexStartWait
+	codexStartWait = 1500 * time.Millisecond
+	t.Cleanup(func() { codexStartWait = old })
+	n, f, _, _ := codexStartHerdr(t, time.Hour)
+	tallPane(f, 51)
+	f.setScreen("w1:p2", "  Sign in with ChatGPT\n\n› 1. Sign in with ChatGPT\n  2. Sign in with Device Code\n  3. Sign in another way\n\n  Press enter to continue\n")
+	_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hi"})
+	if err == nil || !strings.Contains(err.Error(), "没认出它这次的会话") || !strings.Contains(err.Error(), "Sign in another way") {
+		t.Errorf("err %v", err)
+	}
+	if keys := f.trace("pane.send_keys"); len(keys) != 0 {
+		t.Errorf("answered a screen that is not the trust dialog: %v", keys)
+	}
+}
+
+// codexTrustKeys walks the cursor to the option that trusts the folder, and answers no other dialog.
+func TestCodexTrustKeys(t *testing.T) {
+	dialogs := codexTrustDialogs(t)
+	onSecond := strings.Replace(strings.Replace(dialogs["0.167"], "› 1. Trust", "  1. Trust", 1), "  2. Back", "› 2. Back", 1)
+	trustSecond := "  Trust this folder?\n\n› 1. Back to Agent Command Center\n  2. Trust and continue\n\n  enter continue · esc back\n"
+	for name, tc := range map[string]struct {
+		screen string
+		want   []string
+	}{
+		"0.167":                      {dialogs["0.167"], []string{"enter"}},
+		"0.163":                      {dialogs["0.163"], []string{"enter"}},
+		"0.153":                      {dialogs["0.153"], []string{"enter"}},
+		"cursor on the other option": {onSecond, []string{"up", "enter"}},
+		"trust listed second":        {trustSecond, []string{"down", "enter"}},
+		"no cursor drawn yet":        {strings.Replace(dialogs["0.167"], "› 1.", "  1.", 1), nil},
+		"no trust option":            {"  Trust this folder?\n\n› 1. Back to Agent Command Center\n  2. Quit\n", nil},
+		"update prompt":              {"  ✨ Update available! 0.166.0 -> 0.167.0\n\n› 1. Update now\n  2. Skip\n  3. Skip until next version\n\n  Press enter to continue\n", nil},
+		"approval of a command naming trust": {"  Would you like to run the following command?\n\n  $ cat trust.txt\n\n› 1. Yes, proceed (y)\n" +
+			"  2. No, and tell Codex what to do differently (esc)\n\n  Press enter to confirm or esc to cancel\n", nil},
+		"composer": {"› Ask Codex to do anything\n\n  gpt-6 default · ~/proj\n", nil},
+	} {
+		if got := codexTrustKeys(tc.screen); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: keys %q, want %q", name, got, tc.want)
+		}
 	}
 }
 

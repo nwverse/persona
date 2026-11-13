@@ -1,0 +1,16 @@
+{
+  "digest_more": "ほか{count}件",
+  "digest_title": "{label}：オンにする前の1日分が{count}件あります",
+  "digest_title_recipe": "{label}：取得方法を変えたときに{count}件見つかりました",
+  "due": "期限：{when}",
+  "failing_title": "{label}：{since}から取得できていません",
+  "failing_why": "ルール：購読の取得が1日失敗しています",
+  "push_label": "{device} のショートカット",
+  "reason.call_failed": "コネクタの呼び出しに失敗しました。",
+  "reason.no_list": "取得方法が読むリストが結果に見つかりません。",
+  "reason.not_read_only": "コネクタのカタログで、変更を行うツールとされているものがあります。",
+  "reason.other": "購読を開いて理由を確認してください。",
+  "reason.shape_changed": "結果の形式が変わったため、取得方法の更新が必要です。",
+  "reason.tool_changed": "ツールが変わったため、取得方法の更新が必要です。",
+  "recovered": "購読の取得が再開しました"
+}

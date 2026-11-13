@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -33,15 +34,19 @@ func (n *Node) startingSession(id string) bool {
 // (resumed under another profile or copied to another project: the new writes go to the new copy, the old one stays):
 // the newest is the one. A known path, reported by a hook or found here, is looked for again after half a minute, and
 // stays a candidate: a hook may name a file outside the directories searched.
-func (n *Node) transcriptPath(id string) string {
-	p := n.findTranscriptPath(id)
+func (n *Node) transcriptPath(id string) string { return n.transcriptPathIn(id, nil) }
+
+// transcriptPathIn is transcriptPath with a Codex rollout's stat taken from a list pass (codexListPass; nil: stat'ed
+// here): the list stats each rollout already, and this ran again for every row every second.
+func (n *Node) transcriptPathIn(id string, pass *codexListPass) string {
+	p := n.findTranscriptPath(id, pass)
 	if !n.scopedTranscriptAllows(p) {
 		return ""
 	}
 	return p
 }
 
-func (n *Node) findTranscriptPath(id string) string {
+func (n *Node) findTranscriptPath(id string, pass *codexListPass) string {
 	// A runtime's session whose conversation is a Claude transcript (runtimetranscript.go): that one's file.
 	if t := n.runtimes.transcriptOf(id); t != "" {
 		id = t
@@ -50,12 +55,18 @@ func (n *Node) findTranscriptPath(id string) string {
 		return ""
 	}
 	if src, ok := n.codexSource(id); ok && !n.ownedAssistantSource(id) {
+		if p := n.codexAppHistoryPath(src, pass); p != "" {
+			return p
+		}
 		if src.path != "" {
-			if _, err := os.Stat(src.path); err == nil {
+			if _, err := pass.stat(src.path); err == nil {
 				return src.path
 			}
 		}
-		return rolloutPath(src.home, src.thread)
+		if p := rolloutPath(src.home, src.thread); p != "" {
+			return p
+		}
+		return n.codexAppHistoryPath(src, pass) // the App's chat with no rollout: its history as written (codex_apphistory.go)
 	}
 	if strings.HasPrefix(id, "c0de-") {
 		return n.oldCodexTranscript(id)
@@ -65,7 +76,7 @@ func (n *Node) findTranscriptPath(id string) string {
 	at, fresh := n.pathsAt[id]
 	n.mu.Unlock()
 	known := p != "" && fileExists(p)
-	if known && fresh && time.Since(at) < 30*time.Second {
+	if known && fresh && time.Since(at) < pathRecheck {
 		return p
 	}
 	if !validID(id) {
@@ -73,6 +84,29 @@ func (n *Node) findTranscriptPath(id string) string {
 			return p
 		}
 		return ""
+	}
+	// Looking again is for a Claude transcript's newer copy in another projects directory. A rollout found before has
+	// none: it stays the thread's file while it exists (a moved one is looked up afresh below).
+	if known && !isClaudeTranscript(p, id) {
+		n.setPath(id, p)
+		return p
+	}
+	// A live Codex or compatible-CLI agent's conversation is its rollout: the projects directories have nothing of it.
+	if kind := n.rolloutAgent(id); kind != "" {
+		found := ""
+		if kind == traexAgent {
+			found = n.traexPath(id)
+		}
+		if found == "" {
+			found = n.codexPath(id)
+		}
+		if found == "" && kind != traexAgent {
+			found = n.traexPath(id)
+		}
+		if found != "" {
+			n.setPath(id, found)
+		}
+		return found
 	}
 	matches := n.globProjects("*", id+".jsonl")
 	if known && !slices.Contains(matches, p) {
@@ -90,6 +124,27 @@ func (n *Node) findTranscriptPath(id string) string {
 	}
 	n.setPath(id, matches[0])
 	return matches[0]
+}
+
+// pathRecheck is how long a found transcript path is trusted before transcriptPath looks for a newer copy.
+const pathRecheck = 30 * time.Second
+
+// isClaudeTranscript says whether path is a Claude transcript of session id (<projects>/<project>/<id>.jsonl) rather
+// than a Codex or compatible-CLI rollout (rollout-<time>-<id>.jsonl) or another agent's history.
+func isClaudeTranscript(path, id string) bool {
+	return filepath.Base(path) == id+".jsonl"
+}
+
+// rolloutAgent is the kind of a live agent whose conversation is a rollout (Codex, the compatible CLI), "" for any
+// other: such an agent never has a Claude transcript to look for.
+func (n *Node) rolloutAgent(id string) string {
+	n.mu.Lock()
+	a, ok := n.agents[id]
+	n.mu.Unlock()
+	if ok && (a.Agent == "codex" || a.Agent == traexAgent) {
+		return a.Agent
+	}
+	return ""
 }
 
 // setPath remembers session id's transcript path; transcriptPath looks for a newer copy after half a minute.
@@ -121,6 +176,7 @@ func newestFirst(paths []string) []string {
 func validID(id string) bool { return nodeclient.ValidSessionID(id) }
 
 func (n *Node) file(id string) (*transcript.File, error) {
+	n.refreshCodexAppHistory(id) // a Codex App chat with no rollout: its history written out of the App's database (codex_apphistory.go)
 	n.mu.Lock()
 	f := n.files[id]
 	if f != nil {
@@ -189,11 +245,13 @@ func (n *Node) warmTranscripts(ctx context.Context) {
 // followCopy points an open transcript at the file transcriptPath names now, when that is another: moved since it was
 // opened (a Codex thread archived or restored), or a newer copy took over (resumed in another project or profile, or
 // copied when its working directory moved). The session list's rev and updated_at read that file, so the items must
-// too (#1423). Relocate to another inode starts over.
-func (n *Node) followCopy(id string, f *transcript.File) {
+// too (#1423). Relocate to another inode starts over. moved says it pointed the transcript elsewhere.
+func (n *Node) followCopy(id string, f *transcript.File) (moved bool) {
 	if p := n.transcriptPath(id); p != "" && p != f.Where() {
 		f.Relocate(p)
+		return true
 	}
+	return false
 }
 
 // maxFiles caps the transcripts kept parsed in memory: every session ever opened used to stay, items and all.

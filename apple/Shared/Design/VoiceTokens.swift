@@ -1,6 +1,6 @@
 import SwiftUI
 
-// The voice conversation's tokens (docs/assistant/voice.md「设计系统」): how the orb in the voice bar moves and how large it is.
+// The voice conversation's tokens (docs/assistant/voice.md「Design system」): how the orb in the voice bar moves and how large it is.
 // A file of their own, away from Theme.swift (the CarPlay voice PR edits it too). Shared/, so the watch compiles them;
 // it draws no voice UI.
 

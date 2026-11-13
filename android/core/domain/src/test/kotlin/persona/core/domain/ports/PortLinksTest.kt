@@ -6,7 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** docs/operations/ports.md "Recognizing links in answers", the cases of iOS `PortLinksTests`. */
+/** docs/operations/ports.md "Recognizing links in replies", the cases of iOS `PortLinksTests`. */
 class PortLinksTest {
     @Test fun thisMachinesHostsWithAPort() {
         assertEquals(PortLink(5173, "/", false), PortLinks.link("http://localhost:5173/"))

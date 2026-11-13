@@ -5,6 +5,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import persona.core.contracts.*
 import persona.core.designsystem.LocalizedFormats
+import persona.core.domain.sort.AgentSession
+import persona.core.domain.sort.isNestedSubtask
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -13,6 +15,14 @@ import kotlin.math.abs
 
 internal fun percent(used: Number?, total: Number?): Double? =
     if (used != null && total != null && total.toDouble() > 0) used.toDouble() * 100 / total.toDouble() else null
+
+/**
+ * The live machine list (pushed over the WebSocket) sees a computer come and go before the next metrics poll does:
+ * where it has the computer, its online state wins, so a computer that just dropped off is not shown Online with its
+ * last numbers (#3730).
+ */
+internal fun MachineMetrics.live(machine: Machine?): MachineMetrics =
+    if (machine == null || machine.online == online) this else copy(online = machine.online)
 
 internal fun MachineMetrics.current(now: Long): MetricSample? =
     latest?.takeIf { online && now - it.t in 0..30 }
@@ -31,8 +41,12 @@ internal fun alerts(sample: MetricSample?, cores: Int?): List<MetricAlert> {
     return result.sortedByDescending { it.critical }
 }
 
+/**
+ * A computer's running sessions, as the Agents list counts them on its computer chip and header: a subtask another
+ * session started, listed under that one's "Subtasks", is not one of them unless it needs the user (#4494).
+ */
 internal fun machineSessions(sessions: List<Session>, machineId: String): List<Session> = sessions
-    .filter { it.machineId == machineId && !it.assistant && it.isLive }
+    .filter { it.machineId == machineId && !it.assistant && it.isLive && !AgentSession(it).isNestedSubtask }
     .sortedWith(compareBy<Session> { it.agentState.priority }.thenByDescending { it.updated })
 
 /** History keeps the disk's used bytes; the chart shows them as a share of [total] (gaps stay gaps). */

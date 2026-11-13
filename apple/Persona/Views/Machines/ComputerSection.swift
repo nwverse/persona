@@ -114,7 +114,7 @@ struct ComputerSection: View {
             }
         } else if c.desktop == "locked" {
             // Locked: nothing gets through to its apps (Cua refuses, screen_locked), so unlocking comes first. Its live
-            // screen shows the lock screen, where the password is typed (docs/extensions/computer-use.md「锁屏」).
+            // screen shows the lock screen, where the password is typed (docs/extensions/computer-use.md「Locking, preventing sleep and per-App approval」).
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 line(String(localized: "This Mac is locked. Unlock it to control it."), ok: false)
                 if !c.screenSharing {

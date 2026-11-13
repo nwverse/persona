@@ -67,7 +67,8 @@ final class ExtensionManagementUITests: XCTestCase {
     @MainActor func testContributionKeepsDraftAndCascadeNeedsConfirmation() async throws {
         _ = try await state(reset: [:])
         let app = try launch(["-openExtension", "sample-kit"])
-        let title = app.textFields.firstMatch
+        // By its own identifier: Settings is the shell's sheet, and the Assistant's composer under it comes first (#3072).
+        let title = app.textFields["plugin-field-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 15), app.debugDescription)
         title.tap()
         title.typeText("未保存\n")
@@ -217,7 +218,10 @@ final class ExtensionManagementUITests: XCTestCase {
         let attach = app.buttons["shell-composer-add"]
         XCTAssertTrue(attach.waitForExistence(timeout: 15), app.debugDescription)
         attach.tap()
-        // A native Menu does not keep the SwiftUI Button's identifier: find it by its visible title.
+        // The iPhone's + is a panel (AttachSheet): extension prompts are in its More tab.
+        let more = app.buttons["attach-tab-more"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 5), app.debugDescription)
+        more.tap()
         let prompt = app.buttons["整理示例周报"].firstMatch
         XCTAssertTrue(prompt.waitForExistence(timeout: 5), app.debugDescription)
         try shot(app, "prompt-menu")

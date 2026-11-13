@@ -11,7 +11,7 @@ func benchLangClients(h *Hub, n int) {
 	langs := []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja}
 	for i := range n {
 		c := &client{hub: h, out: make(chan []byte, 4), acceptLang: langs[i%len(langs)], urlFeatures: map[string]bool{extensionOperationsFeature: true}}
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 	}
 }
 

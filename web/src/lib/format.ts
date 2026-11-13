@@ -2,12 +2,38 @@ import type { AgentState, Interaction, Session, SessionCapabilities } from "./ty
 import { formatDate, formatRelative, t } from "../i18n";
 import { usageLimitLabel } from "./usage-limit";
 import { workLine } from "./work";
+import { closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
 
-// Missing session metadata is not permission to write; legacy sources retain their existing behavior.
+// Missing session metadata is not permission to write. A native row (no source_kind) that carries capabilities is held
+// to them, as every other source is: a stopped Agent's row says read and terminal only (#4754). A native row without
+// them (every row from an older node) keeps its existing behavior: it may do everything.
 export function sessionCan(s: Session | undefined, operation: keyof SessionCapabilities): boolean {
   if (!s) return false;
   if (operation === "attach") return Boolean(s.source_kind && s.capabilities?.attach === true && !s.attached);
-  return !s.source_kind || s.capabilities?.[operation] === true;
+  if (operation === "close") return s.capabilities?.close ?? sessionCan(s, "terminal");
+  if (!s.source_kind && !s.capabilities) return true;
+  return s.capabilities?.[operation] === true;
+}
+
+/** Rename (#6294): the node's `capabilities.rename` where it says (a runtime's session, which has no terminal), else as
+ *  before: a row that can send and is the user's own Agent or a Persona conversation (no other source). */
+export function sessionCanRename(s: Session | undefined): boolean {
+  if (!s) return false;
+  const said = s.capabilities?.rename;
+  if (typeof said === "boolean") return said;
+  return sessionCan(s, "send") && (Boolean(s.assistant) || !s.source_kind);
+}
+
+/** A stopped Agent (#4754, docs/integrations/engines.md "Agents run in a terminal"): an Agent of a terminal engine that is
+ *  not running. Its row keeps its conversation and its terminal and takes no messages; the one way back is Resume on its
+ *  terminal page. Only a node that knows it says so (capabilities read and terminal, no send): an older node's offline
+ *  row has no capabilities and keeps today's behavior. A Codex thread nothing has open is marked the same way (node
+ *  codex_registry.go, #5521), though its row keeps its Codex history source. */
+export function isStoppedAgent(s: Session | undefined): boolean {
+  if (!s || s.assistant || (s.source_kind && s.source_kind !== "codex_history")) return false;
+  if (s.status !== "offline" && s.status !== "interrupted") return false;
+  const c = s.capabilities;
+  return Boolean(c && c.read === true && c.terminal === true && !c.send);
 }
 
 /** A script request explicitly outside a session has no session-source approval
@@ -49,7 +75,8 @@ export function sessionMenuActions(s: Session): string[] {
   return [
     ...(sessionCan(s, "attach") ? ["attach"] : []),
     ...(stateOf(s) === "working" && sessionCan(s, "interrupt") ? ["stop"] : []),
-    ...(sessionCan(s, "terminal") ? ["resume", ...(!s.assistant && stateOf(s) !== "offline" ? ["close"] : [])] : []),
+    ...(sessionCan(s, "terminal") ? ["resume"] : []),
+    ...(!s.assistant && stateOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
   ];
 }
 
@@ -114,10 +141,21 @@ export function attentionReason(s: Session): string | undefined {
 }
 
 /** The line a list row shows for it: why it waits for you when its host says so, else why its host stopped it on an
- *  error, else where its work stands when the hub triaged its turn (docs/assistant/agent-work.md), else its last words (iOS
- *  listPreview). */
+ *  error, else where its work stands when the hub triaged its turn (docs/assistant/agent-work.md), with where its closeout
+ *  stands on merged and deployed after it, else its last words (iOS listPreview). */
 export function sessionPreview(s: Session): string {
-  return attentionReason(s) ?? failureReason(s) ?? usageLimitLabel(s) ?? workLine(s) ?? s.last_text ?? "";
+  return attentionReason(s) ?? failureReason(s) ?? usageLimitLabel(s) ?? closeoutPreview(s) ?? workLine(s) ?? s.last_text ?? "";
+}
+
+/** A stopped session's line when its agent ended the turn with a closeout (lib/closeout.ts): the hub's line as before
+ *  (the closeout's own words when the hub gave none: the last words would be the raw block), then "merged · not
+ *  deployed" where the agent said or the hub found it. One string: the row truncates it like any other line. */
+function closeoutPreview(s: Session): string | undefined {
+  const c = shownCloseout(s);
+  if (!c) return undefined;
+  const line = workLine(s) ?? closeoutLine(c);
+  const suffix = closeoutSuffix(c);
+  return line && suffix ? t("lib-work.closeout_line", { line, suffix }) : line || suffix || undefined;
 }
 
 /** A failure notice without the warning sign botmux starts it with: the page draws its own (iOS Session.failureText). */
@@ -147,9 +185,13 @@ export function sessionTitle(s: Pick<Session, "title" | "cwd">): string {
   return s.title?.trim() || baseName(s.cwd) || t("lib-format.untitled_session");
 }
 
+// A path from a Windows computer: a drive letter or a UNC share. Only there is a backslash a separator; in any other
+// path it is a character of a name.
+const WINDOWS_PATH = /^[A-Za-z]:[\\/]|^\\\\/;
+
 export function baseName(p?: string): string {
   if (!p) return "";
-  const parts = p.replace(/\/+$/, "").split("/");
+  const parts = (WINDOWS_PATH.test(p) ? p.replace(/\\/g, "/") : p).replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || p;
 }
 
@@ -164,18 +206,20 @@ export function shortPath(p?: string): string {
   return p.replace(/^\/(Users|home|data\d*\/home)\/[^/]+/, "~");
 }
 
-export function ago(iso?: string, now = Date.now()): string {
+/** `style` "narrow" is for a crowded row's end ("13m ago" in English; Chinese reads the same in every style). */
+export function ago(iso?: string, now = Date.now(), style: Intl.RelativeTimeFormatStyle = "long"): string {
   if (!iso) return "";
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts) || ts < 86400_000) return "";
   const s = Math.round((now - ts) / 1000);
+  const opts: Intl.RelativeTimeFormatOptions = { numeric: "auto", style };
   // "Just now" rather than Intl's "now" for under a minute
   if (s < 45) return t("lib-format.just_now");
-  if (s < 3600) return formatRelative(-Math.round(s / 60), "minute");
-  if (s < 86400) return formatRelative(-Math.round(s / 3600), "hour");
+  if (s < 3600) return formatRelative(-Math.round(s / 60), "minute", opts);
+  if (s < 86400) return formatRelative(-Math.round(s / 3600), "hour", opts);
   // Days by the local calendar, not by 24 h spans: yesterday morning seen late tonight is yesterday, not the day before yesterday (#4281).
   const days = calendarDays(ts, now);
-  if (days < 7) return formatRelative(-days, "day");
+  if (days < 7) return formatRelative(-days, "day", opts);
   return formatDate(ts, { month: "numeric", day: "numeric" });
 }
 

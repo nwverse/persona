@@ -1,4 +1,4 @@
-// Mochi, the default persona (docs/apple/persona.md "Built-in avatars"): the app icon's white blob waving on its paper disc (a dark
+// Mochi, the default persona (docs/apple/persona.md "Built-in drawing"): the app icon's white blob waving on its paper disc (a dark
 // disc in the dark), outlined in ink, with its orange cheek. The same drawing as the app's PersonaFace (Mochi), in the
 // icon's 1024 px coordinates moved into the disc, so the two stay one picture. It keeps the icon's colors (the
 // --mochi-* tokens in styles.css), not the page's accent. Each state reads from its first frame alone; the motion runs

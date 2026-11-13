@@ -1,5 +1,6 @@
 import { t } from "../i18n";
 import { api, ApiError, errorText } from "./api";
+import { sameValue } from "./stable-lines";
 import type { Session } from "./types";
 
 export interface BoardColumn { id: string; title: string }
@@ -7,10 +8,9 @@ export interface BoardCard {
   id: string; machine_id: string; workspace_id: string; title: string; cwd: string;
   source: string; source_id?: string; branch?: string; column_id: string; pinned: boolean; archived: boolean;
 }
-export interface Workspace {
-  id: string; machine_id: string; source: string; source_id: string; title: string; cwd: string;
-  branch?: string; online?: boolean; available?: boolean; last_seen?: string;
-}
+/** Compatible board name for the shared discovery wire type. */
+export type { HostWorkspace as Workspace } from "./workspace-catalog";
+import type { HostWorkspace as Workspace } from "./workspace-catalog";
 export interface BoardState { revision: number; columns: BoardColumn[]; cards: BoardCard[]; can_write?: boolean }
 export interface WorkspaceList { workspaces: Workspace[]; errors?: { machine_id: string; error: string }[] }
 export interface BoardMutation {
@@ -92,19 +92,26 @@ export class BoardModel {
   constructor(private request: Transport = api) {}
   snapshot = () => this.state;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
-  private set(patch: Partial<BoardSnapshot>) { this.state = { ...this.state, ...patch }; this.listeners.forEach((fn) => fn()); }
+  /** A patch that changes no field keeps the snapshot and notifies no one, so an unchanged poll does not re-render the board. */
+  private set(patch: Partial<BoardSnapshot>) {
+    if ((Object.keys(patch) as (keyof BoardSnapshot)[]).every((k) => Object.is(this.state[k], patch[k]))) return;
+    this.state = { ...this.state, ...patch }; this.listeners.forEach((fn) => fn());
+  }
   async refresh() {
     const read = ++this.reads;
     await Promise.allSettled([
       this.request<BoardState>("/workspace-board").then((board) => {
         if (read !== this.reads || this.state.busy) return;
-        if (!this.state.board || board.revision >= this.state.board.revision) this.set({ board, readonly: board.can_write === undefined ? this.state.readonly : !board.can_write, error: "" });
+        if (!this.state.board || board.revision >= this.state.board.revision) this.set({
+          board: sameValue(board, this.state.board) ? this.state.board : board,
+          readonly: board.can_write === undefined ? this.state.readonly : !board.can_write, error: "",
+        });
       }).catch((e) => {
         if (read !== this.reads) return;
         this.set({ error: boardError(e), ...(e instanceof ApiError && e.status === 403 ? { readonly: true } : {}) });
       }),
       this.request<WorkspaceList>("/workspaces").then((discovery) => {
-        if (read === this.reads) this.set({ discovery, discoveryError: "" });
+        if (read === this.reads) this.set({ discovery: sameValue(discovery, this.state.discovery) ? this.state.discovery : discovery, discoveryError: "" });
       }).catch((e) => { if (read === this.reads) this.set({ discoveryError: errorText(e) }); }),
     ]);
     if (read === this.reads) this.set({ loading: false });

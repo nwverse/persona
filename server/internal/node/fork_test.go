@@ -160,7 +160,7 @@ func TestForkShortIsListed(t *testing.T) {
 	if st, _ := os.Stat(filepath.Join(dir, newID+".jsonl")); st.Size() >= 2048 {
 		t.Fatalf("the fixture's fork is %d bytes: not short", st.Size())
 	}
-	for _, s := range n.offline(map[string]bool{}) {
+	for _, s := range n.appendOffline(nil, map[string]bool{}) {
 		if s.SessionID == newID {
 			if s.Title != "分支 · remember APPLE" {
 				t.Errorf("title %q", s.Title)

@@ -25,13 +25,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.Lifecycle
@@ -62,15 +60,17 @@ internal val LocalLarkMessageDisplay = staticCompositionLocalOf { LarkMessageDis
 fun LarkScreen(repository: InboxRepository, route: LarkRoute, navigator: Navigator) {
     val inbox by repository.snapshot.collectAsStateWithLifecycle()
     val source = inbox.contentSource
-    key(source, route) {
-        val opening by produceState<Pair<LarkReadingStore?, LarkListNavigation>?>(null, source) {
+    val manager = itemManager(repository, route.itemId)
+    key(source, route, manager) {
+        // Where to open (the first unread) is the item's manager's account's read state.
+        val opening by produceState<Pair<LarkReadingStore?, LarkListNavigation>?>(null, source, manager) {
             val store = source?.let { repository.readingStore() }
-            val navigation = try { source?.let { larkListNavigation(it.transport, route.feedId) } ?: LarkListNavigation() }
+            val navigation = try { source?.forManager(manager)?.read { larkListNavigation(this, route.feedId) } ?: LarkListNavigation() }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { LarkListNavigation() }
             value = store to navigation
         }
-        LarkLinkHost(repository) {
+        LarkLinkHost(repository, manager) {
             val loaded = opening
             if (loaded == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { JLoading() }
             else key(source?.scope, route) {
@@ -367,7 +367,7 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
                 if (record != null) JIconButton(PhIcons.CheckCircle, stringResource(if (record.item.isDone) R.string.inbox_move_back else R.string.inbox_done),
                     enabled = !markingDone, onClick = {
                         markingDone = true
-                        haptics(doneHaptic(!record.item.isDone))
+                        haptics(doneHaptic(!record.item.isDone, single = true))
                         scope.launch {
                             try { repository.setDone(record.item.id, !record.item.isDone); error = null; navigator.back() }
                             catch (e: CancellationException) { throw e }
@@ -378,7 +378,7 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
                 JIconButton(PhIcons.DotsThree, stringResource(R.string.inbox_more), { more = true })
             })
     }, bottomBar = {
-        ReplyComposerField(reply, composer::update, onSend = { composer.send() }, stringResource(R.string.inbox_lark_reply_to, title),
+        ReplyComposerField(reply, composer::update, onSend = { composer.send(context = repository.pagePins) }, stringResource(R.string.inbox_lark_reply_to, title),
             modifier = Modifier.imePadding(), accessory = {
                 // Opened in place of the item's extension page, which broke: one line with "Retry" (inbox_item, #1683).
                 InboxExtensionNotice(route.itemId, route, Modifier)
@@ -417,6 +417,27 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
                     val date = larkDate(message.time)
                     val dateBoundary = date != null && date != previous?.let { larkDate(it.time) }
                     DisposableEffect(message.listKey()) { onDispose { bounds.remove(message.listKey()) } }
+                    // A topic group lists topics (#576 G134): each its own card with its time, never run together like a
+                    // chat's messages; a system line stays a line, and one of mine still on its way stays a bubble.
+                    if (conversation.isTopic && !message.system && message.delivery == LarkDelivery.Sent && message.pendingDelivery == null) {
+                        LarkTopicCard(message, repository, onlineSince, route.feedId,
+                            onThread = { thread = message }, onError = { error = it },
+                            modifier = Modifier.padding(vertical = Tokens.Space.xs).onGloballyPositioned { bounds[message.listKey()] = it.boundsInWindow() },
+                            onProfile = { profilePerson = it },
+                            onReact = { msg, key, isMine ->
+                                scope.launch {
+                                    try {
+                                        repository.react(msg.id, key, remove = isMine)
+                                        repository.refreshConversation(route.feedId)
+                                    } catch (e: Exception) {
+                                        error = e.message ?: res.getString(R.string.inbox_lark_react_failed)
+                                    }
+                                }
+                            },
+                            onOpenReactionPicker = { reactionPickerMessage = it }, onOpenForward = { forwardedDetail = it },
+                            onPlayVideo = { videoPlayerUrl = it }, onAddPin = if (changingPin) null else ({ addingPin = it }))
+                        return@itemsIndexed
+                    }
                     Column {
                         if (dateBoundary) TimelineMark(LocalizedFormats.formatter(LocalizedFormats.DATE, currentLocale).format(date))
                         if (boundary) TimelineMark(stringResource(R.string.inbox_lark_starts_here), emphasized = true)
@@ -471,7 +492,7 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
 
 @Composable
 internal fun LarkBubble(
-    original: LarkMessage,
+    message: LarkMessage,
     showSender: Boolean,
     repository: InboxRepository,
     onlineSince: Long?,
@@ -492,7 +513,6 @@ internal fun LarkBubble(
     onAddPin: ((LarkMessage) -> Unit)? = null,
 ) {
     val display = LocalLarkMessageDisplay.current
-    val message = remember(original, display) { original.shown(display) }
     // "Keep recalled messages" shows what the Lark gateway kept of a recalled message, marked "Recalled"; otherwise it is one line.
     if (message.system && !(message.recalled && display.showsBody(message))) {
         TimelineMark(if (message.recalled) stringResource(R.string.inbox_lark_recalled)
@@ -504,7 +524,7 @@ internal fun LarkBubble(
     val openReactionPicker = onOpenReactionPicker.takeUnless { message.recalled }
     var menuExpanded by remember { mutableStateOf(false) }
     var showingHistory by remember { mutableStateOf(false) }
-    val clipboard = LocalClipboardManager.current
+    val copy = rememberCopy()
     if (showingHistory) LarkEditHistorySheet(message, onDismiss = { showingHistory = false })
 
     val body: @Composable ColumnScope.() -> Unit = {
@@ -518,7 +538,7 @@ internal fun LarkBubble(
             ) {
                 message.quote?.let { quote ->
                     JNotice(if (quote.recalled) stringResource(R.string.inbox_lark_recalled)
-                        else display.summary(quote.text), title = quote.sender)
+                        else quote.text, title = quote.sender)
                 }
                 message.parts.forEach { part ->
                     LarkPartContent(
@@ -554,7 +574,7 @@ internal fun LarkBubble(
                 onCopy = {
                     val textToCopy = message.parts.filterIsInstance<LarkPart.Text>().joinToString("\n") { it.text }
                         .ifBlank { message.parts.filterIsInstance<LarkPart.Code>().joinToString("\n") { it.code } }
-                    clipboard.setText(AnnotatedString(textToCopy))
+                    copy(textToCopy, null)
                 }
             )
         }
@@ -611,7 +631,7 @@ internal fun LarkBubble(
                 Column(if (!message.isRead) Modifier.padding(end = Tokens.Space.m) else Modifier) { body() }
                 if (!message.isRead && !message.system && message.delivery == LarkDelivery.Sent) {
                     val unread = stringResource(R.string.inbox_conversations_unread_message)
-                    Box(Modifier.align(Alignment.TopEnd).size(Tokens.Space.s).clip(CircleShape)
+                    Box(Modifier.align(Alignment.TopEnd).size(Tokens.Space.Standard.s).clip(CircleShape)
                         .background(PersonaTheme.palette.danger.dot).semantics { contentDescription = unread })
                 }
             }

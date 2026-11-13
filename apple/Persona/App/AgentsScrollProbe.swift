@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 
-/// `probe.agents-scroll` (docs/apple/ios-state.md「探针」): where the top of the Agents list is, read from UIKit every frame,
+/// `probe.agents-scroll` (docs/apple/ios-state.md「Probes and assertions」): where the top of the Agents list is, read from UIKit every frame,
 /// for the tests of going into a chat and back (AgentsReturnTests) and of the shell's status row. The navigation bar's
 /// y, the search field's height, the list's top inset and the first row's y (window points), now; where they were when
 /// the list was left for a pushed page; and over every frame of the last way back, from the first frame of the pop to a

@@ -4,7 +4,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// Videos sent as files (VideoAttach.swift, docs/protocol/protocol.md「发送视频」).
+/// Videos sent as files (VideoAttach.swift, docs/protocol/protocol.md「Sending videos」).
 struct VideoAttachTests {
     private let clip = AttachedFile(path: "/tmp/IMG_0001-20261103-150102.MOV", name: "IMG_0001.MOV", size: 25_270_000, duration: 12.4)
 

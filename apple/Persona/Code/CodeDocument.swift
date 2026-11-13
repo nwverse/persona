@@ -1,6 +1,6 @@
 import Foundation
 
-/// A text file in the viewer (docs/apple/ios.md「文件查看器」): its UTF-8, where each line starts, and its colors as far
+/// A text file in the viewer (docs/apple/ios.md「File viewer」): its UTF-8, where each line starts, and its colors as far
 /// as they have been worked out. Lines show at once as plain text; `highlight` colors them off the main thread a chunk
 /// at a time from the top, up to the caps (past them the rest stays plain and `capped` says so). Only the lines on
 /// screen are ever made into Strings.

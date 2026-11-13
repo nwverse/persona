@@ -35,7 +35,7 @@
     <string name="notify_channel_alert">アラート</string>
     <string name="notify_channel_done">完了</string>
     <string name="notify_channel_status">リアルタイムの状態</string>
-    <string name="notify_title_assistant_asks">Personaが質問しています</string>
+    <string name="notify_title_assistant_asks">Personaから質問があります</string>
     <string name="notify_title_needs_you">要対応</string>
     <string name="notify_body_elicitation">MCPフォーム：%1$s</string>
     <string name="notify_title_done">完了</string>

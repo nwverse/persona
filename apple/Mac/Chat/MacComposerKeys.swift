@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// ⏎ and ⇧⏎ in a composer (docs/apple/mac.md「细节」: ⏎ sends, ⇧⏎ adds a new line). The field is a SwiftUI TextField, an AppKit field
+/// ⏎ and ⇧⏎ in a composer (docs/apple/mac.md「Details」: ⏎ sends, ⇧⏎ adds a new line). The field is a SwiftUI TextField, an AppKit field
 /// editor underneath: on its own, ⏎ and ⇧⏎ both ended editing and selected all the text, so the next key typed
 /// replaced it, and ⌥⏎ was the only way to a new line (#785).
 nonisolated enum MacComposerKeys {

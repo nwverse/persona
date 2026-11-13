@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -25,6 +26,8 @@ func init() { firstWait = 0 }
 type fakeHost struct {
 	mu        sync.Mutex
 	states    []devicewire.States
+	desktops  []devicewire.Desktops
+	notified  []string // every event's name, in order
 	events    []devicewire.NodeEvent
 	connected []devicewire.Connected
 	ended     []devicewire.RequestEnd
@@ -38,6 +41,57 @@ type fakeHost struct {
 	theirs map[string]bool
 	// rename answers devices.rename (nil: unknown_method, as an older hub).
 	rename func(p devicewire.Rename) (devicewire.RenameReply, error)
+	// broadcasts are the ws.broadcast messages sent to the apps.
+	broadcasts []json.RawMessage
+
+	// gates holds every event of a kind until its gate is closed (a hub slow to take it, hold); waiting counts the
+	// ones held now.
+	gates   map[string]chan struct{}
+	waiting int
+}
+
+// passOne lets one event of this kind that hold keeps waiting through; the next ones are held still. The test fails
+// when the kind is not held, or when no such event waits within 5 s.
+func (f *fakeHost) passOne(t *testing.T, event string) {
+	t.Helper()
+	f.mu.Lock()
+	gate := f.gates[event]
+	f.mu.Unlock()
+	if gate == nil {
+		t.Fatalf("%s is not held", event)
+	}
+	select {
+	case gate <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no %s waiting at the hub", event)
+	}
+}
+
+// held: the hub holds an event now (hold).
+func (f *fakeHost) held() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.waiting > 0
+}
+
+// hold makes the hub take no event of this kind until release.
+func (f *fakeHost) hold(event string) (release func()) {
+	gate := make(chan struct{})
+	f.mu.Lock()
+	if f.gates == nil {
+		f.gates = map[string]chan struct{}{}
+	}
+	f.gates[event] = gate
+	f.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.mu.Lock()
+			delete(f.gates, event)
+			f.mu.Unlock()
+			close(gate)
+		})
+	}
 }
 
 func (f *fakeHost) Call(ctx context.Context, method string, params, out any) error {
@@ -118,12 +172,29 @@ func (f *fakeHost) Call(ctx context.Context, method string, params, out any) err
 func (f *fakeHost) Notify(event string, params any) error {
 	raw, _ := json.Marshal(params)
 	f.mu.Lock()
+	gate := f.gates[event]
+	if gate != nil {
+		f.waiting++
+	}
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	f.mu.Lock()
+	if gate != nil {
+		f.waiting--
+	}
 	defer f.mu.Unlock()
+	f.notified = append(f.notified, event)
 	switch event {
 	case devicewire.EventState:
 		var st devicewire.States
 		_ = json.Unmarshal(raw, &st)
 		f.states = append(f.states, st)
+	case devicewire.EventDesktops:
+		var ds devicewire.Desktops
+		_ = json.Unmarshal(raw, &ds)
+		f.desktops = append(f.desktops, ds)
 	case devicewire.EventNode:
 		var ev devicewire.NodeEvent
 		_ = json.Unmarshal(raw, &ev)
@@ -132,8 +203,28 @@ func (f *fakeHost) Notify(event string, params any) error {
 		var e devicewire.RequestEnd
 		_ = json.Unmarshal(raw, &e)
 		f.ended = append(f.ended, e)
+	case assistantwire.EventBroadcast:
+		var b assistantwire.Broadcast
+		_ = json.Unmarshal(raw, &b)
+		f.broadcasts = append(f.broadcasts, b.Message)
 	}
 	return nil
+}
+
+// broadcastsOf are the messages of type typ sent to the apps.
+func (f *fakeHost) broadcastsOf(typ string) []json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []json.RawMessage
+	for _, m := range f.broadcasts {
+		var v struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(m, &v) == nil && v.Type == typ {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // eventsOf are the node events forwarded for machine named event.

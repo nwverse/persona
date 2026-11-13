@@ -1,6 +1,6 @@
 import XCTest
 
-/// UI version 3 on an extension's page (docs/extensions/extensions.md「UI 版本 3」): the mock's example-gateway › 「笔记」 page — rows with
+/// UI version 3 on an extension's page (docs/extensions/extensions.md「UI version 3」): the mock's example-gateway › 「笔记」 page — rows with
 /// an icon, an avatar and a thumbnail, its search field and filter chips, `more` at the end of the list, a row that pushes
 /// the note's page (Markdown, a table), that page pushing its editor, saving popping back to a page drawn again, and
 /// `ui.invalidate` drawing the list again with what synced in. Against scripts/mock/mock_hub.py with MOCK_EXTENSIONS=1:

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The Agent menu (docs/apple/mac.md「菜单和快捷键」): what the key window's chat (`MacShellState.focusedChat`) can be told
+/// The Agent menu (docs/apple/mac.md「Menus and shortcuts」): what the key window's chat (`MacShellState.focusedChat`) can be told
 /// from the keyboard. Questions and terminal dialogs need their choices, a plan sent back needs words: those stay in
 /// the chat's card; the menu says yes to a tool or a plan, no to a tool.
 enum MacAgentCommands {
@@ -12,7 +12,7 @@ enum MacAgentCommands {
         switch ix.kind {
         case .permission: ix.requiresInput ? nil : Resolution(allow: true)
         case .plan: Resolution(approve: true, mode: "acceptEdits")
-        case .question, .screen: nil
+        case .question, .screen, .elicitation: nil
         }
     }
 
@@ -35,7 +35,7 @@ enum MacAgentCommands {
         case .screen:
             guard ix.dialog != nil, let d = ix.screenDialog else { return [] }
             return d.options.filter { $0.kind == .plain }.prefix(9).map { .init(title: $0.label, resolution: Resolution(option: $0.key)) }
-        case .permission, .plan:
+        case .permission, .plan, .elicitation:
             return []
         }
     }

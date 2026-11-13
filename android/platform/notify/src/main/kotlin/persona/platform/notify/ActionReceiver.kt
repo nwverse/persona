@@ -46,8 +46,10 @@ open class ActionReceiver : BroadcastReceiver() {
                 // A bounded receiver lifetime is a timeout, not a delivery guarantee.
                 withTimeout(8_000) {
                     val sessions = dependencies.sessions()
+                    // Claims and the second-tap check share this phone's journal: a request gone from the hub that it
+                    // claimed was its own answer, with no notice (#2483).
                     val result = NotificationActionExecutor(
-                        dependencies.interactions(), { dependencies.actionJournal().claim(it).also { claimed = claimed || it } },
+                        dependencies.interactions(), dependencies.actionJournal(),
                         session = { key ->
                             // A cold start may not have the list yet: one refresh, then the hub decides.
                             sessions.sessions.value.firstOrNull { it.key == key } ?: run {
@@ -55,6 +57,7 @@ open class ActionReceiver : BroadcastReceiver() {
                                 sessions.sessions.value.firstOrNull { it.key == key }
                             }
                         },
+                        onClaimed = { claimed = true },
                     ).execute(id, action, reply,
                         locked = { lockedAfterUnlockSettles({ keyguard.isDeviceLocked }) },
                         onInteraction = { session = it.sessionKey; request = it },

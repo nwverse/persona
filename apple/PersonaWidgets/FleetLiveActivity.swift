@@ -110,7 +110,7 @@ struct IslandSide: View {
                 if leading { IslandMinimal(state: state, stale: stale, limited: true, look: state.drawnLook) }
             } else {
                 if leading {
-                    // The persona, then the most urgent count (docs/apple/live-activity.md「形象」).
+                    // The persona, then the most urgent count (docs/apple/live-activity.md「Avatar」).
                     IslandLeading(state: state, stale: stale, look: state.drawnLook).padding(.leading, IslandMetrics.edge)
                 } else {
                     IslandCellView(cell: IslandCell.sides(state).right).padding(.trailing, IslandMetrics.edge)
@@ -414,6 +414,10 @@ struct FleetLockScreen: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+        // The system can refresh the capsule tint and content separately when the wallpaper changes.
+        .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
+        .activityBackgroundTint(.black)
     }
 
     /// Apple Watch Smart Stack: one glance.

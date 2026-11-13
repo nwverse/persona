@@ -3,7 +3,7 @@ import Testing
 @testable import PersonaSSH
 
 /// The tunnel against a real OpenSSH server (this machine's sshd, run as this user on a free port) and the repository's
-/// mock hub: the cases docs/operations/network.md「经 SSH 隧道连 hub」 promises.
+/// mock hub: the cases docs/operations/network.md「Connecting to hub through SSH」 promises.
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct SSHTunnelTests {
     let hub: TestHub

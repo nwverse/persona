@@ -5,7 +5,7 @@ import XCTest
 /// (Mac mini), and the cards for comparison; at each text size (Small / Standard / Large). No hub needed (`-openWelcome` drops a
 /// pairing left by other tests; the launch argument keeps Demo Mode on).
 ///   TEST_RUNNER_PERSONA_SHOTS=<dir> TEST_RUNNER_PERSONA_STYLE=light|dark
-/// writes `compact-<state>-<size>-<style>.png` there (docs/operations/testing.md「Agents 列表」).
+/// writes `compact-<state>-<size>-<style>.png` there (docs/operations/testing.md「Agents list」).
 final class CompactListShots: XCTestCase {
     private var app: XCUIApplication!
 

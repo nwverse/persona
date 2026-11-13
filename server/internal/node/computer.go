@@ -89,6 +89,7 @@ func computerStatus(ctx context.Context) proto.Computer {
 	}
 	c.ScreenSharing = screenSharing(ctx)
 	c.Displays = screenDisplays(ctx, c.ScreenSharing)
+	c.ScreenVideo = screenVideoStatus(ctx) // #3954: nil until advertiseScreenVideo
 	c.Ready, c.Note = computerReady(c)
 	c.Backend = "cua"
 	c.Job = currentJob()
@@ -329,7 +330,8 @@ func screenshotImage(path string) *proto.Image {
 		return &proto.Image{Mime: http.DetectContentType(data), Data: base64.StdEncoding.EncodeToString(data)}
 	}
 	b := img.Bounds()
-	out := &proto.Image{Mime: "image/png", Data: base64.StdEncoding.EncodeToString(data), Width: b.Dx(), Height: b.Dy()}
+	// The bytes' own type: a screenshot may come as a JPEG (the iPhone bridge's), not only a PNG.
+	out := &proto.Image{Mime: http.DetectContentType(data), Data: base64.StdEncoding.EncodeToString(data), Width: b.Dx(), Height: b.Dy()}
 	flat := image.NewRGBA(b)
 	draw.Draw(flat, b, &image.Uniform{C: color.White}, image.Point{}, draw.Src)
 	draw.Draw(flat, b, img, b.Min, draw.Over)

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The Mac's type scale (#779, docs/apple/ios.md「设计语言」): the user chose body 13, nothing under 11, and replies,
+/// The Mac's type scale (#779, docs/apple/ios.md「Design language」): the user chose body 13, nothing under 11, and replies,
 /// profiles and Feishu text read the body level rather than the iPhone's 17.
 struct MacTypeScaleTests {
     @Test func theChosenSizes() {

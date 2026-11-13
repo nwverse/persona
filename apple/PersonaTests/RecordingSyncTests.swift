@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The hub's recording sync (docs/protocol/protocol.md「录音同步」) as far as the phone needs it: stores the latest revision,
+/// The hub's recording sync (docs/protocol/protocol.md「Recording sync」) as far as the phone needs it: stores the latest revision,
 /// remembers deletes (a later PUT gets 410), can be down (503).
 private final class FakeRecordingHub: @unchecked Sendable {
     private let lock = NSLock()
@@ -11,6 +11,8 @@ private final class FakeRecordingHub: @unchecked Sendable {
     private var _calls: [String] = []
     var down = false
     var days = 14
+    var refusal: APIError?
+    var writesOnly = false
 
     var stored: [String: Int64] { lock.withLock { _stored } }
     var calls: [String] { lock.withLock { _calls } }
@@ -21,6 +23,7 @@ private final class FakeRecordingHub: @unchecked Sendable {
         try lock.withLock {
             _calls.append("\(r.method) \(r.path)")
             if down { throw APIError(status: 503, message: "知识库暂时不可用") }
+            if let refusal, !writesOnly || r.method != "GET" { throw refusal }
             if r.method == "GET", r.path == "/api/v1/recordings" {
                 let list = _stored.map { ["id": $0.key, "revision": $0.value, "complete": true, "started_at": "2026-11-05T00:00:00Z"] as [String: Any] }
                 return try JSONSerialization.data(withJSONObject: ["days": days, "recordings": list, "deleted": Array(_deleted)])
@@ -53,7 +56,7 @@ private final class FakeRecordingHub: @unchecked Sendable {
         let lib = RecordingLibrary(root: root)
         let hub = FakeRecordingHub()
         let api = api(hub)
-        return (lib, RecordingSync(library: lib, api: { api }, now: { now }), hub, root)
+        return (lib, RecordingSync(library: lib, api: { api }, now: { now }, recordingDaysChanged: { _ in }), hub, root)
     }
 
     private func transcribed(_ lib: RecordingLibrary, createdAt: Date = .now, text: String = "下周检查进度。") throws -> RecordingEntry {
@@ -99,6 +102,85 @@ private final class FakeRecordingHub: @unchecked Sendable {
         #expect(sync.problem == nil)
     }
 
+    @Test func configurationRefusalsPauseWithoutLosingPendingUploads() async throws {
+        for (status, fields) in [
+            (503, ["code": "kb_disabled"]),
+            (403, ["code": "kb_read_only"]),
+            (503, ["code": "internal", "detail": "the knowledge base is off"])
+        ] {
+            let (lib, sync, hub, root) = setup()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let entry = try transcribed(lib)
+            hub.refusal = APIError(status: status, message: "Request failed", fields: fields)
+            await sync.syncNow()
+            #expect(sync.automaticRetryPaused)
+            #expect(sync.status(entry) == .pending)
+            #expect(hub.stored.isEmpty)
+            #expect(sync.problem?.contains("hub") == false)
+            let before = hub.calls.count
+            lib.change(entry.id) { $0.title = "Updated title" }
+            sync.kick()
+            await sync.syncNow()
+            #expect(hub.calls.count == before, "saving while disabled must not resume automatic requests")
+            hub.refusal = nil
+            await sync.syncNow(retryPaused: true)
+            #expect(sync.status(lib.entry(entry.id)!) == .synced)
+            #expect(!sync.automaticRetryPaused)
+        }
+    }
+
+    @Test func pairingLaterDoesNotNeedAConfigurationRetry() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root), hub = FakeRecordingHub()
+        var client: APIClient?
+        let sync = RecordingSync(library: lib, api: { client }, recordingDaysChanged: { _ in })
+        let entry = try transcribed(lib)
+        await sync.syncNow()
+        #expect(!sync.automaticRetryPaused && sync.status(entry) == .pending)
+        client = api(hub)
+        await sync.syncNow()
+        #expect(sync.status(entry) == .synced)
+    }
+
+    @Test func transportTimeoutKeepsUploadsPendingWithoutClaimingHubIsOffline() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        let client = APIClient(config: ServerConfig(url: URL(string: "https://hub.invalid")!, token: "t"),
+                               transport: { _ in throw URLError(.timedOut) })
+        let sync = RecordingSync(library: lib, api: { client }, recordingDaysChanged: { _ in })
+        let entry = try transcribed(lib)
+        await sync.syncNow()
+        #expect(sync.status(entry) == .pending)
+        #expect(!sync.automaticRetryPaused)
+        #expect(sync.problem == String(localized: "The request timed out. Try again later."))
+    }
+
+    @Test func readOnlyAndUnsupportedDeletesStayPendingAndVisible() async throws {
+        for refusal in [APIError(status: 403, message: "Read-only", fields: ["code": "kb_read_only"]),
+                        APIError(status: 404, message: "Not found")] {
+            let (lib, sync, hub, root) = setup()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let entry = try transcribed(lib)
+            await sync.syncNow()
+            hub.refusal = refusal
+            hub.writesOnly = true
+            try sync.delete(entry.id)
+            await sync.syncNow()
+            #expect(sync.automaticRetryPaused)
+            #expect(sync.store.deletes.contains(entry.id))
+            #expect(hub.stored[entry.id.uuidString.lowercased()] != nil)
+            #expect(sync.problem?.contains(String(localized: "Pending deletions have not been removed from Knowledge yet.")) == true)
+            let relaunched = RecordingSync(library: lib, api: { nil })
+            #expect(relaunched.store.deletes.contains(entry.id))
+            hub.refusal = nil
+            await sync.syncNow(retryPaused: true)
+            #expect(sync.store.deletes.isEmpty)
+            #expect(hub.stored.isEmpty)
+        }
+    }
+
     @Test func deleteHereDeletesThereEvenAfterBeingOffline() async throws {
         let (lib, sync, hub, root) = setup()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -135,7 +217,7 @@ private final class FakeRecordingHub: @unchecked Sendable {
         await sync.syncNow()
         hub.forget(entry.id) // a new hub
         let api = api(hub)
-        let relaunched = RecordingSync(library: lib, api: { api }) // asks the hub what it has first
+        let relaunched = RecordingSync(library: lib, api: { api }, recordingDaysChanged: { _ in }) // asks the hub what it has first
         #expect(relaunched.status(entry) == .synced)
         await relaunched.syncNow()
         #expect(hub.stored[entry.id.uuidString.lowercased()] == entry.revision)
@@ -165,5 +247,77 @@ private final class FakeRecordingHub: @unchecked Sendable {
         await sync.syncNow()
         #expect(sync.status(entry) == .waiting)
         #expect(!hub.calls.contains { $0.hasPrefix("PUT") })
+    }
+
+    @Test func aNewRetentionTellsTheWatchHowLongItMayKeepAudio() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        let hub = FakeRecordingHub()
+        let api = api(hub)
+        var told: [Int] = []
+        let sync = RecordingSync(library: lib, api: { api }, recordingDaysChanged: { told.append($0) })
+        hub.days = 3
+        await sync.syncNow(retryPaused: true)
+        #expect(told == [3], "recordingDayKeepDays follows recording_days (docs/assistant/day-recap.md「Watch and phone capabilities」)")
+        await sync.syncNow(retryPaused: true)
+        #expect(told == [3], "unchanged: nothing to tell")
+        hub.days = 30
+        await sync.syncNow(retryPaused: true)
+        #expect(told == [3, 30])
+    }
+
+    @Test func aDayWhosePartTheHubDeletedGoesWholeEverywhere() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        let hub = FakeRecordingHub()
+        let api = api(hub)
+        let store = RecordingDayStore(root: root, isDeleted: { lib.isDeletedSnapshot($0) }, writeDelay: 3600)
+        var stopped: [UUID] = []
+        let daySync = RecordingDaySync(store: store, library: lib, api: { api }, features: { [RecordingDayContract.feature] },
+                                       days: { 14 }, appState: RecordingDayForeground(), noteParts: { _, _ in },
+                                       removed: { stopped.append($0) }, removeEverywhere: { _ in }, recapFinal: {})
+        let sync = RecordingSync(library: lib, api: { api }, daySync: { daySync }, recordingDaysChanged: { _ in })
+        let day = UUID(), second = UUID()
+        lib.adoptDay(id: day, day: "2027-01-15", timeZone: "Asia/Shanghai", createdAt: .now)
+        sync.noteDayParts(day, [second])
+        // The web deleted the day's second part.
+        hub.deleteThere(second)
+        await sync.syncNow(retryPaused: true)
+        #expect(lib.entry(day) == nil && lib.isDeleted(day), "the day goes here, tombstoned")
+        #expect(stopped == [day], "its transcription stops")
+        #expect(hub.calls.contains("DELETE /api/v1/recordings/\(day.uuidString.lowercased())"), "every part goes from the hub")
+        #expect(hub.calls.contains("DELETE /api/v1/recordings/\(second.uuidString.lowercased())"))
+        #expect(sync.store.deletes.isEmpty && sync.store.dayParts?[day] == nil)
+        var pending = await store.watchRequests()
+        for _ in 0..<200 where pending.deletes.isEmpty {
+            try? await Task.sleep(for: .milliseconds(2))
+            pending = await store.watchRequests()
+        }
+        #expect(pending.deletes == [RecordingDayDelete(recording: day)], "and the watch's copy")
+    }
+
+    /// The day upload's `410` deletes a day the library has no row for yet (written only after its first chunk was
+    /// stored): it is still a day, so its transcription stops and the watch is asked to delete its copy.
+    @Test func aDayWithoutItsRowYetIsStillDeletedEverywhere() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        let store = RecordingDayStore(root: root, isDeleted: { lib.isDeletedSnapshot($0) }, writeDelay: 3600)
+        var stopped: [UUID] = []
+        let daySync = RecordingDaySync(store: store, library: lib, api: { nil }, features: { [RecordingDayContract.feature] },
+                                       days: { 14 }, appState: RecordingDayForeground(), noteParts: { _, _ in },
+                                       removed: { stopped.append($0) }, removeEverywhere: { _ in }, recapFinal: {})
+        let sync = RecordingSync(library: lib, api: { nil }, daySync: { daySync }, recordingDaysChanged: { _ in })
+        let day = UUID()
+        try sync.delete(day, day: true)
+        #expect(lib.isDeleted(day) && stopped == [day])
+        var pending = await store.watchRequests()
+        for _ in 0..<200 where pending.deletes.isEmpty {
+            try? await Task.sleep(for: .milliseconds(2))
+            pending = await store.watchRequests()
+        }
+        #expect(pending.deletes == [RecordingDayDelete(recording: day)])
     }
 }

@@ -1,7 +1,5 @@
 package persona.feature.settings
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
@@ -9,8 +7,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import persona.core.contracts.api.BindPrompt
@@ -18,7 +14,7 @@ import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 
 /**
- * How a connector's sign-in step or a channel's binding step is drawn (docs/extensions/connectors.md "Sign-in", #4488): fields to fill
+ * How a connector's sign-in step or a channel's binding step is drawn (docs/extensions/connectors.md "Login supports", #4488): fields to fill
  * in, a QR code, the link a QR code encodes when its modules did not come, a code to enter or send; or one it cannot
  * draw: a kind it does not know ([Unknown], a newer hub's) or a known one without what it shows ([Incomplete]: a QR code
  * with neither, a code step with neither the code nor a page to open, a form with no fields). Those two say so with
@@ -52,18 +48,12 @@ internal enum class StepView {
 /** A QR step without its modules ([StepView.QrLink]): the link it encodes, to copy (button or long press) and open in [app]. */
 @Composable
 internal fun QrLinkStep(url: String, app: String) {
-    val context = LocalContext.current
-    val res = LocalResources.current
-    val feedback = LocalAppFeedback.current
+    val copy = rememberCopy()
     Text(stringResource(R.string.settings_src_signin_qr_link, app), Modifier.padding(horizontal = rowPadding),
         style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
     Row(Modifier.padding(start = rowPadding), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
         JSelectableText(url, PersonaTheme.type.codeSmall, PersonaTheme.palette.ink, Modifier.weight(1f), maxLines = 2)
-        JIconButton(PhIcons.Copy, stringResource(R.string.settings_src_signin_copy_link), {
-            context.getSystemService(ClipboardManager::class.java)
-                ?.setPrimaryClip(ClipData.newPlainText(res.getString(R.string.settings_src_signin_link), url))
-            feedback?.notice(res.getString(R.string.settings_src_copied))
-        })
+        JIconButton(PhIcons.Copy, stringResource(R.string.settings_src_signin_copy_link), { copy(url, null) })
     }
 }
 

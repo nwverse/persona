@@ -45,6 +45,8 @@ internal fun rebuildTaskProgress(items: List<LineItem>): List<TaskProgressItem> 
         if (item.kind == "tool_use") { uses[callId] = item; continue }
         if (item.kind != "tool_result" || item.item.isError == true) continue
         val use = uses[callId] ?: continue
+        // Only these tools change the list (the `when` below): any other result, a file or shell output, is not parsed.
+        if (use.item.toolName !in progressTools) continue
         val input = use.item.toolInput as? JsonObject ?: JsonObject(emptyMap())
         val output = item.text?.trim().orEmpty()
         val result = runCatching { Json.parseToJsonElement(output) }.getOrNull()
@@ -114,5 +116,6 @@ private fun progressStatus(value: String?): TaskProgressStatus = when (value) {
     else -> TaskProgressStatus.Unknown
 }
 
+private val progressTools = setOf("TodoWrite", "TaskCreate", "TaskUpdate", "TaskList")
 private val createdTask = Regex("Task #([A-Za-z0-9_-]+) created successfully")
 private val listedTask = Regex("#([A-Za-z0-9_-]+) \\[(pending|in_progress|completed)\\] (.+)")

@@ -21,17 +21,22 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import persona.core.contracts.api.InboxDoneTarget
+import persona.core.contracts.api.ManagerPins
 import persona.core.domain.inbox.InboxTier
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 
 /** Conversation identity includes pairing and assistant ownership, even when they share the same source thread. */
 data class InboxConversationKey(val scope: String, val source: String, val account: String, val thread: String, val manager: String? = null)
@@ -41,6 +46,8 @@ class InboxConversationBinding internal constructor(
     val key: InboxConversationKey,
     val window: Flow<LarkConversation>,
     val composer: ReplyComposer,
+    /** The row's manager pins: send with them (`composer.send(context = …)`), as the composer is shared by every copy of the chat. */
+    val context: CoroutineContext = EmptyCoroutineContext,
 )
 
 enum class InboxConversationSection { Action, Fyi, ReadPending, Read, Done }
@@ -121,7 +128,7 @@ data class InboxReadResult(
 )
 
 /**
- * Unread conversations whose message windows load ahead of being opened. Each window fetches and parses whole
+ * Legacy opt-in prefetch count. The app leaves body prefetch disabled; each window fetches and parses whole
  * message pages (cards through jsoup); 24 of them at once ran a real Feishu inbox out of a 192 MB heap within
  * seconds of launch (2026-11-06). Others load when the app or the capsule opens them.
  */
@@ -136,6 +143,8 @@ class InboxConversations(
     val scope: String,
     private val owner: CoroutineScope,
     private val composers: ReplyComposers,
+    /** Body prefetch is opt-in: unread metadata does not require retained message histories. */
+    private val prefetchWindows: Int = 0,
 ) {
     private val mutable = MutableStateFlow(InboxConversationList())
     val state: StateFlow<InboxConversationList> = mutable.asStateFlow()
@@ -157,12 +166,12 @@ class InboxConversations(
         owner.launch {
             repository.snapshot.map { snapshot -> buildInboxConversations(scope, snapshot).rows
                 .filter { it.section != InboxConversationSection.Done && it.section != InboxConversationSection.Read }
-                .take(PREFETCHED_WINDOWS).map { it.key }.toSet() }
+                .take(prefetchWindows).map { it.key }.toSet() }
                 .distinctUntilChanged().collectLatest { keys ->
                     synchronized(active) { prefetched = keys }
                     windows.update { it.filterKeys { key -> key in keys || synchronized(active) { key in active } } }
                     coroutineScope { keys.forEach { key -> launch {
-                        try { repository.conversation(key.thread, null).collect { window ->
+                        try { repository.conversation(key.thread, null).flowOn(asRow(key)).collect { window ->
                             acceptWindow(key, window)
                         } } catch (e: CancellationException) { throw e }
                         catch (_: Exception) { windows.update { it + (key to LarkConversation(failure = LarkFailure.LoadFailed)) } }
@@ -265,11 +274,15 @@ class InboxConversations(
 
     private fun owns(key: InboxConversationKey) = key.scope == scope && state.value.rows.any { it.key == key }
 
+    /** A row's chat is read and acknowledged as its manager's (the merged list's stamp; unstamped: none named). */
+    private fun asRow(key: InboxConversationKey): CoroutineContext =
+        ManagerPins.of(listOf(listOf("lark", "conversations", key.thread)), key.manager) ?: EmptyCoroutineContext
+
     private fun requireOwned(key: InboxConversationKey) = check(owns(key)) { "Conversation is no longer in this inbox" }
 
     fun bind(key: InboxConversationKey): InboxConversationBinding? {
         if (!owns(key)) return null
-        return InboxConversationBinding(key, observeOwned(key), composerOwned(key))
+        return InboxConversationBinding(key, observeOwned(key), composerOwned(key), asRow(key))
     }
 
     fun observe(key: InboxConversationKey): Flow<LarkConversation> {
@@ -280,7 +293,7 @@ class InboxConversations(
     private fun observeOwned(key: InboxConversationKey): Flow<LarkConversation> = channelFlow {
             synchronized(active) { active[key] = (active[key] ?: 0) + 1 }
             try {
-                combine(repository.conversation(key.thread, null), repository.messageReads) { window, reads ->
+                combine(repository.conversation(key.thread, null).flowOn(asRow(key)), repository.messageReads) { window, reads ->
                     acceptWindow(key, window)
                     window.copy(messages = window.messages.map { message ->
                         if (message.position != null && InboxMessageRead(scope, key.thread, message.id, message.position) in reads) message.copy(isRead = true) else message
@@ -330,7 +343,7 @@ class InboxConversations(
         if (snapshot.key.scope != scope || state.value.rows.none { it.key == snapshot.key }) return false
         val job = synchronized(jobs) { jobs.getOrPut(snapshot) { owner.async {
             try {
-                val accepted = repository.markVisible(snapshot.key.thread, snapshot.messages)
+                val accepted = withContext(asRow(snapshot.key)) { repository.markVisible(snapshot.key.thread, snapshot.messages) }
                 if (accepted) acceptedReads.update { old -> old.filterNot { it.key == snapshot.key && it.messages.maxOfOrNull { message -> message.position ?: -1 }
                     ?.let { it <= (snapshot.messages.maxOfOrNull { message -> message.position ?: -1 } ?: -1) } == true } + snapshot }
                 if (accepted) refreshMetadata()
@@ -379,7 +392,7 @@ class InboxConversations(
         capture(row, windows.value[row.key], windowVersions.value[row.key], null)?.takeIf { it.complete }?.let { captured ->
             return runCatching { read(captured) }.getOrDefault(false)
         }
-        return try { repository.markLatestRead(row.key.thread) }
+        return try { withContext(asRow(row.key)) { repository.markLatestRead(row.key.thread) } }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { false }
     }

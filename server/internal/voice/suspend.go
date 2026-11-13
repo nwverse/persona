@@ -118,6 +118,8 @@ func (c *conversation) pauseDue(now time.Time) bool {
 	switch {
 	case !c.ready || c.up == nil || c.version < 2 || c.closed || !c.sus.works || c.sus.state != "":
 		return false // ready first: the version is set before it, outside mu
+	case c.meeting != nil:
+		return false // a meeting call never pauses: it is there for the next Talk (meeting.go)
 	case len(c.queue) > 0 || len(c.pending) > 0 || c.askCur != "" || c.user != nil:
 		return false // something to say, a handover waiting for its call, a card asked, the user's line open
 	}
@@ -306,7 +308,7 @@ func (c *conversation) flushRing() {
 		}
 		c.mu.Unlock()
 		for i, f := range out {
-			err := writeJSON(c.ctx, up, f)
+			err := c.writeUp(up, f)
 			if err == nil {
 				continue
 			}

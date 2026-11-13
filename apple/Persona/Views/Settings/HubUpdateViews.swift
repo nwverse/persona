@@ -14,7 +14,7 @@ struct HubUpdateDeps {
     }
 }
 
-/// Settings › hub (docs/operations/hub-update.md「App 里」): the hub's version and channel, checking for and installing a release,
+/// Settings › hub (docs/operations/hub-update.md「In the App」): the hub's version and channel, checking for and installing a release,
 /// what an update waits for, turning auto-update on and off, and the history.
 @Observable final class HubUpdateModel {
     private(set) var status: HubUpdateStatus?
@@ -343,7 +343,7 @@ struct HubSettingsPage: View {
     }
 }
 
-/// The one quiet line about the hub over the Agents list, like 「Mac 上的 Persona 已登录」 (docs/operations/hub-update.md「App 里」):
+/// The one quiet line about the hub over the Agents list, like 「Mac 上的 Persona 已登录」 (docs/operations/hub-update.md「In the App」):
 /// Auto-update is on (once), a newer version when auto-update is off, an update under way, one that went back, or that the
 /// hub or the app is too old. No dialog; a tap opens the hub page.
 struct HubNoticeRow: View {
@@ -427,13 +427,17 @@ struct HubNoticeRow: View {
     }
 }
 
-/// Settings › Assistant › Skills: the assistant's skills on its machine (GET /api/v1/skills), read only for now.
+/// Settings › Assistant › Skills: the current assistant's skills on its machine (GET /api/v1/skills), read only for now.
+/// The route isn't one of the assistant's own (`APIClient.assistantRoute`), so the page names the assistant it opened for
+/// (`currentAssistantSettings`): none for the default's.
 @Observable final class SkillsModel {
     private(set) var skills: [AgentSkill] = []
     private(set) var machine: String?
     private(set) var loaded = false
     private(set) var error: String?
     @ObservationIgnored private let api: () -> APIClient?
+    /// The client of the assistant the page opened for, kept from its first read.
+    @ObservationIgnored private var scoped: APIClient?
 
     init(api: @escaping () -> APIClient? = { AppModel.shared.api }) { self.api = api }
 
@@ -452,7 +456,8 @@ struct HubNoticeRow: View {
     }
 
     func load() async {
-        guard let api = api() else {
+        if scoped == nil { scoped = api()?.currentAssistantSettings() }
+        guard let api = scoped else {
             error = Self.noHub
             loaded = true
             return

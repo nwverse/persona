@@ -79,7 +79,7 @@ Reads a device makes on its own (filling a gap, a latest page, the card list aft
 | `cards` | `{id: state}` for cards on screen or just answered: `open` (its buttons work), `answering` (this device's answer is in flight: hidden or locked), `answered` (shown as answered, or gone). Ids not listed are not on screen. Only `open` against not-`open` is strict; see "Allowed differences" |
 | `status` | The chat's state: `working`, `needs_you`, `unread`, `idle` |
 | `live` | The streamed text on screen, or `null` |
-| `requests` | Requests the device must have sent since the last step that listed `requests` for it (or the start), in this order; others may come in between: `{"get": "/items", "after_seq": 4}`, `{"ws": "subscribe", "since_seq": 4}`, `{"post": "resolve", "id": "ix1"}`, `{"post": "messages", "id": "m1"}`, `{"post": "conversations", "id": "c1"}` (a start; `id` is the op id; `"new_op": true` instead: an op id this message never had) |
+| `requests` | Requests the device must have sent since the last step that listed `requests` for it (or the start), in this order; others may come in between: `{"get": "/items", "after_seq": 4}`, `{"ws": "subscribe", "since_seq": 4}`, `{"post": "resolve", "id": "ix1"}`, `{"post": "messages", "id": "m1"}`, `{"post": "conversations", "id": "c1"}` (a start; `id` is the op id; `"new_op": true` instead: an op id this message never had), `{"get": "/ops", "id": "m1"}` (the receipt of the op a write went with, by the write's id). Where the protocol allows several ways, an entry `{"one_of": [request, request…]}` is met by any one of them: a send in flight posted again or its op's receipt read; the rest of a capped replay asked from its cap or the whole gap read when the socket came back (#2770) |
 
 ### Allowed differences
 
@@ -110,8 +110,34 @@ The clients draw the same states differently. A consumer maps what it draws onto
 | --- | --- | --- |
 | Go (the files themselves) | `server/internal/proto/sync_scenarios_test.go` | — |
 | Web | `web/src/views/chat/sync/sync-scenarios.test.tsx`: the real store, `useTranscript`, chat page, composer and cards; a fake hub (`sync/fake-hub.ts`) answers reads from the case and holds writes; the page is read back through `data-*` marks (`sync/project.ts`) | `KNOWN` in the test, each with its issue and the reason it must fail for |
-| iOS / Mac | #1112 | |
-| Android | #1111 | |
+| iOS / Mac | `apple/PersonaTests/Sync/SyncScenarioTests.swift`: the real `AppModel`, as Demo Mode drives it; a fake hub (`Sync/SyncHub.swift`) answers reads from the case and holds writes; a transport and a state folder per device, a test clock (#1112) | `known` in the test, each with its issue |
+| Android | `android/core/data/src/test/kotlin/persona/core/data/sync/ChatSyncScenariosTest.kt` (#1111): the real `HubChatRepository`, `HubInteractionCenter`, `OutboxMessageSender` and `HubSessionsRepository`, and the chat page's own taps and bubbles (`ChatTaps`); a fake hub answers reads from the case and holds writes (`sync/SyncDevice.kt`, `sync/SyncHub.kt`) | `KNOWN` in the test, each with the reason it must fail for |
+| Web, end to end | `web/e2e/sync-cases.mjs` (#2777): the real web app in a browser against the mock hub playing the case (below), one browser context per device | `KNOWN` in the runner, each with its issue |
+| iOS, end to end | `scripts/app/cli-tests/sync_cases.py` (#2952): the DEBUG app in the simulator against the mock hub playing the case, driven and read through the Runtime CLI (`docs/operations/runtime-cli.md`, "UI tests written with the CLI"); the app is one device and a two-device case's other device is scripted, once for each | `KNOWN` in the runner, each with its issue |
+
+The Mac app builds the same `AppModel`, so the iOS replay stands for it and `PersonaMacTests` leaves the replay out; run once in `PersonaMacTests`, it passed with the same two known cases (#1112). The end-to-end run is iPhone only: the Runtime CLI exists only on iOS and visionOS, and the frozen Mac app takes no new Mac-only code (`docs/apple/mac.md`).
+
+Nothing here runs on a real device. What only a phone shows (iOS suspending the app in the background, the network really going away, a card answered from a notification) is checked by hand on a TestFlight build (#5189).
+
+## The mock hub plays a case
+
+For runs against the real apps (#1073 step 4), `MOCK_SYNC_CASE=<file>#<name>` makes `scripts/mock/mock_hub.py` play one case (`scripts/mock/sync_case.py`, #2766). An app paired with `token=mock-<device>` is that device. With `MOCK_WEB=<web/dist>` the mock also serves the built web app, so a browser talks to it with no proxy in between (`web/e2e/README.md`, "Shared chat sync cases end to end").
+
+- **The chat** is served from the case's hub state, with the same rules as the web's fake hub: its session list entry, `/items` (latest page, `after_seq`, `before_seq`), `/interactions`, `/ops/{id}` receipts, and the hello's `event_stream` / `event_seq`.
+  - The first socket gets the hub's snapshot: the machine, the session list and the pending cards.
+  - After that, the socket gets only the frames the steps list. The first subscription to the chat also gets the chat's backlog.
+- **Writes** (a send, a card's answer, a start) wait for their `reply`. A receipt the reply leaves answers later retries with the same op id.
+- **The runner** calls `POST /mock/case/step`. The mock plays the next step's hub side and answers `{index, user, wait, expect}`. The runner then does the user action on screen, waits `wait`, and checks `expect`. A step whose app is out of step answers 409 and says what it waited for: a reply with no write, a release with no read, an `open` the device did not take.
+  - `drop` closes the device's socket. New sockets from that device then wait for the `open` step, whose hello says `resumed` or not; the step's frames follow the snapshot.
+  - `hold` arms the device's next read of the path; it is answered with the state it read at the `release`.
+- `GET /mock/case` shows where the case is and, per device, its socket, the requests it made (`seen`) and its writes in flight. `POST /mock/case/load {"case": …}` plays another case in the same mock.
+- The cases' times are in January 2026, and the web's runners pin their clock there (2026-01-02T03:05:00Z). An app on the real clock (the iOS simulator) loads with `"now": true`: every time in the case moves by the same amount so that clock reads the present. Otherwise each line is months older than the messages the app sends, and iOS takes a line without `client_msg_id` for a bubble only when it was written after it.
+
+`scripts/mock/test_sync_case_mock.py` plays every case's hub side with a scripted device per case device (a socket and HTTP, no app):
+
+- every step's frames arrive, after an open the hello and the snapshot first, and nothing else about the chat;
+- writes are answered only at their `reply`, held reads only at their `release`;
+- the hub's final state gives each `end`.
 
 ## Checks
 
@@ -130,6 +156,7 @@ cd server && go test ./internal/proto/ -run SyncScenarios
 The clients replay the cases against their own state code:
 
 - iOS / Mac: `apple/PersonaTests/Sync/` (`SyncScenarioTests`, #1112) plays each case through the real `AppModel`, its frames over the demo config's socket and its requests over the demo config's transport, and projects the chat page onto the view after every step. Cases it cannot play yet, and cases failing on a filed bug, are listed in its `known` table with the issue; `TEST_RUNNER_SYNC_TRACE=1` prints every step's view.
+- Android: `ChatSyncScenariosTest` in `core:data` (#1111) plays each case once per device, as the web does, in virtual time. The app pages its session list (`features=sessions_list`), so a `sessions_delta` frame reaches it as the list's `sessions_list` hint and the list is read from the hub's state. `SYNC_TRACE=1` prints every step's view.
 
 ## Adding a case
 

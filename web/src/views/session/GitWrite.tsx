@@ -11,8 +11,10 @@ import { SearchField } from "../../ui/SearchField";
 import { BackHeader, Empty } from "./files/parts";
 import { t } from "../../i18n";
 
-/** Runs one write at a time for the panel: what is running, and the refusal of the last one until it is read. */
-export function useGitWrite(base: string, cwd: string, onStatus: (s: GitStatus) => void) {
+/** Runs one write at a time for the panel: what is running, and the refusal of the last one until it is read. A refusal
+ *  calls `onRefused` (the panel reads the status again): one may have changed the tree, as a stash apply that stopped
+ *  on conflicts does (#1885). */
+export function useGitWrite(base: string, cwd: string, onStatus: (s: GitStatus) => void, onRefused?: () => void) {
   const [busy, setBusy] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<GitRefusal | null>(null);
   const run = async (what: string, op: GitWriteOp, body: Record<string, unknown>, done?: string) => {
@@ -25,6 +27,7 @@ export function useGitWrite(base: string, cwd: string, onStatus: (s: GitStatus) 
       return r;
     } catch (e) {
       setRefusal(gitRefusal(e));
+      onRefused?.();
       return null;
     } finally {
       setBusy(null);
@@ -137,6 +140,22 @@ export function CommitBox({ s, writer }: { s: GitStatus; writer: GitWriter }) {
         </Button>
       </div>
     </div>
+  );
+}
+
+/** Pull in the summary (#1887, as on iOS and Android): whenever the branch has an upstream that still exists on the
+ *  remote, on any host and without `git_write`. One click: it only fast-forwards, and the node refuses it over
+ *  uncommitted changes or a branch that has moved apart, saying why in the refusal dialog. */
+export function PullButton({ s, writer }: { s: GitStatus; writer: GitWriter }) {
+  if (!s.branch || !s.upstream || s.gone) return null;
+  const pull = async () => {
+    const r = await writer.run("pull", "pull", {});
+    if (r) toast(r.updated ? t("session-gitwrite.pulled") : t("session-gitwrite.pull_current"), "ok");
+  };
+  return (
+    <Button tone="secondary" icon="download" busy={writer.busy === "pull"} disabled={writer.busy !== null} title={t("session-gitwrite.pull_hint")} onClick={() => void pull()}>
+      {writer.busy === "pull" ? t("session-gitwrite.pulling") : t("session-gitwrite.pull")}
+    </Button>
   );
 }
 

@@ -5,7 +5,7 @@ import SwiftUI
 
 /// Dynamic Island Diagnostics (hidden: touch and hold the first preview in Settings › Notifications › Dynamic Island): the steps between Settings › Avatar and the
 /// island, for a phone that draws the wrong persona — what the app saved for the widget extension, what the shared
-/// App Group container holds, what the extension last read (docs/apple/live-activity.md「诊断」). 「复制全部」 is what to send.
+/// App Group container holds, what the extension last read (docs/apple/live-activity.md「Diagnostics」). 「复制全部」 is what to send.
 struct IslandDiagnosticsView: View {
     @Environment(AppModel.self) private var model
     @State private var sections: [IslandDiagnostics.Section] = []

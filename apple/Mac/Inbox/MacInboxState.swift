@@ -1,11 +1,12 @@
 import SwiftUI
 
-// The Mac inbox's state (docs/assistant/inbox.md, docs/apple/mac.md「收件箱」): one per app, shared by the sidebar's filters, the list
+// The Mac inbox's state (docs/assistant/inbox.md, docs/apple/mac.md「Inbox, Lark, mail and links」): one per app, shared by the sidebar's filters, the list
 // column and the detail column, which the window's three columns hold separately (`MacInboxFilters`, `MacInboxList`,
 // `MacInboxDetail`). The filters are the iPhone's (same `inbox.source` / `inbox.kind` defaults), picked from the
 // sidebar instead of a row of chips.
 
-/// A row in the list: an inbox item, or an agent waiting on the user (heads Needs You, as on the iPhone).
+/// A row in the list: an inbox item (its `InboxItem.key`), or an agent waiting on the user (heads Needs You, as on the
+/// iPhone).
 enum MacInboxSelection: Hashable {
     case item(String)
     case agent(String)
@@ -134,15 +135,19 @@ final class MacInboxState {
     }
     var query = ""
     var selection: Set<MacInboxSelection> = []
-    /// Sections shown open: tiers (action, working, fyi, noise) and "done". Collapsed and Done start closed, as on the iPhone.
-    var expanded: Set<String> = ["action", "working", "fyi"]
-    var accounts: [MailAccount] = StateCache.load("mail-accounts", as: [MailAccount].self) ?? []
+    /// Sections shown open: tiers (action, working, fyi, noise) and "done". Collapsed and Done start closed, as on the
+    /// iPhone.
+    var folds = InboxFolds()
+    var accounts: [MailAccount] = InboxMailAccounts.cached(AppModel.shared.assistantManagerID)
     /// The sheets the list opens: New Email, Manage Accounts, Edit on the AI Twin's draft, Hand to AI.
     var composing: ComposeDraft?
     var showAccounts = false
     var editingDraft: InboxItem?
     var drafting: InboxItem?
     var handingOff: InboxItem?
+    /// Rules, and an item's Rule for This Chat / Sender / Repository…
+    var showRules = false
+    var ruling: InboxPolicyTarget?
     /// Clear All over many items, waiting for the user to say yes.
     var confirming = false
 
@@ -170,7 +175,7 @@ final class MacInboxState {
     /// The connectors with items in the list, one entry each (the iPhone's `connectorSources`); none, no entry.
     var connectorSources: [MacInboxFilter] {
         var seen = Set<String>()
-        return store.items.compactMap { it in
+        return store.scopedItems.compactMap { it in
             guard it.connector != nil, seen.insert(it.account).inserted else { return nil }
             return .connector(id: it.account, name: it.accountName)
         }
@@ -185,25 +190,27 @@ final class MacInboxState {
         return [it.title, it.sender ?? "", it.preview, it.summary ?? ""].contains { $0.localizedCaseInsensitiveContains(query) }
     }
 
-    /// Agents (and the assistant) waiting for an answer, an approval or a plan review.
+    /// The current assistant's agents (and the assistant) waiting for an answer, an approval or a plan review.
     func waitingAgents(_ model: AppModel, source: String? = nil, kind: String? = nil) -> [Interaction] {
         let source = source ?? self.source, kind = kind ?? self.kind
         guard source.isEmpty, kind.isEmpty || kind == "agent" else { return [] }
-        return model.pendingInteractions.filter { ix in
+        return model.scopedInteractions.filter { ix in
             !model.isMuted(ix.sessionKey) && (query.isEmpty || [ix.sessionTitle ?? "", ix.summary ?? "", ix.title].contains { $0.localizedCaseInsensitiveContains(query) })
         }
     }
 
     /// What still waits in an entry (the sidebar's count): open items Needs You, plus the waiting agents.
     func count(_ f: MacInboxFilter, model: AppModel) -> Int {
-        let items = store.items.filter { !$0.isDone && $0.triage == .action && matches($0, source: f.source, kind: f.kind, query: "") }
+        let items = store.scopedItems.filter { !$0.isDone && $0.triage == .action && matches($0, source: f.source, kind: f.kind, query: "") }
         let agents = f.source.isEmpty && (f.kind.isEmpty || f.kind == "agent")
-            ? model.pendingInteractions.filter { !model.isMuted($0.sessionKey) }.count : 0
+            ? model.scopedInteractions.filter { !model.isMuted($0.sessionKey) }.count : 0
         return (f.kind == "agent" ? 0 : items.count) + agents
     }
 
     // MARK: Sections
 
+    /// The list's sections: the current assistant's items (`InboxStore.scopedItems`) by tier, its waiting agents heading
+    /// Needs You, and its done items.
     struct Sections {
         var tiers: [(tier: InboxItem.Tier, items: [InboxItem], agents: [Interaction])]
         var done: [InboxItem]
@@ -211,20 +218,20 @@ final class MacInboxState {
     }
 
     func sections(_ model: AppModel) -> Sections {
-        let partition = Dictionary(grouping: store.items.filter { matches($0) }, by: \.isDone)
-        let byTier = Dictionary(grouping: partition[false] ?? [], by: \.triage)
+        let partition = Dictionary(grouping: store.scopedItems.filter { matches($0) }, by: \.isDone)
+        let byTier: [InboxItem.Tier: [InboxItem]] = kind == "agent" ? [:] : Dictionary(grouping: partition[false] ?? [], by: \.triage)
+        let done = (partition[true] ?? []).sorted { ($0.doneAt ?? .distantPast) > ($1.doneAt ?? .distantPast) }
         let agents = waitingAgents(model)
         let tiers = InboxItem.Tier.allCases.compactMap { tier -> (InboxItem.Tier, [InboxItem], [Interaction])? in
-            let items = kind == "agent" ? [] : byTier[tier] ?? []
+            let items = byTier[tier] ?? []
             let a = tier == .action ? agents : []
             return items.isEmpty && a.isEmpty ? nil : (tier, items, a)
         }
-        let done = (partition[true] ?? []).sorted { ($0.doneAt ?? .distantPast) > ($1.doneAt ?? .distantPast) }
         return Sections(tiers: tiers, done: done)
     }
 
     /// Clear All: the open items the list shows (its filter and search); the agents waiting are not items.
-    var openInView: [InboxItem] { kind == "agent" ? [] : store.items.filter { !$0.isDone && matches($0) } }
+    var openInView: [InboxItem] { kind == "agent" ? [] : store.scopedItems.filter { !$0.isDone && matches($0) } }
 
     /// What Clear All covers and how many, for its help tag.
     var cleanUpScope: String {
@@ -247,23 +254,23 @@ final class MacInboxState {
 
     /// The rows in the order the list shows them (closed sections left out): for moving the selection on.
     func visibleOrder(_ model: AppModel) -> [MacInboxSelection] {
-        let s = sections(model)
         var out: [MacInboxSelection] = []
-        for t in s.tiers where expanded.contains(t.tier.rawValue) || !t.tier.folds {
-            out += t.agents.map { .agent($0.id) } + t.items.map { .item($0.id) }
+        let shown = sections(model)
+        for t in shown.tiers where folds.isOpen(t.tier.rawValue) {
+            out += t.agents.map { .agent($0.id) } + t.items.map { .item($0.key) }
         }
-        if expanded.contains("done") { out += s.done.map { .item($0.id) } }
+        if folds.isOpen("done") { out += shown.done.map { .item($0.key) } }
         return out
     }
 
     func toggle(_ section: String) {
-        guard InboxItem.Tier(rawValue: section)?.folds != false else { return } // In Progress stays open
-        if expanded.contains(section) { expanded.remove(section) } else { expanded.insert(section) }
+        folds.toggle(section)
     }
 
     // MARK: Actions
 
-    func item(_ id: String) -> InboxItem? { store.items.first { $0.id == id } }
+    /// The item of a row (`InboxItem.key`).
+    func item(_ key: String) -> InboxItem? { store.items.first { $0.key == key } }
 
     /// The selected rows still present in the list: an `.item` the store no longer returns (it expired or was handled
     /// elsewhere) or an `.agent` interaction that vanished is dropped, so the detail's Selected count and the multi-select
@@ -274,11 +281,11 @@ final class MacInboxState {
 
     /// Same check against an explicit list (a store refresh pruning the selection, and tests).
     func liveSelection(items: [InboxItem], interactions: [Interaction]) -> Set<MacInboxSelection> {
-        let itemIDs = Set(items.map(\.id))
+        let itemKeys = Set(items.map(\.key))
         let agentIDs = Set(interactions.map(\.id))
         return selection.filter {
             switch $0 {
-            case .item(let id): itemIDs.contains(id)
+            case .item(let key): itemKeys.contains(key)
             case .agent(let id): agentIDs.contains(id)
             }
         }
@@ -324,22 +331,20 @@ final class MacInboxState {
     /// The agent's chat (the assistant's in Persona), where the question / plan / approval waits.
     func open(_ ix: Interaction, model: AppModel) {
         if model.session(ix.sessionKey)?.assistant == true {
-            model.selectHub(ix.group)
-            model.assistantCurrent = ix.sessionKey
-            model.selectedTab = .assistant
+            model.openAssistantConversation(ix.sessionKey)
         } else {
             model.openChat = ix.sessionKey
             model.selectedTab = .chats
         }
     }
 
+    /// The current assistant's mail accounts (`InboxMailAccounts`), as the list is its inbox.
     func loadAccounts(_ model: AppModel) async {
-        guard let api = model.api, let a = try? await api.mailAccounts() else { return }
+        guard let a = await InboxMailAccounts.read(model) else { return }
         accounts = a
-        StateCache.save("mail-accounts", a)
         // A connector's id is not a mail account: it stays while the hub's list has not come yet (the cached one may
         // be from before), and while its items are there.
         if !source.isEmpty, source != "feishu", !a.contains(where: { $0.id == source }), store.listed,
-           !store.items.contains(where: { $0.connector != nil && $0.account == source }) { source = "" }
+           !store.scopedItems.contains(where: { $0.connector != nil && $0.account == source }) { source = "" }
     }
 }

@@ -6,7 +6,18 @@ plugins {
 
 android {
     namespace = "persona.feature.agents"
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                // RecentSetupsFixtureTest reads spec/fixtures/recents.
+                it.systemProperty("persona.repo.root", rootProject.projectDir.parentFile.absolutePath)
+                // The screens' screenshots (the to-dos calendar's day, week and month in three styles, dark and light)
+                // share one test process; retain the bounded heap they need rather than the 512 MB default, as feature/settings does.
+                it.maxHeapSize = "1g"
+            }
+        }
+    }
 }
 
 dependencies {
@@ -15,7 +26,6 @@ dependencies {
     implementation(project(":core:domain"))
     implementation(project(":core:designsystem"))
     implementation(project(":core:navigation"))
-    implementation(libs.compose.icons)
     implementation(libs.androidx.lifecycle.compose)
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:${libs.versions.lifecycle.get()}")
     implementation(libs.androidx.activity)

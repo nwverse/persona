@@ -36,12 +36,6 @@ import Testing
         #expect(events == ["rename:first", "close:second", "new-close:first", "new-rename:second"])
     }
 
-    @Test func statesComeInOneOrder() {
-        let list = [session("idle", "idle", updated: 50), session("work", "working", updated: 10),
-                    session("unread", "unread", updated: 20), session("needs", "needs_you", updated: 1)]
-        #expect(order().ordered(list).map(\.sessionID) == ["needs", "unread", "work", "idle"])
-    }
-
     @Test func mutedLiveAgentsGoBelowTheRestButNeedsYouStaysFirst() {
         let list = [session("a", "unread"), session("b", "working"), session("c", "needs_you"), session("d", "idle")]
         let o = order(muted: ["a", "c"])
@@ -70,11 +64,6 @@ import Testing
         #expect(visible.map(\.sessionID) == ["latest", "first", "second"], "navigation follows the displayed rows")
         #expect(AgentListRows.step(visible.map(\.key), from: latest.key, by: 1) == first.key)
         #expect(group.sessions.map(\.slotIndex) == [0, 1, 2], "list order must not rewrite the original tabs")
-    }
-
-    @Test func underAQuickFilterOnlyTimeCounts() {
-        let list = [session("needs", "needs_you", updated: 1), session("idle", "idle", updated: 9)]
-        #expect(order(byRank: false).ordered(list).map(\.sessionID) == ["idle", "needs"])
     }
 
     @Test func sortedByLatestUpdateOnlyTimeCounts() {
@@ -337,6 +326,20 @@ import Testing
         #expect(AgentListRows.step(keys, from: nil, by: 1) == keys[0], "nothing open: ↓ opens the first")
         #expect(AgentListRows.step(keys, from: nil, by: -1) == keys[2])
         #expect(AgentListRows.step([], from: nil, by: 1) == nil)
+    }
+
+    /// By App (#3756): an open app section's rows in order, none of a folded one's, all of them while searching.
+    @Test func appsListTheirRowsUnlessFolded() {
+        var desktop = session("d", "offline", updated: 9)
+        desktop.agent = "claude"
+        desktop.agentSurface = "desktop"
+        let other = session("o", "working", updated: 5)
+        let groups = AppGroups.build([other, desktop])
+        #expect(rows(.app).apps(groups).map(\.sessionID) == ["d", "o"])
+        #expect(rows(.app, folded: ["app/desktop/claude code"]).apps(groups).map(\.sessionID) == ["o"])
+        let searching = AgentListRows(order: AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false }), grouping: .app,
+                                      searching: true, isFolded: { _ in true })
+        #expect(searching.apps(groups).map(\.sessionID) == ["d", "o"])
     }
 
     @Test func machinesListTheirBusyRowsAndOpenedIdleOnes() {

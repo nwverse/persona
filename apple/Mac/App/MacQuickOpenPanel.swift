@@ -10,7 +10,7 @@ import SwiftUI
     var section: MacSection? = MacSection.remembered() {
         didSet { MacSection.remember(section) }
     }
-    /// A page a plugin put in the sidebar (nav_page, docs/extensions/extensions.md「UI 插槽」) while it is picked: "<plugin>/<ui>".
+    /// A page a plugin put in the sidebar (nav_page, docs/extensions/extensions.md「UI slots」) while it is picked: "<plugin>/<ui>".
     /// Not remembered across launches (the plugin may be gone).
     var pluginPage: String?
     /// A conversation the menus asked to open in its own window (MacWindowOpener does it).

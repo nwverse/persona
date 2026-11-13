@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { shortPath, uuid } from "../lib/format";
+import { shortPath } from "../lib/format";
 import { deliverLaunch, type AgentLaunch } from "../lib/new-agent";
+import { namedLauncher, providerIdNote, providerLabel, providerTitle, useProviderNames } from "../lib/provider-names";
 import { navigate } from "../lib/router";
 import { useStore, putLaunch } from "../lib/store";
 import { releaseAttachments } from "../lib/attachments";
@@ -13,13 +14,15 @@ export function StartingAgent({ launch, onToggleSidebar }: { launch: AgentLaunch
   const machine = useStore((s) => s.machines.find((m) => m.id === launch.machineId));
   const [text, setText] = useState(launch.text);
   const [launcher, setLauncher] = useState(launch.launcher);
-  const editable = launch.phase === "failed" && !launch.session && !launch.uncertain;
+  // the launcher by the provider's display name; the line's tooltip says it with its startup ID (#5029)
+  const runsOn = namedLauncher(launch.launcher, useProviderNames());
+  const subtitle = (name: string) => [machine?.name ?? launch.machineId, shortPath(launch.cwd), name, launch.model].filter(Boolean).join(" · ");
+  const editable = launch.phase === "failed" && !launch.session && !launch.uncertain && !launch.repeatOnly;
   useEffect(() => {
     if (launch.phase === "ready" && launch.session) navigate({ name: "session", mid: launch.machineId, sid: launch.session.session_id }, true);
   }, [launch]);
   const retry = () => {
     if (launch.uncertain && !confirm(launch.session ? t("startingagent.resend_confirm") : t("startingagent.restart_confirm"))) return;
-    if (launch.retryNeedsNewId) putLaunch({ ...launch, messageId: uuid(), retryNeedsNewId: false });
     // the model and effort were picked for the launcher it had: another launcher starts with its own
     const other = launcher.trim() !== launch.launcher;
     if (editable) putLaunch({ ...launch, text: text.trim(), launcher: launcher.trim(), outgoing: undefined, ...(other && { model: undefined, effort: undefined }) });
@@ -30,7 +33,7 @@ export function StartingAgent({ launch, onToggleSidebar }: { launch: AgentLaunch
     <div className="flex h-full min-w-0 flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line bg-page/85 px-3 backdrop-blur-md sm:px-4">
         {onToggleSidebar && <button type="button" aria-label={t("startingagent.sidebar")} onClick={onToggleSidebar} className="flex size-7 items-center justify-center rounded-control text-ink-3 hover:bg-hover lg:hidden"><Icon name="sidebar" /></button>}
-        <div className="min-w-0 flex-1"><h1 className="truncate text-[14px] font-semibold text-ink">{t("startingagent.title")}</h1><p className="truncate text-[11.5px] text-ink-3">{[machine?.name ?? launch.machineId, shortPath(launch.cwd), launch.launcher, launch.model].filter(Boolean).join(" · ")}</p></div>
+        <div className="min-w-0 flex-1"><h1 className="truncate text-[14px] font-semibold text-ink">{t("startingagent.title")}</h1><p className="truncate text-[11.5px] text-ink-3" title={providerIdNote(runsOn) ? subtitle(providerLabel(runsOn)) : undefined}>{subtitle(providerTitle(runsOn))}</p></div>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-5 pt-6 pb-10 sm:px-8">

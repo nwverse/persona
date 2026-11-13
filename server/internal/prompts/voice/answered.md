@@ -1,4 +1,4 @@
-{{- /* A question asked by voice is over (docs/assistant/voice.md「提问和卡片」): its answer went to the conversation (voice: on
+{{- /* A question asked by voice is over (docs/assistant/voice.md「Questions and cards」): its answer went to the conversation (voice: on
 the delegation that answered it; .Unfollowed: no run follows that conversation, so its result is not told by itself),
 it was answered on the screen or another device while it was asked (elsewhere: said by itself, only for the one being
 asked) or before the user's answer got there (late), the answer did not get there (failed: it is asked again when the

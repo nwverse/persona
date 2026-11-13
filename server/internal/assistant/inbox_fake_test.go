@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -61,6 +62,10 @@ type fakeMail struct {
 	reads    int
 	sent     []map[string]any
 	fetched  func(uid uint32)
+	// box is the mailbox the hub looks mail up in (inbox.mail_flags) by UID: seen or not; a UID not in it is gone.
+	// nil: the hub can't say (a hub from before #5993 answers an unknown method). flagAsks are the lookups asked.
+	box      map[uint32]bool
+	flagAsks []assistantwire.InboxMailFlagsAsk
 }
 
 func newFakeInbox() *fakeInbox {
@@ -246,6 +251,28 @@ func (in *fakeInbox) answer(ctx context.Context, p AppCall) (json.RawMessage, bo
 		if fetched != nil {
 			fetched(ref.UID)
 		}
+	case assistantwire.InboxMailFlagsMethod:
+		var ask assistantwire.InboxMailFlagsAsk
+		_ = json.Unmarshal(p.Params, &ask)
+		in.mu.Lock()
+		if in.mail == nil || in.mail.box == nil {
+			err = errors.New("unknown method inbox.mail_flags")
+		} else {
+			in.mail.flagAsks = append(in.mail.flagAsks, ask)
+			flags := assistantwire.InboxMailFlags{Seen: []uint32{}, Unseen: []uint32{}}
+			for _, uid := range ask.UIDs {
+				seen, there := in.mail.box[uid]
+				switch {
+				case !there:
+				case seen:
+					flags.Seen = append(flags.Seen, uid)
+				default:
+					flags.Unseen = append(flags.Unseen, uid)
+				}
+			}
+			out = flags
+		}
+		in.mu.Unlock()
 	case assistantwire.InboxReplyMail:
 		var a map[string]any
 		_ = json.Unmarshal(p.Params, &a)
@@ -356,6 +383,27 @@ type inboxMemStore struct {
 	ids  map[string]int
 	fail error // InboxItems fails
 	down error // PutInboxItem fails (writeFails)
+	feed []db.FeedRow
+}
+
+// The inbox's store keeps the assistant feed too (a hand-off's write-back card, inbox_handoff_card.go).
+func (s *inboxMemStore) AppendFeed(_ context.Context, r db.FeedRow) error {
+	s.imu.Lock()
+	defer s.imu.Unlock()
+	s.feed = append(s.feed, r)
+	return nil
+}
+
+func (s *inboxMemStore) Feed(_ context.Context, conversation string, since time.Time, limit int) ([]db.FeedRow, error) {
+	s.imu.Lock()
+	defer s.imu.Unlock()
+	var out []db.FeedRow
+	for _, r := range s.feed {
+		if r.Conversation == conversation && r.At.After(since) && (limit <= 0 || len(out) < limit) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 func newInboxMemStore() *inboxMemStore {
@@ -373,11 +421,11 @@ func (s *inboxMemStore) PutInboxItem(_ context.Context, id string, data []byte, 
 	return nil
 }
 
-func (s *inboxMemStore) InboxItems(_ context.Context, doneSince time.Time) ([][]byte, error) {
+func (s *inboxMemStore) InboxItems(_ context.Context, doneSince time.Time, each func(raw []byte) error) error {
 	s.imu.Lock()
-	defer s.imu.Unlock()
 	if s.fail != nil {
-		return nil, s.fail
+		s.imu.Unlock()
+		return s.fail
 	}
 	var out [][]byte
 	for id, raw := range s.rows {
@@ -385,17 +433,106 @@ func (s *inboxMemStore) InboxItems(_ context.Context, doneSince time.Time) ([][]
 			out = append(out, raw)
 		}
 	}
+	s.imu.Unlock()
+	for _, raw := range out {
+		if err := each(raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *inboxMemStore) DeleteInboxSource(_ context.Context, source string, ids []string) ([]string, error) {
+	s.imu.Lock()
+	defer s.imu.Unlock()
+	var gone []string
+	for id, raw := range s.rows {
+		var it struct {
+			Source string `json:"source"`
+		}
+		_ = json.Unmarshal(raw, &it)
+		if slices.Contains(ids, id) || it.Source == source {
+			delete(s.rows, id)
+			delete(s.done, id)
+			gone = append(gone, id)
+		}
+	}
+	return gone, nil
+}
+
+func (s *inboxMemStore) PurgeInboxItems(_ context.Context, doneBefore time.Time) (int64, error) {
+	s.imu.Lock()
+	defer s.imu.Unlock()
+	var n int64
+	for id, d := range s.done {
+		if d != nil && d.Before(doneBefore) {
+			delete(s.rows, id)
+			delete(s.done, id)
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s *inboxMemStore) DoneInboxItemsByID(_ context.Context, ids []string) ([][]byte, error) {
+	s.imu.Lock()
+	defer s.imu.Unlock()
+	if s.fail != nil {
+		return nil, s.fail
+	}
+	var out [][]byte
+	for _, id := range ids {
+		if raw, ok := s.rows[id]; ok && s.done[id] != nil {
+			out = append(out, raw)
+		}
+	}
 	return out, nil
 }
 
-func (s *inboxMemStore) DeleteInboxItems(_ context.Context, ids []string) error {
+// DoneInboxItems pages the done rows as the database does (newest done first by done_at and id), through the order
+// memory pages its own in (inboxBook.doneItems).
+func (s *inboxMemStore) DoneInboxItems(_ context.Context, q db.InboxDoneQuery) ([]db.InboxRow, error) {
 	s.imu.Lock()
 	defer s.imu.Unlock()
-	for _, id := range ids {
-		delete(s.rows, id)
-		delete(s.done, id)
+	if s.fail != nil {
+		return nil, s.fail
 	}
-	return nil
+	b := newInbox()
+	for id, raw := range s.rows {
+		var it InboxItem
+		if json.Unmarshal(raw, &it) == nil && s.done[id] != nil {
+			it.ID, it.DoneAt = id, s.done[id]
+			b.items[id] = &it
+		}
+	}
+	var out []db.InboxRow
+	for _, it := range b.doneItems(q) {
+		out = append(out, db.InboxRow{ID: it.ID, Data: s.rows[it.ID], UpdatedAt: it.UpdatedAt, DoneAt: it.DoneAt})
+	}
+	return out, nil
+}
+
+// DoneInboxDays counts the done rows per day in zone as the database does, through the count memory makes of its own
+// (inboxBook.doneDays).
+func (s *inboxMemStore) DoneInboxDays(_ context.Context, zone string, connectors bool) ([]db.InboxDay, error) {
+	s.imu.Lock()
+	defer s.imu.Unlock()
+	if s.fail != nil {
+		return nil, s.fail
+	}
+	loc, err := time.LoadLocation(zone)
+	if err != nil {
+		return nil, err
+	}
+	b := newInbox()
+	for id, raw := range s.rows {
+		var it InboxItem
+		if json.Unmarshal(raw, &it) == nil && s.done[id] != nil {
+			it.ID, it.DoneAt = id, s.done[id]
+			b.items[id] = &it
+		}
+	}
+	return b.doneDays(loc, connectors), nil
 }
 
 // writeFails makes every row write fail (on) or succeed again.
@@ -448,7 +585,7 @@ func newInboxHubWith(t *testing.T, kbo *KBOptions) *inboxHub {
 	st := newInboxMemStore()
 	s := New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), KB: kbo})
 	if kbo != nil {
-		t.Cleanup(s.kbClose)
+		t.Cleanup(s.kbEnd)
 	}
 	in.svc = s
 	h := &inboxHub{Service: s, f: f, in: in, st: st}

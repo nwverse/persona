@@ -16,8 +16,8 @@ import (
 // manager's computers"): a manager whose hub has not answered within ownListWait of its start connects them, the way
 // the hub's last hand-over had them (its tailcat DERP map). Not when the hub was in a mesh group: which computers are
 // this hub's to connect, and when, are the group's, so it waits for the hub. Every hand-over is written there
-// (keepOwnList); the hub's, when it comes, is the list (Configure), and what the connections made meanwhile could not
-// do without the hub is done then (afterOwnList).
+// (keepOwnListLocked); the hub's, when it comes, is the list (Configure), and what the connections made meanwhile
+// could not do without the hub is done then (afterOwnList).
 
 // ownListWait is how long a starting manager waits for the hub's hand-over before it connects its own list: a hub that
 // is up answers well within it (the built-in manager is started by its hub), so then nothing connects before it.

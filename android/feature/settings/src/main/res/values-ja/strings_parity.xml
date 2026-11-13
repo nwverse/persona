@@ -8,6 +8,8 @@
     <string name="settings_ext_themes_extension">拡張テーマ</string>
     <string name="settings_scheme">外観モード</string>
     <string name="settings_scheme_note">この端末だけに適用されます。「システムに合わせる」ではシステムのダークモードに従います。</string>
+    <string name="settings_density">レイアウトの密度</string>
+    <string name="settings_density_note">この端末だけに適用されます。「コンパクト」では余白と間隔を詰めて、一画面により多く表示します。文字とアイコンの大きさは変わりません。</string>
     <string name="settings_providers_title">モデルプロバイダー</string>
     <string name="settings_row_providers_subtitle">ゲートウェイ、キー、~/.zshrc の claude 関数</string>
     <string name="settings_providers_demo">体験モードには hub のプロバイダーがありません。hub とペアリングすると表示されます。</string>
@@ -150,7 +152,7 @@
     <string name="settings_storage_clear_all_title">キャッシュ %1$s をすべて消去しますか？</string>
     <string name="settings_storage_clear_text">設定とペアリング情報は残ります。</string>
     <string name="settings_row_storage">ストレージ</string>
-    <string name="settings_row_assistant">アシスタント</string>
+    <string name="settings_row_assistant">アシスタントのプロフィール</string>
     <string name="settings_row_assistant_subtitle">実行場所、あなたについて知っていること、タイムゾーン、通知</string>
     <string name="settings_notify_system_off">通知がオフです</string>
     <string name="settings_notify_system_off_text">下の設定は、システム設定で Persona の通知を許可すると有効になります。</string>

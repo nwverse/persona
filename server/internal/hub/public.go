@@ -69,6 +69,9 @@ func (h *Hub) startPublic(ctx context.Context) error {
 	if err := h.initHubID(ctx); err != nil {
 		return err
 	}
+	if err := h.cfg.checkPlaintextLoopbackOnly(); err != nil {
+		return err
+	}
 	proxy, err := h.cfg.Security.ProxyProtocol.policy()
 	if err != nil {
 		return err
@@ -94,6 +97,9 @@ func (h *Hub) startPublic(ctx context.Context) error {
 			h.logf("hub TLS: %s is not an address of this machine now (has the LAN address changed?): TLS is off; "+
 				"set public.tls_listen to this machine's LAN address, or \":%s\" (every address), and restart",
 				h.cfg.Public.TLSListen, portOf(h.cfg.Public.TLSListen))
+			if h.cfg.Security.PlaintextLoopbackOnly {
+				h.logf("hub TLS: security.plaintext_loopback_only is on, so until then only this machine reaches the hub")
+			}
 			ln, err = nil, nil
 		}
 		if err != nil {
@@ -200,6 +206,8 @@ func (h *Hub) publicLoop(ctx context.Context) {
 	}
 }
 
+// newHubHTTPServer: no ReadTimeout or WriteTimeout, which would cut WebSockets and long uploads; idleBodies bounds the
+// waits for a request body instead (bodyidle.go).
 func newHubHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr: addr, Handler: handler,
@@ -261,7 +269,7 @@ func (h *Hub) serveHTTP(ctx context.Context) error {
 		stopTests = func() {}
 		return err
 	}
-	handler := h.routes()
+	handler := idleBodies(h.routes()) // a body that stops coming is answered and let go (bodyidle.go)
 	plain := newHubHTTPServer(h.cfg.Listen, handler)
 	plain.BaseContext = func(net.Listener) context.Context { return requestCtx }
 	errs := make(chan error, 2)
@@ -325,14 +333,30 @@ func (h *Hub) tlsPin() (port int, fp string) {
 }
 
 // pairCandidates keeps the QR small and never includes plaintext or LAN addresses.
+// Prefer one literal address per family, IPv6 first, when both are available.
+// Names do not guarantee either family; otherwise keep the first two eligible candidates.
 func (h *Hub) pairCandidates() []string {
 	var urls []string
+	var ipv6, ipv4 string
 	for _, endpoint := range h.endpointList() {
-		if endpoint.Scheme == "https" && endpoint.Kind != "lan" {
+		if endpoint.Scheme != "https" || endpoint.Kind == "lan" {
+			continue
+		}
+		if len(urls) < 2 {
 			urls = append(urls, endpoint.URL)
-			if len(urls) == 2 {
-				break
+		}
+		switch endpoint.Kind {
+		case "ipv6":
+			if ipv6 == "" {
+				ipv6 = endpoint.URL
 			}
+		case "ipv4":
+			if ipv4 == "" {
+				ipv4 = endpoint.URL
+			}
+		}
+		if ipv6 != "" && ipv4 != "" {
+			return []string{ipv6, ipv4}
 		}
 	}
 	return urls

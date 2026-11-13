@@ -6,7 +6,7 @@ import SwiftUI
 import Quartz
 #endif
 
-/// Files the file viewer hands to the system's QuickLook (docs/apple/ios.md「文件查看器」): Office and iWork documents and
+/// Files the file viewer hands to the system's QuickLook (docs/apple/ios.md「File viewer」): Office and iWork documents and
 /// RTF, which no viewer of ours draws. Feishu attachments open the same way (`LarkAttachmentView`).
 nonisolated enum QuickLookFileType {
     static let extensions: Set<String> = ["docx", "doc", "xlsx", "xls", "pptx", "ppt", "pages", "numbers", "key", "rtf"]
@@ -28,13 +28,19 @@ nonisolated enum QuickLookFileType {
 enum MachineFileDownload {
     static func fetch(_ ref: FileRef, file: FileContent, api: APIClient, prefix: String,
                       progress: @escaping @MainActor @Sendable (Int64, Int64) -> Void) async throws -> URL {
+        try await fetch(ref, path: file.path, name: file.name, api: api, prefix: prefix, progress: progress)
+    }
+
+    /// The file at path on ref's machine, saved under name (the viewer's Download, before the file's details are here).
+    static func fetch(_ ref: FileRef, path: String, name: String, api: APIClient, prefix: String,
+                      progress: @escaping @MainActor @Sendable (Int64, Int64) -> Void) async throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(prefix + UUID().uuidString, isDirectory: true)
-        let url = directory.appendingPathComponent((file.name as NSString).lastPathComponent)
+        let url = directory.appendingPathComponent((name as NSString).lastPathComponent)
         var kept = false
         defer { if !kept { try? FileManager.default.removeItem(at: directory) } }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try await api.download("/api/v1/machines/\(ref.machineID)/file/download",
-                               query: ["path": file.path, "cwd": ref.cwd ?? ""], to: url) { received, total in
+                               query: ["path": path, "cwd": ref.cwd ?? ""], to: url) { received, total in
             Task { @MainActor in progress(received, total) }
         }
         try Task.checkCancellation()
@@ -172,7 +178,7 @@ struct QuickLookView: NSViewRepresentable {
 #endif
 
 /// Thumbnails for the file list (the Files tab) and the chat's file cards, drawn by the machine (`GET …/file/thumb`, hub
-/// feature `file_thumb`, docs/protocol/protocol.md「文件预览」), three at a time, kept in memory and on disk:
+/// feature `file_thumb`, docs/protocol/protocol.md「File preview」), three at a time, kept in memory and on disk:
 /// - with the file's size and modified time (a listing): by what the file is, so a changed file is asked again;
 /// - with only its path (a card in a conversation; size 0, no time): by the path.
 /// Every disk copy is checked once per launch with its opaque ETag: a node upgrade can change the picture without

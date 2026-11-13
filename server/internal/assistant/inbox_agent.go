@@ -17,8 +17,8 @@ import (
 
 // The inbox's AI twin (docs/assistant/inbox.md): model 1 triages every new item (inbox_triage.go), every "Needs you" item
 // (and what an inbox policy hands it, inbox_policies.go) goes to an agent, model 2 links it to one of the user's
-// tasks (linkTask), and the agent (model 3, a headless Claude Code in the assistant's
-// directory, with its tools: a conversation the assistant starts itself, untitled) looks into it and drafts the reply
+// tasks (linkTaskFor), and the agent (model 3, a headless Claude Code in the assistant's
+// directory, with its tools: a named handling conversation, archived from the default lists) looks into it and drafts the reply
 // (inbox_draft). The draft waits in the inbox; nothing is sent until the user taps "Send" (POST /api/v1/inbox/{id}/reply).
 
 // InboxAgentConfig is manager.json's inbox.agent (the hub hands it over in InboxConfig).
@@ -68,7 +68,7 @@ type InboxAgent struct {
 	Task      string `json:"task,omitempty"`   // model 2's instruction to the agent
 	Reason    string `json:"reason,omitempty"` // model 2's why, short
 	MachineID string `json:"machine_id,omitempty"`
-	SessionID string `json:"session_id,omitempty"` // the agent's conversation ("Chats" tab): how it got there
+	SessionID string `json:"session_id,omitempty"` // the handling conversation, opened from the item's chain
 	Draft     string `json:"draft,omitempty"`
 	Note      string `json:"note,omitempty"` // what the agent found, for the user to check the draft against
 	// Changes are the status moves the agent proposes with its draft (document items); "Send" makes them.
@@ -100,6 +100,12 @@ type InboxAgent struct {
 	// to its count, and the ones queued since are the newest. Pending is trimmed to the latest 20, so its length
 	// cannot tell how many came since.
 	told int
+	// signaled is the item's message count when an inbox signal to the linked task's supervisor last counted it
+	// (in memory only, supervise_inbox.go): the next one counts the messages since that count.
+	signaled int
+	// signaledOf is the newest message considered for a supervisor signal in this process. URL routing also runs
+	// while the twin is off, so Of (what its handling conversation took) is independent of this cursor.
+	signaledOf string
 }
 
 // queueNote adds a note to Pending, kept to the latest 20.
@@ -124,28 +130,14 @@ func (a *InboxAgent) startDue(now time.Time) bool {
 	return a.RetryAfter == nil || !a.RetryAfter.After(now)
 }
 
-// handInbox is one pass of the AI twin's work (docs/assistant/inbox.md"AI twin"): settle conversations that finished, hung or
-// were lost, escalate every newly triaged Needs you item to the manager (one processing conversation per event), deliver
-// what waits for the events' conversations (new messages, the user's answers), start conversations for the queued
-// ones. One pass at a time, in the background. A pass asked for while one runs is not dropped: the goroutine running
-// passes runs another after it (every caller is an event, and nothing else would come back for what it queued).
+// handInbox is one pass of the AI twin's work (docs/assistant/inbox.md"AI twin"): look again at waiting matters whose
+// time came, settle conversations that finished, hung or were lost, escalate every newly triaged Needs you item to the
+// manager (one processing conversation per event), deliver what waits for the events' conversations (new messages, the
+// user's answers), and start conversations for the queued ones. One pass at a time, in the background. A pass asked for
+// while one runs is not dropped: the goroutine running passes runs another after it (every caller is an event, and
+// nothing else would come back for what it queued).
 func (s *Service) handInbox(ctx context.Context) {
 	b := &s.inbox
-	if !s.inboxConfig(ctx).Agent.Enabled {
-		b.mu.Lock()
-		pending := false
-		for _, it := range b.items {
-			active, queued := inboxAgentReleaseState(it)
-			if active || queued {
-				pending = true
-				break
-			}
-		}
-		b.mu.Unlock()
-		if !pending {
-			return
-		}
-	}
 	b.handAgain.Store(true)
 	if !b.handing.TryLock() {
 		return // the running passes' goroutine finds the mark
@@ -170,6 +162,8 @@ func (s *Service) handInbox(ctx context.Context) {
 func (s *Service) handPass(ctx context.Context) {
 	cfg := s.inboxConfig(ctx).Agent
 	b := &s.inbox
+	s.linkInboxTaskURLs(ctx)
+	s.checkInboxFollowUps(ctx, cfg, time.Now())
 	if !cfg.Enabled {
 		s.releaseInboxAgents(ctx)
 		return
@@ -180,18 +174,34 @@ func (s *Service) handPass(ctx context.Context) {
 	now := time.Now()
 	s.sweepInboxAgents(ctx, cfg, now)
 	escalated := b.escalate(now.Add(-agentMaxAge(cfg)), now)
+	linked := map[*InboxItem]bool{}
 	if tasks := s.activeTasks(ctx); len(tasks) > 0 { // which of the user's tasks a new one is about
 		for _, w := range escalated {
 			b.mu.Lock()
-			fresh := w.it.Agent != nil && w.it.Agent.SessionID == "" && w.it.Agent.TodoID == ""
+			a, todo := w.it.Agent, ""
+			fresh := a != nil && a.SessionID == "" && a.TodoID == ""
+			if a != nil {
+				todo = a.TodoID
+			}
 			b.mu.Unlock()
-			if fresh {
-				s.linkTaskFor(ctx, w.it, tasks, w)
+			// A link to a task that was closed, with no one task carrying it on (superviseInbox would have moved it
+			// there), is no link: the judge picks again among the open ones.
+			if !fresh && todo != "" {
+				t, ok := s.todoNow(todo)
+				fresh = !ok || !taskOpen(t)
+			}
+			if fresh && s.linkTaskFor(ctx, w.it, tasks, w) {
+				linked[w.it] = true
 			}
 		}
 	}
 	// A failed row gives the event back its old state: the next pass escalates it again.
 	s.saveWrites(ctx, escalated, "its escalation")
+	items := make([]*InboxItem, 0, len(escalated))
+	for _, w := range escalated {
+		items = append(items, w.it)
+	}
+	s.superviseInbox(ctx, items, linked) // a supervised task's supervisor hears of its new messages (supervise_inbox.go)
 	s.deliverPending(ctx)
 	s.startInboxAgents(ctx, cfg)
 }
@@ -304,9 +314,10 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 			continue
 		}
 		it.Agent.State, it.Agent.StartedAt, it.Agent.Attempts, it.Agent.RetryAfter = AgentRunning, &now, it.Agent.Attempts+1, nil
+		delete(b.listMemo.kept, it.ID) // saved once the start returns: listed as running meanwhile (inbox_list_memo.go)
 		a := b.inboxAgentFor(it, owner, linked[it.Agent.TodoID], larkDefault, loc)
 		a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
-		jobs = append(jobs, job{it, kbChatOf(it), func(kbc *prompts.KBContext) string { a.KB = kbc; return prompts.RenderInboxAgent(a) },
+		jobs = append(jobs, job{it, b.kbChatOf(it), func(kbc *prompts.KBContext) string { a.KB = kbc; return prompts.RenderInboxAgent(a) },
 			it.Agent.told})
 	}
 	b.mu.Unlock()
@@ -366,18 +377,25 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 }
 
 // kbChatOf is the knowledge base's chat of an item: its Feishu chat, or the mail's correspondent; "" for none.
-func kbChatOf(it *InboxItem) string {
+func (b *inboxBook) kbChatOf(it *InboxItem) string {
 	switch {
 	case it.Lark != nil:
 		return kb.ChatID("lark", it.Lark.FeedID)
 	case it.Mail != nil:
 		return kb.ChatID("mail", it.Mail.AccountID+"-"+strings.ToLower(it.Mail.From.Email))
+	case it.Connector != nil: // a subscription's row, while its knowledge base is on (#6222)
+		b.srcMu.RLock()
+		defer b.srcMu.RUnlock()
+		if chat := b.vias[it.Source].chats[it.Connector.Thread]; chat != "" {
+			return kb.ChatID(it.Source, chat)
+		}
 	}
 	return ""
 }
 
 // startInboxAgent starts a headless conversation like the assistant's (same directory, so the same tools) on the
-// inbox agent's model (model settings › inbox.agent), untitled: the draft in the inbox is its result.
+// inbox agent's model (model settings > inbox.agent). Untitled skips ordinary auto-naming; the item's subject
+// names it below. Its origin keeps it archived in the session snapshot; the Inbox item opens its transcript.
 func (s *Service) startInboxAgent(ctx context.Context, cfg InboxAgentConfig, it *InboxItem, prompt string) (machineID, sessionID string, err error) {
 	machine := s.settings(ctx).MachineID
 	if _, ok := s.device(ctx, cfg.Machine); ok && cfg.Machine != "" {
@@ -441,8 +459,9 @@ func (s *Service) requeueAgentStart(ctx context.Context, a *InboxAgent, err erro
 }
 
 // sweepInboxAgents settles the events' conversations: one looking that ended its turn without a suggestion (after its
-// first minute) or ran past the timeout fails, so does one whose sub-session ran past four timeouts; a start the
-// manager did not live to record goes back to the queue (the event's id finds its conversation).
+// first minute) or ran past the timeout fails, so does one whose sub-session ran past four timeouts. A turn woken from
+// waiting instead returns to waiting with its next check time. A start the manager did not live to record goes back to
+// the queue (the event's id finds its conversation).
 func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, now time.Time) {
 	b := &s.inbox
 	b.mu.Lock()
@@ -470,21 +489,44 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 		if it.Handling != nil {
 			state = it.Handling.State
 		}
+		var link *InboxChainLink
+		if state == HandlingAgent {
+			link = inboxLatestAgentLink(it)
+		}
 		b.mu.Unlock()
 		reason := ""
+		returnToWaiting := false
 		switch {
 		case s.isWorkMachine(a.MachineID):
 			reason = i18n.T(s.lang(ctx), "assistant-start.work_machine")
 		case state == HandlingAgent:
+			if link != nil {
+				sess, found, reachable := s.inboxAgentSession(ctx, link.MachineID, link.SessionID)
+				if reachable && found {
+					if !s.recordInboxAgentStops(ctx, sess) { // also repairs a stop report lost in a restart
+						continue // known unsettled work (or an undone stop): wait for the next pass, never time it out now
+					}
+					b.mu.Lock()
+					stillAgent := it.Agent != nil && it.Agent.SessionID == a.SessionID && it.Handling != nil && it.Handling.State == HandlingAgent
+					b.mu.Unlock()
+					if !stillAgent {
+						continue // the stop returned the item to its processing conversation
+					}
+				}
+			}
+			// Only a session known to be unsettled waits past this bound. A link evicted by the chain cap, a session the
+			// node definitively says is gone, or an unreachable node keeps the old four-timeout fallback instead of hanging.
 			if a.StartedAt != nil && now.Sub(*a.StartedAt) > 4*agentTimeout(cfg) {
 				reason = i18n.T(s.lang(ctx), "assistant-inbox_agent.timeout")
 			}
 		case state != HandlingLooking:
 		case a.StartedAt != nil && now.Sub(*a.StartedAt) > agentTimeout(cfg):
 			reason = i18n.T(s.lang(ctx), "assistant-inbox_agent.timeout")
+			returnToWaiting = a.Back == HandlingWaiting
 		case a.StartedAt != nil && now.Sub(*a.StartedAt) > time.Minute:
 			if sess, ok := s.session(ctx, a.MachineID, a.SessionID); ok && sess.Status != proto.StatusWorking {
 				reason = i18n.T(s.lang(ctx), "assistant-inbox_agent.no_draft")
+				returnToWaiting = a.Back == HandlingWaiting
 			}
 		}
 		if reason == "" {
@@ -495,6 +537,8 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 			w := beginWrite(it)
 			if it.Suggestion != nil { // new messages left its suggestion standing: it still holds
 				b.setHandling(it, HandlingDone, "", now)
+			} else if returnToWaiting && it.Agent.Back == HandlingWaiting {
+				b.resumeInboxWaiting(it, now)
 			} else {
 				b.failHandling(it, reason, now)
 			}
@@ -505,20 +549,6 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 	}
 	// Undone, a settled conversation is still running in memory: the next sweep settles it again.
 	s.saveWrites(ctx, changed, "its settled conversation")
-}
-
-// inboxAgentPrompt is the AI twin's first message for an item (prompts/inbox/agent.md).
-func (b *inboxBook) inboxAgentPrompt(it *InboxItem, owner string, kbc *prompts.KBContext) string {
-	return b.inboxAgentPromptFor(it, owner, kbc, nil, 1, time.UTC)
-}
-
-// inboxAgentPromptFor is inboxAgentPrompt for an item about one of the user's tasks (linked: its progress).
-// larkDefault is lark.account: the Feishu account lark_messages reads unless the prompt names another.
-// loc: the user's time zone, which the chain's times are read in.
-func (b *inboxBook) inboxAgentPromptFor(it *InboxItem, owner string, kbc *prompts.KBContext, linked *prompts.InboxTask, larkDefault int, loc *time.Location) string {
-	a := b.inboxAgentFor(it, owner, linked, larkDefault, loc)
-	a.KB = kbc
-	return prompts.RenderInboxAgent(a)
 }
 
 // inboxAgentFor is what the AI twin's first message is made of, but the knowledge base's part.
@@ -548,6 +578,11 @@ func (b *inboxBook) inboxAgentFor(it *InboxItem, owner string, linked *prompts.I
 		a.Moment = &prompts.InboxAgentMoment{PostID: it.Moment.PostID}
 	case it.Connector != nil:
 		a.Connector = &prompts.InboxAgentConnector{Source: it.Source, URL: it.Connector.URL, ReplyTo: it.Connector.ReplyTo}
+		b.srcMu.RLock()
+		if v, ok := b.vias[it.Source]; ok { // a subscription's: what it reads (#6222)
+			a.Connector.Name, a.Connector.Via, a.Connector.ViaSource = b.names[it.Source], v.connector, v.source
+		}
+		b.srcMu.RUnlock()
 	case it.Mail != nil && len(it.Mail.UIDs) > 0:
 		a.Mail = &prompts.InboxAgentMail{Account: it.Mail.AccountID, Mailbox: it.Mail.Mailbox, UID: it.Mail.UIDs[len(it.Mail.UIDs)-1]}
 	}
@@ -586,7 +621,7 @@ func messageCardOf(it *InboxItem) *MessageCard {
 		return nil
 	}
 	return &MessageCard{TodoID: it.Agent.TodoID, Source: it.Source, Account: it.AccountName, Chat: it.Title, Sender: it.Sender,
-		Text: clip(strings.TrimSpace(it.Preview), 400), Draft: it.Agent.Draft}
+		Text: clip(strings.TrimSpace(it.Preview), 400), Draft: it.Agent.Draft, MessageVersion: it.Last}
 }
 
 // inboxRepliedAt is when those of the inbox items ids the user replied to were replied to (the message cards say
@@ -607,7 +642,8 @@ func (s *Service) inboxRepliedAt(ctx context.Context, ids []string) map[string]t
 	return out
 }
 
-// inboxFiledAt is when those of the inbox items ids that are filed (not open) were filed.
+// inboxFiledAt is when those of the inbox items ids that were filed were filed. An unfinished merged member has no
+// filing time of its own, although open is false for it.
 func (s *Service) inboxFiledAt(ctx context.Context, ids []string) map[string]time.Time {
 	b := &s.inbox
 	out := map[string]time.Time{}
@@ -617,7 +653,7 @@ func (s *Service) inboxFiledAt(ctx context.Context, ids []string) map[string]tim
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, id := range ids {
-		if it := b.items[id]; it != nil && !it.open() {
+		if it := b.items[id]; it != nil && it.DoneAt != nil {
 			out[id] = *it.DoneAt
 		}
 	}

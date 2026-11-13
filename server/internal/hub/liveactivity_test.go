@@ -404,21 +404,21 @@ func TestFleetStartPersistenceFailsClosedWithoutLimitingAlertsOrUrgentUpdates(t 
 	for _, unavailable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("no_store=%v", unavailable), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				h, sink, stop := localFleetLoop(t)
+				h, sink, stop := localFleetLoopWith(t, func(h *Hub) {
+					h.store.(*fleetStartStore).fail = true
+					if unavailable {
+						h.store = nil
+					}
+				})
 				defer stop()
 				h.live.update("phone", func(v *db.LiveActivity) { v.PushToken = "" })
-				store := h.store.(*fleetStartStore)
-				store.fail = true
-				if unavailable {
-					h.store = nil
-				}
 				reportLive(t, h, FleetState{Phase: "working", Working: 1}, FleetStats{})
 				time.Sleep(fleetCoalesce + fleetMinGap)
 				synctest.Wait()
 				if got := sink.count("phone", "liveactivity", "start"); got != 0 {
 					t.Fatalf("failed persistence authorized %d starts", got)
 				}
-				h.notifyInteraction("", proto.Interaction{ID: "ordinary", Kind: proto.IxPermission, Summary: "Approve the operation"}, "computer")
+				h.notifyInteraction("", proto.Interaction{ID: "ordinary", Kind: proto.IxPermission, Summary: "Approve the operation"}, "computer", false)
 				synctest.Wait()
 				if got := sink.count("", "alert", ""); got != 2 {
 					t.Fatalf("start claim failure swallowed ordinary alerts: %d", got)
@@ -638,6 +638,13 @@ func (s *fleetPushSink) count(device, kind, event string) int {
 
 func localFleetLoop(t *testing.T) (*Hub, *fleetPushSink, func()) {
 	t.Helper()
+	return localFleetLoopWith(t, nil)
+}
+
+// localFleetLoopWith is localFleetLoop with prepare run on the hub after its devices are set up and before the loop
+// starts: a test changes what the loop reads (h.store) here, not while it runs.
+func localFleetLoopWith(t *testing.T, prepare func(h *Hub)) (*Hub, *fleetPushSink, func()) {
+	t.Helper()
 	h := newTestHub(t)
 	h.store = newFleetStartStore()
 	sink := &fleetPushSink{}
@@ -655,6 +662,9 @@ func localFleetLoop(t *testing.T) (*Hub, *fleetPushSink, func()) {
 		h.live.update(id, func(v *db.LiveActivity) {
 			v.ActivityID, v.PushToken, v.PushToStartToken, v.StartedAt = id+"-activity", id+"-update", id+"-start", time.Now()
 		})
+	}
+	if prepare != nil {
+		prepare(h)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -765,7 +775,7 @@ func TestFleetPushStartWaitsForLastPhoneToLeave(t *testing.T) {
 					t.Errorf("same round started more than once: %d", n)
 				}
 				// Foreground suppression is only for the activity, never the ordinary alert.
-				h.notifyInteraction("", proto.Interaction{ID: "ordinary", Kind: proto.IxPermission, Summary: "Approve the operation"}, "computer")
+				h.notifyInteraction("", proto.Interaction{ID: "ordinary", Kind: proto.IxPermission, Summary: "Approve the operation"}, "computer", false)
 				synctest.Wait()
 				if n := sink.count("", "alert", ""); n != 2 {
 					t.Errorf("ordinary alert fanout=%d, want 2", n)
@@ -1312,7 +1322,7 @@ func TestFleetOpenPhone(t *testing.T) {
 func TestSessionsSentOnce(t *testing.T) {
 	h := newTestHub(t)
 	app := &client{out: make(chan []byte, 16), subs: map[[2]string]bool{}, role: roleFull}
-	h.clients[app] = struct{}{}
+	addTestClient(h, app)
 	box, mini := &Machine{cfg: MachineConfig{ID: "box"}}, &Machine{cfg: MachineConfig{ID: "mini"}}
 	a := []proto.Session{{SessionID: "s1", Status: proto.StatusWorking, LastText: "reading"}}
 	b := []proto.Session{{SessionID: "s1", Status: proto.StatusWorking, LastText: "writing"}}

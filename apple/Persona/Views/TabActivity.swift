@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Which page is in front, for the two kinds of background work that should only run there: polling and read
-// reports (docs/apple/ios.md「只在前台做的事」).
+// reports (docs/apple/ios.md「Foreground-only work」).
 //
 // The system TabView takes a tab out of the window when another is picked: its onDisappear runs and its tasks are
 // cancelled. The shell's two pages (Assistant, Agents) are both kept in the window and only made transparent, so nothing

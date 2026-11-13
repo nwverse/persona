@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 )
 
-// The message cards of the AI twin's drafts about a task (docs/assistant/unified-entry.md "Message cards linked to tasks"): the card is in the
+// The message cards of the AI twin's drafts about a task (docs/assistant/unified-entry.md "Message cards link to tasks"): the card is in the
 // task's conversation, and its "Send" is the inbox's reply, once per card.
 
 // cardHub has a task in conv1 and an inbox item about it (a GitHub-like review thread) whose agent is drafting.
@@ -113,7 +113,9 @@ func TestMessageCardStaysSent(t *testing.T) {
 	}
 
 	// A draft that arrives after the reply went out puts no new card in.
-	draft(t, h, "晚到的草稿")
+	if _, err := h.runTool(context.Background(), "mac", "s1", "inbox_draft", json.RawMessage(`{"text":"晚到的草稿"}`)); !errors.Is(err, errSuggestFiled) {
+		t.Fatalf("late inbox_draft: %v", err)
+	}
 	if got := cards(t, h, time.Time{}); len(got) != 1 {
 		t.Fatalf("a card for a reply already out: %+v", got)
 	}
@@ -247,7 +249,9 @@ func TestMessageCardNotForAFiledItem(t *testing.T) {
 		h.inbox.mu.Lock()
 		it.done(time.Now(), by)
 		h.inbox.mu.Unlock()
-		draft(t, h, "在修了")
+		if _, err := h.runTool(context.Background(), "mac", "s1", "inbox_draft", json.RawMessage(`{"text":"在修了"}`)); !errors.Is(err, errSuggestFiled) {
+			t.Fatalf("filed by %s: inbox_draft: %v", by, err)
+		}
 		if got := cards(t, h, time.Time{}); len(got) != 0 {
 			t.Fatalf("filed by %s: a card to send: %+v", by, got)
 		}

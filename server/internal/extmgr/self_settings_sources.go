@@ -17,7 +17,7 @@ import (
 // reads and writes that setting the way Settings › Extensions does (the registry's SetConfig: held to the schema, the
 // plugin restarts). The hub's own connectors (GitHub, iMessage) carry no rules yet.
 
-// triageRulesField is the plugin setting that holds a source's triage rules (docs/extensions/extensions.md "Agreed settings").
+// triageRulesField is the plugin setting that holds a source's triage rules (docs/extensions/extensions.md "Conventional settings").
 const triageRulesField = "triage_rules"
 
 // sourceRulesSettings is one entry per plugin that declares triage_rules.

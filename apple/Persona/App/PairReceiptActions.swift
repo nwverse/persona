@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import UserNotifications
 
-/// A pairing receipt push (docs/protocol/protocol.md「电脑的配对码」, #4199): `aps.category` is `pair_receipt` or
+/// A pairing receipt push (docs/protocol/protocol.md「Computer pairing codes」, #4199): `aps.category` is `pair_receipt` or
 /// `computer_joining`, and the ids the buttons act on are only in the push's `pair` object, never in its text.
 /// A push without both (an older hub) is not one: it stays a plain notification.
 nonisolated struct PairPush: Sendable, Equatable {

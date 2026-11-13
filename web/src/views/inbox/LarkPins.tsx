@@ -1,4 +1,4 @@
-// The Pin list of a Feishu chat (iOS LarkChatPinsView, docs/extensions/lark-migration.md "Pin messages in a chat"), over the chat.
+// The Pin list of a Feishu chat (iOS LarkChatPinsView, docs/extensions/lark-migration.md "Pinned messages in chats"), over the chat.
 // Reading it marks the chat's Pins read in the Lark gateway, so it is read when opened, when a Pin changes and when the hub
 // says the chat changed while it is open; nothing reads it ahead of time. Pages come in as the list nears its end.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";

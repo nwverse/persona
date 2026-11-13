@@ -1,7 +1,7 @@
 import Foundation
 import PersonaKit
 
-/// A link to a port on the machine a conversation runs on (docs/operations/ports.md「链接」): what an agent prints for the dev
+/// A link to a port on the machine a conversation runs on (docs/operations/ports.md「Recognizing links in replies」): what an agent prints for the dev
 /// server it started — http://localhost:5173/, http://127.0.0.1:8000/docs, http://0.0.0.0:3000, http://[::1]:4173,
 /// or the machine's own name — opened through the hub, never on the phone's own localhost.
 nonisolated struct PortLink: Hashable, Sendable {

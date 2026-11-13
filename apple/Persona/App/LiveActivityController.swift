@@ -75,7 +75,7 @@ final class LiveActivityController {
             let state = content.state.tailored(island: prefs.island, details: prefs.lockDetails, look: AppModel.shared.fleetLook)
             updateRunning(ActivityContent(state: state, staleDate: content.staleDate, relevanceScore: Self.relevance(state)))
         }
-        // Every group's fleet, merged (docs/protocol/multi-hub.md「实时活动」).
+        // Every group's fleet, merged (docs/protocol/multi-hub.md「Live Activities」).
         let model = AppModel.shared
         Task { await model.loadFleets() }
     }
@@ -157,7 +157,7 @@ final class LiveActivityController {
     }
 
     /// The persona and its color changed, or the app started or came back (what failed is tried again). It goes three
-    /// ways (docs/apple/live-activity.md「形象」):
+    /// ways (docs/apple/live-activity.md「Avatar」):
     ///   - into the running activity's content now, which also makes the system draw it again;
     ///   - to the hub, which puts it in this device's pushes (`look` in the device's prefs);
     ///   - into the App Group container shared with the widget extension, with a package's pictures (`FleetLook.save`).
@@ -278,7 +278,7 @@ final class LiveActivityController {
         #if DEBUG
         if UserDefaults.standard.string(forKey: "pairURL") != nil { return } // simulator automation is not this phone
         #endif
-        // To the first group's hub only (docs/protocol/multi-hub.md「实时活动」): two hubs pushing the same activity would each
+        // To the first group's hub only (docs/protocol/multi-hub.md「Live Activities」): two hubs pushing the same activity would each
         // overwrite it with their own agents. In the app the activity shows every group (`AppModel.mergedFleet`); in
         // the background it follows that hub's pushes, and its unqualified ids are that group's (FleetActions).
         guard let api = AppModel.shared.links.first?.api else { return }
@@ -363,7 +363,7 @@ extension LiveActivityController {
 #endif // os(iOS)
 
 extension AppModel {
-    /// What the Live Activity draws for the persona on screen (docs/apple/live-activity.md「形象」).
+    /// What the Live Activity draws for the persona on screen (docs/apple/live-activity.md「Avatar」).
     var fleetLook: FleetLook { FleetLook(persona: persona, builtinAccent: builtinAccent) }
     var fleetFaces: FleetFaces? { FleetFaces(persona: persona, personas: personas) }
 }

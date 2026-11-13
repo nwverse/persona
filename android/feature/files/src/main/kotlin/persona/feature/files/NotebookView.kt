@@ -36,7 +36,7 @@ private sealed interface NotebookLoad {
 }
 
 /**
- * A Jupyter notebook as its cells (docs/android/android.md "File viewer", iOS `NotebookFileView`): Markdown cells rendered,
+ * A Jupyter notebook as its cells (docs/android/android.md "Files and Git in chat", iOS `NotebookFileView`): Markdown cells rendered,
  * code cells with their run count and colored source, then each output: text and streams in the mono face (stderr in
  * neutral secondary ink), pictures, HTML as its text, errors with the traceback. ⋯ shows the JSON source instead.
  */
@@ -52,7 +52,7 @@ internal fun NotebookFile(text: String, base: String, contentPadding: PaddingVal
     }
     val side = pagePadding
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = contentPadding.calculateTopPadding(),
-        bottom = contentPadding.calculateBottomPadding() + Tokens.Space.xxl)) {
+        bottom = contentPadding.calculateBottomPadding() + Tokens.Space.xl)) {
         header()
         when (val state = load) {
             NotebookLoad.Reading -> item { JLoading() }

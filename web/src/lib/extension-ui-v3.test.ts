@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { initials, MAX_STACK, outcome, pushPage, readAction, readView, rowIcon, tableRows, UI_VERSION, uiContext } from "./extension-ui";
+import { initials, MAX_STACK, outcome, pushPage, readView, rowIcon, tableRows, UI_VERSION, uiContext } from "./extension-ui";
+import { readAction } from "./extension-ui-read";
 
 describe("UI 版本 3：新组件", () => {
   it("asks for version 6", () => {

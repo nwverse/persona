@@ -1,8 +1,9 @@
 // Package assistantskills puts the assistant's skills in its directory (<assistant dir>/.claude/skills,
-// docs/operations/hub-update.md "Skills out of the binary"): the user's own, kept in ~/.persona/skills/<name> on the machine that runs
+// docs/operations/hub-update.md "Skills move out of the binary"): the user's own, kept in ~/.persona/skills/<name> on the machine that runs
 // the assistant and linked in, and the built-in ones this binary carries, copied in. Built-in skills are only those
 // Persona may redistribute (persona-office, personad office's): a copied one, like an extension's skill a user put
-// there by hand, lives in the user's space. personad never writes that space, so an update cannot touch the user's skills.
+// there by hand, lives in the user's space. Updates do not overwrite it. Explicit Web ZIP imports may add a new
+// name there; their narrow Undo moves only an unchanged new installation to hidden recovery.
 package assistantskills
 
 import (
@@ -355,14 +356,13 @@ func List(user string, connectors []string) []Skill {
 	return out
 }
 
-// Has says whether the assistant directory's skills (dir) include name.
-func Has(dir, name string) bool {
-	_, err := os.Stat(filepath.Join(dir, name, "SKILL.md"))
-	return err == nil
-}
-
 // description is the `description:` of a SKILL.md's front matter (a folded `>` or `|` one joined on one line).
 func description(md string) string {
+	// ZIP imports accept real YAML (including quoted keys/escapes and block scalars).
+	// Preserve the historical permissive reader for older hand-written manifests.
+	if _, desc, err := importMetadata([]byte(md)); err == nil {
+		return strings.Join(strings.Fields(desc), " ")
+	}
 	sc := bufio.NewScanner(strings.NewReader(md))
 	if !sc.Scan() || strings.TrimSpace(sc.Text()) != "---" {
 		return ""

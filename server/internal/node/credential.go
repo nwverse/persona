@@ -11,9 +11,10 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
-// Credentials the hub reads from this machine for a connector (docs/plans/plan-connectors.md "4 · Credentials"). Only the hub
+// Credentials the hub reads from this machine for a connector (docs/plans/plan-connectors.md "Credentials"). Only the hub
 // asks — it is a hub → node RPC, the node socket of hooks and MCP does not route here — and nothing is logged.
 
 var ghHost = lazyre.New(`^[A-Za-z0-9.-]+(:[0-9]+)?$`)
@@ -52,8 +53,5 @@ func ghToken(ctx context.Context, host string) (map[string]any, error) {
 
 func firstLine(s string) string {
 	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
-	if len(s) > 200 {
-		s = s[:200]
-	}
-	return s
+	return textfmt.Cut(s, 200)
 }

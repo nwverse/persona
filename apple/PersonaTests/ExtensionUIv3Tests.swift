@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// UI version 3 (docs/extensions/extensions.md「UI 版本 3」, #1850): the schema's types read the new components, push opens a page
+/// UI version 3 (docs/extensions/extensions.md「UI version 3」, #1850): the schema's types read the new components, push opens a page
 /// without asking the extension, answers push and pop, the search, filter and `more` send what they should, and
 /// `ui.invalidate` reaches the models drawing that extension.
 @MainActor
@@ -32,6 +32,7 @@ struct ExtensionUIv3Tests {
         #expect(rows[0].icon == "doc" && rows[1].avatar?.text == "A" && rows[2].thumbnail?.aspect == ExtensionThumbnailAspect.wide)
         #expect(ExtensionUIStyle.icon("doc") == Theme.Icon.pluginDoc && ExtensionUIStyle.icon("hologram") == Theme.Icon.plugins)
         #expect(ExtensionUIStyle.icon("plugin") == Theme.Icon.plugins && ExtensionUIStyle.icon("extension") == Theme.Icon.plugins)
+        #expect(ExtensionUIStyle.icon("music") == Theme.Icon.music && ExtensionUIStyle.icon("speaker") == Theme.Icon.voiceSpeaking)
     }
 
     @Test func aPushOpensItsPageWithoutAskingTheExtension() async throws {

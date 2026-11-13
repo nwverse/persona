@@ -82,8 +82,15 @@ describe("words", () => {
   it("says what it runs with when not the default", () => {
     expect(runsWith({})).toBeNull();
     expect(runsWith({ permission_mode: "default" })).toBeNull();
-    expect(runsWith({ launcher: "claude-fast", permission_mode: "auto", effort: "low" })).toEqual({ text: "claude-fast · 自动 · 思考低", danger: false });
-    expect(runsWith({ permission_mode: "bypassPermissions" })).toEqual({ text: "全部放行", danger: true });
+    expect(runsWith({ launcher: "claude-fast", permission_mode: "auto", effort: "low" })).toEqual({ text: "claude-fast · 自动审批 · 思考低", danger: false });
+    expect(runsWith({ permission_mode: "bypassPermissions" })).toEqual({ text: "完全访问", danger: true });
+  });
+
+  it("names its launcher by the provider's display name; an rc alias by its ID (#5029)", () => {
+    const names = [{ name: "relay-example-com", display_name: "我的中转 站" }, { name: "cc_glm" }];
+    expect(runsWith({ launcher: "relay-example-com", effort: "low" }, names)).toEqual({ text: "我的中转 站 · 思考低", danger: false });
+    expect(runsWith({ launcher: "cc_glm" }, names)).toEqual({ text: "cc_glm", danger: false });
+    expect(runsWith({ launcher: "gone" }, names)).toEqual({ text: "gone", danger: false });
   });
 });
 
@@ -135,7 +142,7 @@ describe("the editor", () => {
   it("saves editable fields without task model overrides", () => {
     const saved = task({ repeat: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5, 6, 7], launcher: "claude", effort: "low", session_id: "s1", at: "0001-01-01T00:00:00Z" });
     const body = taskBody({ ...saved, title: " 早报 ", permission_mode: "auto" });
-    expect(body).toEqual({ title: "早报", prompt: "给我早报", repeat: "daily", enabled: true, time: "09:00", weekdays: [], every_minutes: 0, session_id: "s1", permission_mode: "auto" });
+    expect(body).toEqual({ title: "早报", prompt: "给我早报", repeat: "daily", enabled: true, time: "09:00", weekdays: [], every_minutes: 0, cron: "", session_id: "s1", permission_mode: "auto" });
     expect(taskBody({ ...saved, session_id: undefined }).session_id).toBe(""); // runs go to the task's own conversation
     const once = taskBody(task({ repeat: "once", at: iso(at(2, 15)) }));
     expect(once).toMatchObject({ repeat: "once", at: iso(at(2, 15)), time: "", weekdays: [] });
@@ -175,6 +182,35 @@ describe("the editor", () => {
     expect(back.push).toBe("");
     expect(back.session_id).toBeUndefined(); // switched back, it stays in its own conversation
     expect(taskBody(back, { ...saved, push: "asked" })).toMatchObject({ push: "" });
+  });
+
+  it("跑完放进收件箱: compared, saved only when changed, independent of the push setting", () => {
+    const saved = task({ repeat: "interval", every_minutes: 30, push: "asked" });
+    expect(sameTask(saved, { ...saved, inbox: "" })).toBe(true); // a hub that does not send it: nothing goes into the Inbox
+    expect(sameTask(saved, { ...saved, inbox: "worthy" })).toBe(false);
+    expect("inbox" in taskBody(saved, saved)).toBe(false); // unchanged: a hub keeps it, and one that does not know it never gets it
+    expect("inbox" in taskBody(task({ repeat: "interval", every_minutes: 5 }))).toBe(false); // a new task that puts nothing there
+    expect(taskBody({ ...saved, inbox: "every" }, saved)).toMatchObject({ inbox: "every" });
+    expect("push" in taskBody({ ...saved, inbox: "every" }, saved)).toBe(false); // push is not touched
+    expect(taskBody({ ...saved, inbox: "" }, { ...saved, inbox: "worthy" })).toMatchObject({ inbox: "" });
+  });
+
+  it("edits a cron task: says its rule, checks, compares and saves its expression", () => {
+    const cron = task({ repeat: "cron", cron: "*/30 9-18 * * 1-5", cron_text: "每隔 30 分钟, 在 09:00 和 18:59 之间, 星期一至星期五", at: "0001-01-01T00:00:00Z" });
+    expect(ruleText(cron)).toBe("*/30 9-18 * * 1-5 · 每隔 30 分钟, 在 09:00 和 18:59 之间, 星期一至星期五");
+    expect(ruleText({ ...cron, cron_text: "" })).toBe("Cron */30 9-18 * * 1-5"); // the hub has no words for it
+    expect(validateTask(cron, now)).toBeNull();
+    expect(validateTask({ ...cron, cron: "  " }, now)).toBe("请写一个 cron 表达式，比如 0 9 * * 1-5");
+    expect(validateTask({ ...cron, until: iso(at(1, 9)) }, now)).not.toBeNull(); // a past end time, as a daily task's
+    expect(sameTask(cron, { ...cron, cron: " */30 9-18 * * 1-5 " })).toBe(true);
+    expect(sameTask(cron, { ...cron, cron: "0 9 * * *" })).toBe(false);
+    const body = taskBody({ ...cron, cron: " 0 10 1 * * " }, cron);
+    expect(body).toMatchObject({ repeat: "cron", cron: "0 10 1 * *", time: "", weekdays: [], every_minutes: 0 });
+    expect("at" in body).toBe(false);
+    expect(taskBody(task({ repeat: "daily", cron: "0 9 * * *" })).cron).toBe(""); // another rule clears it
+    expect(withRepeat(task({ repeat: "daily" }), "cron", now).cron).toBe("0 9 * * 1-5");
+    expect(withRepeat(cron, "cron", now).cron).toBe("*/30 9-18 * * 1-5");
+    expect(splitTasks([cron]).repeating).toEqual([cron]);
   });
 
   it("keeps the editor valid when the rule changes", () => {

@@ -2,6 +2,7 @@
 """Commit a staged Android release under an exclusive publication lock."""
 import argparse
 import fcntl
+import gzip
 import hashlib
 import json
 import os
@@ -27,6 +28,29 @@ def validate_release(release):
         raise ValueError("invalid APK sha256")
     if type(release.get("size")) is not int or release["size"] <= 0:
         raise ValueError("invalid APK size")
+
+
+def gzip_copy(apk, sha256):
+    """Write <apk>.gz beside the staged APK, for the hub to send to downloads that take gzip
+    (server/internal/hub/androidapp.go). An APK stores its dex files and resources.arsc uncompressed so the phone can
+    map them, so gzip about halves the download; the client checks the SHA-256 of the decoded bytes as before. The copy
+    is checked to decode to the APK and flushed before publish() renames it into place.
+    """
+    copy = apk.with_name(apk.name + ".gz")
+    with apk.open("rb") as source, copy.open("wb") as raw:
+        # No name and a fixed time in the header: the same APK always gives the same bytes.
+        with gzip.GzipFile(filename="", mode="wb", compresslevel=6, fileobj=raw, mtime=0) as packed:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                packed.write(chunk)
+        raw.flush()
+        os.fsync(raw.fileno())
+    decoded = hashlib.sha256()
+    with gzip.open(copy, "rb") as unpacked:
+        for chunk in iter(lambda: unpacked.read(1024 * 1024), b""):
+            decoded.update(chunk)
+    if decoded.hexdigest() != sha256:
+        raise ValueError("gzip copy does not decode to the APK")
+    return copy
 
 
 def sync_directory(directory):
@@ -60,11 +84,13 @@ def publish(directory, stage):
                 if existing.stat().st_size != current["size"] or digest_file(existing) != current["sha256"]:
                     raise ValueError("existing published APK is corrupt")
                 return "already published"
-        # Flush bytes before exposing names. Existing content-addressed APKs remain
-        # available to readers that already loaded the previous manifest.
+        # Flush bytes before exposing names. Existing content-addressed APKs (and their
+        # gzip copies) remain available to readers that already loaded the previous manifest.
         for path in (apk, stage / "latest.json"):
             with path.open("rb") as source:
                 os.fsync(source.fileno())
+        copy = gzip_copy(apk, release["sha256"])
+        os.replace(copy, directory / copy.name)
         os.replace(apk, directory / apk.name)
         sync_directory(directory)
         os.replace(stage / "latest.json", manifest)

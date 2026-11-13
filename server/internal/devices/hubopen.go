@@ -7,10 +7,11 @@ import (
 )
 
 // What the hub opens on a node through the manager — a stream (a forwarded port's: port.dial, a plugin program's:
-// plugin.node.dial), a terminal it watches (terminal.watch) — is the hub's as long as the bus connection it came on lasts: the hub ends its side when a new
-// connection says hello (hub/devices_reports.go devicesConnected), and a hub that restarted has none of it. The manager
-// ends the node's side then (Hello), as the node itself would when its own connection to the hub ended; else a
-// terminal would go on streaming and a port's connection stay open on the computer with nobody at the other end.
+// plugin.node.dial, a preview's browser tab: preview.open), a terminal it watches (terminal.watch) — is the hub's as
+// long as the bus connection it came on lasts: the hub ends its side when a new connection says hello
+// (hub/devices_reports.go devicesConnected), and a hub that restarted has none of it. The manager ends the node's side
+// then (Hello), as the node itself would when its own connection to the hub ended; else a terminal would go on
+// streaming, and a port's connection or a preview's browser tab stay open on the computer with nobody at the other end.
 
 // hubOpened is what the hub has open on the machine's node now; m.mu guards it.
 type hubOpened struct {
@@ -25,7 +26,7 @@ func (m *Machine) noteOpened(method string, params json.RawMessage, err error) {
 		SessionID string `json:"session_id"`
 	}
 	switch method {
-	case "port.dial", "plugin.node.dial", "terminal.watch", "terminal.unwatch":
+	case "port.dial", "plugin.node.dial", "preview.open", "terminal.watch", "terminal.unwatch":
 	default:
 		return
 	}
@@ -36,7 +37,7 @@ func (m *Machine) noteOpened(method string, params json.RawMessage, err error) {
 	defer m.mu.Unlock()
 	o := &m.opened
 	switch {
-	case (method == "port.dial" || method == "plugin.node.dial") && err == nil && p.ID != "":
+	case (method == "port.dial" || method == "plugin.node.dial" || method == "preview.open") && err == nil && p.ID != "":
 		if o.streams == nil {
 			o.streams = map[string]bool{}
 		}

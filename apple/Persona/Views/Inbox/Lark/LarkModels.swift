@@ -25,7 +25,7 @@ nonisolated struct LarkConversation: Codable, Identifiable, Hashable, Sendable {
     var mentionPosition: String?
     /// Client only: open the chat at this message (a flagged message) instead of the first unread.
     var focus: String?
-    /// Client only: the Feishu account the chat is in, sent as `ol_account` (docs/extensions/feishu.md「多账号」); nil: the hub's
+    /// Client only: the Feishu account the chat is in, sent as `ol_account` (docs/extensions/feishu.md「Multiple accounts」); nil: the hub's
     /// own. Kept in the caches.
     var account: Int?
     /// Client only: whose account it is, shown beside Lark while more than one is signed in.
@@ -66,8 +66,11 @@ nonisolated struct LarkConversation: Codable, Identifiable, Hashable, Sendable {
 }
 
 extension LarkMessage {
-    /// The StateCache name of a chat's latest page (the chat paints from it before the network answers).
-    nonisolated static func cacheName(_ c: LarkConversation) -> String { "lark-chat-" + c.key }
+    /// The StateCache name of a chat's latest page (the chat paints from it before the network answers). A named
+    /// manager's page keeps its own under the same prefix, which `LarkSync.displayChanged` clears.
+    nonisolated static func cacheName(_ c: LarkConversation, manager: String? = nil) -> String {
+        "lark-chat-" + c.key + (manager.map { "@" + $0 } ?? "")
+    }
 }
 
 /// One Feishu account signed in on the hub's Lark gateway (`GET /api/v1/lark/accounts`).
@@ -235,11 +238,18 @@ nonisolated struct LarkForwardedMessage: Decodable, Identifiable, Hashable, Send
 }
 
 extension APIClient {
-    struct LarkConversations: Decodable {
+    nonisolated struct LarkConversations: Decodable, Sendable {
         var conversations: [LarkConversation]
         var nextCursor: String?
         var accountID: String? = nil
         enum CodingKeys: String, CodingKey { case conversations; case nextCursor = "next_cursor", accountID = "account_id" }
+
+        /// Filter one generic page without losing its account stamp or the way to older matching chats.
+        func unreadOnly() -> Self {
+            var page = self
+            page.conversations = conversations.filter { $0.badge > 0 }
+            return page
+        }
     }
     nonisolated struct LarkMessages: Decodable, Sendable {
         var messages: [LarkMessage]
@@ -308,9 +318,13 @@ extension APIClient {
         return try await get("/api/v1/lark/conversations", query: ["scope": scope, "cursor": cursor ?? "", "limit": "60"])
     }
     /// The browser opts into account checks without changing inbox or prefetch reads.
-    func larkConversationPage(cursor: String?, accountID: String) async throws -> LarkConversations {
-        if let source = messagingSource { return try await messagingConversations(source, cursor: cursor, pinned: false) }
-        return try await get("/api/v1/lark/conversations", query: ["scope": "chats", "cursor": cursor ?? "", "limit": "60",
+    func larkConversationPage(cursor: String?, accountID: String, scope: String = "chats") async throws -> LarkConversations {
+        if let source = messagingSource {
+            let page = try await messagingConversations(source, cursor: cursor, pinned: false)
+            // The generic messaging contract has no scope parameter. Keep its cursor even on a read-only page.
+            return scope == "unread" ? page.unreadOnly() : page
+        }
+        return try await get("/api/v1/lark/conversations", query: ["scope": scope, "cursor": cursor ?? "", "limit": "60",
             "account_bound": "1", "account_id": accountID])
     }
     func larkPinnedSnapshot() async throws -> LarkConversations {

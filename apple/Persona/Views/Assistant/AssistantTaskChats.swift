@@ -2,8 +2,9 @@ import Foundation
 import Observation
 
 /// Which of the assistant's conversations scheduled tasks and follow-ups started (#2838; the web does the same, #2824).
-/// They are kept on Scheduled Tasks, under each task, not in the sidebar's Recent. Known from the tasks (their own conversation,
-/// the last run's) and the runs (each run's), less the conversations tasks came from (Continue in Original Chat: the user's own).
+/// They are listed on Scheduled Tasks, under each task, and marked as a task's wherever else they are (#5195). Known
+/// from the tasks (their own conversation, the last run's) and the runs (each run's), less the conversations tasks came
+/// from (Continue in Original Chat: the user's own).
 /// The run history is capped (the hub keeps the last 200), so an older run's conversation is known by its title as
 /// well: 「MMDD | 定时 | <the task's title>」, the title the hub gives it (titles.go). The title alone is not enough: 「定时」 is
 /// one of the kinds the model may give the user's own conversations too.
@@ -41,7 +42,8 @@ nonisolated struct AssistantTaskChats: Equatable, Sendable {
 
     func contains(_ s: Session) -> Bool { contains(sessionID: s.sessionID, title: s.title) }
 
-    /// Recent: the conversations without the tasks', except the open one (`current`), which keeps its row.
+    /// All Chats' Mine on a hub that never says who opened a conversation: the conversations without the tasks', except
+    /// the open one (`current`), which keeps its row.
     func recent(_ sessions: [Session], current: SessionKey?) -> [Session] {
         sessions.filter { $0.key == current || !contains($0) }
     }
@@ -90,21 +92,30 @@ nonisolated struct AssistantTaskChats: Equatable, Sendable {
 @Observable final class AssistantTaskChatsStore {
     static let shared = AssistantTaskChatsStore()
 
-    private(set) var known = AssistantTaskChats.none
-    @ObservationIgnored private var loading = false
+    /// By page (group and the manager the Persona page shows): each manager has its own tasks.
+    private var byPage: [String: AssistantTaskChats] = [:]
+    /// The page a read is on its way for: one for a page left meanwhile doesn't land.
+    @ObservationIgnored private var loading: String?
 
-    func update(tasks: [APIClient.ScheduledTask], runs: [APIClient.ScheduleRun]) {
+    /// What is known of the page `api` reads.
+    func known(on api: APIClient?) -> AssistantTaskChats { api.flatMap { byPage[Self.page($0)] } ?? .none }
+
+    func update(tasks: [APIClient.ScheduledTask], runs: [APIClient.ScheduleRun], on api: APIClient) {
         let next = AssistantTaskChats(tasks: tasks, runs: runs)
-        if next != known { known = next }
+        if next != byPage[Self.page(api)] { byPage[Self.page(api)] = next }
     }
 
     /// Reads the tasks and runs again; what was known stays when the hub cannot say (offline, no tasks there).
     func refresh(_ api: APIClient?) async {
-        guard let api, !loading else { return }
-        loading = true
-        defer { loading = false }
+        guard let api else { return }
+        let page = Self.page(api)
+        guard loading != page else { return }
+        loading = page
+        defer { if loading == page { loading = nil } }
         async let r = try? api.scheduleRuns()
-        guard let tasks = try? await api.scheduledTasks(), let runs = await r else { return }
-        update(tasks: tasks, runs: runs)
+        guard let tasks = try? await api.scheduledTasks(), let runs = await r, loading == page else { return }
+        update(tasks: tasks, runs: runs, on: api)
     }
+
+    private static func page(_ api: APIClient) -> String { api.group + "\u{0}" + (api.shownManager ?? "") }
 }

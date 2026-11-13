@@ -21,8 +21,6 @@ import (
 // A pi session that ran in herdr and has stopped is resumed in herdr (`pi --session`, the runtime's resume_argv),
 // never in pi-web.
 
-const piAgent = "pi"
-
 // piResumeWait is how long a resume in the engine waits for the pi it started to list the session (its extension).
 var piResumeWait = 30 * time.Second
 
@@ -49,18 +47,19 @@ func (n *Node) piSession(a host.Agent) string {
 	return n.panes[a.PaneID]
 }
 
-// mergePiRow completes a herdr pi row with what the extension serving it lists: the title, the last thing said, the
-// model, a revision that moves with the conversation, and "needs you" while it waits for the phone. Without one the
-// row says what is missing.
+// mergePiRow completes a herdr row of the family (pi, omp) with what the extension serving it lists: the title, the
+// last thing said, the model, a revision that moves with the conversation, and "needs you" while it waits for the
+// phone. Without one the row says what is missing.
 func (n *Node) mergePiRow(s *proto.Session) {
 	r, _, ok := n.runtimes.rowOf(s.SessionID)
 	if !ok {
-		s.ReadOnlyReason = piNoExtension
+		s.ReadOnlyReason = piFamilyNoExtension(s.Agent)
 		return
 	}
 	if r.Title != "" {
-		s.Title = r.Title
+		s.Title, s.TitleManual, s.TitleSource = r.Title, r.TitleManual, r.TitleSource
 	}
+	s.OutputTokens = r.OutputTokens
 	s.LastText, s.Model, s.UpdatedAt, s.Rev = r.LastText, r.Model, r.UpdatedAt, r.Rev
 	if r.Status == proto.StatusBlocked {
 		s.Status = proto.StatusBlocked
@@ -114,7 +113,7 @@ func (n *Node) resumeInEngine(ctx context.Context, h *runtimeConn, id string, ar
 	pane := created.Pane.String()
 	n.bindPane(pane, id)               // the pane is this session's before herdr or the extension says so
 	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
-	if err := launch.Run(ctx, created.Pane, n.agentCommand(shellQuote(n.bin)+" tab-start "+shellQuote(file), shellQuote, paneShells(ctx)...)); err != nil {
+	if err := launch.Run(ctx, created.Pane, n.agentCommand(shellQuote(n.bin)+" tab-start "+shellQuote(file), shellQuote, paneShells(ctx, created)...)); err != nil {
 		return nil, fmt.Errorf("run %s: %w", argv[0], err)
 	}
 	deadline := time.Now().Add(piResumeWait)

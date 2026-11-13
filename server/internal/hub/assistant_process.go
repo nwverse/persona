@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +16,8 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/procs"
 )
 
 // The assistant runs as its own process, `personad assistant` (internal/assistant), on the hub's bus. Unless hub.json
@@ -144,8 +145,8 @@ func (h *Hub) runAssistant(ctx context.Context, token string) error {
 		return err
 	}
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
-	cmd.Env = identity.Environment(os.Environ(), "PERSONA_ASSISTANT_HUB="+hubLocalURL(h.cfg.Listen),
-		"PERSONA_ASSISTANT_DEPLOY=child")
+	cmd.Env = procs.ChildEnv(identity.Environment(os.Environ(),
+		"PERSONA_ASSISTANT_HUB="+managerconf.LocalHubURL(h.cfg.Listen), "PERSONA_ASSISTANT_DEPLOY=child"))
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
 	if err := cmd.Start(); err != nil {
@@ -182,16 +183,4 @@ func AssistantToken(ctx context.Context, out io.Writer) error {
 	_, err = fmt.Fprintf(out, "%s\n\n在跑助手的机器上：PERSONA_ASSISTANT_TOKEN=<上面的 token> PERSONA_ASSISTANT_HUB=<hub 地址> personad assistant\n"+
 		"（hub.json 的 assistant.external 要是 true，否则 hub 每次启动都换掉这个 token、自己起一个助手）\n", tok)
 	return err
-}
-
-// hubLocalURL is the hub on this machine, from its listen address.
-func hubLocalURL(listen string) string {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return "http://127.0.0.1:18660"
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	return "http://" + net.JoinHostPort(host, port)
 }

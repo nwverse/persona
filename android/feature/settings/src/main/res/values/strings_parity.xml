@@ -8,6 +8,8 @@
     <string name="settings_ext_themes_extension">Extension themes</string>
     <string name="settings_scheme">Appearance</string>
     <string name="settings_scheme_note">Only on this phone. Match system follows the system\'s dark mode.</string>
+    <string name="settings_density">Layout density</string>
+    <string name="settings_density_note">Only on this phone. Compact tightens margins and gaps so more fits on screen; text and icons keep their size.</string>
     <string name="settings_providers_title">Model providers</string>
     <string name="settings_row_providers_subtitle">Gateways, keys and the claude functions in ~/.zshrc</string>
     <string name="settings_providers_demo">The demo has no hub providers. Pair with a hub to see them.</string>
@@ -27,7 +29,7 @@
     <string name="settings_providers_fold">Fold</string>
     <string name="settings_providers_unfold">Show</string>
     <string name="settings_providers_hidden_note">Only hidden in Persona; ~/.zshrc is not changed. Open one to bring it back.</string>
-    <string name="settings_providers_list_sep">, </string>
+    <string name="settings_providers_list_sep">", "</string>
     <string name="settings_providers_api_tag">API</string>
     <string name="settings_providers_delete">Delete provider</string>
     <string name="settings_providers_delete_title">Delete “%1$s”?</string>
@@ -154,7 +156,7 @@
     <string name="settings_storage_clear_all_title">Clear all %1$s of caches?</string>
     <string name="settings_storage_clear_text">Settings and the pairing stay.</string>
     <string name="settings_row_storage">Storage</string>
-    <string name="settings_row_assistant">Assistant</string>
+    <string name="settings_row_assistant">Assistant profile</string>
     <string name="settings_row_assistant_subtitle">Where it runs, what it knows about you, its time zone and notifications</string>
     <string name="settings_notify_system_off">Notifications are off</string>
     <string name="settings_notify_system_off_text">The settings below take effect once system settings allow Persona to send notifications.</string>

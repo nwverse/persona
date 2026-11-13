@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The Agent menu (docs/apple/mac.md「菜单和快捷键」): acts on the chat on screen.
+/// The Agent menu (docs/apple/mac.md「Menus and shortcuts」): acts on the chat on screen.
 @MainActor
 struct MacAgentCommandsTests {
     private func ix(_ json: String) throws -> Interaction { try JSON.decoder.decode(Interaction.self, from: Data(json.utf8)) }

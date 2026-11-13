@@ -17,9 +17,9 @@ The phone connects to the hub directly: HTTPS / WSS over the public internet (TL
  phone / watch ─┐  HTTPS/WSS (public internet, clients that support pinning)
                 ┤  HTTP/WS (LAN / VPN, compatible with older apps)
                 ┤ ─────────────────────────►  personad hub (HTTP + optional TLS)
-                │                                   │  ├─ mail (IMAP/SMTP, encrypted credentials)
-                │  WS: tool.call ◄──────────────────┤  ├─ interaction queue (questions / plans / permissions)
-                │      (phone data tools)            │  └─ session index, event fan-out
+                │                                   │  ├─ session index, event fan-out, push delivery
+                │  WS: tool.call ◄──────────────────┤  └─ manager (`personad assistant`, the hub's child by default):
+                │      (phone data tools)            │       interactions (questions / plans / permissions), mail (IMAP/SMTP)
                                                     │
                      stdio JSON-RPC over `ssh <host> personad node --stdio`
                      (on the hub machine itself, started directly as a child process)
@@ -42,10 +42,10 @@ A single binary `personad`, four modes:
 
 | Mode | Where it runs | What it does |
 | --- | --- | --- |
-| `hub` | An always-on machine, resident under systemd --user | The app's API, event fan-out, interaction queue, mail, dispatching to each node |
-| `node --stdio` | Every machine, started by the hub over SSH | Relays local herdr / claude / transcript / hooks |
+| `hub` | An always-on machine, resident under systemd --user | The app's API, event fan-out, push delivery, forwarding to the managers (the built-in manager keeps the interactions and mail and connects to the nodes) |
+| `node --stdio` | Every machine, started by the manager over SSH | Relays local herdr / claude / transcript / hooks |
 | `hook <event>` | Called by Claude Code hooks | Hands events to the node; for things a person must decide (questions, plans, permissions) it blocks waiting for the phone's answer |
-| `mcp` | Claude Code MCP (stdio) | Exposes phone data, mail and other tools; calls go node → hub → phone |
+| `mcp` | Claude Code MCP (stdio) | Exposes phone data, mail and other tools; a phone tool's call goes node → manager → hub → phone |
 
 ## Why it is designed this way
 
@@ -74,10 +74,14 @@ A single binary `personad`, four modes:
 The hub only handles communication: app and other clients ↔ managers, hub ↔ hub (linked hubs), connections (WebSocket, node / connector links), pairing and auth, the admin UI, push delivery, and various relays.
 Business logic lives in the managers (`server/internal/assistant`, `devices`, `extmgr`; see `docs/server/machines.md`, `docs/extensions/extensions.md` ("Who owns what"), `docs/assistant/assistant.md`):
 the data for the assistant, Inbox, to-dos, usage limits, board, extensions and devices, plus model calls (triage, titles, summaries, judgments). The hub forwards these endpoints to the managers as-is (`assistantwire.Routes`, `devicewire.Routes`, `extwire.Routes`).
+An ordinary route goes as one `http.request` on the bus, its body read whole (a body of 1 MiB or more goes on a relay stream of its own beside the bus, `http.request_streamed`, so the bus is not held up behind it: `docs/protocol/protocol.md` "Forwarding App requests"); a route that upgrades to a WebSocket cannot, so the extensions' routes and the assistant's
+WebSocket routes (`assistantwire.SocketRoutes`: a meeting's audio socket, `docs/assistant/meeting-minutes.md` "Audio from the phone") go over a relay stream instead
+(`extwire.MethodAccept`): the manager dials the relay and serves the request there, and the manager's extensions layer hands the assistant's to it
+(`extmgr.Options.AssistantSocket`). Who asked goes in the hub's headers, the caller's credential stays at the hub, and revoking the device ends the socket.
 
 `server/internal/hub/architecture_guard_test.go` pins down what the hub looks like now and fails if it grows in the wrong direction:
 
-- **Routes the hub answers itself** = `testdata/hub_routes_allowed.txt` (registered with literals in the hub package and not in the three forwarding tables above). New business endpoints go in a manager,
+- **Routes the hub answers itself** = `testdata/hub_routes_allowed.txt` (registered in the hub package with a string literal, or a loop over a literal string list, and not in the forwarding tables: the three above, plus `assistantwire.InboxRoutes`, `assistantwire.SocketRoutes`, `devicewire.ShareRoutes`, `devicewire.MetricsRoutes`, `devicewire.TransferRoutes`, `devicewire.UsageRoutes` and `devicewire.AdminUsageRoutes`). A loop over any other name fails the guard. New business endpoints go in a manager,
   and the route is added to the matching forwarding table; only routes that truly belong to the hub (connections, pairing / auth, admin, push delivery, relays) get a line added to the list by hand. Removing a route means removing its line too (extra lines fail as well).
   While a piece of business logic is being moved into a manager, its line can be marked `# moving to the manager` at the end, and the line is removed once the move is done (usage windows `docs/server/usage-windows.md` ("Who owns this") and the workspace board `docs/web/workspace-board.md` ("Who owns the board") have both been moved).
 - **Dependencies**: the hub's dependencies must not include manager packages (`assistant`, `assistantskills`, `devices`, `extmgr`, `extension/host`, `agents`, `mail`, `office`, `feishubot`, `wechat`, `node`, `mcpserver`),
@@ -111,6 +115,8 @@ Where the business type needs fields of its own, it stays a separate type with t
 - **Pure contracts**: every package in `testdata/contracts.txt` depends only on the standard library and other listed packages (the SDK's `sdk/go/wire` is listed by its full import path), and every package named `*wire` must be listed.
 - **Part boundaries**: the hub (`hub`, `hubedge`) depends on no manager (`assistant`, `devices`, `extmgr`, `manager`) or node package, a manager on no hub package, and the node (`node`) on neither.
   Known violations would go into `testdata/boundary_allowed.txt` (shrink-only, each line naming the step that removes it); it is empty, and a line that no longer applies fails too.
+- **Reap first**: every production `osproc.ReapInherited` call (the hub's `claimInherited`, the manager's `runManager`, `managercli.Assistant`, the node's `runNode`) comes before anything that could start a child, and the hub's `Run`, `Serve` and `RunSlot` call `claimInherited` first (`reap_test.go`).
+  Only the calls its list names, each with why it starts no process, may run ahead; a new call site has to be listed.
 
 ## Key flows
 
@@ -123,14 +129,22 @@ Where the business type needs fields of its own, it stays a separate type with t
 4. The node starts tailing the transcript, and events are pushed through the hub to subscribed apps.
 
 ### Answering questions / approving plans
-1. claude calls AskUserQuestion → PreToolUse hook → `personad hook` connects to node.sock and sends an `interaction` → the hub stores it in the interaction queue and pushes it to the app / watch (including a local notification).
-2. The user picks on the phone → hub → node → the hook process outputs `updatedInput.answers` → claude continues.
-3. On timeout (30 minutes by default), or when no app is online, the hook lets it through right away → the TUI shows it as usual, and it can be answered at the computer too.
+1. claude calls AskUserQuestion → PreToolUse lets Claude draw its terminal dialog → the following PermissionRequest connects `personad hook` to node.sock and sends an `interaction` → the node hands it to the manager (`interaction.create`), which records it and has the hub push it to the app / watch (including a local notification).
+2. The user picks on the phone → hub → manager → node → PermissionRequest outputs `updatedInput.answers` → claude continues. If the person answers in the terminal first, PostToolUse withdraws the waiting phone card instead.
+3. The card waits whether or not an app is online. The hook leaves the question to the terminal (the TUI shows it as usual, and it can be answered at the computer too) on timeout (30 minutes by default),
+   when the node has no connection to its manager, or when a resident node's manager has been away longer than the 10-minute hold (`docs/protocol/protocol.md` "When the manager is away (resident nodes)").
 
 ### Phone data tools
-claude calls the MCP tool `phone_calendar_events` → `personad mcp` → node.sock → hub → finds an online iPhone (WS) → the app queries with EventKit → returns the same way.
-When the app is not online, it returns the error "iPhone is not online, please open Persona".
+claude calls the MCP tool `phone_calendar_events` → `personad mcp` → node.sock → node → manager (`app.call` `phone` / `phone.call`) → hub → a connected iPhone that offers the tool (WS) → the app queries with EventKit → returns the same way.
+When no iPhone is connected, the hub wakes the newest iOS registration that offers the tool with a silent push (only when push is set up; a device at most once per 30 seconds) and waits up to 20 seconds for it to connect
+(`docs/apple/phone-tools.md` "iOS limitations"). If none does, it returns the error "The user's iPhone is not connected and did not wake up in the background: ask them to open the Persona app, then retry."
 
 ### Runtime list origin projection
 
 `internal/sessionorigin` classifies the runtime DTO's pane/host metadata using the host registry, matching the clients' desktop-first origin rule (`docs/protocol/protocol.md`, "Pane/host origins"). The hub's existing list adapter adds this scalar to bounded rows and passes it to `internal/sessionlist`; the generic index only stores and matches it. State, preferences and Agents membership remain with their existing owners.
+
+### Runtime list catalog
+
+`catalog=1` on the paged runtime list (`docs/protocol/protocol.md`, "Projects and spaces"; `server/internal/hub/sessions_catalog.go`) names the filtered list's projects and spaces. The index counts the rows by machine and project and by machine and group (`sessionlist.PlaceCounts`, a scan at request time); the hub's adapter turns each directory into a project. What repository a directory holds is not on the row: the adapter asks the directory's computer (`git.status` with `identity_only`), remembers the answer in memory for 30 minutes, and falls back to the folder's name. `place` and `space` are the matching filters, sets of machine and project (or group) pairs.
+
+Why not a field on the row: `proto.Session` has no word left in its size class and `sessionlist.Item` none in a 150-row batch (`docs/lessons/server.md`, "A field that pushes a row past its size class"), and a repository's remote is a fact about a directory, the same for every row in it. Asked per directory when a client opens the view, it costs nothing on a list update, a push or a page, works with the nodes already deployed, and is lost with nothing else when the hub restarts.

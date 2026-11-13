@@ -90,9 +90,10 @@ func realOf(t *testing.T, p string) string {
 // command, its launcher settings readable, and the environment can turn it off again.
 func TestAssistantCLIInAgentSandbox(t *testing.T) {
 	agentSandboxFakes(t, macSandbox)
-	env := []string{"PATH=/usr/bin:/bin"}
+	profile := t.TempDir()
+	env := []string{"PATH=/usr/bin:/bin", "CLAUDE_CONFIG_DIR=" + profile}
 	plain := func(args []string) []string {
-		return append([]string{"/bin/zsh", "-ic", `claude "$@"`, "persona"}, args...)
+		return append([]string{"/bin/zsh", "-ic", "CLAUDE_CONFIG_DIR=" + shellQuote(profile) + ` claude "$@"`, "persona"}, args...)
 	}
 
 	n := agentNode(t, false)
@@ -153,7 +154,7 @@ func TestAgentSandboxFallsBack(t *testing.T) {
 		state string
 	}{
 		{"no sandbox-exec", sandbox.Support{OS: "darwin", Why: "机器上没有 sandbox-exec"}, nil, sandbox.AgentUnavailable},
-		{"linux", sandbox.Support{OS: "linux", Bwrap: "/usr/bin/bwrap"}, nil, sandbox.AgentUnsupported},
+		{"linux without bwrap", sandbox.Support{OS: "linux", Why: "机器上没有 bwrap"}, nil, sandbox.AgentUnavailable},
 		{"claude's own sandbox in the user's settings", macSandbox, func(t *testing.T, n *Node, cwd string) []string {
 			writeFile(t, filepath.Join(n.home, ".claude", "settings.json"), enabled)
 			return nil
@@ -410,13 +411,16 @@ func TestAgentSandboxCoversPathGuard(t *testing.T) {
 	}
 	both := []string{"secret.key", "secret.key.bak", "handles.key~", "launch.key", "hub.key-old", "hub.json", "hub.json.bak", "link.json",
 		"tailcat.json", "tailcat-hub.json", "daemons.json", "manager.json", "apns.json", "apns.p8", "relay.json", "relay.secret",
+		"relay-tunnel.token", "edge.token", "edge.secret", "edge.password", "edge.token.bak",
 		"devices.json", "mail_accounts.json.1", "tls/hub.key", "tls/hub.crt", "tls/.tls-1", "link-tls/id.key",
+		"docker/db-password",
 		"launcher-settings/claude-x.json", "managers/m1/manager.json", "managers/m1/secret.key", "managers/m1/tls/hub.key",
 		"extensions/data/notes/token", "extensions/data/notes/sub/session.json", "extensions/staging/uninstall-x-1/0/token",
 		"plugins/notes/manifest.json", "plugins/data/notes/token", "node-plugins/notes/data/session.json"}
 	neither := []string{"mcp.json", "claude-settings.json", "assistant/notes.md", "data/proj/link.json", "data/certs/dev.pem",
 		"extensions/notes/manifest.json", "data/extensions/data/x",
-		"data/talk.key", "bin/personad", "uploads/a.png", "runtime-packages/x/node_modules/y/index.js", "node.sock"}
+		"data/talk.key", "bin/personad", "uploads/a.png", "runtime-packages/x/node_modules/y/index.js", "node.sock",
+		"data/proj/edge.token"}
 	sandboxOnly := []string{".hub.json.12345", "managers/m1/manager.log", "extensions/run/notes/proxy.sock", "run/hub-edge.sock"}
 	for _, rel := range both {
 		if !dataSecret(rel) || !closed(rel) {

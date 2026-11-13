@@ -1,6 +1,6 @@
 import Foundation
 
-/// The files an .html page refers to beside it (docs/apple/ios.md「HTML 预览」): read from the machine through the hub and
+/// The files an .html page refers to beside it (docs/apple/ios.md「File viewer」): read from the machine through the hub and
 /// put into the page as data: URLs before it is shown, so pictures, style sheets (with their url() and @import),
 /// fonts and scripts load in the isolated preview while the network stays off. URLs, anchors and absolute paths are
 /// left as they are. At most `maxFiles` files, each up to `maxFileBytes`, `maxTotalBytes` in all; what is past that,

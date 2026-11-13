@@ -6,7 +6,7 @@ import persona.core.contracts.api.DoctorCheck
 import persona.core.contracts.api.DoctorReport
 
 /*
- * "What this computer can do" (docs/server/machines.md "Self-check", the web's lib/node-health.ts): what `personad node doctor` finds on a computer,
+ * "What this computer can do" (docs/server/machines.md "Doctor: what this computer can do", the web's lib/node-health.ts): what `personad node doctor` finds on a computer,
  * read as features. Each feature stands on a set of the node's checks and takes the worst state among them; the raw
  * list stays one tap away.
  */

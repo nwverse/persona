@@ -105,8 +105,8 @@ var (
 // (the hub and `personad hub admin …` on its machine). Not on hub.json itself: the rename replaces that file.
 var hubJSONMu sync.Mutex
 
-// editHubJSON reads <dir>/hub.json (missing: an empty object), lets edit change it and writes it back atomically:
-// a temporary file in the same directory, fsync, rename over the old one, mode 0600. A file that is not a JSON
+// editHubJSON reads <dir>/hub.json (missing: an empty object), lets edit change it and writes it back atomically
+// (managerconf.WriteFileAtomic): a temporary file in the same directory, fsync, rename over the old one, mode 0600. A file that is not a JSON
 // object is left alone (error). Values from the environment (PERSONA_PUBLIC_URL…) never get here: edit sees the file.
 func editHubJSON(dir string, edit func(o *jsonObject) error) error {
 	hubJSONMu.Lock()
@@ -135,7 +135,7 @@ func editHubJSON(dir string, edit func(o *jsonObject) error) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path, out, 0o600)
+	return managerconf.WriteFileAtomic(path, out, 0o600)
 }
 
 // readHubJSON is <dir>/hub.json parsed (an empty object when there is none).
@@ -145,44 +145,4 @@ func readHubJSON(dir string) (*jsonObject, error) {
 		return nil, err
 	}
 	return parseJSONObject(b)
-}
-
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	ok := false
-	defer func() {
-		if !ok {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if err := f.Chmod(perm); err != nil {
-		f.Close()
-		return err
-	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	ok = true
-	// The rename itself must survive a power cut too.
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		d.Close()
-	}
-	return nil
 }

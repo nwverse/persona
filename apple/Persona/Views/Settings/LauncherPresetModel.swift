@@ -1,13 +1,17 @@
 import Foundation
 import Observation
 
-/// Settings › Model Providers › Add › From Extension (docs/extensions/extensions.md「模型供应商」): the providers the hub's plugins offer; pick one,
+/// Settings › Model Providers › Add › From Extension (docs/extensions/extensions.md「Model providers」): the providers the hub's plugins offer; pick one,
 /// give the launcher a name and a key (and maybe another of the provider's models), and the hub fills in the rest
 /// (POST /api/v1/launchers with `preset`).
 @Observable final class LauncherPresetModel {
     struct Deps {
         var api: () -> APIClient?
-        static var live: Deps { .init(api: { AppModel.shared.api }) }
+        static var live: Deps {
+            let app = AppModel.shared
+            let scope = AssistantSettingsRequestScope(app)
+            return .init(api: { scope.api(app) })
+        }
     }
 
     private(set) var presets: [LauncherPreset] = []

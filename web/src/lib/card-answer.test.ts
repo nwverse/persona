@@ -30,11 +30,36 @@ describe("answerCard", () => {
     expect(apiOp).not.toHaveBeenCalled();
   });
 
+  it("a stopped Agent's work card sends only local defer/dismiss answers", async () => {
+    session = { machine_id: "m", session_id: "a", status: "offline", capabilities: { read: true, terminal: true, approve: false, send: false } } as Session;
+    const work: Interaction = {
+      ...ix, kind: "question", tool_name: "persona_triage",
+      questions: [{ question: "What next?", options: [{ label: "Continue" }, { label: "Leave it", action: "defer" }] }],
+    };
+    for (const answer of ["Continue", "A custom reply"]) {
+      expect(await answerCard(work, { answers: { "What next?": answer } })).toEqual({ ok: false, error: "此会话不允许审批" });
+    }
+    expect(await answerCard({ ...ix, tool_name: "persona_triage" }, { dismiss: true })).toEqual({ ok: false, error: "此会话不允许审批" }); // a permission card is unchanged, even with the same tool name
+    expect(apiOp).not.toHaveBeenCalled();
+
+    apiOp.mockResolvedValue({});
+    expect(await answerCard(work, { answers: { "What next?": "Leave it" } })).toEqual({ ok: true, already: false });
+    expect(await answerCard(work, { dismiss: true })).toEqual({ ok: true, already: false });
+    expect(apiOp).toHaveBeenCalledTimes(2);
+  });
+
   it("答上：发到卡片的 resolve，卡片记下答了什么", async () => {
     apiOp.mockResolvedValue({});
     expect(await answerCard(ix, denyBody())).toEqual({ ok: true, already: false });
     expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: { allow: false, message: "用户拒绝了" } });
     expect(ended).toEqual([["p1", { ix, resolution: { allow: false, message: "用户拒绝了" }, already: false, handedBack: false }]]);
+  });
+
+  it("leaves a handed-back receipt for a fresh hand back, as for an answer", async () => {
+    apiOp.mockResolvedValue({ ok: true });
+    expect(await answerCard(ix, { dismiss: true })).toEqual({ ok: true, already: false });
+    expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: { dismiss: true } });
+    expect(ended).toEqual([["p1", { ix, resolution: { dismiss: true }, already: false, handedBack: true }]]);
   });
 
   it("别处已经答过：按 hub 说的答案记下，already", async () => {
@@ -57,6 +82,20 @@ describe("answerCard", () => {
     expect(await answerCard(ix, allowBody())).toEqual({ ok: false, error: expect.stringMatching(/^没送到：.+（HTTP 500: boom）$/) });
     expect(ended).toEqual([]);
   });
+});
+
+it("keeps one answer per card on its way: the same one shares it, another is refused unsent, both free once it ends", async () => {
+  let finish!: (e: Error) => void;
+  apiOp.mockReturnValueOnce(new Promise((_, no) => { finish = no; }));
+  const first = answerCard(ix, allowBody());
+  expect(answerCard(ix, allowBody())).toBe(first);
+  expect(await answerCard(ix, denyBody())).toEqual({ ok: false, error: "这张卡已有一个答案在发送中" });
+  expect(apiOp).toHaveBeenCalledOnce();
+  finish(new TypeError("Failed to fetch"));
+  expect(await first).toEqual({ ok: false, error: expect.stringMatching(/^没送到：/) });
+  apiOp.mockResolvedValueOnce({});
+  expect(await answerCard(ix, denyBody())).toEqual({ ok: true, already: false });
+  expect(apiOp).toHaveBeenCalledTimes(2);
 });
 
 it("sends secret text unchanged and stores only a redacted receipt", async () => {

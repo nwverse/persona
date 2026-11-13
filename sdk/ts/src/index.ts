@@ -2,7 +2,7 @@ import { extensionEnv, hubEnv } from './compat.js';
 import { ExactJSON } from './exact-json.ts';
 export { ExactJSON, JSONIntegerError } from './exact-json.ts';
 export { ExtensionStorage, storageBytes, storageValue } from './storage.ts';
-// Persona extension SDK for TypeScript (docs/extensions/extensions.md "Writing an extension: SDK, templates and CLI"): an extension program's side of
+// Persona extension SDK for TypeScript (docs/extensions/extensions.md "Writing extensions: SDK, templates and command line"): an extension program's side of
 // the process protocol, for Bun. Build the program with `bun build --compile` into one executable per platform:
 // the package holds only that, and the hub needs no runtime.
 //
@@ -111,7 +111,7 @@ export interface Program {
   namespaces?: Record<string, Handler>;
   /** Pages by ui contribution id (widgets too: placement widget, drawn per family; see isWidget). */
   ui?: Record<string, Page | ComponentPage>;
-  /** Shortcuts by contribution id: shortcut.run goes to them (docs/extensions/extensions.md "System-level places"). */
+  /** Shortcuts by contribution id: shortcut.run goes to them (docs/extensions/extensions.md "System-level placements"). */
   shortcuts?: Record<string, (req: ShortcutRequest) => wire.ShortcutResult | void | Promise<wire.ShortcutResult | void>>;
   /** If set, served on the hub's socket (runtime.http in the manifest) by main(). */
   fetch?(req: Request): Response | Promise<Response>;
@@ -562,11 +562,10 @@ export function env() {
   };
 }
 
-/** The manifest as the program answers it to a hub: without `tags`, the market's (nwverse/persona#2424), which hubs
- * from before them refuse as an unknown field. */
+/** Omit source-only tags and icon metadata so strict older hubs accept runtime manifests. */
 function answeredManifest(m: unknown): unknown {
-  if (m === null || typeof m !== "object" || Array.isArray(m) || !("tags" in m)) return m;
-  const { tags: _tags, ...rest } = m as Record<string, unknown>;
+  if (m === null || typeof m !== "object" || Array.isArray(m) || !("tags" in m || "icon" in m)) return m;
+  const { tags: _tags, icon: _icon, ...rest } = m as Record<string, unknown>;
   return rest;
 }
 

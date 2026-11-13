@@ -8,7 +8,7 @@
 //
 // It reads pi's sessions with pi's own SessionManager, from the pi install on PATH (or PI_PACKAGE_DIR).
 //
-// Updates (docs/integrations/pi.md "Auto-update"): run from a store (<store>/current/pi/companion.mjs, as launchd / systemd keep it),
+// Updates (docs/integrations/pi.md "Automatic updates"): run from a store (<store>/current/pi/companion.mjs, as launchd / systemd keep it),
 // it installs the version the node carries as current and exits; its supervisor starts it again on the new code
 // (KeepAlive / Restart=always). --no-update: never.
 

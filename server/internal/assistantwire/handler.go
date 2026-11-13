@@ -1,6 +1,7 @@
 package assistantwire
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"time"
@@ -28,6 +29,42 @@ const AdminHeader = "X-Persona-Admin"
 // RoleHeader, never the client's.
 const DeviceNameHeader = "X-Persona-Device-Name"
 
+// HandoffApprover is the device the hub found may approve a hand-off card (proto.SecretHandoffTool): a full device
+// whose app shows the card (docs/extensions/secret-providers.md "Who may approve a hand-off"). It travels in
+// HTTPRequest, never in a header, so no client can set it, and an older hub never sends it: a manager approves a
+// hand-off only with it.
+type HandoffApprover struct {
+	DeviceID   string `json:"device_id"`
+	DeviceName string `json:"device_name,omitempty"`
+}
+
+type handoffApproverKey struct{}
+
+// WithHandoffApprover is ctx with the device the hub found may approve a hand-off card.
+func WithHandoffApprover(ctx context.Context, a HandoffApprover) context.Context {
+	return context.WithValue(ctx, handoffApproverKey{}, a)
+}
+
+// HandoffApproverOf is the device WithHandoffApprover put on ctx; false when there is none.
+func HandoffApproverOf(ctx context.Context) (HandoffApprover, bool) {
+	a, ok := ctx.Value(handoffApproverKey{}).(HandoffApprover)
+	return a, ok && a.DeviceID != ""
+}
+
+type humanStartKey struct{}
+
+// WithHumanStart is ctx of a new conversation's start that a person's own app asked for, as the hub vouched
+// (HTTPRequest.Human): its first message counts as theirs (StartParams.Human).
+func WithHumanStart(ctx context.Context) context.Context {
+	return context.WithValue(ctx, humanStartKey{}, true)
+}
+
+// HumanStartOf reports whether WithHumanStart marked ctx.
+func HumanStartOf(ctx context.Context) bool {
+	human, _ := ctx.Value(humanStartKey{}).(bool)
+	return human
+}
+
 // ToolCall is assistant.tool's params.
 type ToolCall struct {
 	Name      string          `json:"name"`
@@ -52,8 +89,10 @@ type ContextParams struct {
 }
 
 // ContextResult is assistant.context's answer: the <persona-context> text, and the <persona-view-errors> block of the
-// conversation's rich views that failed their check and were not reported yet (docs/assistant/assistant-views.md "Feedback next turn").
+// conversation's rich views that failed their check and were not reported yet (docs/assistant/assistant-views.md "Next-turn feedback").
 // Reading it consumes nothing: the node acks Receipts once the message is delivered.
+// Receipts also carry what else the hub wants confirmed as delivered with the message (the background supervisor's
+// announcement, item_id "background_supervisor"): the node sends them all back as they are.
 type ContextResult struct {
 	Text       string             `json:"text"`
 	ViewErrors string             `json:"view_errors,omitempty"`
@@ -108,11 +147,20 @@ type MessageCard struct {
 	Sender  string `json:"sender,omitempty"`
 	Text    string `json:"text"` // the message, clipped
 	Draft   string `json:"draft"`
+	// MessageVersion and ProgressVersion identify the source message and task
+	// progress used to produce the draft, independently of its wording.
+	MessageVersion  string `json:"message_version,omitempty"`
+	ProgressVersion string `json:"progress_version,omitempty"`
 	// SentAt: the reply to the item went out (from this card or from the inbox, on any device) and Sent is what it
 	// said; set when the inbox sent the reply (the inbox is the assistant's too), never cleared, so the card stays sent
 	// when the item opens again. A card sent before that was recorded has no Sent (the draft is what went out).
 	SentAt *time.Time `json:"sent_at,omitempty"`
 	Sent   string     `json:"sent,omitempty"`
+	// Dismissal is per draft card, not inbox filing or task completion. Undo
+	// removes these two fields but retains DismissalUpdatedAt for incremental reads.
+	DismissedAt        *time.Time `json:"dismissed_at,omitempty"`
+	DismissalID        string     `json:"dismissal_id,omitempty"`
+	DismissalUpdatedAt *time.Time `json:"dismissal_updated_at,omitempty"`
 }
 
 // APIErrorMarkers start what Claude Code answers when the model call itself failed (an error card in the app). Both
@@ -163,6 +211,24 @@ type StartEnded struct {
 	Code      string          `json:"code,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 }
+
+// ConversationSent is session.assistant_sent's params: an app's message the hub sent to the assistant's conversation
+// SessionID, and what became of it. Outcome is ConversationDelivered, ConversationFailed or ConversationUnknown (it may
+// have been typed); Code and Error are the hub's answer when it was not delivered.
+type ConversationSent struct {
+	MachineID string `json:"machine_id"`
+	SessionID string `json:"session_id"`
+	Outcome   string `json:"outcome"`
+	Code      string `json:"code,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// ConversationSent's outcomes.
+const (
+	ConversationDelivered = "delivered"
+	ConversationFailed    = "failed"
+	ConversationUnknown   = "unknown"
+)
 
 // DeviceSessions is sessions.changed's params: the list as the node sent it, and when the node's connection to the hub
 // began (a new one: the node may have restarted and forgotten what it was told, e.g. the herdr todo marks).

@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 @testable import Persona
 
-/// The voice orb (`VoiceOrb`, docs/assistant/voice.md「设计系统」): its motion is a pure function of phase, time and level
+/// The voice orb (`VoiceOrb`, docs/assistant/voice.md「Design system」): its motion is a pure function of phase, time and level
 /// (`VoiceOrbPose`), held here to the tokens: Android's pace, a still frame with Reduce Motion, and inside its box.
 @MainActor struct VoiceOrbTests {
     /// The breath and the beat are Android's (`Voice.kt`), so the two apps' orbs move alike.

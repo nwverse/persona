@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // An account-pool relay pools provider accounts behind one gateway and stores each account's quota
@@ -413,9 +414,4 @@ func firstNonEmpty(list ...string) string {
 }
 
 // clip cuts s to at most n runes (a name from outside should not be able to fill the sidebar).
-func clip(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n])
-	}
-	return s
-}
+var clip = textfmt.Cut

@@ -635,6 +635,35 @@ func TestBackgroundTasks(t *testing.T) {
 	}
 }
 
+// A foreground command moved to the background by hand (Ctrl+B, or a message sent mid-turn, #3278) runs on as a
+// background task until its notification, as one started in the background does; a foreground command that just ends
+// leaves nothing behind.
+func TestManuallyBackgroundedCommand(t *testing.T) {
+	meta := &Meta{}
+	lines := []string{
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-11-10T08:55:18Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"python3 slow.py","description":"Run a slow test"}}]}}`,
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-10T08:55:24Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"Command was manually backgrounded by user with ID: bmk9rnfdz. Output is being written to: /tmp/tasks/bmk9rnfdz.output. If it is still running after 30m in the background, it will be stopped and you will be notified."}]}}`,
+		`{"type":"assistant","uuid":"a2","timestamp":"2026-11-10T08:55:25Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu2","name":"Bash","input":{"command":"date","description":"Get the time"}}]}}`,
+		`{"type":"user","uuid":"u2","timestamp":"2026-11-10T08:55:26Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu2","content":"Tue Nov 10 16:55:26 CST 2026"}]}}`,
+	}
+	for i, l := range lines {
+		ParseLine(i+1, []byte(l), meta)
+	}
+	if len(meta.Background) != 1 || len(meta.fgBash) != 0 {
+		t.Fatalf("background %+v, foreground left %v", meta.Background, meta.fgBash)
+	}
+	if b := meta.Background[0]; b.ID != "bmk9rnfdz" || b.Kind != "shell" || b.Command != "python3 slow.py" || b.Description != "Run a slow test" ||
+		b.OutputFile != "/tmp/tasks/bmk9rnfdz.output" {
+		t.Fatalf("task: %+v", b)
+	}
+	note := "<task-notification>\n<task-id>bmk9rnfdz</task-id>\n<status>completed</status>\n<summary>Background command \"Run a slow test\" completed (exit code 0)</summary>\n</task-notification>"
+	q, _ := json.Marshal(map[string]any{"type": "queue-operation", "operation": "enqueue", "content": note})
+	ParseLine(5, q, meta)
+	if len(meta.Background) != 0 {
+		t.Fatalf("still running after its notification: %+v", meta.Background)
+	}
+}
+
 func TestPageTurnsStartsAtAPrompt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	var b strings.Builder
@@ -687,10 +716,44 @@ func TestLoopFromScheduleWakeup(t *testing.T) {
 func TestCustomTitleBeatsAITitle(t *testing.T) {
 	var m Meta
 	ParseLine(1, []byte(`{"type":"ai-title","aiTitle":"Generated"}`), &m)
+	if m.TitleManual || m.TitleSource != "auto" {
+		t.Fatalf("generated title provenance: manual=%v source=%q", m.TitleManual, m.TitleSource)
+	}
 	ParseLine(2, []byte(`{"type":"custom-title","customTitle":"我起的名字"}`), &m)
 	ParseLine(3, []byte(`{"type":"ai-title","aiTitle":"Generated again"}`), &m)
-	if m.Title != "我起的名字" {
-		t.Fatalf("title = %q", m.Title)
+	if m.Title != "我起的名字" || !m.TitleManual || m.TitleSource != "manual" {
+		t.Fatalf("title = %q, manual=%v source=%q", m.Title, m.TitleManual, m.TitleSource)
+	}
+}
+
+func TestNamingMetadataMatchesFullParse(t *testing.T) {
+	lines := []string{
+		`{"type":"user","message":{"role":"user","content":"Fix the build"}}`,
+		`{"type":"ai-title","aiTitle":"Generated"}`,
+		`{"type":"custom-title","customTitle":"Claude Code"}`,
+		`{"type":"ai-title","aiTitle":"Generated again"}`,
+		`{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"Checking"}],"usage":{"input_tokens":1000,"output_tokens":20}}}`,
+		`{"type":"assistant","message":{"id":"m1","role":"assistant","content":[],"usage":{"input_tokens":2000,"output_tokens":20}}}`,
+		`{"type":"assistant","message":{"id":"m1","role":"assistant","content":[],"usage":{"input_tokens":3000,"output_tokens":25}}}`,
+		`{"type":"assistant","isSidechain":true,"message":{"id":"side","role":"assistant","content":[],"usage":{"output_tokens":999}}}`,
+		`{"type":"assistant","message":{"id":"m2","role":"assistant","content":[],"usage":{"input_tokens":4000,"output_tokens":10}}}`,
+		`{"type":"api-request-blob","message":{"id":"fake","usage":{"output_tokens":9999}},"customTitle":"Not a rename"}`,
+	}
+	var full, observed Meta
+	for i, line := range lines {
+		ParseLine(i, []byte(line), &full)
+		observed.ObserveNamingMetadata([]byte(line))
+	}
+	for _, m := range []*Meta{&full, &observed} {
+		if m.Title != "Claude Code" || !m.TitleManual || m.TitleSource != "manual" || m.OutputTokens != 35 {
+			t.Fatalf("title=%q manual=%v source=%q output=%d", m.Title, m.TitleManual, m.TitleSource, m.OutputTokens)
+		}
+	}
+	var codex Meta
+	codex.ObserveNamingMetadata([]byte(`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"output_tokens":123},"last_token_usage":{"input_tokens":9000,"output_tokens":3}}}}`))
+	codex.ObserveNamingMetadata([]byte(`{"type":"event_msg","payload":{"type":"token_count","info":null},"note":{"output_tokens":999}}`))
+	if codex.OutputTokens != 123 || codex.TitleSource != "" {
+		t.Fatalf("Codex naming metadata: output=%d source=%q", codex.OutputTokens, codex.TitleSource)
 	}
 }
 
@@ -1048,5 +1111,36 @@ func TestAsyncAgentIDAfterWarning(t *testing.T) {
 	ParseLine(3, q, meta)
 	if len(meta.Background) != 0 {
 		t.Fatalf("finished agent still running: %+v", meta.Background)
+	}
+}
+
+// Claude Code queues its own system notices like typed input (a cross-session message held and then released, #6590):
+// they are not something the user wrote, so they stay out of the queue the apps show, and they still take their place
+// in it, so a dequeue drops the entry it dropped.
+func TestQueuedSystemNoticeIsNotAUserMessage(t *testing.T) {
+	const notice = "[Cross-session delivery notice] Your message to another session was approved and released to that session (recipient: peer-1; msg_id: m1)"
+	var m Meta
+	parse := func(line string) { ParseLine(1, []byte(line), &m) }
+	queue := func(op, content string) string {
+		b, _ := json.Marshal(map[string]any{"type": "queue-operation", "operation": op, "content": content})
+		return string(b)
+	}
+	parse(queue("enqueue", notice))
+	if len(m.Queue) != 0 {
+		t.Fatalf("a system notice is shown as a queued message: %q", m.Queue)
+	}
+	parse(queue("enqueue", "A"))
+	if len(m.Queue) != 1 || m.Queue[0] != "A" {
+		t.Fatalf("queue = %q, want only what the user typed", m.Queue)
+	}
+	parse(`{"type":"queue-operation","operation":"dequeue"}`) // the notice was first in the queue
+	if len(m.Queue) != 1 || m.Queue[0] != "A" {
+		t.Fatalf("after the notice was taken, queue = %q", m.Queue)
+	}
+	parse(queue("enqueue", notice))
+	parse(queue("remove", notice))
+	parse(queue("popAll", "A"))
+	if len(m.Queue) != 0 {
+		t.Fatalf("queue = %q, want it empty", m.Queue)
 	}
 }

@@ -18,6 +18,7 @@ struct LarkTopicCard: View {
     @Environment(\.larkReact) private var react
     @Environment(\.larkAddPin) private var addPin
     @Environment(\.larkDisplay) private var display
+    @Environment(\.larkManager) private var manager
     /// The open thread, and whether its box is focused (Reply).
     @State private var threadOpen: LarkTopicThreadOpening?
     @State private var picking = false
@@ -67,7 +68,8 @@ struct LarkTopicCard: View {
 
     private var menu: some View {
         LarkMessageMenu(message: topic, react: react, reply: canOpen ? { openThread(focus: true) } : nil,
-                        pickReaction: { picking = true }, addPin: addPin, showProfile: openProfile == nil ? nil : { showProfile() })
+                        pickReaction: { picking = true }, addPin: addPin, showProfile: openProfile == nil ? nil : { showProfile() },
+                        manager: manager)
     }
 
     /// Avatar, then the name (with Bot for a bot) over the time. Avatar and name open the poster's card.

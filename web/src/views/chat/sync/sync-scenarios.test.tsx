@@ -22,9 +22,7 @@ vi.mock("../../../lib/panel", async (importOriginal) => ({ ...await importOrigin
 vi.mock("../../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }), PersonaAvatar: () => null }));
 vi.mock("../../assistant/AssistantChat", () => ({
   AssistantFace: () => null,
-  AssistantLauncherChip: () => null,
   CompactionStrip: () => null,
-  StarterLauncherChip: () => null,
   useAssistantMenu: () => ({ items: [], dialogs: null }),
 }));
 // The new-conversation page's setup checks: ready, as a hub without readiness reports it. A refused start still shows
@@ -40,6 +38,7 @@ vi.mock("../../assistant/Tasks", () => ({
   FeedLineView: () => null,
   QuickResultCard: () => null,
   RouteChip: () => null,
+  AssistantActionBar: () => null,
   TaskDock: () => null,
   TaskQuestions: () => null,
 }));
@@ -51,6 +50,7 @@ const { ChatView } = await import("../ChatView");
 const { PersonaAssistant } = await import("../../PersonaAssistant");
 const { navigate, useRoute } = await import("../../../lib/router");
 const { resetOutboxClaimsForTests } = await import("../../../lib/outbox");
+const { resetStalePullsForTests } = await import("../useTranscript");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const files = import.meta.glob<{ cases: SyncCase[] }>("../../../../../spec/fixtures/sync/*.json", { eager: true, import: "default" });
@@ -78,6 +78,7 @@ afterEach(async () => {
   store.disconnect();
   store.reset();
   resetOutboxClaimsForTests();
+  resetStalePullsForTests();
   FakeSocket.hub = null;
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -129,15 +130,17 @@ function answer(id: string, resolution: Record<string, unknown>) {
 /** The requests since the last check, matched in order against what the case names (others may come between). */
 function matchRequests(want: Request[], seen: Seen[], ops: (key: string) => Set<string>, before: Set<string>): string | null {
   let at = 0;
+  const one = (w: Request, s: Seen): boolean => {
+    if (w.one_of) return w.one_of.some((o) => one(o, s));
+    if (w.get === "/ops") return s.get === "/ops" && s.key === w.id;
+    if (w.get) return s.get === w.get && (w.after_seq === undefined || s.after_seq === w.after_seq);
+    if (w.ws) return s.ws === w.ws && (w.since_seq === undefined || s.since_seq === w.since_seq);
+    if (w.post !== s.post) return false;
+    if (w.new_op) return s.op !== undefined && !before.has(s.op);
+    return s.key === w.id;
+  };
   for (const w of want) {
-    const k = seen.findIndex((s, i) => {
-      if (i < at) return false;
-      if (w.get) return s.get === w.get && (w.after_seq === undefined || s.after_seq === w.after_seq);
-      if (w.ws) return s.ws === w.ws && (w.since_seq === undefined || s.since_seq === w.since_seq);
-      if (w.post !== s.post) return false;
-      if (w.new_op) return s.op !== undefined && !before.has(s.op);
-      return s.key === w.id;
-    });
+    const k = seen.findIndex((s, i) => i >= at && one(w, s));
     if (k < 0) return `no ${JSON.stringify(w)} in ${JSON.stringify(seen.slice(at))}`;
     at = k + 1;
   }

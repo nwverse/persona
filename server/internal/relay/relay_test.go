@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -263,6 +264,77 @@ func TestRateLimits(t *testing.T) {
 	if regs >= regBurst+5 {
 		t.Fatal("registration not limited")
 	}
+}
+
+// TestLimiterSweepsAtMostOncePerRefill: past sweepAbove keys a new key forgets the buckets that have refilled, but not
+// again within one refill time, so a flood of new keys does not scan the whole table for each. The answers stay the same.
+func TestLimiterSweepsAtMostOncePerRefill(t *testing.T) {
+	l := newLimiter(regPerMin, regBurst)
+	add := func(prefix string, n int, at time.Time) {
+		t.Helper()
+		for i := range n {
+			if !l.allow(prefix+strconv.Itoa(i), at) {
+				t.Fatalf("new key %s%d refused", prefix, i)
+			}
+		}
+	}
+	burst := func(key string, at time.Time) (n int) {
+		for range regBurst + 5 {
+			if l.allow(key, at) {
+				n++
+			}
+		}
+		return n
+	}
+	check := func(when string, buckets int, swept time.Time) {
+		t.Helper()
+		if len(l.buckets) != buckets || !l.swept.Equal(swept) {
+			t.Fatalf("%s: %d buckets, swept at %v; want %d, %v", when, len(l.buckets), l.swept, buckets, swept)
+		}
+	}
+	t0 := time.Unix(1_800_000_000, 0)
+	add("ip:old", sweepAbove+1, t0)
+	check("filled", sweepAbove+1, time.Time{})
+
+	// The first new key past the size sweeps; every bucket is fresh, so none goes.
+	t1 := t0.Add(l.refill / 2)
+	add("ip:a", 1, t1)
+	check("first sweep", sweepAbove+2, t1)
+
+	// The old buckets have refilled, but the last sweep was less than one refill time ago: new keys do not sweep.
+	t2 := t0.Add(l.refill + time.Millisecond)
+	add("ip:b", 1000, t2)
+	check("within a refill time of the sweep", sweepAbove+1002, t1)
+	// A refilled bucket that stayed answers like the new one it would have become: a full burst.
+	if got := burst("ip:old0", t2); got != regBurst {
+		t.Fatalf("kept refilled bucket allowed %d, want %d", got, regBurst)
+	}
+
+	// One refill time after the last sweep, a new key forgets every bucket that has refilled. Kept: ip:a0 (exactly one
+	// refill time old), ip:old0 (spent at t2), the 1000 ip:b keys and ip:c0.
+	t3 := t1.Add(l.refill)
+	add("ip:c", 1, t3)
+	check("second sweep", 1003, t3)
+	if got := burst("ip:old1", t3); got != regBurst {
+		t.Fatalf("forgotten key allowed %d, want a full burst of %d", got, regBurst)
+	}
+	if got := burst("ip:old0", t3); got >= regBurst {
+		t.Fatalf("key spent half a refill time ago allowed %d, want fewer than %d", got, regBurst)
+	}
+}
+
+// BenchmarkLimiterManyFreshKeys: new keys arriving while the table is past sweepAbove and every bucket is still fresh.
+func BenchmarkLimiterManyFreshKeys(b *testing.B) {
+	l := newLimiter(regPerMin, regBurst)
+	now := time.Unix(1_800_000_000, 0)
+	for i := range sweepAbove + 1 {
+		l.allow("ip:seed"+strconv.Itoa(i), now)
+	}
+	b.ResetTimer()
+	for i := range b.N {
+		l.allow("ip:new"+strconv.Itoa(i), now)
+	}
+	b.ReportMetric(float64(len(l.buckets)), "buckets")
 }
 
 func TestProxySecret(t *testing.T) {

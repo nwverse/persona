@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Localization checks for the Apple apps (docs/apple/ios.md "UI languages", docs/protocol/i18n.md).
+"""Localization checks for the Apple apps (docs/apple/ios.md "Interface language", docs/protocol/i18n.md).
 
   apple_l10n.py check                 English-source catalogs have translated en / zh-Hans / ja units, compatible
                                       numbered format arguments, and no Chinese or Japanese keys; Chinese source
@@ -53,17 +53,19 @@ CATALOGS = [
 ]
 # Persona Link (apple/PersonaLink, docs/operations/link.md "Menu bar App") is its own SwiftPM package: its text is looked
 # up in its own catalog through `linkText`, so its keys are checked apart and never satisfy the apps' source keys. Its
-# older UI text is hard-coded Chinese; LINK_CJK is each file's count of such literals, which may only go down: new text
-# goes through the catalog. Keys are paths under LINK_SOURCES.
+# UI text is all in the catalog; LINK_CJK is each file's allowed count of hard-coded Chinese/Japanese literals (none now;
+# data that must stay Chinese, such as persona-link's own output, carries `// i18n-ignore`): new text goes through the
+# catalog. Keys are paths under LINK_SOURCES.
 LINK_SOURCES = "PersonaLink/Sources/PersonaLink"
 LINK_CATALOG = LINK_SOURCES + "/Resources/Localizable.xcstrings"
-LINK_CJK = {"LinkModel.swift": 28, "MenuView.swift": 48, "PairLink.swift": 2, "PairView.swift": 36, "PersonaLinkApp.swift": 2,
-            "RenameView.swift": 5, "Snapshots.swift": 28}
+LINK_CJK = {}
 # The targets whose extracted strings go into the catalogs (sync / strict).
 TARGETS = ["Persona", "PersonaMac", "PersonaVision", "PersonaWatch", "PersonaWidgets", "PersonaNotify", "PersonaShare"]
 
 SPEC = re.compile(r"%(?:(\d+)\$)?(#@\w+@|[-+ 0#]*\d*(?:\.\d+)?(?:ll|hh|l|h|z|t|j|q|L)?[@dDiuUxXoOfeEgGcCsSpaA])")
 CJK = swift_literals.CJK
+# A key's trailing context, ` [Queue Strip]`: a word in brackets, not a format argument (`In [%@]`) or punctuation.
+CONTEXT = re.compile(r" (\[[^\[\]%]*[^\W\d_][^\[\]%]*\])$")
 
 
 def _specifier_type(spec):
@@ -231,6 +233,15 @@ def catalog_problems(data, rel="catalog", infoplist=False):
                 # The catalog's empty key is intentional; it still needs an explicit translated unit.
                 if not isinstance(text, str) or (not text and key != ""):
                     report(f"{path or 'stringUnit'} has no value")
+        # A key's context (`Open [file]`) tells keys with the same English apart and is never shown: a value that
+        # keeps it puts "[Queue Strip]" on screen in that language (#6703).
+        context = CONTEXT.search(key)
+        for lang, units in by_lang.items() if context else ():
+            for unit, path, *_ in units:
+                text = unit.get("value")
+                if isinstance(text, str) and context.group(1) in text:
+                    problems.append(f"{rel}: {key!r}: {lang} {path or 'stringUnit'} shows the key's context "
+                                    f"{context.group(1)}: drop it from the value")
         en = by_lang.get(SOURCE, [])
         root_units = [u for u in en if u[3] is None and not u[4] and isinstance(u[0].get("value"), str)]
         if not root_units:

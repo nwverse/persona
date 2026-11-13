@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import Observation
 
-/// Which of the hub's Feishu accounts the Messages page shows (docs/extensions/feishu.md「多账号」). The hub's own account
+/// Which of the hub's Feishu accounts the Messages page shows (docs/extensions/feishu.md「Multiple accounts」). The hub's own account
 /// (lark.account) is what requests without `ol_account` are about; another one is named on each request.
 /// The last list and choice are kept per hub, so the chips are there at once on the next launch.
 @MainActor @Observable

@@ -406,7 +406,7 @@ export function uploadProblem(file: { name: string; size: number }, most: number
   return "";
 }
 
-// ── how the extensions run (docs/extensions/extensions.md "Activity") ──
+// ── how the extensions run (docs/extensions/extensions.md "Runtime status") ──
 
 /** An error rate as people read it: 0%, 0.4%, 12%; "—" without calls. */
 export function rateText(rate: number, calls: number): string {

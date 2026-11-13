@@ -8,13 +8,18 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 )
 
 const (
@@ -73,6 +78,9 @@ type pairCodeReply struct {
 	Added   bool              `json:"added,omitempty"`
 	Command string            `json:"command,omitempty"`
 	Install map[string]string `json:"install,omitempty"`
+	// Manager is the manager the computer belongs to now (entryOwner): the one add.manager named, unless it could not
+	// be. A hub from before add.manager leaves it out (and adds every computer to the carrier).
+	Manager string `json:"manager,omitempty"`
 }
 
 type qrImage struct {
@@ -106,6 +114,7 @@ func (h *Hub) pairRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/v1/auth/pair-codes", func(w http.ResponseWriter, r *http.Request) {
 		who := principalOf(r.Context())
 		fromDevice := who.ID != ""
+		source := h.sourceOf(r)
 		if fromDevice {
 			// A device with full access can already add devices (POST /api/v1/auth/tokens); this code is safer to
 			// hand over: it expires in ten minutes and is traded once. Not from a pairing code itself (no chain of
@@ -114,7 +123,7 @@ func (h *Hub) pairRoutes(api *http.ServeMux) {
 				writeErr(w, http.StatusForbidden, errors.New("this device may not pair other devices"))
 				return
 			}
-		} else if h.sourceOf(r) != sourceLoopback {
+		} else if source != sourceLoopback {
 			writeErr(w, http.StatusForbidden, errors.New("pairing codes require the master token over loopback"))
 			return
 		}
@@ -162,7 +171,8 @@ func (h *Hub) pairRoutes(api *http.ServeMux) {
 		}
 		var p *pairCode
 		var err error
-		if h.isMember() {
+		member := h.isMember()
+		if member {
 			// An app pairs with the center: devices are the center's (plan-hub-center.md 3).
 			p = &pairCode{}
 			err = h.meshCall(r.Context(), h.centerID(), "pair.code", map[string]any{}, p)
@@ -172,6 +182,12 @@ func (h *Hub) pairRoutes(api *http.ServeMux) {
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
+		}
+		if !member && source == sourceLoopback {
+			if appURL := h.appPairURL(); appURL != p.URL {
+				p.URL = appURL
+				p.PairURL = p.pairURL()
+			}
 		}
 		reply := pairCodeReply{pairCode: p}
 		if reply.QR, err = newQRImage(p.PairURL); err != nil {
@@ -191,6 +207,60 @@ func (h *Hub) pairRoutes(api *http.ServeMux) {
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, reply)
 	})
+}
+
+// appPairURL replaces the default bare hostname for local app pairing on an IPv6 LAN.
+// Use only addresses the Hub already advertises on its HTTP listener.
+func (h *Hub) appPairURL() string {
+	c := h.cfg
+	publicURL := c.PublicURL
+	if c.Public.TLSListen != "" || c.Security.PlaintextLoopbackOnly || c.Security.ProxyProtocol != nil ||
+		len(c.Public.Advertise) > 0 || identity.Getenv("PERSONA_PUBLIC_URL") != "" {
+		return publicURL
+	}
+	hostname := os.Hostname
+	if h.hostname != nil {
+		hostname = h.hostname
+	}
+	host, hostErr := hostname()
+	bind, port, err := net.SplitHostPort(c.Listen)
+	if err != nil || hostErr != nil || host == "" || strings.ContainsAny(host, ".:") || strings.EqualFold(host, "localhost") ||
+		publicURL != "http://"+net.JoinHostPort(host, port) || h.adminContainer() {
+		return publicURL
+	}
+	if bind != "" {
+		addr, err := netip.ParseAddr(bind)
+		if err != nil || !addr.Unmap().Is6() {
+			return publicURL
+		}
+	}
+
+	var candidate string
+	var subnet netip.Prefix
+	for _, endpoint := range h.endpointList() {
+		if endpoint.Kind != "lan" || endpoint.Scheme != "http" {
+			continue
+		}
+		u, err := url.Parse(endpoint.URL)
+		if err != nil || u.Port() != port {
+			continue
+		}
+		addr, err := netip.ParseAddr(u.Hostname())
+		if err != nil || !addr.Is6() {
+			return publicURL
+		}
+		// Several addresses on one /64 are normal, for example after IPv6 autoconfiguration.
+		prefix := netip.PrefixFrom(addr, 64).Masked()
+		if candidate == "" {
+			candidate, subnet = endpoint.URL, prefix
+		} else if prefix != subnet {
+			return publicURL
+		}
+	}
+	if candidate != "" {
+		return candidate
+	}
+	return publicURL
 }
 
 // newPairCode makes a one-time pairing code: for an app (machine ""), or for that link machine's persona-link.
@@ -283,6 +353,12 @@ func (h *Hub) serveComputerCode(w http.ResponseWriter, r *http.Request, who prin
 			err: i18n.Err("hub-pairing.tls_required"), extra: map[string]any{"action": "enable_tls"}})
 		return
 	}
+	if add != nil {
+		if err := h.addTarget(r.Context(), strings.TrimSpace(add.Manager)); err != nil {
+			writeAddMachineErr(w, err) // nothing written
+			return
+		}
+	}
 	actor := trustActor(who)
 	h.machineAdd.Lock()
 	id, added, err := h.computerFor(r.Context(), machine, add, fromDevice, actor)
@@ -296,7 +372,7 @@ func (h *Hub) serveComputerCode(w http.ResponseWriter, r *http.Request, who prin
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	reply := pairCodeReply{pairCode: p, Trust: db.TrustConfirmed, Added: added,
+	reply := pairCodeReply{pairCode: p, Trust: db.TrustConfirmed, Added: added, Manager: h.entryOwner(id),
 		Command: "persona-link pair '" + p.PairURL + "'", Install: h.computerInstall(p.PairURL)}
 	if h.machinePending(id) {
 		reply.Trust = trustPending

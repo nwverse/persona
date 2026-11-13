@@ -78,7 +78,7 @@ var capabilities = []capability{
 	{CapHistoryAnchors, reflect.TypeFor[HistoryAnchors](), true},
 }
 
-// Manifest is what a connector says it is and does, in one place (docs/extensions/connectors.md "2 · 1"): read whenever the
+// Manifest is what a connector says it is and does, in one place (docs/extensions/connectors.md "Capability declarations: one explicit manifest"): read whenever the
 // hub needs it, so it answers from memory. A program's (connector/proc) is what the program said when it started.
 type Manifest struct {
 	Capabilities []Capability
@@ -97,6 +97,9 @@ type Manifest struct {
 	ConfirmAlways []string
 	// Poll is how often the hub asks Archive for changes; 0 is the hub's default.
 	Poll time.Duration
+	// InboxSwitch: it brings things into the Inbox through a path of the manager's own, not Collect (mail, #5307), and
+	// has the Add to Inbox switch (FeedInbox) all the same; without CapInbox it answers no inbox round itself.
+	InboxSwitch bool
 	// Kinds are the kinds its inbox things have (InboxThing.Kind): prompts/inbox/kinds/<id>.md tells the models what
 	// each means. A thing of a kind not here is still taken, and logged.
 	Kinds []string

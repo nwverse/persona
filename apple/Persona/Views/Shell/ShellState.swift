@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The ChatGPT-style shell on an iPhone (docs/apple/ios.md「新外壳」): Assistant (the Persona assistant) and Agents (the Agents list)
+/// The ChatGPT-style shell on an iPhone (docs/apple/ios.md「New shell」): Assistant (the Persona assistant) and Agents (the Agents list)
 /// under one top switch, the drawer on the left (Inbox, Scheduled Tasks, Knowledge, Machines, the conversations, Settings), Settings as a sheet.
 ///
 /// The pages read this from the environment (`\.shell`): nil means a regular-width iPad / iPhone Duo,
@@ -155,13 +155,19 @@ import SwiftUI
 /// Pages the Assistant page pushes for the shell.
 enum ShellPage: Hashable, Sendable {
     case newConversation, profile, inbox, todos, routines, knowledge, machines, health
+    /// Recordings (meeting recordings started from the drawer, a Control, Siri…; docs/apple/recording.md): this device's.
+    case recordings
     /// An extension's main-navigation page (nav_page) from the drawer.
     case extensionPage(ExtensionNavRoute)
+    /// The Sidebar layout (#6332): the conversation itself, nothing over it (its row picked, or a route to Persona), and
+    /// Messages (the Lark chats, the Separate layout's third page or tab) beside the sidebar.
+    case conversation, messages
 }
 
 /// What the Assistant page pushes by value for the shell (the inbox and the machines push values of their own on top).
+/// Every place the sidebar opens is one, so what it pushes by value is part of the path it keeps (`ShellPlaces`).
 enum ShellRoute: Hashable, Sendable {
-    case inbox, todos, machines
+    case inbox, todos, machines, profile, routines, knowledge, recordings
     case extensionPage(ExtensionNavRoute)
 }
 

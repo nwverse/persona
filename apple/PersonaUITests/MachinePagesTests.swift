@@ -4,7 +4,7 @@ import XCTest
 /// machine's projects, New Chat's machine / directory / launcher), against scripts/mock/mock_hub.py started with
 /// MOCK_MACHINES=1 (an offline machine that reconnect brings back, a machine with 36 agents):
 ///   TEST_RUNNER_PERSONA_MACHINES_HUB=http://127.0.0.1:<port>
-/// TEST_RUNNER_PERSONA_SHOTS=<dir> also saves a screenshot of each step there (docs/operations/testing.md「机器页面」).
+/// TEST_RUNNER_PERSONA_SHOTS=<dir> also saves a screenshot of each step there (docs/operations/testing.md「Machine pages」).
 final class MachinePagesTests: XCTestCase {
     private let widget = "a1f3c2d4-0000-4000-8000-000000000001"
     private var hub = ""
@@ -63,6 +63,16 @@ final class MachinePagesTests: XCTestCase {
 
     private func button(_ s: String) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label CONTAINS %@", s)).firstMatch
+    }
+
+    /// New Chat's card for a machine by its id, not a Recent setup row naming it (#2134: a start in an earlier test
+    /// leaves one, and tapping it fills that setup in).
+    private func machineCard(_ id: String) -> XCUIElement { app.buttons["newChat.machine.\(id)"] }
+
+    /// The new chat knows its session: the slim bar names it as the open header does (#3631), not 「对话」.
+    private func seeChatNamed(_ name: String) {
+        let title = see(app.buttons["chat.compactTitle"], "the new chat's name in its header")
+        XCTAssertTrue(title.label.contains(name), title.label)
     }
 
     private func mock(_ what: String) -> [String: Any] {
@@ -236,7 +246,7 @@ final class MachinePagesTests: XCTestCase {
     @MainActor func testNewSessionFailureShowsWhy() throws {
         launch(["-tab", "dev", "-cwd.macbook", "/Users/me/code/broken"])
         see(app.buttons["新建会话"], "新建会话", timeout: 15).tap()
-        see(button("MacBook"), "MacBook card").tap()
+        see(machineCard("macbook"), "MacBook card").tap()
         see(button("开始对话"), "开始对话").tap()
         let err = see(app.descendants(matching: .any).matching(identifier: "newChat.error").firstMatch, "the error next to the button")
         XCTAssertTrue(err.label.contains("did not become ready"), err.label)
@@ -253,7 +263,7 @@ final class MachinePagesTests: XCTestCase {
         see(app.navigationBars["新对话"], "新对话 sheet")
         let lab = see(button("实验室主机"), "offline machine card")
         XCTAssertFalse(lab.isEnabled, "an offline machine cannot be picked")
-        see(button("MacBook"), "MacBook card").tap()
+        see(machineCard("macbook"), "MacBook card").tap()
         shot("new-chat")
 
         see(app.buttons["newChat.directory"], "directory row").tap()
@@ -304,8 +314,7 @@ final class MachinePagesTests: XCTestCase {
             ((mock("sent")["sent"] as? [[String: Any]]) ?? []).contains { ($0["text"] as? String) == "迁移到 Astro" }
         }
         shot("new-chat-starting")
-        // The new chat knows its session at once (not 「对话 · 对话」 until the hub's next list).
-        see(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "blog")).firstMatch, "the new chat's place in its header")
+        seeChatNamed("迁移到 Astro")
         shot("new-chat-started")
     }
 
@@ -314,7 +323,7 @@ final class MachinePagesTests: XCTestCase {
     @MainActor func testNewSessionPicksAModel() throws {
         launch(["-tab", "dev", "-cwd.macbook", "/Users/me/code/blog"])
         see(app.buttons["新建会话"], "新建会话", timeout: 15).tap()
-        see(button("MacBook"), "MacBook card").tap()
+        see(machineCard("macbook"), "MacBook card").tap()
         // Model Settings' launcher (claude in the mock) runs; with nothing picked, so does its model.
         let row = see(app.buttons["newChat.model"], "模型 row", timeout: 15)
         XCTAssertTrue(row.label.contains("默认模型") && row.label.contains("模型配置：model-chat"), row.label)
@@ -324,7 +333,8 @@ final class MachinePagesTests: XCTestCase {
         see(app.buttons["newChat.model.default"], "默认 first")
         see(app.buttons["newChat.model.opus"], "an alias")
         shot("model-picker")
-        let search = see(app.searchFields.firstMatch, "the search field")
+        // The picker's own field, not the Agents page's behind the sheet.
+        let search = see(app.searchFields.matching(NSPredicate(format: "label CONTAINS %@", "模型 ID")).firstMatch, "the search field")
         search.tap()
         search.typeText("glm")
         XCTAssertFalse(app.buttons["newChat.model.opus"].waitForExistence(timeout: 1), "the search leaves out what does not match")
@@ -353,7 +363,7 @@ final class MachinePagesTests: XCTestCase {
     @MainActor func testNewSessionModelLockedAndCodex() throws {
         launch(["-tab", "dev", "-cwd.macbook", "/Users/me/code/blog"])
         see(app.buttons["新建会话"], "新建会话", timeout: 15).tap()
-        see(button("MacBook"), "MacBook card").tap()
+        see(machineCard("macbook"), "MacBook card").tap()
         see(app.buttons["newChat.launcher"], "launcher row").tap()
         see(button("sonnetcc"), "a launcher with its own --model").tap()
         let locked = see(app.descendants(matching: .any)["newChat.model.locked"], "the locked model row", timeout: 15)
@@ -366,7 +376,7 @@ final class MachinePagesTests: XCTestCase {
         see(app.buttons["newChat.model"], "模型 row", timeout: 15).tap()
         see(app.buttons["newChat.model.gpt-5.5-codex"], "a Codex model").tap()
         let picked = see(app.buttons["newChat.model"], "模型 row")
-        XCTAssertTrue(picked.label.contains("GPT-5.5-Codex"), picked.label)
+        XCTAssertTrue(picked.label.contains("5.5 Codex"), picked.label) // GPT names drop the prefix (SessionModes.gptModelName)
         let prompt = app.textViews["newChat.prompt"].exists ? app.textViews["newChat.prompt"] : app.textFields["newChat.prompt"]
         for _ in 0..<4 where !prompt.isHittable { app.swipeUp() }
         see(prompt, "the first message field").tap()
@@ -380,13 +390,13 @@ final class MachinePagesTests: XCTestCase {
         XCTAssertNil(body["effort"], "a Codex start takes no effort")
     }
 
-    /// A Codex launcher (docs/integrations/codex.md「从手机新建」): marked Codex in the picker; picked, Claude's modes go, the first
+    /// A Codex launcher (docs/integrations/codex.md「Starting from the phone」): marked Codex in the picker; picked, Claude's modes go, the first
     /// message is required and goes with the start as typed (Codex makes its thread from it), and the chat that opens
     /// is that session.
     @MainActor func testNewCodexSessionStartsWithItsFirstMessage() throws {
         launch(["-tab", "dev", "-cwd.macbook", "/Users/me/code/blog"])
         see(app.buttons["新建会话"], "新建会话", timeout: 15).tap()
-        see(button("MacBook"), "MacBook card").tap()
+        see(machineCard("macbook"), "MacBook card").tap()
         see(app.buttons["newChat.launcher"], "launcher row").tap()
         see(app.navigationBars["启动器"], "launcher picker")
         see(text("Codex"), "the Codex mark on its launcher")
@@ -412,7 +422,7 @@ final class MachinePagesTests: XCTestCase {
         XCTAssertNil(body["async"], "the start waits for the thread Codex makes")
         XCTAssertNil(body["permission_mode"])
         XCTAssertFalse(app.navigationBars["新对话"].waitForExistence(timeout: 3), "the sheet closes on start")
-        see(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "blog")).firstMatch, "the new chat's place in its header")
+        seeChatNamed("README")
         see(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "README")).firstMatch, "the first message, already in the thread")
         shot("new-chat-codex-started")
     }

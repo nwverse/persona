@@ -1,5 +1,5 @@
 import { storedCredentials } from "./compatibility";
-import { api, ApiError, setToken } from "./api";
+import { api, ApiError, setPairedToken } from "./api";
 import { formatDate, t } from "../i18n";
 
 function browserName() {
@@ -9,9 +9,6 @@ function browserName() {
   return [b, os].filter(Boolean).join(" · ");
 }
 
-/** Where this browser keeps the id of its device token at the hub, to revoke it on signing out and to have it
- *  replaced when it signs in again. */
-export const TOKEN_ID_KEY = "persona.tokenId";
 /** The id of a device token this browser signed out of without the hub revoking it (lib/disconnect.ts): the next
  *  sign-in here names it in `replaces`, so the hub takes it off then. */
 export const UNREVOKED_KEY = "persona.unrevokedTokenId";
@@ -75,8 +72,8 @@ export async function pair(input: string): Promise<void> {
       if (!(err instanceof ApiError) || err.status !== 404) throw err;
     }
   }
-  if (tokenId === undefined) setToken(use);
-  else setToken(use, tokenId);
+  if (tokenId === undefined) setPairedToken(use);
+  else setPairedToken(use, tokenId);
 }
 
 // takeToken finds a token in a link (`?token=…`, or `#token=…`, which never reaches the server) and returns it with

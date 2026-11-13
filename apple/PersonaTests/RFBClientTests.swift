@@ -212,8 +212,9 @@ struct RFBClientTests {
         try await seen.until { $0.ended }
 
         let encodings = try #require(t.sent.first { $0.first == 2 })
-        let asked = stride(from: 4, to: encodings.count, by: 4).map { i in
-            Int32(bitPattern: UInt32(encodings[i]) << 24 | UInt32(encodings[i + 1]) << 16 | UInt32(encodings[i + 2]) << 8 | UInt32(encodings[i + 3]))
+        let asked = stride(from: 4, to: encodings.count, by: 4).map { i -> Int32 in
+            let b = encodings[i..<i + 4].map { UInt32($0) }
+            return Int32(bitPattern: b[0] << 24 | b[1] << 16 | b[2] << 8 | b[3])
         }
         #expect(asked.contains(-308), "ExtendedDesktopSize asked for: \(asked)")
         let s = await seen.snapshot
@@ -246,6 +247,22 @@ struct RFBClientTests {
         try await Task.sleep(for: .milliseconds(300))
         client.close()
         #expect(t.sent.filter { $0.first == 4 || $0.first == 5 || $0.first == 6 } == out)
+    }
+
+    /// #3954: the screen-sharing stream carries a pair, which the video channel binds to. A WebSocket URL with it; none
+    /// without one (the URL as before); and a fresh, unguessable one each connection.
+    @Test func theConnectURLCarriesAPair() throws {
+        let http = try #require(URL(string: "https://hub.example.com/api/v1/machines/macbook/ports/5900/connect"))
+        let paired = RFBWebSocket.url(http, pair: "0123abcd")
+        #expect(paired.absoluteString == "wss://hub.example.com/api/v1/machines/macbook/ports/5900/connect?pair=0123abcd")
+        #expect(RFBWebSocket.url(http, pair: nil).absoluteString == "wss://hub.example.com/api/v1/machines/macbook/ports/5900/connect")
+        #expect(RFBWebSocket.url(http, pair: "").query == nil, "an empty pair is no pair")
+        let plain = try #require(URL(string: "http://192.0.2.1:8787/api/v1/machines/m/ports/5900/connect"))
+        #expect(RFBWebSocket.url(plain, pair: "p").scheme == "ws", "a hub over http is ws")
+
+        let a = RFBWebSocket.newPair(), b = RFBWebSocket.newPair()
+        #expect(a.count == 32 && a.allSatisfy(\.isHexDigit), "16 random bytes in hex: \(a)")
+        #expect(a != b, "a new pair each connection")
     }
 }
 

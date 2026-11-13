@@ -13,13 +13,16 @@
 #
 # Path mapping (diff mode):
 #   web/**                     npm ci (only with no node_modules or a changed package.json/package-lock.json),
-#                              typecheck, vitest run
-#   schema/extension/**, spec/fixtures/injected/**, spec/fixtures/sync/**, scripts/mock/inbox_events.json
+#                              node_modules against package-lock.json, typecheck, vitest run
+#   schema/extension/**, spec/fixtures/injected/**, spec/fixtures/sync/**, spec/fixtures/attention/**,
+#   spec/fixtures/chat-search/**, scripts/mock/inbox_events.json
 #                              also the web check: web/src and its vitest suite read these files. They are the inputs
 #                              outside web/ of the web lane in scripts/ci/paths.py; test_check_fast.py keeps the two in sync
 #   integrations/<pkg>/**      node --test test/*.test.{js,mjs} (packages without tests are skipped)
 #   site/**                    node --test site/worker.test.mjs
 #   sdk/ts/**                  bun test (skipped with a reason when bun is absent)
+#   sdk/ts/src/**              also go test ./internal/extension/denohost/...: the trusted Deno adapter bundles it,
+#                              and TestTrustedAdapterMatchesOfficialSDK fails while the committed one is stale (#4221)
 #   sdk/go/**                  go test ./... inside the sdk/go module
 #   server/internal/foo/**     go test ./internal/foo/...   (cmd/<x>/** and plugins/<x>/** likewise; other server
 #                              changes: go build ./...)
@@ -45,10 +48,14 @@
 #                              each changed scripts/<dir>/test_*.py and the test_<name>.py of each changed script
 #                              <name>.py / <name>.sh (- read as _; db.sh's is test_db_sh.py), run from its
 #                              directory as CI does (#3968). scripts/hooks/** also runs
-#                              scripts/test/test_privacy_check.py (it runs the hooks); scripts/privacy_check.py also
+#                              scripts/test/test_privacy_check.py and test_check_deno_adapter_sh.py (they run the
+#                              hooks; the latter also for scripts/gen/deno_adapter.sh); scripts/privacy_check.py also
 #                              scripts/release/test_check_bundle_privacy.py (it imports privacy_check)
 #   docs/**, any *.md          scripts/test/test_doc_paths.py and test_doc_go_paths.py (paths quoted in the docs, the
-#                              CLAUDE.md doc index), test_doc_wire.py (the wire lists in protocol.md, extensions.md)
+#                              CLAUDE.md doc index), test_doc_sections.py (section names quoted after a doc path),
+#                              test_doc_wire.py (the wire lists in protocol.md, extensions.md)
+#   server/**, web/src/**, web/e2e/**, scripts/**, sdk/**, apple/**, android/**, integrations/**, spec/**, schema/**
+#                              also test_doc_sections.py: it reads the code comments there too (its SOURCE_DIRS)
 #   server/internal/{proto,hub,extension}/**, schema/extension/manifest.schema.json
 #                              also test_doc_wire.py: the code side of those wire lists
 #   apple/**                   scripts/test/test_apple_l10n.py (String Catalogs, Chinese Swift literals); the iOS/macOS
@@ -312,6 +319,8 @@ job_web() {  # $1 = ci when npm ci must run first
     in_dir web step "$TIMEOUT_NPM_CI" "web: npm ci" npm ci || return $?
     JOB_HINT=""
   fi
+  # A node_modules from before the last lock bump runs old packages: stop with the list instead (#4776).
+  in_dir web step "$TIMEOUT_OTHER" "web: node_modules matches package-lock.json" npm run check:deps || return $?
   in_dir web step "$TIMEOUT_OTHER" "web: tsc -b (typecheck)" npm run typecheck || return $?
   in_dir web step "$TIMEOUT_WEB_TEST" "web: vitest run" npm test
 }
@@ -388,7 +397,11 @@ job_i18n() {
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: test_android_i18n_check.py self-test" \
     python3 -B test_android_i18n_check.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: test_android_token_baseline.py self-test" \
-    python3 -B test_android_token_baseline.py
+    python3 -B test_android_token_baseline.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: test_android_slot_order.py self-test" \
+    python3 -B test_android_slot_order.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_slot_order.py" python3 -B android_slot_order.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_token_baseline.py" python3 -B android_token_baseline.py
 }
 
 job_external_refs() {
@@ -599,7 +612,7 @@ else
     # Repository files outside web/ that web/src and its vitest suite read: a change to one also runs the web check,
     # on top of its own mapping below. The same list is the web lane's filter in scripts/ci/paths.py.
     case "$f" in
-      schema/extension/*|spec/fixtures/injected/*|spec/fixtures/sync/*|scripts/mock/inbox_events.json) WEB=1 ;;
+      schema/extension/*|spec/fixtures/injected/*|spec/fixtures/sync/*|spec/fixtures/attention/*|spec/fixtures/chat-search/*|scripts/mock/inbox_events.json) WEB=1 ;;
     esac
     case "$f" in server/*|sdk/go/*) GO_GUARDS=1 ;; esac  # on top of the mapping below (job_go_guards)
     case "$f" in
@@ -610,6 +623,7 @@ else
         arr_has "$_p" "${INTEG[@]:-}" || INTEG+=("$_p") ;;
       sdk/ts/*) SDKTS=1 ;;
       spec/fixtures/*) ;;  # read by server tests: the reader packages are collected in a pass below
+      spec/tokens/*|spec/icons/*) ;;  # test_gen_tokens.py / test_gen_icon_meanings.py, added with the scripts/ unittests below
       server/*)
         _rest=${f#server/}
         case "$_rest" in
@@ -696,6 +710,17 @@ if [ "$ALL" -eq 0 ]; then
   done
 fi
 
+# The trusted Deno adapter (server/internal/extension/denohost/adapter.mjs) is generated from adapter.ts, which bundles
+# sdk/ts/src: a change there also runs denohost's tests, whose TestTrustedAdapterMatchesOfficialSDK fails while the
+# committed adapter is stale (#4221; scripts/gen/deno_adapter.sh regenerates it). A few seconds; it needs bun.
+if [ "$ALL" -eq 0 ] && printf '%s\n' "$CHANGED" | grep -q '^sdk/ts/src/'; then
+  if [ "$HAVE_BUN" -eq 0 ]; then
+    INFO+=("SKIP  trusted Deno adapter (go test ./internal/extension/denohost/...): bun not found in PATH")
+  elif ! arr_has internal/extension "${GO_GROUPS[@]:-}"; then  # ./internal/extension/... already covers it
+    arr_has internal/extension/denohost "${GO_GROUPS[@]:-}" || GO_GROUPS+=(internal/extension/denohost)
+  fi
+fi
+
 # script_test_add adds a scripts/<dir>/test_*.py that exists (a deleted one is not run) and that no dedicated job above
 # already runs (refs, bundle, extension schema, the android checkers). A file that never mentions unittest is a SKIP
 # line instead, the rule of is_suite in scripts/ci/python-tests.py: python -m unittest runs no tests in such a
@@ -738,17 +763,35 @@ else
     case "$f" in
       docs/*|*.md)
         script_test_add scripts/test/test_doc_paths.py; script_test_add scripts/test/test_doc_go_paths.py
-        script_test_add scripts/test/test_doc_wire.py ;;
+        script_test_add scripts/test/test_doc_sections.py; script_test_add scripts/test/test_doc_wire.py ;;
       # The code side of the wire lists test_doc_wire.py compares with the docs.
       server/internal/proto/*|server/internal/hub/*|server/internal/extension/*|schema/extension/manifest.schema.json)
         script_test_add scripts/test/test_doc_wire.py ;;
     esac
-    case "$f" in apple/*) script_test_add scripts/test/test_apple_l10n.py ;; esac
-    # Suites whose names do not match the file they test: test_privacy_check.py copies scripts/hooks into its temp
-    # repositories and runs the hooks there; check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py
-    # copies privacy_check.py into its temp repositories, where merge-pr.sh runs it.
+    # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
     case "$f" in
-      scripts/hooks/*) script_test_add scripts/test/test_privacy_check.py ;;
+      server/*|web/src/*|web/e2e/*|scripts/*|sdk/*|apple/*|android/*|integrations/*|spec/*|schema/*)
+        script_test_add scripts/test/test_doc_sections.py ;;
+    esac
+    case "$f" in apple/*) script_test_add scripts/test/test_apple_l10n.py ;; esac
+    # test_gen_tokens.py checks the token sources against the iOS values and the committed Android Tokens.kt (#4209).
+    case "$f" in
+      spec/tokens/*|apple/Shared/Design/*|android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt)
+        script_test_add scripts/assets/test_gen_tokens.py ;;
+    esac
+    # test_gen_icon_meanings.py checks spec/icons against Theme.Icon and the Phosphor glyphs, and PersonaIcons.kt.
+    case "$f" in
+      spec/icons/*|apple/Shared/Design/Icons.swift|android/core/designsystem/src/main/kotlin/persona/core/designsystem/icons/*)
+        script_test_add scripts/assets/test_gen_icon_meanings.py ;;
+    esac
+    # Suites whose names do not match the file they test: test_privacy_check.py and test_check_deno_adapter_sh.py copy
+    # scripts/hooks into their temp repositories and run the hooks there (the latter also scripts/gen/deno_adapter.sh);
+    # check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py copies privacy_check.py into its temp
+    # repositories, where merge-pr.sh runs it.
+    case "$f" in
+      scripts/hooks/*)
+        script_test_add scripts/test/test_privacy_check.py; script_test_add scripts/test/test_check_deno_adapter_sh.py ;;
+      scripts/gen/deno_adapter.sh) script_test_add scripts/test/test_check_deno_adapter_sh.py ;;
       scripts/privacy_check.py)
         script_test_add scripts/release/test_check_bundle_privacy.py; script_test_add scripts/test/test_merge_pr_sh.py ;;
     esac

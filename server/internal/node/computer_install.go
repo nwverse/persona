@@ -1,7 +1,7 @@
 package node
 
 // Installing Cua Driver and asking for its permissions from the app (computer.install, computer.grant, computer.cancel;
-// docs/extensions/computer-use.md "One-tap install"): one background job at a time, whose state comes back with computer.status.
+// docs/extensions/computer-use.md "One-tap installation"): one background job at a time, whose state comes back with computer.status.
 
 import (
 	"bytes"

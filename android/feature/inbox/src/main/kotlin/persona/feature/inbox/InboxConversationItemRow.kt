@@ -7,11 +7,12 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.LocalDetailKey
 import persona.core.navigation.Navigator
 
-/** Grouped conversations keep the same directions and callbacks as individual inbox items. */
+/** Grouped conversations swipe and offer the same actions as individual inbox items (`inboxRowSwipe`; the hand-off is in the long-press sheet). */
 @Composable
 internal fun InboxConversationItemRow(
     row: InboxConversationRow, navigator: Navigator, position: GroupPosition, onlineSince: Long?,
     done: Boolean, busy: Boolean, onDone: () -> Unit, onHandOff: () -> Unit,
+    selection: InboxRowSelection? = null,
 ) {
     val record = row.records.firstOrNull() ?: return
     val sender = record.item.sender?.takeIf { it.isNotBlank() }
@@ -24,13 +25,11 @@ internal fun InboxConversationItemRow(
     val doneLabel = stringResource(if (done) R.string.inbox_move_back else R.string.inbox_done)
     val handOffLabel = stringResource(R.string.inbox_hand_to_ai)
     if (menu) JActionSheet(title = row.title, onDismiss = { menu = false }, actions = listOf(
-        JAction(doneLabel, PhIcons.Check, enabled = !busy, onClick = onDone),
+        JAction(doneLabel, doneIcon(done), enabled = !busy, onClick = onDone),
         JAction(handOffLabel, PhIcons.Robot, enabled = !busy, onClick = onHandOff),
     ))
-    JSwipeActions(
-        start = if (busy) null else SwipeAction(doneLabel, PhIcons.Check, Status.Unread, onDone),
-        end = if (busy) null else SwipeAction(handOffLabel, PhIcons.Robot, Status.Working, onHandOff),
-    ) {
+    val selecting = selection?.selecting == true
+    JSwipeActions(end = inboxRowSwipe(doneLabel, done, busy, selecting, onDone)) {
         MessageItem(sender = sender ?: conversationTitle, heading = conversationTitle.takeIf { sender != null },
             title = row.preview, position = position, tags = listOfNotNull(kindTag),
             source = MessageSource.Lark, sourceLabel = record.sourceLabel,
@@ -38,7 +37,9 @@ internal fun InboxConversationItemRow(
             status = when (row.section) { InboxConversationSection.Action -> Status.NeedsYou; InboxConversationSection.Fyi -> Status.Unread; else -> null },
             avatar = rememberLarkAvatar(record.avatar, onlineSince),
             selected = isInboxItemSelected(LocalDetailKey.current, row.itemId, row.key.thread),
-            onClick = { if (!busy) navigator.navigate(pages.open(record)) }, onLongClick = { if (!busy) menu = true })
+            checked = selection?.checked?.takeIf { selection.selectable }, dimmed = selecting && selection?.selectable == false,
+            onClick = { val open = { if (!busy) navigator.navigate(pages.open(record)) }; selection?.click(open) ?: open() },
+            onLongClick = { val showMenu = { if (!busy) menu = true }; selection?.longClick(showMenu) ?: showMenu() })
     }
 }
 

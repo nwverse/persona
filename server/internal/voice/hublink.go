@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// One WebSocket from the extension to the hub (/api/v1/ws, docs/assistant/voice.md "Extension calls the hub"), shared by every conversation:
+// One WebSocket from the extension to the hub (/api/v1/ws, docs/assistant/voice.md "Extension calls to hub"), shared by every conversation:
 // their runs learn at once that a turn ended, a card came or went or the conversation changed, rather than on their
 // 5 s look. Subscriptions are counted per conversation (machine, session). The read loop never waits on anyone: the
 // hub drops a client whose queue fills up (hub/http.go), so each listener gets its events on a bounded channel and one

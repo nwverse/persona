@@ -52,6 +52,17 @@ func EnvNames(name string) (current, legacy string) {
 func ReservedEnv(name string) bool {
 	return strings.HasPrefix(name, "PERSONA_") || strings.HasPrefix(name, "JARVIS_")
 }
+
+// SecretEnvNameProblem is proto.SecretEnvNameProblem with the old names' prefix reserved too.
+func SecretEnvNameProblem(name string) string {
+	if why := proto.SecretEnvNameProblem(name); why != "" {
+		return why
+	}
+	if ReservedEnv(name) {
+		return "names with the old prefix are Persona's"
+	}
+	return ""
+}
 func StateSubpath(rel string) (string, bool) {
 	for _, root := range []string{".persona", StateDir} {
 		if sub, ok := strings.CutPrefix(rel, root+"/"); ok {
@@ -103,7 +114,10 @@ func LegacyRuntimePackage(name string) string {
 
 const NodeUpdateLock = ".jarvis-update.lock"
 
-func Scheme(name string) bool { return name == "persona" || name == "jarvis" }
+// LauncherCheckDir is the temp directory prefix older nodes ran launcher health checks in; their transcripts stay
+// under Claude Code's projects for days after an upgrade.
+const LauncherCheckDir = "jarvis-check-"
+
 func LegacyURL(value string) string {
 	if strings.HasPrefix(value, "persona:") {
 		return "jarvis:" + strings.TrimPrefix(value, "persona:")
@@ -134,11 +148,11 @@ func HeaderConflict(h http.Header, name string) bool {
 	return a != "" && b != "" && a != b
 }
 func ContextPattern() string { return `(?:jarvis|persona)-context` }
+func FilePattern() string    { return `(?:jarvis|persona)-file` }
 func ContextNames() []string { return []string{"jarvis-context", "persona-context"} }
 
 // compat is also built on its own, copied without the rest of the server (scripts/test/test_persona_migration_edges.py),
 // so it uses the standard library only: its patterns compile on first use with sync.OnceValue, not internal/lazyre.
-var legacyContextTags = lazy(`(</?)jarvis-(context|file)([[:space:]/>])`)
 var currentContextTags = lazy(`(</?)persona-(context|file)([[:space:]/>])`)
 
 // lazy is regexp.MustCompile(src) on first use.
@@ -146,9 +160,6 @@ func lazy(src string) func() *regexp.Regexp {
 	return sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(src) })
 }
 
-func NormalizeContextTags(s string) string {
-	return legacyContextTags().ReplaceAllString(s, `${1}persona-${2}${3}`)
-}
 func LegacyContextTags(s string) string {
 	return currentContextTags().ReplaceAllString(s, `${1}jarvis-${2}${3}`)
 }

@@ -14,6 +14,7 @@ import { getWorkspaceBoardSetting, resetWorkspaceBoardSettingForTest } from "../
 import { AgentGroup } from "./settings/AgentGroup";
 import { Sidebar } from "./Sidebar";
 import { WorkspaceBoard } from "./WorkspaceBoard";
+import { CATALOG_POLL_MS } from "../lib/workspace-catalog";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -76,7 +77,7 @@ describe("the workflow board switch", () => {
 
     const open = [...host.querySelectorAll("button")].find((b) => b.textContent === "去设置打开")!;
     act(() => open.click());
-    expect(location.pathname + location.search).toBe("/settings?tab=general");
+    expect(location.pathname + location.search).toBe("/settings?tab=hub");
   });
 
   it("shows the sidebar entry once 设置 › 通用 › Agent turns it on, and keeps the switch on the hub", async () => {
@@ -101,7 +102,7 @@ describe("the workflow board switch", () => {
     expect(calls.some((c) => c.path === "/api/v1/workspace-board")).toBe(true);
     const before = discoveryCalls();
     expect(before).toBeGreaterThan(0);
-    await act(async () => { vi.advanceTimersByTime(10_000); });
+    await act(async () => { vi.advanceTimersByTime(CATALOG_POLL_MS); });
     await flush();
     expect(discoveryCalls()).toBeGreaterThan(before);
   });

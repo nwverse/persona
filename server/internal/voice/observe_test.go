@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// docs/assistant/voice.md "Turn tracking", "Announcements" (#3503): turns the call did not hand over, turns that stopped and are not over, a
+// docs/assistant/voice.md "Per-round tracking", "Announcements" (#3503): turns the call did not hand over, turns that stopped and are not over, a
 // heartbeat while it works, and the user cutting in on the model.
 
 const appMsgID = "0c0ffee0-1111-4222-8333-444455556666" // a message the phone sent (its id a UUID)
@@ -340,8 +340,10 @@ func TestModelErrorsSayOnlyTheirSort(t *testing.T) {
 	}{
 		{name: "transient, nobody goes on", sid: "a1", error: "503 upstream connect error in cluster-7", kind: proto.TurnErrorTransient,
 			want: "模型服务临时出了问题", never: "cluster-7"},
-		{name: "transient, the triage does not go on", sid: "a1", triage: &triageSwitches{Enabled: true}, error: "503 in cluster-7",
+		{name: "transient, the triage does not go on", sid: "a1", triage: &triageSwitches{Enabled: true, TransientRetry: new(false)}, error: "503 in cluster-7",
 			kind: proto.TurnErrorTransient, want: "模型服务临时出了问题", never: "cluster-7"},
+		{name: "triage off, transient errors still continued", sid: "a1", triage: &triageSwitches{}, error: "529 overloaded in pool-3",
+			want: "模型服务出错了", never: "pool-3", waits: true},
 		{name: "a Persona conversation", sid: "main1", triage: &triageSwitches{Enabled: true, AutoContinue: true}, error: "503 in cluster-7",
 			kind: proto.TurnErrorTransient, want: "模型服务临时出了问题", never: "cluster-7"},
 		{name: "never triaged", sid: "a1", triage: &triageSwitches{Enabled: true, AutoContinue: true}, error: "529 overloaded in pool-3",

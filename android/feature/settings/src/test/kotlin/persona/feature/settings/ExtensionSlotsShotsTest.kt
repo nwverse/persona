@@ -35,7 +35,7 @@ import java.io.File
  * Extensions' UI slots drawn on the JVM with Robolectric's native graphics (no emulator): the "Extensions" section of the
  * settings home (a card, nav pages with badges) and a nav page (segmented, number grid, stacked bars, lines, a chart
  * with a picked point), in every style, light and dark. Each is checked to draw something and written as a PNG to
- * `build/extension-ui-shots/` (or `-Dpersona.shots=<dir>`) to look at (docs/android/android.md "Extension UI and the extension market").
+ * `build/extension-ui-shots/` (or `-Dpersona.shots=<dir>`) to look at (docs/android/android.md "Extension UI and marketplace").
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -132,23 +132,4 @@ class ExtensionSlotsShotsTest {
         }
     }
 
-    // The settings tab's badge: the nav pages' numbers added up, a dot for words.
-    @Test fun theSettingsTabShowsTheBadge() {
-        var dark by mutableStateOf(false)
-        rule.setContent {
-            PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Board) {
-                Box(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background)) {
-                    AppNavigation(listOf(
-                        NavItem("a", "Persona", persona.core.designsystem.icons.PhIcons.Sparkle),
-                        NavItem("b", "Agents", persona.core.designsystem.icons.PhIcons.SquaresFour, badge = 2),
-                        NavItem("c", "收件箱", persona.core.designsystem.icons.PhIcons.Tray),
-                        NavItem("d", "设置", persona.core.designsystem.icons.PhIcons.GearSix, dot = true),
-                    ), "a", {})
-                }
-            }
-        }
-        capture("plugin-tab-dot-board-light")
-        dark = true
-        capture("plugin-tab-dot-board-dark")
-    }
 }

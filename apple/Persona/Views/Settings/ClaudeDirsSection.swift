@@ -70,7 +70,7 @@ nonisolated enum ClaudeDirsLogic {
     static var noHub: String { String(localized: "Not connected to this computer's hub yet") }
 }
 
-/// Settings › Claude Code › Blocked Config Folders (docs/integrations/claude-integration.md「屏蔽配置目录」): the machine's Claude Code config
+/// Settings › Claude Code › Blocked Config Folders (docs/integrations/claude-integration.md「Blocking configuration directories」): the machine's Claude Code config
 /// directories, each with Block / Unblock, and rules typed by hand (a path or a glob such as ~/.automation/*). A blocked
 /// directory is not scanned or remembered and its sessions leave Agents; the files are not touched. Sections of the
 /// page's List.

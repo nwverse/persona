@@ -1,10 +1,12 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -40,6 +42,54 @@ func (h *Hub) usageRoutesRelayed(api *http.ServeMux) {
 			h.forwardOwned(w, r, h.byRequest)
 		})
 	}
+}
+
+// transferRoutesRelayed relays computer to computer file transfers (devicewire.TransferRoutes, docs/protocol/file-transfer.md)
+// to the manager that carries the computers: it reads one and writes the other over the connections it holds. A
+// POST goes to its source computer's manager, and both computers must be that manager's (a transfer between two
+// managers' computers would need one to reach the other's); GET and DELETE go by the request (?manager=, which the
+// file_transfer events carry for a manager other than the built-in). 503 assistant_offline while it is away.
+func (h *Hub) transferRoutesRelayed(api *http.ServeMux) {
+	for _, pattern := range devicewire.TransferRoutes {
+		post := strings.HasPrefix(pattern, http.MethodPost+" ")
+		api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			by := h.byRequest
+			if post {
+				var ok bool
+				if by, ok = h.transferSource(w, r); !ok {
+					return
+				}
+			}
+			_ = h.waitDevices(r.Context()) // the hub just started: the manager is on its way (bounded); else 503 at once
+			h.forwardOwned(w, r, by)
+		})
+	}
+}
+
+// transferSource reads a transfer's POST body for its computers (put back for the manager) and answers which manager
+// it goes to; false once it answered (a bad body, an unknown computer, two managers' computers).
+func (h *Hub) transferSource(w http.ResponseWriter, r *http.Request) (ownerOf, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<10))
+	if err != nil {
+		writeBodyErr(w, err, err)
+		return nil, false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var req proto.FileTransferRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeErrCode(w, http.StatusBadRequest, "bad_request", errors.New("bad JSON: "+err.Error()))
+		return nil, false
+	}
+	if h.localMachine(req.From.Machine) == nil || h.localMachine(req.To.Machine) == nil {
+		writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
+		return nil, false
+	}
+	owner := h.machineOwner(req.From.Machine)
+	if h.machineOwner(req.To.Machine) != owner {
+		writeErrCode(w, http.StatusConflict, "different_managers", errors.New("these two computers belong to different managers"))
+		return nil, false
+	}
+	return func(r *http.Request) (string, error) { return h.extensionsOwn(r, owner) }, true
 }
 
 // adminUsageRoutesRelayed relays the admin UI's usage sources page (devicewire.AdminUsageRoutes) to the manager. mux
@@ -119,12 +169,8 @@ func (m *Machine) claudeDirsState(ctx context.Context) claudeDirsState {
 	return st
 }
 
-func (m *Machine) blockedClaudeDirs(ctx context.Context) []string {
-	return m.claudeDirsState(ctx).Blocked
-}
-
-// readBlockedClaudeDirs is blockedClaudeDirs with the error, for changing the list: a failed read is not "none
-// blocked", or the PUT that follows would replace every pattern with just the one changed.
+// readBlockedClaudeDirs is claudeDirsState's Blocked with the error, for changing the list: a failed read is not
+// "none blocked", or the PUT that follows would replace every pattern with just the one changed.
 func (m *Machine) readBlockedClaudeDirs(ctx context.Context) ([]string, error) {
 	var st claudeDirsState
 	if err := m.hub.managerHTTP(ctx, m.hub.machineOwner(m.cfg.ID), http.MethodGet, "/api/v1/machines/"+m.cfg.ID+"/claude-dirs", nil, &st); err != nil {

@@ -57,7 +57,7 @@ func TestHeartbeatDroppedClientIsWrittenNothingPastTheGap(t *testing.T) {
 		t.Cleanup(cancel)
 		h := &Hub{clients: map[*client]struct{}{}}
 		c := &client{out: make(chan []byte, 2), meta: clientMeta{updates: make(chan heartbeatConfig), done: ctx.Done()}}
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 		s := &gatedSocket{gate: make(chan struct{})}
 		go func() { _ = c.writeWS(ctx, s, func(heartbeatConfig) {}) }()
 		send := func() {

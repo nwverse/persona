@@ -16,7 +16,6 @@ import persona.core.navigation.*
 class NotificationCardLinkTest {
     private fun stacks() = mapOf<AppTab, MutableList<NavKey>>(
         AppTab.Persona to mutableListOf(AssistantRoute), AppTab.Agents to mutableListOf(AgentsRoute),
-        AppTab.Inbox to mutableListOf(InboxRoute), AppTab.Settings to mutableListOf(SettingsRoute),
     )
 
     @Test fun theLinkNamesTheCardAndLandsOnTheAgentsList() {

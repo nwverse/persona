@@ -9,7 +9,7 @@ On a computer, use the web app, in the browser or installed as an app ([web.md](
 Persona Link adds what a browser cannot do ([link.md](../operations/link.md), "On computers: the web app and Persona Link").
 A desktop need goes into the web app first, and into Persona Link only when the browser cannot meet it.
 
-The native macOS version of Persona (the `PersonaMac` target in `apple/`, also used by the old `PersonaMac` scheme) shares the iOS App's logic layer (`Shared/`, `Persona/App`) and content views,
+The native macOS version of Persona (the `PersonaMac` target and scheme in `apple/`) shares the iOS App's logic layer (`Shared/`, `Persona/App`) and content views,
 inside a Mac-specific shell (`apple/Mac/`): windows, sidebar, toolbar, menus, shortcuts and menu bar. It uses native macOS interaction. Fixes must not drop scrolling and animation below 60 fps
 (120 fps on ProMotion displays). The rest of this page describes the app as it is.
 
@@ -31,7 +31,7 @@ and multiple windows. Do not copy the iPhone tab bar, bottom sheets or horizonta
 - Sidebar (`List(selection:)`, `.sidebar` style) groups:
   - **Persona**: main chat + pinned chats; **All Chats** opens history grouped by day in the list column.
   - **Agents**: All / Needs You / Unread / Working / Lark Groups / Terminal (counts, with a red Needs You badge), a segmented control where the list column fits it and otherwise a menu with the chosen one (#4769); below, pinned spaces and machines (click a machine to filter by it). The grouping menu supports **By Repository** and **By To-do**, defaulting to repository if never chosen (same as iOS, #2108).
-  - **To-dos**: list on the left, detail on the right (⌘7; hidden on old hubs), with an unfinished-count badge; create, complete/reopen, delete, hand to an Agent.
+  - **To-dos**: list on the left, detail on the right (⌘7; hidden on old hubs), with an unfinished-count badge; create, complete/reopen, delete, hand to an Agent; the list grouped by status or, from a hub with the direction tree, by Pinned (#4352, `docs/apple/ios.md` "Pinned directions (#4352)").
   - **Messages** (#3162, iOS #392 / #530): appears above Inbox, ⌘8, only when **Settings › Connectors › Lark › Show Messages on Home** is on and the hub has Lark conversations (`LarkHomePreference.shows`); turning it off returns the window to its previous section.
     Lark direct and group chats are listed on the left (about 340pt, draggable remembered width, `MacListBeside`); selecting one opens chat on the right (the Inbox's same `LarkChatView`, with direct sending), with the row selected; without a selection, the right shows a one-line hint.
     It shares the iPhone Messages page's list model, row (`LarkConversationRow`), account pills (`LarkAccountChips`) and pinned shelf (`LarkPinnedShelf`, using **Expand / Collapse** buttons on Mac rather than pulling down); search is in the toolbar, with **Lark Settings** at the right of the title row.
@@ -57,7 +57,7 @@ and multiple windows. Do not copy the iPhone tab bar, bottom sheets or horizonta
 | Edit | System Copy / Paste / Select All / Find, Find Next ⌘G / Previous ⇧⌘G; Copy Session ID, Copy Resume Command |
 | View | Refresh ⌘R, Show / Hide Sidebar ⌃⌘S, Show Inspector ⌥⌘I, Compact List, Grouping (Repository / Project / Status / Machine / By To-do, repository by default), Collapse / Expand All, text size ⌘+ ⌘- ⌘0 |
 | Agent | Send ⏎ (in the composer, ⇧⏎ for newline, ↑↓ recalls sent messages, ⌃R searches), Interrupt ⌘., Approve Current Pending ⇧⌘⏎, Deny ⇧⌘⌫, Answer Option ⌥⌘1–9, Focus Composer ⌘I (same as web Mod+I), Switch Terminal / Chat ⇧⌘J (web Mod+J; Mac ⌘J already sends to Persona), Rename, Mute, Pin, Mark Read, Clear Context, Close Agent… |
-| Inbox | Clear All ⇧⌘E (when Inbox is active; unhandled items under the current filter and search, recorded as ignored; confirmation for 10 or more, see `docs/assistant/inbox.md` ("Clear all")) |
+| Inbox | Clear All ⇧⌘E (when Inbox is active; unhandled items under the current filter and search, recorded as ignored; confirmation for 10 or more, see `docs/assistant/inbox.md` ("Clean up all")) |
 | Go | Persona ⌘1 … Machines ⌘5, Settings ⌘6, To-dos ⌘7, Messages ⌘8 (when the sidebar has focus), Previous / Next Agent ⌘[ ⌘], Next Needs You ⌃⌘N, Quick Open ⌘K, Jump to Latest ⌘↓ |
 | Window | System items; each chat can open in its own window (`WindowGroup(for: SessionKey.self)`), as can the terminal |
 
@@ -65,7 +65,7 @@ and multiple windows. Do not copy the iPhone tab bar, bottom sheets or horizonta
 
 | iOS | Mac |
 | --- | --- |
-| Bottom tab bar, badges | Sidebar groups + count badges; Dock icon badge = waiting-card count (a second card in the same session also counts, #4081) |
+| Bottom tab bar, badges | Sidebar groups + count badges; Dock icon badge = the Persona, Agents and Inbox badges added up, as the iPhone's icon (#5824) |
 | Long-press menus, horizontal swipes | Context menus (`contextMenu`); row `swipeActions` remain for trackpads; inline buttons on hover |
 | Bottom sheets / floating panels | Forms use window sheets; viewers use Inspector or popovers; fullscreen panels (terminal, images) use separate windows or the detail column |
 | In-app links (bottom card) | Web panel slides out to the right of detail (draggable width, ⌘W closes, **Open in Browser**); can also detach into a window |
@@ -91,7 +91,7 @@ and multiple windows. Do not copy the iPhone tab bar, bottom sheets or horizonta
   attaches clipboard images (screenshots), and pastes text normally; only the current window's composer receives them (chat may have its own window). Screenshot: `-openDropDemo a.png,b.md`.
 - Drag and drop: Agents in the list can be dragged to sidebar **Pinned**; files in the file panel can be dragged out to Finder (download).
 - Window and column widths, sidebar visibility, selection and each chat's reading position survive relaunch.
-- Appearance: follows system light/dark and accent color; interface styles (Liquid Glass, etc.) still apply, using system materials for Mac glass; no hard-coded dimensions, follows **Settings › Text Size**.
+- Appearance: follows system light/dark and accent color; interface styles (Liquid Glass, etc.) still apply, using system materials for Mac glass, and a style may bring the window's chrome (Lark: Feishu's navigation column, selection and colored monograms, `docs/design/DESIGN_SYSTEM.md` ("2.9 Styles and theme colors")); no hard-coded dimensions, follows **Settings › Text Size**.
   Mac has its own type scale (#779): body 13 (messages, answers, records), secondary 12, captions / labels / code 11, subheading 13 semibold, title 18, display 24; see `docs/apple/ios.md` ("Design language"). User messages and answers use the same size.
 - Performance: lists and chats must scroll without dropped frames on 120 Hz displays (`List` / `LazyVStack` lazy loading, cheap row bodies, cached text layout),
   chat first screen < 200 ms with cache, smooth window resizing. Measure with Instruments (SwiftUI / Animation Hitches), documenting the method here.
@@ -247,7 +247,7 @@ open ../../build/DerivedDataMac/Build/Products/Debug/Persona.app   # or run Cont
     Capture now draws container views individually, then composites the toolbar (`0af14af`, DEBUG only). About 12pt of black border remains along the list column's top and left (already present before the fix), capture-only, not in real windows; not investigated further.
   - Still incorrect on 2026-11-01, requiring unlocked-window checks: dark toolbar search is an empty white pill; colored progress bars (launcher quota) turn gray in inactive windows; prominent white-text buttons (Knowledge **Ask Persona**) disappear;
     connection-details popover; quick-command panel and terminal key bar have dark text on dark backgrounds; same-space tab pill bar above chat; Persona sidebar with `-openAssistantSidebar YES`.
-  - Screenshot pitfalls: DEBUG hooks such as `-showMailAskClaude` and `-openMonitor` run on every onAppear (DEBUG and screenshots only, unchanged); `-showWakeDrawer` and `-showMenu` need about 11 seconds `DELAY`;
+  - Screenshot pitfalls: DEBUG hooks such as `-showMailAskClaude` and `-openMonitor` run on every onAppear (DEBUG and screenshots only, unchanged); `-showMenu` needs about 11 seconds `DELAY`;
     drafts left in shared UserDefaults by other runs (such as `/`) open the slash menu at launch; after restarting the mock with changed data, cache merging can duplicate an error card; `-openChatsFresh` clears it.
 
 
@@ -315,6 +315,7 @@ Limitations: SwiftUI does not recognize synthetic momentum as momentum, and the 
     Mac now sends `register_desktop` (`AppModel.registration`, tested); phone_* accepts only iPhone. If Mac is open but iPhone absent, Claude cannot get phone data, as intended.
     **This Mac** is removed from Mac's **Settings › Connectors** (the hub no longer calls its tools); welcome text says data comes from Persona on iPhone.
     On iPhone, a top Agents row says **Persona on Mac is signed in**, opening **Mute Phone** (while Mac is online, Mac handles Needs You / Agent Done notifications instead of phone pushes; explicitly requested assistant reminders still push), sign-in time, and sign-out for that Mac (revokes device credentials, requires re-pairing). Protocol: `desktops` / `register_desktop` in `docs/protocol/protocol.md`.
+    With this App frozen, Persona Link takes over presence on a Mac: while you are at it, its menu bar App counts as a desktop for **Mute Phone**, for the "Needs you" cards only ([link.md](../operations/link.md) "Presence").
     Mac now exchanges pairing tokens for device credentials with kind `desktop` (`AppModel.credentialKind`, tested); the hub stores `other`, same permissions, computer icon in **Settings › Devices**.
     Macs that exchanged credentials before this change still show phone in the list; only a label, corrected by revoking and pairing again (unchanged).
 - Temporary implementations, to refine later: outer sidebar and page split are separate layers (six entries in an HStack column, page a three-column split with empty first column); `TabView(.page)` paging becomes default style / arrow paging;
@@ -424,7 +425,7 @@ Causes found (main-thread samples):
 Same implementation as iOS (`apple/Packages/PersonaSSH`, see [network.md, "Connecting to hub through SSH"](../operations/network.md#connecting-to-hub-through-ssh-fallback-when-direct-access-fails) and [ios.md, "SSH tunnels"](ios.md#ssh-tunnels-fallback-when-direct-connections-fail-891)): **Settings › Hub › SSH Tunnel**, and **Connect via SSH Tunnel** on the pairing page.
 The sandboxed App cannot invoke `/usr/bin/ssh` or read `~/.ssh`, so the tunnel runs in-process and the App generates its own key; loopback listeners use the existing `com.apple.security.network.server`
 entitlement (also used by port forwarding). Mac does not enter the background lifecycle; the tunnel stays open and switches back within 2 minutes once direct connectivity works.
-Screenshots: `mac_shot.sh`'s `-macSnapshot` does not read the keychain; provide a test key with `-seedSSHKey` (`docs/operations/testing.md` ("SSH tunnel")); screenshot-mode public-key comments always use device name "Mac", never the actual Mac name.
+Screenshots: `mac_shot.sh`'s `-macSnapshot` does not read the keychain; provide a test key with `-seedSSHKey` (`docs/operations/testing.md` ("SSH tunnels")); screenshot-mode public-key comments always use device name "Mac", never the actual Mac name.
 On the pairing page (`-tab settings -openPairSheet YES`), **Connect via SSH Tunnel** is a row with **Settings…**; clicking opens a second sheet over the pairing sheet (`-openPairSSH YES`), with **Cancel / Test Connection and Save** below;
 do not push a page within the pairing sheet (it narrows and clips the form, #1170). **Settings › Hub › SSH Tunnel** appears in the detail column; the two copy-public-key buttons are standard side-by-side buttons, and **Test Connection and Save** is bottom-right.
 
@@ -440,12 +441,15 @@ Dock context menu (`apple/Mac/App/MacDockMenu.swift`, tested): **Needs You / Don
   When Agent Finishes: Never / Long Tasks Only (this turn's `long_turn_seconds`, default over 60 seconds) / Every Time). Exclusions: the currently open chat while App is foreground, muted sessions,
   newly appearing sessions, done immediately after an answer (same stop), completed Persona chats (questions still notify), cards the assistant is still looking at (`delegating`, #544: a session whose only cards are those gets no Needs You notification until the hub hands one over), demo mode, and the first 3 seconds after WebSocket's first connection
   (the preconnection list is exit-time cache; differences on first refresh concern events while the App was closed; timed from connection, not launch, so late network does not flood notifications).
+  Inside this device's quiet hours (`NotifyPrefs.quiet`, `QuietHours.active`) nothing says an Agent finished, and Needs You comes without a sound and passive, as the hub's pushes do then (#1863).
   The state-change notification includes the turn's earliest card; the same card never notifies twice. If state arrives one beat before the card event, the 3-second grace period still deduplicates it.
-  Request notification permission after pairing / at launch (`PushRegistrar`, same as iPhone: remote pushes while closed display only if previously authorized); watcher asks again if it needs to notify before authorization, then sends after approval (items added during the prompt are lost).
-  Closed or disconnected Apps receive hub pushes, see "Remote push (Mac)" below. Muting / unmuting immediately updates the Dock badge.
+  Request notification permission after pairing / at launch (`PushRegistrar`, same as iPhone: remote pushes while closed display only if previously authorized; allowed later in System Settings, it registers when the App becomes active again, `applicationDidBecomeActive`, #1861); watcher asks again if it needs to notify before authorization, then sends after approval (items added during the prompt are lost).
+  Closed or disconnected Apps receive hub pushes, see "Remote push (Mac)" below.
 - Notifications use the same userInfo (`machine_id` / `session_id` / `interaction_id`) and categories as hub pushes: **Allow / Deny** for authorization, **Approve / Send Back** for plans;
   `MacAppDelegate` submits button actions directly to the hub, and clicking opens chat; a second Done notification for the same Agent replaces the first, while card notifications are separate by interaction uid.
-- Dock badge counts waiting cards (interactions, excluding muted and quiet tasks), not sessions; same as iPhone Agents `badges.agents` and the number beside the menu bar icon (#4081).
+- Dock badge (#5824, a bug fix: unread Inbox items never showed): the sidebar's Persona, Agents and Inbox badges added up, the same
+  number as the iPhone's icon (`AppIconBadge`, `docs/apple/ios.md` "App icon badge (#5824)"); muting updates it with the sidebar. Until
+  #5824 it counted waiting cards only, like the menu bar's number, which still does (#4081).
 - Menu bar (`MenuBarExtra`, menu style, remains after closing the main window): waiting-card count beside the icon; groups **Needs You** (longest waiting first), **Working**,
   **Done, Unread** (latest 5). Each Needs You item is a submenu: what it said + immediately answerable card choices (single-question options, Allow / Deny, Approve Plan,
   terminal short options read by the hub) + Open Chat; other items open chat with one click. Ends with **Open Persona / Quit Persona**.
@@ -651,7 +655,7 @@ How the checklist was reviewed, and the roles and rules for real-window checks d
   - Mac (2026-11-02 real Mac mini clicks; executor repeated 11-03 and captures reviewed): Persona · Launcher title; Knowledge, Details/profile, Back to Main Chat (branches only, works), Copy Directory / multiline Info including launcher / Session ID (pill ✓ Session ID Copied), Launcher › Used Starting with Next Message (menu updates launcher), Session Info (run/usage/location sheet). Interrupt only while working; Connection Details only when not online (`AssistantTopBar` conditions); absent on idle online main chat, correctly.
 - [x] Left button: history sidebar; right: new chat (disabled on new-chat page) — AssistantTopBar.swift
   - Mac (2026-11-01) dark capture: both buttons present (light glass only outlines); disabled new-chat button not captured, same iOS code.
-- [x] Sidebar: search, new chat, Persona card (online/offline + machine → profile), Scheduled Tasks / Knowledge tiles, Pinned (long-press pin, `assistant.pinned`; main chat is the list's first row, Persona with the App logo, #2004 / #5110), day groups Today/Yesterday/Last 7 Days/Earlier (8 + View All), row title + preview + time + state dot (Needs You red / Unread blue / Working spinner), context Copy Session ID / End / Pin, Settings row in drawer — Views/Assistant/AssistantSidebar.swift
+- [x] Sidebar: search, new chat, Persona card (online/offline + machine → profile), Scheduled Tasks / Knowledge tiles, Pinned (long-press pin, `assistant.pinned`; main chat is the list's first row, Persona with the App logo, #2004 / #5110), day groups Today/Yesterday/Last 7 Days/Earlier (8 + View All), row title + preview + time + state mark (`RowStateMark`: Needs You blue / Unread green / Working spinner, #4538), context Copy Session ID / End / Pin, Settings row in drawer — Views/Assistant/AssistantSidebar.swift
   - Mac (2026-11-03, Mac mini real window, executor): mock `MOCK_ASSISTANT_SIDEBAR=1`; row markers red Needs You, blue Unread, Working spinner, others none. Recent shows 30; View All (39) expands all and changes to Collapse. Row context: Pin, Rename…, Archive, Copy Session ID (clipboard correct), End… (Close This Agent? confirmation, cancel keeps it); main chat only Copy ID/End. Pin moves to Pinned (main chat is separate, in the top sidebar row labeled Persona, #5110), unpin restores time order. Search (§25), bottom Persona card/profile, Scheduled Tasks, Knowledge all clicked. Offline card (2026-11-03 offscreen, mock assistant moved to offline NAS via `PUT /api/v1/assistant {"machine_id":"nas"}`): gray dot Offline · NAS in both modes. No drawer Settings on Mac: `horizontalSizeClass` is always regular (`Mac/Compat/SwiftUICompat.swift`), split layout, Settings in shell. Inventory day groups/tiles are old design (same iOS); current rows title + marker. New Chat (batch 5): empty right-hand new chat (greeting, guidance cards, empty Ask Persona… composer follows mock avatar named Persona), former Main Chat selection clears; Recent chat restores it.
 - [ ] Drawer gesture: pan anywhere, 45° rule, yields to horizontally scrollable content, velocity/half settle, page card scale/offset, tab bar fade (UIKit host) — AssistantSidebar.swift (DrawerPan, DrawerPageMotion, DrawerSidebarHost), Views/Assistant/DrawerProbe.swift
   - Not on Mac: window with always-regular `horizontalSizeClass`, sidebar column/toggle; `AssistantDrawer+Mac.swift` has no drag and is unreachable in main window even narrow; `DrawerPan` / `DrawerProbe` compile only on iOS.
@@ -734,8 +738,8 @@ How the checklist was reviewed, and the roles and rules for real-window checks d
 - [ ] BeautifulUI: ThinkingState, tool-run chips (ToolRunRow/ToolChipRow) — ToolViews.swift, Views/BeautifulUIBridge.swift, Packages/BeautifulUI
   - Check at Mac: last answer partly covered by composer in capture (seemed ChatView bug), ThinkingState; tool chips/composer rendered.
   - Mac (2026-11-02 real Mac mini): two chats' last answers fully visible above composer/question cards, likely capture issue. ThinkingState remains (thinking session, `MOCK_STREAM=1`).
-- [x] Wake chip/Drawer; recap strip/Drawer (folded multiples) — MessageViews.swift (WakeChip, RecapCard, RecapStrip, RecapDrawer)
-  - Mac (2026-11-01): wake and `-showWakeDrawer` (about 11s DELAY), recap and `-showRecapDrawer` (While Away · 3 Times) correct.
+- [x] Wake work in the ordinary execution summary; recap strip/Drawer (folded multiples) — MessageViews.swift (RecapCard, RecapStrip, RecapDrawer)
+  - Mac (2026-11-01): wake and its then-separate drawer were checked. Wake continuation now stays in the ordinary execution summary (#2796); the recap and `-showRecapDrawer` (While Away · 3 Times) are unchanged.
 - [x] Background-task outcome notices — Views/Chat/TaskNoteRow.swift
   - Mac (2026-11-01) mock: ✕ Exit Code 1 and ✓ · 3 min.
 - [x] API error card (human explanation, chips, copyable details, repeated-error fold, Retry) — Views/Chat/APIErrorCard.swift
@@ -755,7 +759,7 @@ How the checklist was reviewed, and the roles and rules for real-window checks d
   - Mac (2026-11-02 real Mac mini): scrolling up expands full header; idle 3s collapses to pill; click expands.
   - No collapse on Mac (decided 2026-11-05, #1337): always full, regardless of scroll/idle/landing (`ChatChrome.folds`). Transition frames hitch (about 30 ms/s bouncing), and Mac has enough height. iPhone unchanged.
   - Circular ‹ only with a previous page (decided 2026-11-05, #1337): list-opened chat (first split detail page) no ‹, title centered; pushed from space etc. has ‹ and returns (`-openOverSpace YES` + `-openSession` captured; action unchanged, real click untested while locked).
-    No extra small ‹ in title row (`splitDetailPage(ownsBack: true)`), only chat's own. Previously first page had a no-op ‹; `../lessons/macos.md` ("`opacity(0)` cannot hide buttons in glass containers"). iPhone unchanged.
+    No extra small ‹ in title row (`splitDetailPage(ownsBack: true)`), only chat's own. Previously first page had a no-op ‹; `../lessons/macos.md` ("`opacity(0)` cannot hide a button inside a glass container"). iPhone unchanged.
 - [x] Session info (run/usage/location, copy ID/resume) — ChatView.swift (SessionInfoSheet). Mac: right Inspector (⌥⌘I/title click); Persona window sheet.
 - [x] ⋯: Terminal, Files, Git (N), All Agents in Space, Rename…, Mute, Copy Session ID/Resume, Clear Context /clear, Close Agent… — ChatView.swift
   - Mac (2026-11-02 real Mac mini): Terminal, Git(N), Files, working-only Interrupt, Rename, Mute, Copy Resume/Directory, All Agents in Space, Close; Files/Git add Back to Chat. Inventory outdated: Clear Context /clear now under composer + › Shortcuts (when supported), Session ID in info (shared iOS). Same-named row actions share functions, individually checked above.
@@ -1097,7 +1101,7 @@ How the checklist was reviewed, and the roles and rules for real-window checks d
 - [ ] Keychain — Shared/Keychain.swift
   - Check real pairing/quit/relaunch without `-pairURL`, remain paired (allow keychain authorization if prompted). DEBUG screenshots/tests skip keychain (locked cross-build read hangs), untouched offscreen.
 - [ ] Device exchange, Settings › Devices/revoke — App/DeviceCredentials.swift (DevicesView)
-  - Connect New Device (#3077): same iOS card (`Views/Settings/ConnectDeviceView.swift`), Mac QR for phone, copy link for another Mac; `docs/apple/ios.md` ("Connect new device").
+  - Connect New Device (#3077): same iOS card (`Views/Settings/ConnectDeviceView.swift`), Mac QR for phone, copy link for another Mac; `docs/apple/ios.md` ("Connect a new device").
   - Mac (2026-11-01): mock device list/This Device/Answer Only/revoke/revoked group captured. Previously kind phone/iPhone, now desktop (`MacDeviceCredentialTests`), stored other by hub. Real pair must show computer icon and revoke confirm (`-pairURL` skips exchange, capture cannot show).
 - [x] Pair Again, Disconnect and Forget Server — SettingsView.swift
   - Needed buttons/sheet/confirm/welcome; captured Settings › Server.

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Videos picked in Photos go as files (#981, docs/protocol/protocol.md「发送视频」), against scripts/mock/mock_hub.py with
+/// Videos picked in Photos go as files (#981, docs/protocol/protocol.md「Sending videos」), against scripts/mock/mock_hub.py with
 /// `MOCK_SENT_VIDEO=<a video>` (TEST_RUNNER_PERSONA_VIDEO_SEND_HUB=http://127.0.0.1:<port>) and a made-up video in the
 /// simulator's library (`xcrun simctl addmedia`). Each runs in the style the environment picks
 /// (PERSONA_UI_STYLE); PERSONA_SHOTS saves the screenshots there too.
@@ -89,14 +89,17 @@ final class VideoSendTests: XCTestCase {
         try closePlayer(app, "video-\(name)-player", back: card)
     }
 
-    /// + › Photos, the made-up video, Add.
+    /// + › All Photos, the made-up video, Add.
     @MainActor private func pickTheVideo(_ app: XCUIApplication) throws {
         // An enabled one: offline, the box's + is there but greyed out.
         let plus = app.buttons.matching(NSPredicate(format: "(identifier == %@ OR label IN %@) AND enabled == true", "shell-composer-add", ["添加", "Add"])).firstMatch
         XCTAssertTrue(plus.waitForExistence(timeout: 30), "no + button:\n\(app.debugDescription)")
         plus.tap()
-        let photos = app.buttons["照片"].firstMatch
-        XCTAssertTrue(photos.waitForExistence(timeout: 5), "no 照片 item:\n\(app.debugDescription)")
+        // A chat's + on the iPhone is a panel (AttachSheet): its All Photos opens the system's picker, as the menu's
+        // Photos does; a new chat's + (StarterComposer) is still the menu.
+        let all = app.buttons["attach-all-photos"].firstMatch
+        let photos = all.waitForExistence(timeout: 3) ? all : app.buttons["照片"].firstMatch
+        XCTAssertTrue(photos.waitForExistence(timeout: 5), "no All Photos or 照片 after +:\n\(app.debugDescription)")
         photos.tap()
         let video = app.images.matching(NSPredicate(format: "label CONTAINS[c] %@ OR label CONTAINS %@", "video", "视频")).firstMatch
         XCTAssertTrue(video.waitForExistence(timeout: 20), "no video in the picker:\n\(app.debugDescription)")

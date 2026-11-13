@@ -1,6 +1,6 @@
 import XCTest
 
-/// A connector's items in the inbox (GitHub…, docs/plans/plan-connectors.md「六、App 侧」): the generic row with the
+/// A connector's items in the inbox (GitHub…, docs/plans/plan-connectors.md「App side」): the generic row with the
 /// connector's tag, mark and thread, a filter for the source, the detail (a pull request as GitHub's thread) and
 /// Open in GitHub, and AI Draft Reply whose Send comments on the thread through the hub. Against scripts/mock/mock_hub.py with
 /// MOCK_GITHUB_INBOX=1 (PERSONA_MOCK_HUB), which lists them only to apps asking ?sources=all and records replies at
@@ -62,5 +62,45 @@ final class InboxConnectorTests: XCTestCase {
             usleep(250_000)
         }
         XCTAssertTrue(sent.contains("收到，我看一下"), "the reply did not reach the hub: \(sent)")
+    }
+
+    /// A source subscription's item (#5537, MOCK_SUBSCRIPTION_INBOX=1): its source is the subscription, not a connector,
+    /// and it opens to Open in … and its content with no error card or Retry, whether the hub answers its thread request
+    /// with a page that is no conversation or, as older hubs did, with 404 no connector. Light and dark of each are
+    /// attached, and kept in TEST_RUNNER_PERSONA_SHOTS=<dir> when set (TEST_RUNNER_PERSONA_PHASE names them).
+    @MainActor func testASubscriptionItemOpensToItsContent() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let hub = env["PERSONA_MOCK_HUB"] else {
+            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_SUBSCRIPTION_INBOX=1 (PERSONA_MOCK_HUB)")
+        }
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        for (mode, name) in [("1", "hub"), ("old", "older-hub")] {
+            _ = try Data(contentsOf: URL(string: hub + "/mock/subscription_inbox?mode=" + mode)!)
+            for scheme in ["light", "dark"] {
+                let app = XCUIApplication()
+                app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", "", "-inbox.source", "",
+                                       "-openInboxItem", "sub_example01:t1", "-ui.scheme", scheme]
+                app.launchPinned()
+                func text(_ s: String) -> XCUIElement {
+                    app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", s)).firstMatch
+                }
+                XCTAssertTrue(text("停车场 A、B 区当天上午临时关闭").waitForExistence(timeout: 20),
+                              "\(name) \(scheme): the content did not show:\n\(app.debugDescription)")
+                let openIn = NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "示例邮件", "打开")
+                XCTAssertTrue(app.buttons.matching(openIn).firstMatch.exists, "\(name) \(scheme): no Open in")
+                let file = "subscription-item-\(env["PERSONA_PHASE"] ?? "after")-\(name)-\(scheme)"
+                let s = app.screenshot()
+                let a = XCTAttachment(screenshot: s)
+                a.name = file
+                a.lifetime = .keepAlways
+                add(a)
+                if let dir = env["PERSONA_SHOTS"] {
+                    try? s.pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent(file + ".png"))
+                }
+                XCTAssertFalse(text("no connector").exists, "\(name) \(scheme): the hub's error is shown")
+                XCTAssertFalse(app.buttons["重试"].exists, "\(name) \(scheme): a Retry is shown")
+                app.terminate()
+            }
+        }
     }
 }

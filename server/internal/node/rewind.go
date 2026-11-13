@@ -21,7 +21,7 @@ import (
 //
 // Claude Code does not delete the rewound part of the transcript: the file is a tree (parentUuid) and the next prompt
 // is written as a child of the one before the target. The rewound turns stay in the file, and a session read straight
-// through shows them (docs/lessons/agents.md "Rewind").
+// through shows them (docs/lessons/agents.md "Driving Claude Code `/rewind`").
 
 // Restore choices of session.rewind.
 const (
@@ -32,7 +32,7 @@ const (
 // Codes of a rewind that did not happen (a dialog_open / input_draft refusal keeps its own).
 const (
 	rewindBusy        = "rewind_busy"        // the session is working or waiting on a dialog
-	rewindUnsupported = "rewind_unsupported" // not a Claude session of this machine, or nothing to type into
+	rewindUnsupported = "rewind_unsupported" // this session has no supported native rewind
 	rewindNothing     = "rewind_nothing"     // Claude has no prompt to go back to
 	rewindMismatch    = "rewind_mismatch"    // the prompt is not where the app saw it
 	rewindFailed      = "rewind_failed"      // the screen was not what a step needed
@@ -52,7 +52,7 @@ type rewindOpts struct {
 // How long the steps wait for the TUI. Variables so the tests need not wait.
 var (
 	rewindTick       = 40 * time.Millisecond
-	rewindStepWait   = 900 * time.Millisecond // a key's effect on screen
+	rewindStepWait   = 900 * time.Millisecond // a key's effect on screen, and an empty box with nothing restored
 	rewindOpenWait   = 5 * time.Second        // /rewind opening, its confirmation screen
 	rewindDoneWait   = 10 * time.Second       // the panel closing after the final enter
 	rewindDraftWait  = 3 * time.Second        // the prompt back in the box, and out of it again
@@ -156,10 +156,39 @@ func (n *Node) rewind(ctx context.Context, id string, o rewindOpts) (map[string]
 	if o.Restore != RestoreConversation && o.Restore != RestoreCodeAndConv {
 		return nil, fmt.Errorf("bad params: restore is %q or %q", RestoreConversation, RestoreCodeAndConv)
 	}
+	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
+		return nil, err
+	}
 	// Typing into the pane: one thing at a time (a message sent meanwhile would land in the panel).
 	defer n.typing.lock(id)()
 	if n.isAssistantSession(id) {
 		return nil, rewindError(rewindUnsupported, "助手的对话不能回退。")
+	}
+	if s, h, ok := n.runtimes.rowOf(id); ok {
+		h.mu.Lock()
+		supported := h.hello.Caps.Rewind
+		h.mu.Unlock()
+		// Files only where the row offers them (capabilities.rewind_code, from what the runtime's agent can do).
+		code := s.Capabilities != nil && s.Capabilities.RewindCode != nil && *s.Capabilities.RewindCode
+		if !supported || s.IsSubagent || strings.Contains(id, subagentSep) || o.Restore != RestoreConversation && !code ||
+			s.Capabilities != nil && s.Capabilities.Rewind != nil && !*s.Capabilities.Rewind {
+			return nil, rewindError(rewindUnsupported, "This session does not support the requested rewind.")
+		}
+		if s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked || s.Status == proto.StatusOffline {
+			return nil, rewindError(rewindBusy, "Wait for the session to become idle before rewinding.")
+		}
+		cctx, cancel := context.WithTimeout(ctx, rewindTotalLimit)
+		defer cancel()
+		var res map[string]any
+		params := map[string]any{"session_id": id, "prompt": o.Prompt, "occurrence": o.Occurrence, "restore": o.Restore}
+		if o.PromptsAfter != nil {
+			params["prompts_after"] = *o.PromptsAfter
+		}
+		err := h.peer.Call(cctx, "session.rewind", params, &res)
+		return res, err
+	}
+	if _, known := n.codexSource(id); known {
+		return n.rewindCodex(ctx, id, o)
 	}
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
@@ -413,22 +442,35 @@ func (r *rewindRun) clearBox(ctx context.Context) {
 
 // takePromptOutOfBox: Claude puts the rewound prompt back into its input box; the app puts it into its own, so the
 // box is emptied (the keys are pressed once and only on a box that holds the prompt, as the box was empty when the rewind
-// began). It reports whether the box is empty in the end.
+// began). The panel can close before that restore arrives, so an empty box is final only after the clear was pressed,
+// or after staying empty for one key-effect grace. It reports whether the box is empty in the end.
 func (r *rewindRun) takePromptOutOfBox(ctx context.Context, prompt string) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rewindDraftWait+rewindCleanWait)
 	defer cancel()
 	end := time.Now().Add(rewindDraftWait)
 	pressed := false
+	var emptySince time.Time
 	for {
 		s, err := r.readInput(ctx)
 		if err != nil {
 			return false
 		}
+		now := time.Now()
 		switch in := screen.ClaudeInput(s); {
 		case !in.Box:
+			emptySince = time.Time{}
 		case !in.Draft:
-			return true
+			if pressed {
+				return true
+			}
+			if emptySince.IsZero() {
+				emptySince = now
+			}
+			if now.Sub(emptySince) >= rewindStepWait {
+				return true // Claude restored nothing during the grace
+			}
 		case !pressed && screen.RewindDraftIs(in.Text, prompt):
+			emptySince = time.Time{}
 			// A one-row box is emptied the way a send clears a draft (no hint on screen); a taller one only by Ctrl+C.
 			keys := []string{"ctrl+c"}
 			if in.Clearable != "" {
@@ -441,9 +483,13 @@ func (r *rewindRun) takePromptOutOfBox(ctx context.Context, prompt string) bool 
 		case !pressed:
 			return false // something else is in the box: not ours to clear
 		}
-		if time.Now().After(end) {
+		if now.After(end) {
 			return false
 		}
-		time.Sleep(rewindTick)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(rewindTick):
+		}
 	}
 }

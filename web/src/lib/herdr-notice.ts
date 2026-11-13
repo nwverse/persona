@@ -1,4 +1,4 @@
-// The Agents list's "herdr isn't running on <computer>" rows with "Start" (#1916, docs/integrations/engines.md "When herdr isn't running"), as on iOS
+// The Agents list's "herdr isn't running on <computer>" rows with "Start" (#1916, docs/integrations/engines.md "When herdr is not running"), as on iOS
 // (HerdrNotice.swift) and Android (#2066): told before a message to an agent there fails, not after. Only classic herdr
 // (engines herdr and herdr-both): Herdr App's herdr-core has no server for the node to start.
 
@@ -22,8 +22,9 @@ export interface HerdrFailure {
   detail: string;
 }
 
-/** How often the list asks while it is shown. */
-export const HERDR_POLL_MS = 10_000;
+/** How often the list asks while it is shown: once a minute, as on Apple (#4685). Each read is a node round trip on the hub,
+ *  and the list asks again at once when a watched machine comes online or changes engine, or the tab is shown (#5060). */
+export const HERDR_POLL_MS = 60_000;
 
 /** A machine the row can be about: online, on classic herdr. */
 export function herdrWatched(m: Pick<Machine, "online" | "engine">): boolean {

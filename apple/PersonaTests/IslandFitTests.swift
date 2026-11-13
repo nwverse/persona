@@ -3,7 +3,7 @@ import Testing
 @testable import Persona
 
 /// The Dynamic Island's pieces fit the room the system gives them, with one, two, three and four digits
-/// (docs/apple/live-activity.md「和其他 App 共用灵动岛」). Each view is drawn at its own size (outside limited mode the island
+/// (docs/apple/live-activity.md「Sharing the Dynamic Island with other apps」). Each view is drawn at its own size (outside limited mode the island
 /// offers no width: it grows with what it shows, up to the region) in the middle of a larger canvas: whatever it draws
 /// must stay inside the region. The text never shortens or shrinks, so a number that would be cut spills out instead.
 @MainActor

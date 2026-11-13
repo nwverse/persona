@@ -1,4 +1,4 @@
-// Read-only access to opencode's own database (docs/integrations/opencode.md "Where the conversation comes from"): the plugin API gives a session's
+// Read-only access to opencode's own database (docs/integrations/opencode.md "Where the chat comes from"): the plugin API gives a session's
 // context (what is left after a compaction) and no list of sessions, while opencode.db holds every session and every
 // message with a stable seq. The plugin runs in opencode's own process (bun: `bun:sqlite`); the tests run in node
 // (`node:sqlite`). It is opened read-only with query_only and a short busy timeout and never written to: opencode

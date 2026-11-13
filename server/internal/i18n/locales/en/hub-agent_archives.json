@@ -3,7 +3,7 @@
   "unsupported": "Persona's own conversations are archived from All chats, not from Agents",
   "running": "This agent is running or waiting for an answer. Finish or stop it before archiving",
   "storage": "Could not save or load agent archives. Please try again",
-  "upgrade": "Update the manager to use agent archives",
+  "upgrade": "Update the assistant to use agent archives",
   "close_busy": "This agent is busy (working, waiting for an answer, running a loop, queued messages or a server). Archive it without closing, or wait until it is done",
   "close_offline": "Its computer is offline, so the agent is still open there",
   "close_engine": "Its engine or another tool keeps this session, so it was left open on the computer",
@@ -11,5 +11,5 @@
   "close_node_old": "Update Persona on that computer to close agents from here",
   "close_refused": "The computer would not close this agent, so it is still open",
   "close_failed": "Closing the agent on its computer failed, so it may still be open",
-  "close_upgrade": "Update the manager to archive and close agents"
+  "close_upgrade": "Update the assistant to archive and close agents"
 }

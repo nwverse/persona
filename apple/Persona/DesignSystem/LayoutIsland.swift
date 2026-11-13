@@ -7,7 +7,7 @@ import UIKit
 /// A piece of a page laid out on its own: in a hosting controller of its own, so what changes inside it (a text field
 /// gaining a character) does not lay out the page around it. In the page's own view graph every keystroke in the chat's
 /// composer laid the whole window out again from the root, the chat list re-measuring its visible rows on the way
-/// (about 10 ms a character on the simulator, docs/operations/testing.md「Persona 页（长主对话）」). The page only hears from it
+/// (about 10 ms a character on the simulator, docs/operations/testing.md「Persona page」). The page only hears from it
 /// when its height changes (a new line, a chip above the field): the content measures itself and reports the height,
 /// which the page keeps as the island's fixed height.
 ///
@@ -85,6 +85,7 @@ private struct IslandEnvironment: ViewModifier {
             .environment(\.buiTheme, env.buiTheme)
             .environment(\.shellBaseTypeSize, env.shellBaseTypeSize)
             .environment(\.dynamicTypeSize, env.dynamicTypeSize)
+            .environment(\.readingTypeSize, env.readingTypeSize)
             .environment(\.colorScheme, env.colorScheme)
             .environment(\.locale, env.locale)
             .environment(\.layoutDirection, env.layoutDirection)

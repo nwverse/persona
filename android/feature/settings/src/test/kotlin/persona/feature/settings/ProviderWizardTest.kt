@@ -5,6 +5,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.Assert.*
 import org.junit.Test
@@ -157,15 +158,40 @@ class ProviderWizardTest {
         assertNull(model.state.value.keyTest)
     }
 
-    @Test fun aResponsesPresetIsNotTestedAndTheGatewayGoesToTheForm() = runBlocking {
+    @Test fun directApiProtocolsMatchTheHubKeyTestAndClaudeCompatibility() {
+        val presets = listOf(null, "", "messages", "responses", "chat", "future").map {
+            ProviderPreset("example/$it", "example", kind = "api", api = it)
+        }
+        assertEquals(listOf(true, true, true, true, true, false), presets.map { it.testable })
+        assertEquals(listOf(true, true, true, false, false, false), presets.map { it.runsClaude })
+    }
+
+    @Test fun aDirectApiDoesNotWaitForReadinessOrAssign() = runBlocking {
+        val hub = Hub(listOf(responses))
+        val readinessAnswer = CompletableDeferred<AssistantReadiness>()
+        val model = NewProviderModel(hub) { readinessAnswer.await() }
+        val asking = async { model.loadReadiness() }
+        yield()
+        model.load(hubNames = true)
+        model.choose("example/api")
+        model.setAssign(true) // Even an explicit choice is meaningless for a direct API.
+        model.editKey(model.state.value.draft.copy(apiKey = "sk-example-key"))
+        withTimeout(1_000) { assertTrue("a direct API must not wait for readiness", model.saveKey()) }
+        assertNull(hub.created.single().assign)
+        assertFalse(model.state.value.added!!.asked)
+        assertFalse(model.state.value.added!!.noClaudeBefore)
+        asking.cancel()
+    }
+
+    @Test fun aResponsesPresetIsTestedAndTheGatewayGoesToTheForm() = runBlocking {
         val hub = Hub(listOf(responses))
         val model = NewProviderModel(hub)
         model.load(hubNames = true)
         model.choose("example/api")
-        assertFalse(responses.testable)
+        assertTrue(responses.testable)
         model.editKey(model.state.value.draft.copy(apiKey = "sk-example-key"))
         model.testKey()
-        assertTrue(hub.tests.isEmpty())
+        assertEquals(ProviderProbe(preset = "example/api", apiKey = "sk-example-key", auth = "api_key"), hub.tests.single())
         model.backToPick()
         assertEquals(WizardStep.Pick, model.state.value.step)
         model.choose(null)

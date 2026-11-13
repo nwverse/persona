@@ -1,6 +1,6 @@
 import XCTest
 
-/// The file viewer (docs/apple/ios.md「文件查看器」) against scripts/mock/mock_hub.py started with MOCK_FILES=1 (PERSONA_MOCK_HUB):
+/// The file viewer (docs/apple/ios.md「File viewer」) against scripts/mock/mock_hub.py started with MOCK_FILES=1 (PERSONA_MOCK_HUB):
 /// only paths that are there on the conversation's machine become chips; code opens with line numbers, JSON as an
 /// outline, Markdown rendered.
 final class FileViewerUITests: XCTestCase {
@@ -78,6 +78,20 @@ final class FileViewerUITests: XCTestCase {
         let open = app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", #""forecasts": ["#)).firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 5), "tapping did not open the array")
         shot(app, "json-open")
+    }
+
+    /// A picture opened as a file shows its own full-screen viewer on top of the sheet at a tap (#1331): the chat page's
+    /// viewer cannot present while the sheet is up.
+    @MainActor func testPictureOpensItsViewerOverTheSheet() throws {
+        let app = launch(["-openFilePath", "data/chart.png"])
+        let tappable = app.descendants(matching: .any)["file-image"].firstMatch
+        let found = tappable.waitForExistence(timeout: 30)
+        shot(app, "picture")
+        XCTAssertTrue(found, "no picture:\n\(app.debugDescription)")
+        XCTAssertGreaterThan(tappable.frame.width, 300, "the picture is a thumbnail, not the sheet's width")
+        tappable.tap()
+        XCTAssertTrue(app.buttons["viewer-close"].waitForExistence(timeout: 5), "the tap opened no viewer while the sheet is up")
+        shot(app, "picture-viewer")
     }
 
     @MainActor func testMarkdownIsRendered() throws {

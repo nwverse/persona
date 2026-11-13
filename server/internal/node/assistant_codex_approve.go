@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 // serve answers a request from the app-server. Approvals may wait for the phone, so each runs on its own.
@@ -75,15 +77,17 @@ func (c *codexConn) decide(ctx context.Context, method string, raw json.RawMessa
 	var r codexRequest
 	_ = json.Unmarshal(raw, &r)
 	mode, _ := n.modesOf(p.id)
-	cwd := firstNonEmpty(r.Cwd, p.cwd)
+	cwd := firstNonEmpty(r.Cwd, p.cwd) // where the request runs: what the gate and the memory checks go by
+	// The card is the conversation's: placed in its directory, where it started, not a subfolder the request runs in
+	// (identity.CardCwd, #2368).
 	ix := proto.Interaction{
-		ID: codexInteractionID(p.id, method, r.ItemID, r.ApprovalID, r.ServerName), SessionID: p.id, Cwd: cwd,
+		ID: codexInteractionID(p.id, method, r.ItemID, r.ApprovalID, r.ServerName), SessionID: p.id, Cwd: identity.CardCwd(p.cwd, cwd),
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(nodeclient.HookTimeout).UTC(), ToolUseID: r.ItemID,
-		SessionTitle: n.assistantTitle(p.id, cwd),
+		SessionTitle: n.assistantTitle(p.id, firstNonEmpty(p.cwd, r.Cwd)),
 	}
 	switch method {
 	case "item/commandExecution/requestApproval":
-		command := unwrapShell(r.Command)
+		command := r.Command
 		ix.ToolName = "Bash"
 		ix.ToolInput, _ = json.Marshal(map[string]any{"command": command})
 		decision, reason, err := n.larkCheck(ctx, p.id, cwd, command, ix)
@@ -97,6 +101,7 @@ func (c *codexConn) decide(ctx context.Context, method string, raw json.RawMessa
 			c.tellModel(reason)
 			return map[string]any{"decision": "decline"}, nil
 		}
+		command = unwrapShell(command) // display and ordinary permission keys only, after the shared gate
 		if mode == proto.ModeBypass || readsOnlyMemory(command, cwd, c.memDir) {
 			return map[string]any{"decision": "accept"}, nil // Claude reads its auto-memory unasked too
 		}
@@ -245,13 +250,13 @@ func withReason(s, reason string) string {
 	return firstNonEmpty(s, reason)
 }
 
-// unwrapShell takes the script out of Codex's `/bin/zsh -lc '…'` so the gate reads the command the model wrote.
+// unwrapShell shortens command text for display. Approval classification uses the original command.
 func unwrapShell(cmd string) string {
-	segs, ok := shellSegments(cmd)
+	segs, ok := shellcmd.Split(cmd)
 	if !ok || len(segs) != 1 {
 		return cmd
 	}
-	w := segs[0].words
+	w := segs[0].Words
 	if len(w) == 3 && (w[1] == "-c" || w[1] == "-lc") {
 		switch filepath.Base(w[0]) {
 		case "sh", "bash", "zsh":

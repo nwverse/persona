@@ -331,12 +331,17 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
 }
 
+// sweepAbove: past this many keys, a new key first forgets the buckets that have refilled.
+const sweepAbove = 50000
+
 // limiter is a token bucket per key.
 type limiter struct {
 	mu      sync.Mutex
 	perMin  float64
 	burst   float64
+	refill  time.Duration // an empty bucket is full again after this
 	buckets map[string]*bucket
+	swept   time.Time // last time allow forgot the refilled buckets
 }
 
 type bucket struct {
@@ -345,7 +350,8 @@ type bucket struct {
 }
 
 func newLimiter(perMin, burst int) *limiter {
-	return &limiter{perMin: float64(perMin), burst: float64(burst), buckets: map[string]*bucket{}}
+	return &limiter{perMin: float64(perMin), burst: float64(burst),
+		refill: time.Duration(float64(burst) / float64(perMin) * float64(time.Minute)), buckets: map[string]*bucket{}}
 }
 
 func (l *limiter) allow(key string, now time.Time) bool {
@@ -353,9 +359,12 @@ func (l *limiter) allow(key string, now time.Time) bool {
 	defer l.mu.Unlock()
 	b := l.buckets[key]
 	if b == nil {
-		if len(l.buckets) > 50000 { // forget the full ones
+		// Forget the buckets that have refilled: a new one starts full, so no answer changes. At most once per refill
+		// time: otherwise every new key of a flood scans the whole table under the lock, usually forgetting nothing.
+		if len(l.buckets) > sweepAbove && now.Sub(l.swept) >= l.refill {
+			l.swept = now
 			for k, v := range l.buckets {
-				if now.Sub(v.at) > time.Duration(l.burst/l.perMin*float64(time.Minute)) {
+				if now.Sub(v.at) > l.refill {
 					delete(l.buckets, k)
 				}
 			}

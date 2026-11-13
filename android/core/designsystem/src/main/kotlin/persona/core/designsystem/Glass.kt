@@ -73,7 +73,10 @@ fun Modifier.floatingSurface(shape: RoundedCornerShape, accentEdge: Color? = nul
     if (PersonaTheme.style != AppStyle.Glass) {
         return this.clip(shape).background(palette.surfaceOpaque).border(1.dp, accentEdge ?: palette.line, shape)
     }
-    val tint = if (palette.dark) Color(0xB80A1020) else Color(0xCCFFFFFF)
+    val homeChrome = LocalHomeChrome.current != null || LocalHomeDrawer.current || LocalFlatPageSurface.current
+    val tint = if (homeChrome) {
+        if (palette.dark) HomeTokens.chromeDark else HomeTokens.chromeLight
+    } else if (palette.dark) Color(0xB80A1020) else Color(0xCCFFFFFF)
     return when {
         state == null || PersonaTheme.glass == GlassLevel.Solid ->
             this.clip(shape).background(palette.surfaceOpaque.copy(alpha = 0.97f)).border(1.dp, edge, shape)
@@ -153,19 +156,37 @@ private fun smooth(x: Double) = x * x * (3 - 2 * x)
 /** How often the moving light is redrawn. It moves too slowly to show steps, and every change makes the glass above blur again. */
 private const val LightStepNanos = 1_000_000_000L / 12
 
+/** Light time in seconds, in [LightStepNanos] steps. */
+internal fun lightSeconds(nanos: Long) = nanos / LightStepNanos * LightStepNanos / 1e9
+
 /**
- * Seconds on the frame clock in [LightStepNanos] steps, starting from now (not zero, so a page that appears mid-way
- * draws the same light as the ones already on screen). The frame clock pauses while the app is not visible.
+ * The light's redraw loop: every [LightStepNanos] it waits for a frame ([frame]; `withFrameNanos` in the app) and
+ * [publish]es the [clock]'s time at that frame. Once the clock is idle it stops asking for frames and parks until the
+ * next input, so a page nobody touches draws nothing for the light.
+ */
+internal suspend fun driveLight(clock: AmbientClock, frame: suspend ((Long) -> Unit) -> Unit, publish: (Double) -> Unit) {
+    while (true) {
+        var idle = false
+        frame { at ->
+            publish(lightSeconds(clock.activeNanos(at)))
+            idle = clock.isIdle(at)
+        }
+        if (idle) clock.awaitActivity() else delay(LightStepNanos / 1_000_000)
+    }
+}
+
+/**
+ * Seconds of light time ([AmbientClock.Shared]) in [LightStepNanos] steps, starting from the clock's current value (not
+ * zero, so a page that appears mid-way draws the same light as the ones already on screen). While the app is in use
+ * that is the frame clock's time, as before; [AmbientIdleAfterNanos] after the last input it holds still, and it
+ * carries on from there at the next one. The frame clock pauses while the app is not visible.
  */
 @Composable
 private fun lightTime(running: Boolean): State<Double> {
-    fun seconds(nanos: Long) = nanos / LightStepNanos * LightStepNanos / 1e9
-    val time = remember { mutableDoubleStateOf(seconds(System.nanoTime())) }
+    val clock = AmbientClock.Shared
+    val time = remember { mutableDoubleStateOf(lightSeconds(clock.activeNanos(System.nanoTime()))) }
     if (running) LaunchedEffect(Unit) {
-        while (true) {
-            withFrameNanos { time.doubleValue = seconds(it) }
-            delay(LightStepNanos / 1_000_000)
-        }
+        driveLight(clock, frame = { onFrame -> withFrameNanos(onFrame) }) { time.doubleValue = it }
     }
     return time
 }
@@ -190,7 +211,8 @@ private fun powerSaving(): Boolean {
 /**
  * Soft pools of light behind the glass. Each pool belongs to one status colour; the page's [Ambience] decides
  * how strong each one is, and changes fade over about a second. The pools drift, breathe and split and merge
- * slowly ([blobs]); with reduce motion or battery saver they stay where they rest.
+ * slowly ([blobs]); with reduce motion or battery saver they stay where they rest. Five seconds after the last input
+ * they hold still where they are ([AmbientClock]) and carry on from there at the next one.
  *
  * [inWindow] lays the pools out against the whole window instead of this box: every page, pane and nested page that
  * paints it then paints the same light at the same place, so whatever sits side by side or inside another reads as
@@ -254,6 +276,6 @@ fun AmbientLight(ambience: Ambience, modifier: Modifier = Modifier, inWindow: Bo
  */
 @Composable
 fun PageBackdrop(modifier: Modifier = Modifier, ambience: Ambience = LocalAmbience.current) {
-    if (PersonaTheme.style == AppStyle.Glass) AmbientLight(ambience, modifier, inWindow = true)
+    if (PersonaTheme.style == AppStyle.Glass && LocalHomeChrome.current == null && !LocalFlatPageSurface.current) AmbientLight(ambience, modifier, inWindow = true)
     else Box(modifier.fillMaxSize().background(PersonaTheme.palette.background))
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The turns channels wait on (docs/extensions/channels.md "Following the turn"): one copy for every channel. A message from a channel
+// The turns channels wait on (docs/extensions/channels.md "Message flow"): one copy for every channel. A message from a channel
 // starts a run; the assistant follows the conversation (the hub sends on its items and the text it writes, like an
 // open chat in the app), shows progress where the channel can (a card it changes, "typing"), and when the turn
 // ends sends its answer back through the channel's sink. The rules are channel.Run's; what reaches the chat app is

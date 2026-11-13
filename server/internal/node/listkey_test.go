@@ -9,15 +9,20 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// listKeyFmt is listKey as it was written with fmt.Fprintf (before #3207), kept to check that the faster one
-// changes exactly when it did.
+// listKeyFmt is the formatting reference for the fields tracked by listKey.
 func listKeyFmt(list []proto.Session) string {
 	var b strings.Builder
 	for _, s := range list {
 		fmt.Fprintf(&b, "%s|%s|%s|%s|%s|%s|%s|%s|%d|%q|%s|%s\n", s.SessionID, s.Status, s.Title, s.PaneID, s.SpaceName, s.ParentSpaceID, s.SlotName, s.LastText, s.UpdatedAt.Unix()/10, s.Queued, s.Suggestion, s.SpawnFrom)
-		fmt.Fprintf(&b, "hierarchy:%q/%q/%q/%v/%q/%q/%q/%q/%q\n", s.ParentThreadID, s.ParentSessionID, s.RootSessionID, s.IsSubagent, s.RepoRoot, s.Worktree, s.Branch, s.SpaceID, s.SpaceKind)
+		fmt.Fprintf(&b, "hierarchy:%q/%q/%q/%q/%v/%q/%q/%q/%q/%q\n", s.ParentThreadID, s.ParentSessionID, s.ParentAgentID(), s.RootSessionID, s.IsSubagent, s.RepoRoot, s.Worktree, s.Branch, s.SpaceID, s.SpaceKind)
+		if h := s.Hierarchy; h != nil {
+			fmt.Fprintf(&b, "lineage:%q/%d\n", h.AskingParentSessionID, unixOf(&h.StartedAt))
+		}
 		if s.Activity != "" {
 			fmt.Fprintf(&b, "activity:%s/%d\n", s.Activity, unixOf(s.ActivityAt))
+		}
+		if s.SourceKind == "runtime" {
+			fmt.Fprintf(&b, "runtime-state:%q/%q/%v/%q\n", s.Cwd, s.Launcher, s.StartedByPersona, s.WorkspaceID)
 		}
 		fmt.Fprintf(&b, "attention:%q/%q/%s\n", s.AttentionReason, s.FailureReason, s.ExternalURL)
 		if s.Chat != "" || len(s.Dispatched) > 0 {
@@ -34,7 +39,10 @@ func listKeyFmt(list []proto.Session) string {
 		if len(s.Efforts) > 0 {
 			fmt.Fprintf(&b, "effort:%s/%v\n", s.Effort, s.Efforts)
 		}
-		fmt.Fprintf(&b, "source:%s/%s/%s/%s/%v/%v/%s/%s\n", s.SourceKind, s.SourceThreadID, s.SourceInstanceID, s.ReadOnlyReason, s.Capabilities, s.Attached, s.CodexRoute, s.CodexRouteNote)
+		if s.Model != "" || s.PermissionMode != "" || s.Effort != "" {
+			fmt.Fprintf(&b, "modes:%q/%q/%q\n", s.Model, s.PermissionMode, s.Effort)
+		}
+		fmt.Fprintf(&b, "source:%s/%s/%s/%s/%v/%v/%s/%s\n", s.SourceKind, s.SourceThreadID, s.SourceInstanceID, s.ReadOnlyReason, capsFmt(s.Capabilities), s.Attached, s.CodexRoute, s.CodexRouteNote)
 		for _, t := range s.Background {
 			b.WriteString(t.ID + ",")
 		}
@@ -70,6 +78,54 @@ func listKeyFmt(list []proto.Session) string {
 		}
 	}
 	return b.String()
+}
+
+// capsFmt is the capabilities as %v printed them before Modes, with Modes by value (%v of the pointer is its address).
+func capsFmt(c *proto.SessionCapabilities) string {
+	if c == nil {
+		return "<nil>"
+	}
+	modes := "<nil>"
+	if c.Modes != nil {
+		modes = fmt.Sprint(*c.Modes)
+	}
+	key := fmt.Sprintf("&{%v %v %v %v %v %v %s", c.Read, c.Send, c.Interrupt, c.Approve, c.Terminal, c.Attach, modes)
+	if c.Model != nil {
+		key += fmt.Sprintf(" model=%v", *c.Model)
+	}
+	if c.Close != nil {
+		key += fmt.Sprintf(" close=%v", *c.Close)
+	}
+	if c.Rename != nil {
+		key += fmt.Sprintf(" rename=%v", *c.Rename)
+	}
+	if c.Rewind != nil {
+		key += fmt.Sprintf(" rewind=%v", *c.Rewind)
+	}
+	if c.RewindCode != nil {
+		key += fmt.Sprintf(" rewind_code=%v", *c.RewindCode)
+	}
+	return key + "}"
+}
+
+// Capabilities are keyed by value: two rows built apart with equal modes give one key (outsideCapabilities makes a new
+// Modes pointer every poll), and a change of modes, absent included, is a change.
+func TestListKeyCapabilitiesModes(t *testing.T) {
+	key := func(modes *bool) string {
+		return listKey([]proto.Session{{SessionID: "s1", Capabilities: &proto.SessionCapabilities{Read: true, Modes: modes}}})
+	}
+	if key(proto.CanModes(false)) != key(proto.CanModes(false)) {
+		t.Fatal("two rows with modes false give different keys")
+	}
+	if key(proto.CanModes(true)) != key(proto.CanModes(true)) {
+		t.Fatal("two rows with modes true give different keys")
+	}
+	if key(proto.CanModes(false)) == key(proto.CanModes(true)) {
+		t.Fatal("modes false -> true does not change the key")
+	}
+	if key(nil) == key(proto.CanModes(false)) || key(nil) == key(proto.CanModes(true)) {
+		t.Fatal("absent modes keys the same as a set one")
+	}
 }
 
 // listKeyFixture is n sessions; every other one is busy (background tasks, subagents, ports, an activity, a pane).
@@ -130,60 +186,71 @@ func listKeyVariants() (proto.Session, map[string]proto.Session) {
 		"branch":            func(s *proto.Session) { s.Branch = "fix/x" },
 		"space_id":          func(s *proto.Session) { s.SpaceID = "project-id" },
 		"space_kind":        func(s *proto.Session) { s.SpaceKind = "codex_app" },
+		"asking_parent":     func(s *proto.Session) { s.SetAskingParentSessionID("parent-public") },
+		"started_at":        func(s *proto.Session) { s.SetStartedAt(at.Add(-time.Hour)) },
 
-		"session_id":    func(s *proto.Session) { s.SessionID = "s2" },
-		"status":        func(s *proto.Session) { s.Status = proto.StatusDone },
-		"title":         func(s *proto.Session) { s.Title = "t2" },
-		"pane_id":       func(s *proto.Session) { s.PaneID = "%2" },
-		"space":         func(s *proto.Session) { s.SpaceName = "sp2" },
-		"parent_space":  func(s *proto.Session) { s.ParentSpaceID = "" },
-		"slot_name":     func(s *proto.Session) { s.SlotName = "web" },
-		"last_text":     func(s *proto.Session) { s.LastText = "跑测试" },
-		"updated_10s":   func(s *proto.Session) { s.UpdatedAt = at.Add(11 * time.Second) },
-		"updated_churn": func(s *proto.Session) { s.UpdatedAt = at.Add(4 * time.Second) },
-		"queued":        func(s *proto.Session) { s.Queued = append(s.Queued, "x") },
-		"queued_none":   func(s *proto.Session) { s.Queued = nil },
-		"queued_empty":  func(s *proto.Session) { s.Queued = []string{""} },
-		"suggestion":    func(s *proto.Session) { s.Suggestion = "" },
-		"spawn_from":    func(s *proto.Session) { s.SpawnFrom = "todo_2@mac/parent" },
-		"activity":      func(s *proto.Session) { s.Activity = "在跑测试" },
-		"activity_none": func(s *proto.Session) { s.Activity = "" },
-		"activity_at":   func(s *proto.Session) { later := act.Add(3 * time.Second); s.ActivityAt = &later },
-		"activity_nil":  func(s *proto.Session) { s.ActivityAt = nil },
-		"attention":     func(s *proto.Session) { s.AttentionReason = "等你\"确认\"" },
-		"failure":       func(s *proto.Session) { s.FailureReason = "" },
-		"external_url":  func(s *proto.Session) { s.ExternalURL = "https://example.com/u" },
-		"chat":          func(s *proto.Session) { s.Chat = "oc_2" },
-		"topic":         func(s *proto.Session) { s.Topic = "om_9" },
-		"dispatched":    func(s *proto.Session) { s.Dispatched = []string{"om_2", "om_3"} },
-		"botmux_none":   func(s *proto.Session) { s.Chat, s.Dispatched = "", nil },
-		"slot_id":       func(s *proto.Session) { s.SlotID = "w1:t2" },
-		"slot_index":    func(s *proto.Session) { s.SlotIndex = 0 },
-		"pane_index":    func(s *proto.Session) { zero := 0; s.PaneIndex = &zero },
-		"pane_none":     func(s *proto.Session) { s.PaneIndex = nil },
-		"pane_same":     func(s *proto.Session) { one := 1; s.PaneIndex = &one },
-		"compaction":    func(s *proto.Session) { s.Compaction = &proto.Compaction{State: "done", StartedAt: at} },
-		"compact_at":    func(s *proto.Session) { s.Compaction = &proto.Compaction{State: "running", StartedAt: act} },
-		"compact_none":  func(s *proto.Session) { s.Compaction = nil },
-		"effort":        func(s *proto.Session) { s.Effort = "low" },
-		"efforts":       func(s *proto.Session) { s.Efforts = []string{"low", "medium", "high"} },
-		"efforts_none":  func(s *proto.Session) { s.Efforts = nil },
-		"source_kind":   func(s *proto.Session) { s.SourceKind = "claude" },
-		"source_thread": func(s *proto.Session) { s.SourceThreadID = "th2" },
-		"source_inst":   func(s *proto.Session) { s.SourceInstanceID = "in2" },
-		"read_only":     func(s *proto.Session) { s.ReadOnlyReason = "" },
-		"caps":          func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Send: true} },
-		"caps_nil":      func(s *proto.Session) { s.Capabilities = nil },
-		"attached":      func(s *proto.Session) { s.Attached = false },
-		"codex_route":   func(s *proto.Session) { s.CodexRoute = "terminal" },
-		"route_note":    func(s *proto.Session) { s.CodexRouteNote = "" },
-		"background":    func(s *proto.Session) { s.Background = append(s.Background, proto.BackgroundTask{ID: "b2"}) },
-		"bg_none":       func(s *proto.Session) { s.Background = nil },
-		"loop":          func(s *proto.Session) { s.Loop = &proto.LoopInfo{NextAt: act} },
-		"loop_none":     func(s *proto.Session) { s.Loop = nil },
-		"goal_status":   func(s *proto.Session) { s.Goal = &proto.GoalInfo{Status: "complete", Objective: "o", Reason: "r"} },
-		"goal_reason":   func(s *proto.Session) { s.Goal = &proto.GoalInfo{Status: "active", Objective: "o", Reason: "r\n2"} },
-		"goal_none":     func(s *proto.Session) { s.Goal = nil },
+		"session_id":       func(s *proto.Session) { s.SessionID = "s2" },
+		"status":           func(s *proto.Session) { s.Status = proto.StatusDone },
+		"title":            func(s *proto.Session) { s.Title = "t2" },
+		"pane_id":          func(s *proto.Session) { s.PaneID = "%2" },
+		"space":            func(s *proto.Session) { s.SpaceName = "sp2" },
+		"parent_space":     func(s *proto.Session) { s.ParentSpaceID = "" },
+		"slot_name":        func(s *proto.Session) { s.SlotName = "web" },
+		"last_text":        func(s *proto.Session) { s.LastText = "跑测试" },
+		"updated_10s":      func(s *proto.Session) { s.UpdatedAt = at.Add(11 * time.Second) },
+		"updated_churn":    func(s *proto.Session) { s.UpdatedAt = at.Add(4 * time.Second) },
+		"queued":           func(s *proto.Session) { s.Queued = append(s.Queued, "x") },
+		"queued_none":      func(s *proto.Session) { s.Queued = nil },
+		"queued_empty":     func(s *proto.Session) { s.Queued = []string{""} },
+		"suggestion":       func(s *proto.Session) { s.Suggestion = "" },
+		"spawn_from":       func(s *proto.Session) { s.SpawnFrom = "todo_2@mac/parent" },
+		"activity":         func(s *proto.Session) { s.Activity = "在跑测试" },
+		"activity_none":    func(s *proto.Session) { s.Activity = "" },
+		"activity_at":      func(s *proto.Session) { later := act.Add(3 * time.Second); s.ActivityAt = &later },
+		"activity_nil":     func(s *proto.Session) { s.ActivityAt = nil },
+		"attention":        func(s *proto.Session) { s.AttentionReason = "等你\"确认\"" },
+		"failure":          func(s *proto.Session) { s.FailureReason = "" },
+		"external_url":     func(s *proto.Session) { s.ExternalURL = "https://example.com/u" },
+		"chat":             func(s *proto.Session) { s.Chat = "oc_2" },
+		"topic":            func(s *proto.Session) { s.Topic = "om_9" },
+		"dispatched":       func(s *proto.Session) { s.Dispatched = []string{"om_2", "om_3"} },
+		"botmux_none":      func(s *proto.Session) { s.Chat, s.Dispatched = "", nil },
+		"slot_id":          func(s *proto.Session) { s.SlotID = "w1:t2" },
+		"slot_index":       func(s *proto.Session) { s.SlotIndex = 0 },
+		"pane_index":       func(s *proto.Session) { zero := 0; s.PaneIndex = &zero },
+		"pane_none":        func(s *proto.Session) { s.PaneIndex = nil },
+		"pane_same":        func(s *proto.Session) { one := 1; s.PaneIndex = &one },
+		"compaction":       func(s *proto.Session) { s.Compaction = &proto.Compaction{State: "done", StartedAt: at} },
+		"compact_at":       func(s *proto.Session) { s.Compaction = &proto.Compaction{State: "running", StartedAt: act} },
+		"compact_none":     func(s *proto.Session) { s.Compaction = nil },
+		"effort":           func(s *proto.Session) { s.Effort = "low" },
+		"model":            func(s *proto.Session) { s.Model = "claude-opus-5" },        // #6334
+		"permission_mode":  func(s *proto.Session) { s.PermissionMode = "plan" },        // #6334
+		"effort_alone":     func(s *proto.Session) { s.Efforts, s.Effort = nil, "max" }, // #6334
+		"efforts":          func(s *proto.Session) { s.Efforts = []string{"low", "medium", "high"} },
+		"efforts_none":     func(s *proto.Session) { s.Efforts = nil },
+		"source_kind":      func(s *proto.Session) { s.SourceKind = "claude" },
+		"source_thread":    func(s *proto.Session) { s.SourceThreadID = "th2" },
+		"source_inst":      func(s *proto.Session) { s.SourceInstanceID = "in2" },
+		"read_only":        func(s *proto.Session) { s.ReadOnlyReason = "" },
+		"caps":             func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Send: true} },
+		"caps_nil":         func(s *proto.Session) { s.Capabilities = nil },
+		"caps_modes":       func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Modes: proto.CanModes(false)} },
+		"caps_rewind":      func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Rewind: proto.CanModes(true)} },
+		"caps_rewind_code": func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{RewindCode: proto.CanModes(true)} },
+		"caps_model":       func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Model: proto.CanModes(false)} },
+		"caps_close":       func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Close: proto.CanModes(true)} },
+		"caps_rename":      func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Rename: proto.CanModes(true)} },
+		"attached":         func(s *proto.Session) { s.Attached = false },
+		"codex_route":      func(s *proto.Session) { s.CodexRoute = "terminal" },
+		"route_note":       func(s *proto.Session) { s.CodexRouteNote = "" },
+		"background":       func(s *proto.Session) { s.Background = append(s.Background, proto.BackgroundTask{ID: "b2"}) },
+		"bg_none":          func(s *proto.Session) { s.Background = nil },
+		"loop":             func(s *proto.Session) { s.Loop = &proto.LoopInfo{NextAt: act} },
+		"loop_none":        func(s *proto.Session) { s.Loop = nil },
+		"goal_status":      func(s *proto.Session) { s.Goal = &proto.GoalInfo{Status: "complete", Objective: "o", Reason: "r"} },
+		"goal_reason":      func(s *proto.Session) { s.Goal = &proto.GoalInfo{Status: "active", Objective: "o", Reason: "r\n2"} },
+		"goal_none":        func(s *proto.Session) { s.Goal = nil },
 		"plan_done": func(s *proto.Session) {
 			s.Plan = &proto.PlanInfo{Done: 4, Total: 5, Current: "Reproducing the crash", At: at}
 		},
@@ -310,5 +377,17 @@ func BenchmarkListKey(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		_ = listKeySized(list, size)
+	}
+}
+
+func TestListKeyModelCapability(t *testing.T) {
+	key := func(value *bool) string {
+		return listKey([]proto.Session{{SessionID: "s1", Capabilities: &proto.SessionCapabilities{Model: value}}})
+	}
+	if key(proto.CanModes(true)) != key(proto.CanModes(true)) {
+		t.Fatal("equal model capabilities differ")
+	}
+	if key(nil) == key(proto.CanModes(false)) || key(proto.CanModes(false)) == key(proto.CanModes(true)) {
+		t.Fatal("model capability change was lost")
 	}
 }

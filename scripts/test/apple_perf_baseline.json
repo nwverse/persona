@@ -1,0 +1,20 @@
+{
+ "apple/LiveActivity/FleetIslandViews.swift": {
+  "localized-lookup": 4
+ },
+ "apple/Packages/BeautifulUI/Sources/BeautifulUI/Components/PromptBar.swift": {
+  "unpaused-animation": 1
+ },
+ "apple/Shared/ExtensionSystemWidget.swift": {
+  "localized-lookup": 5
+ },
+ "apple/Shared/FleetState.swift": {
+  "localized-lookup": 31
+ },
+ "apple/Shared/PasswordLogin.swift": {
+  "localized-lookup": 7
+ },
+ "apple/Shared/StateNames.swift": {
+  "localized-lookup": 16
+ }
+}

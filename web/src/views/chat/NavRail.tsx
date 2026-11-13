@@ -8,11 +8,20 @@ import { cx } from "../../ui/atoms";
 import { t } from "../../i18n";
 
 function labelOf(tick: NavRailTick): string {
-  return tick.preview || (tick.attachmentsOnly ? t("chat-navrail.attachments", { count: tick.attachmentsOnly }) : "");
+  return tick.preview || (tick.attachmentsOnly ? t("chat-navrail.attachments", { count: tick.attachmentsOnly }) : tick.ordinal ? t("chat-navrail.input", { index: tick.ordinal }) : "");
 }
 
-export function NavRail({ ticks, scroller, onJump, reset }: {
+/** Where the chat's line wrappers (ChatLineView's `[data-line]` boxes) are: the content element's own children, or the
+ *  scroller's when it has no content element. A measure reads those children instead of querying the whole transcript
+ *  subtree, which grows with every message's markup. */
+function lineParent(scroller: HTMLElement): Element {
+  for (const el of scroller.children) if (el instanceof HTMLElement && el.dataset.chatContent !== undefined) return el;
+  return scroller;
+}
+
+export function NavRail({ ticks, total, scroller, onJump, reset }: {
   ticks: NavRailTick[];
+  total?: number;
   scroller: HTMLDivElement | null;
   onJump: (id: string) => void | Promise<void>;
   reset: string;
@@ -62,15 +71,19 @@ export function NavRail({ ticks, scroller, onJump, reset }: {
     if (dirty.current) {
       dirty.current = false;
       setHeight(Math.max(0, scroller.clientHeight - M.padding * 2));
-      setRight(Math.max(0, scroller.offsetWidth - scroller.clientWidth));
+      setRight(Math.max(0, scroller.offsetWidth - scroller.clientWidth) + M.edgeGap);
+      const content = lineParent(scroller);
+      // Wide chats already have a margin. Add only the missing clearance, keeping that column centered.
+      const margin = Math.max(0, (scroller.clientWidth - content.clientWidth) / 2);
+      scroller.style.setProperty("--chat-nav-clearance", `${Math.max(0, M.width + M.edgeGap + M.endInset - margin)}px`);
       const rows = new Map<string, HTMLElement>();
-      for (const el of scroller.querySelectorAll<HTMLElement>("[data-line]")) {
+      for (const el of content.children) {
         const child = el.firstElementChild;
-        if (child instanceof HTMLElement) rows.set(el.dataset.line ?? "", child);
+        if (el instanceof HTMLElement && el.dataset.line !== undefined && child instanceof HTMLElement) rows.set(el.dataset.line, child);
       }
       const top = scroller.getBoundingClientRect().top;
       offsets.current = list.current.flatMap((tick, index) => {
-        const row = rows.get(tick.id);
+        const row = rows.get(tick.lineId ?? tick.id);
         return row ? [{ index, top: row.getBoundingClientRect().top - top + scroller.scrollTop }] : [];
       });
     }
@@ -101,6 +114,7 @@ export function NavRail({ ticks, scroller, onJump, reset }: {
     if (content) mutations.observe(content, { childList: true, subtree: true });
     return () => {
       scroller.removeEventListener("scroll", scroll);
+      scroller.style.removeProperty("--chat-nav-clearance");
       resize.disconnect();
       mutations.disconnect();
       if (frame.current) cancelAnimationFrame(frame.current);
@@ -193,6 +207,8 @@ export function NavRail({ ticks, scroller, onJump, reset }: {
       aria-description={t("chat-navrail.keys")}
       aria-describedby={previewTick ? previewId : undefined}
       data-nav-rail
+      data-nav-total={total ?? ticks.length}
+      data-nav-source={total === undefined ? "loaded" : "server"}
       data-visible={visible}
       tabIndex={0}
       className={cx("absolute inset-y-0 z-10 flex flex-col justify-center py-6 transition-opacity duration-200 motion-reduce:transition-none", visible ? "opacity-100" : "opacity-0")}
@@ -237,7 +253,7 @@ export function NavRail({ ticks, scroller, onJump, reset }: {
           e.stopPropagation();
           pick(ticks[next].id, "keyboard");
           setWindowCenter(ticks[next].id);
-          setAnnouncement(t("chat-navrail.selection", { index: next + 1, count: ticks.length, preview: labelOf(ticks[next]), answer: ticks[next].answerExcerpt ?? "" }));
+          setAnnouncement(t("chat-navrail.selection", { index: ticks[next].ordinal ?? next + 1, count: total ?? ticks.length, preview: labelOf(ticks[next]), answer: ticks[next].answerExcerpt ?? "" }));
         } else if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           e.stopPropagation();
@@ -295,7 +311,7 @@ export function NavRail({ ticks, scroller, onJump, reset }: {
             type="button"
             data-tick={i}
             tabIndex={-1}
-            aria-label={t("chat-navrail.jump", { index: i + 1, preview: labelOf(tick) })}
+            aria-label={t("chat-navrail.jump", { index: tick.ordinal ?? i + 1, preview: labelOf(tick) })}
             aria-current={isCurrent ? "true" : undefined}
             aria-describedby={tick.id === preview ? previewId : undefined}
             className="flex shrink-0 items-center justify-end"
