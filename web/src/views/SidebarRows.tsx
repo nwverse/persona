@@ -190,6 +190,9 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
   );
 }, sameProps);
 
+// The list's one-line notes (loading, no match), as each writes it.
+const NOTE = "px-2 py-1 text-[12px] text-ink-3";
+
 // two shapes as well as two colors, so they tell apart without color: a bare prompt (no frame) and a window with a title bar
 const SOURCE_ICON = { terminal: { name: "run", tone: "text-source-terminal" }, desktop: { name: "appWindow", tone: "text-source-desktop" } } as const;
 
@@ -589,7 +592,7 @@ const LegacyPersonalAgents = memo(function LegacyPersonalAgents({ reg, hover, ac
         </>
       }
     >
-      {!loaded && <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>}
+      {!loaded && <p className={NOTE}>{t("sidebar.loading")}</p>}
       {error && <div className="relative z-10 px-2 py-1">
         <p role="alert" className="text-[12px] break-words text-red">{t("sidebar.personal_failed", { reason: error })}</p>
         <button type="button" disabled={retrying} onClick={() => void retry()} className="touch-hit mt-1 rounded-control px-2 py-1 text-xs leading-normal whitespace-nowrap text-accent-ink hover:bg-hover disabled:cursor-wait disabled:opacity-50">
@@ -611,7 +614,7 @@ const LegacyPersonalAgents = memo(function LegacyPersonalAgents({ reg, hover, ac
           className="relative z-10 mx-1 mb-1 h-7 rounded-control bg-inset px-2 text-[12px] text-ink shadow-hairline outline-none placeholder:text-ink-3"
         />
       )}
-      {loaded && !error && !groups.length && <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.no_match")}</p>}
+      {loaded && !error && !groups.length && <p className={NOTE}>{t("sidebar.no_match")}</p>}
       {groups.map((g) => {
         const more = !q && !all[g.key] && g.key !== "pinned" && g.sessions.length > 5;
         const isOpen = (s: AgentSession) => activeKey === `a:${s.id}`;

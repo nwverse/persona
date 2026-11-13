@@ -25,6 +25,9 @@ import { askSignIn } from "../../lib/extension-auth";
 import { useStore } from "../../lib/store";
 import { OperationSteps, useOperation } from "./ExtensionOperation";
 
+// A paragraph of body text in the market's pages and dialogs, as each writes it.
+const BODY = "text-[12.5px] leading-relaxed text-ink-2";
+
 function Back({ label, onBack, right }: { label: string; onBack: () => void; right?: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-center gap-2">
@@ -358,7 +361,7 @@ export function MarketItem({ market, id, manager, onBack, onInstalled }: { marke
         </div>
         {(it?.description || it?.tags?.length || it?.problem || error || managerName) && (
           <div className="flex flex-col gap-2 border-t border-line px-4 py-3">
-            {it?.description && <p className="text-[12.5px] leading-relaxed text-ink-2">{it.description}</p>}
+            {it?.description && <p className={BODY}>{it.description}</p>}
             {!!it?.tags?.length && (
               <div className="flex flex-wrap gap-1">
                 {it.tags.map((tag) => (
@@ -694,13 +697,13 @@ export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { 
       }
     >
       {warnings ? <div role="status">
-        <p className="text-[12.5px] leading-relaxed text-ink-2">{t("settings-extensionmarket.uninstalled_warnings")}</p>
+        <p className={BODY}>{t("settings-extensionmarket.uninstalled_warnings")}</p>
         <ul className="mt-3 space-y-2">
           {warnings.map((warning, index) => <li key={index} className="rounded-control bg-orange-tint px-3 py-2 text-[12.5px] leading-relaxed whitespace-pre-wrap break-all text-orange">{warning}</li>)}
         </ul>
       </div> : <>
       {version && <Row label={t("settings-extensions.version")} mono wrapValue>{version}</Row>}
-      <p className="text-[12.5px] leading-relaxed text-ink-2">{t("settings-extensionmarket.uninstall_body")}</p>
+      <p className={BODY}>{t("settings-extensionmarket.uninstall_body")}</p>
       {/* The choices, one row each in one box (#4072): keep the data, and for a pack its members too. */}
       <div className="mt-3 divide-y divide-line overflow-hidden rounded-control bg-inset shadow-hairline">
         <UninstallChoice checked={keep} onChange={setKeep} title={t("settings-extensionmarket.keep_data")} hint={t("settings-extensionmarket.keep_data_hint")} />
