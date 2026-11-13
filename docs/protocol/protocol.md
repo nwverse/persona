@@ -453,7 +453,9 @@ New optional Session fields: `source_kind` (`codex_history` / `codex_app_server`
 `capabilities.rewind` permits `session.rewind` to before a user message. `capabilities.rewind_code` additionally permits
 `code_and_conversation`. Absent values keep the Claude terminal heuristic. Codex advertises conversation rewind for a
 shared app-server with persistent paginated history and a node able to materialize that history. Runtime rows report
-`caps.rewind`, excluding sub-Agents, and explicitly disable file restoration. The web message menu reads both fields.
+`caps.rewind`, excluding sub-Agents. A runtime row may carry `capabilities` of its own for this: `rewind: false` takes
+the rewind away from that session, and `rewind_code: true` offers file restoration with it (Paseo: what each agent's
+provider can do); without it file restoration stays off. The web message menu reads both fields.
 
 `capabilities.model` permits model changes through `POST …/modes`. Runtime rows explicitly report whether the runtime
 advertised `caps.model`, excluding sub-Agent rows. Absent values preserve older clients' model-switch heuristics.
@@ -3502,7 +3504,7 @@ node → runtime requests (sent only on the connection that owns the session; al
 | `launchers.check {launcher, cwd, prompt}` | optional availability probe when `caps.check` is true. Returns `{ok, agent?, model?, answer?, millis, error?}`. Runs in the runtime's authentication context. The node owns and removes the temporary workspace and preserves native failures without falling back to the shell |
 | `launchers.models {launcher, refresh?}` | optional live model catalog request when `caps.models` is true. Returns `{agent, models, locked?}` in the existing launcher-model shape. Errors propagate to the caller. Older runtimes keep their advertised list |
 | `session.modes {session_id, permission_mode?, effort?, model?}` | the phone switches permission mode / thinking effort (for runtimes that declared `caps.modes`; values are validated by the node first). `model` requires explicit `caps.model`, otherwise the entire request is refused |
-| `session.rewind {session_id, prompt, occurrence, prompts_after?, restore}` | requires `caps.rewind`. Conversation rewind returns `{prompt, restore, code_restored: false, input_cleared: true}` after verifying the selected message and publishing the new history token. Refusals carry the existing `rewind_*` codes. The SDK exposes optional `driver.rewind(params)` and refreshes inventory after success |
+| `session.rewind {session_id, prompt, occurrence, prompts_after?, restore}` | requires `caps.rewind`, and for `restore: "code_and_conversation"` the row's own `capabilities.rewind_code` (a row's `capabilities.rewind: false` refuses it). Conversation rewind returns `{prompt, restore, code_restored: false, input_cleared: true}` after verifying the selected message and publishing the new history token; one restoring the files says `code_restored: true`. Refusals carry the existing `rewind_*` codes. The SDK exposes optional `driver.rewind(params)` and refreshes inventory after success |
 | `session.archive {session_id}`, `session.unarchive {session_id}` | archive / restore an idle session in the runtime's own archive, without stopping or closing it (for runtimes that declared `caps.archive`; a runtime without it is never asked, and the node answers the manager `native: "unsupported"`). Both must be idempotent: already archived (restored) answers success |
 
 Fields `session.start` carries, each only when set:

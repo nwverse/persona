@@ -180665,6 +180665,98 @@
           }
         }
       }
+    },
+    "Pin Confirmation Title [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pin this chat?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "常駐にしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设为常驻？"
+          }
+        }
+      }
+    },
+    "Unpin Confirmation Title [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unpin this chat?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "常駐をやめますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消常驻？"
+          }
+        }
+      }
+    },
+    "Pin Confirmation Message [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The chat moves to Pinned and no longer appears in Recent."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このチャットは常駐に移り、「最近」には出なくなります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个对话会移到常驻区，不再出现在「最近」。"
+          }
+        }
+      }
+    },
+    "Unpin Confirmation Message %@ [Leader Actions 6214]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” returns to Recent. Its open tasks go back to the main chat's supervision; nothing is closed or deleted."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」は「最近」に戻ります。進行中のタスクはメインチャットの監督に戻り、終了や削除はされません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」会回到「最近」；还在办的任务交还主对话督办，不会关闭或删除。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

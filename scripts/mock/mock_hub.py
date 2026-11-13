@@ -15958,6 +15958,7 @@ if os.environ.get("MOCK_FILES"):
     FILES[ROOT + "/server/handlers.go"] = long_go()
     FILES[ROOT + "/README.md"] = long_markdown()
     FILES[ROOT + "/logs/api.log"] = log()
+    FILES[ROOT + "/data/chart.png"] = _bar_png(360, 150)  # a picture opened as a file (#1331)
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_office
     FILES[ROOT + "/data/observations.csv"] = mock_office.csv_text(100_000)  # 5 MB: the table viewer's paging

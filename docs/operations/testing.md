@@ -389,7 +389,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   `GitPullTests` with `FakeHub` checks POST, decode, feedback, repeated taps. Server `TestGitPull*` uses temporary local remotes with isolated HOME/Git config to test unfetched latest commits, fast-forward/divergence, modified/staged/untracked files, existing stash, failure; never pulls real worktrees.
 - File viewer (`docs/apple/ios.md` ("File viewer")): `MOCK_FILES=1` provides fake `/Users/me/code/weather`: small file per language,
   3 MB JSON, 20K-line Go, 4000+-line README, 5 MB log; `GET …/file` (2 MB/page) and `…/stat` serve it. "Add a Home Screen widget to the weather App"
-  final reply links several files and two nonexistent paths. `FileViewerUITests` needs this mock. Timing/fps: build `-O`
+  final reply links several files and two nonexistent paths; `data/chart.png` is a picture (`testPictureOpensItsViewerOverTheSheet`). `FileViewerUITests` needs this mock. Timing/fps: build `-O`
   (`SWIFT_OPTIMIZATION_LEVEL=-O`, separate DerivedData), run `FileViewerPerfTests` with `PERSONA_FILE_PERF=1`, read App
   `Library/Caches/file-perf.log`. Use App constant-speed scrolling, not XCUITest drags: each gesture captures a main-thread accessibility snapshot, itself a 40–100 ms long frame.
   Uninstall before changing mock message text: item-id caches don't replace old text under the same id.
