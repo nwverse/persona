@@ -248,8 +248,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * among them, as rows with a count, a state and an ⓘ, a to-do's state in the To-dos page's word, and the groups'
  * explanations; the ⓘ's words, ui/InfoTipPanel.tsx, load the first time one is asked for, which took 287 B back off;
  * 31 B of room).
+ * And 344 B for `/permissions` (#6476: main at c78d33330 measured ja 477,349 B; this change takes it to 477,693 B: the
+ * command's row and the opener the composer and the permission picker share, the Full access row's notes on a restart
+ * or the next message, and the pending restart drawn before the hub answers. Shorter words in all three languages took
+ * only 6 B back off, the code is what costs; 31 B of room).
  */
-export const FIRST_SCREEN_BUDGET = 477_380;
+export const FIRST_SCREEN_BUDGET = 477_724;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
