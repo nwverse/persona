@@ -9,10 +9,12 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.preload.json && node scripts/copy-assets.mjs",
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && tsc -p tsconfig.json && tsc -p tsconfig.preload.json && node scripts/copy-assets.mjs",
     "start": "npm run build && electron .",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "test": "npm run clean && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "smoke": "npm run build && node scripts/smoke.mjs",
     "dist": "npm run build && electron-builder",
     "dist:unsigned": "npm run build && electron-builder --config electron-builder.unsigned.yml"
   },

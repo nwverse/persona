@@ -13,8 +13,8 @@ test("Link commands have fixed argv and pairing credentials only on stdin", () =
 });
 
 test("Link status never forwards config paths, credentials or logs", () => {
-  const result = publicLinkStatus({ running: true, machine: "computer", config: "/home/user/.persona/link.json", token: "secret", link: { state: "connected" } });
-  assert.deepEqual(result, { running: true, machine: "computer", link: { state: "connected" } });
+  const result = publicLinkStatus({ running: true, machine: "computer", config: "/home/user/.persona/link.json", token: "secret", link: { state: "connected", address: "https://internal.example", pid: 123, node_error: "internal detail", pending: true } });
+  assert.deepEqual(result, { running: true, machine: "computer", link: { state: "connected", pending: true } });
 });
 
 test("reverse-proxy prefixes on one origin have separate web sessions", () => {

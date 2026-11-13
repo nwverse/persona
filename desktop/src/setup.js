@@ -19,6 +19,8 @@ async function refreshLink() {
   if (!status.available) {
     state.textContent = t("link_absent");
     document.querySelector("#link-reconnect").disabled = true;
+    document.querySelector("#pair-link").disabled = true;
+    document.querySelector("#pair button").disabled = true;
     document.querySelector("#node-install").hidden = true;
     document.querySelector("#link-install-guide").hidden = false;
     document.querySelector("#link-install").hidden = false;
@@ -27,6 +29,8 @@ async function refreshLink() {
   const link = status.link || {};
   state.textContent = t("link_state", { state: link.state || t("not_running") }) + (status.machine_name || status.machine ? ` · ${status.machine_name || status.machine}` : "");
   document.querySelector("#link-reconnect").disabled = false;
+  document.querySelector("#pair-link").disabled = false;
+  document.querySelector("#pair button").disabled = false;
   document.querySelector("#node-install").disabled = false;
   document.querySelector("#node-install").hidden = false;
   document.querySelector("#link-install-guide").hidden = true;

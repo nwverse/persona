@@ -213,13 +213,10 @@ else {
     }
     if (hub) await showMain();
     else await showSetup();
-    installTray(await new Promise<BrowserWindow>(resolve => {
-      const find = () => {
-        const window = mainWindow ?? BrowserWindow.getAllWindows()[0];
-        if (window) resolve(window); else setTimeout(find, 100);
-      };
-      find();
-    }), () => { quitting = true; app.quit(); });
+    installTray(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); }
+      else void showMain();
+    }, () => { quitting = true; app.quit(); });
   }).catch(error => {
     dialog.showErrorBox("Persona could not start", error instanceof Error ? error.message : String(error));
     app.quit();
