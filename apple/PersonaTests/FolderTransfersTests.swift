@@ -65,6 +65,100 @@ struct FolderTransfersTests {
         #expect(asked == 1)
     }
 
+    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async {
+        for _ in 0..<200 where !condition() { try? await Task.sleep(for: .milliseconds(20)) }
+    }
+
+    private func body(_ req: LocalRequest) throws -> [String: Any] {
+        try #require(JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any])
+    }
+
+    @Test func quickCopyAndCompressCarryOperationsWithoutPolling() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/machines/m1/files/copy", json: #"{"copied":[{"from":"~/a.txt","to":"~/a 2.txt"}]}"#)
+        hub.on("POST", "/api/v1/machines/m1/files/zip", json: #"{"path":"~/a.zip","name":"a.zip","size":10,"files":1}"#)
+        let model = AppModel()
+        model.apiForTests = hub.client
+        let transfers = FolderTransfers()
+        let machine = MachineRef(group: "", id: "m1")
+        var duplicated: [String] = []
+        transfers.duplicate(["~/a.txt"], cwd: "~", machine: machine, model: model) { duplicated = $0 }
+        await waitUntil { !duplicated.isEmpty }
+        #expect(duplicated == ["a 2.txt"])
+        var compressed = ""
+        transfers.compress(["~/a.txt"], cwd: "~", machine: machine, model: model) { compressed = $0 }
+        await waitUntil { !compressed.isEmpty }
+        #expect(compressed == "a.zip")
+        let copy = try body(try #require(hub.sent("POST", "/api/v1/machines/m1/files/copy").first))
+        let zip = try body(try #require(hub.sent("POST", "/api/v1/machines/m1/files/zip").first))
+        let copyID = try #require(copy["operation_id"] as? String)
+        let zipID = try #require(zip["operation_id"] as? String)
+        #expect(!copyID.isEmpty && !zipID.isEmpty && copyID != zipID)
+        #expect(hub.requests.filter { $0.path.contains("/files/operations/") }.isEmpty)
+        #expect(transfers.items.isEmpty)
+    }
+
+    @Test func slowCopyPollsProgressAndCancelsThePost() async throws {
+        let hub = FakeHub()
+        var cancelled = false
+        hub.onAsync("POST", "/api/v1/machines/m1/files/copy") { req in
+            let body = try JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any]
+            let id = body?["operation_id"] as? String ?? "missing"
+            hub.on("GET", "/api/v1/machines/m1/files/operations/\(id)", json: #"{"id":"\#(id)","kind":"copy","state":"running","files_done":1,"files_total":2,"bytes_done":32,"bytes_total":100}"#)
+            for _ in 0..<500 {
+                if Task.isCancelled {
+                    cancelled = true
+                    throw CancellationError()
+                }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            return Data(#"{"copied":[]}"#.utf8)
+        }
+        let model = AppModel()
+        model.apiForTests = hub.client
+        let transfers = FolderTransfers()
+        var made: [String] = []
+        transfers.duplicate(["~/a.txt"], cwd: "~", machine: MachineRef(group: "", id: "m1"), model: model) { made = $0 }
+        try await Task.sleep(for: .milliseconds(1250))
+        let item = try #require(transfers.items.first)
+        #expect(item.done == 32 && item.size == 100)
+        #expect(!item.waiting)
+        #expect(hub.requests.contains { $0.path.contains("/files/operations/") })
+        transfers.cancel(item.id)
+        await waitUntil { cancelled }
+        #expect(cancelled)
+        #expect(transfers.items.isEmpty && made.isEmpty)
+    }
+
+    @Test func copyConflictRetriesWithANewOperation() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/machines/m1/files/copy") { req in
+            let body = try JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any]
+            if body?["conflict"] == nil {
+                throw APIError(status: 409, message: "taken", fields: ["code": "exists", "name": "a.txt"])
+            }
+            return Data(#"{"copied":[{"from":"~/a.txt","to":"~/dest/a 2.txt"}]}"#.utf8)
+        }
+        let model = AppModel()
+        model.apiForTests = hub.client
+        let transfers = FolderTransfers()
+        var done = false
+        transfers.copy(["~/a.txt"], into: "~/dest", cwd: "~", machine: MachineRef(group: "", id: "m1"), model: model) { done = true }
+        await waitUntil { transfers.conflict != nil }
+        #expect(transfers.conflict?.name == "a.txt")
+        transfers.answer(.keep)
+        await waitUntil { done }
+        #expect(done)
+        let requests = hub.sent("POST", "/api/v1/machines/m1/files/copy")
+        #expect(requests.count == 2)
+        let first = try body(try #require(requests.first))
+        let second = try body(try #require(requests.last))
+        let firstID = try #require(first["operation_id"] as? String)
+        let secondID = try #require(second["operation_id"] as? String)
+        #expect(firstID != secondID)
+        #expect(second["conflict"] as? String == "keep")
+    }
+
     @Test func failuresInWords() {
         let e = { (code: String) in APIError(status: 409, message: "raw", fields: ["code": code]) }
         #expect(FolderTransfers.message(e("read_only"), name: "a.txt")?.contains("home") == true)

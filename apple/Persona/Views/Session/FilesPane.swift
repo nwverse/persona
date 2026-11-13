@@ -141,7 +141,7 @@ struct FilesPane: View {
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: Theme.Space.s) {
-                    if !transfers.items.isEmpty {
+                    if !transfers.visibleItems.isEmpty {
                         FolderTransfersBar(transfers: transfers)
                     }
                     if selecting { selectionBar }
@@ -262,7 +262,7 @@ struct FilesPane: View {
                 selecting = false
                 selection = []
                 if copyingPick {
-                    edits.copy(names.map(full), into: dir, cwd: cwd, machine: machine, model: model) { Task { await load() } }
+                    transfers.copy(names.map(full), into: dir, cwd: cwd, machine: machine, model: model) { Task { await load() } }
                 } else {
                     edits.move(names.map(full), into: dir, cwd: cwd, machine: machine, model: model) { Task { await load() } }
                 }
@@ -565,7 +565,7 @@ struct FilesPane: View {
     private func compress(_ names: [String]) {
         selecting = false
         selection = []
-        edits.compress(names.map(full), cwd: cwd, machine: machine, model: model) { made in
+        transfers.compress(names.map(full), cwd: cwd, machine: machine, model: model) { made in
             Task {
                 await load()
                 show(full(made), dir: false)
@@ -852,7 +852,7 @@ struct FilesPane: View {
 
     /// Copies names beside themselves ("name 2.ext"), the first copy marked.
     private func duplicate(_ names: [String]) {
-        edits.duplicate(names.map(full), cwd: cwd, machine: machine, model: model) { made in
+        transfers.duplicate(names.map(full), cwd: cwd, machine: machine, model: model) { made in
             Task {
                 await load()
                 if let first = made.first { show(full(first), dir: false) }

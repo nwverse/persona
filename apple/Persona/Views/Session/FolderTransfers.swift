@@ -11,7 +11,7 @@ final class FolderTransfers {
     static let limit: Int64 = 2 << 30
 
     struct Item: Identifiable {
-        enum Kind { case upload, download }
+        enum Kind { case upload, download, copy, compress }
         let id = UUID()
         var kind: Kind
         var name: String
@@ -20,7 +20,13 @@ final class FolderTransfers {
         var waiting = true // behind another transfer
         var asking = false // the name is taken: waiting for Replace / Keep Both
         var zipping = false // several items (or a folder) zipped on the computer before the download (#5828)
+        var filesDone = 0
+        var filesTotal = 0
+        var showsProgress = true // a remote copy / zip appears only after one second
     }
+
+    /// The rows the transfer bar shows; a quick remote operation never appears.
+    var visibleItems: [Item] { items.filter(\.showsProgress) }
 
     /// A name already in the folder, waiting for the user's answer.
     struct Conflict: Identifiable {
@@ -84,6 +90,129 @@ final class FolderTransfers {
         var item = Item(kind: .download, name: name, size: 0)
         item.zipping = true
         queue(item) { [weak self] in await self?.zipThenFetch(item.id, paths: paths, name: name, cwd: cwd, machine: machine, model: model) }
+    }
+
+    private func remoteItem(_ kind: Item.Kind, _ paths: [String]) -> Item {
+        var item = Item(kind: kind, name: paths.map { ($0 as NSString).lastPathComponent }.joined(separator: ", "), size: 0)
+        item.showsProgress = false
+        return item
+    }
+
+    /// Copy To…: a taken name uses the same Replace / Keep Both question as an upload; each retry is a new operation.
+    func copy(_ paths: [String], into dir: String, cwd: String, machine: MachineRef, model: AppModel, conflict policy: String? = nil,
+              done: @escaping () -> Void) {
+        guard !paths.isEmpty else { return }
+        let item = remoteItem(.copy, paths)
+        queue(item) { [weak self] in
+            guard let self else { return }
+            update(item.id) { $0.waiting = false }
+            do {
+                _ = try await copyOperation(item.id, paths: paths, into: dir, cwd: cwd, machine: machine, model: model, conflict: policy)
+                guard !Task.isCancelled else { return }
+                Haptics.tap()
+                model.toast = Toast(paths.count == 1
+                    ? String(localized: "Copied “\((paths[0] as NSString).lastPathComponent)” to \(FolderEdits.folderName(dir))")
+                    : String(localized: "Copied \(paths.count) items to \(FolderEdits.folderName(dir))"), style: .success)
+                done()
+            } catch {
+                if !error.isCancellation { model.toast = Toast(FolderEdits.message(error), style: .error) }
+            }
+        }
+    }
+
+    func duplicate(_ paths: [String], cwd: String, machine: MachineRef, model: AppModel, made: @escaping ([String]) -> Void) {
+        guard let first = paths.first else { return }
+        let dir = (first as NSString).deletingLastPathComponent
+        let item = remoteItem(.copy, paths)
+        queue(item) { [weak self] in
+            guard let self else { return }
+            update(item.id) { $0.waiting = false }
+            do {
+                let copied = try await copyOperation(item.id, paths: paths, into: dir, cwd: cwd, machine: machine, model: model, conflict: "keep")
+                guard !Task.isCancelled else { return }
+                Haptics.success()
+                made(copied.map { ($0.to as NSString).lastPathComponent })
+            } catch {
+                if !error.isCancellation { model.toast = Toast(FolderEdits.message(error), style: .error) }
+            }
+        }
+    }
+
+    private func copyOperation(_ id: UUID, paths: [String], into dir: String, cwd: String, machine: MachineRef, model: AppModel,
+                               conflict policy: String?) async throws -> [APIClient.MovedFile] {
+        guard let api = model.api(machine.group) else { throw CancellationError() }
+        var policy = policy
+        while true {
+            do {
+                return try await remote(id, machine: machine.id, api: api) { operationID in
+                    try await api.copyFiles(machine: machine.id, paths: paths, cwd: cwd, dir: dir, conflict: policy, operationID: operationID)
+                }
+            } catch let e as APIError where e.code == "exists" && policy == nil {
+                let name = e.fields["name"] ?? (paths[0] as NSString).lastPathComponent
+                update(id) { $0.asking = true }
+                let choice = await ask(name)
+                update(id) {
+                    $0.asking = false
+                    $0.done = 0
+                    $0.size = 0
+                    $0.filesDone = 0
+                    $0.filesTotal = 0
+                }
+                switch choice {
+                case .replace: policy = "replace"
+                case .keep: policy = "keep"
+                case .cancel: throw CancellationError()
+                }
+            }
+        }
+    }
+
+    func compress(_ paths: [String], cwd: String, machine: MachineRef, model: AppModel, made: @escaping (String) -> Void) {
+        guard let first = paths.first, let api = model.api(machine.group) else { return }
+        let dir = (first as NSString).deletingLastPathComponent
+        let base = (first as NSString).lastPathComponent
+        let name = paths.count == 1 ? ((base as NSString).deletingPathExtension.isEmpty ? base : (base as NSString).deletingPathExtension) + ".zip"
+            : String(localized: "Archive.zip")
+        let item = remoteItem(.compress, paths)
+        queue(item) { [weak self] in
+            guard let self else { return }
+            update(item.id) { $0.waiting = false }
+            do {
+                let zip = try await remote(item.id, machine: machine.id, api: api) { operationID in
+                    try await api.zipFiles(machine: machine.id, paths: paths, cwd: cwd, dir: dir, name: name, operationID: operationID)
+                }
+                guard !Task.isCancelled else { return }
+                Haptics.success()
+                model.toast = Toast(String(localized: "Compressed into “\(zip.name)”"), style: .success)
+                made(zip.name)
+            } catch {
+                if !error.isCancellation { model.toast = Toast(FolderEdits.message(error), style: .error) }
+            }
+        }
+    }
+
+    /// The original long POST remains authoritative. Polling only paints progress; cancellation of this task cancels that POST.
+    private func remote<T>(_ id: UUID, machine: String, api: APIClient,
+                           request: (String) async throws -> T) async throws -> T {
+        let operationID = UUID().uuidString
+        let polling = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            self?.update(id) { $0.showsProgress = true }
+            while !Task.isCancelled {
+                if let operation = try? await api.fileOperation(machine: machine, id: operationID) {
+                    self?.update(id) {
+                        $0.done = operation.bytesDone
+                        $0.size = operation.bytesTotal
+                        $0.filesDone = operation.filesDone
+                        $0.filesTotal = operation.filesTotal
+                    }
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+        defer { polling.cancel() }
+        return try await request(operationID)
     }
 
     func cancel(_ id: UUID) {
@@ -256,13 +385,44 @@ struct FolderTransfersBar: View {
 
     var body: some View {
         VStack(spacing: Theme.Space.sm) {
-            ForEach(transfers.items) { item in
-                AttachmentRow(symbol: item.kind == .upload ? Theme.Icon.upload : Theme.Icon.save, name: item.name,
-                              status: item.asking ? String(localized: "Already exists, waiting for you") : item.waiting ? String(localized: "Waiting [File Attach 26c8cf]")
-                                  : item.zipping ? String(localized: "Zipping on the computer…") : "\(item.done.storageText) / \(item.size.storageText)",
+            ForEach(transfers.visibleItems) { item in
+                AttachmentRow(symbol: symbol(item), name: item.name, status: status(item),
                               progress: item.asking || item.zipping ? nil : item.size > 0 ? Double(min(item.done, item.size)) / Double(item.size) : 0,
-                              removeLabel: item.kind == .upload ? String(localized: "Cancel upload of \(item.name)") : String(localized: "Cancel download of \(item.name)")) { transfers.cancel(item.id) }
+                              removeLabel: removeLabel(item)) { transfers.cancel(item.id) }
             }
+        }
+    }
+
+    private func symbol(_ item: FolderTransfers.Item) -> String {
+        switch item.kind {
+        case .upload: Theme.Icon.upload
+        case .download: Theme.Icon.save
+        case .copy: Theme.Icon.copy
+        case .compress: Theme.Icon.archive
+        }
+    }
+
+    private func status(_ item: FolderTransfers.Item) -> String {
+        if item.asking { return String(localized: "Already exists, waiting for you") }
+        if item.waiting { return String(localized: "Waiting [File Attach 26c8cf]") }
+        if item.zipping { return String(localized: "Zipping on the computer…") }
+        switch item.kind {
+        case .copy, .compress:
+            let files = item.filesTotal > 0 ? String(localized: "\(item.filesDone) / \(item.filesTotal) items · ") : ""
+            let bytes = item.size > 0 ? "\(item.done.storageText) / \(item.size.storageText)" : ""
+            if !files.isEmpty || !bytes.isEmpty { return files + bytes }
+            return item.kind == .copy ? String(localized: "Copying on the computer…") : String(localized: "Compressing on the computer…")
+        case .upload, .download:
+            return "\(item.done.storageText) / \(item.size.storageText)"
+        }
+    }
+
+    private func removeLabel(_ item: FolderTransfers.Item) -> String {
+        switch item.kind {
+        case .upload: String(localized: "Cancel upload of \(item.name)")
+        case .download: String(localized: "Cancel download of \(item.name)")
+        case .copy: String(localized: "Cancel copy of \(item.name)")
+        case .compress: String(localized: "Cancel compression of \(item.name)")
         }
     }
 }
