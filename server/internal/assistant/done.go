@@ -122,7 +122,7 @@ func ownerActionLine(text string) string {
 				// ("if …", "evaluates whether …") are not unambiguous owner-only next steps (#5732).
 				before := strings.TrimSpace(lower[:strings.Index(lower, p.marker)])
 				direct := before == ""
-				for _, end := range []string{".", "!", "?", ":", ","} {
+				for _, end := range []string{".", "!", "?", ":", ";", ","} {
 					direct = direct || strings.HasSuffix(before, end)
 				}
 				if !direct {

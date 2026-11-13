@@ -116,6 +116,7 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"English proceed offer", "The spec is ready. Should I proceed with the implementation?", verdictNeedsUser, "Should I proceed"},
 		{"English shall offer", "The spec is ready. Shall I proceed with the implementation?", verdictNeedsUser, "Shall I proceed"},
 		{"English direct owner operation", "The spec is ready. You need to deploy it yourself.", verdictNeedsUser, "You need to"},
+		{"English direct owner operation after a semicolon", "The spec is ready; you need to deploy it yourself.", verdictNeedsUser, "you need to"},
 		{"English direct owner operation after an introduction", "Next, you'll need to restart the service.", verdictNeedsUser, "you'll need to"},
 		{"negated manual operation", "不用你本人操作，已经全部完成。", verdictDone, ""},
 		{"negated owner start", "无需由你发起，已自动开始。", verdictDone, ""},
