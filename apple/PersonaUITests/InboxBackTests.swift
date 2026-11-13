@@ -136,7 +136,7 @@ final class InboxBackTests: XCTestCase {
     @MainActor private func assertWideSidebar(_ step: String) {
         let inbox = app.buttons["sidebar-inbox"].firstMatch
         XCTAssertTrue(inbox.waitForExistence(timeout: 5) && inbox.isHittable, "\(step): the wide sidebar is not still there")
-        let title = app.navigationBars[Self.itemTitle].firstMatch
+        let title = app.navigationBars.staticTexts[Self.itemTitle].firstMatch
         XCTAssertGreaterThan(title.frame.minX, inbox.frame.maxX, "\(step): the detail is not beside the sidebar")
     }
 
