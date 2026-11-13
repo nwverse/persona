@@ -72,9 +72,37 @@ func TestTranscriptionModeOnUpload(t *testing.T) {
 	if tr, _ := out["transcription"].(map[string]any); tr["mode"] != "device" || out["revs"] != nil {
 		t.Fatalf("POST …/live: %v", out)
 	}
-	d, err := h.engine().Get(kb.KindRecording, meetingRec, 0)
-	if err != nil || !strings.Contains(string(d.Meta), `"transcription":{"mode":"hub","state":"live","gaps":[]}`) {
-		t.Fatalf("detail.meta: %s %v", d.Meta, err)
+	assertHubDetail := func() kb.TranscriptionView {
+		t.Helper()
+		d, err := h.engine().Get(kb.KindRecording, meetingRec, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var meta struct {
+			Transcription *kb.TranscriptionView `json:"transcription"`
+		}
+		if err := json.Unmarshal(d.Meta, &meta); err != nil {
+			t.Fatalf("detail.meta: %s %v", d.Meta, err)
+		}
+		tr := meta.Transcription
+		if tr == nil || tr.Mode != "hub" || tr.State != "live" || tr.Gaps == nil || len(*tr.Gaps) != 0 {
+			t.Fatalf("detail.meta: %s", d.Meta)
+		}
+		return *tr
+	}
+	assertHubDetail()
+	// No audio socket connects in this test. Its normal fallback clock may have
+	// elapsed already; fallback adds metadata without changing the chosen mode.
+	run := h.s.hubRunFor(h.engine(), meetingRec)
+	if run == nil {
+		t.Fatal("missing hub transcription run")
+	}
+	run.mu.Lock()
+	fallbackDue := run.downSince.Add(fallbackAfter)
+	run.mu.Unlock()
+	run.tick(fallbackDue)
+	if tr := assertHubDetail(); !tr.Fallback {
+		t.Fatalf("detail.meta did not expose the legitimate fallback: %+v", tr)
 	}
 }
 
