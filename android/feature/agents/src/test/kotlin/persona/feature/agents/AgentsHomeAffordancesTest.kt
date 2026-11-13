@@ -14,6 +14,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -152,9 +153,10 @@ class AgentsHomeAffordancesTest {
         showScreen()
         rule.onAllNodesWithText("Requests and history").assertCountEquals(0)
         rule.onNodeWithContentDescription("List settings").performClick()
-        rule.onNodeWithText("Machine monitor").assertIsDisplayed()
+        // Glass's ⋯ holds Display's four choices too (#4338 A9): its end is a scroll away in a 900dp window.
+        rule.onNodeWithText("Machine monitor").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Requests and history")
-            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button)).performClick()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button)).performScrollTo().performClick()
         rule.onNodeWithText("Requests waiting for you").assertIsDisplayed()
     }
 

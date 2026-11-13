@@ -413,10 +413,12 @@ nonisolated extension Item {
         return Int(id[id.index(after: hash)...]) ?? 0
     }
 
-    /// Work a fold may stand for: tool calls, their results and images, thoughts, folds.
+    /// Work a fold may stand for: tool calls, their results and images, thoughts, narration text, folds.
     var isWork: Bool {
         switch kind {
         case .thinking, .toolUse, .toolResult, .fold: true
+        // Only a fold's range distinguishes narration from a final assistant answer.
+        case .text: role == "assistant"
         case .image: toolUseID != nil
         default: false
         }
@@ -1349,6 +1351,9 @@ nonisolated enum ScreenParser {
         /// The tab that submits every answer ("Review your answers"); incomplete: a question has none yet.
         var review = false
         var incomplete = false
+        /// A permission prompt for a shell command, as the hub reads it (#5266): nil for any other dialog, and from a hub
+        /// before it.
+        var commandAsk: CommandAsk?
 
         init(header: String?, question: String, detail: String?, options: [Option]) {
             self.header = header
@@ -1518,10 +1523,11 @@ nonisolated enum ChatCache {
     /// their denied or interrupted calls would stay red.
     /// v17: refusal notices carry `model_refusal` and their text is the refusal's words (#4489); an older hub made it the
     /// record's whole line, which v16's copies would keep showing.
+    /// v18: Codex commentary is assistant text rather than thinking; older cached items would keep hiding mid-turn answers.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v17"
+    static let folder = "chats-v18"
     /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v16"
+    private static let previous = "chats-v17"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
@@ -1656,8 +1662,11 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     /// When its sends started coming back waiting while its group's link was up (AppModel.settleSend, `OutboxWait`);
     /// in memory only: a relaunch starts the run again.
     var stalledSince: Date?
+    /// How the app wrote it when the user did not type it (a card's button): sent with it, so it never counts as the
+    /// user's own words for a secret hand-off's Always rule.
+    var via: APIClient.MessageVia?
 
-    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused }
+    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused, via }
 
     /// Only on this phone as far as it knows: failed, or waiting for the network. Deleting it (its long press, its mark's
     /// menu) drops the bubble and its outbox entry and sends nothing (#4626). One being sent may be arriving and a sent

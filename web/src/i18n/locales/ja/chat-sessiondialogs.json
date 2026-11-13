@@ -24,6 +24,7 @@
   "copy_resume_command": "再開コマンドをコピー",
   "renamed": "名前を変更しました",
   "change_failed": "変更できませんでした：{error}",
+  "change_unconfirmed": "95秒以内に変更結果を確認できませんでした。変更は適用されている可能性があります。現在の設定を確認してからもう一度お試しください。",
   "rename": "名前を変更",
   "tab_name": "タブ名（herdr tab）",
   "session_name": "セッション名",

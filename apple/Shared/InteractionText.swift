@@ -89,6 +89,8 @@ nonisolated extension Interaction {
             if let t = toolName?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty, !isSecretRun { return t }
             return nil
         case .screen:
+            // A command's permission prompt: the agent's words for it, else the command (#5266), not "Do you want to proceed?".
+            if let ask = screenDialog?.commandAsk { return ask.description ?? ask.command }
             return screenDialog?.question
         case .elicitation:
             // An MCP form's or link's message ("Please choose"); its title says which it is.

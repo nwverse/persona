@@ -46,6 +46,7 @@ import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.LocalAppStyleStore
 import persona.core.designsystem.LocalGlassLevel
 import persona.core.designsystem.LocalPersonaDesign
+import persona.core.designsystem.dense
 import persona.core.navigation.*
 import persona.feature.settings.SettingsServices
 import kotlinx.coroutines.CancellationException
@@ -102,7 +103,11 @@ class MainActivity : ComponentActivity() {
         }
         val app = application as PersonaApp
         lifecycleScope.launch { shell.restoreDemo() }
-        persona.android.platform.GlassFrameMonitor.attach(this) { !shell.automation }
+        persona.android.platform.GlassFrameMonitor.attach(
+            this,
+            deviceLevel = { app.appearance.deviceLevel(app.appearance.glass.value) },
+            enabled = { !shell.automation },
+        )
         managerRoster.start()
         setContent {
             val scheme by app.appearance.scheme.collectAsStateWithLifecycle()
@@ -135,6 +140,7 @@ class MainActivity : ComponentActivity() {
                 persona.core.designsystem.LocalManagerGroup provides managerGroup,
                 persona.feature.inbox.LocalTranslator provides translator,
                 LocalAppStyleStore provides app.appearance,
+                persona.core.designsystem.LocalStarPrompt provides app.starPrompt,
                 LocalGlassLevel provides glassLevel,
                 LocalPersonaDesign provides face,
                 persona.core.designsystem.LocalPersonaStore provides app.personas,
@@ -160,7 +166,7 @@ class MainActivity : ComponentActivity() {
                     }
                     else if (ready) PlatformRoot(hub = hub, openNavigation = openNavigation, services = settingsServices, shell = shell)
                     else Surface(Modifier.fillMaxSize()) {
-                        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp)) {
+                        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp.dense)) {
                             if (failed) {
                                 Text(stringResource(R.string.app_pairing_unreadable))
                                 TextButton(onClick = app::restorePairing) { Text(stringResource(R.string.app_retry), maxLines = 1) }

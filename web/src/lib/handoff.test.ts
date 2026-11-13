@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
-// Leaving a conversation for an Agent it handed work to (#5096): the Agent's page, the way back, and the chat's place.
+// Leaving a conversation for an Agent it handed work to: the side panel by default (#5424), or, set to Full page, the
+// Agent's page, the way back, and the chat's place (#5096).
 import { afterEach, describe, expect, it } from "vitest";
-import { chatPlaceIn, chatPlaceOf, dropChatPlace, handoffFrom, leaveChat, openTask, taskRoute } from "./handoff";
+import { agentOpenMode, setAgentOpenMode } from "./agent-open";
+import { chatPlaceIn, chatPlaceOf, dropChatPlace, handoffFrom, leaveChat, openAgent, openTask, taskRoute } from "./handoff";
+import { closePanel, getPanel } from "./panel";
 import { getState, reset, type State } from "./store";
 import type { Todo } from "./todos";
 
 afterEach(() => {
+  setAgentOpenMode("panel");
+  closePanel();
   reset();
   history.replaceState(null, "", "/");
   document.body.innerHTML = "";
@@ -100,8 +105,39 @@ describe("where a task opens", () => {
     expect(taskRoute("unknown")).toEqual({ name: "todos", id: "unknown" });
   });
 
-  it("opens there", () => {
+  it("opens there, set to Full page", () => {
+    setAgentOpenMode("page");
     openTask("unknown");
     expect(location.pathname + location.search).toBe("/todos?id=unknown");
+    expect(getPanel()).toBeNull();
+  });
+});
+
+describe("where it opens (#5424)", () => {
+  it("is the side panel by default: the task's or the Agent's, the page staying where it is", () => {
+    history.replaceState(null, "", "/persona");
+    expect(agentOpenMode()).toBe("panel");
+    openTask("t1");
+    expect(getPanel()).toEqual({ kind: "task", todo: "t1" });
+    openAgent("m1", "s1");
+    expect(getPanel()).toEqual({ kind: "agent", mid: "m1", sid: "s1" });
+    expect(location.pathname).toBe("/persona");
+    expect(handoffFrom()).toBeUndefined();
+  });
+
+  it("is the Agent's page with the way back, set to Full page, and the panel again once set back", () => {
+    history.replaceState(null, "", "/persona");
+    setAgentOpenMode("page");
+    expect(localStorage.getItem("agent.open")).toBe("page");
+    openAgent("m1", "s1");
+    expect(getPanel()).toBeNull();
+    expect(location.pathname).toBe("/s/m1/s1");
+    expect(handoffFrom()).toEqual({ path: "/persona" });
+    setAgentOpenMode("panel");
+    // the default is not written: a browser left on it follows the default
+    expect(localStorage.getItem("agent.open")).toBeNull();
+    openAgent("m1", "s2");
+    expect(getPanel()).toEqual({ kind: "agent", mid: "m1", sid: "s2" });
+    expect(location.pathname).toBe("/s/m1/s1");
   });
 });

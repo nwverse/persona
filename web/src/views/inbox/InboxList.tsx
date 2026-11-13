@@ -177,9 +177,9 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
     if (!days) return { groups: loaded.map((g, i) => ({ ...g, count: g.items.length, plus: i === loaded.length - 1 && historyMore.includes(group), more: false, range: timeRange(g.key, now) })) };
     const counts = dayGroupCounts(days, now, filtered ? 0 : loaded.find((g) => g.key === "just")?.items.length ?? 0);
     const byKey = new Map(loaded.map((g) => [g.key, g.items]));
-    // complete: a page of its own reached its start, or the list holds it (the done items of its last days, the hub's
-    // inboxKeepDone), or (unfiltered) as many are loaded as the hub counts
-    const complete = (key: string, loadedCount: number) => groupComplete.includes(`${group}|${key}`) || timeRange(key, now).start >= now - LIST_DONE_MS
+    // complete: a page of its own reached its start, or (unfiltered) as many are loaded as the hub counts. The list's
+    // done items don't make a group complete: it carries only the newest of the last days' (#5549), the rest page in.
+    const complete = (key: string, loadedCount: number) => groupComplete.includes(`${group}|${key}`)
       || (!filtered && loadedCount >= (counts.get(key) ?? 0));
     const groupOf = (key: string): DoneGroup => {
       const items = byKey.get(key) ?? [];
@@ -552,9 +552,6 @@ function scrollListTo(el: Element | null) {
   box.scrollTo?.({ top: box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top, behavior: scrollBehavior() });
 }
 
-/** How long the list keeps done items (the hub's inboxKeepDone): Done's groups within it are complete without a page. */
-const LIST_DONE_MS = 3 * 86_400_000;
-
 /** A group of Done (#2969): its items loaded so far, its count (the hub's when it has day counts), whether the count
  *  reads "n+" (plus), whether more of its items can load (more) and its time range (where its pages start). */
 type DoneGroup = InboxGroup & { count: number; plus: boolean; more: boolean; range: { start: number; end: number } };
@@ -722,9 +719,9 @@ export function rowMenu(it: InboxItem, done: boolean, folders = false): MenuItem
       ? { key: "undone", label: t("inbox-inboxlist.move_back"), icon: "inbox", onSelect: () => void setDone(it, false) }
       : { key: "done", label: t("inbox-inboxlist.done"), icon: "check", onSelect: () => void markFromRow(it, true, true) }, // a menu pick: "Undo" on any screen (#4162)
   ];
-  (it.mutes ?? []).forEach((m, i) => items.push({ key: `mute:${m.tag}:${m.value}`, label: muteTitle(m), hint: muteShortName(m), icon: "bellOff", divider: i === 0, onSelect: () => void muteItem(it, m) }));
+  (it.mutes ?? []).forEach((m, i) => items.push({ key: `mute:${m.tag}:${m.value}`, label: muteTitle(m), detail: muteShortName(m), icon: "bellOff", divider: i === 0, onSelect: () => void muteItem(it, m) }));
   // then a rule for each (docs/assistant/inbox.md "Policies"): the tier its items get, what the AI twin does with them
-  (it.mutes ?? []).forEach((m, i) => items.push({ key: `policy:${m.tag}:${m.value}`, label: policyMenuTitle(m), hint: muteShortName(m), icon: "target", divider: i === 0, onSelect: () => openPolicyDialog({ item: it, option: m, source: it.source }) }));
+  (it.mutes ?? []).forEach((m, i) => items.push({ key: `policy:${m.tag}:${m.value}`, label: policyMenuTitle(m), detail: muteShortName(m), icon: "target", divider: i === 0, onSelect: () => openPolicyDialog({ item: it, option: m, source: it.source }) }));
   if (folders) items.push({ key: "folder", label: t("inbox-folders.move_menu"), hint: it.folder, icon: "folder", divider: true, onSelect: () => openFolderDialog(it) });
   return items;
 }

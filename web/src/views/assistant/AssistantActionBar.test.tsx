@@ -4,14 +4,19 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { getFeedState, loadFeed, type FeedItem, type TaskPlan } from "../../lib/feed";
-import { getPanel } from "../../lib/panel";
+import { setAgentOpenMode } from "../../lib/agent-open";
+import { closePanel, getPanel } from "../../lib/panel";
 import { putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
+import { usageLimitLabel } from "../../lib/usage-limit";
 import type { Interaction, Session } from "../../lib/types";
 import { AssistantActionBar, DOCK_CAPSULE, FeedLineView, TaskDock } from "./Tasks";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const at = "2026-11-10T08:00:00Z";
+// "Now" for every case: an hour after the fixtures, not the real clock, by which they would be long shelved
+// (SHELVE_AFTER_MS, lib/todo-triage.ts) and the trays would leave them out (#5531). Only Date is faked: timers stay real.
+const now = new Date("2026-11-10T09:00:00Z");
 const conversation = "tray-demo";
 const plan: TaskPlan = { id: "tray-plan", conversation, state: "started", created_at: at, tasks: [{ title: "Demo task", prompt: "Demo checks", cwd: "/demo", machine: "demo", todo_id: "tray-task" }] };
 let todo: Todo;
@@ -31,6 +36,8 @@ const feed: FeedItem[] = [
 ];
 
 beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
   writes = [];
   moreTodos = [];
   moreSessions = [];
@@ -54,9 +61,12 @@ beforeEach(async () => {
   act(() => root.render(<StrictMode><AssistantActionBar conversation={conversation} />{feed.map((item) => <FeedLineView key={item.id} item={item} simplified />)}</StrictMode>));
 });
 afterEach(() => {
+  vi.useRealTimers();
   act(() => root.unmount());
   host.remove();
   history.replaceState(null, "", "/");
+  setAgentOpenMode("panel");
+  closePanel();
   reset();
   delete getFeedState().plans[plan.id];
   delete getFeedState().feeds[conversation];
@@ -66,8 +76,11 @@ afterEach(() => {
 const entries = () => [...host.querySelectorAll<HTMLButtonElement>("[data-assistant-actionbar] [data-tray-entry]")];
 const entry = (key: string) => host.querySelector<HTMLButtonElement>(`[data-assistant-actionbar] [data-tray-entry="${key}"]`)!;
 
+/** Opens the Needs you rows the tray folds to a line (#5569); a row with its key opens that one. */
+const openRows = (key?: string) => act(async () => host.querySelectorAll<HTMLButtonElement>(`button[data-needs-row${key ? `="${key}"` : ""}][aria-expanded="false"]`).forEach((b) => b.click()));
+
 const label = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
-// where a click went: a page of its own (#5096), never a side panel
+// where a click went as a page (set to Full page, #5096); the side panel, the default, says so itself (getPanel)
 const opened = () => location.pathname + location.search;
 const trays = () => host.querySelector("[data-assistant-actionbar]")!.textContent;
 
@@ -98,14 +111,40 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(writes).toEqual([]);
   });
 
+  it("puts a row's status in its own column, with › where it opens and the reset time under a usage limit (#5569)", () => {
+    act(() => entry("running").click());
+    const row = () => host.querySelector("[data-task-slot]")!;
+    const status = () => row().querySelector<HTMLElement>("[data-task-status]")!;
+    expect(status().textContent).toBe(t("lib-state-labels.working"));
+    expect(row().querySelector(".font-semibold")!.textContent).toBe("Demo task"); // the title no longer carries the word
+    const limited: Session = { machine_id: "demo", session_id: "worker", title: "Demo agent", cwd: "/demo", status: "idle", state: "idle", updated_at: at,
+      turn_error: "You've hit your usage limit.", turn_error_kind: "usage_limit", turn_error_resets_at: new Date(now.getTime() + 3 * 3_600_000).toISOString() };
+    act(() => upsertSession(limited));
+    expect(status().dataset.taskStatus).toBe("usage_limit");
+    expect(status().className).toContain("text-orange");
+    expect(row().textContent).toContain(usageLimitLabel(limited, now.getTime())!);
+    act(() => upsertSession({ ...limited, turn_error: undefined, turn_error_kind: undefined, turn_error_resets_at: undefined, state: "working", status: "working" }));
+    expect(status().className).toContain("text-ink-2");
+  });
+
+  it("says Starting, not Not started, on a task whose Agent is not up yet", async () => {
+    todo.agents = [];
+    await act(async () => {
+      await refreshTodos();
+    });
+    act(() => entry("running").click());
+    expect(host.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.status_starting"));
+  });
+
   it("keeps two entries in order, collapses by default and replaces conversation cards with the dispatch's hand-off card", () => {
     expect(entries().map((button) => button.getAttribute("data-tray-entry"))).toEqual(["needs", "running"]);
     expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`]);
     expect(host.querySelector("section")).toBeNull();
-    // the plan's one Agent; the task line of a planned task adds none
+    // the plan's one Agent; the task line of a planned task adds none; the task's conclusion is its own card (#5569)
     expect(host.querySelectorAll("[data-handoff-cards]")).toHaveLength(1);
     expect(host.querySelectorAll("[data-handoff-card]")).toHaveLength(1);
-    expect(host.textContent).not.toContain("Demo result");
+    expect(host.querySelectorAll("[data-receipt]")).toHaveLength(1);
+    expect(host.textContent).toContain("Demo result");
     act(() => entry("running").click());
     expect(entry("running").getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelectorAll("[data-task-slot]")).toHaveLength(1);
@@ -116,13 +155,18 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(trays()).not.toContain("Demo agent");
   });
 
-  it("draws the dispatched Agent as a hand-off card that opens its page, not the In progress tray (#3700, #5096)", () => {
+  it("draws the dispatched Agent as a hand-off card that opens it in the side panel, or its page set to Full page, not the In progress tray (#3700, #5096, #5424)", () => {
     const card = host.querySelector<HTMLButtonElement>('[data-handoff-card="demo/worker"]')!;
     expect(card.tagName).toBe("BUTTON");
     // the Agent's own title, New (the plan started it), and its state
     expect(card.textContent).toContain("Demo agent");
     expect(card.querySelector('[data-handoff-wake="created"]')?.textContent).toBe(t("assistant-tasks.handoff_wake_created"));
     expect(card.querySelector('[data-handoff-state="working"]')).not.toBeNull();
+    act(() => card.click());
+    expect(getPanel()).toEqual({ kind: "agent", mid: "demo", sid: "worker" });
+    expect(opened()).toBe("/");
+    act(() => closePanel());
+    setAgentOpenMode("page");
     act(() => card.click());
     expect(opened()).toBe("/s/demo/worker");
     expect(getPanel()).toBeNull();
@@ -161,9 +205,9 @@ describe("Assistant Needs you / In progress trays", () => {
       expect(cards[3]!.textContent).toContain("Failed task");
       expect(cards[3]!.textContent).toContain(t("assistant-tasks.start_failed", { error: "machine offline" }));
       act(() => cards[1]!.click());
-      expect(opened()).toBe("/s/demo/second");
+      expect(getPanel()).toEqual({ kind: "agent", mid: "demo", sid: "second" });
       act(() => cards[0]!.click());
-      expect(opened()).toBe("/s/demo/worker");
+      expect(getPanel()).toEqual({ kind: "agent", mid: "demo", sid: "worker" });
       expect(host.querySelector("section")).toBeNull();
     } finally {
       delete getFeedState().plans[many.id];
@@ -182,7 +226,11 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(row?.textContent).not.toContain("Waiting for a decision");
     expect(host.querySelector('[role="progressbar"] .bg-orange')).not.toBeNull();
     act(() => (host.querySelector("[data-task-slot]") as HTMLButtonElement).click());
-    // its Agent's page (#5096)
+    // the task's side panel (#5424); set to Full page, its Agent's page (#5096)
+    expect(getPanel()).toEqual({ kind: "task", todo: todo.id });
+    act(() => closePanel());
+    setAgentOpenMode("page");
+    act(() => (host.querySelector("[data-task-slot]") as HTMLButtonElement).click());
     expect(opened()).toBe("/s/demo/worker");
     act(() => putTodo({ ...todo, done_at: at, supervision: { ...todo.supervision!, state: "accepted" } }));
     // finished: in neither entry (the board has it), no fold for it either
@@ -197,6 +245,7 @@ describe("Assistant Needs you / In progress trays", () => {
     todo = { ...todo, ask: firstRound, supervision: { ...todo.supervision!, state: "needs_user" } };
     await act(async () => putTodo(todo));
     await act(async () => { entry("needs").click(); await import("./TaskDecision"); });
+    await openRows();
     expect(host.querySelectorAll('[data-brief-row="accept"]')).toHaveLength(1);
     expect(host.textContent).not.toContain(t("assistant-tasks.review_needs_user"));
     const first = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === t("assistant-brief.take"))!;
@@ -206,6 +255,7 @@ describe("Assistant Needs you / In progress trays", () => {
       todo = { ...todo, ask: { ...firstRound, asked_at: nextRound } };
       putTodo(todo);
     });
+    await openRows(); // the next round asks folded again
     const second = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === t("assistant-brief.take"))!;
     expect(second).not.toBe(first);
     await act(async () => second.click());
@@ -219,8 +269,10 @@ describe("Assistant Needs you / In progress trays", () => {
     todo = { ...todo, ask, supervision: { ...todo.supervision!, state: "needs_user" } };
     await act(async () => putTodo(todo));
     await act(async () => { entry("needs").click(); await import("./TaskDecision"); });
+    await openRows();
+    expect(host.textContent!.split(todo.title).length - 1, "an opened row names its task once").toBe(1);
     const row = host.querySelector('[data-brief-row="accept"]')!;
-    expect([...row.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual([t("assistant-brief.open"), t("assistant-brief.finish"), t("assistant-brief.take")]);
+    expect([...row.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual([t("assistant-brief.open"), t("assistant-brief.finish"), t("assistant-tasks.later"), t("assistant-tasks.dismiss_draft"), t("assistant-brief.take")]);
     const read = vi.mocked(fetch).getMockImplementation()!;
     vi.mocked(fetch).mockImplementation(async (url, init) => {
       if (init?.method === "PATCH") {
@@ -250,6 +302,8 @@ describe("Assistant Needs you / In progress trays", () => {
       await import("./MessageDraft");
       await import("./TaskDecision");
     });
+    expect(host.querySelector('[data-testid="message-card"]')).toBeNull(); // folded until opened
+    await openRows();
     expect(host.querySelector('[data-testid="message-card"]')).not.toBeNull();
     expect(host.textContent).toContain(t("assistant-tasks.review_needs_user"));
     const draftCard = host.querySelector('[data-testid="message-card"]')!;
@@ -275,6 +329,24 @@ describe("Assistant Needs you / In progress trays", () => {
     const row = host.querySelector('[data-needs-row="task:tray-task"]')!;
     expect(row.textContent).toContain("Demo task");
     expect(row.textContent).toContain("Which port?");
+    // a line until opened (#5569): the question under the title, no card, no answer buttons
+    const head = row as HTMLButtonElement;
+    expect(head.tagName).toBe("BUTTON");
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector("[data-card]")).toBeNull();
+    // it opens where it is (a real button: Enter and Space do the same as the click), and a click on the head folds it again
+    act(() => head.click());
+    const opened = host.querySelector('[data-needs-row="task:tray-task"]')!;
+    expect(opened.hasAttribute("data-needs-open")).toBe(true);
+    expect(opened.querySelector("button[aria-expanded=true]")).not.toBeNull();
+    expect(opened.textContent).toContain("8080");
+    act(() => opened.querySelector<HTMLButtonElement>("button[aria-expanded=true]")!.click());
+    expect(host.querySelector('[data-needs-row="task:tray-task"]')!.tagName).toBe("BUTTON");
+    // every row is folded again when the tray is closed and opened
+    act(() => host.querySelector<HTMLButtonElement>('button[data-needs-row="task:tray-task"]')!.click());
+    act(() => entry("needs").click());
+    act(() => entry("needs").click());
+    expect(host.querySelector('[data-needs-row="task:tray-task"]')!.tagName).toBe("BUTTON");
     // the agent is not a row of its own in either tray (the chat's hand-off card names it)
     expect(trays()).not.toContain("Demo agent");
     moreInteractions = [];
@@ -306,7 +378,7 @@ describe("Assistant Needs you / In progress trays", () => {
     // the task's own agent is still not listed by itself
     expect(host.querySelector('[data-running-agent="demo/worker"]')).toBeNull();
     act(() => (host.querySelector('[data-running-agent="demo/by-hand-works"]') as HTMLButtonElement).click());
-    expect(opened()).toBe("/s/demo/by-hand-works");
+    expect(getPanel()).toEqual({ kind: "agent", mid: "demo", sid: "by-hand-works" });
   });
 
   it("draws the entries as the dock's old All / task capsules, with the open tray selected", () => {
@@ -413,6 +485,13 @@ describe("Assistant Needs you / In progress trays", () => {
       act(() => entry("needs").click());
       expect(entry("needs").getAttribute("aria-expanded")).toBe("true");
       expect(host.querySelector("section")?.textContent).toContain("Diet card");
+      // folded: the plan's first task and how many more; Start is not on the screen until the row is opened
+      expect(host.querySelector("section")?.textContent).toContain(t("assistant-tasks.needs_more", { title: "Diet card", count: 1 }));
+      const plan = host.querySelector<HTMLButtonElement>("button[data-needs-row]")!;
+      expect(plan.getAttribute("aria-expanded")).toBe("false");
+      expect(host.querySelector("[data-plan-actions]")).toBeNull();
+      act(() => plan.click());
+      expect(host.querySelector("[data-needs-open]")).not.toBeNull();
       expect(host.querySelector("section")?.textContent).toContain("Fix the supervisor");
       expect([...host.querySelectorAll("section button")].some((button) => button.textContent?.includes(t("assistant-tasks.plan_start_n", { count: 2 })))).toBe(true);
       // once it is started or dismissed it leaves Needs you

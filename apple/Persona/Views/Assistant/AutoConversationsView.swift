@@ -114,7 +114,6 @@ struct AutoConversationsView: View {
         let from = AutoConversations.source(of: s, tasks: taskChats.known(on: model.api))
         let detail = [filter == .all ? from?.name : nil, [.working, .needsYou, .unread].contains(s.state) ? s.state.label : s.updatedAt.map { Fmt.relative($0) }]
             .compactMap { $0 }.joined(separator: " · ")
-        let external = AutoConversationSource.external(s.origin)
         // The hub's built-in background supervisor (#5083) stays listed: no Archive, no Pin.
         let builtIn = model.isBackgroundSupervisor(s.sessionID)
         return Button { open(s.key) } label: {
@@ -127,7 +126,7 @@ struct AutoConversationsView: View {
                         } else {
                             Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                         }
-                        if let external { ExternalSourceMark(source: external) } // an extension opened it (#3758)
+                        if let from { AutoSourceMark(source: from) } // what opened it, as in the sidebar (#3758, #5195)
                     }
                     if !detail.isEmpty {
                         Text(detail).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
@@ -141,7 +140,7 @@ struct AutoConversationsView: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel([title, filter == .all ? nil : external?.from, detail.isEmpty ? nil : detail].compactMap { $0 }
+        .accessibilityLabel([title, filter == .all ? nil : from?.markLabel, detail.isEmpty ? nil : detail].compactMap { $0 }
             .joined(separator: String(localized: ", ", comment: "Separator between the parts of a VoiceOver label")))
         .accessibilityIdentifier("auto-conversation")
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {

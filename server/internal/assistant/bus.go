@@ -132,7 +132,9 @@ func NewBusHub(o BusOptions) *BusHub {
 			return map[string]any{"id": id, "host": host, "os": runtime.GOOS, "arch": runtime.GOARCH,
 				"deploy": o.Deploy, "version": o.Version, "capabilities": []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
 					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityMachinesOwn,
-					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityRecordingDay,
+					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
+					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingEcho,
+					assistantwire.CapabilityRecordingDay,
 					devicewire.SharingCapability}}
 		},
 		OnHello: b.onHello,
@@ -175,12 +177,12 @@ func (b *BusHub) Run(ctx context.Context, svc *Service) error {
 	return b.Serve(ctx, svc)
 }
 
-// Serve is Run without svc's own work: the connection alone. It lets svc's knowledge base go when it ends.
+// Serve is Run without svc's own work: the connection alone. It lets svc's knowledge base go for good when it ends.
 func (b *BusHub) Serve(ctx context.Context, svc *Service) error {
 	b.mu.Lock()
 	b.svc, b.ctx = svc, ctx
 	b.mu.Unlock()
-	defer svc.kbClose()
+	defer svc.kbEnd()
 	go b.takeEvents(ctx)
 	go b.runOutbox(ctx) // what was made while the hub was away, once it is back (outbox.go)
 	return b.client.Run(ctx)

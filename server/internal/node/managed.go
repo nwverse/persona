@@ -268,6 +268,10 @@ var (
 	agentExecutableCache = map[string]string{}
 )
 
+// agentSystemDirs are the system-wide install directories agentExecutable and commonNodePaths look in (Homebrew,
+// /usr/local). A test that must not find the machine's own install points them elsewhere, as it does PATH and HOME.
+var agentSystemDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
+
 // claudeExecutable finds claude: PATH first, then the usual install spots. A node started by launchd (macOS) has a
 // minimal PATH that misses /opt/homebrew/bin, and nothing in `personad launch`'s own path adds it.
 func agentExecutable(bin string) (string, error) {
@@ -279,10 +283,11 @@ func agentExecutable(bin string) (string, error) {
 	if jsEnv := strings.TrimSpace(os.Getenv("PERSONA_NODEJS")); jsEnv != "" {
 		candidates = append(candidates, filepath.Join(filepath.Dir(jsEnv), bin))
 	}
+	candidates = append(candidates, filepath.Join(home, ".local", "bin", bin))
+	for _, dir := range agentSystemDirs {
+		candidates = append(candidates, filepath.Join(dir, bin))
+	}
 	candidates = append(candidates,
-		filepath.Join(home, ".local", "bin", bin),
-		"/opt/homebrew/bin/"+bin,
-		"/usr/local/bin/"+bin,
 		filepath.Join(home, ".claude", "local", bin),
 		filepath.Join(home, ".volta", "bin", bin),
 	)
