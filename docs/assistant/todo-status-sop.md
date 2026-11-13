@@ -147,9 +147,10 @@ to-do with priority `high`, still asks the owner with the card, as before.
 Just finished used to empty itself only by time: a to-do the owner had already looked at stayed there for 24 hours, on
 top of the list (#5707). Now the owner files it:
 
-- **Got it** on a Just finished row (a small button at the end of its status line, under the time, #6578; on iOS also a
-  leading swipe action) marks it seen. The row goes to Done at once, before the hub answers; a toast says so with
-  **Undo**, which takes the mark off. A failed write puts the row back and says why.
+- **Got it** on a Just finished row (on the web a small button at the end of its status line, under the time, #6578; on
+  iOS a button under its words, moving to the web's place in #7148, and a leading swipe action) marks it seen. The row
+  goes to Done at once, before the hub answers; a toast says so with **Undo**, which takes the mark off. A failed write
+  puts the row back and says why.
 - **Opening it** counts too: the iPhone marks it seen when its page opens (the list behind has it in Done on the way
   back); the web when the page leaves it (another to-do, the list, another page), so its row does not move while it is
   read. Nothing is said about it. The Mac (frozen) and Android do neither yet; both file what another device marked.
