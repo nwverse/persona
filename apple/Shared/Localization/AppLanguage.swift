@@ -183,8 +183,8 @@ nonisolated func interfaceText(_ resource: LocalizedStringResource) -> String {
     return String(localized: resource)
 }
 
-/// The locale `interfaceText` resolves in. A lookup with an explicit locale reads the bundle's tables each time (1–2 ms);
-/// words drawn on every redraw keep what they resolved per locale, as `StateName.text` does (#5438).
+/// The locale `interfaceText(_:)` resolves words in. Words kept once per locale (docs/apple/performance.md P4) key on it,
+/// so a change of language resolves them again.
 nonisolated var interfaceTextLocale: Locale {
     #if WIDGET_EXTENSION
     LanguageStore.drawingLocale

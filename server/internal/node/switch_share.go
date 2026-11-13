@@ -28,6 +28,9 @@ type switchShare struct {
 	// flights: the switches past their checks, from just before the quit until they end: the row listed meanwhile, and
 	// a channel closed at the end.
 	flights map[string]*switchFlight
+	// resumes: the sessions the user's Resume is starting right now (how many, resuming): a switch to the other engine
+	// does not take one of them up as the conversation's earlier session meanwhile (hold).
+	resumes map[string]int
 	// held: the records a switch wrote that its Node could no longer send its hub (its connection had ended), until a
 	// Node whose state has loaded takes them (to); delivering while drain gives them to it, one batch after another,
 	// so a record written meanwhile goes after the ones before it.
@@ -39,6 +42,9 @@ type switchShare struct {
 type switchFlight struct {
 	row  proto.Session
 	done chan struct{}
+	// unlisted: the parked session a switch to the other engine resumes (hold), waited for and kept from restarting as
+	// a session switching is, but no row of its own: the switch's session is the conversation's row meanwhile.
+	unlisted bool
 }
 
 // switches is n's share: the resident node's when attach set one, else one of n's own.
@@ -105,6 +111,44 @@ func (s *switchShare) begin(id string, row proto.Session) bool {
 	return true
 }
 
+// hold registers session id as taken up by a switch under way (the conversation's earlier session that a switch to the
+// other engine resumes, engine_switch.go), from before its first Ctrl+C until it ends: a message to it and the user's
+// Resume of it wait (wait), a pick, a stop and keys are refused (busy), and it is not listed. end ends it. false when a
+// switch of it is under way already, or the user's Resume is starting it (resuming).
+func (s *switchShare) hold(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.flights[id] != nil || s.resumes[id] > 0 {
+		return false
+	}
+	if s.flights == nil {
+		s.flights = map[string]*switchFlight{}
+	}
+	s.flights[id] = &switchFlight{done: make(chan struct{}), unlisted: true}
+	return true
+}
+
+// resuming registers the user's Resume of session id while it starts the session (done ends it); ok false while a
+// switch of it is under way or holds it: the Resume waits for that first (awaitSwitch).
+func (s *switchShare) resuming(id string) (done func(), ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.flights[id] != nil {
+		return nil, false
+	}
+	if s.resumes == nil {
+		s.resumes = map[string]int{}
+	}
+	s.resumes[id]++
+	return func() {
+		s.mu.Lock()
+		if s.resumes[id]--; s.resumes[id] <= 0 {
+			delete(s.resumes, id)
+		}
+		s.mu.Unlock()
+	}, true
+}
+
 // end ends session id's switch under way: those waiting for it go on, and its records are no longer held for it. It
 // returns the Node serving now, the one whose state took the records (nil when none has loaded since).
 func (s *switchShare) end(id string) (serving *Node) {
@@ -162,7 +206,7 @@ func (s *switchShare) listed(seen map[string]bool) []proto.Session {
 	defer s.mu.Unlock()
 	var out []proto.Session
 	for id, f := range s.flights {
-		if !seen[id] {
+		if !seen[id] && !f.unlisted {
 			out = append(out, f.row)
 		}
 	}
@@ -170,13 +214,17 @@ func (s *switchShare) listed(seen map[string]bool) []proto.Session {
 	return out
 }
 
-// keep takes the record v of session id that Node from could not send its hub, when a switch of it is under way
-// (written by the switch, which outlived from's connection): for the Node whose state has loaded now, after what it
-// is being given already, or held until one has. A record its own Node could not send is held for the next one: that
-// Node's connection has gone too, and it takes no more. false: not a switch's, not taken.
+// keep takes the record v of session id that Node from could not send its hub, when a switch of it is under way, or
+// v is the record of the session a switch to the other engine starts (written by the switch, which outlived from's
+// connection): for the Node whose state has loaded now, after what it is being given already, or held until one has.
+// A record its own Node could not send is held for the next one: that Node's connection has gone too, and it takes no
+// more. false: not a switch's, not taken.
 func (s *switchShare) keep(from *Node, id string, v sessionState) bool {
 	s.mu.Lock()
-	if s.flights[id] == nil {
+	// A switch to the other engine (engine_switch.go) writes the record of the session it starts too, under another id:
+	// that record names the switch's session as the stretch it continues.
+	carried := len(v.EngineHistory) > 0 && s.flights[v.EngineHistory[len(v.EngineHistory)-1].SessionID] != nil
+	if s.flights[id] == nil && !carried {
 		s.mu.Unlock()
 		return false
 	}

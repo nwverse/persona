@@ -18,9 +18,10 @@ export function sessionCan(s: Session | undefined, operation: keyof SessionCapab
 /** A stopped Agent (#4754, docs/integrations/engines.md "Agents run in a terminal"): an Agent of a terminal engine that is
  *  not running. Its row keeps its conversation and its terminal and takes no messages; the one way back is Resume on its
  *  terminal page. Only a node that knows it says so (capabilities read and terminal, no send): an older node's offline
- *  row has no capabilities and keeps today's behavior. */
+ *  row has no capabilities and keeps today's behavior. A Codex thread nothing has open is marked the same way (node
+ *  codex_registry.go, #5521), though its row keeps its Codex history source. */
 export function isStoppedAgent(s: Session | undefined): boolean {
-  if (!s || s.source_kind || s.assistant) return false;
+  if (!s || s.assistant || (s.source_kind && s.source_kind !== "codex_history")) return false;
   if (s.status !== "offline" && s.status !== "interrupted") return false;
   const c = s.capabilities;
   return Boolean(c && c.read === true && c.terminal === true && !c.send);
@@ -175,9 +176,13 @@ export function sessionTitle(s: Pick<Session, "title" | "cwd">): string {
   return s.title?.trim() || baseName(s.cwd) || t("lib-format.untitled_session");
 }
 
+// A path from a Windows computer: a drive letter or a UNC share. Only there is a backslash a separator; in any other
+// path it is a character of a name.
+const WINDOWS_PATH = /^[A-Za-z]:[\\/]|^\\\\/;
+
 export function baseName(p?: string): string {
   if (!p) return "";
-  const parts = p.replace(/\/+$/, "").split("/");
+  const parts = (WINDOWS_PATH.test(p) ? p.replace(/\\/g, "/") : p).replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || p;
 }
 

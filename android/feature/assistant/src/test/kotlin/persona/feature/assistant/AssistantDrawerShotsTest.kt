@@ -31,6 +31,12 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import persona.core.contracts.Direction
+import persona.core.contracts.DirectionAgent
+import persona.core.contracts.DirectionCounts
+import persona.core.contracts.DirectionTask
+import persona.core.contracts.DirectionTaskState
+import persona.core.contracts.DirectionTree
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.LeaderCounts
@@ -219,6 +225,33 @@ class AssistantDrawerShotsTest {
         rule.onAllNodesWithText("工作中").assertCountEquals(1)
     }
 
+    // #6230: one spinning activity mark. A lead whose own conversation is idle while the Agents under it work spins in
+    // every style; a lead with nothing running keeps its quiet row.
+    @Test fun anIdleLeadWithAgentsWorkingSpins() {
+        var style by mutableStateOf(AppStyle.Glass)
+        val idleLead = Session(machineId = "hub", sessionId = "l9", title = "1110 | 探索 | 基建", status = "idle",
+            updatedAt = minutesAgo(8), lastText = "等待下一轮。")
+        val groups = ConversationGroups(main, listOf(idleLead), recent,
+            names = mapOf("l9" to "基建"),
+            counts = mapOf("l9" to LeaderCounts(working = 2, needsYou = 0)))
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = style) {
+                Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onSettings = {})
+                }
+            }
+        }
+        rule.onNodeWithText("在做 2").assertExists()
+        for (s in AppStyle.entries) {
+            style = s
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            // the spinner is the only element carrying the loading content description (JSpinner), one for this lead
+            rule.onNodeWithContentDescription("加载中").assertExists()
+            capture("drawer-lead-working-spin-${s.name.lowercase()}-light")
+        }
+    }
+
     // #4331: the leaders, "常驻", under their names, each saying what it has open, in every style, light and dark; every
     // other chat waits under one All chats row.
     @Test fun drawsTheLeadersWithTheirCounts() {
@@ -253,8 +286,56 @@ class AssistantDrawerShotsTest {
         capture("drawer-all-chats-glass-light")
     }
 
-    // #4922: Recent, the user's own newest chats, between 常驻 and All chats (which still lists everything), in every style,
-    // light and dark; no Recent heading when nothing qualifies.
+    // #4352 + #5860: an open 常驻 lead unfolds the hub's one tree — to-dos with their state words (Not started is the quiet
+    // grey for a piece no Agent has started), then a to-do's Agents and a sub-Agent. Drawn on the JVM with Robolectric, so
+    // the tree is checked here even with no emulator.
+    @Test fun drawsAnOpenDirectionTreeWithANotStartedPiece() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        val lead = Session(machineId = "hub", sessionId = "l1", title = "1110 | 探索 | 增长", status = "working",
+            updatedAt = minutesAgo(4), lastText = "正在整理增长实验的数据。")
+        val tree = DirectionTree(listOf(Direction("l1", "增长",
+            counts = DirectionCounts(working = 1, needsYou = 1, planned = 1),
+            tasks = listOf(
+                DirectionTask("t1", "上线支付", DirectionTaskState.Working, listOf(
+                    DirectionAgent("hub", "a1", title = "Agent 甲", state = "working",
+                        children = listOf(DirectionAgent("hub", "a1@sub", title = "子 Agent", state = "working"))))),
+                DirectionTask("t2", "核对账单", DirectionTaskState.NeedsYou),
+                DirectionTask("t3", "平板两栏布局", DirectionTaskState.Planned),
+            ))))
+        val groups = ConversationGroups(main, listOf(lead), emptyList(),
+            names = mapOf("l1" to "增长"), tree = tree)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1400.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("", {}, groups, active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
+                        onInfo = {}, onNew = {}, onSettings = {})
+                }
+            }
+        }
+        // Fold the lead open, then its working to-do, through the real carets (the fold state is SharedPreferences-backed).
+        rule.onNodeWithContentDescription("增长 的待办").performClick()
+        rule.onNodeWithText("上线支付").assertExists()
+        rule.onNodeWithText("核对账单").assertExists()
+        rule.onNodeWithText("平板两栏布局").assertExists()
+        // Every open task says its state; the piece nobody started reads Not started, in the quiet tone.
+        rule.onNodeWithText("在做").assertExists()
+        rule.onNodeWithText("等你").assertExists()
+        rule.onNodeWithText("未开始").assertExists()
+        rule.onNodeWithContentDescription("上线支付 的 Agent").performClick()
+        rule.onNodeWithText("Agent 甲").assertExists()
+        // A sub-Agent is one more fold down: open the Agent's own caret, then the child shows.
+        rule.onNodeWithContentDescription("Agent 甲 的 Agent").performClick()
+        rule.onNodeWithText("子 Agent").assertExists()
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            capture("drawer-direction-open-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+        }
+    }
+
+    // #4922 / #5196: every newest chat, including automatic ones with their source mark, between 常驻 and All chats
+    // (which still lists everything), in every style, light and dark; no Recent heading when the group is empty.
     @Test fun drawsRecentBetweenTheLeadersAndAllChats() {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
@@ -274,7 +355,8 @@ class AssistantDrawerShotsTest {
         val top = { text: String -> rule.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.top }
         rule.onNodeWithText("最近").assertExists()
         assertTrue("常驻 › 最近 › 全部对话", top("常驻") < top("最近") && top("最近") < top("整理收件箱") && top("周末去哪儿") < top("全部对话（3）"))
-        rule.onNodeWithText("收件箱分身").assertDoesNotExist()
+        rule.onNodeWithText("收件箱分身").assertExists()
+        rule.onNodeWithContentDescription("收件箱", useUnmergedTree = true).assertExists()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
@@ -283,6 +365,58 @@ class AssistantDrawerShotsTest {
         groups = groups.copy(recent = emptyList())
         rule.waitForIdle()
         rule.onNodeWithText("最近").assertDoesNotExist()
+    }
+
+    // #5196: automatic conversations carry their source's mark everywhere the same row is drawn. The user's own chat
+    // keeps its latest-message channel mark; an automatic chat's source takes precedence over that channel.
+    @Test fun drawsSourceMarksInRecentLeadersSearchAndAllChats() {
+        val origins = listOf("inbox", "task", "lark_agent", "spawned", "extension", "something_new")
+        val titles = listOf("Inbox chat", "Scheduled chat", "Lark chat", "Spawned chat", "Extension chat", "Other chat")
+        val sources = origins.mapIndexed { index, origin ->
+            Session(machineId = "hub", sessionId = "auto-$index", title = titles[index], origin = origin,
+                channels = if (origin == "lark_agent") listOf("feishu") else emptyList())
+        }
+        val own = Session(machineId = "hub", sessionId = "own", title = "Own chat", origin = "user", channels = listOf("feishu"))
+        val lead = sources[1].copy(sessionId = "lead", title = "Leader chat")
+        var query by mutableStateOf("")
+        var groups by mutableStateOf(ConversationGroups(main = main, directions = listOf(lead), others = sources + own,
+            recent = sources + own, names = mapOf("lead" to "Leader chat")))
+        rule.setContent {
+            CompositionLocalProvider(LocalChannels provides listOf(persona.core.contracts.api.HubChannel(id = "feishu", name = "Feishu channel"))) {
+                PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                    Box(Modifier.testTag("shot").width(400.dp).height(1700.dp).background(PersonaTheme.palette.background)) {
+                        AssistantDrawer(query, { query = it }, groups, active = null, hasMain = true, onEnd = null,
+                            onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onSettings = {})
+                    }
+                }
+            }
+        }
+        val labels = listOf("收件箱", "定时任务", "来自 飞书 /agent", "对话派生", "来自扩展", "其他")
+        fun assertRowMark(title: String, label: String, below: Float? = null) {
+            val rows = rule.onAllNodesWithText(title).fetchSemanticsNodes()
+                .filter { below == null || it.boundsInRoot.top >= below }
+            assertTrue("no $title row below $below", rows.isNotEmpty())
+            val marks = rule.onAllNodesWithContentDescription(label, useUnmergedTree = true).fetchSemanticsNodes()
+            assertTrue("$title lacks $label in its own row", rows.any { row ->
+                marks.any { mark -> mark.boundsInRoot.top >= row.boundsInRoot.top && mark.boundsInRoot.bottom <= row.boundsInRoot.bottom }
+            })
+        }
+        fun assertMarks(below: Float? = null) {
+            titles.forEachIndexed { index, title -> assertRowMark(title, labels[index], below) }
+            assertRowMark("Own chat", "Feishu channel", below)
+        }
+        assertMarks() // Every Recent row, not merely one mark somewhere in the drawer.
+        assertRowMark("Leader chat", "定时任务")
+        groups = groups.copy(recent = emptyList(), directions = emptyList())
+        rule.waitForIdle()
+        rule.onNodeWithText("全部对话（7）").performScrollTo().performClick()
+        val allChatsBottom = rule.onNodeWithText("全部对话（7）").fetchSemanticsNode().boundsInRoot.bottom
+        assertMarks(below = allChatsBottom) // Every expanded All chats row.
+        query = "chat"
+        groups = groups.copy(directions = listOf(lead))
+        rule.waitForIdle()
+        assertMarks() // Every search-result row.
+        assertRowMark("Leader chat", "定时任务")
     }
 
     // #5084: the built-in background supervisor waits under All chats with the chats Persona opened itself, under the
@@ -309,7 +443,7 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("后台督办").assertDoesNotExist()
         rule.onNodeWithText("全部对话（4）").performClick()
         rule.onNodeWithText("后台督办").assertExists()
-        rule.onNodeWithText("每日早报").assertExists()
+        rule.onAllNodesWithText("每日早报").assertCountEquals(2) // Recent and All chats, with the same Scheduled mark.
         rule.onAllNodesWithText("Background supervisor").assertCountEquals(0)
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
@@ -318,16 +452,16 @@ class AssistantDrawerShotsTest {
         }
         style = AppStyle.Glass; dark = false
         rule.waitForIdle()
-        // The rows with a menu, top to bottom: Persona, the two recent chats, then All chats newest first, where the
+        // The rows with a menu, top to bottom: Persona, the three recent chats, then All chats newest first, where the
         // background supervisor (3 minutes ago) is first.
-        rule.onAllNodesWithContentDescription("对话操作")[3].performClick()
+        rule.onAllNodesWithContentDescription("对话操作")[4].performClick()
         rule.onNodeWithText("拷贝会话 ID").assertExists()
         rule.onAllNodesWithText("设为常驻").assertCountEquals(0)
         rule.onAllNodesWithText("归档").assertCountEquals(0)
         rule.onAllNodesWithText("结束…").assertCountEquals(0)
         rule.onNodeWithText("拷贝会话 ID").performClick()
         // any other chat there keeps its whole menu
-        rule.onAllNodesWithContentDescription("对话操作")[4].performClick()
+        rule.onAllNodesWithContentDescription("对话操作")[5].performClick()
         rule.onNodeWithText("设为常驻").assertExists()
         rule.onNodeWithText("归档").assertExists()
         rule.onNodeWithText("结束…").assertExists()

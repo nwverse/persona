@@ -587,11 +587,9 @@ enum ExtensionMarketText {
         }
     }
 
-    /// What the hub has going on (this page opening: an install started earlier shows its steps).
-    func loadOperations() async {
-        guard operations.stepped, let api = try? api(), let list = try? await api.extensionOperations() else { return }
-        for var op in list { op.manager = manager; operations.received(op) }
-    }
+    /// What the hub has going on for this page's assistant (this page opening: an install started earlier shows its
+    /// steps), as the extension's settings page reads it.
+    func loadOperations() async { await operations.reload(manager: manager) }
 
     /// Reads the installed extensions' names for a pack's members; names read earlier stay (a member uninstalled since
     /// is still named). A list that can't be read leaves the ids.
@@ -609,10 +607,10 @@ enum ExtensionMarketText {
     var uninstallMessage: String {
         guard isPack else { return String(localized: "Its settings and data are deleted too. You can install it again from the market later.") }
         guard !members.isEmpty else {
-            return String(localized: "Uninstalling only the pack keeps its members. Uninstalling with members deletes their settings and data.")
+            return String(localized: "Pack Only keeps its members. Everything also uninstalls them and deletes their settings and data.")
         }
         let names = ExtensionText.list(members.map { memberNames[$0.id] ?? $0.id })
-        return String(localized: "Members: \(names). Uninstalling only the pack keeps them. Uninstalling with members deletes their settings and data.")
+        return String(localized: "Members: \(names). Pack Only keeps them. Everything also uninstalls them and deletes their settings and data.")
     }
 
     /// The partial uninstall's lines for its failed operation's card (nil: none, or another operation).

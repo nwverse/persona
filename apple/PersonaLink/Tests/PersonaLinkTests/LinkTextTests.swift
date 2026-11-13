@@ -3,7 +3,38 @@ import XCTest
 @testable import PersonaLink
 
 final class LinkTextTests: XCTestCase {
+    /// Runs `body` with `linkText` looking in one language's resources.
+    private func within(_ language: String, _ body: () throws -> Void) throws {
+        let path = try XCTUnwrap(Bundle.module.path(forResource: language, ofType: "lproj"), "no \(language) resources")
+        let saved = linkTextBundle
+        linkTextBundle = try XCTUnwrap(Bundle(path: path))
+        defer { linkTextBundle = saved }
+        try body()
+    }
+
     func testDuration() throws {
+        try within("zh-Hans") { try durationCases() }
+    }
+
+    func testEnglishAndJapaneseText() throws {
+        let since = Date(timeIntervalSince1970: 1_000_000)
+        let later = Date(timeIntervalSince1970: 1_000_000 + 7_320)
+        try within("en") {
+            XCTAssertEqual(LinkText.duration(since: since, now: later), "2 h 2 min")
+            XCTAssertEqual(LinkText.hub(name: "x", mesh: 2), "Hub “x” · 2 hubs in its mesh")
+            XCTAssertEqual(LinkText.mode(true), "The hub connects to me (passive)")
+            XCTAssertEqual(LinkText.kinds["lan"], "LAN")
+            XCTAssertEqual(StatePill.title(.unpaired), "Not Paired")
+            XCTAssertTrue(PairLink.notice(for: .otherApp)?.contains("not for pairing this computer") == true)
+        }
+        try within("ja") {
+            XCTAssertEqual(LinkText.duration(since: since, now: later), "2時間2分")
+            XCTAssertEqual(LinkText.hub(name: "x", mesh: 1), "ハブ「x」・他のハブとは連携していません")
+            XCTAssertEqual(StatePill.title(.connected), "接続済み")
+        }
+    }
+
+    private func durationCases() throws {
         let since = Date(timeIntervalSince1970: 1_000_000)
         let cases = [(30, "不到 1 分钟"), (60, "1 分钟"), (3660, "1 小时 1 分钟"), (7320, "2 小时 2 分钟")]
         for (seconds, expected) in cases {
@@ -12,6 +43,10 @@ final class LinkTextTests: XCTestCase {
     }
 
     func testHubLine() throws {
+        try within("zh-Hans") { try hubLineCases() }
+    }
+
+    private func hubLineCases() throws {
         XCTAssertEqual(LinkText.hub(name: "x", mesh: nil), "hub「x」")
         XCTAssertEqual(LinkText.hub(name: "x", mesh: 1), "hub「x」· 没和别的 hub 互联")
         XCTAssertTrue(LinkText.hub(name: "x", mesh: 1).contains("没和别的 hub 互联"))

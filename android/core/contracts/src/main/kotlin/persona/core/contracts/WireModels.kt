@@ -62,6 +62,27 @@ data class Fold(
     val tasks: List<FoldTaskSnapshot> = emptyList(),
     /** The folded run belongs to a supervision round the user must see (`fold_supervision.go`); older hubs omit it. */
     @SerialName("supervision_user") val supervisionUser: Boolean? = null,
+    /** The images this run of work looked at (docs/protocol/protocol.md, "Images viewed this turn"); older hubs omit it. */
+    val images: List<FoldImage> = emptyList(),
+)
+
+/**
+ * An image a folded run looked at (`fold.images`, docs/protocol/protocol.md "Images viewed this turn"): its image item
+ * ([itemId], absent for a picture file Read opened whose result kept no image), the call and tool, where it came from
+ * (`read`, `screenshot`, `browser`, `mcp`, `tool`), the file Read read, the machine a screenshot named, and its shape.
+ */
+@Serializable
+data class FoldImage(
+    @SerialName("item_id") val itemId: String? = null,
+    @SerialName("tool_use_id") val toolUseId: String = "",
+    val tool: String = "",
+    val source: String = "tool",
+    val path: String? = null,
+    val machine: String? = null,
+    val mime: String? = null,
+    val size: Int? = null,
+    val width: Int? = null,
+    val height: Int? = null,
 )
 
 @Serializable

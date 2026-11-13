@@ -156,12 +156,10 @@ func TestLiveHerdr(t *testing.T) {
 	// Given its resume command, the pane keeps its agent, its name and herdr's own reading of its working state (#4657:
 	// before this fix, pane.report_agent pinned agent_status to "idle" forever).
 	var held *herdr.Agent
-	for deadline := time.Now().Add(4 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+	waitWithin(t, 4*time.Second, "the held pane's working status", func() bool {
 		held, err = c.AgentGet(ctx, persona)
-		if err == nil && held.AgentStatus == "working" {
-			break
-		}
-	}
+		return err == nil && held.AgentStatus == "working"
+	})
 	if err != nil || held == nil || held.Agent != "claude" || held.Name != "j-0e0000" || held.AgentStatus != "working" {
 		t.Errorf("after the hold: %+v %v (want agent claude, name j-0e0000, status working)", held, err)
 	} else {

@@ -1,5 +1,25 @@
 # Lessons: testing and validation
 
+- Fixture teardown is part of a test's elapsed time (#5730). A scripted terminal whose shell is ready immediately
+  does not need a fixed startup pause. When a test has finished its assertions, cancel background prompt checks
+  owned by that fixture and join them before restoring package settings or closing sockets. Delivery/recovery tests
+  must still await the check before their assertions; cancellation at teardown must not substitute for those checks.
+  Keep normal detached delivery and production wait limits unchanged, and measure serial and partitioned commands
+  separately when evaluating the gain.
+
+- A transport fixture that already reads every reply should wake its request waiter from that reader (#5730).
+  Register by request ID before sending, retain JSON-RPC errors, remove waiters on cancellation/EOF/write failure,
+  and keep duplicate or late replies from blocking the reader. Polling an already available approval response
+  added about 23 seconds to the complete shell-name security matrix. Keep every classification assertion and
+  verify the transport with real pipes and held approvals; virtual time can expose an unnecessary polling tick.
+
+- A counter of a shared resource (lists, calls, reads) must not include what a fixture's own background passes do
+  (#6121). `TestIdlePassesReadWhatRuns` counted `closeDoneTaskAgents`'s machine lists, but `liveLoop`'s signal-driven
+  pass (a 100 ms coalescing window) listed the same machine from the fixture's earlier calls, so the count was 0 or 1
+  depending on the race (32 failures in 200 runs). Settle the counter before the measurement: wait until no list has
+  happened for a quiet window longer than the background pass's coalescing delay, then count only what the call under
+  test adds. Never fix this class with a plain `time.Sleep` before the call — that only moves the race.
+
 - A test that calls an entry point which sets the process environment must `t.Setenv` that variable first, so the
   test puts it back (#4581). `nodeclient.RunHook` with `--persona-home <dir>` sets `PERSONA_HOME`; one test left it
   pointing at its removed `t.TempDir()`, and every later `internal/node` test put `node.sock` there. On macOS that path
@@ -11,6 +31,12 @@
   or removing their temporary files (#3345). Waiting only for `pane.send_input` leaves a background start polling a
   dead host for three minutes, with its diagnostics appearing under a later test. Expected start failures use the
   node's logger, so tests can capture diagnostics without changing production logging.
+
+- An async status fixture must carry the operation job that the real status endpoint reports (#5363). `iphoneMac`
+  returned a job from `iphone.pair` but never from `iphone.status`, so a later refresh could erase the just-started
+  job; `go test -count=1000 -run '^TestIPhoneJobs$' ./internal/extmgr` reproduced it in about a second. Keep the
+  fixture's status/job state consistent with `node/iphoneStatus`, and assert the post-pair status directly rather than
+  adding a wait or changing production synchronization.
 
 - Bulk Postgres fixtures need physical isolation, not just row deletion (#3743). Deleting 500 feed rows left a larger
   unsent B-tree than the sent index; a controlled statistics refresh then changed a later index-choice assertion even
@@ -350,10 +376,35 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 - A database copied with `CREATE DATABASE ... TEMPLATE` keeps none of its template's `ALTER DATABASE ... SET` settings: set `synchronous_commit` on every copy (`dbtest.create`). Nothing may be connected to the template; Postgres waits up to 5 s on its own for backends that are closing, so no sleep after `Close` is needed. Use `STRATEGY wal_log`: `file_copy` checkpoints the whole server twice.
 - Since Postgres 15, every `DROP DATABASE` forces a checkpoint of the whole server, which writes whatever other tests left dirty. On a loaded machine, one drop took 0.07-3.8 s. Count that before giving more tests a database of their own.
 
+## "TempDir RemoveAll cleanup: directory not empty" after an assistant test (2026-11-12, #5510)
+
+- A test passed and then failed its own cleanup: something wrote into its `t.TempDir()` after the test returned. In
+  `internal/assistant` the writer was the service's debounced timers (`directionsSoon`, `directionTreeSoon`,
+  `meetingLiveChanged`, an attending look): they fire up to a second later, call `kbGet`, and that opened the
+  knowledge base again after the test's cleanup had closed it, putting back `.lock`, `chats/`, `people/` and the rest.
+  The same happened to a stopping manager (a late timer took the data directory's lock back), so it was a code bug:
+  `kbEnd` closes for good, and test fixtures register `t.Cleanup(s.kbEnd)`, not `kbClose` (which stays reopenable,
+  for the disconnected case and restart tests). A timer that already holds the engine still writes: the meeting
+  fixture runs the attending feed on real timers, so its cleanup waits for the looks already running and lets none
+  start after (`trackAttendFeed` in `server/internal/assistant/meeting_live_test.go`).
+- It shows only under load (one in four shuffled package runs on a busy Mac; six processes of `-run '^TestMeeting'
+  -count=20 -cpu=1` reproduce it every time). To find such a writer, give the fixture a directory whose cleanup, when
+  `os.RemoveAll` fails, lists what is left (with modification times against the cleanup's start) and dumps every
+  goroutine with `runtime.Stack(buf, true)`: the stack that calls `MkdirAll` or opens the lock names the timer.
+
 ## Green here, red on the hub: judge server tests on the hub machine (2026-11-12, #5182, #5188)
 
 - A test that needs Postgres skips without `PERSONA_TEST_DATABASE_URL`, and a plain `go test` prints `ok` for its package. #5031 changed what `task_plan` answers and checked `internal/hub` without a database, so `TestSupervisedTaskOverTheBus`, which drives that answer end to end, never ran and went red on `main` (#5182). Before a change that touches what a database test covers, run its package with `scripts/test/test-server.sh <package>`, or `go test -v` and check for `SKIP` lines.
 - Allocation budgets are set from numbers measured on the hub machine (linux/amd64). The same tests read about 2 KB lower on an arm64 Mac, so #5150 passed `TestReindexOneRevAllocation` and `TestIndexWholeListAllocation` there and failed them on the hub (#5188). Judge a budget only from a `test-server.sh` run. To find where a regression comes from, compare `allocated(...)` in a probe at both commits; the Mac shows the same difference, so a `pprof -sample_index=alloc_space` profile of the measured call can be taken there.
+
+## "Not listed" holds for a transcript the list never shows (2026-11-12, #5054)
+
+The node's list leaves out offline Claude transcripts under 2 KB (a hook probe's, `scanOffline`), and the fixtures of
+the launcher switch tests (`finishedTurn`) are about 400 bytes. A test that a session is left out of the list once it is
+no longer running passes with such a transcript whatever the code does: the engine switch's "the old session is not
+listed" did, and its title check (the row takes the old session's title, read off that session's row) failed until the
+transcript was long enough to be listed (`longTurn`). Before asserting a row is absent, assert it is there in the same
+setup.
 
 ## The mock hub does not enforce device roles (2026-11-12, #4869)
 
@@ -971,3 +1022,13 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - `testhome` now resolves `GOENV`, `GOPATH`, `GOMODCACHE` and `GOCACHE` with the real home before swapping it and pins
   them. Anything else that reads the home directory for its own config (git, ssh, a CLI's login) has the same problem
   under testhome: pin what the child needs, or give the test its own config.
+
+## A throw-away HOME also hides Docker's CLI plugins (2026-11-13, #6131)
+
+- The Compose config checks run `docker compose` under a temporary `HOME`, so Docker reads an empty config directory and
+  finds no `docker-compose` plugin where Docker Desktop and Colima register it (`cliPluginsExtraDirs` in the user's
+  `~/.docker/config.json`). The checks skipped only on the text `is not a docker command`; Docker 29 prints
+  `unknown shorthand flag: 'f' in -f` for the same missing plugin, so they failed instead, on `main` too.
+- Don't detect a missing tool by one wording of its error: ask it directly in the test's own environment
+  (`scripts/test/compose_cli.py` runs `docker compose version`) and skip with how to enable the check
+  (`PERSONA_TEST_DOCKER_CONFIG`, `docs/operations/hub-update.md`).
