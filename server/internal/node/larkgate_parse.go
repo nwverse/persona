@@ -61,6 +61,21 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 		v.deny = "不要读或改 lark-cli 的配置和凭据（~/.lark-cli）：飞书用 lark-cli 命令，它自己带登录。"
 		return v
 	}
+	if commands, ok := literalLarkLoopCommands(cmd, gates); ok {
+		v.unknown, v.other = false, true
+		for _, command := range commands {
+			child := classifyLarkDepth(command, gates, cwd, risk, depth+1)
+			merge(child)
+			v.unsure = v.unsure || child.unsure
+			v.unparsed = v.unparsed || child.unparsed
+			// Loop expansion proves reads only. Writes (including GET deletion
+			// routes) keep the whole-command approval and proxy restrictions.
+			for _, call := range child.calls {
+				v.unknown = v.unknown || !larkRead(call) || !larkBypassSafe(call)
+			}
+		}
+		return v
+	}
 	cmd = normalizeLarkCommand(cmd, cwd)
 	v.unknown = shellCommandUnknown(cmd, false, depth)
 	segs, ok := shellcmd.Split(cmd)

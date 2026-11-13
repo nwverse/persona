@@ -1,6 +1,9 @@
 // Shared sizing and recipes for measured, variable-height session rows.
 // pickMenuMin: the least a value pill's menu is wide (the menu's own default width); wider pills set their menu's width.
-export const SESSION_LIST_METRICS = { estimate: 44, overscan: 6, searchDelay: 250, groupOptions: 50, avatar: 22, icon: 12, pickMenuMin: 208 } as const;
+// The list by group: groupsOpen sections start open, each showing groupPreview rows before "Load more"; groupsRefresh
+// is the least time between two reads of the groups themselves, however many hints come.
+export const SESSION_LIST_METRICS = { estimate: 44, overscan: 6, searchDelay: 250, groupOptions: 50, avatar: 22, icon: 12, pickMenuMin: 208,
+  groupsOpen: 3, groupPreview: 6, groupsRefresh: 1500 } as const;
 export const SESSION_LIST_STYLE = {
   foldButton: "touch-hit relative z-10 flex size-6 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover hover:text-ink-2 [@media(pointer:coarse)]:size-11",
   heading: "mt-3 flex items-center gap-1 px-2",

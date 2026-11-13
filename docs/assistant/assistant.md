@@ -39,7 +39,7 @@ Changing trust does not erase context already delivered to a computer or termina
 | Scheduled tasks | One table ("Scheduled tasks" below), default "Morning briefing" on weekdays 09:00 enabled, "Evening review" weekdays 21:30 disabled; normal "completion" push afterward (with the task's `facts` on, as `docs/extensions/bots.md` "Morning and evening briefings" says, Persona computes what waits and what failed, and the push is the counts). When told "every day / on weekday X at…", the assistant creates one with `schedule_routine` (marked "Created by Persona" in the App), deletes with `delete_routine`. With `facts` on, the briefing is also the daily digest of handed-out work, told from each task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): "On <date> you said: <their words>" (or who started it and its goal), where it stands in a line, what is needed from the owner, overdue and scope changes since the last briefing; what ended since is listed once with each criterion's result, and work that needs nothing and has not changed is left out. The mark of the last briefing is the setting `assistant.brief_digest_at`; a list has at most 8 rows |
 | Run history | Every run (chat started successfully / failed to start / skipped because downtime missed it) is stored in settings `assistant.runs` (latest 200), `GET /api/v1/assistant/runs[?ref=]`; scheduled tasks include `last_status` |
 | Due time | Scheduling sets a timer for the next due time (sleeps at most 30 seconds, recalculates on list changes), not 20-second polling. Follow-ups missed during hub downtime run once on return, with lateness stated in the prompt. A run into a conversation the owner is talking in waits for them, 5 minutes past its time at most ("Messages from the system wait for the owner") |
-| Background tasks / Monitor | The assistant can use Bash `run_in_background` and Monitor to watch events, then end its turn; command completion / events make claude start another turn itself (node considers it working, with normal push on completion). node learns running tasks from stream-json `system/background_tasks_changed`: don't reclaim the process while tasks exist (up to 12 hours); task lists live in `node_sessions.tasks`. personad restart (deployment) kills tasks with the process; on startup node sends these chats an explanation so the assistant decides whether to restart them |
+| Background tasks / Monitor | The assistant can use Bash `run_in_background` and Monitor to watch events, then end its turn; command completion / events make claude start another turn itself (node considers it working, with normal push on completion). node learns running tasks from stream-json `system/background_tasks_changed`: don't reclaim the process while tasks exist (up to 12 hours); task lists live in `node_sessions.tasks`. personad restart (deployment) kills tasks with the process; on startup node sends these chats an explanation so the assistant decides whether to restart them; the task list is cleared only once that message went, so a failed one is sent again by the next connection (#6306) |
 | Tools without approval | The assistant process allows Persona's MCP tools (notify_user, schedule_followup, agents_list, kb_*…) without phone approval each time; the registered and allowed namespaces follow the hub capability and resume policy in "Built-in MCP namespaces" below. Actions representing the user (mail_send, phone writes) are confirmed by hub itself; Lark writes are confirmed by a Bash gate ("Lark: skill supplied by the Lark extension" below). Other Bash / Monitor calls follow the session permission mode; assistant conversations default to `bypassPermissions` when no manager or conversation mode is selected |
 | Agents | `agents_list` / `agent_read` / `agent_send` / `agent_start`: use hub session state (`decorated`) and node `session.items` / `session.send` / `session.start` directly, not ssh. With `worktree.branch`, `agent_start` first has the computer's engine make the worktree through node `worktree.prepare` / `worktree.create` (the workspace found by `cwd`; herdr's or Orca's own, so Orca and the app list it), then starts the Agent in it, instead of the Agent running `git worktree add` itself (#5325, `assistant/agent_worktree.go`) |
 | Answer questions on the user's behalf | `interaction_answer`: when the owner says "answer that question for me, choose A", the assistant answers other Agents' **question-type** interactions. Only `kind: question`, excluding the assistant's own chat; `permission` / `plan` / `screen` are always rejected with an explanation that only the owner can answer in the App (no proxy approvals is a hard boundary). Validate every question: all must be answered, keys must be exact question text, choices must be listed (an answer that writes out exactly one option, its label then its own description as `label：description`, with `:`, a dash or the description in brackets, quotes or spaces around it, counts as that label, #3929), single-select exactly one, multi-select joined as `A, B` like the App; reject free text (answer in the App or use `agent_send`). Expired, answered, dismissed, cancelled, and nonexistent interactions each return their own error (the latter four consult history). `Resolution.AnsweredBy = "assistant"` accompanies interaction history (`GET /api/v1/interactions/history`) and `interaction_resolved` broadcasts; the App marks "Answered by Persona". On Agent questions, the assistant first decides whether to answer, see "Assistant answers questions first" below. `agents_list`'s waiting rows include `interaction_id` and options for every question, avoiding another lookup (tools and rules all belong to the assistant: `toolInteractionAnswer` in `assistant/tools_apps.go`, tests `assistant/tools_apps_test.go`; the interaction queue also lives in the manager: `interactions.get` returns the interaction or its historical outcome if no longer waiting; `interactions.answer` records validated answers as assistant answers, directly in-process, `assistant/fleet_routes.go`) |
@@ -163,7 +163,7 @@ knowledge base (2026-11-04, `assistant/kb_bus.go`): `kb.context {chat_id}` → `
 one-way `kb.kick {connector?, scope?}` (source changed: run a round after 5 seconds and read that connector's chats, or the items, at that round even before their poll, at most once a minute; a manager before #1562 sends `{}`: only the round), `kb.agent_turn {machine_id, session_id, cwd, title?, line}` (Agent turn completed, append to its cwd project's timeline; hub queues while assistant disconnected and delivers on reconnect),
 hub-observed events: `session.user_spoke`, `session.user_stopped` (user stopped an assistant chat in the App: Lark /agent chats stop their dispatched tasks too, #3308), `session.turn_started`, `session.turn_ended`, `sessions.changed` (a machine's session list drives inter-chat messages, automatic project / derived to-do links, herdr markers, Agent titles), `interaction.resolved` (user handled an Agent card; record in task chat, and linked Agent choice questions become decisions), `todos.space_renamed` (hub renamed a workspace), `interaction.raised` (quiet task Agent asks, #1731), `session.seen` (user viewed a session, for triage statistics), `manager.updated` (handshake answers changed); removed on 2026-11-04: `assistant.tasks`, `assistant.card_sent`, `assistant.cards_sent`, `inbox.message`, because Inbox moved into the assistant,
 and `manager.resync` (a request for a full snapshot; the assistant still answers it, but the hub no longer sends it).
-Inbox (`assistant/inbox_bus.go`): `inbox.collected` (hub hands over a source round: `{epoch, seq, round, sources:[{id, name, off?, extension?, migrated?, group?, meta?, meta_description?, settles?, kinds?, things, read_error?}], mail?: {accounts, failed?: [{id, email, read_error}]}, names}`; assistant synthesizes / triages items then answers; `epoch` identifies this hub run, `seq` the round, discard older already-used rounds; unreadable stored Inbox returns `inbox_unavailable`, retried next round), `inbox.item {id}` → `{item, ok}` (stored JSON for plugin detail slots), `inbox.forget {source}` → `{deleted}`, `inbox.repo_mutes {source, set?, add?, repos?}` → `{repos}` (GitHub settings "Muted repositories"); `inbox.mutes {source?}` → `{mutes}` and `inbox.unmute {id}` → `{}` (the Inbox Sources pages' Muted list, #5278); `inbox.triage_preview {source, name, kinds?, things}` → `{verdicts: [{tier?, summary?, reason?, urgent?, state?, why?}]}` (the pages' Try Triage with the Model: at most 3 things, each asked about once as a round's item would be, nothing kept). Snapshots add `inbox: {agents:[{machine_id, session_id}]}` for AI twin chats, suppressing hub completion push (`null` if unreadable, retain previous).
+Inbox (`assistant/inbox_bus.go`): `inbox.collected` (hub hands over a source round: `{epoch, seq, round, sources:[{id, name, off?, extension?, migrated?, group?, meta?, meta_description?, settles?, kinds?, things, read_error?}], mail?: {accounts, failed?: [{id, email, read_error}]}, names}`; assistant synthesizes / triages items then answers; `epoch` identifies this hub run, `seq` the round, discard older already-used rounds; unreadable stored Inbox returns `inbox_unavailable`, retried next round), `inbox.item {id}` → `{item, ok}` (stored JSON for plugin detail slots), `inbox.forget {source}` → `{deleted}`, `inbox.repo_mutes {source, set?, add?, repos?}` → `{repos}` (GitHub settings "Muted repositories"); `inbox.mutes {source?}` → `{mutes}` and `inbox.unmute {id}` → `{}` (the Inbox Sources pages' Muted list, #5278); `inbox.post {on?}` → `{on}` (the Assistant source's switch on those pages, #6430: whether the assistant may put its conversations into the Inbox; on unless turned off); `inbox.triage_preview {source, name, kinds?, things}` → `{verdicts: [{tier?, summary?, reason?, urgent?, state?, why?}]}` (the pages' Try Triage with the Model: at most 3 things, each asked about once as a round's item would be, nothing kept). Snapshots add `inbox: {agents:[{machine_id, session_id}]}` for AI twin chats, suppressing hub completion push (`null` if unreadable, retain previous).
 Hub errors cross the bus with codes (`no_device`, `machine_offline`, `node_closed`, `stale_snapshot`, `assistant_in_doubt` for interrupted partial Inbox replies), restored by the assistant to original errors with unchanged decisions. App routes, events, fields, and pushes are unchanged.
 
 **State** uses the assistant's `assistant.Store` (`assistant/store.go`): settings `assistant` (its own profile, below), model config `model_config.*`, `launchers.managed`, `launchers.hidden`, `launchers.zshrc` (`docs/assistant/model-config.md` ("Who owns models")), `assistant.main_handoff`, `assistant.titles`, `assistant.archived`, `assistant.model_picks`, `assistant.relay`, `assistant.tasks`, `assistant.runs`, `tasks.trust`, Inbox `inbox_mutes` (legacy `assistant.routines` / `assistant.followups` still migrate only on first read), channel `channels`, `channels.state`, `bots.feishu.state` (since 2026-11-04; `bots.feishu` credentials, pairing, and switches still belong to hub); tables `task_plans`, `assistant_feed`, `todos`, `todo_spaces`, `todo_agents`, `todo_decisions`, `inbox_items`.
@@ -419,7 +419,7 @@ With over ten Agents running, most mid-task questions concern internal choices t
 
 - **The card is the same card**: the same `question` interaction (`tool_name: ask_user`), push, Lark / channel cards, 2-hour expiry (`askUserWait`), `deadline` / `reversible` / `recommend` handling and duplicate-question check. The one difference is `resumable: true`, which the queue already knows from hook cards: nothing waits on it in memory, so it must outlive a manager restart and its node's connection.
 - **What the tool says** (`prompts/agents/question_asked_later.md`): the card is up, the answer comes later as a new message, end the turn without guessing or going ahead, and until when the card waits.
-- **How it ends**, each told once with `prompts/assistant/ask_later.md` (when it was asked, the questions, then the end):
+- **How it ends**, each told once with `prompts/assistant/ask_later.md` (when it was asked, the questions, then the end). The apps show that message as one line ("You answered: …", "The question timed out unanswered", "The question was closed without an answer"), never as the user's bubble (#6421; `docs/protocol/protocol.md`, "Messages injected by Persona"):
 
   | The card | The conversation is told |
   | --- | --- |
@@ -563,6 +563,75 @@ process needs its settings restored. This applies to both the Claude CLI and the
 - Settings chosen while the conversation has no running process are kept for its next start. The existing
   `bypassPermissions` restart rule remains: a process not started with it cannot switch to it through a control request;
   a busy process finishes its work before the restart. Ultracode remains available only in Agent sessions.
+
+## Explicit skill mentions (Web only, #5357)
+
+The Web assistant's existing mention menu reads `GET /api/v1/assistant/skills?machine_id=…&session_id=…&launcher=…`.
+The owning manager resolves the conversation and effective model/launcher, supplies its own assistant directory and
+identity, and asks that computer's `skills.list` in catalog mode. Client `cwd`, profile and file paths are not accepted
+by this endpoint. Foreign/non-assistant sessions, guest chats and external runtimes without an inventory contract
+cannot expose a supported catalog. The legacy `GET /skills` and non-catalog `skills.list` remain unchanged.
+
+Codex uses the selected launcher's real app-server `skills/list` (`cwds`, `forceReload`), reusing its live connection
+when possible or initializing a short-lived connection without a thread/model. This preserves launcher wrappers and
+their configuration instead of guessing from `~/.persona/skills`. Persona's prepared `.claude/skills` extra root is
+the same as normal Codex startup. Enabled entries with real regular instruction files are accepted; discovery errors
+mark the inventory incomplete. At send time the resolved file becomes a typed `skill` input in `turn/start` or
+`turn/steer`, alongside the unchanged reference text.
+
+Claude resolves the same effective profile as `assistantSend`, then reads only immediate skill directories under
+that profile's `skills` and the working directory's ancestor `.claude/skills` roots (at most 64 ancestors, 512 entries,
+16 KiB frontmatter per file). Names/descriptions are data, not executed YAML or shell substitutions; bodies are not
+read for the menu. `user-invocable: false` and local `skillOverrides: off` are respected.
+Nonempty `user-invocable` scalar forms other than `true` are conservatively omitted by this bounded parser.
+Known strict-plugin policy or `Skill` deny/ask rules refuse this adapter rather than work around native
+customization/approval gates.
+The launcher's existing `--settings` file or inline object is checked through the same settings reader as startup;
+its values are never returned in the catalog or diagnostics.
+Known managed-policy files/drop-in directories or a server-policy cache also refuse the bounded adapter:
+it checks their presence without reading a potentially credential-bearing cache or executing policy helpers.
+This bounded adapter deliberately does **not** claim to enumerate plugin, bundled or remote skills.
+It sends an explicit, server-resolved exact-file reading instruction under existing permissions rather than a native
+slash command, which could resolve a same-name skill elsewhere or apply frontmatter tool/permission overrides.
+
+References are hashes of assistant, computer, working directory, launcher/runtime/profile and skill identity.
+The manager and execution node revalidate selected identities against the current environment. Paths never come
+from a client, and names never serve as fallback lookup keys. Deleted or changed-environment selections return
+`skill_unavailable`, `delivered: none`, `retryable: false`; ordinary text does not query the catalog. Skill bodies
+remain subject to existing runtime permissions and higher-priority instructions.
+
+Offline contracts: `server/internal/assistant/skill_mentions_test.go`,
+`server/internal/node/skill_mentions_test.go`, `server/internal/assistantskills/references_test.go`,
+and `web/src/views/chat/MentionSkill.test.tsx`. Opt-in real runtime checks:
+`node scripts/test/skill-runtime-smoke.mjs codex` (actual inventory, no model),
+`node scripts/test/skill-runtime-smoke.mjs codex --model`, and
+`node scripts/test/skill-runtime-smoke.mjs claude --model`. Model runs use disposable read-only-request fixtures and
+existing authentication; optional `--model-id <existing-model-id>` selects a model for this invocation only.
+Claude also accepts `--settings <current-profile-settings-file>` without copying its contents or changing the default.
+Its Go test bridge uses production catalog, opaque-reference validation and instruction rendering against the
+current profile (`CLAUDE_CONFIG_DIR`, or Claude's unset/default profile), explicitly keeping the catalog partial.
+It confirms an explicit model override against the runtime's initialization event, then requires an actual
+exact-file `Read`/successful tool-result pair and the random marker stored only in
+the disposable instruction body, not merely a successful chat reply. Go must be installed for that bridge.
+Output is allowlisted; arbitrary replies, catalogs and credentials are not printed. A successful runtime
+smoke is not a production Web-to-hub end-to-end test. Synthetic browser fixture:
+`PORT=25357 python3 scripts/mock/skill_mentions.py`.
+
+Inspected browser captures use only that fictional fixture, not the requester's reference image or account data:
+[light](../web/screenshots/skill-mentions/light-menu.png),
+[dark](../web/screenshots/skill-mentions/dark-menu.png),
+[narrow large-text light](../web/screenshots/skill-mentions/narrow-light-menu.png),
+[narrow large-text dark](../web/screenshots/skill-mentions/narrow-dark-menu.png),
+[selected](../web/screenshots/skill-mentions/narrow-selected.png),
+[loading](../web/screenshots/skill-mentions/narrow-loading.png),
+[unavailable](../web/screenshots/skill-mentions/narrow-error.png), and
+[partial](../web/screenshots/skill-mentions/narrow-light-partial.png).
+These demonstrate rendered interaction, not production connectivity or model execution.
+
+Runtime contracts were checked against the official
+[Codex app-server skills documentation](https://developers.openai.com/codex/app-server/#skills) and
+[Claude skills documentation](https://code.claude.com/docs/en/skills).
+No native client feature or build is part of this Web-only change.
 
 ## Workspace mentions (2026-11-06, #5594)
 
@@ -820,7 +889,11 @@ reported to hub); each had races swallowing user pushes: Claude processes queued
 failed Codex steer becoming start is claimed by another input's `turn/started`; old push callbacks read new-turn markers if hub misses intermediate Working.
 Correctness requires correlating every input / completion id in core node message paths. Per-chat decisions avoid those races and have a fixed answer.
 
-App `PUT /api/v1/assistant/tasks/{id}` omitting `push` or `facts` preserves it (old Apps); old `PUT /api/v1/assistant/routines` always preserves both.
+App `PUT /api/v1/assistant/tasks/{id}` omitting `push`, `inbox` or `facts` preserves it (old Apps); old `PUT /api/v1/assistant/routines` always preserves all.
+
+### Put it in the Inbox when done (#6430)
+
+Push says whether a run reaches the phone; `inbox` says whether it leaves a row in the Inbox, so a result is not missed behind a quiet unread dot. The two are independent. On the edit page (web `TaskEditor.tsx`, iPhone `AssistantTaskEditor`; shown when the hub has `task_inbox`) the setting is **When done, put it in the Inbox**: **Don't** (`""`, the default; a task from before keeps behaving as it did), **Only if worth a look** (`worthy`: the run puts a row there itself with `inbox_post` when it finds something worth the user's time, tier Needs you) and **Every time** (`every`: after each run that answered, the manager adds a row, tier FYI, titled by the task, saying what the run answered; `assistantTurnSettled` → `inboxPostEvery`). A run's start message says which one applies (`task_run`). `schedule_routine` / `schedule_followup` take `inbox` (`off` / `worthy` / `every`, left out keeps it) and their descriptions say to set it only when the user asked. `inbox_post` itself (`assistant/inbox_post.go`, `prompts/mcp/inbox/inbox_post.md`) is for the user's own request too ("tell me if there is anything worth a look"): its description allows it only on the user's explicit request or a task's setting, and `reason` (required) names which, shown on the row. A Just me meeting turn and a health conversation refuse it, like `notify_user`. The rows and their source: `docs/assistant/inbox.md` ("Assistant rows").
 `null`, non-string, unknown values return 400. `schedule_routine` / `schedule_followup` accept optional `push` (`every` / `asked`); omission defaults new tasks to every run,
 preserves existing values. `schedule_routine` with `id` / `push` can change only this field on any task. Web, iOS / Mac, Android editors include the switch (#2570, #2676: shown with hub `task_push` or an already-asked task; "Only when it notifies" hides "Continue original chat", list marks "Push only on notification"; tasks without prior `push` omit it on save for old hubs).
 
@@ -1334,6 +1407,17 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
   swipe / long-press Unarchive. Mac shares code (two-finger trackpad swipe).
 - Calls remain tool cards with localized Chinese source names (`ToolPresentation`: New chat, Send to chat, Rename chat, Archive chat…).
 - Measurement (2026-11-01, isolated test hub on hub machine: fake HOME, separate port / database, copied launcher pointing to fake Claude config): assistant performed new → list → rename → send → archive → list including archived → unarchive → read, all 8 succeeded. Both new-chat messages included source and hop 1; it answered only "OK", no relay reply. First-turn untitled chats were formerly "assistant" in lists / source context (directory-name title), now "New chat".
+
+## Chat search (#6282)
+
+The apps find an assistant chat by what was said in it through `GET /api/v1/assistant/search` (`docs/protocol/protocol.md` ("Assistant chat search (#6282)"), the design in `docs/design/proposals/assistant-search.md`). The manager answers it from an index in its own database (`internal/assistant/search_index.go`, `search_routes.go`, `search_text.go`; tables `assistant_search_items` and `assistant_search_cursors`, migration `0511_assistant_search.sql`).
+
+- **What it keeps**: the user's own words and the assistant's replies of the chats "All chats" lists (archived ones too, never the health space), as the chat shows them: the shared rule of `spec/fixtures/chat-search` (its `index`). No thoughts, tools, system events, quoted contexts, hidden tags or messages Persona injected for the model; a card is its fallback text.
+- **Keeping up**: `searchLoop` (started with the service) sweeps when the computers' session lists change (`setSessions` wakes it) or every 30 s. A chat whose `rev` moved is read after its cursor (`session.items` with `after_seq`, unfolded, about 500 items a page); a working chat at most every 5 s. Chats never read are read newest first with a pause between pages, and the cursors let a restart go on from there; until then searches say `partial`. A new `history` token (the transcript replaced or rewritten) drops the chat's rows and reads it again from 0. A read that fails (the computer offline) waits a minute. A chat missing from the list for a day leaves the index (never while the list is empty: the computer may be offline).
+- **Searching**: a substring scan of the folded text (NFKC, lower case), every word in one message, at most 3 newest hits a chat (`db.SearchAssistantItems`), with a 2 s limit; titles are matched in memory. No `pg_trgm`: the proposal's measurements show two-character Chinese queries cannot use a trigram index, and a personal install's text scans in tens of milliseconds.
+- **Privacy**: full devices only (a read-only role gets 403), not an extension scope, not a tool the model can call; the query is never logged. The rows go with their chat; dropping the manager's database drops them.
+- **Reading it again** (#6340): `personad assistant search-reindex` (the built-in manager; `persona-manager assistant search-reindex`) or `personad manager search-reindex [--dir D]` (a manager made in the app, `--dir` left out when the computer has one) empties both tables in the database the manager runs on and counts the reset (`db.ResetSearch`, the manager setting `assistant_search.reset`). The built-in manager's database is its own once its data moved there, else the hub's (`builtinDatabaseNow`, as `builtinDatabase` decides at its start); another manager's is its `manager.json`'s, never the hub's. A running manager sees the count move at its next sweep (`searchLoad`): it empties what it wrote meanwhile from its old cursors, drops the cursors it held and reads every chat again from the start, so it need not be stopped; a stopped one reads them when it starts. A database without the index (a manager from before chat search) is left as it is. There is no separate `--purge`: the manager always fills the index again from the transcripts, so emptying it and rebuilding it are the same act.
+- **Not yet**: the earlier stretches of a chat that moved between Claude Code and Codex are not indexed, only the session it runs in now.
 
 ## Codex (2026-11-01, `codex app-server`)
 

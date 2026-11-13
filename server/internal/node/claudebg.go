@@ -19,7 +19,7 @@ import (
 // Claude sessions that run where Persona has no terminal pane: a background session Claude's own daemon runs (/fork,
 // /background: kind "bg"), a session open in Claude's desktop app (entrypoint claude-desktop…), claude in a terminal
 // that herdr, Orca, Tern or botmux do not run (entrypoint cli). Each writes sessions/<pid>.json in its config directory with
-// the session it has open, its status (busy / idle / waiting) and, since Claude Code 2.1.29x, its peer inbox
+// the session it has open, its status (busy / idle / shell / waiting) and, since Claude Code 2.1.29x, its peer inbox
 // (claudepeer.go). They listed as offline while they worked, and a message from the phone was refused (a second
 // claude --resume would write the same transcript, openelsewhere.go). The node lists every live one as running, with
 // its status from the file and its transcript as for any session; a message goes through its inbox when the node can
@@ -56,8 +56,12 @@ const claudeBgReadOnly = proto.ReadOnlyClaudeBg
 const claudeAgentsList = "这个标签停在 Claude Code 的 agents 列表上：打开终端，用方向键选中一个会话、回车进去后再发消息"
 
 // claudeBgStatus maps a claude's sessions/<pid>.json status to the node's: waiting is a question or dialog of its
-// own, answered on the computer. Anything else is unknown.
-var claudeBgStatus = map[string]string{"busy": proto.StatusWorking, "idle": proto.StatusIdle, "waiting": proto.StatusBlocked}
+// own, answered on the computer. shell (Claude Code 2.1.31x and later) is a turn that ended while a background command
+// or Monitor still runs, which older builds wrote as idle; the commands come from the transcript (#6363). Anything else
+// is unknown.
+var claudeBgStatus = map[string]string{
+	"busy": proto.StatusWorking, "idle": proto.StatusIdle, "shell": proto.StatusIdle, "waiting": proto.StatusBlocked,
+}
 
 // parkedClaudeSessions are the sessions only parked claudes have open, each with the background job it went to.
 func parkedClaudeSessions(procs []claudeProc) map[string]parkedJob {

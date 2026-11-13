@@ -640,6 +640,7 @@ sending identity or confirmation behavior.
   - Section titles are the Agents list's state headers (`SectionHeader`: the name and a `CountBadge` in the state's tone; `FoldButton` for the folding ones), and the count is the items listed under the title. No separate summary line repeats them (#3712).
   - "N related" sits inside the row it belongs to, under its words; opened, the related rows come under it a level in, with a line down their side.
   - A filter and a sort for such a list go in one button's menu next to the view switch (on the web, next to the search field), the active filter also as a chip that clears it ("List controls" below); the sort orders rows inside each section and never moves a section (To-dos on iOS, Android and the web, #3740).
+- A paged list drawn by group (web paged Agents list, #6348): choosing a grouping in **Browse by** (Computer, Project, Space; Account for personal agents) draws the list as the sidebar's folding sections, one per group, the busiest first, with the group's count on its heading and, while any do, how many of its sessions need the user in the attention tone (the Earlier header's badge). The first three start open on their newest six sessions and **Load more**; the rest are folded and read nothing until opened. A project that is checked out in several places lists them under its heading as quiet lines: its remote, then each directory with its computer and its own count; the same lines sit under the project's name in the value pill's menu, and each of its rows says its computer before its title. A space names its computer beside its own name when the list spans several. The sessions without the attribute are one last section (**No folder**, **No space**). Picking a value in the pill narrows the list to that group and draws it flat. Why sections and not only a filter: a grouping control says how the list is arranged ("List controls" below), so choosing one has to rearrange it; a pill alone left the list as it was until a second choice. Why only a few open: an open section keeps its own list up to date, and a hub can have dozens of projects.
 - Older rows folded by activity (web paged Agents list, #4236): an "Active within" menu beside the list's count (Any time, the default, then 24 hours, 7 days, 30 days) folds the rows last active before the window into one Earlier group at the list's end, folded by default, with how many it holds and how many of them need the user on its header. It is a display choice ("List controls": grouping and display), not a filter: no row leaves the list, no count changes, and Any time undoes it. Why not a filter chip: a filter hides rows, and sessions that need the user must stay visible (below).
 
 #### Long lists on a detail page
@@ -683,6 +684,8 @@ A list's controls come in four kinds. Each kind looks like itself, so that narro
 | Navigation entry, such as personal Agents | opens another page | a row or the sidebar, never chip-shaped |
 
 Search may take query operators and scopes; they live inside the search field.
+
+A list row found by what is inside it, not by its own name (a Persona chat found by a message, #6283), keeps its title and puts the sentence that matched in place of its second line, the match marked as search in chat marks it (the accent tint); opening it goes to that message, ringed as a search hit. A row found by its name keeps its usual second line and opens as usual. Local matches show at once; what the server finds merges in, and a short line under the field says when the server's results may be incomplete.
 
 Android's `JMenu` takes a choice list in groups: an action can open a group with a title (`JAction.section`, drawn after a rule; `JActionSheet` draws it too, over its labels' column, as the Agents ⋯'s Display) and carry a quiet line under its label (`JAction.subtitle`), as the To-dos list's Show (each choice with how many it would show) and Sort by (#3740). A status section's count can sit in a capsule of its state's tone (`JSectionHeader` `countTone`, the To-dos list's sections, #3712), as iOS `CountBadge`. A one-line notice over a list keeps its action on its line as a text button (`JNotice` `inlineAction`: "1 more waiting on you, not in This week · Show all").
 
@@ -922,6 +925,17 @@ chat (#5033), where the panel only offers models and says plainly which one the 
 
 ### 3.9 Empty states
 
+**Web skill ZIP import** (#5478): the advanced Settings › Assistant › Skills group reuses `Group`, `Row`,
+`SettingsHint`, `RowFailed`, `Pill`, `Button`, `Dialog` and `Loading`. **Upload ZIP** opens the existing dialog with a
+labelled shared Button opening the native file picker. Checking is announced; the preview shows plain-text metadata and a wrapping real path.
+Cancel receives focus at preview; closing restores focus to Upload ZIP. The existing dialog owns focus trapping and
+Escape. Install/Undo are single-flight and cannot be dismissed halfway through a write; failures are actionable
+localized text, never raw archive HTML or filesystem errors. Buttons have a 44 px target; actions wrap on narrow
+screens. Semantic tokens supply light/dark colors. All content is English, Simplified Chinese and Japanese.
+Explicit review-before-install is intentional even with Undo: uploaded instructions may later influence an assistant,
+so selecting a file must not silently change behavior. Success refreshes the list and offers a bounded, unchanged-new-
+package-only Undo with retained recovery files; `docs/operations/hub-update.md` defines the state and discovery limits.
+
 `EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; Android `JAssistantOffline`, a `JEmptyState` whose `leading` slot holds `JManagerAvatar`; `docs/assistant/managers.md` "Clients").
 
 ### 3.10 Loading and error states
@@ -944,6 +958,15 @@ Toasts: error, success or info; one slot, so a new toast replaces the old. Durat
 **The error the chat stopped on** (web, #5313; cindy's `ErrorBanner`, the owner's requested alignment, replacing the deviation #5157 recorded): while a chat's last line is a model error (the Persona conversation's last chat line, whatever feed lines follow), not dismissed, with nothing on its way and the Agent not working, it is drawn over the composer as the dock's last item: the same `ErrorNotice` with what can be done now (**Fix it**, **Retry**, **Edit last message**) and a ✕ (`onDismiss`): cindy's 28 px round button in the card's top end corner (`-mt-1 -mr-1`, so it sits on the first line of text), a 14 px x in `--ink-2`, the `hover` fill and `--ink` on hover, the accent focus ring, a 44 px touch target, spoken and hovered as **Dismiss error**. The chat leaves the line out meanwhile, so the error is said once. ✕ (remembered per conversation in this browser) and **Retry** (at once, before "continue" reaches the transcript) put the banner away; the same error again after a retry is a new banner. Dismissed, followed by anything, or while the Agent works, the error is the record in the chat: the same card without Retry, Edit last message or ✕, as cindy's `ErrorMessageCard` has none (a Persona chat's record keeps its Fix it: the hub's word on the turn's error while it is the last line, else what its own text names). A usage limit is the banner too, with ✕ and no Retry. The banner is `role="status"`; ✕ and Retry hand the keyboard back to the composer with a fine pointer only; a new banner is scrolled into view, once, in the box over the composer when that box scrolls; a Retry that did not go brings it back. The host's failure note (`FailureNote`, a botmux turn stopped on an error) and the Persona conversation's refused-send card (`FailureCard`) are the same notice, no longer red-tinted boxes: the reason with Retry and Open in Lark, or the hub's sentence with its buttons, the original under **Error details** and ✕; while the failure note shows, it is the one card over the composer and the model error stays in the chat. `ModelFallbackCard` is not a failure and keeps its look. Deviations from cindy: Esc does not dismiss the banner (Esc twice in the composer already edits the last message), and Retry's hover text says it continues the current task rather than that it resends the last message, which Persona's Retry does not do.
 
 The hub's link while it is down (Waiting for network, Connecting…, Updating…, or what only the user can fix) is said once: in the title of a page that has one (an Agent's chat), else by a pill floating under the home bar on the home pages (iOS `ShellLinkPill`, `docs/apple/shell.md` "Connection status and toasts"; Android `JLinkPill`, #4339). It moves nothing, takes no touches and is announced; a spinner while it retries, a caution mark when it cannot.
+
+### Web assistant skill mentions (#5357)
+
+Reuse the composer's existing `ComposerPanel` surface, neutral sliding highlight, icon set, keyboard/IME/Escape
+behavior and context chips. A skill row has two lines: readable name plus source, then its description; the source
+distinguishes equal names. Selecting it adds a removable skill chip rather than hiding an invocation in display text.
+Skill rows and the skill chip's remove target meet the Web 44 px touch size. The menu's loading, partial-inventory and
+failure status stays secondary and never disables ordinary chat. No new primary screen, setting, model choice or
+native client pattern is introduced. Use the existing surface/hover/ink/accent tokens in light/dark and narrow layouts.
 
 ### 3.11 Code blocks, inline code and quotes in replies
 
@@ -990,6 +1013,8 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 - **The persona is an accent**: a small face at the top right whose mood says how that widget's subject is, the empty states, and the state before pairing. It never takes the hero's place.
 - **Every rendering mode**: in tinted, clear and Lock Screen modes every colored part goes in the accent group (`homeTone`, `homeAccent()`); a mark on a filled disc is knocked out of it; Mochi becomes a line drawing (`MochiGlyph`).
 - **Counts** are the app's own (Needs You per session, section 4.8; the Inbox's Needs You; the Machines page's windows); inbox and health content is `privacySensitive`. A to-do ticked on a widget shows done at once and says so in red when the hub refuses it.
+- **Choices live on the widget** (Edit Widget), never in the app's Settings: each starts at a default that works on a fresh install (every agent, every computer, the fullest account), and its list is the snapshot's, named as the widget names them.
+- **The Lock Screen** shows the same hero in one color: the circle holds the hero alone, the rectangle the widget's line and one or two under it, the inline one line beside the clock.
 
 ### 3.15 Charts (iOS)
 
@@ -1140,7 +1165,7 @@ Today there are seven mechanisms and the same action can use different ones (DS-
 - Foreground: the system banner, suppressed for the visible session. No custom in-app push banner.
 - Actions: Allow (needs unlock) and Deny on permissions; Approve and Send Back on plans; Reply on done (`apple/Persona/App/NotificationActions.swift:19-52`). Failures are posted as local notifications.
 - Live Activity: Allow and Deny buttons; Allow requires authentication. Stale after 15 minutes.
-- Recording Live Activity: Bookmark and Stop. In a meeting Persona attends (#2981) Ask Persona leads the row with its words, and Bookmark, Turn Off Persona and Stop show only their marks (over 44 pt wide with the capsule's padding, `IslandMetrics.recordingIconButton`) and keep their names for VoiceOver, so four fit the Lock Screen's width; all work without unlocking (`docs/apple/live-activity.md`, "Recording").
+- Recording Live Activity: Bookmark and Stop. In a meeting Persona attends (#2981) Ask Persona leads the row with its words, and Bookmark, Turn Off Persona and Stop show only their marks (over 44 pt wide with the capsule's padding, `IslandMetrics.recordingIconButton`) and keep their names for VoiceOver, so four fit the Lock Screen's width; all work without unlocking (`docs/apple/live-activity.md`, "Recording"). In a room meeting with Talk (#3862 phase 4) **Talk** leads instead: its tap opens a talk window (Live Activity buttons can't be held), the button reads **Done** while it is open, the third line says "Listening to you…" and the island's mark is the talk mark.
 - Apple Watch all-day recording (#4741, `WatchAllDayNotices`, `AllDayAlertPolicy`): the watch posts its own local notifications, since the phone may be out of reach and only the watch knows its microphone stopped. "Recording Paused" (a call, Siri, a changed microphone, a failed resume) and "Recording Stopped" (battery, storage, a failed write, an audio reset, the app ended) each say what happened and the one next step (a stop also that what was recorded is kept), with **Continue**; the phone's request to start has **Start**; a deletion on the phone has none. Each kind has one request id, so a newer one replaces the older. In front a notice goes only to Notification Center (the page and a haptic already said it), and recording again withdraws it. A "Recording Stopped" scheduled 10 minutes ahead and pushed on by every saved chunk is the dead-man's switch: it fires only if the app dies. A tap on the notice opens the page; its button brings the app to the front, where the microphone can open.
 - Deep links: the `persona://` custom scheme, plus the former name's scheme kept for old links (`docs/protocol/rolling-upgrade-compatibility.md`); no associated domains.
 - Reminders are agent tools and Scheduled Tasks, not a UI object.
@@ -1493,6 +1518,7 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 - Intentionally dark: watch, Live Activity island, image editor, VNC screen, image viewer chrome. Code colors are the same in both modes.
 - Add a view-level `colorScheme` read only for drawn content that a dynamic color cannot express.
 - Web: class on the root, set before first paint, plus a `color-scheme` meta.
+- Web terminal: Terminal settings › Appearance (Match page by default, Light, Dark) gives the terminal's screen one scheme's page tokens with `[data-terminal-scheme]`, theme color and extension theme included, never a palette of its own (`docs/integrations/terminal.md` "Appearance").
 
 ### 6.2 Dynamic Type
 
@@ -1753,6 +1779,28 @@ page the user watches during the meeting is the page they keep writing in after 
   (past retention not the text), on a hub with the meeting conversation. It is a row, not a button: the page's primary content stays the minutes, and
   the composer is the thread's. The minutes push opens the same page over Recordings, with Open to the recording's page,
   and the live sheet of a recording running then doesn't present itself over it.
+- **Talk (phase 4)**: while a room meeting Persona can be asked in records (listening or taking part, not paused),
+  **Talk** stands in send's place while the field is empty, as the chat's voice button does, so the row keeps one solid
+  button (`MeetingTalkButton`, via `MeetingQuestionField`'s `instead`): a capsule in the composer's ink, `Theme.Icon.talk`
+  and the word **Talk** on one line (only the icon at accessibility sizes, in the row under the field, its name the
+  label). It is pressed and held while the owner speaks, never tapped: held, it takes `Theme.ai` on `Theme.aiTint` and
+  grows to `Theme.Recording.talkHeldScale` (no growth under Reduce Motion), and the caption under the field says
+  "Listening to you… Let go when you're done." (a window: "…Tap Talk when you're done."), announced for VoiceOver. A
+  release under half a second says to hold it while speaking; a span asked without the call that held no words says
+  Persona heard nothing; both go after a few seconds. VoiceOver can't hold: its double tap opens a talk window (as the
+  Lock Screen's tap), the next ends it; its hint says where the words go. Where a span goes to the voice service (taking
+  part, the extension takes meeting calls) a caption line of its own under the caption shows the contract's privacy
+  Wording until a span went while it showed ("Audio stays on this iPhone, except while you hold Talk: what is said then
+  goes to the voice service."), beside a word after a span rather than replaced by it, and the line under Record says it
+  before the meeting starts. Until a span went under it, a span from anywhere (held, VoiceOver's, the Lock Screen's) is
+  asked without the call unless that line had been on screen for a second as it opened; the Lock Screen has no room for
+  the Wording, so its Talk waits until it was seen. Hidden with Just Me on (Talk is the room's) and after the meeting: a
+  hold
+  ends when Talk leaves the screen under the finger (Just Me, the page left, a word typed), and after 60 seconds.
+  While the meeting call's voice speaks, the page's **Stop Speaking** row shows and cuts it (`interrupt`), as it does for
+  a spoken answer. Reason: push-to-talk is the contract's way of addressing Persona (no wake phrase), a hold makes the
+  span exactly what the owner said, and taking send's place keeps typing and talking one gesture apart without a second
+  solid button. No haptic beyond the light tap as a span opens; nothing at its end, since the microphone is open.
 - **Voice after the meeting (phase 6)**: once the follow-up exists, the composer has the chat's **Voice Chat** button
   (`ComposerVoiceButton`, the plain face) before the field, where the live page has [+]; at accessibility sizes it is in
   the row under the field. During the call the chat's `VoiceBar` takes the composer's place, and a call that ended by

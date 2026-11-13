@@ -115,6 +115,7 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 	}()
 	cmd.Env = identity.Environment(cmd.Env, gateEnv...)
 	cmd.SysProcAttr = osproc.SessionGroupAttr()
+	msysCmdLine(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

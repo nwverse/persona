@@ -533,9 +533,9 @@ internal class AgentsViewModel(
     /** Still not running (not started again elsewhere since the confirmation opened). */
     fun deletable(session: Session): Boolean = page.value.sessions.firstOrNull { it.key == session.key }?.canDelete
         ?: page.value.sessions.isEmpty()
-    /** Still running in a terminal pane (not closed elsewhere since a confirmation opened). */
+    /** Still running and closable from here, in a terminal pane or a runtime's (not closed elsewhere since a confirmation opened). */
     fun closable(session: Session): Boolean = page.value.sessions.firstOrNull { it.key == session.key }
-        ?.let { it.isLive && it.canTerminal } ?: page.value.sessions.isEmpty()
+        ?.let { it.isLive && it.canClose } ?: page.value.sessions.isEmpty()
     /** "Join live": join a Codex app-server thread live; the list refreshes after it. */
     fun attach(session: Session) = change(session.machineId, R.string.agents_notice_attached) { it.attach(session) }
     /** Stop its turn from the list (iOS's row menu Interrupt): felt once it went through. */

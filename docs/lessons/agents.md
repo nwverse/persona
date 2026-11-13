@@ -566,6 +566,13 @@ Recorded screens: `server/internal/screen/testdata/claude-2.1.318-rewind-*`; par
 - Tests: `claudeSim` in `node/rewind_sim_test.go` renders the recorded screens, and `TestClaudeSimMatchesRecordedScreens` compares each row, so flow tests use actual screen appearances. Its restore gate can hold the prompt back after the panel closes, making the late-restore race deterministic instead of relying on a sleep.
   Live testing runs only in a disposable session (`go test -tags herdrlive -run TestLiveRewind`, `PERSONA_LIVE_PANE` / `PERSONA_LIVE_PROMPT`), with an isolated herdr server and a fresh directory, never the agent's working herdr or a real conversation.
 
+## Paseo's rewind of a Claude Code agent forks its session (2026-11-12, #6293, Paseo 0.14)
+
+- `agent.rewind.request` with `mode: "conversation"` forks the Claude session at the last answered turn before the target (the Agent SDK's `forkSession`): a new `<id>.jsonl` beside the old one, which stays untouched, and the agent moves to the new id (`persistence.sessionId`). With no answered turn before it, the agent gets a fresh id and no transcript until its next prompt.
+- A Persona session listed under its Claude session id would therefore come back under another id. Pin it first: `update_agent_request {labels: {"persona.session": <id>}}` (labels merge; one cannot be removed over the wire, so the pin is for good, as for a session Persona started).
+- `messageId` is the timeline `user_message.messageId`: the transcript entry's uuid for history Paseo loaded, else the client message id, which Paseo maps to the provider's id (and refuses before the provider acknowledged the prompt). The handler does not load the agent: read its timeline first (that loads it).
+- Which providers can: the agent snapshot's `capabilities.supportsRewindConversation` / `supportsRewindFiles` / `supportsRewindBoth` (Claude Code all three; Codex, pi, omp the conversation; OpenCode both at once only).
+
 ## herdr reports terminal-blocking Claude notices as done (2026-11-05, #2553)
 
 Claude Code 2.1.309 shows an auto mode billing notice after a turn ("We're changing auto mode…", "Enter to continue · Esc to cancel"), while herdr `agent_status` stays `done`.
@@ -913,6 +920,10 @@ sees a wait it can't name, and a following `dequeue` pops whatever it guessed. G
 `command_lifecycle` lines for it instead (queued, started, cancelled, completed). Take one back with `cancel_async_message`, and treat
 `cancelled: false` as "it went in": writing it again would send it twice. Check such behavior against the real CLI with a short
 `claude -p` script before building on it; the requests are not in the public docs.
+
+## Herdr workspace directories come from panes (#4761)
+
+herdr's `workspace.list` does not report a workspace cwd, even though panes do (#4761). Resolve cwd-only worktree requests from each session's `pane.list` and optional worktree metadata, with canonical deepest-prefix matching. Only associate a pane-derived directory when the workspace's panes agree: herdr creates from the workspace source, so a matching later pane must not select another repository (#5524). A linked-worktree workspace holds only its checkout, not its main repository: herdr refuses it as a worktree source. A workspace that contains the path can still belong to an ancestor repository. Use it for native creation only when its matched directory is inside the requested Git root; otherwise use Git. Use foreground directories only when the workspace has no stable pane directory. Test with workspace records that omit cwd and a matching second pane from another repository. A repository with no matching terminal workspace can still use Git worktree creation and open a plain workspace: checkout isolation remains, but terminal parent grouping is unavailable.
 
 ## A published runtime stream must end after its viewer leaves (#5247)
 

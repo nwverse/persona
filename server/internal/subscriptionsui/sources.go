@@ -12,6 +12,12 @@ import (
 // ① Inbox Sources (#5278): everything that brings new things into the Inbox or the knowledge base. What needs
 // attention first, then what Persona reads itself, the subscriptions, the recommended ones a plugin brings, and the
 // way to more. {"ext": id} or {"c": id} narrows it to one extension or connector (its page's Subscriptions row).
+// ownRows are the subscriptions that are rows of their own: not a built-in's default one, which its built-in's page
+// shows (#6345), so a source is listed once.
+func ownRows(subs []subscriptions.Subscription) []subscriptions.Subscription {
+	return slices.DeleteFunc(slices.Clone(subs), func(s subscriptions.Subscription) bool { return subscriptions.IsMigration(s.ID) })
+}
+
 func (p *pages) list() wire.View {
 	filtered := p.st.C != "" || p.st.Ext != ""
 	v := wire.View{Title: p.t("title.sources")}
@@ -22,6 +28,7 @@ func (p *pages) list() wire.View {
 	if err != nil {
 		return p.failed(v.Title, err)
 	}
+	subs = ownRows(subs)
 	intro := "list.intro_sources"
 	if filtered {
 		intro = "list.intro"

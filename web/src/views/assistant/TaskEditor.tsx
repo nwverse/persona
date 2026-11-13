@@ -11,7 +11,7 @@ import { navigate } from "../../lib/router";
 import {
   BYPASS, CRON_EXAMPLES, DAY_NAMES, everyLabel, fromLocalInput, INTERVALS, lastRunText, MAX_EVERY, MIN_EVERY, momentLabel, nextRun, normalizeDays,
   parseTime, PERMISSION_MODES, repeatsLabel, runDetail, runStatusWord, sameTask, taskBody, taskTitle, toLocalInput, untilLabel, validateTask,
-  TASK_CRON_FEATURE, TASK_PUSH_FEATURE, WEEKEND, withPush, withRepeat, WORKDAYS, type CronPreview, type Push, type Repeat, type Run, type Task,
+  TASK_CRON_FEATURE, TASK_INBOX_FEATURE, TASK_PUSH_FEATURE, WEEKEND, withPush, withRepeat, WORKDAYS, type CronPreview, type InboxMode, type Push, type Repeat, type Run, type Task,
 } from "../../lib/routines";
 import { hubHas, useStore } from "../../lib/store";
 import { Button, cx, Dialog, Spinner, toast, useNow } from "../../ui/atoms";
@@ -50,6 +50,8 @@ export function TaskEditor({
   const origin = task.session_id;
   /** "Push when done" shows when the hub takes it (task_push), or the task already has it. */
   const hasPush = useStore((s) => hubHas(s.features, TASK_PUSH_FEATURE)) || task.push === "asked";
+  /** "When done, put it in the Inbox" shows when the hub takes it (task_inbox), or the task already has it. */
+  const hasInbox = useStore((s) => hubHas(s.features, TASK_INBOX_FEATURE)) || !!task.inbox;
   /** "Cron" shows when the hub runs cron tasks (task_cron), or the task already is one. */
   const hasCron = useStore((s) => hubHas(s.features, TASK_CRON_FEATURE)) || task.repeat === "cron";
 
@@ -343,6 +345,29 @@ export function TaskEditor({
               />
               <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">
                 {draft.push === "asked" ? t("assistant-taskeditor.push_hint_asked") : t("assistant-taskeditor.push_hint_every")}
+              </p>
+            </section>
+          )}
+
+          {hasInbox && (
+            <section>
+              <SectionTitle>{t("assistant-taskeditor.section_inbox")}</SectionTitle>
+              <Segmented<InboxMode>
+                label={t("assistant-taskeditor.section_inbox")}
+                value={draft.inbox ?? ""}
+                onChange={(inbox) => set({ inbox })}
+                options={[
+                  { v: "", label: t("assistant-taskeditor.inbox_off") },
+                  { v: "worthy", label: t("assistant-taskeditor.inbox_worthy") },
+                  { v: "every", label: t("assistant-taskeditor.inbox_every") },
+                ]}
+              />
+              <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">
+                {draft.inbox === "every"
+                  ? t("assistant-taskeditor.inbox_hint_every")
+                  : draft.inbox === "worthy"
+                    ? t("assistant-taskeditor.inbox_hint_worthy")
+                    : t("assistant-taskeditor.inbox_hint_off")}
               </p>
             </section>
           )}
