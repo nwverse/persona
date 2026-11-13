@@ -303,4 +303,20 @@ private actor Seen {
         #expect(done(snapshot), "the session did not end")
         try await Task.sleep(for: .milliseconds(50)) // the callbacks' tasks
     }
+
+    /// #3954: the screen-sharing stream carries a pair, which the video channel binds to. A WebSocket URL with it; none
+    /// without one (the URL as before); and a fresh, unguessable one each connection.
+    @Test func theConnectURLCarriesAPair() throws {
+        let http = try #require(URL(string: "https://hub.example.com/api/v1/machines/macbook/ports/5900/connect"))
+        let paired = RFBWebSocket.url(http, pair: "0123abcd")
+        #expect(paired.absoluteString == "wss://hub.example.com/api/v1/machines/macbook/ports/5900/connect?pair=0123abcd")
+        #expect(RFBWebSocket.url(http, pair: nil).absoluteString == "wss://hub.example.com/api/v1/machines/macbook/ports/5900/connect")
+        #expect(RFBWebSocket.url(http, pair: "").query == nil, "an empty pair is no pair")
+        let plain = try #require(URL(string: "http://192.0.2.1:8787/api/v1/machines/m/ports/5900/connect"))
+        #expect(RFBWebSocket.url(plain, pair: "p").scheme == "ws", "a hub over http is ws")
+
+        let a = RFBWebSocket.newPair(), b = RFBWebSocket.newPair()
+        #expect(a.count == 32 && a.allSatisfy(\.isHexDigit), "16 random bytes in hex: \(a)")
+        #expect(a != b, "a new pair each connection")
+    }
 }
