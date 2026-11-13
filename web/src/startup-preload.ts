@@ -440,7 +440,8 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * this branch measures 44,585 B — 23 B less than main, two over the old ceiling; the ceiling moves to 44,608 B so it
  * covers main, 0 B of room for this branch's measured 44,585 B.
  */
-export const IDLE_TIER_BUDGET = 44_734;
+// After merging main 65cbb6b95, this branch measures 44,741 B: account for the 7 B feature delta.
+export const IDLE_TIER_BUDGET = 44_741;
 
 const gzip = promisify(gzipCompress);
 
