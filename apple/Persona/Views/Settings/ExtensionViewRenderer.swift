@@ -73,7 +73,10 @@ struct ExtensionParts: Identifiable {
             var leftOut = false
             for (j, c) in s.items.enumerated() {
                 if case .divider = c { parts.append([]); continue }
-                guard drawn(c, includeHTML: includeHTML) else { leftOut = true; continue }
+                // Left out: a component this app doesn't know, and the assistant's HTML outside its chat (extensions never
+                // receive the assistant sandbox context).
+                if case .unknown = c { leftOut = true; continue }
+                if case .html = c, !includeHTML { leftOut = true; continue }
                 parts[parts.count - 1].append(Item(id: Item.id(c, section: i, index: j), component: c))
             }
             parts = parts.filter { !$0.isEmpty }
@@ -91,18 +94,6 @@ struct ExtensionParts: Identifiable {
             }
         }
         return out
-    }
-
-    /// Whether a page's rows draw `c`: not a component this app doesn't know, not the assistant's HTML outside its chat
-    /// (extensions never receive the assistant sandbox context), not UI version 4's code-hosting components (the code page
-    /// draws a View with them, `ExtensionCodePage`).
-    static func drawn(_ c: ExtensionComponent, includeHTML: Bool) -> Bool {
-        switch c {
-        case .unknown, .divider: false
-        case .html: includeHTML
-        case .header, .breadcrumb, .fileTree, .code, .diff, .commentThread, .composer: false
-        default: true
-        }
     }
 }
 

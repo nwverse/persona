@@ -63,13 +63,12 @@ struct ExtensionMediaTests {
         #expect(cameras.items.contains { if case .image = $0.component { true } else { false } })
     }
 
-    /// A section whose components this app all leaves out is not drawn as its title alone (#827); one with a footer, or
-    /// sent with no components, keeps it.
+    /// A section whose components this app all leaves out (ones it doesn't know) is not drawn as its title alone (#827);
+    /// one with a footer, or sent with no components, keeps it.
     @Test func aTitleNeverStandsAloneOverNothing() throws {
         let v = try JSONDecoder().decode(ExtensionView.self, from: Data(#"""
         {"sections": [
           {"title": "Future", "items": [{"type": "hologram"}, {"type": "divider"}, {"type": "hologram"}]},
-          {"title": "Code", "items": [{"type": "code", "path": "a.go", "text": "package a"}]},
           {"title": "With a footer", "footer": "Shown on newer apps.", "items": [{"type": "hologram"}]},
           {"title": "Empty on purpose", "items": []},
           {"title": "Rows", "items": [{"type": "hologram"}, {"type": "row", "title": "One"}]}
@@ -78,7 +77,7 @@ struct ExtensionMediaTests {
         #expect(ExtensionParts.of(v).map(\.title) == ["With a footer", "Empty on purpose", "Rows"])
         #expect(ExtensionParts.of(v).last?.items.count == 1, "the row, without the unknown component")
         // The page's heading goes to the first section drawn.
-        #expect(ExtensionParts.of(ExtensionView(sections: [v.sections[0], ExtensionSection(items: v.sections[4].items)]),
+        #expect(ExtensionParts.of(ExtensionView(sections: [v.sections[0], ExtensionSection(items: v.sections[3].items)]),
                                   heading: "Page").first?.title == "Page")
     }
 }
