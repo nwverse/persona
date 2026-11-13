@@ -171,11 +171,12 @@ function GroupTitle({ name, onToggle }: { name: string; onToggle: () => void }) 
 }
 
 /** A group of agents beside the to-dos (#6458): "Opened in the terminal", "Not on a to-do", and the sidebar's "Recent (not
- *  running)". Its count, the most urgent of its agents' states, an ⓘ saying what it holds, which is also what an open,
- *  empty group says. `section`: drawn as the section headings around it are (the "By pinned" grouping's). */
-export function GroupBranch({ branch, name, hint, icon, n, state, folded, onToggle, section, children }: { branch: string; name: string; hint: string; icon: IconName; n: number; state: TreeState; folded: boolean; onToggle: () => void; section?: boolean; children?: React.ReactNode }) {
+ *  running)". Its count, the most urgent of its agents' states, and, where its name does not say it (`hint`), an ⓘ saying
+ *  what it holds, which is also what an open, empty group says. `section`: drawn as the section headings around it are
+ *  (the "By pinned" grouping's). */
+export function GroupBranch({ branch, name, hint, icon, n, state, folded, onToggle, section, children }: { branch: string; name: string; hint?: string; icon: IconName; n: number; state: TreeState; folded: boolean; onToggle: () => void; section?: boolean; children?: React.ReactNode }) {
   const said = n > 0 ? state : undefined;
-  const info = <InfoTip name={name} text={hint} />;
+  const info = hint ? <InfoTip name={name} text={hint} /> : null;
   const body = n > 0 ? children : undefined;
   if (section) {
     return (
@@ -185,7 +186,7 @@ export function GroupBranch({ branch, name, hint, icon, n, state, folded, onTogg
         onToggle={onToggle}
         right={<span className="flex shrink-0 items-center gap-1.5">{info}<BranchEnd n={n} state={said} /></span>}
       >
-        {body ?? <EmptyHint text={hint} />}
+        {body ?? (hint ? <EmptyHint text={hint} /> : null)}
       </Section>
     );
   }
