@@ -70,9 +70,12 @@ func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, store
 		compatible = messagesAPI(v.API)
 	}
 	if p.Kind == "api" && v.Kind == "launcher" {
+		// Claude Code answering on the main chat's computer (models_run.go); a managed launcher with a Messages gateway is
+		// called over HTTP, as before. With no such computer it stays offered, and its status says to choose one.
+		compatible = (v.Agent == "" || v.Agent == "claude") && (p.MachineID == "" || len(v.Machines) == 0 || slices.Contains(v.Machines, p.MachineID))
 		for _, l := range stored {
 			if v.ID == "launcher."+l.Name {
-				compatible = messagesAPI(l.API)
+				compatible = messagesAPI(l.API) || compatible && (p.MachineID == "" || s.scopeReason(l, p.MachineID) == "")
 				break
 			}
 		}
@@ -128,6 +131,13 @@ func (s *Service) modelLauncherCompatible(p ModelPurpose, l ConfiguredLauncher, 
 	return s.modelProviderCompatible(p, v, stored)
 }
 
+func effortLevelsForKind(kind string) []string {
+	if kind == "api" {
+		return append(slices.Clone(proto.EffortLevels), "off", "none")
+	}
+	return proto.EffortLevels
+}
+
 func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBinding, providers []ModelProvider) error {
 	var provider *ModelProvider
 	for i := range providers {
@@ -161,11 +171,14 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 			return i18n.Err("assistant-models.err_provider_unsupported")
 		}
 	}
-	if b.Effort != "" && !slices.Contains([]string{"low", "medium", "high", "xhigh", "max"}, b.Effort) {
+	if b.Effort != "" && !slices.Contains(effortLevelsForKind(p.Kind), b.Effort) {
 		return i18n.Err("assistant-models.err_effort_unsupported")
 	}
 	if p.Kind == "api" {
-		_, err := s.apiConfig(ctx, b)
+		c, err := s.apiConfig(ctx, b)
+		if err == nil && c.RunLauncher != "" {
+			return checkModelID(b.Model) // passed to the CLI as --model
+		}
 		return err
 	}
 	if p.Kind == "plugin" {
@@ -209,9 +222,6 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 				if p.CategoryID == "agent.new" && result.Agent != "claude" && result.Agent != "codex" && result.Agent != "agy" && result.Agent != "omp" {
 					return i18n.Err("assistant-models.err_agent_launcher")
 				}
-				if p.CategoryID == "agent.new" && result.Agent == "codex" && b.Effort != "" {
-					return i18n.Err("assistant-models.err_codex_effort")
-				}
 			}
 		}
 	}
@@ -220,6 +230,7 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 
 // providerModelUses are the current configurable purposes assigned to provider: a provider in use is not deleted underneath them.
 // Automatic selection by the built-in API categories is not an assignment; current extension purposes also protect an inherited provider.
+// The background supervisor's use is one of them (modelConfigIDs, #5806): its own provider, or the main chat's while it follows it.
 func (s *Service) providerModelUses(ctx context.Context, provider string) ([]string, error) {
 	uses := []string{}
 	ids := slices.Clone(modelConfigIDs)

@@ -118,15 +118,17 @@ func newFakeCodex(t *testing.T, n *Node, cwd string) (*assistantProc, *codexConn
 
 // fakeHub answers the node's calls the way the hub would: the Feishu gate config, the snapshot, and the phone's answers.
 type fakeHub struct {
-	mu      sync.Mutex
-	asked   []proto.Interaction
-	answer  func(proto.Interaction) proto.Resolution
-	deltas  []string
-	model   map[string]any    // assistant.model's answer; nil: an older hub without it
-	queried map[string]string // the session id the node asked about, by method
-	context map[string]any    // assistant.context's answer; nil: just a snapshot
-	acks    []json.RawMessage // assistant.context calls that acked view errors
-	mcp     []map[string]any  // the mcp.tools / mcp.call params relayed ("method" says which)
+	mu        sync.Mutex
+	asked     []proto.Interaction
+	answer    func(proto.Interaction) proto.Resolution
+	deltas    []string
+	model     map[string]any        // assistant.model's answer; nil: an older hub without it
+	queried   map[string]string     // the session id the node asked about, by method
+	context   map[string]any        // assistant.context's answer; nil: just a snapshot
+	acks      []json.RawMessage     // assistant.context calls that acked view errors
+	mcp       []map[string]any      // the mcp.tools / mcp.call params relayed ("method" says which)
+	onModel   func()                // called as assistant.model is asked, before it answers (model_restore_test.go)
+	onContext func(context.Context) // optional isolated snapshot delay (assistant_send_latency_test.go)
 }
 
 func (h *fakeHub) interactions() []proto.Interaction {
@@ -156,6 +158,12 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 			}
 			_ = json.Unmarshal(params, &p)
 			fh.mu.Lock()
+			onContext := fh.onContext
+			fh.mu.Unlock()
+			if len(p.Ack) == 0 && onContext != nil {
+				onContext(ctx)
+			}
+			fh.mu.Lock()
 			defer fh.mu.Unlock()
 			if len(p.Ack) > 0 {
 				fh.acks = append(fh.acks, p.Ack)
@@ -170,6 +178,12 @@ func withFakeHub(t *testing.T, n *Node) *fakeHub {
 				SessionID string `json:"session_id"`
 			}
 			_ = json.Unmarshal(params, &p)
+			fh.mu.Lock()
+			onModel := fh.onModel
+			fh.mu.Unlock()
+			if onModel != nil {
+				onModel()
+			}
 			fh.mu.Lock()
 			defer fh.mu.Unlock()
 			if fh.queried == nil {

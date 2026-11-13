@@ -10,15 +10,22 @@ import UIKit
 // in three equal square columns (the camera one cell like the others) under a header, and a bar at the sheet's foot
 // (Photos, Files, More) that the keyboard pushes up. Photos picked turn the bar into a caption (the draft) and Send.
 
+/// What was picked in the panel: the photos and videos (by `PHAsset.localIdentifier`) in the order picked, and those of
+/// them edited there, which go as edited.
+struct AttachPicks {
+    var ids: [String] = []
+    var edited: [String: EditedImage] = [:]
+}
+
 /// What the composer gets back once the panel has gone (`AttachSheet`).
 enum AttachOutcome {
     /// Closed: what was picked goes into the composer, nothing is sent.
-    case closed([String])
+    case closed(AttachPicks)
     /// Send: what was picked goes into the composer and the message is sent.
-    case send([String])
+    case send(AttachPicks)
     /// A row asked for something the panel cannot show itself (the camera, Files, a voice call): what was picked goes
     /// into the composer, and the action runs once the panel is gone.
-    case then([String], () -> Void)
+    case then(AttachPicks, () -> Void)
 }
 
 /// The panel's tabs, in the bar's order.
@@ -48,13 +55,18 @@ enum AttachTab: String, CaseIterable, Identifiable {
 final class AttachPanel {
     /// The sheet is on screen.
     var shown = false
-    /// The photos and videos picked, in order. Kept here, not in the sheet, so a swipe down hands them back too.
+    /// The photos and videos picked, in order, and the photos edited here (picked or not, by id: they go as edited once
+    /// picked, and open again as they were left). Kept here, not in the sheet, so a swipe down hands them back too.
     var picked: [String] = []
+    var edited: [String: EditedImage] = [:]
     /// What the composer gets once the sheet is down; nil: closed by the system (a swipe down, a tap outside).
     @ObservationIgnored fileprivate var outcome: AttachOutcome?
 
+    /// What was picked, with the edits of those of them edited here.
+    var picks: AttachPicks { AttachPicks(ids: picked, edited: edited.filter { picked.contains($0.key) }) }
+
     /// A row of the composer's (the More tab) closes the sheet, then acts.
-    func close(then action: @escaping () -> Void) { leave(.then(picked, action)) }
+    func close(then action: @escaping () -> Void) { leave(.then(picks, action)) }
 
     fileprivate func leave(_ outcome: AttachOutcome) {
         guard shown else { return }
@@ -152,6 +164,22 @@ final class AttachLibrary {
         }
     }
 
+    /// The picture to edit (`ImageEditor`): downloaded from iCloud if it has to be, decoded off the main thread at the
+    /// size it is sent (`MessagePhotos.maxSide`) and upright.
+    static func editable(_ asset: PHAsset) async -> UIImage? {
+        let options = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .highQualityFormat
+        let data: Data? = await withCheckedContinuation { c in
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { @Sendable data, _, _, _ in
+                c.resume(returning: data)
+            }
+        }
+        guard let data else { return nil }
+        let side = MessagePhotos.maxSide
+        return await Task.detached(priority: .userInitiated) { LarkMedia.decode(data, maxPixel: side) }.value
+    }
+
     /// A copy of the video in a directory of its own under the app's temporary uploads, named as in Photos, for the
     /// upload (`VideoAttachments.start(staged:)`, which deletes it). A slow-motion or edited video is a composition with
     /// no file: its original goes instead.
@@ -209,11 +237,22 @@ struct AttachSheet<More: View>: View {
     private var library: AttachLibrary { panel.library }
     @State private var tab: AttachTab = .photos
     @State private var detent: PresentationDetent = .medium
+    /// The photo open in the editor (a tap on its picture), and what runs once the editor has gone (Send leaves the panel).
+    @State private var previewing: AttachPreview?
+    @State private var afterPreview: (() -> Void)?
     @FocusState private var captionFocused: Bool
 
     private var tabs: [AttachTab] { showsMore ? AttachTab.allCases : [.photos, .files] }
-    private var surface: Color { AppStyle.current.usesBeautifulUI ? theme.colors.surface : Theme.Shell.composer }
     private var picked: [String] { panel.picked }
+    private var picks: AttachPicks { panel.picks }
+    private var surface: Color { AppStyle.current.usesBeautifulUI ? theme.colors.surface : Theme.Shell.composer }
+    #if DEBUG
+    /// Simulator automation: `-showAttachCamera YES` shows the camera cell on a simulator, which has no camera, so
+    /// screenshots and UI tests see the grid as a phone draws it (a tap does nothing).
+    private var cameraCell: (() -> Void)? { camera ?? (AttachDebug.showsCameraCell ? {} : nil) }
+    #else
+    private var cameraCell: (() -> Void)? { camera }
+    #endif
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -226,9 +265,12 @@ struct AttachSheet<More: View>: View {
                 page(width: width)
             }
             // The bar sits on the sheet's safe area: over the home indicator, or over the keyboard while the caption is
-            // typed, so the field and what is typed stay in sight (#3704); the grid scrolls under it to its last row.
+            // typed, so the field and what is typed stay in sight (#3704, #3004); the grid scrolls under it to its end.
             .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) { bar(width: width) }
         }
+        // Typing the caption opens the sheet to full, as the panel always did: the keyboard takes the half it rested
+        // in, and the sheet stays open when the keyboard goes (#3004).
+        .onChange(of: captionFocused) { _, focused in if focused { detent = .large } }
         .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .presentationBackground(surface)
@@ -236,6 +278,34 @@ struct AttachSheet<More: View>: View {
         .accessibilityIdentifier("attach-sheet")
         .task { await library.load() }
         .onDisappear { library.forget() }
+        .fullScreenCover(item: $previewing, onDismiss: {
+            let then = afterPreview
+            afterPreview = nil
+            then?()
+        }) { preview in
+            AttachPhotoEditor(asset: preview.asset, resume: panel.edited[preview.id], picked: picked.contains(preview.id), caption: $caption,
+                              done: { keep(preview.asset, $0, sending: false) },
+                              send: { keep(preview.asset, $0, sending: true) })
+        }
+    }
+
+    // MARK: The editor
+
+    /// The editor's Select / Done (`sending` false) or Send on `asset`: the edit remembered (an edit undone to nothing is
+    /// forgotten, so the photo goes from the library as it is), the photo picked if there is room, and Send leaves the
+    /// panel with everything picked once the editor has gone.
+    private func keep(_ asset: PHAsset, _ edit: EditedImage, sending: Bool) {
+        let id = asset.localIdentifier
+        panel.edited[id] = edit.edits.isEmpty ? nil : edit
+        if !panel.picked.contains(id) {
+            guard AttachGrid.hasRoom(for: asset, picked: panel.picked, photoRoom: photoRoom, videoRoom: videoRoom) else {
+                AppModel.shared.toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
+                return
+            }
+            panel.picked.append(id)
+            Haptics.tap()
+        }
+        if sending { afterPreview = { leave(.send(picks)) } }
     }
 
     private var header: some View {
@@ -246,7 +316,7 @@ struct AttachSheet<More: View>: View {
                 .contentTransition(.opacity)
                 .accessibilityAddTraits(.isHeader)
             HStack {
-                Button { leave(.closed(picked)) } label: {
+                Button { leave(.closed(picks)) } label: {
                     ThemedIcon(Theme.Icon.close).font(Theme.Font.heading)
                         .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                         .contentShape(.rect)
@@ -256,7 +326,7 @@ struct AttachSheet<More: View>: View {
                 .accessibilityIdentifier("attach-close")
                 Spacer()
                 if tab == .photos {
-                    Button { leave(.then(picked, allPhotos)) } label: {
+                    Button { leave(.then(picks, allPhotos)) } label: {
                         Text("All Photos").font(Theme.Font.secondaryMedium).lineLimit(1)
                             .scaledFrame(minHeight: Theme.Size.tapTarget)
                             .contentShape(.rect)
@@ -294,18 +364,19 @@ struct AttachSheet<More: View>: View {
         case .unknown:
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         case .denied:
-            AttachNoAccess(settings: openSettings, allPhotos: { leave(.then(picked, allPhotos)) })
+            AttachNoAccess(settings: openSettings, allPhotos: { leave(.then(picks, allPhotos)) })
         case .full, .limited:
-            AttachGrid(library: library, picked: Bindable(panel).picked, width: width,
-                       camera: camera.map { camera in { leave(.then(picked, camera)) } },
-                       limited: library.access == .limited, photoRoom: photoRoom, videoRoom: videoRoom)
+            AttachGrid(library: library, picked: Bindable(panel).picked, edited: panel.edited.mapValues(\.result), width: width,
+                       camera: cameraCell.map { camera in { leave(.then(picks, camera)) } },
+                       limited: library.access == .limited, photoRoom: photoRoom, videoRoom: videoRoom,
+                       open: { previewing = AttachPreview(asset: $0) })
         }
     }
 
     private var filesPage: some View {
         List {
             Section {
-                Button { leave(.then(picked, files)) } label: {
+                Button { leave(.then(picks, files)) } label: {
                     Label { Text("Browse Files").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.file) }
                 }
                 .accessibilityIdentifier("attach-browse-files")
@@ -354,7 +425,7 @@ struct AttachSheet<More: View>: View {
                 .accessibilityIdentifier("attach-caption")
             HStack(spacing: Theme.Space.flush) {
                 ComposerRoundButton(symbol: Theme.Icon.send, label: String(localized: "Send"), id: "attach-send", pressScales: true) {
-                    leave(.send(picked))
+                    leave(.send(picks))
                 }
             }
             .transition(.composerSend)
@@ -382,6 +453,13 @@ struct AttachSheet<More: View>: View {
         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
     }
 }
+
+#if DEBUG
+/// The panel's simulator switches, read once.
+private enum AttachDebug {
+    static let showsCameraCell = UserDefaults.standard.bool(forKey: "showAttachCamera")
+}
+#endif
 
 /// The floating tab bar: a pill of tabs, a highlight sliding under the one shown.
 struct AttachTabBar: View {
@@ -427,11 +505,15 @@ struct AttachTabBar: View {
 private struct AttachGrid: View {
     let library: AttachLibrary
     @Binding var picked: [String]
+    /// The pictures of the photos edited in the panel, drawn in their cells instead of the library's.
+    var edited: [String: UIImage]
     var width: CGFloat
     var camera: (() -> Void)?
     var limited: Bool
     var photoRoom: Int
     var videoRoom: Int
+    /// A tap on a photo's picture (not its ring): it opens in the editor.
+    var open: (PHAsset) -> Void
     @Environment(\.displayScale) private var displayScale
 
     var body: some View {
@@ -453,72 +535,152 @@ private struct AttachGrid: View {
             }
         }
         .scrollIndicators(.hidden)
+        // Typing the caption, a drag of the grid puts the keyboard away and the caption back down. Not
+        // `scrollDismissesKeyboard`: it leaves the caption's keyboard up, the field being outside the grid.
+        .onScrollPhaseChange { _, phase in if phase == .interacting { Keyboard.dismiss() } }
         .accessibilityIdentifier("attach-grid")
     }
 
     private func photo(_ asset: PHAsset, cell: CGFloat) -> some View {
         let id = asset.localIdentifier
-        return AttachPhotoCell(library: library, asset: asset, side: cell, number: picked.firstIndex(of: id).map { $0 + 1 }) {
-            toggle(asset)
-        }
+        return AttachPhotoCell(library: library, asset: asset, side: cell, number: picked.firstIndex(of: id).map { $0 + 1 },
+                               edited: edited[id], toggle: { toggle(asset) },
+                               open: { asset.mediaType == .video ? toggle(asset) : open(asset) })
     }
 
     private func toggle(_ asset: PHAsset) {
         let id = asset.localIdentifier
         if let i = picked.firstIndex(of: id) { picked.remove(at: i); return }
-        let video = asset.mediaType == .video
-        let same = picked.compactMap(AttachLibrary.asset).filter { ($0.mediaType == .video) == video }.count
-        guard same < (video ? videoRoom : photoRoom) else {
+        guard Self.hasRoom(for: asset, picked: picked, photoRoom: photoRoom, videoRoom: videoRoom) else {
             AppModel.shared.toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
             return
         }
         picked.append(id)
         Haptics.tap()
     }
+
+    /// The composer takes one more of `asset`'s kind (photos and videos are counted apart).
+    static func hasRoom(for asset: PHAsset, picked: [String], photoRoom: Int, videoRoom: Int) -> Bool {
+        let video = asset.mediaType == .video
+        let same = picked.compactMap(AttachLibrary.asset).filter { ($0.mediaType == .video) == video }.count
+        return same < (video ? videoRoom : photoRoom)
+    }
 }
 
-/// One photo or video in the grid: its thumbnail, a video's length, and the mark that says it is picked and in what order.
+/// One photo or video in the grid: its thumbnail (an edited photo's edit), a video's length, and the mark that says it
+/// is picked and in what order. The mark's corner picks (`toggle`); the rest of a photo opens it in the editor (`open`;
+/// a video's picks too). VoiceOver's activation picks, as before; Edit is an action.
 private struct AttachPhotoCell: View {
     let library: AttachLibrary
     let asset: PHAsset
     var side: CGFloat
     var number: Int?
+    var edited: UIImage?
     var toggle: () -> Void
+    var open: () -> Void
     @State private var image: UIImage?
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("AttachPhotoCell")
         #endif
-        Button(action: toggle) {
-            ZStack(alignment: .topTrailing) {
-                Group {
-                    if let image { Image(uiImage: image).resizable().scaledToFill() } else { Theme.Fill.well }
+        ZStack(alignment: .topTrailing) {
+            Button(action: open) {
+                ZStack(alignment: .bottomLeading) {
+                    Group {
+                        if let shown = edited ?? image { Image(uiImage: shown).resizable().scaledToFill() } else { Theme.Fill.well }
+                    }
+                    .frame(width: side, height: side)
+                    .clipped()
+                    if asset.mediaType == .video {
+                        Text(Duration.seconds(asset.duration).formatted(.time(pattern: .minuteSecond)))
+                            .font(Theme.Font.labelStrong)
+                            .foregroundStyle(.white)
+                            .shadow(radius: Theme.Space.xxs)
+                            .padding(Theme.Space.xs)
+                    } else if edited != nil {
+                        ThemedIcon(Theme.Icon.markup).font(Theme.Font.labelStrong).foregroundStyle(.white)
+                            .shadow(radius: Theme.Space.xxs)
+                            .padding(Theme.Space.xs)
+                    }
                 }
+                // Taps where it is drawn: the thumbnail filling the square is laid out past it (a landscape photo, wider
+                // than tall), and the cell to the right, drawn over it, took the taps on this one's ring (#3702).
                 .frame(width: side, height: side)
-                .clipped()
-                if asset.mediaType == .video {
-                    Text(Duration.seconds(asset.duration).formatted(.time(pattern: .minuteSecond)))
-                        .font(Theme.Font.labelStrong)
-                        .foregroundStyle(.white)
-                        .shadow(radius: Theme.Space.xxs)
-                        .padding(Theme.Space.xs)
-                        .frame(width: side, height: side, alignment: .bottomLeading)
-                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            // The ring, and a finger's room round it in the corner.
+            Button(action: toggle) {
                 AttachPickMark(number: number)
                     .padding(Theme.Attach.badgeInset)
+                    .frame(width: Theme.Attach.badgeTarget, height: Theme.Attach.badgeTarget, alignment: .topTrailing)
+                    .contentShape(.rect)
             }
-            // Taps where it is drawn: the thumbnail filling the square is laid out past it (a landscape photo, wider than
-            // tall), and the cell to the right, drawn over it, took the taps on this one's ring (#3702).
-            .contentShape(.rect)
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
         .frame(width: side, height: side)
         .task(id: asset.localIdentifier) { image = await library.thumbnail(asset, side: side) }
-        .accessibilityLabel(asset.mediaType == .video ? String(localized: "Video") : String(localized: "Photo"))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(asset.mediaType == .video ? String(localized: "Video") : edited != nil ? String(localized: "Photo, edited") : String(localized: "Photo"))
         .accessibilityValue(number.map { String(localized: "Picked, \($0)") } ?? "")
-        .accessibilityAddTraits(number != nil ? .isSelected : [])
+        .accessibilityAddTraits(number != nil ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { toggle() }
+        .accessibilityActions {
+            if asset.mediaType != .video { Button(String(localized: "Edit [Attach Sheet 7d3c90]"), action: open) }
+        }
         .accessibilityIdentifier("attach-photo")
+    }
+}
+
+/// The photo a tap on its picture opened (`AttachSheet.previewing`).
+private struct AttachPreview: Identifiable {
+    let asset: PHAsset
+    var id: String { asset.localIdentifier }
+}
+
+/// A photo from the grid in the image editor, with the panel's caption and Send under its tools (`ImageEditorSend`):
+/// Select (Done once it is picked) picks it as edited, Send picks it and sends, Cancel changes nothing. The picture is
+/// fetched first (from iCloud if it has to be); until then a spinner and Cancel.
+private struct AttachPhotoEditor: View {
+    let asset: PHAsset
+    /// How it was left when it was edited in the panel before.
+    let resume: EditedImage?
+    var picked: Bool
+    @Binding var caption: String
+    var done: (EditedImage) -> Void
+    var send: (EditedImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var source: UIImage?
+
+    var body: some View {
+        if let start = resume ?? source.map({ EditedImage(source: $0) }) {
+            ImageEditor(start, doneTitle: picked ? String(localized: "Done [Extension System Presentation c0b3fb]") : String(localized: "Select"),
+                        send: ImageEditorSend(caption: $caption, send: send), onDone: done)
+        } else {
+            NavigationStack {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    ProgressView().tint(.white)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }.accessibilityIdentifier("image-edit-cancel")
+                    }
+                }
+                .toolbarBackground(.black, for: .navigationBar)
+                .toolbarColorScheme(.dark, for: .navigationBar)
+            }
+            .environment(\.colorScheme, .dark) // as the editor's: never `preferredColorScheme`, which reaches the panel
+            .task {
+                if let picture = await AttachLibrary.editable(asset) {
+                    source = picture
+                } else {
+                    AppModel.shared.toast = Toast(String(localized: "Couldn't open this photo. It may still be downloading from iCloud."), style: .error)
+                    dismiss()
+                }
+            }
+        }
     }
 }
 
@@ -634,9 +796,10 @@ struct AttachSheetHost<More: View>: ViewModifier {
     func body(content: Content) -> some View {
         content.sheet(isPresented: Binding(get: { panel.shown }, set: { panel.shown = $0 }), onDismiss: {
             // Closed by the system (a swipe down, a tap outside): what was picked goes into the composer.
-            let outcome = panel.outcome ?? .closed(panel.picked)
+            let outcome = panel.outcome ?? .closed(panel.picks)
             panel.outcome = nil
             panel.picked = []
+            panel.edited = [:]
             // What runs after it (the camera, Files) presents now that the sheet is down.
             finish(outcome)
         }) {
@@ -656,20 +819,70 @@ private enum AttachTop {
     }
 }
 
-/// A row of the panel's More tab (the menu's other items); it closes the panel, then acts.
+/// A row of what + offers besides photos and files (#3225): in the panel's More tab it closes the panel, then acts; in
+/// the menu (`AttachMenuItems`) it acts.
 struct AttachMoreRow: Identifiable {
     let id: String
     let title: String
     let symbol: String
+    /// The "/" word a quick command's title ends with (「压缩上下文 /compact」): the menu draws it as the row's second
+    /// line, so the title stays on one.
+    var word: String? = nil
     var destructive = false
     var disabled = false
     let action: () -> Void
+
+    /// The title without its trailing `word`, and the word; nil when the title does not end with it.
+    var split: (title: String, word: String)? {
+        guard let word, title.hasSuffix(" " + word) else { return nil }
+        return (String(title.dropLast(word.count + 1)), word)
+    }
 }
 
 struct AttachMoreSection: Identifiable {
     let id: String
     let title: String?
     let rows: [AttachMoreRow]
+    /// The menu folds the section into a submenu with this icon and the section's title; the More tab keeps it a section.
+    var symbol: String? = nil
+}
+
+/// What + offers besides photos and files as menu items, in their order (the menu puts the first nearest the finger):
+/// the iPhone's touch and hold on + and the iPad's + menu, from the same list as the panel's More tab (#3225).
+struct AttachMenuItems: View {
+    let sections: [AttachMoreSection]
+
+    var body: some View {
+        ForEach(sections) { section in
+            Section {
+                if let symbol = section.symbol, let title = section.title {
+                    Menu { rows(section) } label: { Label { Text(title).lineLimit(1) } icon: { Theme.Icon.image(symbol) } }
+                        .accessibilityIdentifier("attach-menu-\(section.id)")
+                } else {
+                    rows(section)
+                }
+            }
+        }
+    }
+
+    private func rows(_ section: AttachMoreSection) -> some View {
+        ForEach(section.rows) { row in
+            // A menu draws a second line only from a second Text right in the label (docs/lessons/ios.md, #1307).
+            if let split = row.split {
+                item(row) { Text(split.title); Text(split.word); Theme.Icon.image(row.symbol) }
+            } else {
+                item(row) { Label { Text(row.title).lineLimit(1) } icon: { Theme.Icon.image(row.symbol) } }
+            }
+        }
+    }
+
+    /// The identifier right on the button, as the composer's menus had it; UI tests fall back on the title where UIKit's
+    /// menu drops it.
+    private func item(_ row: AttachMoreRow, @ViewBuilder label: () -> some View) -> some View {
+        Button(role: row.destructive ? .destructive : nil, action: row.action, label: label)
+            .accessibilityIdentifier(row.id)
+            .disabled(row.disabled)
+    }
 }
 
 struct AttachMoreRows: View {
@@ -694,11 +907,88 @@ struct AttachMoreRows: View {
 }
 
 extension AttachPanel {
-    /// Opens the sheet, nothing picked yet.
+    /// Opens the sheet, nothing picked yet (the last one's `onDismiss` emptied it). Not while the last one is still on
+    /// its way out with an outcome to hand back.
     func open() {
-        picked = []
-        outcome = nil
+        guard outcome == nil else { return }
         shown = true
+    }
+
+    /// What the iPhone's 「+」 does on a tap (`ShellComposerBar.openAttach`), in a conversation and a new one alike; nil on
+    /// the iPad, whose + is the menu. The composer's keyboard goes down as the sheet comes up.
+    func opener(focused: FocusState<Bool>.Binding) -> ((CGRect) -> Void)? {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return nil }
+        return { _ in
+            focused.wrappedValue = false
+            self.open()
+        }
+    }
+}
+
+extension AttachMoreSection {
+    /// The rows every composer's + offers besides photos and files, in their order (#3225, #3805): the calls and the
+    /// camera, then Mention. A row whose action is nil is not there (no call before a conversation exists, no camera).
+    /// `scan`: Scan Document (#3720), next to Take Photo. `meeting`: Persona's main conversation's Meeting Recording
+    /// (#3723), the sidebar's row by its words: with a recording under way it says so and opens it. `context`: Add as
+    /// Context › Knowledge Note… / To-do… / Inbox Item… (#3721), folded under Mention.
+    static func common(voice: (() -> Void)?, camera: (() -> Void)?, scan: (() -> Void)? = nil, glasses: (() -> Void)?,
+                       meeting: (() -> Void)? = nil, mention: @escaping () -> Void,
+                       context: ((ContextPickKind) -> Void)? = nil) -> [AttachMoreSection] {
+        var capture: [AttachMoreRow] = []
+        if let voice { capture.append(AttachMoreRow(id: "composer-menu-voice", title: String(localized: "Voice Chat"), symbol: Theme.Icon.voiceChannel, action: voice)) }
+        if let camera { capture.append(AttachMoreRow(id: "composer-menu-camera", title: String(localized: "Take Photo [Chat View 6e3a10]"), symbol: Theme.Icon.camera, action: camera)) }
+        if let scan { capture.append(AttachMoreRow(id: "composer-menu-scan", title: String(localized: "Scan Document"), symbol: Theme.Icon.scanDocument, action: scan)) }
+        if let glasses { capture.append(AttachMoreRow(id: "attach-glasses", title: String(localized: "Glasses Photo"), symbol: Theme.Icon.glasses, action: glasses)) }
+        if let meeting {
+            let recording = RecordingCapture.shared.state != .idle
+            capture.append(AttachMoreRow(id: "composer-menu-meeting", title: recording ? String(localized: "Recording… Open") : String(localized: "Record [Recordings Section ef2821]"),
+                                         symbol: Theme.Icon.recording, action: meeting))
+        }
+        var sections: [AttachMoreSection] = []
+        if !capture.isEmpty { sections.append(AttachMoreSection(id: "capture", title: nil, rows: capture)) }
+        sections.append(AttachMoreSection(id: "mention", title: nil, rows: [
+            AttachMoreRow(id: "composer-menu-mention", title: String(localized: "Mention a File or Session"), symbol: Theme.Icon.mention, action: mention),
+        ]))
+        if let context {
+            sections.append(AttachMoreSection(id: "context", title: String(localized: "Add as Context"), rows: ContextPickKind.allCases.map { kind in
+                AttachMoreRow(id: "attach-context-\(kind.rawValue)", title: kind.menuTitle, symbol: kind.symbol) { context(kind) }
+            }, symbol: Theme.Icon.addContext))
+        }
+        return sections
+    }
+
+    /// The prompts the hub's extensions declare, folded into a submenu in the menu; nil when there are none.
+    static func prompts(_ prompts: [ExtensionTextTemplate], fill: @escaping (ExtensionTextTemplate) -> Void) -> AttachMoreSection? {
+        guard !prompts.isEmpty else { return nil }
+        return AttachMoreSection(id: "prompts", title: String(localized: "Extension Prompts"), rows: prompts.map { prompt in
+            AttachMoreRow(id: "extension-prompt-\(prompt.id)", title: prompt.title, symbol: Theme.Icon.insert) { fill(prompt) }
+        }, symbol: Theme.Icon.plugins)
+    }
+}
+
+extension ComposerAttachments {
+    /// What was picked in the panel, into the box: pictures as its photos (at most `MessagePhotos.limit`), the ones
+    /// edited there as edited (and still editable in the strip), videos uploaded to `machine` as files; a toast says how
+    /// many could not be read.
+    func addPicked(_ picks: AttachPicks, machine: MachineRef, model: AppModel) async {
+        var failed = 0
+        for id in picks.ids {
+            if let edit = picks.edited[id] {
+                add(edit, model: model)
+                continue
+            }
+            guard let asset = AttachLibrary.asset(id) else { failed += 1; continue }
+            if asset.mediaType == .video {
+                guard let url = await AttachLibrary.movie(asset) else { failed += 1; continue }
+                videos.start(staged: url, machine: machine, model: model)
+            } else {
+                guard let picture = await AttachLibrary.picture(asset) else { failed += 1; continue }
+                MessagePhotos.add(picture, to: &images, model: model)
+            }
+        }
+        if failed > 0 {
+            model.toast = Toast(String(localized: "Couldn't read \(failed) photos (they may still be downloading from iCloud) [Chat View 5712c0]"), style: .error)
+        }
     }
 }
 #endif

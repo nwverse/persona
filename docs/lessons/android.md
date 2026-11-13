@@ -1,5 +1,29 @@
 # Lessons: Android
 
+## Explicit home selection is not detail-stack restoration (#5638)
+
+Keeping visited tabs composed prevents loading flashes, but keeping their entire back stacks can make the Agents
+home control reopen a session instead of its list. Treat explicit Agents selection separately from a targeted session
+entry: remove only destinations above the existing Agents root, and preserve Assistant's current conversation.
+Do not route task entries or notification/session links through that reset. Exercise the production home control after
+those entry paths and after a restored stack; a navigator test that expects the old detail to survive a tab selection
+can accidentally pin the bug rather than prevent it.
+
+## Keep a worktree fixed while Gradle verifies it (#5233)
+
+Do not merge main or edit source while a multi-task Gradle invocation is running in that worktree. Earlier tasks can
+compile the old contracts and later tasks read newly merged tests, producing misleading missing-field and constructor
+errors. Finish or stop that invocation first, update the branch, then verify the fixed revision. A failure is not an
+inherited main defect until a clean, independent main worktree reproduces it.
+
+## Reusing an onboarding checklist for ordinary settings (#5233)
+
+Reusing the full phone-check list is not enough: an ordinary Notifications and background page must also suppress
+assistant/computer setup, skipped-computer summaries and first-run completion/dismissal actions. Otherwise leaving
+settings can clear first-run pending state or dismiss assistant setup. Keep these behaviors behind an explicit
+`backgroundOnly` mode with an unchanged default for onboarding. Preserve old route names separately from new home
+labels, and test owner-switch closure and parent Back navigation after adding a group page.
+
 ## A design-system signature change compiles every caller (#4145)
 
 #4124 added a `Boolean` after `JSectionHeader`'s composable slot. A caller passing the slot as a trailing lambda then bound it to the `Boolean`, and `main` stopped compiling for every Android build. No hosted CI runs on PRs, so the module's own build passing was not enough. Before merging a change to a `core/designsystem` component's parameters, compile `:app:compileDebugKotlin` (every feature's main code) and the test code of the modules that call it. Keep a composable slot last; `scripts/app/android_slot_order.py` checks that (#4146).
@@ -133,6 +157,10 @@ stream fixtures. Fixture screenshots do not establish live transport routing; ve
 
 A bounded, filtered session list cannot establish that a task has no agent. Keep navigation from the durable todo binding even when its session is outside the window; request exact metadata only for watched task agents and never add those rows to the paged list. Refresh that metadata on list invalidations and reconnect. Serialize todo reads so an older unbound or completed snapshot cannot overwrite a later linked or reopened snapshot in memory or on disk. A metadata failure falls back to the binding and never starts another agent.
 
+## Every list of sessions takes the subtask rule, not only the Agents list (#4769)
+
+#4686 made an agent another Paseo agent created a subtask, folded under its creator and left out of the Agents list's counts, but the floating capsule and the main chat's dock each filtered the session list by state on their own: an orchestrator with five working reviewers was six dock rows, and every finished Codex subagent an unread capsule entry with its own notice. A new place that lists or counts sessions by state takes the same rule from `CodexTaskForest.kt`: `isNestedSubtask` for a count, `foldedSubtasks` for a flat list that draws rows of its own (left out only while the list shows the session above it). Do not write a second parent lookup; the forest's (parent session, then the Codex thread, then the root, on the same computer) is the one the Agents list uses. Test with a runtime subtask, a Codex subagent and a subtask that needs the user, beside a list without subtasks that must stay as it was.
+
 ## Completion edges must retain evidence of the current run (#2124)
 
 Comparing only adjacent Working → Unread snapshots misses Working → NeedsYou → Unread; a turn can finish directly after waiting for a question or permission midway through work. Retain a current-run marker through NeedsYou and consume it at completion; clear it on Idle, removal, or disconnect. A rev-only change is not a new completion, and old unread versions must not replay when unmuted.
@@ -144,6 +172,15 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Plugin alerts `notify.kind=alert` have no interaction ID, and one session may have multiple distinct alerts. Notification tags must distinguish individual alerts, not reuse completion alerts' `kind:machine/session` replacement rule (#1654). Empty machine or session identifiers mean a generic alert; do not use them to refresh session lists or create empty-session deep links. Check the `input` preference at both delivery and notification construction, so disabling it during async refresh does not still show an alert.
 
 ## UI and Compose
+
+- Composer growth needs a real field-bounds test, not only a formula test (#5648). The old viewport-share rule
+  showed seven lines on a 400 × 640 dp Native JVM Compose render and could shrink to three with the keyboard up.
+  Assistant and Agents now share the fixed six-line `ComposerGrowLines` token. Test short and tall viewports,
+  wrapped text, and large text; a manual swipe's bitmap must stay unchanged across idle cursor-blink frames,
+  while typing and selection movement must restore the visible caret. Native renders do not verify a real IME.
+  Full-screen dialogs own another Android view: override system font scale with `RuntimeEnvironment.setFontScale`
+  as well as Compose's density, complete the Activity recreation before mounting the fixture, and assert the dialog's
+  actual text-layout density before labelling a capture large. Inspect its rendered line height and pixels too.
 
 - **A big page must not read a state that changes on every scroll frame** (#4039). `ChatListState.position` holds the
   reading anchor's pixel offset, written each frame; `ChatPage` read `position.expanded`, so a scroll re-ran the whole
@@ -196,6 +233,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Pages' own `PersonaTheme` wrappers default to `isSystemInDarkTheme()`; passing `darkTheme` only at the root does not override them. DEBUG-fixed light / dark mode must change `LocalConfiguration` uiMode (`MainActivity.AppearanceOverride`), or dark screenshots mix in light pages.
 - Kotlin trailing lambdas match only the final function parameter. After adding an optional function parameter to `AppNavigator`, existing `AppNavigator(...) { group tabs by session }` calls silently bound to the new parameter. Put new function parameters last, and name parameters at call sites.
 - Do not use `Modifier.alpha` for changing opacity in Compose. At 1 it adds no layer, so switching adds / removes a graphicsLayer in the modifier chain. After `clip` + `background`, removing the layer in Compose UI 1.12.1 stops drawing that background (Android `JButton` lost everything but text when enabled). The design system uses `Modifier.stableAlpha` (`docs/android/android.md`, "Lessons").
+- `Modifier.clip` on a frame also clips touches (2026-11-10, DS-06). Compose gives any control smaller than 48 dp a 48 dp touch target, even past its own clip, but a clipping parent at least 48 dp across rejects every touch outside itself first: the 36 dp segments inside `JSegmented`'s clipped Glass capsule and Board frame lost the taps just above them, while unclipped buttons, chips and switches kept the full 48 dp. A frame that only needs to keep its children's drawing inside its shape uses `clipDrawing`. Test touch targets with real text metrics (`@GraphicsMode(NATIVE)`): Robolectric's legacy text measurement drew the segments 53-61 dp tall and hid the miss (`TouchTargetTest`, which also checks that a tap just past 48 dp misses).
 - material3-adaptive `ListDetailSceneStrategy.detailPane()` returns new metadata without `equals` every time, so equality comparisons always fail (Android two-column left selection never highlighted). Identify detail pages by route type (`ShellPanes.kt`).
 - A container with `height(IntrinsicSize.Min)` (to stretch a left color block) crashes as soon as it contains a lazy list or `BoxWithConstraints`
   ("Asking for intrinsic measurements of SubcomposeLayout layouts is not supported," seen in board-style Lark chats). Draw edge color blocks with `drawBehind` (`Modifier.holder`).
@@ -246,6 +284,10 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## Testing
 
+- A shot diff against `main` needs the images' own noise first (2026-11-12, #4339). `android_shots_diff.py` on one run of `main` and one of a branch with no relevant change calls hundreds of the ~1,700 images different: live clocks ("21:30"), a shimmer, the dither of dark Brief and Board, text heights that jump by 4 px between two runs of the same code. Run each side at least twice (`clean…UnitTest` and `--no-build-cache`, or Gradle replays the results without redrawing a picture), take the pixels that differ between two runs of one side as that image's noise, and count only the differences outside it, with a pixel of margin; what is left is what the change drew, and it is looked at by eye. Shots drawn by tests whose class name does not end in `ShotsTest` need a `--tests` pattern of their own.
+
+- A fixture time fed to code that reads the real clock is a time bomb (2026-11-12, #5530). The Assistant's trays build In progress with `System.currentTimeMillis()`, and an open task that hasn't moved for 48 hours, with nothing running, is shelved (`SHELVE_AFTER_MS`). `AssistantTraysShotsTest` and `CloseoutShotsTest` pinned their tasks to `2026-11-10T08:00:00Z`. They passed on the day they merged and failed from 2026-11-12T08:00Z on every commit, so a bisect over the day's merges pointed at nothing. Build such times from `Instant.now()` (as the chat shot tests do), or pass the code a fixed `now` when it takes one (`TodosScreen(now = …)`). To see whether a test will break later, move its date literals back N days in a scratch copy and run it: to code that reads the real clock, that is the same test N days later.
+
 - A screenshot test's fake image loader is global state (#2546). `SingletonImageLoader.setUnsafe` survives into later Robolectric classes using the same sandbox. Reset the singleton and shut down the test-owned loader in teardown. Otherwise a later image-fallback assertion can fail because it receives a successful synthetic bitmap; running only that later class hides the leak. Reproduce with the showcase and native-stream classes together, and retain the original fallback assertion.
 
 - `OkHttpHubConnection` publishes `Revoked` before it reports the last refusing hub through `onMemberRevoked`, outside the lock (HubGroupConnectionTest). A test that reads the callback list right after seeing `Revoked` can miss that last entry under load; one hosted run failed `theConnectionIsRevokedOnlyWhenNoHubOfTheGroupIsLeft` this way while main passed. Widening the gap with a temporary sleep before that report fails the old test every time (`but was:<[(hub-a, true), (hub-b, true)]>`). Production consumers launch their cleanup asynchronously and reach the same end state in either order, so the test now waits for the report it asserts, then checks the exact list.
@@ -284,6 +326,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Decode images with `ImageDecoder` (corrects EXIF orientation), not `BitmapFactory` (ignores it, displaying camera originals sideways). Bitmaps to draw into / reencode need `ALLOCATOR_SOFTWARE`; hardware bitmaps cannot be drawn into software Canvas. Flatten transparent areas onto white before saving JPEG: JPEG has no alpha, and the encoder otherwise makes them black (`jpegBytes`).
 - `Offset` is a value class with bitwise equality. `coerceIn(-0f, 0f)` can produce `-0f`, unequal to `Offset.Zero`. Return `0f` directly when no range exists (`ImageMath.clampPan`); use tolerance for computed floating-point offsets in tests.
 - Robolectric's default window is 320×470 dp (2026-11-09, #1581). `performClick` taps the node's centre; a node laid out below the window (a tall card set straight into `setContent`, no scroll container) gets nothing, and the test fails as if the button ignored the tap. Give the test a window that fits (`@Config(qualifiers = "zh-w400dp-h1200dp")`) or bring the node into view with `performScrollTo()` first.
+- A Compose dialog that holds a text field never gets idle under Robolectric unless the window is Robolectric's default 320×470 dp (2026-11-12, #4339). A bare `Dialog { BasicTextField(…) }` hung every finder for 60 seconds (`AppNotIdleException`, once an `OutOfMemoryError`) with `w400dp-h1200dp`, `w400dp-h900dp`, `w360dp-h800dp` and `w400dp-h480dp` alike, focusable or not, and passed at the default size; a dialog without the field and the field without the dialog were fine. Test and shoot such a dialog (the history's Rename…, `ConversationRenameTest`) in a class whose qualifiers leave the size alone (`zh-xhdpi`), and reach rows below the window with `performScrollToNode`. On a device the same dialog works (the Agents rename dialog is the same pair).
 
 ## System capabilities
 
@@ -570,3 +613,19 @@ On the JVM, closing a server socket with a blocked accept can defer the actual d
 Keep a message's last rendered parse while its next parse runs; switching to raw text for every delta changes list and code-block geometry twice. Reset that retained state when the message identity or cache changes, and include stream completion in the parse effect keys. The Markdown renderer also defaults to a text-size spring: chat text should use its measured size immediately, without animating every line wrap.
 
 Measure pending and parsed frames with the real chat row and reverse list. A fixed scroll index and offset can still accompany visible height oscillation. Replay both Assistant and Agent styles, completion, rapid deltas, history reading and return-to-latest. Check selection and exact copied text in the APK as well. Write a PASS evidence file only after every assertion has completed; cleanup must not turn an earlier failure into a successful verdict.
+
+## Bound divider settling frames (#4756)
+
+A non-bouncy spring can still overshoot with a fling velocity. Clamp every divider animation frame to the current drag range before writing PaneExpansionState; negative widths can collide with its unset sentinel. Exercise the production splitter in a measured two-pane scaffold at both edges, including collapse and expand. State-only tests miss the visible width reset.
+
+## Pairing fixtures must follow the default sign-in page (#4623)
+
+Skipping onboarding does not skip password sign-in. Tests of manual or scan pairing must select the localized pairing alternative from that default page before using the existing controls. Keep initial-link fixtures on their direct confirmation path, and retain back-stack, field-retention, invalid-input and screenshot assertions rather than changing the product default to fit older fixtures.
+
+## A box that animates its size must already have its final width (#4339)
+
+`Modifier.animateContentSize` animates both axes. The composer's @ list sat in a wrapper `Column` as wide as its content, so while the list had no rows the wrapper was 0 by 0, and when rows came the list swept in diagonally from a corner. A settled screenshot and a test on the final tree both looked right; only frames taken with `mainClock.autoAdvance = false` and `advanceTimeBy` showed it. Give the wrapper `fillMaxWidth()` so its width is the constraint's and only its height moves, and review a motion by its frames (`NewChatMentionsMotionShotsTest`), not by its last picture.
+
+## First-message handoff must cross decorators and filtered lists (#4999)
+
+The composer decorator posts messages itself, so handling a successful response only in its underlying transport misses the production send and manual-refusal retry paths. Share the successful-response handler with the decorator and test that path. Keep a start/send receipt's session metadata separately from a paged list's membership: a newly started idle pane, or its working thread, may be excluded by the current filter. Bind a send reply to its exact previous waiting session; scanning old receipts by pane can select an earlier run after the pane is reused. For a terminal first message, match the same computer and pane only in current rows. If the current list excludes the thread, keep the waiting page without fetching extra pages. Never infer the new thread from its directory.

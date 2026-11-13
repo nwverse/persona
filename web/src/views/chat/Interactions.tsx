@@ -1,12 +1,14 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
-import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createContext, Fragment, Suspense, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { answerCard, usePendingLine } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
+import { lazyPage } from "../../lib/lazy-page";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
 import { Choice, DigitHint } from "./Choice";
 import { DelegatedCard } from "./Delegated";
 import { allowBody, denyBody } from "../../lib/quick-answers";
 import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
+import { appArchiveDeps, archiveAgent, archiveSession } from "../../lib/agent-archives";
 import type { Interaction } from "../../lib/types";
 import { defaults, elicitationDraft, elicitationResolution, elicitationSource, fields, numberInputMode, saveElicitationDraft, urlHost, urlTarget, validate, type ElicitationAction, type Field, type Values } from "../../lib/elicitation";
 import { answerLines } from "../../lib/answered";
@@ -14,9 +16,10 @@ import { interactionCanAnswer, sessionTitle } from "../../lib/format";
 import { interactionAsk } from "../../lib/inbox";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { cardToolName, mcpServerLabel } from "../../lib/turns";
-import { isSecretRun, optionDisplay, secretRunInput } from "../../lib/tool-detail";
+import { isSecretHandoff, isSecretRun, optionDisplay, secretHandoffInput, secretRunInput } from "../../lib/tool-detail";
 import { RecommendedTag } from "../../ui/RecommendedTag";
 import { dropAnswered, getSession, useStore, type AnsweredCard as Answered } from "../../lib/store";
+import { useChildRow } from "../../lib/use-child-sessions";
 import { Button, Collapse, cx, EASE, Kbd, Menu, SECRET_INPUT, toast, useMenu } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
@@ -45,7 +48,7 @@ export async function resolve(ix: Interaction, body: Record<string, unknown>) {
  * to the composer and never answers. `focused` is when — and only when — the card's key hints (option digits, the Enter
  * badge) are drawn: a card at rest looks exactly as before. Spread `root` on the card's root element (Card does).
  */
-function useCardKeys({ enter, digit }: { enter?: () => boolean | void; digit?: (n: number) => boolean } = {}) {
+export function useCardKeys({ enter, digit }: { enter?: () => boolean | void; digit?: (n: number) => boolean } = {}) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [focused, setFocused] = useState(false);
   const at = useRef({ enter, digit });
@@ -100,10 +103,14 @@ const AskedByVoice = createContext(false);
  *  moment online. InteractionCard says so (lib/card-answer.ts usePendingLine, past the card's own state) and disables
  *  every answer meanwhile. */
 const SendingAnswer = createContext("");
+/** Which child session asks (#5120): "From subagent · <title>" at the top of a card on its parent's page. InteractionCard
+ *  says so for every kind but a tool approval, whose body already has that line (PermissionBody). */
+const AskedFrom = createContext("");
 
-function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys }) {
+export function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys }) {
   const asked = useContext(AskedByVoice);
   const sending = useContext(SendingAnswer);
+  const from = useContext(AskedFrom);
   return (
     <div {...(cardKeys?.root ?? {})} aria-label={title} className="shrink-0 overflow-clip rounded-card bg-surface shadow-card outline-none focus-visible:ring-2 focus-visible:ring-accent" style={{ animation: `fade-up 350ms ${EASE} both` }}>
       <div className="px-3.5 pt-3 pb-2.5">
@@ -123,7 +130,10 @@ function Card({ title, kicker, onDismiss, busy, children, footer, looking = fals
             <div className="text-[13.5px] font-medium text-ink">{title}</div>
           </div>
         </div>
-        <div className="mt-2">{children}</div>
+        <div className="mt-2">
+          {from && <p data-permission-from title={from} className="mb-2 truncate text-[12px] leading-snug text-ink-3">{from}</p>}
+          {children}
+        </div>
         {/* Hand back (dismiss) leaves the request to the computer's terminal, and the hub takes no other answer for this card
             after it: so it says so in words on a row of its own (Android's action row), never a bare × that reads as "close" */}
         {onDismiss && (
@@ -151,7 +161,7 @@ function Card({ title, kicker, onDismiss, busy, children, footer, looking = fals
 }
 
 /** A terminal dialog's option: its words without the "(Recommended)" suffix, the "Recommended" tag instead. */
-function OptionLabel({ label }: { label: string }) {
+export function OptionLabel({ label }: { label: string }) {
   const shown = optionDisplay(label);
   return (
     <span className="block text-[13px] text-ink">
@@ -491,13 +501,15 @@ const CODE_BOX = "max-h-48 overflow-auto rounded-[8px] bg-inset px-2.5 py-2 font
  *  input stays one click away, open from the start only when nothing else says what the tool does. */
 const FROM_MAX = 48;
 
-/** "From subagent · <type>" for a subagent's card, its type on one line and cut to FROM_MAX; empty otherwise. */
-export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type">): string {
-  if (!ix.agent_id?.trim()) return "";
-  const type = (ix.agent_type ?? "").replace(/\s+/g, " ").trim();
-  if (!type || type.toLowerCase() === "main") return "";
-  const agent = type.length > FROM_MAX ? `${type.slice(0, FROM_MAX - 1)}…` : type;
-  return t("lib-elicitation.from_subagent", { agent });
+/** "From subagent · <type>" for a subagent's card, its type on one line and cut to FROM_MAX; for a child session's card
+ *  on its parent's page (#5120, `folded_under`), the child's title the same way, and "From worker · <title>" for a lead's
+ *  worker's (#5180, `folded_as`); empty otherwise. */
+export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type" | "folded_under" | "folded_as" | "session_title">): string {
+  const oneLine = (s: string | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+  const name = ix.folded_under ? oneLine(ix.session_title) || t("chat-subagentcard.untitled_task") : ix.agent_id?.trim() ? oneLine(ix.agent_type) : "";
+  if (!name || (!ix.folded_under && name.toLowerCase() === "main")) return "";
+  const agent = name.length > FROM_MAX ? `${name.slice(0, FROM_MAX - 1)}…` : name;
+  return ix.folded_under && ix.folded_as === "worker" ? t("lib-elicitation.from_worker", { agent }) : t("lib-elicitation.from_subagent", { agent });
 }
 
 function PermissionBody({ ix }: { ix: Interaction }) {
@@ -639,7 +651,109 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
   );
 }
 
+/**
+ * The hand-off card (#3962): secret values a provider holds, handed to one Agent run once the user approves here. Only
+ * this card approves it (lib/card-answer.ts sends its approval with the card's feature; Overview's rows and the
+ * notifications open the chat instead), and no key does: Allow is a press of its button. It says what goes where:
+ * each variable with the item it comes from, the Agent and its computer, where it runs and what it is asked.
+ */
+function SecretHandoffCard({ ix }: { ix: Interaction }) {
+  const [busy, setBusy] = useState<"allow" | "always" | "deny" | null>(null);
+  const keys = useCardKeys();
+  const { variables, agent, machine, cwd, prompt } = secretHandoffInput(ix.tool_input);
+  // nothing says what would be handed over: only Deny
+  const ready = variables.length > 0;
+  const go = async (body: Record<string, unknown>, key: "allow" | "always" | "deny") => {
+    setBusy(key);
+    const r = await answerCard(ix, body, { handoffCard: true });
+    if (!r.ok) toast(r.error, "error");
+    else if (r.already) toast(t("chat-interactions.already_answered"), "info");
+    setBusy(null);
+  };
+  const lead = agent
+    ? t("chat-interactions.secret_handoff_lead", { agent, machine })
+    : t("chat-interactions.secret_handoff_lead_unnamed", { machine });
+  return (
+    <Card
+      kicker={t("chat-interactions.permission_kicker")}
+      title={t("chat-interactions.secret_handoff_title")}
+      cardKeys={keys}
+      footer={
+        <>
+          <Button tone="quiet" busy={busy === "deny"} disabled={busy !== null} onClick={() => void go({ allow: false }, "deny")}>
+            {t("chat-interactions.deny")}
+          </Button>
+          <span className="flex gap-1.5">
+            {ix.always_label && (
+              <Button tone="secondary" busy={busy === "always"} disabled={busy !== null || !ready} onClick={() => void go({ allow: true, always: true }, "always")}>
+                {t("chat-interactions.always_allow")}
+              </Button>
+            )}
+            <Button tone="primary" busy={busy === "allow"} disabled={busy !== null || !ready} onClick={() => void go({ allow: true }, "allow")}>
+              {t("chat-interactions.allow")}
+            </Button>
+          </span>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-2">
+        <p className="text-[13px] leading-relaxed text-ink">{machine ? lead : t("chat-interactions.secret_handoff_lead_bare")}</p>
+        <ul className="flex flex-col gap-1">
+          {variables.map((v) => (
+            <li key={v.name} data-handoff-variable className="flex min-w-0 items-baseline gap-2">
+              <code className="shrink-0 font-mono text-[12px] text-ink">{v.name}</code>
+              <span className="min-w-0 break-words text-[13px] text-ink-2">{v.title ? `${v.provider} › ${v.title}` : v.provider}</span>
+            </li>
+          ))}
+        </ul>
+        {(cwd || prompt) && (
+          <div className="flex flex-col gap-0.5 text-[12px] leading-snug text-ink-3">
+            {cwd && <span data-handoff-cwd className="truncate font-mono">{cwd}</span>}
+            {prompt && <span data-handoff-prompt className="line-clamp-2">{prompt}</span>}
+          </div>
+        )}
+        <span className="text-[12px] leading-snug text-ink-3">
+          {t("chat-interactions.secret_handoff_note")}
+          {ix.always_label ? ` ${t("chat-interactions.secret_handoff_always_scope", { scope: ix.always_label })}` : ""}
+        </span>
+      </div>
+    </Card>
+  );
+}
+
+export function CloseBlockedAgent({ ix, disabled }: { ix: Interaction; disabled: boolean }) {
+  const session = useStore(() => getSession(ix.machine_id, ix.session_id));
+  const [confirming, setConfirming] = useState(false);
+  const [closing, setClosing] = useState(false);
+  if (!session || session.assistant || session.status !== "blocked") return null;
+  const close = async () => {
+    if (closing) return;
+    setClosing(true);
+    await archiveAgent(session, true, { ...appArchiveDeps, archive: s => archiveSession(s, true, true) });
+    setClosing(false);
+    setConfirming(false);
+  };
+  if (!confirming) return <Button className="min-h-11" disabled={disabled} onClick={() => setConfirming(true)}>{t("chat-interactions.close_agent")}</Button>;
+  return <div className="flex min-w-0 flex-col gap-2">
+    <p className="text-ink-2">{t("chat-interactions.close_agent_hint")}</p>
+    <div className="flex flex-wrap gap-2">
+      <Button className="min-h-11" disabled={disabled || closing} onClick={() => setConfirming(false)}>{t("chat-interactions.close_agent_cancel")}</Button>
+      <Button className="min-h-11" tone="danger" busy={closing} disabled={disabled || closing} onClick={() => void close()}>{t("chat-interactions.close_agent_confirm")}</Button>
+    </div>
+  </div>;
+}
+
+/** Claude Code asking to run a command (#5266), said in plain words: its own chunk, loaded only when a command card
+ *  appears, since most chats never show one. Until it is in, the card is the terminal's question as before. */
+const CommandScreenCard = lazyPage(() => import("./CommandScreenCard").then((m) => m.CommandScreenCard));
+
 function ScreenCard({ ix }: { ix: Interaction }) {
+  // The hub sets `command` only on a shell command's permission prompt (one choice, no free-text field).
+  const plain = <PlainScreenCard ix={ix} />;
+  return ix.dialog?.command ? <Suspense fallback={plain}><CommandScreenCard ix={ix} /></Suspense> : plain;
+}
+
+function PlainScreenCard({ ix }: { ix: Interaction }) {
   const input = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
     const el = input.current;
@@ -679,8 +793,9 @@ function ScreenCard({ ix }: { ix: Interaction }) {
       cardKeys={keys}
       onDismiss={() => go({ dismiss: true }, "dismiss")}
       busy={busy !== null}
-      footer={
-        d?.options?.length ? (
+      footer={<div className="flex w-full min-w-0 flex-col gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+        {d?.options?.length ? (
           <span className="text-[11.5px] text-ink-3">{t("chat-interactions.screen_hint")}</span>
         ) : (
           <>
@@ -701,8 +816,10 @@ function ScreenCard({ ix }: { ix: Interaction }) {
               {keys.focused && <Kbd>Enter</Kbd>}
             </Button>
           </>
-        )
-      }
+        )}
+        </div>
+        <CloseBlockedAgent ix={ix} disabled={busy !== null} />
+      </div>}
     >
       {d?.detail && <p className="mb-2 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2">{d.detail}</p>}
       {d?.options?.length ? (
@@ -1060,17 +1177,27 @@ export function AnsweredCard({ card }: { card: Answered }) {
   );
 }
 
+/** What is drawn right under a card: views/assistant/Tasks puts the suggested rule's line here (#5802), whose code
+ *  loads with the first card that carries one. A slot, not an import: Tasks imports this file. */
+export const underCard: { line?: (ix: Interaction & { disabled?: boolean }) => React.ReactNode; /** The cards (by id) Always was answered on: their line stays to say what was made. */ made?: Set<string> } = {};
+
 export function InteractionCard({ ix }: { ix: Interaction }) {
-  const canApprove = useStore(() => interactionCanAnswer(ix, getSession(ix.machine_id, ix.session_id)));
+  // a child session's card on its parent's page (#5120): its row is the one the parent's chat holds (a paging hub's
+  // summary, which the store's complete rows never have)
+  const child = useChildRow(ix.machine_id, ix.session_id);
+  const canApprove = useStore(() => interactionCanAnswer(ix, child ?? getSession(ix.machine_id, ix.session_id)));
   // an answer still on its way (the hub away, apiOp retrying) holds the card, also after leaving the chat and coming back
   const { pending, line } = usePendingLine(ix);
   const card = ix.kind === "question" && ix.tool_name === "persona_tool_loop" ? <ToolLoopCard key={ix.id} ix={ix} />
     : ix.kind === "question" ? <QuestionCard ix={ix} />
     : ix.kind === "plan" ? <PlanCard ix={ix} />
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
+    : isSecretHandoff(ix) ? <SecretHandoffCard key={ix.id} ix={ix} />
     : ix.kind === "permission" ? <PermissionCard ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
   const asked = useVoiceAsking(ix);
+  // a permission card says it in its body (PermissionBody); a secret run's or hand-off's card has none, so it says it here
+  const from = ix.folded_under && (ix.kind !== "permission" || isSecretRun(ix) || isSecretHandoff(ix)) ? permissionFrom(ix) : "";
   // data-card: which card this is, for the sync scenarios (spec/fixtures/sync); `contents` keeps the layout as it was.
   // The fieldset is always there (switching it in would remount the card): disabled, it stops every answer and the
   // card's keys (lib/card-keys.ts) while the session can't be approved here or an answer is on its way
@@ -1078,7 +1205,11 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     <div data-card={ix.id} className="contents">
       <AskedByVoice.Provider value={asked}>
         <SendingAnswer.Provider value={line}>
-          <fieldset disabled={!canApprove || pending} className={canApprove ? "contents" : undefined}>{card}</fieldset>
+          <AskedFrom.Provider value={from}>
+            {/* a question a supervisor passed up may carry a suggested rule: its line goes under the card (#5802) */}
+            <fieldset disabled={!canApprove || pending} className={canApprove ? "contents" : undefined}>{card}</fieldset>
+            {underCard.line?.(canApprove ? ix : { ...ix, disabled: true })}
+          </AskedFrom.Provider>
         </SendingAnswer.Provider>
       </AskedByVoice.Provider>
     </div>

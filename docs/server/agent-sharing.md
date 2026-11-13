@@ -7,7 +7,7 @@ subscription, a transcript download, or an alternate login credential.
 ## Deployment and transport
 
 Configure the hub's `sharing.public_origin` explicitly, for example
-`http://share.example.test:18661` or `https://share.example.test`. Both HTTP and HTTPS
+`http://share.example.test:18081` or `https://share.example.test`. Both HTTP and HTTPS
 are supported. The origin must have no userinfo, path, query, fragment, or invalid
 port and must differ from the authenticated application's configured origin.
 The same host with a different port is an independent origin. Links never use
@@ -22,6 +22,70 @@ A missing independent build fails closed and is not replaced with the app shell;
 creation is unavailable until the hub hands a configured origin to the manager.
 The public origin must actually be routed to the hub by the deployment's listeners
 or reverse proxy; configuring a URL alone does not open a listener.
+
+### Independent HTTP ingress
+
+For an unprivileged separate port without changing the hub's socket-activation
+configuration, run the standalone public-only ingress from the installed binary:
+
+```sh
+personad share-http --listen :18081 \
+  --upstream http://127.0.0.1:18080 \
+  --public-origin http://share.example.test:18081 \
+  --hub-config <private hub configuration>
+```
+
+Choose unused ports from the deployment's own configuration, not these examples.
+Set `sharing.public_origin` to the same public origin. The hub loads it at startup;
+`admin/reload` does not update sharing. When an existing automatic release process
+is in use, wait for its normal release and verify the serving configuration before
+starting the ingress. Do not restart, switch or redeploy the hub solely to open the
+sharing port without separate authorization. A URL change by itself is not proof
+that the running process has loaded it.
+
+This command starts no hub, manager, runtime or database. It accepts only an
+explicit HTTP origin with an unprivileged port and a literal-loopback HTTP upstream.
+It rejects unexpected Host, nonpublic/encoded/absolute paths, bodies, upgrades and
+non-GET methods before contacting the hub. The upstream Host is fixed to the
+sharing authority, client credentials and forwarded headers are removed, and
+upstream cookies, redirects, login challenges and compressed/oversized bodies fail
+closed. Every response has the restrictive sharing headers; request paths and
+capabilities are never logged. Only the viewer, isolated `.js`/`.css` assets and
+exact anonymous capability API are eligible.
+
+The ingress bounds accepted connections (64), simultaneous relays (16), request
+and response headers (16 KiB), upstream requests (10 seconds) and fully buffered
+responses (1 MiB). The upstream retains its own capability and token/IP limits.
+The private Unix-owned mode0600 configuration must also contain
+`sharing.ingress_key`: 32 independently random bytes encoded as 64 hexadecimal
+characters, never copied into command arguments, URLs, logs or client state.
+Configure the key and origin before the hub's normal configuration lifecycle;
+this ingress reads the existing file without starting another hub.
+
+The ingress MAC binds its actual TCP peer IP, timestamp and exact GET authority,
+path and query. Only the exact anonymous capability API arriving on literal
+loopback verifies that proof, within 30 seconds, and uses its canonical IP for the
+existing IPv4 / IPv6 /64 budget. The key grants no account, management or content
+access; the publication capability and ownership checks remain mandatory. Client
+forwarding/proof headers are removed before the ingress creates its own proof.
+No general X-Forwarded-For or proxy-protocol trust is enabled. The original direct
+public ingress still budgets its actual peer when no authenticated proof exists.
+
+Before opening its listener, the command makes one bounded anonymous probe and
+requires the hub's proof acknowledgement. A legacy, unconfigured or wrongly keyed
+upstream cannot open the sharing listener. Losing acknowledgement on an API
+response blocks subsequent anonymous relays until the separate ingress service is
+started again after verification; it never falls back to one shared loopback
+budget. The acknowledgement and proof are never returned to readers. This
+restores IP isolation, not a guarantee against distributed load; all resource and
+per-token bounds remain in force.
+
+Run it under a separate user service for persistence. Stop that service to close
+only the sharing port; it never signals or changes the upstream hub. Removing the
+sharing origin also requires the hub's normal configuration lifecycle. Use the
+same origin again for existing links: their origin cannot be reconstructed or
+retargeted from tokenless metadata. Check anonymous HTTP behavior at the configured
+origin; local browser checks do not prove external-network reachability.
 
 HTTP preview responses include `requires_insecure_transport_ack:true` and a
 localized `transport_warning`: the bearer link and selected content cross the
@@ -80,6 +144,12 @@ existing `devicewire.NodeCall` or `assistantwire.HTTPRequest` envelope; client
 headers and arbitrary node parameters cannot install them. Background/delegated
 manager calls are system calls and borrow no human owner.
 
+Sharing-authority handover follows the hub's trusted roster: its staged entries
+and machines recorded as kept by their manager. Removing a kept machine from
+hub.json does not remove its authority. The keeper/owner filter and live routing
+generation validation still apply; reported-only machines receive no authority.
+This does not change the separate handover of actual machine configuration.
+
 The manager persists a creation intent and sends opaque creation/incarnation IDs
 only to nodes advertising `creation_receipt.v1`. Terminal, asynchronous, runtime
 launcher and engine-runtime start returns record those IDs in node state. The
@@ -93,6 +163,34 @@ Managers advertise `agent_sharing.v1`; nodes advertise `share_projection.v1` and
 content. Source projection is `session.share_projection` with
 `{session_id,incarnation,previous?}`; the trusted inspection variant can recover
 an existing node incarnation without claiming it. Clients cannot supply file paths.
+
+### Creation outcome diagnostics
+
+Local `share_creation` lines contain only a JSON object with `session_id`, `step`
+and an allowlisted `result`. UUID and bounded synthetic session IDs are accepted;
+other identifiers become `invalid`, and a not-yet-known ID becomes `pending`.
+Content, owner/credential identities, creation/incarnation IDs, capabilities,
+paths, machine names and raw error strings are never included. These are local
+logs, not public DTOs, permissions or new durable state.
+
+| Step | What its result establishes |
+| --- | --- |
+| `manager_prepare` | The intent was created, or preparation skipped/failed because storage, caller, authority, resume or node capability did not qualify. Emitted after the start reply supplies its session ID. |
+| `node_reply` | Returned creation identities match the manager's prepared identities, are missing, or differ. Values themselves are not logged. |
+| `node_receipt` | The real node updated memory and invoked its persistence callback, lacked a callback, or skipped the receipt. |
+| `node_notify` | The one-way write was sent without durable acknowledgement, lacked a peer, or failed. Existing reconnect/switch-state handling is preserved. |
+| `manager_persist` | State arrived with/without both receipt fields, its database write committed, or storage/input failed. |
+
+`sent_unacknowledged` is deliberately not called persisted. Likewise,
+`committed_with_receipt` proves the state write succeeded, not that an unknown or
+mismatched intent acquired ownership. Existing database reconciliation and catalog
+ownership checks remain the authority. Counts may be obtained from these fixed
+step/result codes; they never use session IDs as metric labels.
+
+For a bounded synthetic reproduction, reduce only exact-session log lines to
+step/result presence and counts. Do not publish its actual identifiers or inspect
+unrelated conversation logs. Missing lines from an older node or unavailable log
+stream are an observability limitation, not proof that a stage did not execute.
 
 Supported complete sources:
 

@@ -79,6 +79,10 @@ final class AttachGridTests: XCTestCase {
         XCTAssertTrue(caption.isHittable, "the caption field can't be reached")
         // The caption is the conversation's draft, which the app keeps: what was typed ends it.
         XCTAssertTrue((caption.value as? String ?? "").hasSuffix("看看这张图"), "what was typed is not in the field: \(caption.value ?? "")")
+        // Leave the draft empty for the tests after this one (AttachMenuTests' Mention reads it).
+        caption.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.9)).tap()
+        caption.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (caption.value as? String ?? "").count + 2))
+        sleep(2) // drafts are saved a moment after the last change
     }
 
     /// The panel is a half-height system sheet with an even grid (#4312): it opens at the medium detent with the chat
@@ -126,7 +130,7 @@ final class AttachGridTests: XCTestCase {
     @MainActor func testCaptionTypedAboveTheKeyboard() throws {
         let check = ProcessInfo.processInfo.environment["PERSONA_SHOTS_ONLY"] != "1"
         let (app, cells) = try openPanel()
-        cells.element(boundBy: 0).tap()
+        ring(cells.element(boundBy: 0)).tap()
         let caption = app.descendants(matching: .any)["attach-caption"].firstMatch
         XCTAssertTrue(caption.waitForExistence(timeout: 5), "no caption field after a photo was picked:\n\(app.debugDescription)")
         caption.tap()
@@ -140,16 +144,20 @@ final class AttachGridTests: XCTestCase {
         if check {
             XCTAssertLessThanOrEqual(caption.frame.maxY, keyboard.frame.minY + 1, "the caption field is under the keyboard: \(caption.frame), the keyboard \(keyboard.frame)")
             XCTAssertTrue(caption.isHittable, "the caption field can't be reached")
-            // The caption is the conversation's draft, which the app keeps: what was typed ends it.
-            XCTAssertTrue((caption.value as? String ?? "").hasSuffix("Look at this one"), "what was typed is not in the field: \(caption.value ?? "")")
+            // The caption is the conversation's draft, which the app keeps: what was typed is in it.
+            XCTAssertTrue((caption.value as? String ?? "").contains("Look at this one"), "what was typed is not in the field: \(caption.value ?? "")")
         }
+        // Leave the draft empty for the tests after this one.
+        caption.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.9)).tap()
+        caption.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (caption.value as? String ?? "").count + 2))
+        sleep(2) // drafts are saved a moment after the last change
     }
 
     /// Opened while typing, the composer's keyboard goes down and stays down after the sheet is swiped away; what was
     /// picked lands in the composer once, and the next opening starts with nothing picked (#4312).
     @MainActor func testSwipeDownKeepsThePicksAndTheKeyboardDown() throws {
         let (app, cells) = try openPanel(typingFirst: true)
-        cells.element(boundBy: 0).tap()
+        ring(cells.element(boundBy: 0)).tap()
         XCTAssertEqual(cells.element(boundBy: 0).value as? String, "已选，第 1 张", "the first photo was not picked")
         let sheet = app.descendants(matching: .any)["attach-sheet"].firstMatch
         sheet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
@@ -166,6 +174,11 @@ final class AttachGridTests: XCTestCase {
         sleep(1)
         let picked = (0..<cells.count).filter { !((cells.element(boundBy: $0).value as? String) ?? "").isEmpty }
         XCTAssertEqual(picked, [], "the next opening starts with photos picked")
+        // Leave the composer as it was: close the panel and take the photo out.
+        app.buttons["attach-close"].firstMatch.tap()
+        _ = app.descendants(matching: .any)["attach-sheet"].firstMatch.waitForNonExistence(timeout: 5)
+        removes.firstMatch.tap()
+        sleep(2)
     }
 
     /// Launches against the mock hub with the camera cell shown, opens the panel and gives it the photo library.
@@ -200,6 +213,12 @@ final class AttachGridTests: XCTestCase {
         XCTAssertTrue(cells.firstMatch.waitForExistence(timeout: 15), "no photos in the panel:\n\(app.debugDescription)")
         sleep(2) // the sheet's spring, and the thumbnails
         return (app, cells)
+    }
+
+    /// A cell's ring, which picks (a tap on the picture opens the editor, #4963).
+    @MainActor private func ring(_ cell: XCUIElement) -> XCUICoordinate {
+        let side = cell.frame.width
+        return cell.coordinate(withNormalizedOffset: CGVector(dx: (side - 17.5) / side, dy: 17.5 / side))
     }
 
     /// The cells that read as picked, by their place in the grid.

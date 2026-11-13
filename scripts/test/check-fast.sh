@@ -13,7 +13,7 @@
 #
 # Path mapping (diff mode):
 #   web/**                     npm ci (only with no node_modules or a changed package.json/package-lock.json),
-#                              typecheck, vitest run
+#                              node_modules against package-lock.json, typecheck, vitest run
 #   schema/extension/**, spec/fixtures/injected/**, spec/fixtures/sync/**, spec/fixtures/attention/**,
 #   scripts/mock/inbox_events.json
 #                              also the web check: web/src and its vitest suite read these files. They are the inputs
@@ -48,7 +48,8 @@
 #                              each changed scripts/<dir>/test_*.py and the test_<name>.py of each changed script
 #                              <name>.py / <name>.sh (- read as _; db.sh's is test_db_sh.py), run from its
 #                              directory as CI does (#3968). scripts/hooks/** also runs
-#                              scripts/test/test_privacy_check.py (it runs the hooks); scripts/privacy_check.py also
+#                              scripts/test/test_privacy_check.py and test_check_deno_adapter_sh.py (they run the
+#                              hooks; the latter also for scripts/gen/deno_adapter.sh); scripts/privacy_check.py also
 #                              scripts/release/test_check_bundle_privacy.py (it imports privacy_check)
 #   docs/**, any *.md          scripts/test/test_doc_paths.py and test_doc_go_paths.py (paths quoted in the docs, the
 #                              CLAUDE.md doc index), test_doc_sections.py (section names quoted after a doc path),
@@ -318,6 +319,8 @@ job_web() {  # $1 = ci when npm ci must run first
     in_dir web step "$TIMEOUT_NPM_CI" "web: npm ci" npm ci || return $?
     JOB_HINT=""
   fi
+  # A node_modules from before the last lock bump runs old packages: stop with the list instead (#4776).
+  in_dir web step "$TIMEOUT_OTHER" "web: node_modules matches package-lock.json" npm run check:deps || return $?
   in_dir web step "$TIMEOUT_OTHER" "web: tsc -b (typecheck)" npm run typecheck || return $?
   in_dir web step "$TIMEOUT_WEB_TEST" "web: vitest run" npm test
 }
@@ -397,7 +400,8 @@ job_i18n() {
     python3 -B test_android_token_baseline.py || return $?
   in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: test_android_slot_order.py self-test" \
     python3 -B test_android_slot_order.py || return $?
-  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_slot_order.py" python3 -B android_slot_order.py
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_slot_order.py" python3 -B android_slot_order.py || return $?
+  in_dir scripts/app step "$TIMEOUT_OTHER" "scripts/app: android_token_baseline.py" python3 -B android_token_baseline.py
 }
 
 job_external_refs() {
@@ -619,6 +623,7 @@ else
         arr_has "$_p" "${INTEG[@]:-}" || INTEG+=("$_p") ;;
       sdk/ts/*) SDKTS=1 ;;
       spec/fixtures/*) ;;  # read by server tests: the reader packages are collected in a pass below
+      spec/tokens/*|spec/icons/*) ;;  # test_gen_tokens.py / test_gen_icon_meanings.py, added with the scripts/ unittests below
       server/*)
         _rest=${f#server/}
         case "$_rest" in
@@ -769,11 +774,24 @@ else
         script_test_add scripts/test/test_doc_sections.py ;;
     esac
     case "$f" in apple/*) script_test_add scripts/test/test_apple_l10n.py ;; esac
-    # Suites whose names do not match the file they test: test_privacy_check.py copies scripts/hooks into its temp
-    # repositories and runs the hooks there; check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py
-    # copies privacy_check.py into its temp repositories, where merge-pr.sh runs it.
+    # test_gen_tokens.py checks the token sources against the iOS values and the committed Android Tokens.kt (#4209).
     case "$f" in
-      scripts/hooks/*) script_test_add scripts/test/test_privacy_check.py ;;
+      spec/tokens/*|apple/Shared/Design/*|android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt)
+        script_test_add scripts/assets/test_gen_tokens.py ;;
+    esac
+    # test_gen_icon_meanings.py checks spec/icons against Theme.Icon and the Phosphor glyphs, and PersonaIcons.kt.
+    case "$f" in
+      spec/icons/*|apple/Shared/Design/Icons.swift|android/core/designsystem/src/main/kotlin/persona/core/designsystem/icons/*)
+        script_test_add scripts/assets/test_gen_icon_meanings.py ;;
+    esac
+    # Suites whose names do not match the file they test: test_privacy_check.py and test_check_deno_adapter_sh.py copy
+    # scripts/hooks into their temp repositories and run the hooks there (the latter also scripts/gen/deno_adapter.sh);
+    # check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py copies privacy_check.py into its temp
+    # repositories, where merge-pr.sh runs it.
+    case "$f" in
+      scripts/hooks/*)
+        script_test_add scripts/test/test_privacy_check.py; script_test_add scripts/test/test_check_deno_adapter_sh.py ;;
+      scripts/gen/deno_adapter.sh) script_test_add scripts/test/test_check_deno_adapter_sh.py ;;
       scripts/privacy_check.py)
         script_test_add scripts/release/test_check_bundle_privacy.py; script_test_add scripts/test/test_merge_pr_sh.py ;;
     esac

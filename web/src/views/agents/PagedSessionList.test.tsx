@@ -134,22 +134,40 @@ describe("paged state chips during count refreshes", () => {
     expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("reads scoped counts once per hint, not again when the root's counts land for it", async () => {
+  it("reads a search's counts once per hint: the list's own read serves the facet chips and the scope", async () => {
     vi.mocked(api).mockClear();
     await show();
     await search();
-    const scopedReads = () => vi.mocked(api).mock.calls.filter(([path]) => path === "/sessions?counts=1&q=review").length;
-    expect(scopedReads()).toBe(2); // the facet chips and the scope, once each
+    const scopedReads = () => vi.mocked(api).mock.calls.filter(([path]) => {
+      const params = new URL(path, "https://example.com").searchParams;
+      return params.get("counts") === "1" && params.get("q") === "review";
+    }).length;
+    expect(scopedReads()).toBe(1);
     const before = scopedReads();
     for (let i = 0; i < 3; i++) {
       rootCounts.mockResolvedValue(counts(initialState, `hint-${i}`));
       await hint();
     }
-    expect(scopedReads() - before).toBe(6); // 3 hints × (facets + scope)
+    expect(scopedReads() - before).toBe(3); // 3 hints × one shared read
     // A root refresh with no hint (a retry, a rebaseline) reads nothing scoped.
     rootCounts.mockResolvedValue(counts(initialState, "retry"));
     await act(async () => { await list.load(); });
-    expect(scopedReads() - before).toBe(6);
+    expect(scopedReads() - before).toBe(3);
+  });
+
+  it("shares one counts read between the facet chips and the scope while a state tab is open", async () => {
+    await show();
+    await search();
+    const working = chips().find((chip) => chip.getAttribute("aria-label")?.startsWith(STATE_LABEL.working))!;
+    await act(async () => { working.click(); await vi.advanceTimersByTimeAsync(0); });
+    vi.mocked(api).mockClear();
+    const reads = (state: boolean) => vi.mocked(api).mock.calls.filter(([path]) => {
+      const params = new URL(path, "https://example.com").searchParams;
+      return params.get("counts") === "1" && params.get("q") === "review" && params.has("state") === state;
+    }).length;
+    for (let i = 0; i < 3; i++) await hint();
+    expect(reads(false)).toBe(3); // facets and scope: the same query, once per hint
+    expect(reads(true)).toBe(3); // the state-filtered list's own counts
   });
 
   it("keeps unfiltered chips while the root rebaselines and accepts a successful empty count", async () => {

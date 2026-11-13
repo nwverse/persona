@@ -237,6 +237,12 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		return nil, ErrNotFound
 	}
 	d.Meta = raw
+	if kind == KindRecording {
+		e.Store.recFilesMu.RLock()
+		m, _ := e.Store.readMeeting(id)
+		e.Store.recFilesMu.RUnlock()
+		d.Meta = metaWithMeeting(raw, m)
+	}
 	if kind == KindProject {
 		d.Log = e.Store.Log(id, 30)
 		if p, ok := e.Store.Project(id); ok {
@@ -253,7 +259,21 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		_ = json.Unmarshal(recording["segments.json"], &segs)
 		d.Segments = nonNilSegments(segs)
 		if raw, err := os.ReadFile(e.Store.path(kind, id, "minutes.json")); err == nil && json.Valid(raw) {
+			var r Recording
+			if json.Unmarshal(recording["meta.json"], &r) == nil {
+				raw = minutesWithSpan(raw, &r, e.Store.Zone())
+			}
 			d.Minutes = raw
+		}
+		d.Meta, d.Recap = e.dayDetail(id, d.Meta)
+		if d.Summary == "" && d.Recap != nil {
+			// A trimmed day recording keeps its recap, not summary.md: its summary is the recap's.
+			var rc struct {
+				Summary string `json:"summary"`
+			}
+			if json.Unmarshal(d.Recap, &rc) == nil && rc.Summary != "" {
+				d.Summary = rc.Summary + "\n"
+			}
 		}
 		if recentChars > 0 {
 			raw := recording["transcript.md"]
@@ -265,6 +285,11 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	}
 	if kind == KindTopic {
 		d.Points = e.Store.TopicPoints(id)
+	}
+	if kind == KindPerson {
+		if all := e.Store.profiles(SafeID(id)); len(all) > 0 {
+			d.Profiles = all
+		}
 	}
 	var refs struct {
 		Projects []string `json:"projects"`
@@ -347,19 +372,67 @@ func tagUpdate(u Update, t *Tagging) {
 	}
 }
 
+// projectUpdate keeps fields that the project branch can apply, for locking and attribution too.
+func (e *Engine) projectUpdate(u Update) Update {
+	if u.Kind != "short" && u.Kind != "long" {
+		u.Kind = ""
+	}
+	if u.Status != "active" && u.Status != "paused" && u.Status != "done" && u.Status != "ignored" {
+		u.Status = ""
+	}
+	if !importanceRe.MatchString(u.Importance) {
+		u.Importance = ""
+	}
+	if u.Relevance != nil && (*u.Relevance < 0 || *u.Relevance > 100) {
+		u.Relevance = nil
+	}
+	u.Projects, u.RemoveProjects = nil, nil
+	var chats []string
+	for _, id := range u.Chats {
+		if _, ok := e.Store.Chat(id); ok {
+			chats = append(chats, id)
+		}
+	}
+	u.Chats = chats
+	return u
+}
+
 // Apply changes one entity as the user (the app, the assistant); for projects it creates the project when it does
 // not exist (id = name or slug). Locked fields it touches become the user's: an extension's provenance on them goes.
 func (e *Engine) Apply(kind, id string, u Update) (string, error) {
 	if e.Store.ReadOnly() {
 		return "", ErrReadOnly
 	}
+	u = stripUnsupported(kind, u) // what the kind does not use is neither applied nor locked (Unsupported says it)
+	if err := checkProfile(u.Profile); err != nil {
+		return "", err
+	}
+	profile := u.Profile
+	u.Profile = nil
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
+	if kind == KindProject {
+		u = e.projectUpdate(u)
+	}
 	out, err := e.apply(kind, id, u)
 	if err == nil && u.MergeInto == "" {
 		err = e.claim(kind, out, u, "", nil, nil)
 	}
+	if err == nil && profile != nil {
+		_, err = e.putProfile(out, UserWriter, profile)
+	}
 	return out, err
+}
+
+// putProfile replaces writer's profile of person pid and writes the person's summary.md again; it answers the profile
+// it replaced (nil for none).
+func (e *Engine) putProfile(pid, writer string, p *PersonProfile) (*PersonProfile, error) {
+	before, err := e.Store.putProfile(pid, writer, p, time.Now())
+	if err != nil {
+		return before, err
+	}
+	e.WritePersonSummary(pid)
+	return before, nil
 }
 
 func (e *Engine) apply(kind, id string, u Update) (string, error) {
@@ -411,6 +484,9 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		}
 		if u.MyRole != "" {
 			p.MyRole = oneLine(u.MyRole)
+		}
+		if u.Note != "" {
+			p.Note = oneLine(u.Note)
 		}
 		tagUpdate(u, &p.Tagging)
 		protectUpdate(u, &p.Tagging)
@@ -519,6 +595,9 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
 		return c.ID, nil
 	case KindPerson:
+		if u.Status != "" && u.Status != "active" && u.Status != "ignored" && u.Status != "self" {
+			return "", fmt.Errorf("unknown person status %q", u.Status)
+		}
 		p, ok := e.Store.Person(id)
 		if !ok {
 			return "", ErrNotFound
@@ -542,6 +621,9 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 			protectUpdate(u, &p.Tagging)
 			if u.Note != "" {
 				p.Note = oneLine(u.Note)
+			}
+			if u.Status != "" {
+				p.Status = u.Status
 			}
 			p.Projects = addUnique(p.Projects, linked...)
 			p.Chats = removeStrings(p.Chats, u.RemoveChats)
@@ -700,7 +782,7 @@ func (e *Engine) entries(projects, chats, people []string) []Entry {
 		}
 	}
 	for _, id := range people {
-		if p, ok := e.Store.Person(id); ok {
+		if p, ok := e.Store.Person(id); ok && p.Status != "ignored" && p.Status != "self" {
 			ps = append(ps, Entry{Kind: KindPerson, ID: p.ID, Name: p.Name, OneLine: p.Note, Importance: p.Importance,
 				Relevance: p.Relevance, Tags: p.Tags, Updated: p.LastSeen})
 		}

@@ -52,6 +52,9 @@ type fleetBook struct {
 	// screenHandedBack: screen card id -> the card handed back to the computer (fleet_ix_screen.go screenHandedBackLocked):
 	// the same dialog still on screen gets no new card until the agent moves on (#4867).
 	screenHandedBack map[string]screenGone
+	// handoffBy: hand-off card id -> the approval that claimed it, with the device the hub vouched for (secret_handoff.go:
+	// only such an approval counts).
+	handoffBy map[string]handoffClaim
 	// upgradeEvery / upgradeFor override screenUpgradeEvery / screenUpgradeFor (0: those; upgradeScreenCard). Tests
 	// shorten them on their own Service before any session list comes, so an upgrade loop another test left running
 	// never reads what this one writes (#4554).
@@ -75,6 +78,10 @@ type fleetBook struct {
 	shown   map[string][]proto.Session
 	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
 	asks asksMemo
+	// folds: what each machine's last complete list folded its children under (fleet_fold.go), for the rows and
+	// cards sent without the rest of the list.
+	foldMu sync.Mutex
+	folds  map[string]sessionFold
 
 	// rep is the last snapshot's parts the session lists show (fleetTakeSnapshot).
 	rep fleetReport
@@ -168,6 +175,34 @@ func (g guardedStore) InteractionOutcome(ctx context.Context, id string) (status
 func (g guardedStore) Interactions(ctx context.Context, machine, session string, limit int) (out []db.InteractionRecord, err error) {
 	defer guard(&err)
 	return g.st.Interactions(ctx, machine, session, limit)
+}
+
+// lateAnswerer is a store that records an answer given after a card expired (db.DB); one without it records none.
+type lateAnswerer interface {
+	LateAnswer(ctx context.Context, id string, answers map[string]string, by, reason string) (bool, error)
+}
+
+func (g guardedStore) LateAnswer(ctx context.Context, id string, answers map[string]string, by, reason string) (ok bool, err error) {
+	defer guard(&err)
+	l, has := g.st.(lateAnswerer)
+	if !has {
+		return false, errNoTable
+	}
+	return l.LateAnswer(ctx, id, answers, by, reason)
+}
+
+// interactionPager is a store that pages the history by time (db.DB); one without it answers errNoTable.
+type interactionPager interface {
+	InteractionsPage(ctx context.Context, q db.InteractionQuery) (db.InteractionPage, error)
+}
+
+func (g guardedStore) InteractionsPage(ctx context.Context, q db.InteractionQuery) (out db.InteractionPage, err error) {
+	defer guard(&err)
+	p, ok := g.st.(interactionPager)
+	if !ok {
+		return out, errNoTable
+	}
+	return p.InteractionsPage(ctx, q)
 }
 
 func (g guardedStore) AllowAlways(ctx context.Context, session, tool string, keys []string) (err error) {

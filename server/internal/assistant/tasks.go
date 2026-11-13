@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md, #930). The assistant hands the user a plan
@@ -39,13 +40,18 @@ type PlanTask struct {
 	Prompt  string `json:"prompt"`
 	Machine string `json:"machine"`
 	// MachinePolicy defaults to fixed; only explicit flexible tasks may move to another machine.
-	MachinePolicy string `json:"machine_policy,omitempty"`
-	Cwd           string `json:"cwd"`
-	Launcher      string `json:"launcher,omitempty"`
-	Model         string `json:"model,omitempty"`
-	Effort        string `json:"effort,omitempty"`
-	Tier          string `json:"tier,omitempty"`
-	Permission    string `json:"permission,omitempty"`
+	MachinePolicy     string                 `json:"machine_policy,omitempty"`
+	Cwd               string                 `json:"cwd"`
+	Workspace         *TaskWorkspace         `json:"workspace,omitempty"`
+	WorkspaceResolved *TaskWorkspaceResolved `json:"workspace_resolved,omitempty"`
+	// Hub-owned identity for the default branch's preview, before a todo exists.
+	ReservedTodoID    string `json:"reserved_todo_id,omitempty"`
+	WorkspaceInferred bool   `json:"workspace_inferred,omitempty"`
+	Launcher          string `json:"launcher,omitempty"`
+	Model             string `json:"model,omitempty"`
+	Effort            string `json:"effort,omitempty"`
+	Tier              string `json:"tier,omitempty"`
+	Permission        string `json:"permission,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
 	Ultracode *bool `json:"ultracode,omitempty"`
@@ -54,6 +60,9 @@ type PlanTask struct {
 	// assistant.start_requested_tasks on it starts without the card's "Start".
 	UserRequested bool   `json:"user_requested,omitempty"`
 	Why           string `json:"why,omitempty"`
+	// OwnerStarted: the owner tapped Start on the plan's card (POST …/start), as against the hub starting it without
+	// asking; the hub's, never what a tool call or an edit says. What a suggested rule counts (rule_suggest.go, #4929).
+	OwnerStarted bool `json:"owner_started,omitempty"`
 	// Reroute is set once a flexible task has been moved to another machine; nil while it runs where it was asked.
 	// Repeated moves keep the original FromMachine and refresh ToMachine and Reason (#2271).
 	Reroute *PlanReroute `json:"reroute,omitempty"`
@@ -109,11 +118,13 @@ type PlanTask struct {
 	// whoever planned the task, so a retry may still swap it for one its computer has (launcher_fit.go).
 	defaulted bool
 	// inPane: the kept tab this try starts in (task_retry), "" for a new one.
-	inPane string
+	inPane    string
+	planID    string
+	planIndex int
 }
 
-// Readonly is a launch constraint, including for older saved plans and card edits.
-// Never let an omitted mode inherit a writable launcher default.
+// Readonly starts conservatively in plan. The launcher fit changes Claude to bypassPermissions while preserving Codex's sandbox.
+// Never let an omitted mode inherit a writable launcher default before that fit.
 func (t *PlanTask) normalizeReadonlyPermission() {
 	if t.Readonly {
 		t.Permission = "plan"
@@ -128,6 +139,9 @@ type TaskPlan struct {
 	State        string     `json:"state"` // planOpen, planStarted, planDismissed
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
+	// Suggestion: the owner started this kind of task three times; the open plan's card offers to start it directly
+	// from now on (rule_suggest.go, #4929). Filled in where the apps read the plan, never kept with it.
+	Suggestion *proto.RuleSuggestion `json:"suggestion,omitempty"`
 }
 
 const (
@@ -148,7 +162,7 @@ type FeedItem struct {
 
 const (
 	feedPlan     = "plan"     // ref: the plan id
-	feedTask     = "task"     // ref: the todo id
+	feedTask     = "task"     // ref: the todo id; body: taskCardBody, a wake for a task that did not start its Agent (taskCard)
 	feedAnswered = "answered" // ref: the todo id; body: answeredBody (answered.go)
 	feedReceipt  = "receipt"  // ref: the todo id; body: title, state, summary, pr, machine
 	feedRouted   = "routed"   // ref: the todo id; body: text, interrupted (agent_interrupt stopped its turn first), from
@@ -208,6 +222,10 @@ type tasksState struct {
 	// trustMu serializes the read-modify-writes of tasks.trust (trustKinds, forgetTrust), so that two plans
 	// remembered at once, or a forget racing a remember, do not drop each other's kinds.
 	trustMu sync.Mutex
+	// Admission is serialized through claiming the resolved cwd; claims last until
+	// the task's agent link or failure is recorded.
+	workspaceMu     sync.Mutex
+	workspaceClaims map[string]string
 }
 
 func newTasksState() tasksState {
@@ -544,13 +562,14 @@ func (s *Service) trustKinds(ctx context.Context, tasks []PlanTask) {
 func (s *Service) taskRoutes() {
 	s.draftDecisionRoutes()
 	s.doneCheckRoute()
+	s.handle("POST /api/v1/task-plans/{id}/workspace-preview", s.previewPlanWorkspaces)
 	s.handle("GET /api/v1/task-plans/{id}", func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.loadPlan(r.Context(), r.PathValue("id"))
 		if err != nil {
 			planErr(w, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"plan": p})
+		apierr.WriteJSON(w, map[string]any{"plan": s.planWithSuggestion(r.Context(), p, s.requestLang(r))})
 	})
 	s.handle("POST /api/v1/task-plans/{id}/start", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -567,7 +586,7 @@ func (s *Service) taskRoutes() {
 				return
 			}
 		}
-		p, err := s.startPlan(r.Context(), r.PathValue("id"), in.Tasks, in.Remember)
+		p, err := s.startPlan(ownerStart(r.Context()), r.PathValue("id"), in.Tasks, in.Remember)
 		if err != nil {
 			planErr(w, err)
 			return
@@ -636,6 +655,9 @@ func (s *Service) taskRoutes() {
 			return
 		}
 		plans := s.feedPlans(r.Context(), items)
+		for id, p := range plans {
+			plans[id] = s.planWithSuggestion(r.Context(), p, s.requestLang(r))
+		}
 		if items == nil {
 			items = []FeedItem{}
 		}

@@ -15,9 +15,10 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A provider refusal after assistant.send returned must not end the conversation without the one bounded same-model
-// retry the owner asked for (#3204). The fake CLI is the real node process/stream-json seam, not a model call.
-func TestAssistantRefusalRetriesOnceOnTheSameModel(t *testing.T) {
+// A transient model failure after assistant.send returned must not end the conversation without the one bounded
+// same-model retry the owner asked for (#3204); a Claude safeguards refusal skips it (#4283,
+// TestAssistantClaudeRefusalSwitchesAtOnce). The fake CLI is the real node process/stream-json seam, not a model call.
+func TestAssistantTransientErrorRetriesOnceOnTheSameModel(t *testing.T) {
 	f := sdkTest(t)
 	script := `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
 echo '{"type":"system","subtype":"init"}'
@@ -27,7 +28,7 @@ while IFS= read -r line; do
     count=$(cat "$SDK_FAKE_DIR/refusals" 2>/dev/null || echo 0)
     if [ "$count" -eq 0 ]; then
       echo 1 > "$SDK_FAKE_DIR/refusals"
-      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
     else
       echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
       echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answered"}},"parent_tool_use_id":null}'
@@ -55,7 +56,7 @@ done
 	}
 }
 
-func TestAssistantRefusalThenUsesTheNextLauncherModel(t *testing.T) {
+func TestAssistantFailureThenUsesTheNextLauncherModel(t *testing.T) {
 	f := sdkTest(t)
 	script := `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
 echo '{"type":"system","subtype":"init"}'
@@ -75,7 +76,7 @@ while IFS= read -r line; do
         if [ "$count" -eq 2 ]; then
           echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
         fi
-        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
+        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
       else
         printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
         printf '{"type":"assistant","uuid":"final","timestamp":"2026-11-10T00:00:00Z","message":{"role":"assistant","model":"%s","content":[{"type":"text","text":"answered by fallback"}]}}\n' "$model" >> "$SDK_FAKE_DIR/transcript.jsonl"
@@ -414,7 +415,7 @@ while IFS= read -r line; do
     count=$((count+1))
     echo "$count" > "$SDK_FAKE_DIR/attempts"
     if [ "$count" -eq 1 ]; then
-      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
     else
       exit 0 # the recovered turn ends without any result event
     fi ;;
@@ -462,7 +463,7 @@ func TestAssistantRecoveryKeepsSessionWorkingBetweenProcesses(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
-	if !n.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !n.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("the failed turn did not enter recovery")
 	}
 	select {
@@ -622,7 +623,7 @@ func TestAssistantHandoverResumesPendingFailureWithTheSameBudget(t *testing.T) {
 	r := &assistantTurnRecovery{retried: map[string]bool{"primary-model": true}, used: map[string]bool{"primary-model": true}}
 	a.recoveries = map[string]*assistantTurnRecovery{id: r}
 	a.handOverAssistants()
-	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("a result in the handover gap was published instead of queued")
 	}
 
@@ -728,7 +729,7 @@ func TestAssistantResultOnTheOldNodeForwardsAfterAdoption(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
-	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("a result that read the old owner was not forwarded after adoption")
 	}
 	select {
@@ -767,7 +768,7 @@ func TestAssistantRecoveryCannotRestartOnTheOldNodeAfterHandover(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoverySend = send })
-	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("the failed turn did not enter recovery")
 	}
 	select {
@@ -828,7 +829,7 @@ func TestAssistantPendingFailureUsesTheReplacementProcess(t *testing.T) {
 			n.procs[p.id] = replacement
 			n.mu.Unlock()
 			// The replacement's first result arrives before its recovery send has returned.
-			n.recoverAssistantResult(replacement, true, "API Error: safeguards flagged this message")
+			n.recoverAssistantResult(replacement, true, "API Error: 503 no eligible upstream account is currently available")
 		}
 		return nil
 	}

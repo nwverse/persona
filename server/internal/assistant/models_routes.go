@@ -40,6 +40,9 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 		return p, err
 	}
 	p.InheritedFrom = inheritedLabel(s.requestCtxLang(ctx), p, base, from, providers)
+	if p.Kind == "api" {
+		p.MachineID = s.settings(ctx).MachineID // where a launcher picked for it runs (models_run.go)
+	}
 	stored := s.storedLaunchers(ctx)
 	p.Fields = []string{"provider", "model"}
 	p.ProviderIDs = []string{}
@@ -51,7 +54,7 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 			if p.Effective.Model == "" {
 				p.Effective.Model = v.Model
 			}
-			if p.Kind == "api" && v.API == "responses" {
+			if p.Kind == "api" && (v.API == "responses" || v.API == "messages" || v.API == "") {
 				p.Fields = append(p.Fields, "effort")
 			}
 		}
@@ -71,15 +74,25 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 		if p.Kind == "api" && strings.HasPrefix(p.Effective.Provider, "legacy.") && s.legacyModelConfig(ctx, p.Effective.Provider).BaseURL == "" {
 			p.Status = mc(l, modelNoAPIStatus)
 		}
-	} else if p.Kind == "api" && p.Effective.Model == "" {
-		p.Status = mc(l, "status_no_model")
 	} else if p.Kind == "api" {
-		if config, e := s.apiConfig(ctx, p.Effective); e != nil {
+		config, e := s.apiConfig(ctx, p.Effective)
+		switch {
+		case config.RunLauncher != "": // the launcher's own model when none is chosen
+			if e != nil {
+				p.Status = i18n.Localize(e, l) // no main chat computer
+			} else if d, ok := s.device(ctx, config.ViaMachine); ok && !d.Online {
+				p.Status = mc(l, "status_machine_offline")
+			}
+		case p.Effective.Model == "":
+			p.Status = mc(l, "status_no_model")
+		case e != nil:
 			p.Status = i18n.Localize(e, l)
-		} else if config.APIKey == "" && config.APIKeyFile == "" {
+		case config.APIKey == "" && config.APIKeyFile == "":
 			p.Status = mc(l, "status_no_credentials")
-		} else if pause := ai.Held(config); pause != nil {
-			p.Status, p.Limit = pause.Text(), pause
+		default:
+			if pause := ai.Held(config); pause != nil {
+				p.Status, p.Limit = pause.Text(), pause
+			}
 		}
 	} else if p.Kind == "plugin" {
 		for _, provider := range providers {
@@ -205,7 +218,7 @@ func (s *Service) modelConfigRoutes() {
 			apierr.Write(w, 500, err)
 			return
 		}
-		effective := mergeModel(base, b)
+		effective := effectiveModel(p, base, b)
 		if body, err := s.triageInUse(ctx, id, effective); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
@@ -219,7 +232,7 @@ func (s *Service) modelConfigRoutes() {
 				apierr.Write(w, 400, e)
 				return
 			}
-			if config.API != "responses" {
+			if !messagesAPI(config.API) && config.API != "responses" {
 				apierr.Write(w, 400, i18n.Err("assistant-models.err_api_effort"))
 				return
 			}

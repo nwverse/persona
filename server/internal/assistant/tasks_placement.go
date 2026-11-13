@@ -88,18 +88,19 @@ func (t *PlanTask) noteWhy(note string) {
 }
 
 // fitTaskLauncher holds t's resolved launcher (params, resolveStart's) to what m has (fitLauncher): a default m lacks
-// is swapped for one it has, which t then names, without a tier that no longer applies, and its why says so.
-func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) error {
-	note, err := s.fitLauncher(ctx, m, own, params)
+// is swapped for one it has, which t then names, without a tier that no longer applies, and its why says so. It also
+// reports whether the resolved launcher is Claude, using the same launcher list rather than another probe.
+func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (bool, error) {
+	note, agent, err := s.fitLauncher(ctx, m, own, params)
 	if err != nil || note == "" {
-		return err
+		return agent == "claude", err
 	}
 	t.Launcher, _ = params["launcher"].(string)
 	t.Model, _ = params["model"].(string)
 	t.Effort, _ = params["effort"].(string)
 	t.Tier = ""
 	t.noteWhy(note)
-	return nil
+	return agent == "claude", nil
 }
 
 // taskDirectoryExists checks the mapped directory before a flexible task changes machines. Missing, denied or
@@ -154,8 +155,12 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// On the computer it landed on (a flexible task may have moved): a default it lacks gives way to one it has, a
 	// launcher the plan named that it lacks is refused before any tab opens (#2640). Before the health check below,
 	// which is then about the launcher that will run.
-	if err := s.fitTaskLauncher(ctx, t, m, own, params); err != nil {
+	claude, err := s.fitTaskLauncher(ctx, t, m, own, params)
+	if err != nil {
 		return "", "", err
+	}
+	if claude {
+		t.Permission = "bypassPermissions"
 	}
 	if t.MachinePolicy == machineFixed {
 		// Only an actual terminal start can recheck a repaired terminal shell.
@@ -167,7 +172,13 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			})
 		}
 	}
+	if err := s.admitTaskWorkspace(ctx, t); err != nil {
+		return "", "", err
+	}
 	prompt := t.Prompt
+	if t.Readonly {
+		prompt += "\n\n" + prompts.RenderReadonlyTaskConstraint()
+	}
 	if len(t.DoneWhen) > 0 { // what the supervisor will check (supervise.go)
 		prompt += "\n\n" + prompts.RenderTaskDoneWhen(t.DoneWhen)
 	}
@@ -189,12 +200,19 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// The project background, and the todo's decisions (a task started again may have some), go before the prompt
 	// (#2820, #1618); the tab is named from the title.
 	prompt = s.withProjectContext(ctx, m.ID, t.Cwd, s.withTodoDecisions(ctx, t.TodoID, prompt))
+	prompt, err = s.withStandingAuthorizations(ctx, m.ID, t.Cwd, prompt)
+	if err != nil {
+		return "", "", err
+	}
 	// The user's attachments end it, copied here when this is not the assistant's computer (#2437): last, so the
 	// pictures' <attached_images> block ends the message as it does one sent straight to an agent.
 	if len(t.Attachments)+len(t.Mentioned) > 0 {
 		prompt = withAttachments(prompt, s.handAttachments(ctx, t.AttachFrom, m.ID, t.Attachments, t.Mentioned))
 	}
 	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
+	if t.WorkspaceResolved != nil && t.WorkspaceResolved.WorkspaceID != "" {
+		params["workspace_id"] = t.WorkspaceResolved.WorkspaceID
+	}
 	if t.Model != "" {
 		params["model"] = t.Model
 	}
@@ -247,13 +265,16 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	return m.ID, res.Session.SessionID, nil
 }
 
-// updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now, and its ultracode
-// when the start went without it.
+// updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now, its actual launch
+// permission, and its ultracode when the start went without it.
 func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t PlanTask) {
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
 		pt.Reroute, pt.Ultracode = t.Reroute, t.Ultracode
+		pt.Workspace, pt.WorkspaceResolved, pt.MachinePolicy = t.Workspace, t.WorkspaceResolved, t.MachinePolicy
+		pt.WorkspaceInferred, pt.ReservedTodoID = t.WorkspaceInferred, t.ReservedTodoID
 		pt.Launcher, pt.Model, pt.Effort, pt.Tier = t.Launcher, t.Model, t.Effort, t.Tier
+		pt.Permission = t.Permission
 	}); err != nil {
 		s.logf("plan %s: %v", planID, err)
 	}

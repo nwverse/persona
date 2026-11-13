@@ -100,7 +100,18 @@ const (
 	MethodMachinesPut    = "devices.machines.put"
 	MethodMachinesRemove = "devices.machines.remove"
 	MethodMachinesGet    = "devices.machines.get"
+	// MethodEngineGet MachineRef → MachineEngine, MethodEnginePut MachineEngine → {}: a machine's engine choice as the
+	// manager keeps it in its own settings (Choice nil: never chosen). A move reads it from the manager the machine
+	// leaves and puts it in the one it goes to, so a change of owner does not change the engine (#3611).
+	MethodEngineGet = "devices.engine.get"
+	MethodEnginePut = "devices.engine.put"
 )
+
+// MachineEngine is one machine's engine choice (devices.engine.get's answer, devices.engine.put's params).
+type MachineEngine struct {
+	MachineID string              `json:"machine_id"`
+	Choice    *proto.EngineChoice `json:"choice,omitempty"`
+}
 
 // CodeNotOwnList: the manager does not keep its own list of computers (the hub did not hand it MachinesOwn, or its
 // list was not taken over as its own): the hub edits hub.json for it instead.
@@ -437,4 +448,7 @@ const (
 	CodeMachineOffline = "machine_offline" // its node is not connected
 	CodeNodeClosed     = "node_closed"     // the connection to its node dropped during the call
 	CodeDeadline       = "deadline"        // the call's time ran out with the node on it (it may have done it)
+	// CodeHandoffRefused: secret.stage, or a session.start with a secret_ticket, asked by the hub or another manager:
+	// only the manager that connects the computer makes a hand-off, after its own card (docs/extensions/secret-providers.md).
+	CodeHandoffRefused = "handoff_refused"
 )

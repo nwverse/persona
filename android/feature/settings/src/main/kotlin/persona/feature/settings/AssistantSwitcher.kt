@@ -55,9 +55,9 @@ internal fun switcherLine(res: Resources, manager: HubManager, now: Instant): St
 
 /**
  * The switcher in the sidebar. [managers] is the selected hub's roster API (null in demo mode); without it, or before
- * the roster is read, or on a hub without one, [fallback] is drawn instead. The sidebar's head (no [head]) also falls
- * back with fewer than two installed assistants (#3978); Settings' first group ([head]: its title and Switch) shows with
- * one too (docs/assistant/managers.md "Clients"). [waiting] is what waits for the user at each assistant
+ * the roster is read, or on a hub without one, [fallback] is drawn instead. A single installed assistant keeps its
+ * name, avatar and roster entry in both the sidebar and Settings' first group ([head]: its title and Switch).
+ * [waiting] is what waits for the user at each assistant
  * ([persona.core.contracts.api.waiting]); [onManage] opens Settings › Assistants.
  */
 @Composable
@@ -76,7 +76,7 @@ fun AssistantSwitcher(
     head: SwitcherHead? = null,
 ) {
     val reported = LocalManagerRoster.current
-    if (managers == null || reported == null || reported.installed.isEmpty() || (head == null && !reported.isMulti)) { fallback(); return }
+    if (managers == null || reported == null || reported.installed.isEmpty()) { fallback(); return }
     // Without the hub nothing is known to be online, as the assistant page reads it.
     val roster = if (hubOnline) reported else reported.copy(managers = reported.managers.map { it.copy(online = false) })
     val choice by AssistantManagerChoice.current.collectAsState()
@@ -156,7 +156,7 @@ internal fun AssistantSwitcherContent(
                 list.forEach { manager ->
                     JAssistantSwitcherRow(manager, manager.id == default, switcherLine(res, manager, now),
                         current = manager.id == current.id, badge = waiting[manager.id] ?: 0, onClick = { onPick(manager) },
-                        defaultTag = stringResource(R.string.settings_managers_default).takeIf { manager.id == default && list.size > 1 })
+                        defaultTag = stringResource(R.string.settings_managers_default).takeIf { manager.id == default && roster.isMulti })
                 }
                 failure?.let { JInlineStatus(it.text(), Modifier.padding(Tokens.Space.s), tone = InlineTone.Failed) }
             }

@@ -114,6 +114,9 @@ class HubManagerHeaderTest {
         val base = "https://example.com/api/v1/"
         assertEquals("m-3", managerHeaderFor("${base}kb/projects".toHttpUrl(), "hub"))
         assertEquals("m-3", managerHeaderFor("${base}todos".toHttpUrl(), "hub", "POST"))
+        // the health space is the default manager's (docs/assistant/health.md): its list and new chats name none
+        assertNull(managerHeaderFor("${base}assistant?space=health".toHttpUrl(), "hub"))
+        assertNull(managerHeaderFor("${base}assistant/conversations?space=health".toHttpUrl(), "hub", "POST"))
         assertNull(managerHeaderFor("${base}todos".toHttpUrl(), "hub"))
         assertNull(managerHeaderFor("${base}kb/projects".toHttpUrl(), "another-hub"))
         // a to-do the list showed as another manager's names that one, whichever is current

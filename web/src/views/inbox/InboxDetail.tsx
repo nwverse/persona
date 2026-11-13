@@ -3,7 +3,8 @@
 // when the extension whose connector brought the item in draws its page (inbox_item), the extension's View.
 // An event (a hub that sends this phase's fields, lib/inbox-events.ts) opens on its event body instead (InboxEvent.tsx:
 // summary, recap, the suggestion, the handling chain); "Original" and the chain's source entries open the thing itself,
-// "Handling" goes back. A Feishu item's event sits above its chat instead, the chain's entries scrolling the chat (#3262).
+// "Handling" goes back. A Feishu item's event sits above its chat and a mail event above its message instead,
+// the chain's entries focusing that source in place (#3262, #5471).
 import { useEffect, useState } from "react";
 import { ItemManager, useKnownDefault } from "../../lib/manager-choice";
 import { hasEvent, itemAtUid } from "../../lib/inbox-events";
@@ -70,9 +71,10 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
   const done = isDone(item);
   const label = kindLabel(item);
   const event = hasEvent(item);
-  // A Feishu item's event sits above its chat (#3262): with no summary or suggestion the event alone was a folded chain
-  // row with the messages a click away. A chain entry scrolls the chat to its message instead of switching the page.
-  const embed = event && Boolean(item.lark) && !place;
+  // A Feishu item's event sits above its chat (#3262), and a mail event above its message (#5471): with no summary
+  // or suggestion the event alone was a folded chain row with the source a click away. A chain entry focuses the
+  // chat or mail in place instead of switching the page.
+  const embed = event && Boolean(item.lark || item.mail) && !place;
   const showEvent = event && (embed || !source);
   // a suggestion takes the AI twin's draft's place (the hub mirrors a reply suggestion into the draft for older apps)
   const draft = item.suggestion ? undefined : agentDraft(item);
@@ -80,16 +82,16 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
   const time = shortTime(item.updated_at);
   const canPin = Boolean(item.lark) && (!place || ownShown) && (!showEvent || embed);
   const muteRows: MenuItem[] = [
-    ...(item.mutes ?? []).map((m): MenuItem => ({ key: `${m.tag}:${m.value}`, label: muteTitle(m), hint: muteShortName(m), icon: "bellOff", onSelect: () => void muteItem(item, m) })),
+    ...(item.mutes ?? []).map((m): MenuItem => ({ key: `${m.tag}:${m.value}`, label: muteTitle(m), detail: muteShortName(m), icon: "bellOff", onSelect: () => void muteItem(item, m) })),
     // and a rule for each (docs/assistant/inbox.md "Policies"), under a divider
-    ...(item.mutes ?? []).map((m, i): MenuItem => ({ key: `policy:${m.tag}:${m.value}`, label: policyMenuTitle(m), hint: muteShortName(m), icon: "target", divider: i === 0, onSelect: () => openPolicyDialog({ item, option: m, source: item.source }) })),
+    ...(item.mutes ?? []).map((m, i): MenuItem => ({ key: `policy:${m.tag}:${m.value}`, label: policyMenuTitle(m), detail: muteShortName(m), icon: "target", divider: i === 0, onSelect: () => openPolicyDialog({ item, option: m, source: item.source }) })),
   ];
   // the item's own body: the chat, the mail, the document's rows, the post, a connector's thread
   // (a chain entry opens the chat at its message, the mail at its uid)
   const at = source ?? {};
   const own = () => (
     <div className={cx("min-h-0 flex-1", item.lark || item.connector ? "flex flex-col overflow-hidden" : "overflow-y-auto")}>
-      {item.doc ? <DocBody item={item} /> : item.moment ? <MomentBody item={item} /> : item.lark ? <LarkThread chat={at.position ? { ...chatOfItem(item), focus: at.position } : chatOfItem(item)} pinsOpen={pins} onPinsOpen={setPins} /> : item.connector ? <ConnectorBody item={item} /> : item.mail ? <MailBody key={at.uid ?? ""} item={itemAtUid(item, at.uid)} /> : (
+      {item.doc ? <DocBody item={item} /> : item.moment ? <MomentBody item={item} /> : item.lark ? <LarkThread chat={at.position ? { ...chatOfItem(item), focus: at.position } : chatOfItem(item)} pinsOpen={pins} onPinsOpen={setPins} /> : item.connector ? <ConnectorBody item={item} /> : item.mail ? <MailBody key={at.uid ?? ""} item={itemAtUid(item, at.uid)} onLatest={at.uid !== undefined && at.uid !== item.mail.uids[item.mail.uids.length - 1] ? () => setSource(null) : undefined} /> : (
         <div className="mx-auto max-w-[760px] px-6 py-5 text-[13.5px] whitespace-pre-wrap text-ink">{item.preview}</div>
       )}
     </div>
@@ -104,8 +106,8 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
             <div className="flex items-start gap-3">
               <ItemAvatar it={item} size={36} />
               <div className="min-w-0 flex-1">
-                <h2 className="flex min-w-0 items-center gap-2 text-[15px] font-semibold text-ink">
-                  <span className="truncate" title={translated?.subject ? item.title : undefined}>{translated?.subject || item.title}</span>
+                <h2 className={cx("flex min-w-0 items-center gap-2 text-[15px] font-semibold text-ink", item.source === "larkcli" && "flex-wrap gap-y-1 sm:flex-nowrap")}>
+                  <span className={item.source === "larkcli" ? "min-w-0 max-w-full break-words sm:truncate" : "truncate"} title={translated?.subject ? item.title : undefined}>{translated?.subject || item.title}</span>
                   {label && <Tag urgent={labelIsUrgent(item)}>{label}</Tag>}
                 </h2>
                 {/* the source line gives way first, so the time stays whole */}
@@ -161,7 +163,12 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                 <Button tone="accent" icon="write" onClick={() => setDialog("draft")}>{draft && !done ? t("inbox-inboxdetail.view_draft") : t("inbox-inboxdetail.ai_draft")}</Button>
               ) : (
                 // Answered in the source's own app (a CI run has nothing to answer: only "Hand to AI").
-                openURL(item) && <Button tone="accent" icon="external" onClick={() => openSystem(openURL(item)!)}>{openTitle(item)}</Button>
+                item.source !== "larkcli" && openURL(item) && <Button tone="accent" icon="external" onClick={() => openSystem(openURL(item)!)}>{openTitle(item)}</Button>
+              )}
+              {item.source === "larkcli" && openURL(item) && (
+                <Button tone="secondary" icon="external" onClick={() => openSystem(openURL(item)!)}>
+                  {openURL(item)!.startsWith("https://applink.larksuite.com/") ? t("inbox-inboxdetail.open_in_lark") : t("inbox-inboxdetail.open_in_feishu")}
+                </Button>
               )}
               <Button tone="secondary" icon="spark" onClick={() => setDialog("handoff")}>{t("inbox-inboxdetail.hand_to_ai")}</Button>
               {event && !embed && (showEvent ? (

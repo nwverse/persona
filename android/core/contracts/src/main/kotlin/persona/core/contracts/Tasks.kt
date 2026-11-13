@@ -46,6 +46,8 @@ data class TaskPlan(
     @WireEnum("open", "started", "dismissed", "unknown")
     val state: String = "unknown",
     @WireTime @SerialName("created_at") val createdAt: String? = null,
+    /** The rule an open plan suggests after three Starts of its kind (#4929): the hub fills it in on every read; null otherwise. */
+    val suggestion: RuleSuggestion? = null,
 )
 
 /** A message card's reply that went out: when, and what it said. */
@@ -61,7 +63,7 @@ data class FeedItem(
     val id: String,
     val conversation: String = "",
     @WireTime val at: String? = null,
-    @WireEnum("plan", "task", "answered", "receipt", "review", "report", "routed", "today", "brief", "message", "view", "unknown")
+    @WireEnum("plan", "task", "answered", "receipt", "review", "report", "routed", "today", "brief", "message", "view", "notice", "unknown")
     val kind: String = "unknown",
     val ref: String? = null,
     val body: JsonElement? = null,
@@ -152,6 +154,8 @@ data class Todo(
     @SerialName("done_by") val doneBy: String? = null,
     @SerialName("done_reason") val doneReason: String? = null,
     @WireTime @SerialName("reopened_at") val reopenedAt: String? = null,
+    /** When the owner last looked at it in Just finished: Got it, or opening it (#5707); one seen since it got there is Done. */
+    @WireTime @SerialName("seen_at") val seenAt: String? = null,
     /** Why the task's agent did not start (#1077): the hub ended the todo with it; "Retry" clears it (#1396). */
     @SerialName("start_error") val startError: String? = null,
     /** Opened from the main conversation while "Notify main-chat tasks only in the main chat" was on (#1731): not in the to-dos badge. */
@@ -168,6 +172,9 @@ data class Todo(
     /** When it is due (#1683): a moment, or a day ("yyyy-MM-dd", due by its end in the user's zone); at most one. */
     @WireTime @SerialName("due_at") val dueAt: String? = null,
     @SerialName("due_date") val dueDate: String? = null,
+    /** Where its work stands (#2776, docs/assistant/todos.md "Delivery"): plan, develop, review, merge, deploy or verify; the hub
+     *  merges it from `assistant.todo_stages`. Null when none, and a name this build doesn't know draws nothing. */
+    val stage: String? = null,
     /** When the phone is pushed about it, and when that was done. */
     @WireTime @SerialName("remind_at") val remindAt: String? = null,
     @WireTime @SerialName("reminded_at") val remindedAt: String? = null,
@@ -220,6 +227,12 @@ sealed interface TodoDue {
 }
 
 /**
+ * A to-do's due date, reminder and priority as the detail page sets them together (#4636, iOS `TodoPlanChange`,
+ * docs/assistant/todos.md PATCH): [due] null clears it, [remindAt] null clears it, [priority] "" normal, "high" or "low".
+ */
+data class TodoPlan(val due: TodoDue?, val remindAt: Instant?, val priority: String)
+
+/**
  * Why an open to-do has nobody working on it (docs/assistant/todos.md "Nobody is working on this"): [reason] error (closed
  * after a model error), offline (its computer is not connected) or closed, kept as sent; [since] when the hub first saw it.
  */
@@ -231,7 +244,9 @@ data class TodoOrphaned(val reason: String? = null, @WireTime val since: String?
  * owner can answer") also carries what is to be decided ([question]), why only the owner can ([whyOwner]), its
  * [options] with the recommended one first, where the task came from and stands in one line ([background]), what waiting
  * costs, whether the recommendation is taken at [deadline] ([default] "taken") or never ("never"), the fixed answers the
- * hub takes ([responses]) and the one already given while it still waits ([response]). All absent from an older hub.
+ * hub takes ([responses]) and the one already given while it still waits ([response]). A decision that can wait is held
+ * for the next briefing, with nothing pushed for it, while [forBriefing] (#4930, "Decisions that can wait"); one the owner
+ * gave the same go-ahead for three times carries the rule it suggests ([suggestion], #4929). All absent from an older hub.
  */
 @Serializable
 data class TodoAsk(
@@ -248,6 +263,8 @@ data class TodoAsk(
     val default: String? = null,
     val responses: List<String>? = null,
     val response: String? = null,
+    @SerialName("for_briefing") val forBriefing: Boolean = false,
+    val suggestion: RuleSuggestion? = null,
 )
 
 /** One option of a decision: its [label], which is the answer, and what choosing it leads to. */
