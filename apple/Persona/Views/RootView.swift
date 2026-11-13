@@ -4,8 +4,16 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
-    /// The system's text size, before Small / Standard / Large moves it.
-    @Environment(\.dynamicTypeSize) private var systemTypeSize
+    /// The system's text size, before Small / Standard / Large moves it. On iOS the windows' own size is capped
+    /// (`WindowTextSize`), so the environment no longer says what the system's is once that has run: the system's is
+    /// read from UIKit and kept here; until then the environment's is the system's.
+    @Environment(\.dynamicTypeSize) private var environmentTypeSize
+    #if os(iOS)
+    @State private var systemSize: DynamicTypeSize?
+    private var systemTypeSize: DynamicTypeSize { systemSize ?? environmentTypeSize }
+    #else
+    private var systemTypeSize: DynamicTypeSize { environmentTypeSize }
+    #endif
     /// How far down the toasts outside the shell's window start: below the navigation bar's buttons, as the shell's do,
     /// not on them (the owner asked, #138: a toast covered Back). The Mac's stay at the top of the window.
     private var toastClearance: CGFloat {
@@ -204,6 +212,16 @@ struct RootView: View {
         #if os(iOS) || os(visionOS)
         // Settings › Appearance › Light & Dark on this scene's window (and any other open one) as it first shows.
         .onAppear { model.colorScheme.apply() }
+        #if os(iOS)
+        // The interface's cap on the windows' text size, so sheets and covers are capped too (`WindowTextSize`).
+        .onAppear { WindowTextSize.apply(); systemSize = WindowTextSize.system }
+        .onReceive(NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification)) { _ in
+            WindowTextSize.apply(); systemSize = WindowTextSize.system
+        }
+        #if DEBUG
+        .task { await WindowTextSize.probe() }
+        #endif
+        #endif
         // The Theme Color on the windows too, for what UIKit draws in the window's tint (Settings' row icons, `WindowTint`).
         .onChange(of: model.look, initial: true) { WindowTint.apply() }
         #endif
