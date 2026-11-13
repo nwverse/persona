@@ -761,8 +761,10 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   unknown `kind` rendered from `text` with a generic icon). An item is an event (`isEvent`) only if it has one of these fields or `recap`; otherwise rows / details remain pixel-identical.
   - Row: suggestions show their kind + first line below the summary (reply / Agent / conclusion / judgment needed), replacing the old AI twin draft card (hub mirrors replies into `agent.draft`; do not render twice).
     Working shows handling state (AI reviewing / Agent working / awaiting reply); urgent items without suggestions show AI is preparing a suggestion; failures show "AI couldn't handle it" (`InboxEventText.mark`).
-  - iPhone details use one page (`InboxEventPage`): ✦ summary + View original, state, recap, suggestion card (adjacent buttons: reply Send · Edit · Reject; Agent Start · Edit · Reject;
-    conclusion OK · Reject; judgment Confirm · Edit · Reject), handling chain, relationships, related items, then AI Draft Reply (absent with a reply suggestion) and Hand to AI at the bottom.
+  - iPhone details use one page (`InboxEventPage`): the small where · who: newest line with View original at its trailing edge; state, Conversation and Say something / Try again;
+    ✦ summary in the state's secondary type; suggestion card (adjacent buttons: reply Send · Edit · Reject; Agent Start · Edit · Reject; conclusion OK · Reject;
+    judgment Confirm · Edit · Reject); recap; handling chain; related items and relationships; then AI Draft Reply (absent with a reply suggestion) and Hand to AI at the bottom.
+    Conversation appears when `handling` has both `machine_id` and `session_id`; it pushes the processing conversation over the item, so Back returns to the detail.
     Original source pages (Lark chat, mail, plugin-rendered) sit behind View original and Received messages chain entries (`InboxSourceRoute` → `InboxSourcePage`, Lark at link position, mail at link uid).
   - Mac keeps the source on the left rather than opening a separate page. Below summary in right-side `MacInboxActions`: state, recap, suggestion card, chain, related items.
     Chain entries linking only to the source do not navigate (already beside them); position / uid links push within the detail column's own stack. At narrow width with only the top action strip, recap keeps three lines.
