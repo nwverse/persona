@@ -27,9 +27,10 @@ typedef struct PersonaCoreHost {
     void (*changed)(void *context, uint64_t version);
     void (*run)(void *context, const uint8_t *effect, size_t length);
     void (*release)(void *context);
+} PersonaCoreHost;
+
 // The legacy four-field host layout stays stable. Optional targeted wake is registered separately.
 typedef void (*PersonaCoreChatCallback)(void *context, const uint8_t *chat, size_t length, uint64_t version);
-} PersonaCoreHost;
 
 // Bytes the core allocated; give them back with persona_core_bytes_free.
 typedef struct PersonaCoreBytes {
