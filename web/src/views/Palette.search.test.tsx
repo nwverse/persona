@@ -60,6 +60,7 @@ async function search(query: string) {
   await act(async () => { vi.advanceTimersByTime(210); });
   await act(async () => { await vi.dynamicImportSettled(); });
   for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+  if (fake.features.includes("assistant_search")) expect(fake.asked).toContain(query);
   return document.body;
 }
 
