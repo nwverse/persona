@@ -3,6 +3,8 @@ import PersonaCore
 import PersonaCoreTestSupport
 @testable import Persona
 
+private typealias ContinuityFixtureError = PersonaCoreTestSupport.ContinuityFixtureError
+
 /// Replays the shared JSON against the actual iOS `ChatStore`, not a second translation of the Rust reducer. The
 /// store is untouched: this type is used only by PersonaTests and compiled into that iOS test target. Scheduling is
 /// covered separately through AppModel's real fill path in PersonaCoreContinuityTests.swift.
