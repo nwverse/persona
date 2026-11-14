@@ -16,6 +16,14 @@ node web/e2e/ask-card-dock.mjs <loopback-web-origin> <artifact-directory> [--chr
 
 Opens the real app against a loopback web server (Vite or a preview build) with every hub request and the socket answered in the browser by invented data. The main conversation shows an ask_user card with four described options in the Pending tray at 1280 × 600, 1024 × 520, 390 × 664 and 360 × 560 (touch), light and dark. It checks the card's send button and the three tray entries are not under the composer before any scrolling, and that "Or write your own" is fully visible (not under the sticky answer row or the tray's title) once tapped and typed into. Writes `results.json` and before/after-typing screenshots; exits nonzero on failure or the four-minute timeout.
 
+## Waiting cards cut off below the dock (audit item 10)
+
+```sh
+node web/e2e/pending-cards-cut.mjs <loopback-web-origin> <artifact-directory> [--chromium <executable>]
+```
+
+Opens the real app on an Agent's session page against a loopback web server (Vite or a preview build) with every hub request and the socket answered in the browser by invented data (an Agent with a question and a Bash approval at once); no card is answered. At 1440 × 900 and 1280 × 820 the approval's answers stand at the bottom edge of the dock's box (its 55% cap) while its title and command are above it; at 1024 × 700 the question alone fills the box; 1440 × 1600 fits both. Light and dark. It checks that wherever the approval's Allow is in view, its title and command are too (in the card, or on the answer row's `data-card-answers` line), that the first card says "2 pending" while the stack is cut off, that the line brings the whole approval into view with the focus on it, that scrolling the box brings an approval wholly below it into view, and that neither the line nor the count is drawn when both cards fit. Writes `results.json` and screenshots; a four-minute watchdog ends the run with a timeout verdict, and the last line is the verdict.
+
 ## Chat content: sent lines, tables, bubble actions, model pill, runtime line, long folds
 
 ```sh
@@ -103,6 +111,16 @@ node web/e2e/knowledge-kind-chips.mjs <loopback-web-origin> <artifact-directory>
 ```
 
 Run against an exclusively owned mock-backed web server; the runner only reads. On `/kb/projects` it checks that every kind chip reads its kind's name alone, then picks each other kind by clicking its chip and holds that kind's list read (`page.route`), so the kind is still loading: **Loading** must show under the chips, and every chip's box is measured. It then lets the read through and measures again once the list is drawn: no chip may move, change or go. It runs at 1280 x 820 and on a 390 x 844 touch phone, light and dark in Chinese and light in English, and saves the chip row with the first and the last kind picked, and with the last kind while it loads. A three-minute watchdog ends the run with a timeout verdict; it exits 1 on a failed check. Browser and mock checks only.
+
+## The complete Agents list with hundreds of Agents
+
+```sh
+MOCK_SESSIONS_LIST=1 MOCK_SESSIONS_MANY=400 MOCK_LEADERS=1 MOCK_TASKS=1 MOCK_RECENT=1 MOCK_HISTORY=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && npx vite build && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite preview --port <web port> --strictPort &)
+node web/e2e/sidebar-many-agents.mjs <loopback-web-origin> <artifact-directory>
+```
+
+Run against an exclusively owned mock with 400 extra Agents on no to-do (the mock's default pins keep the complete list). A dev server works too; the production build is what the long-task numbers are for. With By to-do and 4x CPU it checks, at 390 × 844 touch: no row under a folded group (`aside [inert] a` is 0, the sidebar under 2,000 elements), none of Not on a to-do's rows on the Agents page while it is folded, at most 90 of its 400 rows once opened, its heading stuck under the Agents controls and rows (not empty boxes) on screen in the middle of the list, and the last rows drawn at its end with the count still bounded. At 1280 × 800 with the group open in the sidebar: a bounded number of rows, Tab walking the rows in order across the parts, and an open Agent far down the group (Session 330) drawn and scrolled into view, also when it is opened from elsewhere while the group is folded (the group opens for it). By machine, with the mock's 400 Agents as tabs of one open workspace at 390 × 844: a bounded number of its tab rows in the sidebar and on the Agents page, and the sidebar under 3,000 elements. It prints the long tasks of a cold Overview and Agents page and of a By machine page switch, saves five screenshots and `results.json`, prints one line per check and a verdict, and exits nonzero on a failure or its four-minute timeout. Browser and mock only.
 
 ## Bounded list verification
 
@@ -237,3 +255,57 @@ reaches the mock. It checks, in light and dark:
 
 It prints one line per check and a final verdict, writes `results.json` and screenshots to the artifact directory, and
 exits nonzero on a failure or its five-minute timeout. Against a build from before these fixes nearly every check fails.
+
+## The app shell's connection states, dead links and keyboard focus (web usability audit)
+
+```sh
+MOCK_TASKS=1 MOCK_SESSIONS_LIST=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/shell-connection.mjs http://127.0.0.1:<web port> http://127.0.0.1:<port> <artifact directory>
+```
+
+Needs a fake hub of its own: the runner takes it down (`/mock/down`) and refuses this browser's credential for a while
+(`/mock/reject`), and puts both back at the end. In Chrome, light and dark, it checks that folding the sidebar to its
+rail by the keyboard leaves the focus on the rail's expand button and opening it again on the collapse button; that an
+Agent's page names its browser tab after the session's title; that an unknown address says **Page not found** and
+keeps the address, a knowledge entry the hub doesn't have says **Entry not found** in the shared empty state (no
+title made of its id, no disabled buttons), and `/a/<missing>` says the conversation isn't there once, under the list's
+name, with no message box left loading; that the
+first key press makes no `AudioContext` while the alert sound is off and one when it is on; that the reconnect pill
+covers none of the to-dos' fields, buttons or titles at 390 px and 1280 px, and its details open over the page; that
+the English Offline line wraps only between words; and that a credential refused while the page is open reaches the
+sign-in page with "signed out" within 25 seconds. Each block of checks fails on its own and the run goes on; it prints
+one line per check and a verdict, saves screenshots in the artifact directory, and exits 1 on a failure and 2 on its
+five-minute timeout.
+
+## Keyboard around the overlays
+
+```sh
+MOCK_RECENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/keyboard-overlays.mjs <loopback-web-origin> [--shots <dir>] [--executable <chromium>]
+```
+
+Run against an exclusively owned mock-backed web server, in Chinese, light and dark, a fresh browser context each. It checks that the session ⋯ menu shows every row at 1280 × 820, and at 1280 × 560 (too short for it) opens beside its button (not over it) with a fade at the edge where rows are cut and End scrolling the last row into view; that Escape anywhere in the ⌘K palette closes it and gives the focus back to the composer it was opened from; that ⌘/ and ⌘K replace one another instead of stacking two dialogs; that Tab in the shortcut help reaches "Change in Settings" after the scrolling list and wraps to Close; that Escape out of a menu's Rename leaves the focus on the row with the Rename row highlighted, so Enter renames again; that Escape clears the To-dos search; and that a theme, theme color or language picked in one tab reaches the other, the language's reload waiting (with a toast) while that tab holds a draft. Every hub write except the sign-in is answered in the browser. It prints one line per check and a verdict, and exits nonzero on a failure or its three-minute timeout.
+
+## The Inbox by keyboard, its filtered empty state and long lists (web usability audit)
+
+```sh
+PORT=<port> MOCK_INBOX_EXTRA=300 MOCK_INBOX_HISTORY=busy python3 scripts/mock/mock_hub.py &
+(cd web && npx vite build --outDir <scratch>/dist && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite preview --outDir <scratch>/dist --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/inbox-keyboard-long-list.mjs http://127.0.0.1:<web port> <artifact-directory>
+```
+
+Run against an exclusively owned web server backed by the mock hub with the flags above (`npx vite` works too; a
+production build is what the timings mean). It uses only the mock's invented data and answers the read failure in the
+browser. In English, light and dark, at 1280 x 820 unless named: chips that leave nothing show the neutral filtered
+empty state with no green check and **Clean up all** without "Nothing to do", and **Clear filters** brings the rows
+back with the keyboard on the **All** chip; a failed read has its own **Retry** and a Clean up all with no scope; the detail's small line has the time right
+after its words, not at the line's end; **Edit** on a drafted reply puts the caret at the end of the text; Select and
+Done keep the keyboard on the one button, also after Esc on a row's tick; at 390 x 844 a row opened by keyboard moves
+the focus to the item's title, with its focus ring, and Esc or the browser's Back returns it to that row. With Done
+open, **Done** in an opened item's header leaves the list where it was (it used to jump to the row filed under Done), at
+1280 and at 390, and at 390 the focus lands on the row now in the item's place. Last, a 390 x 844 touch phone at CPU 4x
+opens the long Inbox and records how many rows were there at the first draw (at most 100), that all of them come in the
+end, the elements under `main` and the long tasks. Screenshots and `results.json` go to the artifact directory; a
+four-minute watchdog ends the run, and it prints a final pass / fail / timeout line.
