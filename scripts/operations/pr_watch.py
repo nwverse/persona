@@ -324,7 +324,8 @@ class Watcher:
                            outcome="repair_exhausted", failure=str(error))
             return False
         comparison = pr_watch_repair.main_failure_comparison(repo, pr, str(worktree), getattr(error, "output", "") or str(error),
-                                                             git_root=config["checkout"], command=getattr(error, "command", None))
+                                                             git_root=config["checkout"], command=getattr(error, "command", None),
+                                                             failures=getattr(error, "failures", None))
         if comparison.get("reproduced"):
             self.log("%s#%s failure also reproduces on clean main; continue the remaining gates" % (repo, number))
             self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
@@ -333,8 +334,10 @@ class Watcher:
                            base_failures=comparison, verification="base_failure", checks=old.get("checks", []),
                            outcome="passed_with_base_failures", failure=str(error))
             return "base_failure"
-        if pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"]):
-            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+        updated_head = pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"])
+        if updated_head:
+            updated_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + updated_head
+            self.state.put(repo, number, updated_head, evidence_key=updated_key,
                            repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
             if pr.get("isCrossRepository"):
                 new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
@@ -348,6 +351,7 @@ class Watcher:
         if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
             self.log("%s#%s moved before automatic repair; old checkout discarded" % (repo, number))
             return False
+        checked(["git", "reset", "--hard", pr["headRefOid"]], cwd=worktree, timeout=90)
         pr_watch_repair.repair_with_model(repo, pr, str(worktree), str(error), self.config["reviewer"])
         new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
         self.comment(repo, number, "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
@@ -415,7 +419,9 @@ class Watcher:
                         return
                     worktree = self.worktree(repo, number, pr)
                     if pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"]):
-                        self.state.put(repo, number, head, evidence_key=evidence_key,
+                        updated_head = checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+                        updated_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + updated_head
+                        self.state.put(repo, number, updated_head, evidence_key=updated_key,
                                        repair_rounds=rounds + 1, outcome="base_updated")
                         self.comment(repo, number, "The watcher merged current main into the same-repository branch to resolve the stale base. The new head will be reviewed.")
                 except WatchError as error:

@@ -359,6 +359,18 @@ class WatcherTests(unittest.TestCase):
                 pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure")
         self.assertIn("Refs #6", created.call_args.args[0][-1])
 
+    def test_every_failed_lane_must_reproduce_on_main(self):
+        failures = [{"command": ["test", "one"], "output": "--- FAIL: TestA\n"},
+                    {"command": ["test", "two"], "output": "--- FAIL: TestB\n"}]
+        def fake_run(argv, **kwargs):
+            if argv[:2] == ["git", "worktree"]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            return subprocess.CompletedProcess(argv, 1, "--- FAIL: TestA\n", "") if "one" in argv else subprocess.CompletedProcess(argv, 0, "ok\n", "")
+        with patch.object(pr_watch_repair, "checked", return_value=""), \
+                patch.object(pr_watch_repair, "run", side_effect=fake_run):
+            comparison = pr_watch_repair.main_failure_comparison("example/one", pr(), self.root, "", failures=failures)
+        self.assertFalse(comparison["reproduced"])
+
     def test_repair_budget_survives_new_head(self):
         self.watcher.state.put("example/one", 7, SHA_A, evidence_key="old", repair_rounds=2)
         with patch.object(pr_watch, "pr_snapshot", return_value=pr(head=SHA_B)), \

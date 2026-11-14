@@ -271,5 +271,6 @@ def verify(repo, pr, worktree, config, environ=None):
     if failures:
         raise VerificationError("\n\n".join(str(failure) for failure in failures),
                                 output="\n\n".join(failure.output for failure in failures),
-                                command=failures[0].command)
+                                command=failures[0].command,
+                                failures=[{"command": failure.command, "output": failure.output} for failure in failures])
     return results

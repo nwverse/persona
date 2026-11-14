@@ -60,8 +60,13 @@ def failure_test_ids(text):
     return ids
 
 
-def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=None, command=None):
-    """Rerun named tests or the same failing lane on clean main."""
+def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=None, command=None, failures=None):
+    """Rerun every failed lane independently before calling anything base-owned."""
+    if failures:
+        evidence = [main_failure_comparison(repo, pr, worktree, item["output"], timeout=timeout,
+                                            git_root=git_root, command=item["command"]) for item in failures]
+        return {"reproduced": all(item.get("reproduced") for item in evidence), "lanes": evidence,
+                "reason": "Every failed lane must reproduce on clean main."}
     if command:
         if any(str(worktree) in argument or pr["headRefOid"] in argument for argument in command):
             return {"reproduced": False, "reason": "Parameterized external evidence cannot be compared with clean main safely."}
@@ -93,9 +98,11 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
                          cwd=Path(base_worktree, "server"), timeout=timeout, environ=verification_env())
             output = result.stdout + "\n" + result.stderr
             reproduced = {name for name in failed_test_names(output) if name in names}
-            if reproduced:
-                failures.append({"package": package, "tests": sorted(reproduced),
-                                 "output": bounded(output, 4000)})
+            if result.returncode == 0 or reproduced != set(names):
+                return {"reproduced": False, "packages": failures,
+                        "reason": "Not every named PR failure reproduces on clean main."}
+            failures.append({"package": package, "tests": sorted(reproduced),
+                             "output": bounded(output, 4000)})
         return {"reproduced": bool(failures), "packages": failures,
                 "reason": "The same named test(s) fail on clean main." if failures else
                           "The named test(s) pass on clean main; this PR must repair its own failure."}
@@ -124,7 +131,9 @@ def merge_base_in_isolation(pr, worktree, base):
 def update_branch_with_main(repo, pr, worktree, base):
     """Merge current main only on a same-repository branch, with a clean diff."""
     if pr.get("isCrossRepository"):
-        return merge_base_in_isolation(pr, worktree, base)
+        if merge_base_in_isolation(pr, worktree, base):
+            return checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+        return None
     if not pr.get("headRefName") or pr["headRefName"].startswith("-"):
         raise WatchError("PR branch name is unsafe for an authorized update")
     if checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
@@ -140,7 +149,7 @@ def update_branch_with_main(repo, pr, worktree, base):
     if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
         raise WatchError("PR head moved before merging main; nothing was pushed")
     checked(["git", "push", "origin", "HEAD:refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
-    return True
+    return checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
 
 
 def repair_worker_argv(argv, worktree):
