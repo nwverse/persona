@@ -210,6 +210,8 @@ type Service struct {
 	viewMemo   viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
 
 	devs          Devices // the computers (devices.go); nil: no fleet
+	mcpWaitMu     sync.Mutex
+	mcpWaits      map[string]*mcpWaitReporter // live opted-in mcp.call requests, by their validated call id
 	agentArchives agentArchiveBook
 	orphans       orphanBook      // tasks_orphan.go: the open to-dos nobody works on
 	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
@@ -262,6 +264,7 @@ func New(o Options) *Service {
 	s.archiveRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
+	s.agentNamingRoutes() // agent_naming_request.go
 	s.alwaysRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
