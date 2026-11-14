@@ -164,12 +164,14 @@ final class LarkSendTests: XCTestCase {
         app.launchPinned()
         expandSource(app)
         XCTAssertTrue(app.staticTexts["能赶上，下午三点前给你确认"].waitForExistence(timeout: 20), "the 韩梅梅 chat did not open")
-        // Locate the chat's one scroll view directly: the quote bar can shrink the lazy list until an older row used to
-        // identify it leaves the accessibility hierarchy. Querying the last row through the list still excludes its summary.
-        let list = app.scrollViews.firstMatch
+        // Scope each lookup by a visible message instead of choosing among every scroll view: the keyboard can change
+        // which one is first. Re-resolve the list after the swipe so the older anchor may leave the lazy hierarchy;
+        // querying the last row through its list also excludes the quote bar's summary.
+        let list = app.scrollViews.containing(.staticText, identifier: "能赶上，下午三点前给你确认").firstMatch
         list.swipeUp() // at the end, as after reading the unread ones
         sleep(1)
-        let last = list.staticTexts["新包发你了"]
+        let currentList = app.scrollViews.containing(.staticText, identifier: "新包发你了").firstMatch
+        let last = currentList.staticTexts["新包发你了"]
         XCTAssertTrue(last.waitForExistence(timeout: 5), "the chat's last message is there")
         let field = app.textFields["lark.box"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
