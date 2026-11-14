@@ -335,20 +335,33 @@ func TestExtensionReportsHeldStoreLeavesBusReadAndCoalesces(t *testing.T) {
 	s := newReportStore(true)
 	h.store = s
 	t.Cleanup(func() { waitHubWorkers(t, h) })
-	reports := []extwire.Report{features("r1"), features("r2"), features("r3"), features("r4"), features("r5")}
-	done := extensionReports(h, reports...)
-	defer waitExtensionReports(t, done)
-	defer s.release()
+	first := extensionReports(h, features("r1"))
+	defer func() {
+		s.release()
+		waitExtensionReports(t, first)
+	}()
 	s.next(t)
-	waitExtensionReports(t, done)
+	waitExtensionReports(t, first)
+
+	rest := extensionReports(h, features("r2"), features("r3"), features("r4"), features("r5"))
+	defer func() {
+		s.release()
+		waitExtensionReports(t, rest)
+	}()
+	waitExtensionReports(t, rest)
 	if got := h.extReport().Features; !slices.Equal(got, []string{"r5"}) {
 		t.Fatalf("the in-memory report is %v while the first write is held, want the latest report", got)
 	}
 	s.release()
 	waitHubWorkers(t, h)
 	writes, saved := s.snapshot()
-	if len(writes) > 2 {
-		t.Fatalf("%d reports caused %d writes, want at most the held write and one trailing write", len(reports), len(writes))
+	if len(writes) != 2 {
+		t.Fatalf("five reports caused %d writes, want exactly the held r1 write and one trailing r5 write: %+v", len(writes), writes)
+	}
+	for i, want := range []string{"r1", "r5"} {
+		if got := writes[i].report.Features; !slices.Equal(got, []string{want}) {
+			t.Errorf("report write %d = %v, want %s", i+1, got, want)
+		}
 	}
 	if saved == nil || !slices.Equal(saved.Features, []string{"r5"}) {
 		t.Fatalf("stored report = %+v, want r5", saved)
