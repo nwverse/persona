@@ -12,6 +12,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,7 +47,23 @@ class SettingsPresentationShotsTest {
             rule.onNodeWithTag("settings-page-card").assertExists()
             val name = "settings-page-${s.name.lowercase()}-${if (d) "dark" else "light"}.png"
             save(rule.onNodeWithTag("settings-page-card").captureToImage().asAndroidBitmap(), name)
+            save(rule.onNode(isDialog()).captureToImage().asAndroidBitmap(), name.replace("settings-page-", "settings-window-"))
         }
+    }
+
+    @Test fun pageSizedWindowCaptureIncludesBackgroundAroundCard() {
+        rule.setContent {
+            CompositionLocalProvider(LocalLargeWindowInput provides true) {
+                PersonaTheme(darkTheme = false, reduceMotion = true) {
+                    JSettingsSheet(onDismiss = {}) { JListPage("Settings") {} }
+                }
+            }
+        }
+        rule.onNodeWithTag("settings-page-card").assertExists()
+        val card = rule.onNodeWithTag("settings-page-card").captureToImage().asAndroidBitmap()
+        val window = rule.onNode(isDialog()).captureToImage().asAndroidBitmap()
+        assertTrue(window.width > card.width && window.height > card.height)
+        save(window, "settings-window-with-background.png")
     }
 
     @Config(sdk = [35], qualifiers = "en-w600dp-h480dp-xhdpi")

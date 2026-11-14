@@ -75,6 +75,8 @@ fun JSheet(
     bottomPadding: androidx.compose.ui.unit.Dp? = null,
     /** Leave the window-sized container transparent so a page-sized Settings card can supply the only opaque surface. */
     clearContainer: Boolean = false,
+    /** The page-sized Settings frame already draws the window scrim; do not blend a second one over it. */
+    clearScrim: Boolean = false,
     showDragHandle: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -97,7 +99,7 @@ fun JSheet(
         onDismissRequest = { if (canDismiss) onDismiss() }, modifier = modifier,
         sheetState = sheetState,
         shape = PersonaTheme.shapes.sheetShape, containerColor = container, contentColor = palette.ink,
-        scrimColor = palette.scrim, tonalElevation = 0.dp,
+        scrimColor = if (clearScrim) palette.scrim.copy(alpha = 0f) else palette.scrim, tonalElevation = 0.dp,
         dragHandle = if (!showDragHandle) null else ({ Box(Modifier.padding(top = 10.dp.dense, bottom = 6.dp.dense).size(36.dp, 4.dp).clip(CircleShape).background(palette.ink3.copy(alpha = 0.5f))) }),
     ) {
         // Opaque over a scrim: glass inside the sheet must not sample (and show through) the page behind it.

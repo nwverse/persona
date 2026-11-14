@@ -46,6 +46,7 @@ fun JSettingsSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
             contentPadding = 0.dp,
             bottomPadding = 0.dp,
             clearContainer = presentation == SettingsPresentation.PageSized,
+            clearScrim = presentation == SettingsPresentation.PageSized,
             showDragHandle = false,
         ) {
             JSettingsPresentationFrame(presentation, onDismiss) { settingsContent() }
