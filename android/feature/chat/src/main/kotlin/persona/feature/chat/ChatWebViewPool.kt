@@ -1,6 +1,7 @@
 package persona.feature.chat
 
 import androidx.annotation.StringRes
+import androidx.annotation.VisibleForTesting
 import android.content.Context
 import android.graphics.Rect
 import android.os.Message
@@ -15,20 +16,34 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.webkit.*
+import java.net.URI
 import java.util.concurrent.Executors
 import org.json.JSONTokener
 import kotlinx.coroutines.CompletableDeferred
-import persona.core.domain.ports.PortLinks
+
+/** What the pool asks the WebView implementation it runs on. Production asks [WebViewFeature]; a test fixes the answers. */
+internal fun interface ChatWebFeatures {
+    fun supported(feature: String): Boolean
+
+    companion object {
+        val Platform = ChatWebFeatures { WebViewFeature.isFeatureSupported(it) }
+    }
+}
 
 /** Owned by one chat host; never retains a departed activity or a different account. */
 internal class ChatWebViewPool(
     private val context: Context,
+    private val features: ChatWebFeatures = ChatWebFeatures.Platform,
     private val viewFactory: (Context) -> ChatSelectionWebView = { ChatSelectionWebView(it) },
 ) {
     /** At most this many pages live (each is a renderer): the one on screen and up to three preloaded links. */
     private val limit = 4
     private val pages = LinkedHashMap<String, ChatSelectionWebView>(limit, 0.75f, true)
     private var active: ChatSelectionWebView? = null
+    /** Views the host took with [acquire] and has not given back with [release]: still on its screen, so never evicted. */
+    private val held = mutableSetOf<ChatSelectionWebView>()
+    /** After [destroy] nothing is created or brought back: late calls from the host's own teardown do nothing. */
+    private var closed = false
     private val speculative = mutableSetOf<String>()
     private val popups = mutableSetOf<WebView>()
     private val startupExecutor = Executors.newSingleThreadExecutor()
@@ -36,6 +51,7 @@ internal class ChatWebViewPool(
     private val startup = CompletableDeferred<Unit>()
 
     suspend fun warmUp() {
+        if (closed) return
         if (!started) {
             started = true
             WebViewCompat.startUpWebView(context.applicationContext, WebViewStartUpConfig.Builder(startupExecutor).build(),
@@ -47,8 +63,11 @@ internal class ChatWebViewPool(
         startup.await()
     }
 
-    fun acquire(url: String): ChatSelectionWebView {
+    /** The view for [url], or null once the pool is [destroy]ed. It stays [held] until [release]. */
+    fun acquire(url: String): ChatSelectionWebView? {
+        if (closed) return null
         val view = pages[url] ?: create().also { pages[url] = it; if (url in noCache) it.settings.cacheMode = WebSettings.LOAD_NO_CACHE; it.loadUrl(url) }
+        held += view
         active?.takeIf { it !== view }?.let { mute(it, true); it.onPause() }
         active = view
         if (speculative.remove(url)) view.loadUrl(url)
@@ -68,17 +87,18 @@ internal class ChatWebViewPool(
         val view = pages[url] ?: return
         // The one on screen reloads in place; one kept aside goes, and the next acquire loads it anew.
         if (view === active) { view.settings.cacheMode = WebSettings.LOAD_NO_CACHE; if (view.loadProgress >= 100) view.reload() }
-        else { pages.remove(url); (view.parent as? ViewGroup)?.removeView(view); view.destroy() }
+        else { pages.remove(url); held -= view; (view.parent as? ViewGroup)?.removeView(view); view.destroy() }
     }
 
     private val noCache = mutableSetOf<String>()
 
     @androidx.annotation.OptIn(markerClass = [Profile.ExperimentalUrlPrefetch::class])
     fun preload(url: String) {
-        if (pages.containsKey(url)) return
+        // A loopback address is the phone's own, with or without a port: never loaded ahead.
+        if (closed || isLoopback(url) || pages.containsKey(url)) return
         val view = create()
         pages[url] = view
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.PRERENDER_WITH_URL)) {
+        if (features.supported(WebViewFeature.PRERENDER_WITH_URL)) {
             speculative.add(url)
             WebViewCompat.prerenderUrlAsync(view, url, null, context.mainExecutor, object : PrerenderOperationCallback {
                 override fun onPrerenderActivated() = Unit
@@ -92,9 +112,12 @@ internal class ChatWebViewPool(
         trim()
     }
 
+    @VisibleForTesting
     fun existing(url: String): ChatSelectionWebView? = pages[url]
 
     fun release(view: ChatSelectionWebView) {
+        held -= view
+        if (closed) return
         val entry = pages.entries.firstOrNull { it.value === view } ?: return
         val url = entry.key
         view.onPick = null; view.onExternal = null
@@ -108,13 +131,17 @@ internal class ChatWebViewPool(
         pages.remove(url)
         speculative.remove(url)
         view.destroy()
-        // A loopback address is the phone's own: never loaded ahead, even when it was not opened as a forwarded port.
-        if (PortLinks.link(url) == null) preload(url)
+        preload(url)
     }
 
+    /**
+     * Over the cap the least recently used page goes, but never the one on screen nor one the host still holds (the page
+     * being replaced by a newly opened link is released only after that link's [acquire]). So the pool may exceed [limit]
+     * by the pages the host holds until they are released.
+     */
     private fun trim() {
         while (pages.size > limit) {
-            val entry = pages.entries.firstOrNull { it.value !== active } ?: return
+            val entry = pages.entries.firstOrNull { it.value !== active && it.value !in held } ?: return
             pages.remove(entry.key)
             speculative.remove(entry.key)
             entry.value.destroy()
@@ -127,12 +154,13 @@ internal class ChatWebViewPool(
      */
     fun trimMemory() {
         val drop = pages.entries.filter { it.value !== active && it.value.parent == null }
-        drop.forEach { (url, view) -> pages.remove(url); speculative.remove(url); view.destroy() }
+        drop.forEach { (url, view) -> pages.remove(url); speculative.remove(url); held -= view; view.destroy() }
     }
 
     /** A renderer that crashed or was killed takes only its page with it: forgotten here, shown as gone, made anew on reopening. */
     private fun dropGone(view: ChatSelectionWebView) {
         pages.entries.firstOrNull { it.value === view }?.let { pages.remove(it.key); speculative.remove(it.key) }
+        held -= view
         if (active === view) active = null
         view.gone = true
         view.onPick = null; view.onExternal = null
@@ -151,7 +179,7 @@ internal class ChatWebViewPool(
         settings.cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
         settings.setSupportMultipleWindows(true)
         settings.javaScriptCanOpenWindowsAutomatically = false
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+        if (features.supported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, true)
         }
         // Logins embedded in a page (a sign-in frame from another site) need its cookies; every page shares the store.
@@ -207,14 +235,22 @@ internal class ChatWebViewPool(
         }
     }
 
+    private fun isLoopback(url: String): Boolean {
+        val host = runCatching { URI(url.trim()).host }.getOrNull()?.lowercase() ?: return false
+        return host in loopbackHosts || host.endsWith(".localhost")
+    }
+
     private fun mute(view: WebView, muted: Boolean) {
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.MUTE_AUDIO)) WebViewCompat.setAudioMuted(view, muted)
+        if (features.supported(WebViewFeature.MUTE_AUDIO)) WebViewCompat.setAudioMuted(view, muted)
     }
 
     fun pause() { pages.values.forEach { mute(it, true); it.onPause() } }
     fun resume() { active?.let { mute(it, false); it.onResume() } }
-    fun destroy() { popups.forEach { it.destroy() }; popups.clear(); pages.values.forEach { (it.parent as? ViewGroup)?.removeView(it); it.destroy() }; pages.clear(); speculative.clear(); active = null; startupExecutor.shutdown() }
+    fun destroy() { closed = true; held.clear(); startup.complete(Unit); popups.forEach { it.destroy() }; popups.clear(); pages.values.forEach { (it.parent as? ViewGroup)?.removeView(it); it.destroy() }; pages.clear(); speculative.clear(); active = null; startupExecutor.shutdown() }
 }
+
+/** The hosts that mean this phone itself (the same set as `PortLinks`, which also needs a port). */
+private val loopbackHosts = setOf("localhost", "127.0.0.1", "0.0.0.0", "::1", "::", "[::1]", "[::]")
 
 /** What text picked on a page can become: in a conversation "AI edit" and "Use as context", elsewhere "Hand to Persona". */
 internal enum class ChatLinkPick(@StringRes val label: Int) {

@@ -2,7 +2,6 @@ package persona.feature.chat
 
 import android.content.Context
 import android.webkit.CookieManager
-import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebSettings
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -18,7 +17,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
-/** The pool owns page history; the shared WebView cookie and disk stores outlive every renderer it replaces. */
+/**
+ * What the pool does with its views: which instance it hands out, when it destroys, creates or refuses one, and which calls
+ * it makes. The views are [RecordingWebView]s, so in-page history, cookies and the disk cache are not exercised here; the
+ * device scene `chat-link-reopen.json` and its helper check those.
+ */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
 class ChatWebViewPoolTest {
@@ -31,18 +34,19 @@ class ChatWebViewPoolTest {
 
     @Before fun setUp() {
         CookieManager.getInstance().setCookie(link, "session=kept")
-        pool = ChatWebViewPool(context) { viewContext ->
+        pool = ChatWebViewPool(context, NoWebFeatures) { viewContext ->
             RecordingWebView(viewContext).also(created::add)
         }
     }
 
     @After fun sharedDataSurvivesEveryScenario() {
+        // Robolectric's in-memory cookie store: this only shows the pool never clears it, not that a real store persists.
         assertEquals("session=kept", CookieManager.getInstance().getCookie(link))
         assertTrue(created.all { it.cacheClearCalls == 0 })
         pool.destroy()
     }
 
-    @Test fun firstAcquireUsesPreloadAndOrdinaryReleaseCreatesFreshPreload() {
+    @Test fun releaseDestroysTheShownViewAndPreloadsAReplacementInstanceForTheOriginalUrl() {
         pool.preload(link)
         val preloaded = created.single()
         assertEquals(listOf(link), preloaded.loads)
@@ -59,7 +63,8 @@ class ChatWebViewPoolTest {
         assertEquals(listOf(link), fresh.loads)
     }
 
-    @Test fun ordinaryReleaseDropsNavigationMetadataAndBothHistoryDirections() {
+    @Test fun theReplacementInstanceStartsFromTheOriginalUrlWhateverTheOldViewHadShown() {
+        // The recording view reports no history for any new instance: this shows a new instance loading only the link's own url.
         val shown = pool.acquire(link) as RecordingWebView
         shown.loadUrl(next)
         shown.back = true
@@ -125,7 +130,7 @@ class ChatWebViewPoolTest {
         assertEquals(listOf(link), retry.loads)
     }
 
-    @Test fun releaseAndPreloadKeepTheRendererCapAndNeverTrimTheActiveView() {
+    @Test fun releaseAndPreloadKeepTheViewCapAndNeverTrimTheActiveView() {
         val activeUrl = "https://example.invalid/active"
         val active = pool.acquire(activeUrl) as RecordingWebView
         repeat(7) { index -> pool.preload("https://example.invalid/preload/$index") }
@@ -181,18 +186,79 @@ class ChatWebViewPoolTest {
     }
 
     @Test fun loopbackReleasedAsAnOrdinaryLinkIsDestroyedAndNeverPreloaded() {
-        val local = "http://localhost:5173/app"
-        val shown = pool.acquire(local) as RecordingWebView
-        val count = created.size
+        // With a port, without one, and the other loopback spellings: the phone's own address is never loaded ahead.
+        listOf("http://localhost:5173/app", "http://localhost/", "http://127.0.0.1/", "https://[::1]/page", "http://dev.localhost/").forEach { local ->
+            val shown = pool.acquire(local) as RecordingWebView
+            val count = created.size
 
-        pool.release(shown)
+            pool.release(shown)
 
-        assertEquals(1, shown.destroyCalls)
-        assertNull(pool.existing(local))
-        assertEquals(count, created.size)
+            assertEquals(local, 1, shown.destroyCalls)
+            assertNull(local, pool.existing(local))
+            assertEquals(local, count, created.size)
+        }
     }
 
-    @Test fun freshPreloadRetainsSharedLoginAndPageConfiguration() {
+    @Test fun preloadRefusesALoopbackAddressWithOrWithoutAPort() {
+        listOf("http://localhost/", "http://localhost:3000/", "http://127.0.0.1/x").forEach { pool.preload(it) }
+        assertTrue(created.isEmpty())
+        pool.preload(link)
+        assertEquals(1, created.size)
+    }
+
+    @Test fun aClosedPoolCreatesNothingAndABeforeCloseReleaseOnlyFindsItAlreadyDestroyed() {
+        val shown = pool.acquire(link) as RecordingWebView
+        pool.destroy()
+        val count = created.size
+        assertEquals(1, shown.destroyCalls)
+
+        assertNull(pool.acquire(next))
+        pool.preload(next)
+        pool.release(shown)
+
+        assertEquals(count, created.size)
+        assertEquals(1, shown.destroyCalls)
+        assertNull(pool.existing(link))
+        assertNull(pool.existing(next))
+    }
+
+    @Test fun releaseBeforeCloseBuildsAReplacementAndCloseDestroysIt() {
+        // What a host teardown does when its page releases before the pool closes; the host declares the close to run first.
+        val shown = pool.acquire(link) as RecordingWebView
+        pool.release(shown)
+        val replacement = pool.existing(link) as RecordingWebView
+        pool.destroy()
+        assertEquals(1, replacement.destroyCalls)
+        assertNull(pool.existing(link))
+    }
+
+    @Test fun openingAnotherLinkNeverTrimsAViewTheHostStillHolds() {
+        val other = "https://example.invalid/other"
+        val first = pool.acquire(link) as RecordingWebView
+        val preloads = (1..3).map { "https://example.invalid/preload/$it" }
+        preloads.forEach { pool.preload(it) }
+
+        // The card shows `other` while `link` is still held (it is released after `other` is acquired).
+        val second = pool.acquire(other) as RecordingWebView
+        assertEquals(0, first.destroyCalls)
+        assertSame(first, pool.existing(link))
+        // The oldest preload went instead.
+        assertEquals(1, created[1].destroyCalls)
+
+        pool.release(first)
+        val warmLink = pool.existing(link) as RecordingWebView
+        assertNotSame(first, warmLink)
+        assertEquals(0, warmLink.destroyCalls)
+        pool.release(second)
+
+        // Reopening the first link finds the warm replacement made when it was released; nothing new is created.
+        val count = created.size
+        assertSame(warmLink, pool.acquire(link))
+        assertEquals(count, created.size)
+        assertEquals(0, warmLink.destroyCalls)
+    }
+
+    @Test fun theReplacementKeepsTheSamePageConfigurationAndTheStoreIsNeverCleared() {
         val shown = pool.acquire(link) as RecordingWebView
         pool.release(shown)
         val fresh = pool.existing(link) as RecordingWebView
@@ -205,43 +271,4 @@ class ChatWebViewPoolTest {
         assertTrue(CookieManager.getInstance().acceptThirdPartyCookies(fresh))
         assertEquals("session=kept", CookieManager.getInstance().getCookie(link))
     }
-
-    private class RecordingWebView(context: Context) : ChatSelectionWebView(context) {
-        val loads = mutableListOf<String>()
-        var destroyCalls = 0
-        var reloadCalls = 0
-        var cacheClearCalls = 0
-        var back = false
-        var forward = false
-
-        override fun loadUrl(url: String) {
-            loads += url
-            currentUrl = url
-        }
-
-        override fun reload() {
-            reloadCalls++
-        }
-
-        override fun destroy() {
-            destroyCalls++
-        }
-
-        override fun clearCache(includeDiskFiles: Boolean) {
-            cacheClearCalls++
-        }
-
-        override fun canGoBack() = back
-
-        override fun canGoForward() = forward
-    }
-}
-
-/** The pool ignores the detail, but the client's parameter is non-null, so a real one is passed. */
-internal fun simulateChatRendererGone(view: ChatSelectionWebView) {
-    val detail = object : RenderProcessGoneDetail() {
-        override fun didCrash() = true
-        override fun rendererPriorityAtExit() = 0
-    }
-    view.webViewClient.onRenderProcessGone(view, detail)
 }
