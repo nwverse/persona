@@ -43,11 +43,20 @@ func supervisionOf(s *Service, f *fakeHub, id string) supervisionSeen {
 	return seen
 }
 
-// nothingToldAfter waits out the supervision messages' timings and fails when anything about task id was raised or
-// told since before.
+// nothingToldAfter runs the supervision pass now, and again at a time past every wait the pass measures (an answer
+// waited for, a stall, a silent transcript), and fails when anything about task id was raised or told since before.
+// Nothing has to be waited out: turns and passes raise their signals as they run, a signal waits in the book until a
+// supervision message takes it, and the message marks it told as it takes it, so a signal raised by now shows as
+// waiting or as told.
 func nothingToldAfter(t *testing.T, s *Service, f *fakeHub, id string, before supervisionSeen) {
 	t.Helper()
-	time.Sleep(4 * shortSuperviseTimings.every)
+	ctx, now := context.Background(), time.Now()
+	expect := 0
+	if v := todoNow(s, id).Supervision; v != nil {
+		expect = v.ExpectMinutes
+	}
+	s.superviseWatch(ctx, now)
+	s.superviseWatch(ctx, now.Add(max(superviseNeedsAfter, stallAfter(expect), silentAfter(expect))+time.Minute))
 	after := supervisionOf(s, f, id)
 	if len(after.pending) != 0 || !maps.Equal(after.told, before.told) || after.notices != before.notices {
 		t.Fatalf("the supervisor heard of a closed task: waiting %v, told %v (before %v), %d messages (before %d):\n%s",
@@ -76,14 +85,16 @@ func receiptCount(t *testing.T, s *Service) int {
 	return n
 }
 
-// reviewAndWait runs task_review on id from its supervisor conv1, and waits out what the review itself tells.
+// reviewAndWait runs task_review on id from its supervisor conv1, and waits until the supervision messages it leaves
+// due (what the review itself tells, and a digest still armed for the signals it answered) have gone out, so that a
+// snapshot taken next counts them.
 func reviewAndWait(t *testing.T, s *Service, id, verdict string) Todo {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]any{"todo_id": id, "verdict": verdict, "note": "Checked the PR and the screenshots"})
 	if _, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw); err != nil {
 		t.Fatalf("%s: %v", verdict, err)
 	}
-	time.Sleep(4 * shortSuperviseTimings.every)
+	settleService(t, s)
 	got := todoNow(s, id)
 	if got.DoneAt == nil {
 		t.Fatalf("%s did not close it: %+v", verdict, got)
@@ -121,7 +132,7 @@ func TestAcceptedPlanTaskStaysClosedOnALateDoneTurn(t *testing.T) {
 	}
 	before, judged, receipted := supervisionOf(s, f, todo.ID), judgeCalls(f), receiptCount(t, s)
 
-	time.Sleep(5 * time.Millisecond)
+	waitFor(t, "the clock to pass the acceptance", func() bool { return time.Now().After(*accepted.DoneAt) })
 	agentTurn(s, f, proto.StatusWorking, "", 0) // nothing was sent for the task
 	closedUnchanged(t, s, accepted)
 	agentTurn(s, f, proto.StatusDone, "Checked again: nothing is left. PR https://github.com/o/r/pull/78", 0)
@@ -190,7 +201,7 @@ func TestLateJudgmentOfAnAcceptedTaskIsDropped(t *testing.T) {
 	work := time.Now()
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	judgedCopy := todoNow(s, todo.ID) // the task as the judge was handed it
-	time.Sleep(5 * time.Millisecond)
+	waitFor(t, "the clock to pass the work's start", func() bool { return time.Now().After(work) })
 	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { // task_review, before it closes the to-do
 		v.State = reviewAccepted
 		v.Reviews = append(v.Reviews, TaskReview{At: time.Now().UTC(), Verdict: reviewAccepted})
@@ -242,7 +253,7 @@ func TestLateJudgmentLeavesAnAcceptedTaskAsItWas(t *testing.T) {
 			work := s.tasks.working[todo.ID] // the stretch the judge was asked about
 			s.tasks.mu.Unlock()
 			judgedCopy := todoNow(s, todo.ID)
-			time.Sleep(5 * time.Millisecond)
+			waitFor(t, "the clock to pass the work's start", func() bool { return time.Now().After(work) })
 			if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { // task_review, before it closes the to-do
 				v.State = reviewAccepted
 				v.Reviews = append(v.Reviews, TaskReview{At: time.Now().UTC(), Verdict: reviewAccepted})
@@ -301,7 +312,7 @@ func TestAcceptedPlanTaskReopensWhenItsConversationSendsMore(t *testing.T) {
 			delete(s.todos.activeBySession, [2]string{"box", sid}) // closed: as setTodoRow does
 			s.todos.mu.Unlock()
 			turn(proto.StateIdle)
-			time.Sleep(5 * time.Millisecond)
+			waitFor(t, "the clock to pass the acceptance", func() bool { return time.Now().After(done) })
 			open := func() bool { return todoNow(s, "todo_a").DoneAt == nil }
 			send := func(from, text string) {
 				t.Helper()
@@ -441,7 +452,8 @@ func TestCancelledTaskStaysClosedOnALateDoneTurn(t *testing.T) {
 	before, judged := supervisionOf(s, f, todo.ID), judgeCalls(f)
 
 	agentTurn(s, f, proto.StatusDone, "Finished anyway: PR https://github.com/o/r/pull/78 is merged", 0)
-	time.Sleep(5 * time.Millisecond)
+	ended := time.Now()
+	waitFor(t, "the clock to pass the turn's end", func() bool { return time.Now().After(ended) })
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "Checked again: all done", 0)
 	closedUnchanged(t, s, cancelled)
@@ -465,7 +477,11 @@ func TestJudgeClosedTaskStillReopensOnTheNextTurn(t *testing.T) {
 	if ok, err := s.autoDoneTodo(context.Background(), todo.ID, "Done", time.Now().Add(-time.Minute)); err != nil || !ok {
 		t.Fatalf("auto done: %v %v", ok, err)
 	}
-	time.Sleep(5 * time.Millisecond)
+	closed := todoNow(s, todo.ID)
+	if closed.DoneAt == nil || closed.DoneBy != db.DoneByAuto {
+		t.Fatalf("not closed by the judge: %+v", closed)
+	}
+	waitFor(t, "the clock to pass the judge's close", func() bool { return time.Now().After(*closed.DoneAt) })
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	if got := todoNow(s, todo.ID); got.DoneAt != nil || got.ReopenedAt == nil {
 		t.Fatalf("the judge's close did not give way to its agent's next turn: %+v", got)
