@@ -68,6 +68,37 @@ func TestContinuationStopsAndReleasesLiveAgent(t *testing.T) {
 	}
 }
 
+func TestContinuationKeepsAnAgentNowWorkingOnAnotherTodo(t *testing.T) {
+	e := newThreadEnv(t, nil)
+	agent := TodoAgent{MachineID: "box", SessionID: "agent01"}
+	putTodo(e.s, Todo{ID: "todo_old", Title: "Original task", Origin: "m1", Agents: []TodoAgent{agent}})
+	putTodo(e.s, Todo{ID: "todo_current", Title: "Current task", Origin: "m1", Agents: []TodoAgent{agent}})
+
+	if _, err := e.s.toolTaskPlan(context.Background(), "m1", continuesArgs("todo_old")); err != nil {
+		t.Fatal(err)
+	}
+	old := newAgentOn(t, e, "todo_old")
+	if old.ReleasedAt == nil || old.DismissedAt != nil {
+		t.Fatalf("the stale original link was not released into history: %+v", old)
+	}
+	if len(e.f.stopped) != 0 {
+		t.Fatalf("continuing the original task stopped another task's Agent: %v", e.f.stopped)
+	}
+	current := todoNow(e.s, "todo_current")
+	if len(current.Agents) != 1 || !current.Agents[0].active() {
+		t.Fatalf("the other task lost its live Agent: %+v", current)
+	}
+	e.s.todos.mu.RLock()
+	owner := e.s.todos.activeBySession[[2]string{agent.MachineID, agent.SessionID}]
+	e.s.todos.mu.RUnlock()
+	if owner != current.ID {
+		t.Fatalf("the Agent's active owner changed to %q, want %q", owner, current.ID)
+	}
+	if todoCount(e.s) != 2 {
+		t.Fatalf("continuation created an extra to-do: %d", todoCount(e.s))
+	}
+}
+
 func TestContinuationReopensClosedTodo(t *testing.T) {
 	for _, backend := range []string{"memory", "database"} {
 		t.Run(backend, func(t *testing.T) {

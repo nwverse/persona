@@ -307,6 +307,8 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 		s.todos.mu.RUnlock()
 		if other != "" && other != todo.ID {
 			// A historical link cannot authorize stopping an Agent that now belongs to another task.
+			// Return only this to-do's stale link for release, not the other to-do's live link.
+			// releaseStoppedAgents does not stop the process.
 			stopped = append(stopped, a)
 			continue
 		}
