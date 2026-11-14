@@ -96,104 +96,79 @@ fun JSectionHeader(
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val fold = if (onClick != null && open != null) foldLabels(open) else null
-    if (overflowActions.isEmpty()) {
-        Row(
-            modifier.fillMaxWidth().then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClickLabel = fold?.action, onClick = onClick) else Modifier)
-                .padding(top = if (sub) Tokens.Space.s else if (style == AppStyle.Board) 18.dp.dense else 26.dp.dense, bottom = if (sub) Tokens.Space.xs else 10.dp.dense,
-                    start = if (style == AppStyle.Brief) 0.dp else 4.dp.dense, end = if (style == AppStyle.Brief) 0.dp else 4.dp.dense)
-                .heightIn(min = if (leading != null) 48.dp else 0.dp)
-                .semantics { heading(); fold?.let { stateDescription = it.state } },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            leading?.let { it(); Spacer(Modifier.width(Tokens.Space.xs)) }
-            if (sub && open != null) {
-                JIcon(PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3, modifier = Modifier.rotate(if (open) 90f else 0f))
-                Spacer(Modifier.width(Tokens.Space.xs))
-            }
-            if (status != null && style == AppStyle.Board) {
-                Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(palette.status(status).dot))
-                Spacer(Modifier.width(8.dp.dense))
-            }
-            // The title and its count take the free width, so the trailing text and the action sit at the end of the row.
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    title,
-                    style = if (sub) PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
-                    else if (style == AppStyle.Glass) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp))
-                    else PersonaTheme.type.headline.copy(fontSize = androidx.compose.ui.unit.TextUnit(15f, androidx.compose.ui.unit.TextUnitType.Sp)),
-                    color = if (muted) palette.ink3 else if (sub || style == AppStyle.Glass) palette.ink2 else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                count?.let {
-                    Spacer(Modifier.width(6.dp.dense))
-                    if (countTone == null) Text("$it", style = PersonaTheme.type.micro, color = palette.ink3)
-                    else {
-                        val tone = palette.status(countTone)
-                        Text("$it", style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold), color = tone.text, maxLines = 1,
-                            modifier = Modifier.clip(CircleShape).background(tone.tint)
-                                .padding(horizontal = SectionHeaderTokens.countPadding, vertical = SectionHeaderTokens.countPaddingVertical))
-                    }
+    val titleStyle = if (sub) PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
+    else if (style == AppStyle.Glass) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp))
+    else PersonaTheme.type.headline.copy(fontSize = androidx.compose.ui.unit.TextUnit(15f, androidx.compose.ui.unit.TextUnitType.Sp))
+    fun headerModifier(): Modifier = modifier.fillMaxWidth()
+        .then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClickLabel = fold?.action, onClick = onClick) else Modifier)
+        .padding(top = if (sub) Tokens.Space.s else if (style == AppStyle.Board) 18.dp.dense else 26.dp.dense, bottom = if (sub) Tokens.Space.xs else 10.dp.dense,
+            start = if (style == AppStyle.Brief) 0.dp else 4.dp.dense, end = if (style == AppStyle.Brief) 0.dp else 4.dp.dense)
+        .heightIn(min = if (leading != null) 48.dp else 0.dp)
+        .semantics { heading(); fold?.let { stateDescription = it.state } }
+    @Composable
+    fun leadingContent() {
+        leading?.let { it(); Spacer(Modifier.width(Tokens.Space.xs)) }
+        if (sub && open != null) {
+            JIcon(PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3, modifier = Modifier.rotate(if (open) 90f else 0f))
+            Spacer(Modifier.width(Tokens.Space.xs))
+        }
+        if (status != null && style == AppStyle.Board) {
+            Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(palette.status(status).dot))
+            Spacer(Modifier.width(8.dp.dense))
+        }
+    }
+    @Composable
+    fun titleGroup(wrap: Boolean) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                title, style = titleStyle,
+                color = if (muted) palette.ink3 else if (sub || style == AppStyle.Glass) palette.ink2 else palette.ink,
+                maxLines = if (wrap) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            count?.let {
+                Spacer(Modifier.width(Tokens.Space.sm))
+                if (countTone == null) Text("$it", style = PersonaTheme.type.micro, color = palette.ink3)
+                else {
+                    val tone = palette.status(countTone)
+                    Text("$it", style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold), color = tone.text, maxLines = 1,
+                        modifier = Modifier.clip(CircleShape).background(tone.tint)
+                            .padding(horizontal = SectionHeaderTokens.countPadding, vertical = SectionHeaderTokens.countPaddingVertical))
                 }
             }
-            if (trailing != null || action != null) Spacer(Modifier.width(8.dp.dense))
-            trailing?.let {
-                Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1,
-                    modifier = if (trailingIsFoldAction && fold != null) Modifier.clearAndSetSemantics {} else Modifier)
-            }
-            action?.invoke(this)
+        }
+    }
+    @Composable
+    fun ordinaryActions() {
+        if (trailing != null || action != null) Spacer(Modifier.width(Tokens.Space.s))
+        trailing?.let {
+            Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1,
+                modifier = if (trailingIsFoldAction && fold != null) Modifier.clearAndSetSemantics {} else Modifier)
+        }
+        if (action != null) Row { action.invoke(this) }
+    }
+    if (overflowActions.isEmpty()) {
+        Row(
+            headerModifier(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            leadingContent()
+            // The title and its count take the free width, so the trailing text and the action sit at the end of the row.
+            Row(Modifier.weight(1f)) { titleGroup(false) }
+            ordinaryActions()
         }
         return
     }
     var menu by remember { mutableStateOf(false) }
-    val titleStyle = if (sub) PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
-    else if (style == AppStyle.Glass) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp))
-    else PersonaTheme.type.headline.copy(fontSize = androidx.compose.ui.unit.TextUnit(15f, androidx.compose.ui.unit.TextUnitType.Sp))
     val textMeasurer = rememberTextMeasurer()
     val countStyle = PersonaTheme.type.micro
     val trailingStyle = PersonaTheme.type.caption
     val actionStyle = PersonaTheme.type.labelSmall
     SubcomposeLayout(
-        modifier.fillMaxWidth().then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClickLabel = fold?.action, onClick = onClick) else Modifier)
-            .padding(top = if (sub) Tokens.Space.s else if (style == AppStyle.Board) 18.dp.dense else 26.dp.dense, bottom = if (sub) Tokens.Space.xs else 10.dp.dense,
-                start = if (style == AppStyle.Brief) 0.dp else 4.dp.dense, end = if (style == AppStyle.Brief) 0.dp else 4.dp.dense)
-            .heightIn(min = if (leading != null) 48.dp else 0.dp)
-            .semantics { heading(); fold?.let { stateDescription = it.state } },
+        headerModifier(),
     ) { constraints ->
-        @Composable
-        fun titleGroup(wrap: Boolean) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    title,
-                    style = titleStyle,
-                    color = if (muted) palette.ink3 else if (sub || style == AppStyle.Glass) palette.ink2 else palette.ink,
-                    maxLines = if (wrap) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                count?.let {
-                    Spacer(Modifier.width(6.dp.dense))
-                    if (countTone == null) Text("$it", style = PersonaTheme.type.micro, color = palette.ink3)
-                    else {
-                        val tone = palette.status(countTone)
-                        Text("$it", style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold), color = tone.text, maxLines = 1,
-                            modifier = Modifier.clip(CircleShape).background(tone.tint)
-                                .padding(horizontal = SectionHeaderTokens.countPadding, vertical = SectionHeaderTokens.countPaddingVertical))
-                    }
-                }
-            }
-        }
-
         val leading = subcompose("leading") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                leading?.let { it(); Spacer(Modifier.width(Tokens.Space.xs)) }
-                if (sub && open != null) {
-                    JIcon(PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3, modifier = Modifier.rotate(if (open) 90f else 0f))
-                    Spacer(Modifier.width(Tokens.Space.xs))
-                }
-                if (status != null && style == AppStyle.Board) {
-                    Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(palette.status(status).dot))
-                    Spacer(Modifier.width(8.dp.dense))
-                }
-            }
+            Row(verticalAlignment = Alignment.CenterVertically) { leadingContent() }
         }.map { it.measure(Constraints()) }
         val leadingWidth = leading.maxOfOrNull { it.width } ?: 0
         val density = this
@@ -202,25 +177,17 @@ fun JSectionHeader(
         ).size.width
         fun Dp.toPxInt() = with(density) { this@toPxInt.toPx() }.roundToInt()
         val fullTitleWidth = textWidth(title, titleStyle) + (count?.let {
-            6.dp.dense.toPxInt() + textWidth("$it", countStyle) +
+            Tokens.Space.sm.toPxInt() + textWidth("$it", countStyle) +
                 if (countTone != null) SectionHeaderTokens.countPadding.toPxInt() * 2 else 0
         } ?: 0)
-        @Composable
-        fun ordinaryActions() {
-            if (trailing != null || action != null) Spacer(Modifier.width(8.dp.dense))
-            trailing?.let {
-                Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1,
-                    modifier = if (trailingIsFoldAction && fold != null) Modifier.clearAndSetSemantics {} else Modifier)
-            }
-            if (action != null) Row { action.invoke(this) }
-        }
-        val ordinaryWidth = (if (trailing != null || action != null) 8.dp.dense.toPxInt() else 0) +
+        val ordinaryWidth = (if (trailing != null || action != null) Tokens.Space.s.toPxInt() else 0) +
             (trailing?.let { textWidth(it, trailingStyle) } ?: 0) +
-            if (action != null) maxOf(48.dp.toPxInt(), textWidth(overflowActions.last().label, actionStyle) + 16.dp.dense.toPxInt()) else 0
+            if (action != null) maxOf(Tokens.MinTouch.android.toPxInt(),
+                textWidth(overflowActions.last().label, actionStyle) + Tokens.Space.s.toPxInt() * 2) else 0
         val overflow = overflowActions.isNotEmpty() && leadingWidth + fullTitleWidth + ordinaryWidth > constraints.maxWidth
         val right = if (overflow) subcompose("overflow") {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Spacer(Modifier.width(8.dp.dense))
+                Spacer(Modifier.width(Tokens.Space.s))
                 JIconButton(PhIcons.DotsThree, stringResource(R.string.designsystem_more), { menu = true }, raised = false,
                     modifier = Modifier.testTag("inbox.section.overflow"))
                 JMenu(menu, { menu = false }, buildList {
