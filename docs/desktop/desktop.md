@@ -35,7 +35,7 @@ Closing the main window hides it to the tray while the signed-in renderer stays 
 
 `electron-builder.yml` defines universal macOS DMG/ZIP and Windows NSIS artifacts. `electron-builder.unsigned.yml` uses a temporary development app ID and explicitly disables certificate discovery/signing and notarization. It is for development only. Unsigned artifacts do not prove signed distribution, notarization or installation.
 
-CI has Linux policy tests, macOS universal packaging and Windows NSIS jobs, with native-runner Electron smoke and screenshots. Windows is built on Windows, not via a failed Wine cross-build. Signed artifacts require explicitly supplied repository credentials and an authorized run; no certificate is purchased, inferred from App Store signing or sought from a private key store. The secrets and what each must contain are listed under "What the owner must provide" below.
+CI has Linux policy tests, macOS universal packaging and Windows NSIS jobs, with native-runner Electron smoke and screenshots. Windows is built on Windows, not via a failed Wine cross-build. The development workflow builds unsigned packages only and never receives signing credentials; signing and notarization run only in the release workflow. Signed artifacts require explicitly supplied repository credentials and an authorized run; no certificate is purchased, inferred from App Store signing or sought from a private key store. The secrets and what each must contain are listed under "What the owner must provide" below.
 
 The real smoke starts an isolated Vite server and the repository's synthetic hub on owned ports, launches Electron with an isolated profile, waits for actual login/setup DOM and the entrance transition, captures the page and exits with a one-line verdict. Generated output is cleaned before compilation so deleted tests cannot linger. Linux/macOS development evidence does not substitute for Windows acceptance or a published-release update test.
 
@@ -58,7 +58,7 @@ The update state lives in the tray menu, between **Open Persona** and **Quit Per
 
 - **Check for updates** changes to "Checking for updates…" at once, before any network work. Asking again while a check runs does not start a second one.
 - Only a check the person asked for leaves a result line. A scheduled check that finds nothing, or fails, changes nothing visible; the next scheduled check retries. A failure never blocks or covers the web UI.
-- A downloaded update stays offered until the app restarts. Quitting installs it silently; **Restart to update** installs it and reopens Persona. No further checks run in that session.
+- An update the platform has accepted stays offered until the app restarts. On macOS that is Squirrel.Mac's own acceptance, not electron-updater's earlier file-downloaded event; a refusal returns to the retry schedule instead of offering a restart that cannot work. Quitting installs it silently; **Restart to update** installs it and reopens Persona. No further checks run in that session.
 - The schedule is fixed (launch, then every four hours, no random delay), so it is the same on every run and unit-tested with a fake clock (`desktop/test/update.test.ts`).
 - Development runs and Linux have no update feed, so the tray shows no update entries there.
 - The feed is the one written into the package at build time (`app-update.yml`: this repository's GitHub Releases). No environment variable, setting or hub page can point a packaged app at another feed; `PERSONA_DESKTOP_DISABLE_UPDATE=1` only turns checks off. A test pins that the electron-updater calls which would override the feed are never used.
@@ -79,7 +79,7 @@ Between the moment the Release is created and the moment its desktop metadata is
 
 ### What the owner must provide
 
-No certificate exists yet, so no release has published desktop packages. These are repository secrets (Settings › Secrets and variables › Actions); none of them is ever committed, and nobody should look for them in a key store.
+No certificate exists yet, so no release has published desktop packages. Before adding credentials, the owner must create the `persona-desktop-release` GitHub Environment with required reviewer approval restricted to the administrator, and configure these as **Environment secrets**, not repository secrets. The environment restricts their use to the release jobs on stable version tags. The development Desktop workflow never receives them. None is ever committed, and nobody should look for them in a key store.
 
 | Secret | What it is |
 | --- | --- |

@@ -25,7 +25,7 @@ export type UpdateEvent =
   | { readonly type: "check"; readonly manual: boolean }
   | { readonly type: "available"; readonly version: string }
   | { readonly type: "current" }
-  | { readonly type: "downloaded"; readonly version: string }
+  | { readonly type: "downloaded"; readonly version?: string }
   | { readonly type: "failed" };
 
 export const INITIAL_UPDATE_STATE: UpdateState = { phase: "idle", manual: false };
@@ -42,7 +42,7 @@ export function reduceUpdate(state: UpdateState, event: UpdateEvent): UpdateStat
     case "available":
       return { phase: "downloading", version: event.version, manual: state.manual };
     case "downloaded":
-      return { phase: "ready", version: event.version, manual: false };
+      return { phase: "ready", ...((event.version ?? state.version) !== undefined ? { version: event.version ?? state.version } : {}), manual: false };
     case "current":
       if (state.phase !== "checking") return state;
       return state.manual ? { phase: "idle", manual: false, notice: "current" } : { phase: "idle", manual: false };

@@ -1,4 +1,4 @@
-import { app } from "electron";
+import { app, autoUpdater as nativeUpdater } from "electron";
 import electronUpdater from "electron-updater";
 import { UpdateController, updatesSupported } from "./update-state.js";
 import type { UpdateState } from "./update-state.js";
@@ -35,7 +35,14 @@ export function installAutoUpdate(deps: {
   });
   autoUpdater.on("update-available", info => controller.dispatch({ type: "available", version: info.version }));
   autoUpdater.on("update-not-available", () => controller.dispatch({ type: "current" }));
-  autoUpdater.on("update-downloaded", info => controller.dispatch({ type: "downloaded", version: info.version }));
+  if (process.platform === "darwin") {
+    // electron-updater emits update-downloaded when it hands the file to Squirrel.Mac, before the signature and
+    // install location are accepted. Only Squirrel's own verdict makes Restart to update actionable; a refusal
+    // arrives as an error and returns the controller to the retry schedule.
+    nativeUpdater.once("update-downloaded", () => controller.dispatch({ type: "downloaded" }));
+  } else {
+    autoUpdater.on("update-downloaded", () => controller.dispatch({ type: "downloaded" }));
+  }
   autoUpdater.on("error", error => {
     // The web UI stays available; the next scheduled check retries. Only a check the person asked for shows the failure.
     console.warn("Desktop update failed:", error.message);

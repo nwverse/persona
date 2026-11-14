@@ -139,7 +139,7 @@ async function build(version, port) {
   const { code, text } = await run(process.execPath, [
     join(root, "node_modules", "electron-builder", "cli.js"), "--config", "electron-builder.update-test.yml", ...target, "--publish", "never",
     `-c.publish.url=http://127.0.0.1:${port}/`, `-c.extraMetadata.version=${version}`, `-c.directories.output=${directory}`,
-  ], { seconds: 1500, quiet: true, env: { ...process.env, PERSONA_DESKTOP_APP_ID: "com.example.persona.desktop", CSC_IDENTITY_AUTO_DISCOVERY: "false" } });
+  ], { seconds: 1500, quiet: true, env: { ...process.env, PERSONA_DESKTOP_APP_ID: "com.example.persona.update-test", CSC_IDENTITY_AUTO_DISCOVERY: "false" } });
   if (code !== 0) console.log(text);
   need(`build ${version}`, code === 0, `exit ${code}`);
   return directory;
@@ -291,7 +291,7 @@ async function main() {
   let install;
   if (platform === "darwin" && settled?.event !== "native-downloaded") {
     // Nothing is installed, and the test says so rather than passing an install it did not see.
-    need("Squirrel.Mac refused the update and said why", settled?.event === "error", settled?.message?.slice(0, 400) ?? seen.at(-1));
+    need("Squirrel.Mac refused the unsigned build's code signature", settled?.event === "error" && /SQRLCodeSignatureErrorDomain|did not pass validation|code failed to satisfy/.test(settled?.message ?? ""), settled?.message?.slice(0, 400) ?? seen.at(-1));
     stop(first);
     await exited(first, 30);
     install = "not installed: Squirrel.Mac refused the update for this build";

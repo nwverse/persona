@@ -103,6 +103,7 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
         for name in ("desktop-mac", "desktop-win"):
             self.assertEqual(self.jobs[name]["needs"], ["authorize", "desktop-gate"])
             self.assertNotIn("permissions", self.jobs[name])
+            self.assertEqual(self.jobs[name]["environment"], "persona-desktop-release")
         self.assertEqual(self.jobs["desktop-mac"]["if"], "needs.desktop-gate.outputs.mac == 'true'")
         self.assertEqual(self.jobs["desktop-win"]["if"], "needs.desktop-gate.outputs.win == 'true'")
         self.assertIn("publish", self.jobs["desktop-publish"]["needs"])
@@ -124,7 +125,8 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
         for name in ("smoke", "publish"):
             self.assertNotIn("desktop", str(self.jobs[name]["needs"]))
         self.assertIn("needs.publish.result == 'success'", self.jobs["desktop-publish"]["if"])
-        self.assertIn("always()", self.jobs["desktop-publish"]["if"])
+        self.assertIn("!cancelled()", self.jobs["desktop-publish"]["if"])
+        self.assertNotIn("always()", self.jobs["desktop-publish"]["if"])
 
     def test_update_metadata_is_uploaded_after_the_packages(self):
         script = self.jobs["desktop-publish"]["steps"][-1]["run"]
@@ -142,3 +144,10 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_desktop_ci_never_receives_signing_credentials(self):
+        # Signing and notarization are release-only; a manually dispatched branch cannot sign arbitrary code.
+        text = (ROOT / ".github/workflows/desktop-test.yml").read_text()
+        self.assertNotIn("inputs.signed", text)
+        for name in sorted(set(MAC) | set(WIN)):
+            self.assertNotIn(f"secrets.{name}", text)

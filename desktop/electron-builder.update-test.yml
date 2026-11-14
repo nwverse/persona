@@ -6,8 +6,10 @@
 #     app-update.yml exactly as a release's feed is; nothing at run time can redirect it;
 #   - the entry is update-test/main.mjs, which records updater events for the harness and then loads the real main
 #     process unchanged. That file is listed only here, so a release package does not contain it;
-#   - a separate name, so its install directory, profile and update cache never touch a real Persona install.
+#   - a separate app ID and name, so its installer GUID, install directory, profile and update cache never touch
+#     a real Persona install or the unsigned development build.
 extends: ./electron-builder.unsigned.yml
+appId: com.example.persona.update-test
 productName: Persona Update Test
 extraMetadata:
   name: persona-desktop-update-test

@@ -245,5 +245,6 @@ test("no run-time switch can point a packaged app at another update feed", async
   assert.doesNotMatch(release, /update-test|generic/);
   const testOnly = await readFile(join(source, "..", "electron-builder.update-test.yml"), "utf8");
   // Windows checkouts may carry CRLF line endings.
+  assert.match(testOnly, /appId: com\.example\.persona\.update-test\r?\n/);
   assert.match(testOnly, /provider: generic\r?\n {2}url: http:\/\/127\.0\.0\.1:9\/\r?\n/);
 });
