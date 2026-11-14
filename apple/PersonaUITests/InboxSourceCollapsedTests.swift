@@ -2,6 +2,7 @@ import XCTest
 
 /// A non-event native source stays collapsed when its inbox detail opens. Only View original constructs the source and
 /// lets it report what was seen. Run against scripts/mock/mock_hub.py without MOCK_INBOX_EVENTS (PERSONA_MOCK_HUB).
+/// The mail test enforces the default mock fixture (no MOCK_INBOX_EVENTS or MOCK_MAIL) by checking UID 501's body first.
 final class InboxSourceCollapsedTests: XCTestCase {
     private static let chatItem = "lark:f1:100"
     private static let chatFeed = "f1"
@@ -53,6 +54,12 @@ final class InboxSourceCollapsedTests: XCTestCase {
     }
 
     @MainActor func testMailDetailReportsSeenOnlyAfterViewOriginal() throws {
+        let messageURL = try XCTUnwrap(URL(string: hub + "/api/v1/mail/messages/\(Self.mailAccount)/\(Self.mailUID)?mailbox=INBOX"))
+        let messageData = try Data(contentsOf: messageURL)
+        let message = try XCTUnwrap(JSONSerialization.jsonObject(with: messageData) as? [String: Any])
+        guard let text = message["text"] as? String, text.contains("议程见附件，有问题随时说") else {
+            throw XCTSkip("requires the default mock fixture without MOCK_INBOX_EVENTS or MOCK_MAIL; MOCK_MAIL=1 replaces mail UID 501's body")
+        }
         try resetMailFixture()
         let baseline = try mailSeenReports().count
         openDetail(Self.mailItem)
