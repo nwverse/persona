@@ -14820,6 +14820,29 @@
       },
       "extractionState" : "manual"
     },
+    "AI-generated from the recording. Check anything important." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI-generated from the recording. Check anything important."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由 AI 根据录音生成，重要内容请核对。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音から AI が作成しました。重要な内容は確認してください。"
+          }
+        }
+      }
+    },
     "API Key" : {
       "shouldTranslate" : true,
       "localizations" : {
@@ -43794,6 +43817,29 @@
       },
       "extractionState" : "manual"
     },
+    "Core Conclusions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Core Conclusions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "核心结论"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主な結論"
+          }
+        }
+      }
+    },
     "Cores" : {
       "localizations" : {
         "en" : {
@@ -50366,6 +50412,29 @@
         }
       }
     },
+    "Decision [Minutes Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Decision"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "决定"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "決定"
+          }
+        }
+      }
+    },
     "Decision dismissed. The task stays open." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -55828,6 +55897,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "済み：%1$@"
+          }
+        }
+      }
+    },
+    "Done: %@ [Minutes To-Do]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done: %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成：%1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了：%1$@"
           }
         }
       }
@@ -133185,6 +133277,29 @@
         }
       }
     },
+    "Show %lld More" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show %lld More"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开其余 %lld 条"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "残り %lld 件を表示"
+          }
+        }
+      }
+    },
     "Show %lld idle agents" : {
       "localizations" : {
         "en" : {
@@ -133219,6 +133334,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Show %lld more in %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show %1$lld more in %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开“%2$@”的其余 %1$lld 条"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%2$@」の残り %1$lld 件を表示"
+          }
+        }
+      }
     },
     "Show Agents (%lld)" : {
       "localizations" : {
@@ -134364,6 +134502,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在转写中查看 %1$@ 处"
+          }
+        }
+      }
+    },
+    "Show less of %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show less of %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起“%1$@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」を閉じる"
           }
         }
       }

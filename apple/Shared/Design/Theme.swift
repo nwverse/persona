@@ -143,6 +143,9 @@ nonisolated enum Theme {
     #endif
     /// A line picked out for a moment in the accent's soft ground (the transcript line a minutes item's time jumped to).
     static var accentTint: Color { accent.opacity(aiTintStrength) }
+    /// Any color's soft ground at the AI tint's strength: behind a mark drawn in that color (a minutes topic's icon tile,
+    /// #6563), so the mark reads at 3:1 or better on it (`StyleSpecTests`).
+    static func softTint(_ color: Color) -> Color { color.opacity(aiTintStrength) }
     /// The AI color at half strength: a mark of the AI's that is at work but not the lit one (a workflow phase with
     /// agents running that the run has moved past), apart from a ring (not started) and the full dot (lit).
     static var aiMuted: Color { ai.opacity(0.5) }
@@ -896,6 +899,11 @@ nonisolated enum Theme {
         static let amber = Color(light: 0xB7791F, dark: 0xF5B342)
         static let yellow = Color(light: 0x9A7B00, dark: 0xFFD60A)
         static let teal = Color(light: 0x0F7C80, dark: 0x40C8C8)
+        /// A blue-gray that reads as a mark on a card (the system gray is under 3:1 there in both modes).
+        static let slate = Color(light: 0x5E6B7D, dark: 0x9AA7B8)
+        /// A meeting's summary card (#6563): the four topic tints a group's cards share, by the group's place (the first
+        /// group the first). They only tell groups apart: never a state's color (red, orange, green, yellow) or the AI's.
+        static let minutesGroups: [Color] = [blue, teal, pink, slate]
     }
 
     /// A permission mode's tone where the Agents header shows it (#3719), by how much the agent does without asking.
