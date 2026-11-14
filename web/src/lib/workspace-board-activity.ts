@@ -162,7 +162,7 @@ export class BoardActivityModel {
   async detail(id: string): Promise<void> {
     if (!this.current() || this.state.loading || !revision(id) || !this.state.entries.some((entry) => entry.revision === id)) return;
     const previous = this.state.details.get(id);
-    if (previous?.loading || (previous?.loaded && !previous.error)) return;
+    if (previous?.loading || previous?.loaded) return;
     await this.loadDetail(id, 0);
   }
   async moreDetails(id: string): Promise<void> {

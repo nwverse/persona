@@ -58,6 +58,24 @@ describe("workflow board history reader", () => {
     expect(model.snapshot().details.get("9")).toMatchObject({ error: "", nextOffset: undefined, changes: [detail().changes[0], detail().changes[0]] });
     model.dispose();
   });
+  it("keeps loaded detail pages when a failed continuation is collapsed and reopened", async () => {
+    const request = vi.fn().mockResolvedValueOnce(page(["9"]))
+      .mockResolvedValueOnce({ ...detail(), total: 3 })
+      .mockResolvedValueOnce({ ...detail("9", 1), total: 3, next_offset: 2 })
+      .mockRejectedValueOnce(new Error("Continuation failed"))
+      .mockResolvedValueOnce({ ...detail("9", 1), total: 3 });
+    const model = new BoardActivityModel(undefined, request);
+    await model.refresh(); await model.detail("9"); await model.moreDetails("9"); await model.moreDetails("9");
+    expect(model.snapshot().details.get("9")).toMatchObject({ total: 3, nextOffset: 2, error: "Continuation failed" });
+    expect(model.snapshot().details.get("9")?.changes).toHaveLength(2);
+    await model.detail("9"); // Reopening the group must not restart offset zero.
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(model.snapshot().details.get("9")?.changes).toHaveLength(2);
+    await model.moreDetails("9");
+    expect(request.mock.calls[4][0]).toContain("offset=2");
+    expect(model.snapshot().details.get("9")?.changes).toHaveLength(3);
+    model.dispose();
+  });
   it("fences a stale page and unfinished detail on refresh", async () => {
     const old = deferred<ActivityDetail>();
     const request = vi.fn().mockResolvedValueOnce(page(["9"])).mockImplementationOnce(() => old.promise).mockResolvedValueOnce(page(["10", "9"], undefined, "10")).mockResolvedValueOnce(detail());

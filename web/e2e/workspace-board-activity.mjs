@@ -241,10 +241,19 @@ async function failures(browser) {
     await waitForCount(row().locator("[data-activity-change]"), 30);
     await row().getByRole("alert").scrollIntoViewIfNeeded(); await x.shot("detail-failure");
     x.setFailDetail(undefined); await retry(row()).click(); await row().locator("[data-activity-change]").nth(59).waitFor();
+    x.setFailDetail(60); await row().getByRole("button", { name: format(s.more_details, { count: 440 }), exact: true }).click(); await row().getByRole("alert").waitFor();
+    await waitForCount(row().locator("[data-activity-change]"), 60);
+    const readsBeforeToggle = x.detailReads().length;
+    await x.expand(); await x.expand(); await page.waitForTimeout(200);
+    await waitForCount(row().locator("[data-activity-change]"), 60);
+    assert.equal(x.detailReads().length, readsBeforeToggle, "Reopening after a later-page failure keeps both loaded pages without refetching offset zero");
+    await row().getByRole("alert").scrollIntoViewIfNeeded(); await x.shot("reopened-detail-failure");
+    x.setFailDetail(undefined); await retry(row()).click(); await row().locator("[data-activity-change]").nth(89).waitFor();
+    assert.equal(x.detailReads().at(-1).query.offset, "60", "Retry resumes the failed page rather than replacing already loaded changes");
     x.setFailOlder(true); await reader().getByRole("button", { name: s.load_more, exact: true }).click(); await reader().getByRole("alert").waitFor();
-    await waitForCount(reader().locator("[data-activity-revision]"), 20); await waitForCount(row().locator("[data-activity-change]"), 60);
+    await waitForCount(reader().locator("[data-activity-revision]"), 20); await waitForCount(row().locator("[data-activity-change]"), 90);
     x.setFailOlder(false); await retry(reader()).click(); await row("561").waitFor();
-    x.healthy(); result.checks.push("Failures: initial summaries, initial details, later details and older summaries retain data and explicitly retry");
+    x.healthy(); result.checks.push("Failures: initial summaries/details, later pages, collapse/reopen and older summaries preserve loaded data; retry resumes the failed offset");
   } catch (error) { await x.captureFailure(error); } finally { await x.context.close(); }
 }
 
