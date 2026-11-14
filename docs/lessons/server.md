@@ -2263,3 +2263,8 @@ record. Cover repeated corrections and cancellation before any Node effect, not 
 Default cleanup retains branches. A workspace-private bare repository must survive removal of its
 worktree for that promise to hold. Verify the retained branch's actual commit after cleanup, including
 local commits; a directory-exists assertion alone does not show that the branch data survived.
+
+For a test of a newer transcript copy, give the base fixture an explicitly older timestamp.
+The filesystem's timestamp on a new write can lag a wall-clock value passed to `os.Chtimes`,
+so writing the continuation next does not establish the ordering the test requires. Keep
+equal-timestamp selection covered separately.
