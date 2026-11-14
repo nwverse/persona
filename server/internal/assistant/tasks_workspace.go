@@ -236,8 +236,9 @@ func repositoryWithoutCommits(err error) bool {
 
 // taskWorkspaceOwner checks durable active task links, and the gap between
 // admission and linking. Callers that admit a writer hold workspaceMu as well.
+// Directories compare by proto.NodeKey: on a Windows machine, case aside.
 func (s *Service) taskWorkspaceOwner(ctx context.Context, machine, cwd, except string) *Todo {
-	machine, cwd = s.effectiveBoardMachine(machine), proto.NodeClean(cwd)
+	machine, cwd = s.effectiveBoardMachine(machine), proto.NodeKey(cwd)
 	s.tasks.mu.Lock()
 	owner := s.tasks.workspaceClaims[machine+"\x00"+cwd]
 	s.tasks.mu.Unlock()
@@ -251,7 +252,7 @@ func (s *Service) taskWorkspaceOwner(ctx context.Context, machine, cwd, except s
 			continue
 		}
 		for _, a := range t.Agents {
-			if a.ReleasedAt == nil && a.DismissedAt == nil && s.effectiveBoardMachine(a.MachineID) == machine && proto.NodeClean(a.Cwd) == cwd {
+			if a.ReleasedAt == nil && a.DismissedAt == nil && s.effectiveBoardMachine(a.MachineID) == machine && proto.NodeKey(a.Cwd) == cwd {
 				return &t
 			}
 		}
@@ -306,7 +307,7 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 			if s.tasks.workspaceClaims == nil {
 				s.tasks.workspaceClaims = map[string]string{}
 			}
-			s.tasks.workspaceClaims[s.effectiveBoardMachine(t.Machine)+"\x00"+t.Cwd] = t.TodoID
+			s.tasks.workspaceClaims[s.effectiveBoardMachine(t.Machine)+"\x00"+proto.NodeKey(t.Cwd)] = t.TodoID
 			s.tasks.mu.Unlock()
 		}
 	}

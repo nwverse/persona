@@ -90,8 +90,8 @@ func TestTaskWorkspaceWindowsNodeBusyDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The agent's row has the directory as its terminal wrote it.
-		if err := s.linkTodoAgent(ctx, owner.ID, "box", "writer", owner.Title, `c:\code\app\`, ""); err != nil {
+		// The agent's row has the directory as its terminal wrote it, in another case: Windows ignores it.
+		if err := s.linkTodoAgent(ctx, owner.ID, "box", "writer", owner.Title, `c:\Code\APP\`, ""); err != nil {
 			t.Fatal(err)
 		}
 		p := windowsNodePlan(t, s, `{"existing":"C:\\code\\app"}`)
@@ -104,6 +104,35 @@ func TestTaskWorkspaceWindowsNodeBusyDirectory(t *testing.T) {
 		}
 		if len(f.starts) != 0 || !strings.Contains(reason, owner.ID) {
 			t.Fatalf("busy directory was not refused with its owner: err=%v plan=%+v starts=%v", err, saved, f.starts)
+		}
+	})
+}
+
+// Two writers admitted together claim one Windows directory however each wrote it.
+func TestTaskWorkspaceWindowsNodeConcurrentClaimsIgnoreCase(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, f := windowsNodeTaskService(t)
+		args := `{"tasks":[
+			{"title":"Writer one","prompt":"Write one","machine":"box","cwd":"C:\\code\\app","permission":"bypassPermissions","workspace":{"existing":"C:\\code\\app"}},
+			{"title":"Writer two","prompt":"Write two","machine":"box","cwd":"C:\\code\\app","permission":"bypassPermissions","workspace":{"existing":"c:\\Code\\App"}}
+		]}`
+		if _, err := s.toolTaskPlan(context.Background(), "workspace-chat", json.RawMessage(args)); err != nil {
+			t.Fatal(err)
+		}
+		p := readonlyFeedPlan(t, s, "workspace-chat")
+		if _, err := s.startPlan(context.Background(), p.ID, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		saved, _ := s.loadPlan(context.Background(), p.ID)
+		failures := 0
+		for _, task := range saved.Tasks {
+			if strings.Contains(task.Error, "occupied by task") {
+				failures++
+			}
+		}
+		if failures != 1 || len(f.starts) != 1 {
+			t.Fatalf("writers were not serialized: starts=%v plan=%+v", f.starts, saved)
 		}
 	})
 }
