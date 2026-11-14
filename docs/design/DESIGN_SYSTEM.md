@@ -458,7 +458,9 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   line fading, with Show More / Show Less (展开 / 收起, 展開 / 折りたたむ). iOS puts it inside the bubble at its bottom, in
   the bubble's link color (`FoldToggle`), folds past 9 lines to 5 at the accessibility text sizes, opens a folded bubble
   on a long press too (section 4.2), keeps open or not per message, and holds the bubble's top in place while it opens
-  or folds. The web puts the button under the bubble and its fold scrolls inside; it has no long press to open and
+  or folds. What opens fades in under the lines already shown with `reveal`, as a tool's details do (`.unfolding`,
+  #6481); the fold's fade mask grows open with it. The lifted copy is always its whole height, also after Show More
+  (#6481). The web puts the button under the bubble and its fold scrolls inside; it has no long press to open and
   does not keep open or not (noted in #5676 for a web issue).
 - Everything in the user's bubble takes its colors from the bubble as drawn (`Theme.UserBubbleInk`, #5204): the
   unified layout's box (primary words) or the theme's bubble, never the style alone. Blocks at its top (quotes, forwards,
