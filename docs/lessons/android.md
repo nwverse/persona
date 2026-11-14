@@ -718,3 +718,7 @@ A file attachment's unbounded error text can make its row taller than the previe
 ## Keep expanded-composer send and Escape focus states separate
 
 A movable small composer field can remain composed and focused behind the expanded editor, so `onFocusChanged` may not fire again when the editor closes. Preserving `focusRequest` alone therefore leaves `state.focused` stale after a hardware send, while the following Escape cannot restore it through another callback. Use separate collapse actions: sending preserves the request count and clears the focused state; Escape follows the ordinary focus request and restores it. Target key injection at the expanded input's own tag when both nodes report focus.
+
+## A registering surface must not take focus from a child that already has it
+
+`hardwareShortcutDismiss` registered its surface and requested focus on itself whenever a large window attached its shortcut controller. When a compact window became large with the second Settings field focused, that request moved focus to the surface, and the later focus restoration entered the first field. Robolectric did not show it; a real window did. Track focus inside the surface in every window size and request it only when no child holds it. Verify focus changes on a device with real touch and key events (`SettingsFocusInstrumentedTest`).
