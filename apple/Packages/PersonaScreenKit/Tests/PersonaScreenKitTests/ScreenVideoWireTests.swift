@@ -21,6 +21,7 @@ final class ScreenVideoWireTests: XCTestCase {
         .keyframe,
         .update(UpdateMessage(maxKbps: 4000, paused: true)),
         .update(UpdateMessage(display: 3)),
+        .update(UpdateMessage(path: .init(kind: "tailscale", via: "cellular", minRttMs: 12.5))),
         // Quality tiers (#6396).
         .hello(HelloMessage(version: 1, codec: "hevc", display: 1, width: 2268, height: 1472, features: ["tiers"],
                             points: [1512, 982], pixels: [3024, 1964])),
