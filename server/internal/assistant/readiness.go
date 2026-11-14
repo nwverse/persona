@@ -670,6 +670,12 @@ func (s *Service) readinessClaude(ctx context.Context, lang i18n.Lang, d Device,
 		return ReadinessStep{ID: StepClaude, State: StepChecking}
 	case seen.version != "":
 		return ReadinessStep{ID: StepClaude, State: StepOK, Version: seen.version}
+	case seen.known && plain && d.ClaudeVersion != "":
+		// The node found Claude Code on this connection, and its self-check now finds none. Claude Code updating
+		// itself through npm replaces its package and the claude link in place, so a check caught mid-update sees no
+		// claude for seconds to minutes: unknown, which does not stop the main conversation. A real removal still
+		// shows as soon as a start is refused (rec.Start above).
+		return ReadinessStep{ID: StepClaude, State: StepUnknown}
 	case seen.known && plain:
 		return problem(proto.CodeClaudeMissing, "install_claude")
 	}
