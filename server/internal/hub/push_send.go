@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apns"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/relayproto"
@@ -15,6 +16,7 @@ import (
 // send alerts every device whose settings take it (nil: all of them).
 // A device that chose "Phone Muted" gets none while a desktop app is connected (desktops.go), and a desktop app that is
 // connected gets none of these: it shows them itself. What was asked for explicitly (nil) goes to it all the same.
+// The hub's own alerts (pairing, a computer joining) always pass ln mode: they are P0.
 func (p *Pusher) send(payload map[string]any, collapseID string, wants func(NotifyPrefs) bool) {
 	p.sendLocalized(func(i18n.Lang) map[string]any { return payload }, collapseID, wants)
 }
@@ -31,15 +33,42 @@ func (p *Pusher) sendLocalizedQuiet(build localized, collapseID string, wants fu
 
 // sendLocalizedQuietTo is sendLocalizedQuiet that tells sent each device the push goes to (nil: nobody).
 func (p *Pusher) sendLocalizedQuietTo(build localized, collapseID string, wants func(NotifyPrefs) bool, rule quietRule, sent func(Device)) {
-	p.sendFrom("", build, collapseID, wants, rule, sent)
+	p.sendFromPolicy("", pushPolicy{level: assistantwire.LevelP0}, build, collapseID, wants, rule, nil, sent)
 }
 
 // sendFrom is sendLocalizedQuietTo for a push manager asked for (notify.request, its extensions' pushes, a computer's
 // personad notify): none to a device that turned that manager's pushes off (NotifyPrefs.MutedManagers), whatever else
 // it takes. "" is the hub's own push. wants keeps its meaning: nil (asked for explicitly) still goes past Phone Muted
-// and to an open desktop. Returns the selected count and the reachable count before preferences are applied.
+// and to an open desktop. Returns the selected count and the reachable count before preferences are applied. Such a
+// push defaults to P1 for ln mode; callers that know its urgency use sendFromPolicy.
 func (p *Pusher) sendFrom(manager string, build localized, collapseID string, wants func(NotifyPrefs) bool, rule quietRule, sent func(Device)) (selected, reachable int) {
-	return p.sendFromTo(manager, build, collapseID, wants, rule, nil, sent)
+	return p.sendFromPolicy(manager, pushPolicy{level: assistantwire.LevelP1, manager: manager}, build, collapseID, wants, rule, nil, sent)
+}
+
+// sendFromPolicy is sendFrom with the push's ln-mode policy (level, related key and the held-push record's text).
+func (p *Pusher) sendFromPolicy(manager string, policy pushPolicy, build localized, collapseID string, wants func(NotifyPrefs) bool, rule quietRule, only func(Device) bool, sent func(Device)) (selected, reachable int) {
+	if p == nil {
+		return 0, 0
+	}
+	policy.manager = manager
+	if policy.title == "" || policy.body == "" {
+		if payload := build(i18n.Default); payload != nil {
+			if alert, ok := payload["aps"].(map[string]any)["alert"].(map[string]any); ok {
+				if policy.title == "" {
+					policy.title, _ = alert["title"].(string)
+				}
+				if policy.body == "" {
+					policy.body, _ = alert["body"].(string)
+				}
+			}
+		}
+	}
+	if allow, _ := p.applyLn(policy); !allow {
+		// ln mode held this push back for every device; selection counts as zero, the WebSocket still carries it
+		// (callers run notifyWSFrom themselves) so the app's lists and briefings keep updating.
+		return 0, 0
+	}
+	return p.sendFromTo(manager, build, collapseID, wants, rule, only, sent)
 }
 
 // sendFromTo is sendFrom to the devices only takes (nil: every device), before their settings decide.

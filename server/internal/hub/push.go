@@ -80,6 +80,14 @@ type Pusher struct {
 	// prefsEdit holds one change of a device's settings from its read to its write (editPrefs); taken before saveMu
 	// and mu, never by a push.
 	prefsEdit sync.Mutex
+
+	// lnMu guards the low-distraction mode state (lnmode.go): the cached switch, the per-key push times for the
+	// 12-hour rule and the held-push list.
+	lnMu       sync.Mutex
+	lnCached   *bool
+	lnCachedAt time.Time
+	lnLastPush map[string]time.Time
+	intercepts []pushIntercept
 }
 
 // deviceStoreTimeout: how long a device row write may take before it gives up (the pool has no statement_timeout).
@@ -104,6 +112,7 @@ func newPusher(dir string, store Store, logf func(string, ...any)) *Pusher {
 		}
 		cancel()
 	}
+	p.loadIntercepts() // held pushes survive restarts from hub_settings, whether or not APNs is configured
 	b, err := os.ReadFile(filepath.Join(dir, "apns.json"))
 	if err != nil {
 		logf("push: no %s, pushing through each phone's relay (docs/operations/push-relay.md)", filepath.Join(dir, "apns.json"))
