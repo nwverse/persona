@@ -265,6 +265,8 @@ nonisolated struct AgentListProjection: Sendable {
         var machines: [Machine]
         var settings: Settings
         var workspaces: [HostWorkspace] = []
+        /// What a waiting child asks, keyed by the parent the card is shown on. Empty leaves every row's own line.
+        var asks: [SessionKey: String] = [:]
     }
 
     struct Rows: Sendable {
@@ -320,9 +322,10 @@ nonisolated struct AgentListProjection: Sendable {
         let plan = AgentSearchPlan.compile(query: settings.query, settings: settings)
         result.searchPlan = plan
         let parsed = plan.parsed
-        // A side session lives in its parent's chat (#7944): a paged window's rows fold here, once per revision; the
-        // model's own list is folded already (`AppModel.sessionsByMachine`), and folding it again changes nothing.
-        let sessions = SideFold.fold(input.sessions, groups: settings.sideFold).listed
+        // A side session lives in its parent's chat (#7944): a paged window's rows fold here, once per revision (the
+        // model's own list is folded already, and folding it again changes nothing). Then the folded children are not
+        // rows; what the hub did not fold still goes through CodexTasks below.
+        let sessions = ChildSessions.fold(SideFold.fold(input.sessions, groups: settings.sideFold).listed, asks: input.asks)
         result.sessionsByKey = Dictionary(sessions.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         result.machinesByRef = Dictionary(input.machines.map { ($0.ref, $0) }, uniquingKeysWith: { a, _ in a })
         // Subtasks go under the session that started them, as in the Codex App and on Android: the list and its counts

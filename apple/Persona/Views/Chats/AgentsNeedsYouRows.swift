@@ -25,18 +25,20 @@ nonisolated extension AgentsNeedsYou {
     }
 
     /// The rows for `cards` (pending, oldest first, as `AppModel.pendingInteractions` gives them) and `waiting` (the
-    /// sessions whose state needs the user, card or not), both already narrowed to what the caller shows. `home` is the
-    /// session whose row a card goes under: a side session's card goes under the parent whose chat it lives in
-    /// (`AppModel.sideHomes`, #7944), so that session is one row, counted once; every other card under its own.
-    static func rows(cards: [Interaction], waiting: [Session],
-                     home: (Interaction) -> SessionKey = { $0.sessionKey }) -> [Row] {
+    /// sessions whose state needs the user, card or not), both already narrowed to what the caller shows.
+    static func rows(cards: [Interaction], waiting: [Session]) -> [Row] {
         var rows: [Row] = []
         var at: [SessionKey: Int] = [:]
+        let waitingKeys = Set(waiting.map(\.key))
         for ix in cards {
-            let key = ix.isSessionless ? ix.sessionKey : home(ix)
             if ix.isSessionless {
-                rows.append(Row(key: key, cards: [ix], since: ix.createdAt))
-            } else if let i = at[key] {
+                rows.append(Row(key: ix.sessionKey, cards: [ix], since: ix.createdAt))
+                continue
+            }
+            // A folded child's card counts under its parent, once, and only when that parent is a row here.
+            let home = SessionKey(group: ix.group, machineID: ix.machineID, sessionID: ix.requestHome)
+            let key = home != ix.sessionKey && waitingKeys.contains(home) ? home : ix.sessionKey
+            if let i = at[key] {
                 rows[i].cards.append(ix)
             } else {
                 at[key] = rows.count
@@ -59,7 +61,7 @@ nonisolated extension AgentsNeedsYou {
     /// The sessions that wait for the user whether or not a card was read, as the Needs You filter matches them;
     /// never the Persona tab's own conversations.
     static func waiting(_ sessions: [Session]) -> [Session] {
-        sessions.filter { !$0.assistant && $0.countedState == .needsYou }
+        ChildSessions.fold(sessions).filter { !$0.assistant && $0.countedState == .needsYou }
     }
 
     /// The Agents tab's badge: its rows less the ones that are not the tab's to announce (`TabBadges.place`): the

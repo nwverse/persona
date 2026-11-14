@@ -8,8 +8,12 @@ import Foundation
 /// holds; the views only draw what `fold` gives them.
 ///
 /// Folding is done once per list change, where the lists land (`AppModel.sessionsByMachine`) and where the Agents list's
-/// paged window is projected (`AgentListProjection.build`), never in a view's `body` (docs/apple/performance.md P4/P5).
-/// Without the feature for a row's hub, nothing here changes it.
+/// paged window is projected (`AgentListProjection.build`, before `ChildSessions.fold`), never in a view's `body`
+/// (docs/apple/performance.md P4/P5). It sits in front of the hub's child fold (`ChildSessions`, #8010), which drops
+/// every folded row from the Agents list and shows children as cards in their parent's chat: a side is no such card,
+/// it lives behind its parent's Side Sessions chip, it counts nowhere on its own (the dock, badges, widgets, the watch,
+/// Siri, machines pages too), and its own result unread makes its parent unread. Without the feature for a row's hub,
+/// nothing here changes it.
 nonisolated enum SideFold {
     /// What a hub lists in its hello when every manager behind it folds side sessions.
     static let feature = "sessions_side_fold"
@@ -149,7 +153,7 @@ nonisolated enum SideFold {
             var s = sessions[i]
             if let list = members[i], let r = out.rollups[s.key] {
                 s = folded(s, members: list.map { sessions[$0] }, rollup: r)
-            } else if groups.contains(s.group), let c = s.children, (c.sides ?? 0) > 0, out.rollups[s.key] == nil {
+            } else if groups.contains(s.group), let c = s.children, c.sides > 0, out.rollups[s.key] == nil {
                 // A paged row whose sides are not held: the hub's rollup says what they add up to.
                 let r = Rollup(c)
                 out.rollups[s.key] = r
@@ -174,10 +178,10 @@ nonisolated enum SideFold {
         s.pendingInteractions += members.reduce(0) { $0 + $1.pendingInteractions }
         if let newest = members.compactMap(\.updatedAt).max(), newest > (s.updatedAt ?? .distantPast) { s.updatedAt = newest }
         var c = s.children ?? SessionChildren()
-        c.sides = r.sides > 0 ? r.sides : nil
-        c.sidesWorking = r.working > 0 ? r.working : nil
-        c.sidesNeedsYou = r.needsYou > 0 ? r.needsYou : nil
-        c.sidesUnread = r.unread > 0 ? r.unread : nil
+        c.sides = r.sides
+        c.sidesWorking = r.working
+        c.sidesNeedsYou = r.needsYou
+        c.sidesUnread = r.unread
         s.children = c
         return s
     }
@@ -200,15 +204,8 @@ nonisolated enum SideFold {
 
     // MARK: Cards
 
-    /// The listed row whose chat is a card's home: its parent's for a side's card (by the hub's fields, or by what the
-    /// client folded), its own session otherwise. `on`: whether the card's hub folds sides.
-    static func home(_ ix: Interaction, fold: Result, on: Bool) -> SessionKey {
-        guard on else { return ix.sessionKey }
-        if isSideCard(ix), let under = ix.foldedUnder {
-            return SessionKey(group: ix.group, machineID: ix.machineID, sessionID: under)
-        }
-        return fold.home[ix.sessionKey] ?? ix.sessionKey
-    }
+    // A side's card is shown on its parent by its `folded_under` (`Interaction.requestHome`, as every folded child's,
+    // #8010): Needs You counts it there once, and the parent's chat has it. Only which side's chat it is, is ours.
 
     /// The side session whose chat shows a card, nil when it is no side's.
     static func chat(_ ix: Interaction, fold: Result, on: Bool) -> SessionKey? {

@@ -833,6 +833,65 @@ nonisolated enum TerminalResume: Equatable, Sendable {
     case hidden
 }
 
+/// Folded children of one session (`children` on a session row). Counts the hub omitted are zero.
+nonisolated struct SessionChildren: Codable, Hashable, Sendable {
+    var total: Int = 0
+    var working: Int = 0
+    var needsYou: Int = 0
+    var workers: Int = 0
+    /// Of them, the side sessions (`folded_as: "side"`, #7944) by their own states: how many, working, needing the user
+    /// and with a result not looked at yet. Omitted from a hub without side folding, and when 0 (`SideFold`).
+    var sides: Int = 0
+    var sidesWorking: Int = 0
+    var sidesNeedsYou: Int = 0
+    var sidesUnread: Int = 0
+
+    enum CodingKeys: String, CodingKey {
+        case total, working, workers, sides
+        case needsYou = "needs_you"
+        case sidesWorking = "sides_working", sidesNeedsYou = "sides_needs_you", sidesUnread = "sides_unread"
+    }
+
+    init(total: Int = 0, working: Int = 0, needsYou: Int = 0, workers: Int = 0,
+         sides: Int = 0, sidesWorking: Int = 0, sidesNeedsYou: Int = 0, sidesUnread: Int = 0) {
+        self.total = total
+        self.working = working
+        self.needsYou = needsYou
+        self.workers = workers
+        self.sides = sides
+        self.sidesWorking = sidesWorking
+        self.sidesNeedsYou = sidesNeedsYou
+        self.sidesUnread = sidesUnread
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // An odd count reads as 0, never dropping the rollup.
+        func count(_ key: CodingKeys) -> Int { (try? c.decodeIfPresent(Int.self, forKey: key)).flatMap { $0 } ?? 0 }
+        total = count(.total)
+        working = count(.working)
+        needsYou = count(.needsYou)
+        workers = count(.workers)
+        sides = count(.sides)
+        sidesWorking = count(.sidesWorking)
+        sidesNeedsYou = count(.sidesNeedsYou)
+        sidesUnread = count(.sidesUnread)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(total, forKey: .total)
+        try c.encode(working, forKey: .working)
+        try c.encode(needsYou, forKey: .needsYou)
+        try c.encode(workers, forKey: .workers)
+        // The side keys only when there are sides, as the hub sends them.
+        if sides > 0 { try c.encode(sides, forKey: .sides) }
+        if sidesWorking > 0 { try c.encode(sidesWorking, forKey: .sidesWorking) }
+        if sidesNeedsYou > 0 { try c.encode(sidesNeedsYou, forKey: .sidesNeedsYou) }
+        if sidesUnread > 0 { try c.encode(sidesUnread, forKey: .sidesUnread) }
+    }
+}
+
 nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var machineID: String
     var sessionID: String
@@ -857,22 +916,26 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var isSubagent: Bool? = nil
     var parentSessionID: String? = nil
     var rootSessionID: String? = nil
-    /// The session on the same machine this one was started from while staying a session of its own (`parent_agent_id`,
-    /// #5935): a Claude desktop app's side chat, /btw question or spawned session. Unlike `parentSessionID` it makes no
-    /// subtask. Nil from older nodes, and when empty.
-    var parentAgentID: String? = nil
-    /// When the session began (`started_at`: its transcript's first line, a runtime's created time); nil when the node
-    /// does not know.
-    var startedAt: Date? = nil
-    /// What the hub's fold says of this row (docs/protocol/protocol.md "Session hierarchy"): the listed session on the same
-    /// machine it folds under (`folded_under`), why when it is no child (`folded_as`: "worker", "side"), and the side
-    /// session whose chat it belongs to when it folds through one and is not the side itself (`folded_side`). Read with
-    /// the feature only (`SideFold`); nil from older hubs.
+    /// The session a question or approval is asking (`asking_parent_session_id`). The hub folds that child under it.
+    var askingParentSessionID: String? = nil
+    /// The parent this row folds under (`folded_under`), when the hub computed one. Empty from a hub without
+    /// `sessions_hierarchy`, and for an orphan or a cycle. The row's own `state` is never replaced by the fold.
     var foldedUnder: String? = nil
+    /// How it folds (`folded_as`): "worker" for a tab worker, "side" for a Claude desktop app's side session (#7944).
+    /// Absent otherwise.
     var foldedAs: String? = nil
+    /// The side session whose chat a folded row belongs to when it folds through one and is not the side itself
+    /// (`folded_side`: a side's own children and workers, #7944, `SideFold`). Absent otherwise.
     var foldedSide: String? = nil
-    /// The rollup of the rows folded under this one, on the topmost listed row only (`children`); nil when none fold.
+    /// The session on the same machine this one was started from while staying a session of its own (`parent_agent_id`,
+    /// #5935): a Claude desktop app's side chat, /btw question or spawned session. Nil from older nodes, and when empty.
+    var parentAgentID: String? = nil
+    /// Folded children of this row (`children`). Omitted when there are none. Counts use folded state; this stays.
     var children: SessionChildren? = nil
+    /// When the child started (`started_at`). A card is placed by this, not by a later `updated_at`.
+    var startedAt: Date? = nil
+    /// The hub's session status was `interrupted`. `SessionStatus` has no such case (it would be `.unknown`).
+    var wasInterrupted = false
     var readOnlyReason: String? = nil
     var capabilities: SessionCapabilities? = nil
     var attached: Bool? = nil
@@ -1078,7 +1141,12 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     func awaitsYourReply(muted: Bool) -> Bool { state == .idle && awaitsReply && !muted }
     /// Waiting in the background (#6045): working, but all it runs is waiting. Shown apart from Working and lighter, and
     /// left out of Working's counts and filter; whatever acts on a working agent (stop, queue) still treats it as one.
-    var waitsInBackground: Bool { state == .working && backgroundWaiting }
+    /// A list copy whose state was rewritten to working because a child is working is not waiting in the background.
+    var waitsInBackground: Bool {
+        state == .working && backgroundWaiting && (children?.working ?? 0) == 0 && (children?.needsYou ?? 0) == 0
+    }
+    /// How many subagents the row says are running: its own reported count and its working folded children, once.
+    var shownRunningChildren: Int { ChildSessions.shownRunning(self) }
     /// Its turn ended, yet something brings it back, so its task waits rather than stopped (#3274; the hub's agentWaits):
     /// only its background work runs and will report back, or the hub waits out another agent, a deploy / CI / a time,
     /// or a moment's model failure for it and wakes it (work blocked on anything but the user).
@@ -1252,8 +1320,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case sourceKind = "source_kind", sourceThreadID = "source_thread_id", sourceInstanceID = "source_instance_id",
              parentThreadID = "parent_thread_id", readOnlyReason = "read_only_reason"
         case isSubagent = "is_subagent", parentSessionID = "parent_session_id", rootSessionID = "root_session_id"
-        case parentAgentID = "parent_agent_id", startedAt = "started_at", foldedUnder = "folded_under", foldedAs = "folded_as",
-             foldedSide = "folded_side", children
+        case askingParentSessionID = "asking_parent_session_id", foldedUnder = "folded_under", foldedAs = "folded_as"
+        case children, startedAt = "started_at", foldedSide = "folded_side", parentAgentID = "parent_agent_id"
         case codexRoute = "codex_route", codexRouteNote = "codex_route_note"
         case agentLabelHint = "agent_label"
         case agentSurface = "agent_surface"
@@ -1284,7 +1352,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         manager = try c.decodeIfPresent(String.self, forKey: .manager)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
-        status = try c.decodeIfPresent(SessionStatus.self, forKey: .status) ?? .unknown
+        let rawStatus = try c.decodeIfPresent(String.self, forKey: .status)
+        status = rawStatus.flatMap(SessionStatus.init(rawValue:)) ?? .unknown
+        wasInterrupted = rawStatus == "interrupted"
         paneID = try c.decodeIfPresent(String.self, forKey: .paneID)
         tabID = try c.decodeIfPresent(String.self, forKey: .tabID)
         workspaceID = try c.decodeIfPresent(String.self, forKey: .workspaceID)
@@ -1297,13 +1367,15 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         isSubagent = try c.decodeIfPresent(Bool.self, forKey: .isSubagent)
         parentSessionID = try c.decodeIfPresent(String.self, forKey: .parentSessionID)
         rootSessionID = try c.decodeIfPresent(String.self, forKey: .rootSessionID)
-        // The hierarchy's newer keys (#5935, #7944): an odd one never drops the session; an empty one names nothing.
-        parentAgentID = Self.lenientText(c, .parentAgentID)
-        startedAt = (try? c.decodeIfPresent(Date.self, forKey: .startedAt)).flatMap { $0 }.flatMap { $0.isMeaningful ? $0 : nil }
+        askingParentSessionID = try c.decodeIfPresent(String.self, forKey: .askingParentSessionID)
+        // The hierarchy's keys: an odd one never drops the session; an empty one names nothing (#7944).
         foldedUnder = Self.lenientText(c, .foldedUnder)
         foldedAs = Self.lenientText(c, .foldedAs)
         foldedSide = Self.lenientText(c, .foldedSide)
+        parentAgentID = Self.lenientText(c, .parentAgentID)
+        // An odd rollup never drops the session. Omitted is none.
         children = (try? c.decodeIfPresent(SessionChildren.self, forKey: .children)).flatMap { $0 }
+        startedAt = (try? c.decodeIfPresent(Date.self, forKey: .startedAt)).flatMap { $0 }.flatMap { $0.isMeaningful ? $0 : nil }
         readOnlyReason = try c.decodeIfPresent(String.self, forKey: .readOnlyReason)
         capabilities = try c.decodeIfPresent(SessionCapabilities.self, forKey: .capabilities)
         attached = try c.decodeIfPresent(Bool.self, forKey: .attached)
@@ -1401,57 +1473,6 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// A text key a newer hub added: another type reads as none, and so does an empty one.
     private static func lenientText(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> String? {
         (try? c.decodeIfPresent(String.self, forKey: key)).flatMap { $0 }.flatMap { $0.isEmpty ? nil : $0 }
-    }
-}
-
-/// The rollup a parent row carries of the rows folded under it (`Session.children`, the hub's `SessionChildren`): how
-/// many, and how many of them work, need the user, are a tab's workers, and, of its side sessions alone
-/// (`folded_as: "side"`), how many there are, work, need the user and have a result not looked at (`SideFold`). The
-/// counts after `total` are omitted when 0; an odd one reads as none.
-nonisolated struct SessionChildren: Codable, Hashable, Sendable {
-    var total = 0
-    var working: Int? = nil
-    var needsYou: Int? = nil
-    var workers: Int? = nil
-    var sides: Int? = nil
-    var sidesWorking: Int? = nil
-    var sidesNeedsYou: Int? = nil
-    var sidesUnread: Int? = nil
-
-    enum CodingKeys: String, CodingKey {
-        case total, working, workers, sides
-        case needsYou = "needs_you", sidesWorking = "sides_working", sidesNeedsYou = "sides_needs_you", sidesUnread = "sides_unread"
-    }
-
-    init() {}
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        func count(_ key: CodingKeys) -> Int? { (try? c.decodeIfPresent(Int.self, forKey: key)).flatMap { $0 } }
-        total = count(.total) ?? 0
-        working = count(.working)
-        needsYou = count(.needsYou)
-        workers = count(.workers)
-        sides = count(.sides)
-        sidesWorking = count(.sidesWorking)
-        sidesNeedsYou = count(.sidesNeedsYou)
-        sidesUnread = count(.sidesUnread)
-    }
-}
-
-/// A text key a newer hub added to a card: another type, or an empty string, reads as none and never drops the card.
-nonisolated struct LenientText: Codable, Hashable, Sendable {
-    var value: String?
-
-    init(_ value: String?) { self.value = value }
-
-    init(from decoder: Decoder) throws {
-        value = (try? decoder.singleValueContainer().decode(String.self)).flatMap { $0.isEmpty ? nil : $0 }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.singleValueContainer()
-        if let value { try c.encode(value) } else { try c.encodeNil() }
     }
 }
 
@@ -2492,25 +2513,20 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var mcpConfigSource: String?
     var agentID: String?
     var agentType: String?
-    /// Its session's fold (`Session.foldedUnder`, `foldedAs`, `foldedSide`), set by the hub when it sends the card: the
-    /// listed session whose chat is the card's home, why, and the side session whose chat shows it (`SideFold`).
-    var foldedUnderText: LenientText?
-    var foldedAsText: LenientText?
-    var foldedSideText: LenientText?
-    var foldedUnder: String? {
-        get { foldedUnderText?.value }
-        set { foldedUnderText = newValue.map(LenientText.init) }
-    }
-    var foldedAs: String? {
-        get { foldedAsText?.value }
-        set { foldedAsText = newValue.map(LenientText.init) }
-    }
-    var foldedSide: String? {
-        get { foldedSideText?.value }
-        set { foldedSideText = newValue.map(LenientText.init) }
-    }
+    /// The asking session's `folded_under` (`Interaction.folded_under`). The card is shown on that parent. Absent from
+    /// a hub without `sessions_hierarchy`, and on a card whose session is not folded.
+    var foldedUnder: String? = nil
+    /// How the asking session folds (`folded_as`).
+    var foldedAs: String? = nil
+    /// The side session whose chat shows the card when its session folds through one (`folded_side`, #7944, `SideFold`).
+    var foldedSide: String? = nil
 
     var sessionKey: SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
+    /// The session the card is shown on. Answering still uses `id` and `sessionID`.
+    var requestHome: String {
+        if let under = foldedUnder, !under.isEmpty, under != sessionID { return under }
+        return sessionID
+    }
     var machineRef: MachineRef { MachineRef(group: group, id: machineID) }
 
     var group: String {
@@ -2531,8 +2547,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
              toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", alwaysHonored = "always_honored",
              toolTitle = "tool_title", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
              mutedFlag = "muted", elicitation, mcpServerName = "mcp_server_name", mcpConfigSource = "mcp_config_source",
-             agentID = "agent_id", agentType = "agent_type"
-        case foldedUnderText = "folded_under", foldedAsText = "folded_as", foldedSideText = "folded_side"
+             agentID = "agent_id", agentType = "agent_type", foldedUnder = "folded_under", foldedAs = "folded_as",
+             foldedSide = "folded_side"
     }
 }
 

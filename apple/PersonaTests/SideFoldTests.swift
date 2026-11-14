@@ -152,30 +152,26 @@ import PersonaWire
 
     // MARK: Cards
 
-    @Test func aSidesCardIsItsParents() throws {
+    @Test func aSidesCardIsItsParentsAndSaysWhichSide() throws {
         let fold = SideFold.fold(try [row("p"), row("s", under: "p", as: "side")], groups: Self.on)
         let byHub = try card("c1", session: "s", under: "p", as: "side")
-        #expect(SideFold.home(byHub, fold: fold, on: true) == key("p"))
+        #expect(byHub.requestHome == "p", "shown on its parent, as every folded child's card (#8010)")
         #expect(SideFold.chat(byHub, fold: fold, on: true) == key("s"))
         let ofChild = try card("c2", session: "child", under: "p", side: "s")
-        #expect(SideFold.home(ofChild, fold: fold, on: true) == key("p") && SideFold.chat(ofChild, fold: fold, on: true) == key("s"))
+        #expect(ofChild.requestHome == "p" && SideFold.chat(ofChild, fold: fold, on: true) == key("s"))
         let bare = try card("c3", session: "s") // a hub that stamped nothing: the client's own fold
-        #expect(SideFold.home(bare, fold: fold, on: true) == key("p"))
-        #expect(SideFold.home(byHub, fold: fold, on: false) == key("s"), "without the feature a card is its own session's")
+        #expect(SideFold.chat(bare, fold: fold, on: true) == key("s"))
+        #expect(SideFold.chat(byHub, fold: fold, on: false) == nil, "without the feature no card is a side's")
         let own = try card("c4", session: "p")
-        #expect(SideFold.home(own, fold: fold, on: true) == key("p") && SideFold.chat(own, fold: fold, on: true) == nil)
+        #expect(SideFold.chat(own, fold: fold, on: true) == nil)
     }
 
     @Test func needsYouCountsTheParentOnce() throws {
-        let fold = SideFold.fold(try [row("p", state: "needs_you"), row("s", state: "needs_you", under: "p", as: "side")], groups: Self.on)
-        let cards = try [card("c1", session: "p"), card("c2", session: "s", under: "p", as: "side")]
-        let rows = AgentsNeedsYou.rows(cards: cards, waiting: AgentsNeedsYou.waiting(fold.listed)) {
-            SideFold.home($0, fold: fold, on: true)
-        }
-        #expect(rows.map(\.key) == [key("p")])
-        #expect(rows[0].cards.map(\.id) == ["c1", "c2"])
-        let apart = AgentsNeedsYou.rows(cards: cards, waiting: AgentsNeedsYou.waiting(fold.listed))
-        #expect(apart.count == 2, "without the mapping each card is its own session's row")
+        let fold = SideFold.fold(try [row("p"), row("s", state: "needs_you", under: "p", as: "side")], groups: Self.on)
+        let cards = try [card("c2", session: "s", under: "p", as: "side")]
+        let rows = AgentsNeedsYou.rows(cards: cards, waiting: AgentsNeedsYou.waiting(fold.listed))
+        #expect(rows.map(\.key) == [key("p")], "the parent needs you by its side, and the side's card is under it")
+        #expect(rows[0].cards.map(\.id) == ["c2"])
     }
 
     // MARK: The list's projection
@@ -187,10 +183,12 @@ import PersonaWire
         settings.sideFold = Self.on
         let list = AgentListProjection.build(.init(sessions: rows, machines: [], settings: settings))
         #expect(Set(ids(list.base)) == ["p", "q"])
-        #expect(list.filterCounts[.needsYou] == 1, "the parent, once")
+        #expect(list.filterCounts[.needsYou] == 1, "the parent, once, by the side it holds")
         settings.sideFold = []
         let unfolded = AgentListProjection.build(.init(sessions: rows, machines: [], settings: settings))
-        #expect(Set(ids(unfolded.base)) == ["p", "s", "q"])
+        #expect(Set(ids(unfolded.base)) == ["p", "q"], "the hub's child fold (#8010) still takes the row out")
+        #expect(unfolded.filterCounts[.needsYou] == nil || unfolded.filterCounts[.needsYou] == 0,
+                "and goes by the hub's rollup alone, which this row has none of")
     }
 
     // MARK: The model
@@ -223,7 +221,7 @@ import PersonaWire
         #expect(model.badges.agents == 1)
         let sides = model.sides(of: key("p"))
         #expect(sides.count == 1 && sides.needsYou && sides.rows.map(\.key) == [key("s")])
-        #expect(model.sideCards(for: key("p")).map(\.id) == ["c"])
+        #expect(model.interactions(for: key("p")).map(\.id) == ["c"], "its chat has the side's card")
         #expect(model.watchSummary().sessions.map(\.sessionID) == ["p"])
         #expect(model.watchSummary().sideFold == [""])
 
