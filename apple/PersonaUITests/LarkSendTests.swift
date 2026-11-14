@@ -54,7 +54,7 @@ final class LarkSendTests: XCTestCase {
     @MainActor private func openChat() -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", "mention", "-inbox.source", "", "-openInboxFirst", "YES"] + Self.fresh
+        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", "mention", "-inbox.source", "", "-openInboxItem", "lark:f2:200"] + Self.fresh
         app.launchPinned()
         expandSource(app)
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "The new icon set")).firstMatch.waitForExistence(timeout: 20),
@@ -164,8 +164,9 @@ final class LarkSendTests: XCTestCase {
         app.launchPinned()
         expandSource(app)
         XCTAssertTrue(app.staticTexts["能赶上，下午三点前给你确认"].waitForExistence(timeout: 20), "the 韩梅梅 chat did not open")
-        // The list's own row, not the quote bar's summary of it (the bar is outside the list).
-        let list = app.scrollViews.containing(NSPredicate(format: "label == %@", "能赶上，下午三点前给你确认")).firstMatch
+        // Locate the chat's one scroll view directly: the quote bar can shrink the lazy list until an older row used to
+        // identify it leaves the accessibility hierarchy. Querying the last row through the list still excludes its summary.
+        let list = app.scrollViews.firstMatch
         list.swipeUp() // at the end, as after reading the unread ones
         sleep(1)
         let last = list.staticTexts["新包发你了"]

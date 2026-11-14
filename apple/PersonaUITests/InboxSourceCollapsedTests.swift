@@ -49,6 +49,7 @@ final class InboxSourceCollapsedTests: XCTestCase {
     }
 
     @MainActor func testMailDetailReportsSeenOnlyAfterViewOriginal() throws {
+        try resetMailFixture()
         let baseline = try mailSeenReports().count
         openDetail(Self.mailItem)
         let toggle = sourceToggle()
@@ -60,6 +61,8 @@ final class InboxSourceCollapsedTests: XCTestCase {
                        "opening the mail detail reported seen before View original")
 
         toggle.tap()
+        let body = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "议程见附件，有问题随时说")).firstMatch
+        XCTAssertTrue(body.waitForExistence(timeout: 10), "View original did not load the mail body:\n\(app.debugDescription)")
         let reports = try waitForReports(after: baseline, fetch: mailSeenReports)
         XCTAssertGreaterThan(reports.count, baseline,
                              "View original did not report mail UID \(Self.mailUID) as seen")
@@ -107,7 +110,28 @@ final class InboxSourceCollapsedTests: XCTestCase {
         try records("/mock/lark_reads", key: "reads").filter { $0["feed"] as? String == Self.chatFeed }
     }
 
-    /// Only this message's seen writes; flag writes and other accounts or UIDs do not affect the baseline.
+    /// Restores the fixture through existing APIs so earlier readers and Done actions cannot suppress the seen write.
+    private func resetMailFixture() throws {
+        try post("/api/v1/inbox/done", body: ["ids": [Self.mailItem], "done": false])
+        try post("/api/v1/mail/messages/\(Self.mailAccount)/\(Self.mailUID)/flags", body: ["mailbox": "INBOX", "seen": false])
+    }
+
+    private func post(_ path: String, body: [String: Any]) throws {
+        let url = try XCTUnwrap(URL(string: hub + path))
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let done = expectation(description: "POST " + path)
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            XCTAssertNil(error)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            done.fulfill()
+        }.resume()
+        wait(for: [done], timeout: 10)
+    }
+
+    /// Only this message's seen writes; the unseen setup write, flag writes and other accounts or UIDs do not affect it.
     private func mailSeenReports() throws -> [[String: Any]] {
         try records("/mock/mail_flags", key: "flags").filter {
             $0["account_id"] as? String == Self.mailAccount
