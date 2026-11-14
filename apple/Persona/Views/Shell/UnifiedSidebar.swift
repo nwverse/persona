@@ -5,6 +5,23 @@ import SwiftUI
 /// beside it. What the column's pieces share: the Persona rows' state (search, dialogs), what the page beside it shows,
 /// and where the Agents' Needs You section is in the list.
 @MainActor @Observable final class UnifiedSidebar {
+    /// Which part of the one sidebar a column shows (#4206): the whole of it (the Sidebar layout), or in the Separate
+    /// layout at regular width each tab its own part, in the same column (header, width, color, slide, foot).
+    enum Part {
+        /// The main conversation, the pages, Persona's chats and the Agents list (Merged).
+        case whole
+        /// The Persona tab's: the main conversation, the pages and Persona's chats.
+        case persona
+        /// The Agents tab's: the Agents list, under the same head.
+        case agents
+    }
+
+    let part: Part
+
+    init(part: Part = .whole) {
+        self.part = part
+    }
+
     /// The Persona rows' search and dialogs (`AssistantSidebarUI`), shared by the head, the rows in the Agents list and
     /// the presenters around the column. Lazy: made when the column is first drawn (P3).
     @ObservationIgnored lazy var ui = AssistantSidebarUI()
@@ -106,8 +123,8 @@ struct UnifiedSidebarColumn<Agents: View>: View {
     @Environment(\.splitShowList) private var showList
     private var inDrawer: Bool { split?.drawer == true }
     let state: UnifiedSidebar
-    /// The Agents list, given the Persona rows to hold above its own.
-    @ViewBuilder var list: (AssistantSidebar) -> Agents
+    /// The Agents list, given the Persona rows to hold above its own (none for the Agents tab's part).
+    @ViewBuilder var list: (AssistantSidebar?) -> Agents
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -115,9 +132,18 @@ struct UnifiedSidebarColumn<Agents: View>: View {
         #endif
         VStack(spacing: 0) {
             persona(.header)
-            persona(.main)
-            list(persona(.rows))
-            SidebarNeedsJump(state: state)
+            switch state.part {
+            case .whole:
+                persona(.main)
+                list(persona(.rows))
+                SidebarNeedsJump(state: state)
+            case .persona:
+                persona(.main)
+                personaList
+            case .agents:
+                list(nil)
+                SidebarNeedsJump(state: state)
+            }
             SidebarUsageStrip { show(.machines) }
             persona(.footer)
         }
@@ -130,6 +156,16 @@ struct UnifiedSidebarColumn<Agents: View>: View {
         // A container: on its own the identifier went onto every element in it, the rows' own lost.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("unified-sidebar")
+    }
+
+    /// The Persona tab's rows (the Separate layout, #4206): the pages and Persona's chats in a list of their own, as they
+    /// sit over the Agents in the whole sidebar.
+    private var personaList: some View {
+        List { persona(.rows) }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .contentMargins(.horizontal, Theme.Space.l, for: .scrollContent)
+            .environment(\.defaultMinListRowHeight, Theme.Space.flush)
     }
 
     /// A piece of the Persona sidebar, every place it lists opening beside the sidebar.
@@ -149,7 +185,8 @@ struct UnifiedSidebarColumn<Agents: View>: View {
                          openHealth: { show(.health) },
                          openRecordingsPage: { show(.recordings) },
                          openMessages: LarkHomePreference.shared.shows ? { show(.messages) } : nil,
-                         part: part, shared: state.ui, shownPlace: state.shownPlace)
+                         part: part, shared: state.ui, shownPlace: state.shownPlace,
+                         foldColumn: inDrawer ? nil : showList?.hide)
     }
 
     private func open(_ key: SessionKey) {
@@ -159,6 +196,8 @@ struct UnifiedSidebarColumn<Agents: View>: View {
 
     private func show(_ page: ShellPage) {
         state.shownPlace = page.isSidebarPlace ? page : nil
+        // The Agents tab's foot opens Persona's pages (New Chat, Settings' places) on the Persona tab (#4206).
+        if state.part == .agents, model.selectedTab != .assistant { model.selectedTab = .assistant }
         router?.show(page)
         if inDrawer { state.drawer.close() }
         // Laid over the page (the open Duo upright): a pick slides the column away, even one that leaves the page as it

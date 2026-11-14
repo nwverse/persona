@@ -100,7 +100,7 @@ final class SidebarLayoutTests: XCTestCase {
         // Persona's row goes back to the conversation, nothing over it.
         main.tap()
         waitGone(title, "the Agent's chat stayed over the conversation")
-        XCTAssertTrue(element("assistant-sidebar-button").waitForExistence(timeout: 10), "not on the conversation:\n\(app.debugDescription)")
+        XCTAssertTrue(element("persona-avatar").waitForExistence(timeout: 10), "not on the conversation:\n\(app.debugDescription)")
     }
 
     /// With nothing picked an iPad starts in the Merged sidebar (#4206, "Merged where wide"), and Settings names it
@@ -293,6 +293,8 @@ final class SidebarLayoutTests: XCTestCase {
         pick(separate, "Separate")
         app.buttons["settings-close"].firstMatch.tap()
         XCTAssertTrue(app.buttons["Agents"].firstMatch.waitForExistence(timeout: 10), "the tabs did not come back:\n\(app.debugDescription)")
-        XCTAssertFalse(element("unified-sidebar").exists, "the Sidebar layout is still there")
+        // Separate's tabs show their own part of the same column (#4206): Persona's has no Agents heading.
+        XCTAssertTrue(app.buttons["Persona"].firstMatch.exists, "no Persona tab")
+        XCTAssertFalse(element("sidebar-agents-new").exists, "the Agents in Persona's tab: still the whole sidebar")
     }
 }

@@ -234,6 +234,15 @@ struct AssistantView: View {
         }
     }
 
+    /// A phone's page (the iPhone, the open iPhone Duo): the iPhone's new conversation (`ShellHome`), not the iPad's.
+    private var phonePage: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
+
     /// Nothing pushed on the page: the sidebar's drag only works here (pushed pages have their own back swipe).
     private var atRoot: Bool {
         var pushed = showProfile || showKnowledge || showRoutines || showTodos || openedExtension != nil || showHealth || showRecordings
@@ -269,9 +278,9 @@ struct AssistantView: View {
                     // The iPad draws the shell's composer too (`ChatComposerKind.padCard`): the assistant's, as on the iPhone.
                     // The Sidebar layout's phone page too: the iPhone's conversation, as in the shell (#6332).
                     .environment(\.shellChat, shell != nil || ChatComposerKind.padCard || drawerPage)
-            } else if shell != nil || pageTabSwitch || drawerPage {
-                // A phone's tabs too (iPhone Duo open, #3680): the iPhone's new conversation, with what needs the user
-                // over the composer. The iPad keeps `AssistantHome`.
+            } else if shell != nil || drawerPage || phonePage {
+                // A phone's page at regular width too (iPhone Duo open, either layout; #3680, #3641): the iPhone's new
+                // conversation, with what needs the user over the composer. The iPad keeps `AssistantHome`.
                 ShellHome(pending: shownStart, error: shownFailure?.reason, launcher: $starterLauncher, mode: $starterMode,
                           effort: $starterEffort, openInbox: { navPath.wrappedValue.append($0) }, resend: resend, delete: deleteFailed) { text, images in
                     Task { await start(text, images) }

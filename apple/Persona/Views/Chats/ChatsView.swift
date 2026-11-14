@@ -251,6 +251,17 @@ struct ChatsView: View {
     /// The top on a phone: its own search field and layout (#2478).
     @State private var header = AgentsHeader()
     private var ownsTop: Bool { widthClass != .regular && unified == nil }
+    /// This page opens the Agents' chats asked for from outside: all but the Persona tab's (the Separate layout's new
+    /// look, #4206), whose column has no Agents; the Agents tab's takes them.
+    private var takesAgents: Bool { unified?.part != .persona }
+    /// Where the list column's shown state is kept (`SplitListMemory`): each tab's own as before, the Sidebar layout's.
+    private var listKey: String {
+        switch unified?.part {
+        case nil, .agents: "agents.list"
+        case .persona: "assistant.list"
+        case .whole: "sidebar.list"
+        }
+    }
     /// Laid out for searching (`AgentsHeader.compact`).
     private var headerCompact: Bool { header.compact }
     /// Where the shell's bar is and how far it has faded for the rising field, read apart from this body (`AgentsTopBarPlace`).
@@ -319,14 +330,14 @@ struct ChatsView: View {
         // Closing the search before a push from its results redraws the navigation with it, as when the list was
         // drawn here: drawn by the list alone, the chat came up under the system navigation bar again (SearchOpenTests).
         let _ = searching
-        SplitNavigation(path: pushing, listKey: unified == nil ? "agents.list" : "sidebar.list",
+        SplitNavigation(path: pushing, listKey: listKey,
                         destinations: AgentsDestinations(unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch,
                         columnColor: unified == nil ? nil : UnifiedSidebar.columnColor) {
             listColumn
         } empty: {
-            if unified != nil {
+            if unified != nil, unified?.part != .agents {
                 // The Sidebar layout (#6332): the page beside the sidebar starts at the Persona conversation, the root
-                // what the sidebar opens goes over (`AssistantView`'s embedded page).
+                // what the sidebar opens goes over (`AssistantView`'s embedded page); so does the Persona tab's (#4206).
                 AssistantView()
             } else {
                 SplitPlaceholder(symbol: Theme.Icon.agents, title: String(localized: "Choose an Agent"),
@@ -470,12 +481,15 @@ struct ChatsView: View {
                 if let unified, widthClass != .regular, !p.isEmpty { unified.drawer.close() }
                 #endif
                 spaceAt = spaceAt.filter { $0.key < p.count }
-                if p.isEmpty, !leaving { AppModel.rememberChat(nil); model.chatSwitched = [:] } // back at the list: next launch starts here
+                // Back at the list: next launch starts here. Not the Persona tab's page (#4206): its path is Persona's.
+                if p.isEmpty, !leaving, takesAgents { AppModel.rememberChat(nil); model.chatSwitched = [:] }
             }
             .onChange(of: model.agentsListReveal) { _, request in
                 // The Sidebar layout: Agents is a part of the sidebar, not a page: choosing it shows that part, and
-                // the page beside it stays (#6332).
-                if let unified {
+                // the page beside it stays (#6332). The Persona tab's page leaves it to the Agents tab's (#4206), which
+                // goes back to its list as the Separate layout's did.
+                if unified?.part == .persona { return }
+                if let unified, unified.part == .whole {
                     #if os(iOS)
                     if widthClass != .regular { unified.drawer.open() } // on a phone the sidebar is the drawer
                     #endif
@@ -515,7 +529,7 @@ struct ChatsView: View {
                 // did not show. The old tree's page, living on a moment, leaves it to this one (`leaving`).
                 // Still the same chat a turn later: going back runs onAppear before onChange(path) forgets it (#1868).
                 // Not over a personal agent's conversation asked for (#4519): that one is what the app came up for.
-                if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, model.selectedTab == .chats,
+                if takesAgents, path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, model.selectedTab == .chats,
                    let v = AppModel.rememberedChat {
                     let request = model.agentsNavigationRevision
                     DispatchQueue.main.async {
@@ -554,7 +568,7 @@ struct ChatsView: View {
     @ViewBuilder private var agentsColumn: some View {
         #if os(iOS)
         if let unified {
-            UnifiedSidebarColumn(state: unified) { rows in agentsList(rows: AnyView(rows)) }
+            UnifiedSidebarColumn(state: unified) { rows in agentsList(rows: rows.map { AnyView($0) }) }
                 .toolbarVisibility(.hidden, for: .navigationBar)
         } else {
             agentsList(rows: nil)
@@ -575,7 +589,7 @@ struct ChatsView: View {
     /// the path and the stack fell apart, the stack left with a page of nothing over the list under the shell's bar,
     /// which shows at the root only (#1941, AgentsPushPopRaceTests). Once it is still, at once.
     private func takeOpenChat() {
-        guard model.openChat != nil else { return }
+        guard model.openChat != nil, takesAgents else { return }
         stackStill.whenStill { pushOpenChat() }
     }
 
@@ -665,7 +679,7 @@ struct ChatsView: View {
     /// A personal agent's conversation asked for from outside (a Spotlight result, #4519): once the stack is still, as
     /// `takeOpenChat`.
     private func takeOpenPersonalAgent() {
-        guard model.openPersonalAgent != nil else { return }
+        guard model.openPersonalAgent != nil, takesAgents else { return }
         stackStill.whenStill { pushOpenPersonalAgent() }
     }
 
@@ -4545,19 +4559,21 @@ private struct UnifiedFront: ViewModifier {
 
     func body(content: Content) -> some View {
         if let unified {
+            // The tab follows what is in front in the Sidebar layout; in the Separate layout's tabs the tab bar sets it.
+            let follows = unified.part == .whole
             content
                 .onChange(of: atRoot) { _, root in
                     unified.atRoot = root
                     if root {
                         unified.shownPlace = nil
-                        if model.selectedTab != .assistant { model.selectedTab = .assistant }
+                        if follows, model.selectedTab != .assistant { model.selectedTab = .assistant }
                     }
                 }
                 .onChange(of: model.visibleSession) { _, key in
                     // An Agent's chat in front (not one of Persona's): no place is shown, and the tab is Agents'.
                     guard let key, model.session(key)?.assistant != true, !atRoot else { return }
                     unified.shownPlace = nil
-                    if model.selectedTab != .chats { model.selectedTab = .chats }
+                    if follows, model.selectedTab != .chats { model.selectedTab = .chats }
                 }
         } else {
             content

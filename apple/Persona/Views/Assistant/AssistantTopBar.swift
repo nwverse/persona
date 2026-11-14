@@ -278,11 +278,16 @@ struct AssistantTopBar: View {
     }
 
     private var classicBar: some View {
-        // On a phone's tabs the column's own button folds it, at its top: this one only brings it back, and is not there
-        // while the column is out. Left out, not faded: a glass button made see-through (or slid away) while the split
-        // moved its columns left the page taking no touches at all on iPhone Duo open (2026-11-10).
-        let sidebarButtonShown = !(pageTabSwitch && sidebarIsColumn && sidebarShown)
+        // On a phone's tabs, and beside the one sidebar's column (#4206), the column's own button folds it, at its top:
+        // this one only brings it back, and is not there while the column is out. Left out, not faded: a glass button
+        // made see-through (or slid away) while the split moved its columns left the page taking no touches at all on
+        // iPhone Duo open (2026-11-10).
+        let sidebarButtonShown = !((pageTabSwitch || sidebarCounts) && sidebarIsColumn && sidebarShown)
         return HStack(alignment: .top) {
+            if !sidebarButtonShown && newChatInSidebar {
+                // Its room kept, empty, as New Chat's on the other side: the face stays in the middle.
+                Color.clear.scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget).accessibilityHidden(true)
+            }
             if sidebarButtonShown {
                 GlassEffectContainer {
                     Self.circle(sidebarIsColumn ? Theme.Icon.sidebar : Theme.Icon.sidebarMenu, label: String(localized: "Chat History [Shell Components 60636b]"), id: "assistant-sidebar-button") {

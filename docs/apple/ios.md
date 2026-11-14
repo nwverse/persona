@@ -770,7 +770,9 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   (`AssistantTopBar.room`, Agents' list `room`, Messages' top inset), so the content starts at the top. Menus (tapping the chosen segment), the badge and the drawer work as before; horizontal bars
   (ordinary iPhone, inner portrait) are unchanged. The rail measures the column as the page's width with the side's safe area less its width without: a `GeometryReader` that
   ignores the safe area reports no inset of its own on that edge.
-- **The inner screen's tabs** (#2623, 2026-11-10, the user, after ChatGPT's open layout): on a phone at regular width (iPhone Duo open, either way up; the iPhone app is upright only) `RootTabs`
+- **The inner screen's tabs** (#2623, 2026-11-10, the user, after ChatGPT's open layout; replaced on 2026-11-14 by the
+  Separate layout's new look, #4206, "Sidebar layout (#6332)": the system's tab bar, the one sidebar's column. What follows is
+  the history): on a phone at regular width (iPhone Duo open, either way up; the iPhone app is upright only) `RootTabs`
   hides the system tab bar, which iOS drew down the side with the switch at its foot, and the pages draw `ShellSwitch` at their top (`pageTabSwitch`): Assistant in its floating bar in the face's place
   (tapping the chosen Assistant opens the face's menu, as in the shell; the link's state and a copy's confirmation show under it), Agents and Messages as a row over the page column
   (`PageTabSwitchRow`; Agents' list options stay on the list's ⋯). Assistant's sidebar column has the button that folds it at its top trailing corner, where Search was (`collapse`); the page's
@@ -906,8 +908,18 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   noted); `.feishu` opens Messages; `.settings` is the sheet over what is in front. Choosing Agents by itself
   (`agentsListReveal`) scrolls the sidebar to the Agents' heading and leaves the page beside it. `selectedTab` follows
   what is in front, so a relaunch goes back to the Agent's chat that was open.
-- The Separate layout's views take the same code with the Sidebar layout's parts off: the whole `AssistantSidebar`,
-  `RootTabs` and the shell are drawn as before (pixel comparisons in #6332's PR).
+- **The Separate layout at regular width** (#4206, the owner's new look; it replaced #6332's pixel-for-pixel tabs and
+  #2623's switch drawn on the open Duo's pages): the system's tab bar (at the top on the iPad, down the side on the open
+  Duo on its side), each tab the same column with its part of the one sidebar (`UnifiedSidebar.Part`), its own selection
+  and its own page: Persona's tab the head, the main conversation, the pages and Persona's chats (in a list of their own,
+  `personaList`), Persona's page beside it; the Agents tab the head and the Agents list, the "Choose an Agent" page beside
+  it. Both feet are the Sidebar layout's (New Chat, Search, Settings); the Agents tab's New Chat and places open on
+  Persona's tab. Each tab's column is kept as before (`assistant.list`, `agents.list`); an Agent asked for from outside
+  opens on the Agents tab only. At compact width the shell is drawn as before.
+- **The head's fold** (both layouts, beside a page; #4206 as the earlier one sidebar had it): the column's head ends in
+  the button that folds it (`sidebar-fold-column`, `AssistantSidebar.foldColumn`); the page's sidebar button only shows
+  while the column is away, to bring it back, its place kept empty meanwhile so the face stays in the middle. In the
+  phone's drawer the face opens it, as before.
 - Tests: `SidebarLayoutRoutingTests` (the router), `SidebarLayoutTests` (iPad UI: the column, a pick replacing the
   page, the routes), `SidebarLayoutPhoneTests` (iPhone UI: the drawer, a pick replacing the page, the face where a back
   would be, the setting switching both ways at once, nothing picked: Separate). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout, `-app.navigation ""` with nothing picked; `-openAppearance navigation` opens

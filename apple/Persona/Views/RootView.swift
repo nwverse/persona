@@ -300,6 +300,12 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
     #if os(iOS)
     @State private var pad = PadRouter()
+    /// The Separate layout's tabs in the new look (#4206): each its own part of the one sidebar's column, its own
+    /// selection, beside its own page.
+    @State private var personaPart = UnifiedSidebar(part: .persona)
+    @State private var agentsPart = UnifiedSidebar(part: .agents)
+    /// Where the system puts its bars down the side (the open iPhone Duo on its side): the columns' top margin there.
+    @State private var barEdge: HorizontalEdge?
     #endif
 
     var body: some View {
@@ -307,8 +313,13 @@ struct RootView: View {
         let _ = PerfTrace.body("RootTabs")
         #endif
         TabView(selection: Binding(get: { model.selectedTab }, set: { model.selectHomeTab($0) })) {
+            #if os(iOS)
+            AssistantRootTab(part: personaPart)
+            AgentsRootTab(part: agentsPart)
+            #else
             AssistantRootTab()
             AgentsRootTab()
+            #endif
             #if os(iOS) || os(visionOS)
             if LarkHomePreference.shared.shows { FeishuRootTab() }
             #endif
@@ -318,6 +329,8 @@ struct RootView: View {
             #endif
         }
         #if os(iOS)
+        .environment(\.splitSideBars, barEdge != nil) // the columns' top margin under side bars (#4853)
+        .readsVerticalBarEdge($barEdge)
         .modifier(PadRoutes(router: pad))
         #endif
     }
@@ -482,16 +495,6 @@ struct PageTabSwitchInset: ViewModifier {
     }
 }
 
-/// A phone's tabs (`pageTabSwitch`): no tab bar; the pages draw the switch.
-private struct PageTabSwitch: ViewModifier {
-    func body(content: Content) -> some View {
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            content.toolbarVisibility(.hidden, for: .tabBar).environment(\.pageTabSwitch, true)
-        } else {
-            content
-        }
-    }
-}
 #endif
 
 /// One tree RootView builds: the shell or the tabs, built again by a fold or an unfold, and by a new look.
@@ -547,6 +550,10 @@ private struct TabPage<Page: View>: View, Equatable {
 
 @MainActor private struct AssistantRootTab: TabContent {
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    /// The Persona tab's part of the one sidebar (#4206).
+    let part: UnifiedSidebar
+    #endif
 
     var body: some TabContent<AppTab> {
         #if DEBUG || PERF_SIGNPOST
@@ -554,10 +561,15 @@ private struct TabPage<Page: View>: View, Equatable {
         #endif
         Tab("Persona", systemImage: Theme.Icon.ai, value: AppTab.assistant) {
             TabPage {
+                #if os(iOS)
+                // The Separate layout in the new look (#4206): the one sidebar's column with Persona's part, Persona's
+                // page beside it (the Agents page's split, as the Sidebar layout's), the system's tab bar kept.
+                ChatsView()
+                    .environment(\.unifiedSidebar, part)
+                    .modifier(TabActivityScope(tab: .assistant))
+                #else
                 AssistantView()
                     .modifier(TabActivityScope(tab: .assistant))
-                #if os(iOS)
-                    .modifier(PageTabSwitch())
                 #endif
                 #if PERF_SIGNPOST
                     .modifier(PerfTabMount("assistant"))
@@ -571,6 +583,10 @@ private struct TabPage<Page: View>: View, Equatable {
 
 @MainActor private struct AgentsRootTab: TabContent {
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    /// The Agents tab's part of the one sidebar (#4206).
+    let part: UnifiedSidebar
+    #endif
 
     var body: some TabContent<AppTab> {
         #if DEBUG || PERF_SIGNPOST
@@ -579,10 +595,11 @@ private struct TabPage<Page: View>: View, Equatable {
         Tab("Agents", systemImage: Theme.Icon.agents, value: AppTab.chats) {
             TabPage {
                 ChatsView()
-                    .modifier(TabActivityScope(tab: .chats))
                 #if os(iOS)
-                    .modifier(PageTabSwitch())
+                    // The Separate layout in the new look (#4206): the one sidebar's column with the Agents' part.
+                    .environment(\.unifiedSidebar, part)
                 #endif
+                    .modifier(TabActivityScope(tab: .chats))
                 #if PERF_SIGNPOST
                     .modifier(PerfTabMount("agents"))
                 #endif
@@ -655,10 +672,9 @@ nonisolated struct ConnectionShown: Encodable, Equatable {
     var body: some TabContent<AppTab> {
         Tab(String(localized: "Messages [Quote Views 4da199]"), systemImage: Theme.Icon.feishuChats, value: AppTab.feishu) {
             TabPage {
+                // The system's tab bar on every tab, the open iPhone Duo's too (#4206): no Assistant | Agents switch drawn
+                // on the pages.
                 LarkConversationsView().modifier(TabActivityScope(tab: .feishu))
-                #if os(iOS)
-                    .modifier(PageTabSwitch())
-                #endif
             }
             .equatable()
         }

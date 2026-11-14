@@ -79,7 +79,7 @@ final class IPadSidebarTests: XCTestCase {
             shot("inbox-\(name)")
             // Persona goes back to the conversation.
             main.tap()
-            XCTAssertTrue(element("assistant-sidebar-search").waitForExistence(timeout: 5))
+            XCTAssertTrue(element("sidebar-search").waitForExistence(timeout: 5)) // Search at the column's foot (#4206)
 
             // Settings is a sheet with its ×.
             settings.tap()

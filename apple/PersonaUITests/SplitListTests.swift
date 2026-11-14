@@ -32,7 +32,7 @@ final class SplitListTests: XCTestCase {
     @MainActor func testHidingAndShowingIsRemembered() throws {
         let app = try launch(fresh: true)
         let width = listWidth(app)
-        showButton(app).tap() // the page's sidebar button folds the column too
+        element(app, "sidebar-fold-column").tap() // the column's head folds it; the page's button brings it back
         XCTAssertTrue(element(app, "sidebar-main").until("exists == false OR isHittable == false"), "the column did not go")
         shot(app, "split-hidden-landscape")
         app.terminate()

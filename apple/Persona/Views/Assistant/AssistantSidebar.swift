@@ -803,6 +803,9 @@ struct AssistantSidebar: View {
     var shared: AssistantSidebarUI? = nil
     /// The Sidebar layout: the place shown beside the sidebar, its row shaded as the open conversation's is.
     var shownPlace: ShellPage? = nil
+    /// The one sidebar's column beside a page (#4206): its head's button folds it away, at the head's trailing end, as
+    /// the earlier one sidebar's header had it; the page's own button then only brings it back. nil in the drawer.
+    var foldColumn: (() -> Void)? = nil
     /// The Sidebar layout's folds (the rows part): the places and Persona's chats, remembered on this device.
     @StoredValue("sidebar.fold.places") private var placesFolded = false
     @StoredValue("sidebar.fold.chats") private var chatsFolded = false
@@ -1201,7 +1204,13 @@ extension AssistantSidebar {
                     }
                 } else if part == .header {
                     // The Sidebar layout searches from its foot, over the whole window, Persona's chats and the Agents
-                    // (#4206, the owner): no field here.
+                    // (#4206, the owner): no field here. Beside a page, the button that folds the column.
+                    if let foldColumn {
+                        AssistantTopBar.circle(Theme.Icon.sidebar, label: String(localized: "Hide Sidebar"), id: "sidebar-fold-column") {
+                            Haptics.tap()
+                            foldColumn()
+                        }
+                    }
                 } else if besideBar {
                     // The same button as the top bar's beside it (2026-11-04: on iPhone Duo open, this one stood lower
                     // and larger than Chat History / New Chat in the next column).
