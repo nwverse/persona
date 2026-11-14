@@ -39,19 +39,28 @@ import java.time.ZoneId
 /**
  * The calendar and contact write tools against the phone's real providers. The Robolectric tests only prove the operations
  * the tools generate; whether an OEM Calendar or Contacts provider accepts them (exception URIs, a new series inserted and
- * the old one cut in one batch, back references, expected counts, what the Instances table expands to) can only be shown here.
+ * the old one cut in one batch, back references, expected counts, what the Instances table expands to, how a recurrence date
+ * list is really stored) can only be shown here.
  *
- * Run on a phone or emulator with `scripts/app/android.sh` or `./gradlew :platform:phonetools:connectedDebugAndroidTest`.
- * It is not run by the unit test task and was not run when it was written.
+ * Run it on an emulator or a dedicated test phone, never on a phone in daily use: for the duration of a run a placeholder
+ * calendar and placeholder contacts exist in the real Calendar and Contacts apps. From the `android/` directory:
+ * `./gradlew :platform:phonetools:connectedDebugAndroidTest`. It is not run by the unit test task, and it has not been run
+ * (dependency resolution of the test rule included).
  *
  * The first thing to read from a run is [instancesProjectionAcceptsRruleAndRdate]: it covers the only change to the existing
  * read-only phone_calendar_events query (the RRULE and RDATE projection columns). If it fails, that tool is broken on the
  * device and every other result here is secondary.
  *
- * Test data is placeholder only. Events live in a throwaway local-account calendar ([ACCOUNT]) that the test creates with
- * CALLER_IS_SYNCADAPTER and deletes (with every event in it) afterwards; a run that was killed leaves at most that calendar,
- * which the next run deletes first. Contacts carry the placeholder family name [FAMILY] and are deleted the same way. No
- * real calendar, event or contact is read or changed, and nothing syncs because the account is local.
+ * What the test touches. Everything it writes or deletes is its own: events live in a throwaway local-account calendar
+ * ([ACCOUNT]) that it creates with CALLER_IS_SYNCADAPTER and deletes (with every event in it) afterwards, and contacts carry
+ * the placeholder family name [FAMILY] and are the only ones deleted. A run that was killed leaves at most those two, and the
+ * next run removes them first. What it can only read: the projection test goes through the existing event query, which lists
+ * every calendar on the phone, so it reads (and ignores) real events inside its own small time window. Nothing syncs because
+ * the account is local.
+ *
+ * Recurrence date lists (EXDATE / RDATE) are the part that was inferred rather than seen. The tests that seed them read back
+ * what the provider actually stored and then check behaviour against that stored form; a form the provider refuses to store
+ * is reported as skipped with the provider's own error, never as a pass.
  */
 @RunWith(AndroidJUnit4::class)
 class CalendarContactsProviderTest {
@@ -91,7 +100,7 @@ class CalendarContactsProviderTest {
         val series = seed("Placeholder series", utc("2026-11-10T15:00:00Z"), duration = "PT1H", rrule = "FREQ=DAILY;COUNT=3")
         val extra = seed("Placeholder extra date", utc("2026-11-11T15:00:00Z"), duration = "PT1H", rdate = "20261113T150000Z")
         val result = body(calendarTools.events(buildJsonObject {
-            put("start", "2026-11-09T00:00:00-05:00"); put("end", "2026-11-20T00:00:00-05:00"); put("limit", 200)
+            put("start", "2026-11-09T12:00:00-05:00"); put("end", "2026-11-14T00:00:00-05:00"); put("limit", 200)
         }))
         val events = result.getValue("events").jsonArray.map { it.jsonObject }
         fun byId(id: Long) = events.filter { it.getValue("id").jsonPrimitive.content == id.toString() }
@@ -138,6 +147,39 @@ class CalendarContactsProviderTest {
     }
 
     // MARK: this and future
+
+    @Test fun changingFutureKeepsThePastExceptionItsRowsAndTheSeriesRows() {
+        val series = seedWithRows("Placeholder daily", utc("2026-11-10T15:00:00Z"), "FREQ=DAILY;COUNT=6")
+        // The first occurrence is changed on its own: an exception with its own copy of the attendee and the reminder.
+        calendarTools.update(calendarTools.prepareUpdate(args(
+            "id" to series, "occurrence_start" to "2026-11-10T10:00:00-05:00", "title" to "Placeholder first, renamed")))
+        val pastException = instances().first()
+        assertEquals("Placeholder first, renamed", pastException.title)
+        assertNotEquals(series, pastException.eventId)
+
+        calendarTools.update(calendarTools.prepareUpdate(args(
+            "id" to series, "occurrence_start" to "2026-11-13T10:00:00-05:00", "span" to "future", "title" to "Placeholder new series")))
+
+        val after = instances()
+        assertEquals(List(6) { utc("2026-11-10T15:00:00Z") + it * DAY }, after.map { it.begin })
+        assertEquals(listOf("Placeholder first, renamed") + List(2) { "Placeholder daily" } + List(3) { "Placeholder new series" },
+            after.map { it.title })
+        // The past exception is the same row (not recreated or dropped) and keeps its rows; the old series keeps its rows.
+        assertEquals(pastException.eventId, after.first().eventId)
+        assertEquals(listOf(Calendar.Events.STATUS_CONFIRMED), exceptionsOf(series).map { it.status })
+        assertEquals("attendees on the past exception", 1, count(Calendar.Attendees.CONTENT_URI, Calendar.Attendees.EVENT_ID, pastException.eventId))
+        assertEquals("reminders on the past exception", 1, count(Calendar.Reminders.CONTENT_URI, Calendar.Reminders.EVENT_ID, pastException.eventId))
+        assertEquals("attendees on the old series", 1, count(Calendar.Attendees.CONTENT_URI, Calendar.Attendees.EVENT_ID, series))
+        assertEquals("reminders on the old series", 1, count(Calendar.Reminders.CONTENT_URI, Calendar.Reminders.EVENT_ID, series))
+        // The new series carries one copy of each, and starts at the selected occurrence with the rest of the count.
+        val newSeries = after[3].eventId
+        assertNotEquals(series, newSeries)
+        assertEquals("attendees on the new series", 1, count(Calendar.Attendees.CONTENT_URI, Calendar.Attendees.EVENT_ID, newSeries))
+        assertEquals("reminders on the new series", 1, count(Calendar.Reminders.CONTENT_URI, Calendar.Reminders.EVENT_ID, newSeries))
+        assertEquals("FREQ=DAILY;COUNT=4", row(newSeries).rrule)
+        val oldRule = requireNotNull(row(series).rrule)
+        assertTrue(oldRule, oldRule.contains("UNTIL=") && !oldRule.contains("COUNT="))
+    }
 
     @Test fun deletingFutureKeepsThePastAndAnExceptionInIt() {
         val series = seed("Placeholder daily", utc("2026-11-10T15:00:00Z"), duration = "PT1H", rrule = "FREQ=DAILY;COUNT=6")
@@ -246,6 +288,120 @@ class CalendarContactsProviderTest {
         assertEquals(utc("2027-03-13T00:00:00Z") to utc("2027-03-15T00:00:00Z"), row(spring).start to row(spring).end)
     }
 
+
+    // MARK: a series whose zone is not the phone's, with extra and excluded dates
+
+    /**
+     * Every way an EXDATE / RDATE list could be written for a Berlin series while the tools run in New York. The first reading
+     * of what the provider keeps is the point: the test asserts on the stored text, not on what was sent.
+     */
+    private enum class DateForm(val exdate: String, val rdate: String) {
+        ProviderZonePrefix("Europe/Berlin;20261112T100000,20261116T100000", "Europe/Berlin;20261114T083000,20261121T100000"),
+        IcalendarTzid("TZID=Europe/Berlin:20261112T100000,20261116T100000", "TZID=Europe/Berlin:20261114T083000,20261121T100000"),
+        UtcInstants("20261112T090000Z,20261116T090000Z", "20261114T073000Z,20261121T090000Z"),
+    }
+
+    private data class Stored(val exdate: String?, val rdate: String?, val rrule: String?)
+
+    private fun storedDates(id: Long): Stored = resolver.query(ContentUris.withAppendedId(Calendar.Events.CONTENT_URI, id),
+        arrayOf(Calendar.Events.EXDATE, Calendar.Events.RDATE, Calendar.Events.RRULE), null, null, null)!!.use { cursor ->
+        assertTrue(cursor.moveToFirst())
+        Stored(cursor.getString(0), cursor.getString(1), cursor.getString(2))
+    }
+
+    /** The daily 10:00 Berlin series (09:00Z in November) with the dates of [form], or null when the provider refuses them. */
+    private fun seedBerlin(form: DateForm): Pair<Long, String?>? {
+        val values = eventValues("Placeholder berlin", utc("2026-11-10T09:00:00Z"), duration = "PT1H",
+            rrule = "FREQ=DAILY;COUNT=10", timezone = "Europe/Berlin").apply {
+            put(Calendar.Events.EXDATE, form.exdate); put(Calendar.Events.RDATE, form.rdate)
+        }
+        val id = try {
+            ContentUris.parseId(requireNotNull(resolver.insert(syncAdapter(Calendar.Events.CONTENT_URI), values)))
+        } catch (refused: Exception) {
+            android.util.Log.w(TAG, "the provider refused ${form.name}: $refused")
+            return null
+        }
+        val kept = storedDates(id)
+        return id to "stored exdate=${kept.exdate} rdate=${kept.rdate}"
+    }
+
+    private fun dayTokens(list: String?): List<String> = Regex("""\d{8}""").findAll(list.orEmpty()).map { it.value }.toList()
+
+    /** Whatever precedes the dates of a stored list: a zone with `;`, a `TZID=` with `:` or nothing. */
+    private fun prefixOf(list: String?): String {
+        val text = list.orEmpty()
+        if (text.startsWith("TZID=", ignoreCase = true)) return text.substring(0, text.indexOf(':') + 1)
+        val semicolon = text.indexOf(';')
+        // A date item starts with a digit; a zone name does not.
+        return if (semicolon > 0 && text.first().isLetter()) text.substring(0, semicolon + 1) else ""
+    }
+
+    private fun splitBerlinSeries(form: DateForm) {
+        val (series, description) = seedBerlin(form) ?: run {
+            org.junit.Assume.assumeTrue("the provider refuses the ${form.name} form (see logcat tag $TAG)", false)
+            return
+        }
+        val before = instances()
+        val stored = storedDates(series)
+        android.util.Log.i(TAG, "${form.name}: $description, ${before.size} instances")
+        // The extra date on the selected day is earlier than the selected 10:00 Berlin occurrence: it belongs to the past,
+        // but only if the dates are read in the series zone. Read in the phone's zone (New York) it would look like the future.
+        // What the provider makes of the lists is read, not assumed: the excluded days are gone and the extra ones are there.
+        val begins = before.map { it.begin }
+        assertTrue("the excluded 12th is expanded ($description)", utc("2026-11-12T09:00:00Z") !in begins)
+        assertTrue("the excluded 16th is expanded ($description)", utc("2026-11-16T09:00:00Z") !in begins)
+        assertTrue("the extra date earlier on the 14th is missing ($description)", utc("2026-11-14T07:30:00Z") in begins)
+        assertTrue("the extra date on the 21st is missing ($description)", utc("2026-11-21T09:00:00Z") in begins)
+        val selected = "2026-11-14T10:00:00+01:00"
+        // One hour later in Berlin, so shifted dates show which zone they were read in.
+        val result = body(calendarTools.update(calendarTools.prepareUpdate(args(
+            "id" to series, "occurrence_start" to selected, "span" to "future", "start" to "2026-11-14T11:00:00+01:00",
+            "title" to "Placeholder berlin new"))))
+
+        val newSeries = result.getValue("id").jsonPrimitive.content.toLong()
+        assertNotEquals(series, newSeries)
+        val old = storedDates(series)
+        val new = storedDates(newSeries)
+        // The past stays with the old series: the excluded 12th and the extra date earlier on the 14th. The rest moves on.
+        assertEquals(description, listOf("20261112"), dayTokens(old.exdate))
+        assertEquals(description, listOf("20261114"), dayTokens(old.rdate))
+        assertEquals(description, listOf("20261116"), dayTokens(new.exdate))
+        assertEquals(description, listOf("20261121"), dayTokens(new.rdate))
+        // Whatever shape the provider stored (prefix or none), the tool wrote the same shape back.
+        assertEquals(prefixOf(stored.exdate), prefixOf(old.exdate))
+        assertEquals(prefixOf(stored.exdate), prefixOf(new.exdate))
+        assertEquals(prefixOf(stored.rdate), prefixOf(old.rdate))
+        assertEquals(prefixOf(stored.rdate), prefixOf(new.rdate))
+        // And the provider agrees on what the series now is: the same days, the new series one hour later from the 14th.
+        val after = instances()
+        assertEquals(description, before.take(4).map { it.begin }, after.take(4).map { it.begin })
+        assertEquals(description, "Placeholder berlin", after.first().title)
+        assertTrue(description, after.any { it.eventId == newSeries && it.title == "Placeholder berlin new" })
+        assertTrue(description, after.filter { it.eventId == newSeries }.all { Instant.ofEpochMilli(it.begin).atZone(ZoneId.of("Europe/Berlin")).hour == 11 })
+    }
+
+    @Test fun aBerlinSeriesWithProviderZonePrefixedDatesIsSplitInItsOwnZone() = splitBerlinSeries(DateForm.ProviderZonePrefix)
+    @Test fun aBerlinSeriesWithTzidPrefixedDatesIsSplitInItsOwnZone() = splitBerlinSeries(DateForm.IcalendarTzid)
+    @Test fun aBerlinSeriesWithUtcDatesIsSplitInItsOwnZone() = splitBerlinSeries(DateForm.UtcInstants)
+
+    @Test fun aBerlinSeriesIsCutBeforeTheSelectedOccurrenceWhateverFormTheProviderKept() {
+        var tried = 0
+        for (form in DateForm.entries) {
+            val (series, description) = seedBerlin(form) ?: continue
+            tried++
+            val before = instances()
+            calendarTools.delete(calendarTools.prepareDelete(args(
+                "id" to series, "occurrence_start" to "2026-11-14T10:00:00+01:00", "span" to "future")))
+            val after = instances()
+            // Only what lies before the selected occurrence stays, including the extra date earlier on the same day.
+            val cut = utc("2026-11-14T09:00:00Z")
+            assertEquals(description, before.filter { it.begin < cut }.map { it.begin }, after.map { it.begin })
+            assertTrue(description, after.any { it.begin == utc("2026-11-14T07:30:00Z") })
+            deleteLocalCalendar(); createPlaceholderCalendar()
+        }
+        assertTrue("the provider refused every date list form; read logcat tag $TAG", tried > 0)
+    }
+
     // MARK: expected counts and refusals
 
     @Test fun aWriteToAnEventThatIsGoneFailsInsteadOfSucceedingSilently() {
@@ -304,7 +460,7 @@ class CalendarContactsProviderTest {
         assertEquals("Placeholder nick", nicknameOf(raw))
     }
 
-    @Test fun renamingAContactIsReadBackEvenIfItsAggregateChanges() {
+    @Test fun renamingAContactReadsItBack() {
         val id = body(contactsTools.create(args("given_name" to "Placeholder", "family_name" to FAMILY))).getValue("id").jsonPrimitive.content
         val result = body(contactsTools.update(contactsTools.prepareUpdate(args("id" to id, "given_name" to "Renamed", "replace" to true))))
         assertTrue(result.getValue("name").jsonPrimitive.content.contains("Renamed"))
@@ -445,5 +601,6 @@ class CalendarContactsProviderTest {
         const val ACCOUNT = "persona-write-check"
         const val FAMILY = "Persona-Write-Check"
         const val DAY = 86_400_000L
+        const val TAG = "PersonaProviderCheck"
     }
 }
