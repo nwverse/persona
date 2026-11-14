@@ -98,6 +98,7 @@ func newFSReadLoopFixture(t *testing.T) *fsReadLoopFixture {
 	t.Cleanup(func() {
 		n.release()
 		_ = a.conn.CloseNow()
+		waitHubHandlers(t, h)
 		waitHubWorkers(t, h)
 	})
 	return f
@@ -106,6 +107,17 @@ func newFSReadLoopFixture(t *testing.T) *fsReadLoopFixture {
 func (f *fsReadLoopFixture) watch(t *testing.T, paths ...string) {
 	t.Helper()
 	f.app.send(t, map[string]any{"type": "fs_watch", "machine_id": "m1", "cwd": "/work", "paths": paths})
+}
+
+func waitHubHandlers(t *testing.T, h *Hub) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { h.wsHandlers.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(readLoopLimit):
+		t.Fatal("hub socket handlers did not finish")
+	}
 }
 
 func waitHubWorkers(t *testing.T, h *Hub) {
