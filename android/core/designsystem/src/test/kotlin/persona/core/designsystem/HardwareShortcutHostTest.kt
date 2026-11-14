@@ -200,6 +200,29 @@ class HardwareShortcutHostTest {
         rule.onNodeWithTag("host-with-field").assertIsNotFocused()
     }
 
+    @Test fun aDismissSurfaceKeepsItsFocusedChildWhenTheWindowBecomesLarge() {
+        var large by mutableStateOf(false)
+        rule.setContent {
+            CompositionLocalProvider(LocalLargeWindowInput provides large) {
+                PersonaTheme(darkTheme = false, reduceMotion = true) {
+                    HardwareShortcutHost(Modifier.fillMaxSize(), requestFocusWhenLarge = false) {
+                        Column(Modifier.fillMaxSize().hardwareShortcutDismiss({})) {
+                            val second = remember { FocusRequester() }
+                            LaunchedEffect(Unit) { runCatching { second.requestFocus() } }
+                            BasicTextField("first", {}, Modifier.testTag("first-dismiss-field"))
+                            BasicTextField("second", {}, Modifier.testTag("second-dismiss-field").focusRequester(second))
+                        }
+                    }
+                }
+            }
+        }
+        rule.onNodeWithTag("second-dismiss-field").assertIsFocused()
+        large = true
+        rule.waitForIdle()
+        rule.onNodeWithTag("second-dismiss-field").assertIsFocused()
+        rule.onNodeWithTag("first-dismiss-field").assertIsNotFocused()
+    }
+
     @Test fun mainShellContentSurvivesLargeWindowChanges() {
         var large by mutableStateOf(true)
         var effectStarts = 0

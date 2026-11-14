@@ -92,7 +92,11 @@ fun Modifier.hardwareShortcutDismiss(onDismiss: () -> Unit): Modifier = hardware
 
 /** Register help in this surface's own dialog window when it has one. */
 fun Modifier.hardwareShortcutDismiss(onDismiss: () -> Unit, helpOwner: Any?): Modifier = composed {
-    val controller = LocalHardwareShortcutController.current ?: return@composed this
+    // Tracked in every window size, so a child's focus is known when a compact window becomes large.
+    var focusWithin by remember { mutableStateOf(false) }
+    val currentFocusWithin by rememberUpdatedState(focusWithin)
+    val tracked = onFocusChanged { focusWithin = it.hasFocus }
+    val controller = LocalHardwareShortcutController.current ?: return@composed tracked
     val currentDismiss by rememberUpdatedState(onDismiss)
     val token = remember { Any() }
     val focus = remember { FocusRequester() }
@@ -100,6 +104,7 @@ fun Modifier.hardwareShortcutDismiss(onDismiss: () -> Unit, helpOwner: Any?): Mo
         val registration = controller.register(token) { currentDismiss() }
         onDispose { controller.unregister(registration) }
     }
-    LaunchedEffect(controller, token) { runCatching { focus.requestFocus() } }
-    onKeyEvent { controller.handle(it, helpOwner) }.focusRequester(focus).focusable()
+    // Becoming a large window registers this surface again; a child that already holds focus keeps it.
+    LaunchedEffect(controller, token) { if (!currentFocusWithin) runCatching { focus.requestFocus() } }
+    tracked.onKeyEvent { controller.handle(it, helpOwner) }.focusRequester(focus).focusable()
 }
