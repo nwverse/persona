@@ -417,6 +417,9 @@ final class TasksStore {
     }
 
     func later(_ cardID: String) { laterMessages.insert(cardID) }
+    /// Put off with Later, by the card's own id: Needs You and the chat's feed both ask this, so a card whose Inbox item
+    /// (`ref`) differs from its id leaves both (#6002).
+    func isLater(_ card: FeedItem) -> Bool { laterMessages.contains(card.id) }
     /// A card put off with Later, opened again (a hand-off card's one line, #5932).
     func unlater(_ cardID: String) { laterMessages.remove(cardID) }
 
