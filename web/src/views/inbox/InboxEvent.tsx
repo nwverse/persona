@@ -48,7 +48,7 @@ export function EventMark({ it }: { it: InboxItem }) {
     const working = key === "queued" || key === "looking" || key === "agent_working";
     const icon = key === "waiting" ? "clock" : working ? "spinner" : needsYou ? "needs-you" : key.startsWith("done_") ? "check" : "none";
     return (
-      <p className={cx("flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap", key === "failed" ? "text-red" : isDone(it) ? "text-ink-3" : "text-ink-2")} data-event-mark="now" data-event-icon={icon}>
+      <p className={cx("flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap", key === "failed" ? "text-red" : isDone(it) ? "text-ink-3" : "text-ink-2")} data-event-mark="now" data-event-icon={icon}>
         {icon === "clock" && <Icon name="clock" size={12} className="shrink-0 text-ink-3" />}
         {icon === "spinner" && <Spinner size={11} />}
         {/* failed keeps the Needs-you shape, but both its mark and its words use the danger color */}
@@ -66,7 +66,7 @@ export function EventMark({ it }: { it: InboxItem }) {
     // An older hub keeps the manager-done line alone.
     if (it.done_by !== "manager") return null;
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-ink-3" data-event-mark="manager-done">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap text-ink-3" data-event-mark="manager-done">
         <Icon name="check" size={12} stroke={2.4} className="shrink-0" />
         <span className="truncate">{t("inbox-inboxevent.manager_done")}</span>
       </p>
@@ -75,7 +75,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   const s = it.suggestion;
   if (s) {
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap" data-event-mark="suggestion">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap" data-event-mark="suggestion">
         <span className="shrink-0 font-medium text-accent-ink"><Spark />{suggestionTitle(s)}</span>
         <span className="min-w-0 truncate text-ink-2">{firstLine(s.text)}</span>
       </p>
@@ -83,7 +83,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   }
   if (preparing(it)) {
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap" data-event-mark="preparing">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap" data-event-mark="preparing">
         <Spinner size={11} />
         <Shimmer className="truncate">{t("inbox-inboxevent.preparing")}</Shimmer>
       </p>
@@ -91,7 +91,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   }
   if (handlingFailed(it)) {
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-red" data-event-mark="failed">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap text-red" data-event-mark="failed">
         <Icon name="warning" size={12} className="shrink-0" />
         <span className="truncate">{t("inbox-inboxevent.failed_short")}</span>
       </p>
@@ -101,7 +101,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   if (!oldWord) return null;
   const waiting = it.handling?.state === "waiting";
   return (
-    <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-ink-2" data-event-mark="working">
+    <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap text-ink-2" data-event-mark="working">
       {waiting ? <Icon name="clock" size={12} className="shrink-0 text-ink-3" /> : <Spinner size={11} />}
       <span className="truncate">{oldWord}</span>
     </p>
@@ -120,11 +120,12 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
   // capped above the source: its bottom fades while there is more below, so a cut-off row reads as more to scroll to
   const box = useRef<HTMLDivElement>(null);
   const fold = useFoldScroll(box, embedded, [item]);
+  const hasConversation = Boolean(item.handling?.machine_id && item.handling.session_id);
   const body = (
     <div ref={box} {...fold} className={embedded ? "min-h-0 overflow-y-auto" : "min-h-0 flex-1 overflow-y-auto"} data-event-body={embedded ? "embedded" : ""}>
       <div className={cx("mx-auto flex max-w-[760px] flex-col px-4 sm:px-6", embedded ? "gap-3 py-3" : "gap-4 py-4")}>
-        {(!done || now !== undefined) && <HandlingLine item={item} now={now} />}
-        {done && now === undefined && item.done_by === "manager" && (
+        {(!done || now !== undefined || hasConversation) && <HandlingLine item={item} now={now} />}
+        {done && now === undefined && item.done_by === "manager" && !hasConversation && (
           <p className="flex items-center gap-2 text-[12.5px] text-ink-2" data-event-manager-done>
             <Icon name="check" size={13} stroke={2.4} className="shrink-0 text-green" />
             {t("inbox-inboxevent.manager_done")}
@@ -141,7 +142,7 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
             )}
             {item.recap && (
               <div>
-                <p className="text-[11.5px] font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
+                <p className="text-submeta font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
                 <p className="mt-0.5 text-meta leading-relaxed whitespace-pre-wrap text-ink-2" data-event-recap>{item.recap}</p>
               </div>
             )}
@@ -167,8 +168,9 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   const done = isDone(item);
   const canSay = !done && !item.suggestion;
   const failed = canSay && (handlingFailed(item) || item.now === "failed");
+  const showPreparing = !done && preparing(item);
   if (!h && !canSay && now === undefined) return null;
-  const word = now ?? handlingWord(item);
+  const word = now ?? (done ? (item.done_by === "manager" ? t("inbox-inboxevent.manager_done") : undefined) : handlingWord(item));
   const working = h?.state === "looking" || h?.state === "agent";
   const to = h?.machine_id && h.session_id ? conversation(h.machine_id, h.session_id) : undefined;
   const instruct = async (words: string) => {
@@ -203,10 +205,10 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   ) : null);
   const showSay = sayOpen && canSay && !failed;
   const actions = (open || action) ? <div className="flex shrink-0 items-center gap-2" data-event-status-actions>{open}{action}</div> : null;
-  if (!preparing(item) && !failed && !word && !action && !showSay) return null;
+  if (!showPreparing && !failed && !word && !(done && open) && !action && !showSay) return null;
   return (
     <div className="flex flex-col gap-2">
-      {preparing(item) ? (
+      {showPreparing ? (
         <div className="flex min-w-0 flex-col gap-2 rounded-[10px] bg-inset p-3 text-[12.5px] shadow-hairline sm:flex-row sm:items-center" data-event-preparing>
           <div className="flex min-w-0 items-center gap-2 sm:flex-1">
             <Spinner size={12} />
@@ -230,7 +232,7 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
           </div>
           {actions}
         </div>
-      ) : action ? <div className="flex justify-end gap-2">{open}{action}</div> : null}
+      ) : (done && open) || action ? <div className="flex justify-end gap-2">{open}{action}</div> : null}
       {showSay && (
         <div className="flex flex-col gap-2" data-event-say>
           <label className="flex h-8 items-center gap-2 rounded-control bg-field px-2.5 focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
@@ -289,7 +291,7 @@ function TodoSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   const field = "h-8 rounded-control bg-field px-2.5 text-meta text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
   return (
     <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion="todo">
-      <p className="flex items-center gap-1.5 text-[11.5px] font-medium whitespace-nowrap text-accent-ink"><span><Spark />{suggestionTitle(s)}</span></p>
+      <p className="flex items-center gap-1.5 text-submeta font-medium whitespace-nowrap text-accent-ink"><span><Spark />{suggestionTitle(s)}</span></p>
       <input value={title} onChange={(e) => setTitle(e.target.value)} aria-label={t("inbox-inboxevent.todo_title")} className={cx(field, "mt-2 w-full")} data-todo-title />
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <input type="date" value={day} onChange={(e) => setDay(e.target.value)} aria-label={t("inbox-inboxevent.todo_day")} className={field} data-todo-day />
@@ -345,7 +347,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   const edited = text.trim() && text !== s.text ? text : undefined;
   return (
     <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion={s.kind} data-handback={s.handback ? "" : undefined}>
-      <p className="flex items-center gap-1.5 text-[11.5px] font-medium whitespace-nowrap text-accent-ink">
+      <p className="flex items-center gap-1.5 text-submeta font-medium whitespace-nowrap text-accent-ink">
         <span><Spark />{suggestionTitle(s)}</span>
         {s.handback && <span className="text-ink-3">· {t("inbox-inboxevent.handback")}</span>}
       </p>
@@ -387,7 +389,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
         <>
           <p className="mt-1.5 text-meta leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{s.text}</p>
           {(s.changes ?? []).map((c) => (
-            <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-[11.5px] text-ink-2">
+            <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-submeta text-ink-2">
               <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />
               <span className="truncate">{docChangeLine(c, item.doc)}</span>
             </p>
@@ -464,6 +466,14 @@ function ChainIcon({ item, e }: { item: InboxItem; e: ChainEntry }) {
   );
 }
 
+/** The Agent session a step links, or none for the processing conversation and non-Agent steps. */
+function agentSession(e: ChainEntry): { key: string; machine: string; session: string } | undefined {
+  if (e.kind !== "agent" && e.kind !== "agent_stopped") return undefined;
+  const link = e.link as Record<string, unknown> | undefined;
+  if (link?.type !== "session" || typeof link.machine_id !== "string" || typeof link.session_id !== "string") return undefined;
+  return { key: `${link.machine_id}\u0000${link.session_id}`, machine: link.machine_id, session: link.session_id };
+}
+
 /** The handling chain: folded to the three newest entries, "Show all (N)" shows them all, oldest first. */
 export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: SourceAt) => void }) {
   const view = useInboxView();
@@ -481,6 +491,11 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
   const all = item.chain ?? [];
   if (!all.length) return null;
   const rows = chainRows(all, open);
+  const latestAgent = new Map<string, string>();
+  for (const e of all) {
+    const link = agentSession(e);
+    if (link) latestAgent.set(link.key, e.id);
+  }
   const tap = (x: ChainTap) => {
     if (x.kind === "source") {
       if (x.url) {
@@ -491,18 +506,17 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
     } else if (x.kind === "route") openFromInbox(x.route);
   };
   const agentState = (e: ChainEntry) => {
-    if (e.kind !== "agent" && e.kind !== "agent_stopped") return undefined;
-    const link = e.link as Record<string, unknown> | undefined;
-    if (link?.type !== "session" || typeof link.machine_id !== "string" || typeof link.session_id !== "string") return undefined;
-    const session = sessions[link.machine_id]?.find((s) => s.session_id === link.session_id);
+    const link = agentSession(e);
+    if (!link || latestAgent.get(link.key) !== e.id) return undefined;
+    const session = sessions[link.machine]?.find((s) => s.session_id === link.session);
     return session ? stateName(stateOf(session)) : undefined;
   };
   return (
     <section data-event-chain>
       <div className="flex items-center gap-2 pb-1">
-        <p className="min-w-0 flex-1 text-[11.5px] font-medium whitespace-nowrap text-ink-3">{t("inbox-inboxevent.chain")}</p>
+        <p className="min-w-0 flex-1 text-submeta font-medium whitespace-nowrap text-ink-3">{t("inbox-inboxevent.chain")}</p>
         {all.length > 3 && (
-          <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="h-6 shrink-0 rounded-[6px] px-1.5 text-[11.5px] font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink" data-chain-toggle>
+          <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="h-6 shrink-0 rounded-[6px] px-1.5 text-submeta font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink" data-chain-toggle>
             {open ? t("inbox-inboxevent.chain_collapse") : t("inbox-inboxevent.chain_expand", { count: all.length })}
           </button>
         )}
@@ -531,11 +545,11 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
           aria-expanded={!goes && expandable ? open : undefined}
           className={cx("flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-[12.5px]", goes || expandable ? cx("hover:bg-field", reported ? "text-ink-2" : "text-ink") : cx("cursor-default", reported ? "text-ink-2" : "text-ink"))}
         >
-          <span className="min-w-[34px] shrink-0 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums">{chainTime(e.at)}</span>
+          <span className="min-w-[34px] shrink-0 text-submeta whitespace-nowrap text-ink-3 tabular-nums">{chainTime(e.at)}</span>
           <ChainIcon item={item} e={e} />
           {reported && <Tag>{t("inbox-inboxdetail.assistant_says")}</Tag>}
           <span className="min-w-0 flex-1 truncate">{text}</span>
-          {agentState && <span className="shrink-0 text-[11.5px] whitespace-nowrap text-ink-3" data-chain-agent-state>{agentState}</span>}
+          {agentState && <span className="shrink-0 text-submeta whitespace-nowrap text-ink-3" data-chain-agent-state>{agentState}</span>}
           {goes && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />}
           {!goes && expandable && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />}
         </button>
@@ -568,7 +582,7 @@ function Related({ item }: { item: InboxItem }) {
   if (!list.length) return null;
   return (
     <section data-event-related>
-      <p className="pb-1 text-[11.5px] font-medium text-ink-3">{t("inbox-inboxevent.related")}</p>
+      <p className="pb-1 text-submeta font-medium text-ink-3">{t("inbox-inboxevent.related")}</p>
       <ul className="flex flex-col gap-0.5">
         {list.map((r) => (
           <li key={r.id}>
