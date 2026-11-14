@@ -152,7 +152,9 @@ internal class ContactsTool(
             updateWrites(prepared).ifEmpty { throw PhoneToolWriteRefusal(staleContactMessage) }
         }
         backend.apply(writes)
-        return PhoneToolResult.text((backend.contact(snapshot.contactId) ?: error("The changed contact could not be read back")).toString())
+        // A changed name can re-aggregate the raw contact into another contact: read back through the raw contact, as create does.
+        val contactId = backend.contactId(snapshot.rawContactId) ?: error("The changed raw contact has no aggregate contact id")
+        return PhoneToolResult.text((backend.contact(contactId) ?: error("The changed contact could not be read back")).toString())
     }
 
     /** The provider operations of an approved edit; pure, so the card's plan and the executed batch cannot differ. */

@@ -182,6 +182,17 @@ class ContactsWriteToolsTest {
         assertTrue(backend.batches.isEmpty())
     }
 
+    @Test fun aRenameThatReAggregatesStillReadsTheContactBackByItsNewId() {
+        backend.current = existing
+        val prepared = tools.prepareUpdate(args("id" to "5", "given_name" to "Bea", "replace" to true))
+        // The provider merged the raw contact into another aggregate; the id the user searched with no longer exists.
+        backend.aggregateId = 9
+        val result = tools.update(prepared)
+        assertEquals(1, backend.batches.size)
+        val text = result.content.single().jsonObject.getValue("text").jsonPrimitive.content
+        assertEquals("9", kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject.getValue("id").jsonPrimitive.content)
+    }
+
     @Test fun aBatchFailureIsLeftToTheRegistryToAnswerUncertain() {
         backend.current = existing
         val prepared = tools.prepareUpdate(args("id" to "5", "company" to "Beta", "replace" to true))
@@ -235,9 +246,12 @@ internal class FakeContactsBackend : ContactsBackend {
     var reads = 0
 
     override fun snapshot(contactId: Long): ContactSnapshot? { reads++; return current?.takeIf { it.contactId == contactId } }
-    override fun contactId(rawContactId: Long): Long? = 5
+    /** The aggregate the raw contact belongs to now: a rename can re-aggregate it, after which the old id is gone. */
+    var aggregateId = 5L
+    override fun contactId(rawContactId: Long): Long? = aggregateId
     override fun contact(contactId: Long): JsonObject? {
         reads++
+        if (contactId != aggregateId) return null
         return buildJsonObject { put("id", contactId.toString()); put("name", "Ann Lee") }
     }
 
