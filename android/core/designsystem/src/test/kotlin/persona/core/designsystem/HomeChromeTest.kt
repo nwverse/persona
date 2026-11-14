@@ -450,7 +450,7 @@ class HomeChromeTest {
     }
 
     @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-xhdpi")
-    @Test fun glass240Dp145KeepsMainFontSizeWithoutEllipsis() {
+    @Test fun glass240Dp145UsesBaseSizeWhenItFits() {
         var expectedSize = 0f
         rule.setContent {
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = 1.45f)) {
@@ -458,8 +458,9 @@ class HomeChromeTest {
                     val density = LocalDensity.current
                     val scale = (density.fontScale * HomeTokens.shellTextStep).coerceAtMost(HomeTokens.shellScaleMaximum)
                     val base = PersonaTheme.type.body
-                    val labelStyle = base.copy(fontSize = base.fontSize * HomeTokens.shellTextStep)
-                    val measured = androidx.compose.ui.text.rememberTextMeasurer().measure("Assistant", style = labelStyle, maxLines = 1)
+                    val labelStyle = base.copy(fontSize = base.fontSize * HomeTokens.shellTextStep,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    val measured = androidx.compose.ui.text.rememberTextMeasurer().measure("Agents", style = labelStyle, maxLines = 1)
                     val available = with(density) { (HomeTokens.segmentWidth * scale).toPx() }
                     val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
                     expectedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit) * density.fontScale
@@ -481,27 +482,24 @@ class HomeChromeTest {
             }
         }
         val layouts = mutableListOf<TextLayoutResult>()
-        placedText("Assistant", useUnmergedTree = true)
+        placedText("Agents", useUnmergedTree = true)
             .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         val result = layouts.single()
-        assertTrue("Assistant is ellipsized at 240dp / 1.45", !result.isLineEllipsized(0))
+        assertTrue("Agents is ellipsized at 240dp / 1.45", !result.isLineEllipsized(0))
         assertEquals("240dp / 1.45 shrank below main", expectedSize,
             result.layoutInput.style.fontSize.value * result.layoutInput.density.fontScale, 0.001f)
     }
 
     @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-xhdpi")
-    @Test fun narrowLabelEllipsisMatchesPublishedRevision() {
-        var style by mutableStateOf(AppStyle.Glass)
-        var width by mutableStateOf(200.dp)
-        var fontScale by mutableStateOf(1.3f)
+    @Test fun glassStackedWithoutBadgeKeepsCellsEqualAndInsideContent() {
         rule.setContent {
-            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = fontScale)) {
-                PersonaTheme(style = style, reduceMotion = true) {
-                    Box(Modifier.width(width).height(220.dp)) {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = 1.3f)) {
+                PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                    Box(Modifier.width(220.dp).height(160.dp).testTag("pane")) {
                         HomeNavigation(
                             items = listOf(
                                 NavItem("assistant", "Assistant", PhIcons.ChatCircle),
-                                NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
+                                NavItem("agents", "Agents", PhIcons.Robot),
                             ),
                             selected = "agents", onSelect = {},
                             leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {}) },
@@ -514,18 +512,53 @@ class HomeChromeTest {
                 }
             }
         }
-        for (s in AppStyle.entries) for (w in listOf(200.dp, 240.dp, 280.dp)) for (scale in listOf(1.3f, 1.45f, 2f)) {
-            rule.runOnIdle { style = s; width = w; fontScale = scale }
+        val pane = rule.onNodeWithTag("pane").getBoundsInRoot()
+        val switcher = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+        val assistant = rule.onNodeWithText("Assistant").getBoundsInRoot()
+        val agents = rule.onNodeWithText("Agents").getBoundsInRoot()
+        assertEquals("stacked cells must have equal widths", assistant.right - assistant.left, agents.right - agents.left)
+        assertTrue("capsule exceeds content width: $pane / $switcher",
+            switcher.left >= pane.left + Tokens.Space.l && switcher.right <= pane.right - Tokens.Space.l)
+    }
+
+    @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-xhdpi")
+    @Test fun narrowLabelEllipsisMatrix() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var width by mutableStateOf(200.dp)
+        var fontScale by mutableStateOf(1.3f)
+        var badge by mutableStateOf(0)
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = fontScale)) {
+                PersonaTheme(style = style, reduceMotion = true) {
+                    Box(Modifier.width(width).height(220.dp)) {
+                        HomeNavigation(
+                            items = listOf(
+                                NavItem("assistant", "Assistant", PhIcons.ChatCircle),
+                                NavItem("agents", "Agents", PhIcons.Robot, badge = badge),
+                            ),
+                            selected = "agents", onSelect = {},
+                            leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {}) },
+                            trailing = {
+                                JIconButton(PhIcons.NotePencil, "New session", {})
+                                JIconButton(PersonaIcons.moreMenu, "List options", {})
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        for (badgeValue in listOf(0, 2)) for (s in AppStyle.entries) for (w in listOf(200.dp, 220.dp, 240.dp, 280.dp)) for (scale in listOf(1.3f, 1.45f, 2f)) {
+            rule.runOnIdle { badge = badgeValue; style = s; width = w; fontScale = scale }
             rule.waitForIdle()
             val expected = when (s) {
-                AppStyle.Glass -> (scale == 2f && w <= 240.dp) to false
-                AppStyle.Brief -> false to ((w == 200.dp && scale >= 1.45f) || (w == 240.dp && scale == 2f))
-                AppStyle.Board -> ((w == 200.dp && scale >= 1.45f) || (w == 240.dp && scale == 2f)) to
-                    ((w == 200.dp && scale >= 1.45f) || (w == 240.dp && scale == 2f))
+                AppStyle.Glass -> (scale == 2f && w <= 240.dp) to (badgeValue == 2 && w == 200.dp && scale == 2f)
+                AppStyle.Brief -> false to (scale == 2f || (badgeValue == 2 && w == 200.dp && scale >= 1.45f))
+                AppStyle.Board -> ((w == 200.dp && scale >= 1.45f) || ((w == 220.dp || w == 240.dp) && scale == 2f)) to
+                    (scale == 2f || (badgeValue == 2 && w == 200.dp && scale >= 1.45f))
             }
-            val agentsLabel = if (s == AppStyle.Glass) "Agents" else "Agents 2"
-            assertEquals("$s $w $scale Assistant ellipsis", expected.first, isTextEllipsized("Assistant"))
-            assertEquals("$s $w $scale $agentsLabel ellipsis", expected.second, isTextEllipsized(agentsLabel))
+            val agentsLabel = if (s == AppStyle.Glass || badgeValue == 0) "Agents" else "Agents 2"
+            if (!expected.first) assertFalse("$s $w $scale badge=$badgeValue Assistant must not be ellipsized", isTextEllipsized("Assistant"))
+            if (!expected.second) assertFalse("$s $w $scale badge=$badgeValue $agentsLabel must not be ellipsized", isTextEllipsized(agentsLabel))
         }
     }
 

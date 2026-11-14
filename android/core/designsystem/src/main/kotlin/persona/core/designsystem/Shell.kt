@@ -321,7 +321,7 @@ fun HomeNavigation(
                 textWidth = HomeTokens.segmentWidth * scale, surfacePadding = Tokens.Space.xxs, badgeOffset = 0.dp, onClick = choose)
         },
         stackedSwitcher = { available ->
-            val fittedWidth = (((available - Tokens.Space.xs * 2) / items.size.coerceAtLeast(1)) + Tokens.Space.xs)
+            val fittedWidth = ((available - Tokens.Space.xs * 2) / items.size.coerceAtLeast(1))
                 .coerceIn(0.dp, segmentWidth)
             GlassHomeSwitcher(items, selected, fittedWidth, scale,
                 textWidth = minOf(HomeTokens.segmentWidth * scale, fittedWidth),
