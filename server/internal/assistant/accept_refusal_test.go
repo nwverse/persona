@@ -3,6 +3,8 @@ package assistant
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -21,6 +23,9 @@ func TestAcceptRouteSaysTheTerminalDialogBlocksIt(t *testing.T) {
 		a := askOf(s, todo.ID)
 		f.mu.Lock()
 		f.failSend = &rpc.Error{Code: "dialog_open", Message: "a dialog is open in the terminal"}
+		f.nodes = map[string]nodeAnswer{"session.screen": func(string, json.RawMessage) (any, error) {
+			return map[string]any{"text": rateLimitScreen(t)}, nil
+		}}
 		f.mu.Unlock()
 		asked, _ := json.Marshal(a.AskedAt)
 		status, body := serveJSON(t, s, "POST", "/api/v1/todos/"+todo.ID+"/accept", string(lang), `{"asked_at":`+string(asked)+`}`)
@@ -28,8 +33,22 @@ func TestAcceptRouteSaysTheTerminalDialogBlocksIt(t *testing.T) {
 		if status != http.StatusConflict || body["code"] != "dialog_open" || body["error"] != want || body["delivered"] != "none" {
 			t.Fatalf("%s: %d %v, want 409 dialog_open %q", lang, status, body, want)
 		}
+		// what the card says and where it sends the owner: the dialog's own first line, read off a Codex screen whose node
+		// did not say it, and the agent whose terminal it is
+		if body["dialog"] != "Approaching rate limits" || body["machine_id"] == nil || body["machine_id"] == "" || body["session_id"] == nil || body["session_id"] == "" {
+			t.Fatalf("%s: %v, want the dialog's first line and the agent", lang, body)
+		}
 		if got := askOf(s, todo.ID); !got.AcceptedAt.IsZero() {
 			t.Fatalf("%s: taken after all: %+v", lang, got)
 		}
 	}
+}
+
+// rateLimitScreen is Codex 0.169's "Approaching rate limits" picker as session.screen reads it.
+func rateLimitScreen(t *testing.T) string {
+	b, err := os.ReadFile(filepath.Join("..", "screen", "testdata", "codex-0.169-rate-limit-picker.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

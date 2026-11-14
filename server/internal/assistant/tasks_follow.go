@@ -674,7 +674,7 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 		if !startResultUnknown(err) {
 			unsent()
 		}
-		return FeedItem{}, err
+		return FeedItem{}, s.dialogRefusal(ctx, c, err)
 	}
 	body := map[string]string{"text": text}
 	if relay != "" {
