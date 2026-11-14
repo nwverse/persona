@@ -96,7 +96,7 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
       <div className="flex h-full flex-col">
         {header}
         {/* not found only once the agents are read: until then (or while they can't be) nobody knows */}
-        {!loaded || renamedTo || (!full.loaded && !full.failed) ? (
+        {!loaded || renamedTo || (!full.loaded && !full.error) ? (
           <div className="flex flex-1 items-center justify-center"><Loading /></div>
         ) : !full.loaded ? (
           <div className="flex min-h-0 flex-1 flex-col pb-[10vh]" data-agents="failed">

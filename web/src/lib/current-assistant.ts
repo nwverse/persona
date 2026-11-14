@@ -96,15 +96,15 @@ export function useScopedCounts(): ReturnType<typeof useCounts> {
 }
 
 /** Whether the agents useScopedAgentSessions and useScopedCounts give are known, from where they come: with several
- *  assistants the complete list ("loading" until it is read, "failed" when its first read failed; it is read again
- *  meanwhile, and retryAgentList asks at once), else the Agents list's pages (useAgentListStatus). `whole`: they are
- *  every agent, so a page can count them by computer. */
+ *  assistants the complete list ("loading" until it is read, "failed" while its read has failed, its `error`; it is read
+ *  again every few seconds, and retryAgentList reads it at once, loading until the answer), else the Agents list's pages
+ *  (useAgentListStatus). `whole`: they are every agent, so a page can count them by computer. */
 export function useScopedAgentListStatus(): AgentList {
   const scope = useScope();
   const page = useAgentListStatus();
-  const { loaded, failed } = useFullAgentSessions(scope.several);
+  const { loaded, error } = useFullAgentSessions(scope.several);
   return useMemo<AgentList>(
-    () => (scope.several ? { status: loaded ? "loaded" : failed ? "failed" : "loading", whole: loaded } : page),
-    [scope.several, page, loaded, failed],
+    () => (scope.several ? { status: loaded ? "loaded" : error ? "failed" : "loading", whole: loaded } : page),
+    [scope.several, page, loaded, error],
   );
 }

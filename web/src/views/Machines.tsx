@@ -45,7 +45,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // and until that read is in, a card says so rather than "No agents running".
   const full = useFullAgentSessions();
   const agents = useMemo(() => agentCounts(full.sessions), [full.sessions]);
-  const known: AgentsKnown = full.loaded ? "yes" : full.failed ? "failed" : "loading";
+  const known: AgentsKnown = full.loaded ? "yes" : full.error ? "failed" : "loading";
 
   useEffect(() => {
     let dead = false;

@@ -146,16 +146,29 @@ describe("Overview on a hub that pages its Agents list, with one assistant", () 
     expect(machineLine()).toBe("macOS 26.1"); // no "0 个 Agent"
     expect(host.textContent).not.toContain("一切就绪");
     expect(host.textContent).not.toContain("所有 Agent 都在等你");
-    // Retry while the hub still fails: the read on its way keeps the failure and its Retry where they are
+    // an agent changes the list while the hub still fails: the read that starts keeps the failure and its Retry where
+    // they are (they do not turn into "Loading…" under the pointer), and so does its failure
     page = "hold";
-    const before = reads.page;
-    await act(async () => { retry()!.click(); });
+    let before = reads.page;
+    act(() => FakeSocket.last.onmessage?.({ data: JSON.stringify({ type: "sessions_list", revision: "r2" }) }));
     await flush();
     expect(reads.page).toBe(before + 1);
     expect(summaryText()).toBe("没能读到 Agent 的状态。");
     expect(retry()).toBeDefined();
     await release("page", false);
     expect(summaryText()).toBe("没能读到 Agent 的状态。");
+    expect(retry()).toBeDefined();
+    // Retry reads at once and says it is loading until the answer, as the complete list's Retry does; failed again,
+    // the failure line and Retry come back
+    before = reads.page;
+    await act(async () => { retry()!.click(); });
+    await flush();
+    expect(reads.page).toBe(before + 1);
+    expect(summaryText()).toBe("正在读取…");
+    expect(retry()).toBeUndefined();
+    await release("page", false);
+    expect(summaryText()).toBe("没能读到 Agent 的状态。");
+    expect(retry()).toBeDefined();
     // and once the hub answers, the counts come back
     page = "ok";
     await act(async () => { retry()!.click(); });
@@ -207,11 +220,14 @@ describe("Overview on a hub that pages its Agents list, with several assistants"
     expect(retry()).toBeDefined();
     expect(machineLine()).toBe("macOS 26.1");
     expect(host.textContent).not.toContain("一切就绪");
-    full = "ok";
+    full = "hold";
     const before = reads.full;
     await act(async () => { retry()!.click(); });
     await flush(); // well before the complete list's own retry, five seconds on
     expect(reads.full).toBe(before + 1);
+    expect(summaryText()).toBe("正在读取…"); // loading until the answer
+    expect(machineLine()).toBe("macOS 26.1");
+    await release("full", true);
     expect(summaryText()).toBe("1 个工作中。");
     expect(machineLine()).toBe("2 个 Agent · macOS 26.1");
   });

@@ -7,7 +7,7 @@ A connection that asked for `sessions_list` gets no `sessions` / `sessions_delta
 page. The Machines cards and a computer's page read `sessions[mid]` and said "No agents running" / "Agent 0" for every
 computer. Read a computer's Agents the way the Agents list does (`useFullAgentSessions`, folded, without the assistant's
 conversations), and keep the older hub's pushed path working (the same hook returns the store's rows there). A count
-whose source has not been read yet, or failed, is unknown, not zero: `useFullAgentSessions().loaded` / `failed` and
+whose source has not been read yet, or failed, is unknown, not zero: `useFullAgentSessions().loaded` / `error` and
 `useAgentListStatus()` tell the page to say "Loading…" or "Couldn't load …" instead. Take that status from the same
 source as the count: with several assistants Overview counts from the complete list, and a status read from the paged
 list said "loaded" while the complete list was still on its way or had failed (`useScopedAgentListStatus`). A count of

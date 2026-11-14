@@ -334,8 +334,8 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
         {/* until its agents are read, how many there are is unknown: no count, and no "No agents running" */}
         <Heading title="Agent" count={online && full.loaded ? agentCount : undefined} />
         {groups.length === 0 ? (
-          <p className="rounded-card bg-surface px-4 py-3 text-[12.5px] text-ink-3 shadow-card" data-agents={online ? (full.loaded ? "yes" : full.failed ? "failed" : "loading") : undefined}>
-            {!online ? t("machines-machinedetail.agents_offline") : full.loaded ? t("machines-machinedetail.no_agents") : full.failed ? t("machines-machinedetail.agents_failed_detail") : t("machines-machinedetail.agents_loading")}
+          <p className="rounded-card bg-surface px-4 py-3 text-[12.5px] text-ink-3 shadow-card" data-agents={online ? (full.loaded ? "yes" : full.error ? "failed" : "loading") : undefined}>
+            {!online ? t("machines-machinedetail.agents_offline") : full.loaded ? t("machines-machinedetail.no_agents") : full.error ? t("machines-machinedetail.agents_failed_detail") : t("machines-machinedetail.agents_loading")}
           </p>
         ) : (
           <div className="flex flex-col gap-2.5">

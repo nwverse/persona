@@ -5,6 +5,7 @@ indirect public enum Action: Hashable, Sendable {
     case openChat(chat: String, snapshot: PersonaCoreWire.ChatSnapshot)
     case closeChat(chat: String)
     case chat(chat: String, event: PersonaCoreWire.ChatEvent)
+    case wirePayload(chat: String, payload: PersonaCoreWire.Payload)
     case continueFill(chat: String)
 
     public func serialize<S: Serializer>(serializer: S) throws {
@@ -21,8 +22,12 @@ indirect public enum Action: Hashable, Sendable {
             try serializer.serialize_variant_index(value: 2)
             try serializer.serialize_str(value: chat)
             try event.serialize(serializer: serializer)
-        case .continueFill(let chat):
+        case .wirePayload(let chat, let payload):
             try serializer.serialize_variant_index(value: 3)
+            try serializer.serialize_str(value: chat)
+            try payload.serialize(serializer: serializer)
+        case .continueFill(let chat):
+            try serializer.serialize_variant_index(value: 4)
             try serializer.serialize_str(value: chat)
         }
         try serializer.decrease_container_depth()
@@ -53,6 +58,11 @@ indirect public enum Action: Hashable, Sendable {
             try deserializer.decrease_container_depth()
             return .chat(chat: chat, event: event)
         case 3:
+            let chat = try deserializer.deserialize_str()
+            let payload = try PersonaCoreWire.Payload.deserialize(deserializer: deserializer)
+            try deserializer.decrease_container_depth()
+            return .wirePayload(chat: chat, payload: payload)
+        case 4:
             let chat = try deserializer.deserialize_str()
             try deserializer.decrease_container_depth()
             return .continueFill(chat: chat)
@@ -446,6 +456,87 @@ indirect public enum ListOp: Hashable, Sendable {
     }
 
     public static func bincodeDeserialize(input: [UInt8]) throws -> ListOp {
+        let deserializer = BincodeDeserializer.init(input: input);
+        let obj = try deserialize(deserializer: deserializer)
+        if deserializer.get_buffer_offset() < input.count {
+            throw DeserializationError.invalidInput(issue: "Some input bytes were not read")
+        }
+        return obj
+    }
+}
+
+indirect public enum Payload: Hashable, Sendable {
+    case latest(body: String)
+    case newer(body: String)
+    case reloaded(body: String)
+    case older(body: String)
+    case range(body: String)
+    case frame(body: String)
+
+    public func serialize<S: Serializer>(serializer: S) throws {
+        try serializer.increase_container_depth()
+        switch self {
+        case .latest(let body):
+            try serializer.serialize_variant_index(value: 0)
+            try serializer.serialize_str(value: body)
+        case .newer(let body):
+            try serializer.serialize_variant_index(value: 1)
+            try serializer.serialize_str(value: body)
+        case .reloaded(let body):
+            try serializer.serialize_variant_index(value: 2)
+            try serializer.serialize_str(value: body)
+        case .older(let body):
+            try serializer.serialize_variant_index(value: 3)
+            try serializer.serialize_str(value: body)
+        case .range(let body):
+            try serializer.serialize_variant_index(value: 4)
+            try serializer.serialize_str(value: body)
+        case .frame(let body):
+            try serializer.serialize_variant_index(value: 5)
+            try serializer.serialize_str(value: body)
+        }
+        try serializer.decrease_container_depth()
+    }
+
+    public func bincodeSerialize() throws -> [UInt8] {
+        let serializer = BincodeSerializer.init();
+        try self.serialize(serializer: serializer)
+        return serializer.get_bytes()
+    }
+
+    public static func deserialize<D: Deserializer>(deserializer: D) throws -> Payload {
+        let index = try deserializer.deserialize_variant_index()
+        try deserializer.increase_container_depth()
+        switch index {
+        case 0:
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .latest(body: body)
+        case 1:
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .newer(body: body)
+        case 2:
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .reloaded(body: body)
+        case 3:
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .older(body: body)
+        case 4:
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .range(body: body)
+        case 5:
+            let body = try deserializer.deserialize_str()
+            try deserializer.decrease_container_depth()
+            return .frame(body: body)
+        default: throw DeserializationError.invalidInput(issue: "Unknown variant index for Payload: \(index)")
+        }
+    }
+
+    public static func bincodeDeserialize(input: [UInt8]) throws -> Payload {
         let deserializer = BincodeDeserializer.init(input: input);
         let obj = try deserialize(deserializer: deserializer)
         if deserializer.get_buffer_offset() < input.count {
