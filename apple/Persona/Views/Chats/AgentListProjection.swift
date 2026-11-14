@@ -272,6 +272,8 @@ nonisolated struct AgentListProjection: Sendable {
         var idle: [TabPanes.Entry]
         /// The side sessions drawn a level in, under the session that started them (#5935).
         var nested: Set<SessionKey> = []
+        /// Them by the row they are under, for its Side sessions row (#7755).
+        var sides = SideSessions.Groups()
 
         /// The agents of `all`, in order.
         var sessions: [Session] { all.flatMap(\.sessions) }
@@ -323,6 +325,8 @@ nonisolated struct AgentListProjection: Sendable {
     /// By App's sections, their projects in them (`AppGroups`); empty under any other grouping.
     var apps: [AppGroup] = []
     var menuSections: [String] = []
+    /// The folds of the parents listed with side sessions (`SideSessions.foldIDs`): Collapse All folds them too (#7755).
+    var sideFolds: [String] = []
     var searchPlan = AgentSearchPlan(code: "session.where(s => true)", parsed: .init())
     /// Searching can match an Agent-free worktree even when no session matches the query.
     var hasSearchResults: Bool { !base.isEmpty || !tree.isEmpty }
@@ -403,6 +407,7 @@ nonisolated struct AgentListProjection: Sendable {
             .map { (session: $0, rank: settings.preferences[$0.group]?.pins.sessions.firstIndex(of: "\($0.machineID)/\($0.sessionID)") ?? 0) }
             .sorted { $0.rank < $1.rank }.map(\.session)
         result.unread = result.filtered.filter { $0.state == .unread }.map(\.key)
+        result.sideFolds = SideSessions.foldIDs(result.unpinned)
         result.byHost = settings.machine.isEmpty && Set(result.base.lazy.filter { $0.state.isLive }.map(\.machineRef)).count > 1
         for machine in input.machines {
             result.scopes["machine/" + machine.ref.path] = settings.scope(machine: machine.id, hub: machine.group)

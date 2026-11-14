@@ -137969,6 +137969,29 @@
       },
       "extractionState" : "manual"
     },
+    "Side sessions (%lld)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Side sessions (%lld)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子セッション（%lld）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子会话（%lld）"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Sign In" : {
       "localizations" : {
         "en" : {

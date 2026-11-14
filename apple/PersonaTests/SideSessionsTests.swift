@@ -245,4 +245,120 @@ import Testing
         #expect(parts.stay.count + parts.fold.count == nested.count)
         #expect(arranged.rows.count == nested.count && Set(arranged.rows.map(\.key)) == Set(nested.map(\.key)))
     }
+
+    // MARK: Side sessions row (#7755)
+
+    private let review = SessionKey(machineID: "box", sessionID: "review")
+
+    @Test func eachNestedRowKnowsTheTopItIsUnder() {
+        let out = arrange([r("p"), r("s", "p"), r("g", "s"), r("q")])
+        #expect(out.top == ["s": "p", "g": "p"], "one level in, under the topmost listed one")
+        #expect(arrange([r("a"), r("b", "gone")]).top.isEmpty)
+    }
+
+    @Test func aSideSessionsRowSaysHowManyAndFoldsAllButOneThatNeedsTheUser() throws {
+        let list = projection(try fixture())
+        let rows = try #require(list.rows.values.first { $0.all.flatMap(\.sessions).contains { $0.sessionID == "review" } })
+        let all = rows.all.flatMap(\.sessions)
+        let btw = try #require(all.first { $0.sessionID == "btw" }), side = try #require(all.first { $0.sessionID == "side" })
+        #expect(rows.sides.under == [review: .init(parent: review, count: 2)])
+        // open by default: every row drawn, the row says 2
+        let open = rows.sides.folding { _ in false }
+        #expect(open.fold(after: review) == .init(id: "side:box/review", count: 2, open: true))
+        #expect(all.allSatisfy { !open.hides($0) })
+        // folded by its parent's id: the idle side chat goes, the /btw question that needs the user stays, the row still says 2
+        let folded = rows.sides.folding { $0 == SideSessions.foldID(self.review) }
+        #expect(folded.fold(after: review) == .init(id: "side:box/review", count: 2, open: false))
+        #expect(folded.hides(side) && !folded.hides(btw))
+        #expect(all.filter { !folded.hides($0) }.map(\.sessionID) == ["review", "btw", "other", "old"])
+        // another parent's fold leaves it open; no row follows a session without side sessions
+        #expect(rows.sides.folding { $0 == "side:box/other" }.fold(after: review)?.open == true)
+        #expect(open.fold(after: btw.key) == nil && open.fold(after: side.key) == nil)
+    }
+
+    @Test func aFoldIsKeptPerParentUnderAnIdNoOtherFoldHas() throws {
+        #expect(SideSessions.foldID(review) == "side:box/review")
+        #expect(SideSessions.foldID(SessionKey(group: "hub-b", machineID: "box", sessionID: "review")) == "side:hub-b|box/review")
+        let s = try session("review", slot: "w1:t3")
+        let others = ["state/idle", "machine/" + s.machineRef.path, TabPanes.foldID(s), "todo:none", "direction:d1"]
+            + SpaceGroup.build([s]).map(\.id) + AppGroups.build([s]).map(\.id)
+        for id in others { #expect(!id.hasPrefix("side:"), "\(id)") }
+    }
+
+    @Test func aTabsSideSessionsFoldByTheParentInTheTabAndFollowItsLastAgent() throws {
+        let order = AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false })
+        let rows = order.rows([
+            try session("side", parent: "lead", minutes: 1, space: nil),
+            try session("lead", minutes: 30, slot: "w1:t1", paneIndex: 0),
+            try session("mate", minutes: 40, slot: "w1:t1", paneIndex: 1),
+        ], all: false)
+        let lead = SessionKey(machineID: "box", sessionID: "lead"), mate = SessionKey(machineID: "box", sessionID: "mate")
+        #expect(rows.sides.under == [mate: .init(parent: lead, count: 1)], "after the tab's last agent, folded by its parent")
+        let folded = rows.sides.folding { $0 == SideSessions.foldID(lead) }
+        #expect(folded.hides(try session("side")) && folded.fold(after: mate)?.open == false)
+    }
+
+    @Test func aParentInAnotherSectionHasNoSideSessionsRow() throws {
+        let order = AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false })
+        let sessions = try fixture()
+        #expect(order.arranged(sessions.filter { order.rank($0) == 0 }).sides.isEmpty, "Needs You: the /btw question alone")
+        #expect(order.arranged(sessions.filter { order.rank($0) == 7 }).sides.under == [review: .init(parent: review, count: 1)])
+    }
+
+    @Test func collapseAllFoldsEveryListedParentWithSideSessions() throws {
+        #expect(SideSessions.foldIDs(try fixture()) == ["side:box/review"])
+        #expect(SideSessions.foldIDs(try fixture(nesting: false)).isEmpty)
+        #expect(SideSessions.foldIDs(try fixture().filter { $0.sessionID != "review" }).isEmpty, "a parent not listed has no row")
+        #expect(projection(try fixture()).sideFolds == ["side:box/review"])
+    }
+
+    /// Acceptance (#7755): folding hides rows, not sessions. Every list a count is read from (the quick filters, Needs
+    /// you, the sections and their headers, "N more idle", Show All) is the same folded and open; the rows drawn differ
+    /// only by the side sessions folded away, never one that needs the user, and each Side sessions row says the same.
+    @Test func everyCountIsTheSameFoldedAndOpen() throws {
+        let sessions = try fixture() + [try session("far", state: "unread", parent: "elsewhere", minutes: 3)]
+        let order = AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false })
+        var checked = 0
+        func check(_ list: [Session], _ sides: SideSessions.Groups, _ label: String) {
+            let open = sides.folding { _ in false }, shut = sides.folding { _ in true }
+            #expect(list.allSatisfy { !open.hides($0) }, "open draws every row, \(label)")
+            let gone = list.filter(shut.hides)
+            #expect(gone.allSatisfy { sides.top[$0.key] != nil && $0.countedState != .needsYou }, "only side sessions that do not need you, \(label)")
+            #expect(list.filter { !shut.hides($0) }.count + gone.count == list.count, "nothing dropped or doubled, \(label)")
+            for (key, under) in sides.under {
+                #expect(open.fold(after: key)?.count == shut.fold(after: key)?.count, "the row's count, \(label)")
+                #expect(under.count == sides.top.values.filter { $0 == key }.count)
+                #expect(list.contains { $0.key == key } && !shut.hides(list.first { $0.key == key }!), "its row stays, \(label)")
+            }
+            checked += sides.under.count
+        }
+        for grouping in ["repo", "space", "app", "recent", "machine", "state", "todo"] {
+            for filter in [AgentFilter.all, .needsYou, .unread] {
+                let a = projection(sessions) { $0.grouping = grouping; $0.filter = filter }
+                let again = projection(sessions) { $0.grouping = grouping; $0.filter = filter }
+                // nothing a fold decides enters the projection the counts come from
+                #expect(a.filterCounts == again.filterCounts && a.unread == again.unread && a.filtered.map(\.key) == again.filtered.map(\.key))
+                let waiting = AgentsNeedsYou.waiting(a.base)
+                for (key, rows) in a.rows {
+                    let all = rows.all.flatMap(\.sessions)
+                    check(all, rows.sides, "\(grouping) \(key)")
+                    let shut = rows.sides.folding { _ in true }
+                    #expect(waiting.filter { w in all.contains { $0.key == w.key } }.allSatisfy { !shut.hides($0) }, "Needs you in view")
+                    #expect(rows.busy.flatMap(\.sessions).count + rows.idle.flatMap(\.sessions).count == all.count, "N more idle, Show All")
+                }
+                for app in a.apps {
+                    check(app.sessions, app.sides, "\(grouping) \(app.id)")
+                    for project in app.projects { check(project.sessions, project.sides, "\(grouping) \(project.id)") }
+                }
+                // By Status's, By Machine's and Recently Used's sections, arranged where they are drawn
+                for rank in AgentListOrder.stateKeys.indices {
+                    let arranged = order.arranged(a.unpinned.filter { order.rank($0) == rank })
+                    check(arranged.rows, arranged.sides, "state \(rank)")
+                }
+                let recent = SideSessions.arrange(AgentListOrder.recent(a.unpinned))
+                check(recent.rows, recent.sides, "recent")
+            }
+        }
+        #expect(checked > 0, "some section drew a Side sessions row")
+    }
 }

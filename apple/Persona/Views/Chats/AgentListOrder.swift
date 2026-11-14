@@ -69,10 +69,10 @@ nonisolated struct AgentListOrder {
     /// session's group when any of it does) and the idle ones; with `all` off (a quick filter), every row stays.
     func rows(_ list: [Session], all: Bool = true) -> AgentListProjection.Rows {
         let arranged = Self.nestSideSessions(TabPanes.entries(ordered(list)))
-        let nested = Self.nestedSessions(arranged)
-        guard all else { return .init(all: arranged.rows, busy: arranged.rows, idle: [], nested: nested) }
+        let nested = Self.nestedSessions(arranged), sides = SideSessions.Groups(arranged, key: \.id, sessions: \.sessions)
+        guard all else { return .init(all: arranged.rows, busy: arranged.rows, idle: [], nested: nested, sides: sides) }
         let parts = arranged.split { $0.sessions.contains(where: self.stays) }
-        return .init(all: arranged.rows, busy: parts.stay, idle: parts.fold, nested: nested)
+        return .init(all: arranged.rows, busy: parts.stay, idle: parts.fold, nested: nested, sides: sides)
     }
 
     /// `rows`, as the busy and the idle ones and the side sessions drawn a level in.

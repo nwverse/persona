@@ -242,7 +242,8 @@ extension Theme {
         static let open = "arrow.up.right"
         /// Open a file or a document in its viewer.
         static let openDocument = "arrow.up.forward.square"
-        /// What follows from something before it: a follow-up, the next row of a table.
+        /// What follows from something before it: a follow-up, the next row of a table, the side sessions started from a
+        /// session (its Side sessions row in Agents, #7755).
         static let followOn = "arrow.turn.down.right"
         static let enlarge = "arrow.up.left.and.arrow.down.right"
         /// Back from the enlarged view (the composer's full-page editor, #3167); a file outline's Collapse all.

@@ -20,6 +20,8 @@ nonisolated struct AppGroup: Identifiable, Sendable {
     var projects: [AppProject] = []
     /// The side sessions `sessions` draws a level in, under the session that started them (#5935).
     var nested: Set<SessionKey> = []
+    /// Them by the row they are under, for its Side sessions row (#7755).
+    var sides = SideSessions.Groups()
 
     /// Its projects have headings: a desktop app's or an engine's section, unless every agent of it is in Other (then they
     /// are listed as before). Other's section is not by project: its agents are other terminals' and the like.
@@ -88,10 +90,10 @@ nonisolated enum AppGroups {
             // A side session under the session that started it in its section or project, the group where its latest
             // member is (#5935): after the projects, which go by their latest agent.
             let arranged = SideSessions.arrange(group.sessions)
-            (group.sessions, group.nested) = (arranged.rows, arranged.nested)
+            (group.sessions, group.nested, group.sides) = (arranged.rows, arranged.nested, arranged.sides)
             for i in group.projects.indices {
                 let arranged = SideSessions.arrange(group.projects[i].sessions)
-                (group.projects[i].sessions, group.projects[i].nested) = (arranged.rows, arranged.nested)
+                (group.projects[i].sessions, group.projects[i].nested, group.projects[i].sides) = (arranged.rows, arranged.nested, arranged.sides)
             }
             return group
         }
@@ -206,6 +208,8 @@ nonisolated struct AppProject: Identifiable, Sendable {
     var place: Int? = nil
     /// The side sessions `sessions` draws a level in, under the session that started them (#5935).
     var nested: Set<SessionKey> = []
+    /// Them by the row they are under, for its Side sessions row (#7755).
+    var sides = SideSessions.Groups()
 
     var isOther: Bool { name.isEmpty }
     var title: String { isOther ? String(localized: "Other") : name }

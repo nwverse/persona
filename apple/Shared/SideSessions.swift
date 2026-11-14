@@ -17,6 +17,10 @@ nonisolated enum SideSessions {
         var lead: [Key: Key] = [:]
         /// Beside `rows` when something moved: each row's group (0, 1, …), -1 for a row in none. Empty otherwise.
         var group: [Int] = []
+        /// Each row drawn a level in → its group's top, the row it is drawn under. Empty when nothing moved.
+        var top: [Key: Key] = [:]
+        /// Session rows (`arrange`): the side sessions under each top, for its Side sessions row (#7755). Empty otherwise.
+        var sides = Groups()
 
         /// The row that places `key`'s group: the first of it in the order given (the most urgent, or the most recent).
         func lead(of key: Key) -> Key { lead[key] ?? key }
@@ -82,7 +86,7 @@ nonisolated enum SideSessions {
         var out: [Row] = [], group: [Int] = []
         out.reserveCapacity(rows.count)
         group.reserveCapacity(rows.count)
-        var nested = Set<Key>(), lead: [Key: Key] = [:], placed = Set<Int>()
+        var nested = Set<Key>(), lead: [Key: Key] = [:], topKey: [Key: Key] = [:], placed = Set<Int>()
         for i in rows.indices {
             let top = topOf[i] ?? i
             guard let under = members[top] else { // in no group
@@ -91,25 +95,120 @@ nonisolated enum SideSessions {
                 continue
             }
             guard placed.insert(top).inserted else { continue } // its group is drawn already, where its first member was
-            let number = placed.count - 1, first = key(rows[min(top, under[0])])
+            let number = placed.count - 1, first = key(rows[min(top, under[0])]), head = key(rows[top])
             out.append(rows[top])
             group.append(number)
-            lead[key(rows[top])] = first
+            lead[head] = first
             for m in under {
                 out.append(rows[m])
                 group.append(number)
                 nested.insert(key(rows[m]))
                 lead[key(rows[m])] = first
+                topKey[key(rows[m])] = head
             }
         }
-        return Arranged(rows: out, nested: nested, lead: lead, group: group)
+        return Arranged(rows: out, nested: nested, lead: lead, group: group, top: topKey)
     }
 
     /// `sessions` (in the list's order) with each side session under the session that started it, when that one is
     /// among them. Most lists have none: they come back as they are, with nothing built.
     static func arrange(_ sessions: [Session]) -> Arranged<Session, SessionKey> {
         guard sessions.contains(where: { $0.parentAgentID != nil }) else { return Arranged(rows: sessions) }
-        return nestUnderParents(sessions, key: \.key, parentKey: \.sideParent)
+        var arranged = nestUnderParents(sessions, key: \.key, parentKey: \.sideParent)
+        arranged.sides = Groups(arranged, key: \.key, sessions: { [$0] })
+        return arranged
+    }
+
+    /// Where the Side sessions row under `parent` is kept folded (`dev.folded`, #7755): "side:" and the parent's key
+    /// path, so it is no other fold's id (theirs start "state/", "machine/", "app/", "repo/", "tree/", "tab/", "todo:",
+    /// "direction:", or with a machine's path and "/").
+    static func foldID(_ parent: SessionKey) -> String { "side:" + parent.path }
+
+    /// The folds of every parent among `sessions` with a side session among them (Collapse All, #7755). Most lists
+    /// have none: one scan.
+    static func foldIDs(_ sessions: [Session]) -> [String] {
+        let parents = Set(sessions.lazy.compactMap(\.sideParent))
+        guard !parents.isEmpty else { return [] }
+        return sessions.filter { parents.contains($0.key) }.map { foldID($0.key) }
+    }
+
+    /// A section's side sessions by the row they are drawn under (#7755): what each "Side sessions (N)" row folds.
+    nonisolated struct Groups: Equatable, Sendable {
+        nonisolated struct Under: Equatable, Sendable {
+            /// The session they were started from, whose fold (`foldID`) folds them: the top row's, or of a tab's
+            /// agents the one the first of them names.
+            var parent: SessionKey
+            /// How many are under it, in view or folded away.
+            var count: Int
+        }
+
+        /// By the session whose row the Side sessions row goes after: the top's, or a tab's last agent.
+        var under: [SessionKey: Under] = [:]
+        /// Each side session drawn a level in → the key of `under` it is counted in.
+        var top: [SessionKey: SessionKey] = [:]
+
+        var isEmpty: Bool { under.isEmpty }
+
+        init() {}
+
+        /// From rows as `nestUnderParents` arranged them, each group's top then the rows under it; `sessions` gives a
+        /// row's agents (one, or a tab's in pane order).
+        init<Row, Key: Hashable>(_ arranged: Arranged<Row, Key>, key: (Row) -> Key, sessions: (Row) -> [Session]) {
+            guard !arranged.top.isEmpty else { return }
+            var under: [SessionKey: Under] = [:], top: [SessionKey: SessionKey] = [:]
+            var heads: [Session] = [], sides: [Session] = []
+            func close() {
+                guard let anchor = heads.last, !sides.isEmpty else { return }
+                let parent = heads.count == 1 ? anchor.key
+                    : sides.lazy.compactMap(\.sideParent).first { k in heads.contains { $0.key == k } } ?? heads[0].key
+                under[anchor.key] = Under(parent: parent, count: sides.count)
+                for s in sides { top[s.key] = anchor.key }
+            }
+            for row in arranged.rows {
+                if arranged.top[key(row)] != nil {
+                    sides += sessions(row)
+                } else {
+                    close()
+                    (heads, sides) = (sessions(row), [])
+                }
+            }
+            close()
+            (self.under, self.top) = (under, top)
+        }
+
+        /// These groups with each one's fold as `isFolded` (a fold id) has it now.
+        func folding(_ isFolded: (String) -> Bool) -> Folds {
+            guard !isEmpty else { return Folds() }
+            return Folds(groups: self, folded: Set(under.filter { isFolded(SideSessions.foldID($0.value.parent)) }.keys))
+        }
+    }
+
+    /// A section's side sessions as drawn now (#7755): open unless folded. Folding hides rows, not sessions: every
+    /// count stays as it was, and a side session that needs the user stays a row of its own a level in
+    /// (docs/design/DESIGN_SYSTEM.md 3.4), as a subtask that does is never folded.
+    nonisolated struct Folds: Sendable {
+        nonisolated struct Fold: Equatable, Sendable {
+            /// Its fold id (`foldID`).
+            var id: String
+            var count: Int
+            var open: Bool
+        }
+
+        var groups = Groups()
+        /// The keys of `groups.under` folded now.
+        var folded: Set<SessionKey> = []
+
+        /// Left out while its group is folded: a side session that does not need the user.
+        func hides(_ s: Session) -> Bool {
+            guard !folded.isEmpty, let top = groups.top[s.key], folded.contains(top) else { return false }
+            return s.countedState != .needsYou
+        }
+
+        /// The Side sessions row after `key`'s row, when side sessions are drawn under it.
+        func fold(after key: SessionKey) -> Fold? {
+            guard let under = groups.under[key] else { return nil }
+            return Fold(id: SideSessions.foldID(under.parent), count: under.count, open: !folded.contains(key))
+        }
     }
 }
 
