@@ -294,7 +294,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // 192 B on top of #7339's.
 // A folded-search retry now clears its partial warning only after every requested fold has loaded; real failures and
 // budget caps still show it (#7389). Measured: en 476,854 B, ja 480,545 B, zh-Hans 477,834 B. The budget moves by 51 B.
-export const FIRST_SCREEN_BUDGET = 480_545;
+// The web audit's settings fixes add 184 B to ja, measured against main at 608510018 (ja 480,562 B to 480,746 B; en
+// 476,871 B to 477,041 B, zh-Hans 477,851 B to 478,025 B): Disconnect this browser asking first (audit item 20: the
+// account menu's question state and the lazy load of its dialog, whose code and words are a chunk of their own), the
+// hub's category named "This hub" and Knowledge selection's own icon (audit item 66: settings/nav.ts, which the
+// assistant's page reads, and the startup settings-nav words), and the hubs group's search anchor (audit item 18). The
+// budget moves by these 184 B. It does not cover main's own 17 B over at 608510018 (ja 480,562 B against 480,545 B).
+export const FIRST_SCREEN_BUDGET = 480_729;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

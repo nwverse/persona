@@ -282,7 +282,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (i
           const sub = routeSub({ kind: "extension", id: p.id, manager: p.manager && p.manager !== defaultManager() ? p.manager : undefined }) ?? p.id;
           const current = openBeside != null && openBeside === sub;
           const state = (
-            <span className={cx("flex items-center gap-1.5 whitespace-nowrap text-ink-2", compact ? "mt-0.5 min-w-0 text-[11.5px]" : "shrink-0 text-[12px]")}>
+            <span className={cx("flex items-center gap-1.5 whitespace-nowrap text-ink-2", compact ? "mt-0.5 min-w-0 text-submeta" : "shrink-0 text-[12px]")}>
               <StateDot extension={p} />
               <span className={cx(compact && "truncate")}>
                 {extensionState(p)}

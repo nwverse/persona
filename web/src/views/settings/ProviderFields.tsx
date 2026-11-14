@@ -10,8 +10,9 @@ import { t } from "../../i18n";
 import { referenceState, type SecretReference } from "../../lib/secret-reference";
 
 export const INPUT = inputClass;
-/** A field the form can't go on with (aria-invalid) keeps a red edge, focused too. */
-const INVALID = "aria-invalid:shadow-[inset_0_0_0_1px_var(--red)]";
+/** A field the form can't go on with (aria-invalid) has a red edge in place of its inset, as other settings forms draw
+ *  one (the inset would win over an added edge); focused, it has the focus edge. */
+const ringed = (base: string, error?: string) => (error ? base.replace("shadow-inset-field", "shadow-[inset_0_0_0_1px_var(--red)]") : base);
 /** How long typed text has to stay the same before it is checked (a gateway's address and key) or read (a pasted
  *  configuration) on its own. */
 export const AUTO_TEST_MS = 700;
@@ -56,7 +57,7 @@ export function TextField({ label, value, onChange, hint, error, placeholder, mo
   return (
     <Labelled label={label} hint={hint} error={error} htmlFor={id} describedById={noteId} field={field}>
       <input id={id} aria-invalid={error ? true : undefined} aria-describedby={error || hint ? noteId : undefined} value={value}
-        onChange={(e) => onChange(e.target.value)} onPaste={onPaste} onBlur={onBlur} disabled={disabled} placeholder={placeholder} inputMode={inputMode} autoComplete="off" spellCheck={false} className={cx(INPUT, INVALID, mono && "font-mono")} />
+        onChange={(e) => onChange(e.target.value)} onPaste={onPaste} onBlur={onBlur} disabled={disabled} placeholder={placeholder} inputMode={inputMode} autoComplete="off" spellCheck={false} className={cx(ringed(INPUT, error), mono && "font-mono")} />
     </Labelled>
   );
 }
@@ -91,9 +92,9 @@ export function SecretField({ label, value, onChange, hint, error, placeholder, 
       <div className="relative">
         {multiline ? (
           <textarea id={id} aria-describedby={described} aria-invalid={invalid} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={3} {...quiet}
-            className={cx(textareaClass, INVALID, "pr-9 font-mono", !shown && "[-webkit-text-security:disc]")} />
+            className={cx(ringed(textareaClass, error), "pr-9 font-mono", !shown && "[-webkit-text-security:disc]")} />
         ) : (
-          <input id={id} aria-describedby={described} aria-invalid={invalid} type={shown ? "text" : "password"} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} {...quiet} autoComplete="new-password" className={cx(INPUT, INVALID, "pr-9")} />
+          <input id={id} aria-describedby={described} aria-invalid={invalid} type={shown ? "text" : "password"} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} {...quiet} autoComplete="new-password" className={cx(ringed(INPUT, error), "pr-9")} />
         )}
         {toggle}
       </div>
@@ -134,7 +135,7 @@ export function KeyField({ label, value, onChange, hint, error, placeholder, byR
     <Labelled label={label} hint={hint ? <span className="flex flex-col gap-0.5"><span>{note}</span>{hint}</span> : note} error={error} htmlFor={id} describedById={noteId} accessory={toggle} field={field}>
       <input id={id} aria-describedby={noteId} aria-invalid={error ? true : undefined} type="text" value={value} onChange={(e) => onChange(e.target.value)}
         placeholder={stored?.reference || t("settings-providerfields.reference_placeholder")} autoComplete="off" spellCheck={false}
-        data-key-reference className={cx(INPUT, INVALID, "font-mono")} />
+        data-key-reference className={cx(ringed(INPUT, error), "font-mono")} />
     </Labelled>
   );
 }

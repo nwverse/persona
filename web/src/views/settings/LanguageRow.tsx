@@ -15,7 +15,7 @@ export function LanguageRow() {
   return (
     <Row label={t("language.label")} hint={t("language.hint")} wrapHint stackOnNarrow anchor="language">
       {/* on a phone under its sentence, the width of the row */}
-      <select value={pref} onChange={(e) => choose(e.target.value as LangPreference)} className={cx(controlClass, "min-w-[140px] max-sm:flex-1")} aria-label={t("language.label")}>
+      <select value={pref} onChange={(e) => choose(e.target.value as LangPreference)} className={cx(controlClass, "min-w-[140px] max-sm:w-full")} aria-label={t("language.label")}>
         <option value="system">{t("language.system_detail", { language: LANG_NAMES[systemLanguage()] })}</option>
         {LANGS.map((l) => (
           <option key={l} value={l} lang={l}>

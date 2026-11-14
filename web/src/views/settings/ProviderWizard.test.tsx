@@ -681,6 +681,11 @@ describe("ProviderWizard names", () => {
     expect(note(url)).toBe("要填地址");
     expect(keyInput().getAttribute("aria-invalid")).toBe("true");
     expect(note(keyInput())).toBe("要填 API Key");
+    // a red edge in place of the field's inset (an added edge would lose to the inset)
+    for (const input of [id, url, keyInput()]) {
+      expect(input.className).toContain("shadow-[inset_0_0_0_1px_var(--red)]");
+      expect(input.className).not.toContain("shadow-inset-field");
+    }
     expect(document.activeElement).toBe(id);
     expect(scrolled.at(-1)?.contains(id)).toBe(true);
     expect(scrolled.at(-1)?.textContent).toContain("要填启动 ID");

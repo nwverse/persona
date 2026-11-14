@@ -90,23 +90,24 @@ export function ConnectorList({ onOpen, onLarkCli, openBeside }: { onOpen: (id: 
       {(list ?? []).map((c) => {
         const current = openBeside != null && openBeside === ownedSub(c.id, c.manager);
         const state = (
-          <span className={cx("flex min-w-0 items-center gap-1.5 text-ink-2", openBeside !== undefined ? "mt-0.5 text-[11.5px]" : "text-[12.5px]")}>
+          <span className={cx("flex min-w-0 items-center gap-1.5 text-ink-2", openBeside !== undefined ? "mt-0.5 text-submeta" : "text-[12.5px]")}>
             <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT[connectorTone(c)])} />
             <span className="truncate">{connectorSummary(c)}</span>
           </span>
         );
+        const name = <span className={cx("min-w-0 truncate text-[13px] text-ink", openBeside !== undefined ? "block" : "flex-1")}>{c.name}</span>;
         return (
           <button key={`${c.manager ?? ""}:${c.id}`} type="button" data-connector-row={c.id} data-manager={c.manager ?? ""} aria-current={current || undefined} onClick={() => onOpen(ownedSub(c.id, c.manager))}
             className={cx("flex w-full items-center gap-3 px-4 py-2.5 text-left whitespace-nowrap transition-colors", current ? "bg-accent-tint" : "hover:bg-hover")}>
             <Mark id={c.id} size={32} />
             {openBeside !== undefined ? (
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] text-ink">{c.name}</span>
+                {name}
                 {state}
               </span>
             ) : (
               <>
-                <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{c.name}</span>
+                {name}
                 {state}
               </>
             )}

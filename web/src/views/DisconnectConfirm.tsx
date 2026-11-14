@@ -22,7 +22,7 @@ export function DisconnectConfirm({ open, busy, onCancel, onConfirm }: { open: b
         </>
       }
     >
-      <p className="text-[13px] leading-relaxed text-ink-2">{t("disconnect-confirm.body")}</p>
+      <p className="text-meta leading-relaxed text-ink-2">{t("disconnect-confirm.body")}</p>
     </Dialog>
   );
 }
