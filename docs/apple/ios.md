@@ -850,6 +850,11 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   and Settings. The parts share their search and dialogs through `AssistantSidebarUI`, presented around the column
   (`AssistantSidebarPresenters`): a sheet on a list row went with the row as it scrolled away. Search's words filter
   Persona's chats and the Agents under them.
+- **Its color** (`UnifiedSidebar.columnColor`, #4206, #4855): one neutral near-white / near-black down the whole column,
+  as ChatGPT's (`Theme.Shell.drawer`, the shell drawer's), in every style and at every width: behind the head, the list
+  (`AgentsListPage(column:)`) and the foot, in the strip over the column on the iPad (`SidebarTopFill(color:)`) and
+  behind the phone's drawer. The system sidebar's grey-blue it had stayed under the head and the foot only, in the
+  styles whose list paints the page's own color: three bands down the column.
 - **The page beside it**: the Agents page's split (`ChatsView` under `\.unifiedSidebar`, `SidebarRoot` in `RootView`),
   whose detail starts at the Persona conversation: `AssistantView` without a stack of its own (`embedded`), pushing on
   the split's one path (`\.unifiedPath`). A pick in the sidebar replaces what is over the conversation, as the web's
@@ -868,8 +873,8 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   yields to a second page's back swipe, `DrawerPan.firstPages`). A pick closes the drawer. Choosing Agents by itself
   opens the drawer at the Agents. While the drawer is in, the Agents list holds its updates as a covered list does, and
   the Persona rows keep the list they last showed (`SidebarFeed`). The conversation is the iPhone's (`shellChat`, the
-  shell's new-conversation page). Behind the drawer is the Agents list's own page color (`Theme.groupedPage`), so its
-  head, list and foot are one surface in dark mode too. Settings is the sheet the shell shows it in (`PadRoutes`: the
+  shell's new-conversation page). Behind the drawer is the column's color, so its head, list and foot are one surface in
+  dark mode too. Settings is the sheet the shell shows it in (`PadRoutes`: the
   whole window only at a phone's regular width), so it opens and closes the same way in both layouts.
 - **Routes** (`PadRouter(unified: true)`): notifications, links, Live Activities, widgets, quick actions and Siri /
   Shortcuts set `AppModel.selectedTab` and `openChat` as in the Separate layout and land on the same chat or page: an

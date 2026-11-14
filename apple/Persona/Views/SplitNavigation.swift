@@ -22,6 +22,9 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     var destinations: Destinations
     /// The Assistant | Agents switch over the page column, on a phone's tabs (iPhone Duo open: `pageTabSwitch`, #2623).
     var pageSwitch = false
+    /// The list column's own color, for the strip over it on the iPad (`SidebarTopFill`) and behind the phone's drawer;
+    /// nil, the system sidebar's.
+    var columnColor: Color? = nil
     #if os(iOS)
     /// The Sidebar layout on a phone's width (#6332): the list in this drawer, the pages one stack whose root is `empty`
     /// (`drawerLayout`); nil, the list at the stack's root as before. Set around this split only (`splitDrawer`): it is
@@ -90,7 +93,7 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                 #endif
             }
             .navigationSplitViewStyle(.balanced)
-            .modifier(SidebarTopFill(shown: columns != .detailOnly))
+            .modifier(SidebarTopFill(shown: columns != .detailOnly, color: columnColor))
             .modifier(SplitDividerHandle(columns: $columns, key: listKey))
             // On the whole split, not the detail stack: its pages are built from the destinations the sidebar
             // registered, in the sidebar's environment.
@@ -122,10 +125,10 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     /// The Sidebar layout on a phone (#6332): the list in the drawer that slides in from the left, the pages one stack
     /// whose root is `empty` (the Persona conversation). What the list opens is that stack's first page, as beside an
     /// iPad's column, with the drawer's button where its back would be (`SplitDetail.drawer`), and a drag to the right on
-    /// it opens the drawer as on the conversation (`AssistantDrawerLayout.firstPages`). Behind the drawer, the Agents
-    /// list's own page color: its head and foot and the list are one surface, in dark mode too.
+    /// it opens the drawer as on the conversation (`AssistantDrawerLayout.firstPages`). Behind the drawer, the column's
+    /// color (the Agents list's own page color without one): its head and foot and the list are one surface, in dark mode too.
     private func drawerLayout(_ drawer: AssistantDrawer) -> some View {
-        AssistantDrawerLayout(drawer: drawer, enabled: path.count <= 1, backdrop: Theme.groupedPage, firstPages: true, sidebar: { sidebar }, page:
+        AssistantDrawerLayout(drawer: drawer, enabled: path.count <= 1, backdrop: columnColor ?? Theme.groupedPage, firstPages: true, sidebar: { sidebar }, page:
             NavigationStack(path: $path) { empty.modifier(destinations) })
             .environment(\.splitDetail, SplitDetail(isFirstPage: path.count <= 1, listHidden: true, drawer: true))
             .environment(\.splitShowList, SplitShowList(show: { drawer.open() }))
@@ -187,6 +190,8 @@ struct SidebarEdge: PreferenceKey {
 struct SidebarTopFill: ViewModifier {
     /// The column is open (closed, its last frame stays reported: the fill must go by this).
     var shown: Bool
+    /// The column's own color where it has one (the Sidebar layout's, `UnifiedSidebar.columnColor`); nil, the system's.
+    var color: Color? = nil
     @State private var edge: CGFloat = 0
 
     func body(content: Content) -> some View {
@@ -194,7 +199,7 @@ struct SidebarTopFill: ViewModifier {
             content
                 .onPreferenceChange(SidebarEdge.self) { edge = $0 }
                 .background(alignment: .topLeading) {
-                    (AppStyle.current.usesGlass ? Theme.systemSidebar : Theme.pageBackground)
+                    (color ?? (AppStyle.current.usesGlass ? Theme.systemSidebar : Theme.pageBackground))
                         .frame(width: shown ? max(edge, 0) : 0)
                         .animation(Theme.Motion.layout, value: shown)
                         .ignoresSafeArea()
