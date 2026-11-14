@@ -33,8 +33,8 @@ internal class ShellCounts(
 
     /** A card a count counts: not a quiet task's (#1731, told in the main conversation), not a muted session's. */
     fun countsCard(request: Interaction): Boolean {
-        val session = byKey[request.sessionKey]
-        return session?.quiet != true && !mutes.mutes(request.sessionKey.path, session?.spaceName?.let { "${request.machineId}/$it" })
+        val session = byKey[request.homeKey]
+        return session?.quiet != true && !mutes.mutes(request.homeKey.path, session?.spaceName?.let { "${request.machineId}/$it" })
     }
 
     /** A session the switcher's badges count: not quiet, not muted. */
@@ -59,7 +59,8 @@ internal class ShellCounts(
 
     /** What waits at each assistant ([waiting]): the switcher's badges. */
     fun waiting(roster: ManagerRoster?, pending: List<Interaction>): Map<String, Int> =
-        roster?.waiting(pending, sessions, current.group, ::countsCard, ::countsSession).orEmpty()
+        roster?.waiting(pending.map { it.copy(sessionId = it.homeKey.sessionId) }, persona.core.domain.sort.foldedSessions(sessions),
+            current.group, ::countsCard, ::countsSession).orEmpty()
 
     /** The dot on the sidebar's button: something waits at another assistant than the current one. */
     fun othersWaiting(roster: ManagerRoster?, pending: List<Interaction>): Boolean = current.othersWaiting(waiting(roster, pending))

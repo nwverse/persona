@@ -183,10 +183,12 @@ fun ChatDestination(
 ) {
     val context = LocalContext.current.applicationContext
     val services = remember(context) { EntryPointAccessors.fromApplication(context, ChatServices::class.java) }
-    val session = SessionKey(route.machineId, route.sessionId)
-    val wiring by remember(services, session) { services.chatWiring().bindingsFor(session) }.collectAsStateWithLifecycle()
+    val requested = SessionKey(route.machineId, route.sessionId)
+    val wiring by remember(services, requested) { services.chatWiring().bindingsFor(requested) }.collectAsStateWithLifecycle()
     if (wiring == null) { androidx.compose.material3.CircularProgressIndicator(); return }
     val metadata by services.sessions().sessions.collectAsStateWithLifecycle()
+    val home = rememberChildSessionHome(requested, metadata, wiring?.actions, wiring?.connection?.lastHello?.features.orEmpty())
+    val session = home.key
     val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val managerId = metadata.firstOrNull { it.key == session }?.manager ?: managerChoice.shown
     val assistantManagement = remember(wiring?.assistantManagement, managerId) {
@@ -214,6 +216,7 @@ fun ChatDestination(
             onTerminal = onTerminal ?: { navigator.navigate(TerminalRoute(it.machineId, it.sessionId)) },
             onResumeInTerminal = { navigator.navigate(TerminalRoute(it.machineId, it.sessionId, resume = true)) },
             chrome = ChatChromeBindings(actions = wiring?.actions.takeUnless { historyReadOnly }, connection = wiring?.connection,
+                childSessionId = home.childSessionId,
                 worktrees = wiring?.worktrees.takeUnless { historyReadOnly },
                 onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
                 onOpenAssistant = { navigator.navigate(conversationRoute(it, assistant = true)) },

@@ -13,6 +13,8 @@ import dagger.hilt.components.SingletonComponent
 data class ChatChromeBindings(
     val covered: Boolean = false,
     val requestId: String? = null,
+    /** A child link opens its parent's work summary and this card. */
+    val childSessionId: String? = null,
     val onFiles: (() -> Unit)? = null,
     val onGit: (() -> Unit)? = null,
     val gitLabel: String = "Git",

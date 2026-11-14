@@ -23,6 +23,7 @@ import persona.core.domain.lines.ToolCall
 import persona.core.domain.lines.WorkItem
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.foldedSubtasks
+import persona.core.domain.sort.foldedSessions
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; iOS TasksStore / Shared/Tasks.swift, web
 // lib/feed.ts): the todos that are tasks, the plans, each conversation's feed, and where those go among the chat's lines.
@@ -245,7 +246,7 @@ fun dockAgents(conversation: String, main: String?, sessions: List<Session>, tod
     if (main.isNullOrBlank() || conversation != main) return emptyList()
     val taskAgents = todos.filter { !it.origin.isNullOrBlank() && !it.isDone }.flatMap { t -> t.activeAgents.map { it.key } }.toSet()
     val manual = todos.filter { it.origin.isNullOrBlank() }.map { it.id }.toSet()
-    val going = sessions.filter { !it.assistant && (it.agentState == AgentState.NeedsYou || it.agentState == AgentState.Working) }
+    val going = foldedSessions(sessions).filter { !it.assistant && (it.agentState == AgentState.NeedsYou || it.agentState == AgentState.Working) }
         .filter { it.key !in taskAgents && (it.todo?.id?.takeIf(String::isNotBlank)?.let { id -> id in manual } ?: true) }
     val shown = going.mapTo(HashSet()) { it.key } + taskAgents
     val folded = foldedSubtasks(sessions.map(::AgentSession)) { it.session.key in shown }

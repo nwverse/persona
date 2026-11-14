@@ -192,7 +192,7 @@ fun buildAgentList(
     /** The hub's direction tree, which "By direction" ([AgentGrouping.Direction]) is built from; null: none to group by. */
     directions: DirectionTree? = null,
 ): AgentListResult {
-    val tree = codexTaskForest(sessions, runs = { settings.draws(it, pins) })
+    val tree = codexTaskForest(foldRows(sessions), runs = { settings.draws(it, pins) })
     return buildFlatAgentList(tree.roots, machines, pins, mutes, tree.searchSettings(settings, pins, machines.associate { it.id to it.name }), todos, directions)
         .let { it.copy(children = tree.children.plusChildren(it.children)) }
 }
@@ -215,7 +215,7 @@ fun buildFlatAgentList(
     directions: DirectionTree? = null,
 ): AgentListResult {
     val machineNames = machines.associate { it.id to it.name }
-    val base = sessions.filter { settings.admits(it.session, pins, machineNames) && !(settings.hideBotmux && it.session.isBotmux) }
+    val base = foldRows(sessions).filter { settings.admits(it.session, pins, machineNames) && !(settings.hideBotmux && it.session.isBotmux) }
     val counts = AgentQuickFilter.entries.filter { it != AgentQuickFilter.All }
         .associateWith { filter -> base.count { !it.isNestedSubtask && filter.matches(it) } }
     val filtered = base.filter { settings.quick.matches(it) || it.id in settings.kept }

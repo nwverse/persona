@@ -93,10 +93,10 @@ fun assistantEntries(
     plans: Collection<TaskPlan>, feed: List<FeedItem>, now: Long, restored: Map<String, Long> = emptyMap(),
 ): AssistantEntries {
     val isMain = !main.isNullOrBlank() && main == conversation
-    val bySession = sessions.associateBy { GroupKeys.rawKey(it.key) }
+    val bySession = persona.core.domain.sort.foldedSessions(sessions).associateBy { GroupKeys.rawKey(it.key) }
     val lookup = { key: SessionKey -> bySession[GroupKeys.rawKey(key)] }
     val asksOf = interactions.sortedWith(compareBy<Interaction> { parseTime(it.createdAt) ?: Instant.MIN }.thenBy { it.id })
-        .groupBy { GroupKeys.rawKey(it.sessionKey) }
+        .groupBy { GroupKeys.rawKey(it.homeKey) }
     val time = { at: String? -> parseTime(at) ?: Instant.MIN }
 
     val asking = mutableListOf<NeedsYouEntry>()

@@ -167,6 +167,28 @@ class HttpChatActions internal constructor(
         }
     }
 
+    override suspend fun childRows(session: Session): List<Session> {
+        val rows = mutableListOf<Session>()
+        val cursors = mutableSetOf<String>()
+        var cursor: String? = null
+        do {
+            val url = HttpUrl.Builder().scheme("https").host("example.com").addPathSegments("api/v1/sessions")
+                .addQueryParameter("summary", "1").addQueryParameter("limit", "200")
+                .addQueryParameter("machine_id", session.machineId).addQueryParameter("parent_session_id", session.sessionId)
+                .apply { cursor?.let { addQueryParameter("cursor", it) } }.build()
+            val page = request(url.encodedPath + "?" + url.encodedQuery, "GET", null).use {
+                if (!it.isSuccessful) throw HubFailure.from(it)
+                JsonCodec.decodeFromString<SessionListPage>(it.body!!.string())
+            }
+            rows += page.sessions.filter { it.foldedUnder == session.sessionId }.map { it.copy(machineId = session.machineId) }
+            cursor = if (page.hasMore) {
+                page.nextCursor?.takeIf { it.isNotBlank() && cursors.add(it) }
+                    ?: throw HubFailure(HubError.Protocol, retryable = false)
+            } else null
+        } while (cursor != null)
+        return rows.distinctBy { it.key }
+    }
+
     override suspend fun interactionHistory(session: Session): List<InteractionRecord> {
         val url = HttpUrl.Builder().scheme("https").host("example.com").addPathSegments("api/v1/interactions/history")
             .addQueryParameter("machine_id", session.machineId).addQueryParameter("session_id", session.sessionId)

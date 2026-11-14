@@ -24,7 +24,7 @@ fun needsYouCards(cards: List<Interaction>, sessions: Map<SessionKey, Session>):
 
 /** The sessions that wait for the user whether or not a card was read; never the Persona tab's own conversations. */
 fun needsYouWaiting(sessions: List<Session>): List<Session> =
-    sessions.filter { !it.assistant && it.agentState == AgentState.NeedsYou }
+    foldedSessions(sessions).filter { !it.assistant && it.agentState == AgentState.NeedsYou }
 
 /**
  * The rows for [cards] (pending) and [waiting] (sessions in Needs you): a session's cards under it, oldest first, the
@@ -35,14 +35,14 @@ fun needsYouWaiting(sessions: List<Session>): List<Session> =
 fun needsYouRows(cards: List<Interaction>, waiting: List<Session>): List<NeedsYouRow> {
     val rows = ArrayList<NeedsYouRow>()
     val at = HashMap<SessionKey, Int>()
-    cards.sortedBy { parseTime(it.createdAt) ?: Instant.MIN }.forEach { card ->
-        val i = at[card.sessionKey]
+    cards.distinctBy { it.id }.sortedBy { parseTime(it.createdAt) ?: Instant.MIN }.forEach { card ->
+        val i = at[card.homeKey]
         when {
             card.sessionId.isEmpty() -> rows += NeedsYouRow(card.sessionKey, listOf(card), parseTime(card.createdAt))
             i != null -> rows[i] = rows[i].copy(cards = rows[i].cards + card)
             else -> {
-                at[card.sessionKey] = rows.size
-                rows += NeedsYouRow(card.sessionKey, listOf(card), parseTime(card.createdAt))
+                at[card.homeKey] = rows.size
+                rows += NeedsYouRow(card.homeKey, listOf(card), parseTime(card.createdAt))
             }
         }
     }

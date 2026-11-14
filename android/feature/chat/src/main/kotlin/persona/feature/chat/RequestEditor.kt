@@ -17,6 +17,7 @@ import dagger.hilt.components.SingletonComponent
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.PersonaTheme
+import persona.core.domain.sort.canApprove
 import persona.core.domain.answer.*
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -94,6 +95,13 @@ fun RequestEditor(
     onAnswer: (AnswerAction, AnswerDraft, Boolean) -> Unit,
 ) {
     val context = LocalContext.current.applicationContext
+    val childRows = LocalChatChildren.current?.rows
+    val child = childRows?.get(request.sessionId)
+    val requestBlock = if (!request.foldedUnder.isNullOrBlank() && childRows != null) {
+        if (child?.canApprove == true) null else approvalBlockedReason(context.resources, child)
+    } else blockedReason
+    val shown = if (!request.foldedUnder.isNullOrBlank() && request.sessionTitle.isNullOrBlank())
+        request.copy(sessionTitle = stringResource(R.string.chat_subagent_untitled)) else request
     val services = remember(context) { EntryPointAccessors.fromApplication(context, RequestEditorServices::class.java) }
     val store = remember(services) { services.requestDrafts() }
     val local by store.storage.collectAsStateWithLifecycle()
@@ -122,10 +130,12 @@ fun RequestEditor(
         if (request.kind == "screen") services.chats().observe(request.sessionKey) else flowOf(ChatSnapshot())
     }
         .collectAsStateWithLifecycle(ChatSnapshot())
-    InteractionForm(request, machine, draft, update, busy || !online, uncertain, full,
+    InteractionForm(shown, machine, draft, update, busy || !online, uncertain, full,
         { action, submitted, read ->
-            storageScope?.let { store.clear(it, request) }
-            transient = AnswerDraft()
-            onAnswer(action, submitted, read)
-        }, onTerminal, onExpand, items.items, readOnly, linkVisible, blockedReason = blockedReason, showTerminalHelp = terminalHelp)
+            if (requestBlock == null) {
+                storageScope?.let { store.clear(it, request) }
+                transient = AnswerDraft()
+                onAnswer(action, submitted, read)
+            }
+        }, onTerminal, onExpand, items.items, readOnly, linkVisible, blockedReason = requestBlock, showTerminalHelp = terminalHelp)
 }
