@@ -443,3 +443,185 @@ func TestInboxGroupInputNamesTheDirectChat(t *testing.T) {
 		})
 	}
 }
+
+// Review fixes (#7986): what the re-sort leaves alone, and a model that isn't there gives the try back.
+func TestInboxRetriageSkipsAndRetries(t *testing.T) {
+	m, client := newTriageModel(t, "busy", `{"tier":"fyi","summary":"示例","reason":"示例"}`)
+	h, _ := admitHub(t, client)
+	if err := h.inboxReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	add := func(id string, change func(*InboxItem)) *InboxItem {
+		it := &InboxItem{ID: id, Source: "lark", Kind: KindGroup, Title: "示例 " + id, Tier: TierAction, Reason: "示例", Context: "示例群：丙：在吗",
+			Last: "10", TriagedAt: "10", UpdatedAt: now, Lark: &InboxLark{FeedID: "F" + id, IsGroup: true}}
+		if change != nil {
+			change(it)
+		}
+		h.inbox.items[id] = it
+		return it
+	}
+	stale := add("a", nil)
+	add("failed", func(it *InboxItem) { it.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingFailed} })
+	add("due", func(it *InboxItem) { it.Follow = &InboxFollow{Due: true} })
+	add("agent", func(it *InboxItem) { it.Agent = &InboxAgent{State: AgentSkipped} })
+	add("github", func(it *InboxItem) {
+		it.Source, it.Lark = "github", nil
+		it.Connector = &InboxConnector{Thread: "example-org/example-repo#1", RuleTier: TierAction}
+	})
+	pass := func() {
+		h.triageInbox(context.Background())
+		h.inbox.triaging.Lock()
+		h.inbox.triaging.Unlock() //nolint:staticcheck // waiting for the pass
+	}
+	pass()
+	if n := len(m.asked()); n != 1 || !strings.Contains(m.asked()[0].User, "在吗") {
+		t.Fatalf("%d calls, want only the stale one", n)
+	}
+	if stale.Tier != TierAction || h.inbox.retriaged[stale.ID] {
+		t.Fatalf("a busy model: item %+v, tried %v", stale, h.inbox.retriaged[stale.ID])
+	}
+	back, client2 := newTriageModel(t, "ok", `{"tier":"fyi","summary":"示例","reason":"示例"}`)
+	h.in.mu.Lock()
+	h.in.model = client2 // the model is back (a fresh connection: the busy one stays held a while)
+	h.in.mu.Unlock()
+	pass()
+	if stale.Tier != TierFYI || len(back.asked()) != 1 {
+		t.Fatalf("model back: tier %q after %d calls", stale.Tier, len(back.asked()))
+	}
+}
+
+// A "settled" the model writes as something other than a string is ignored, not a reason to throw the answer away;
+// and a new event is never filed on arrival.
+func TestInboxGroupSettledOddValues(t *testing.T) {
+	answer := `{"assign":[{"message":"m1060","event":"lark:F1:1051"},{"message":"m1061","event":"new:1"}],
+		"events":[{"event":"lark:F1:1051","title":"示例 A","summary":"示例","tier":"fyi","reason":"示例","settled":false},
+		{"event":"new:1","title":"示例 B","summary":"示例","tier":"fyi","reason":"示例","settled":"over"}]}`
+	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
+	model, client := newGroupModel(t, answer)
+	h, _ := groupHub(t, g, client)
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+	if n := len(model.asked()); n != 1 {
+		t.Fatalf("%d grouping calls: the answer was re-asked", n)
+	}
+	if _, _, fallbacks := g.counts(); fallbacks != 0 {
+		t.Fatal("went to the fallback")
+	}
+	for id, it := range h.inbox.items {
+		if id != "lark:F1:900" && !it.open() {
+			t.Fatalf("%s filed: %+v", id, it)
+		}
+	}
+}
+
+// After a hand reopen, a newer message that isn't the owner's doesn't file the item again on the old reply; in a
+// direct chat with another open event in between, the owner's message goes to the model; a recalled one is nothing;
+// "replied" with no message of the owner's is "over"; a failed model call is asked again.
+func TestInboxSettleReviewCases(t *testing.T) {
+	t.Run("reopened, newer message from the other side", func(t *testing.T) {
+		c := &settleLark{groupLark: groupLark{placed: map[string]bool{}}}
+		c.set(`{"messages":[{"id":"m1051","pos":"1051","sender":"丙","text":"示例：什么时候部署？"},{"id":"m1052","pos":"1052","sender":"我","text":"示例：下午","mine":true},
+			{"id":"m1053","pos":"1053","sender":"丙","text":"示例：好的，那我等你"}]}`)
+		n, mu, model := settleModel(t, `{"state":"open"}`)
+		h, it := settleHub(t, c, model, false)
+		h.inbox.mu.Lock()
+		it.SettledOf = "1052" // filed on the reply, then reopened by hand
+		h.inbox.mu.Unlock()
+		h.settleAndWait()
+		mu.Lock()
+		calls := *n
+		mu.Unlock()
+		if !it.open() || calls != 1 {
+			t.Fatalf("open %v, %d model calls: want left open after the model saw only 1053", it.open(), calls)
+		}
+	})
+	t.Run("direct chat, another open event in between", func(t *testing.T) {
+		c := &settleLark{groupLark: groupLark{placed: map[string]bool{}}}
+		c.set(`{"messages":[{"id":"m1051","pos":"1051","sender":"丙","text":"示例：什么时候部署？"},{"id":"m1055","pos":"1055","sender":"丙","text":"示例：另外，周报呢"},
+			{"id":"m1056","pos":"1056","sender":"我","text":"示例：周报晚点发","mine":true}]}`)
+		n, mu, model := settleModel(t, `{"state":"open"}`)
+		h, it := settleHub(t, c, model, false)
+		h.inbox.mu.Lock()
+		h.inbox.items["lark:F1:1055"] = &InboxItem{ID: "lark:F1:1055", Source: "lark", Kind: KindDM, Tier: TierFYI, Last: "1055",
+			Group: &InboxGroup{Connector: "lark", Thread: "chat:F1"}, Lark: &InboxLark{FeedID: "F1", ReplyTo: "m1055"}}
+		h.inbox.mu.Unlock()
+		h.settleAndWait()
+		mu.Lock()
+		calls := *n
+		mu.Unlock()
+		if !it.open() || calls != 1 {
+			t.Fatalf("open %v after %d model calls: the reply may answer the other event, so the model decides", it.open(), calls)
+		}
+	})
+	t.Run("recalled", func(t *testing.T) {
+		c := &settleLark{groupLark: groupLark{placed: map[string]bool{}}}
+		c.set(`{"messages":[{"id":"m1051","pos":"1051","sender":"丙","text":"示例：什么时候部署？"},{"id":"m1052","pos":"1052","sender":"我","text":"(撤回了一条消息)","mine":true}]}`)
+		n, mu, model := settleModel(t, `{"state":"over"}`)
+		h, it := settleHub(t, c, model, false)
+		h.settleAndWait()
+		mu.Lock()
+		calls := *n
+		mu.Unlock()
+		if !it.open() || calls != 0 {
+			t.Fatalf("open %v, %d model calls", it.open(), calls)
+		}
+	})
+	t.Run("replied without the owner", func(t *testing.T) {
+		c := &settleLark{groupLark: groupLark{placed: map[string]bool{}}}
+		c.set(`{"messages":[{"id":"m1051","pos":"1051","sender":"丙","text":"示例：什么时候部署？"},{"id":"m1060","pos":"1060","sender":"丁","text":"示例：我来答，下午部署"}]}`)
+		_, _, model := settleModel(t, `{"state":"replied","reason":"已答复"}`)
+		h, it := settleHub(t, c, model, true)
+		h.settleAndWait()
+		if it.open() || it.DoneBy != doneByManager {
+			t.Fatalf("item %+v, want done_by manager", it)
+		}
+	})
+	t.Run("failed call asked again", func(t *testing.T) {
+		c := &settleLark{groupLark: groupLark{placed: map[string]bool{}}}
+		c.set(`{"messages":[{"id":"m1051","pos":"1051","sender":"丙","text":"示例：什么时候部署？"},{"id":"m1060","pos":"1060","sender":"丁","text":"示例：我也想知道"}]}`)
+		n, mu, model := settleModel(t, `not json at all`)
+		h, it := settleHub(t, c, model, true)
+		for range 2 {
+			h.inbox.mu.Lock()
+			h.inbox.settleAsked = map[string]time.Time{}
+			h.inbox.mu.Unlock()
+			h.settleAndWait()
+		}
+		mu.Lock()
+		calls := *n
+		mu.Unlock()
+		if !it.open() || calls < 2 {
+			t.Fatalf("open %v, %d model calls: a failed call must be asked again", it.open(), calls)
+		}
+	})
+}
+
+// A settled event keeps its own slot when the batch also opens a noise event: noise folding doesn't swallow it.
+func TestInboxGroupSettledSurvivesNoiseFolding(t *testing.T) {
+	answer := `{"assign":[{"message":"m1060","event":"new:1"},{"message":"m1061","event":"lark:F1:1051"}],
+		"events":[{"event":"new:1","title":"示例闲聊","summary":"示例","tier":"noise","reason":"闲聊"},
+		{"event":"lark:F1:1051","title":"示例 A","summary":"丙说不用了","tier":"noise","reason":"对方说不用了","settled":"over"}]}`
+	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
+	_, client := newGroupModel(t, answer)
+	h, _ := groupHub(t, g, client)
+	h.collectInbox(context.Background(), roundPoll)
+	h.waitGrouping()
+	if it := h.inbox.items["lark:F1:1051"]; it.open() || it.DoneBy != doneByManager {
+		t.Fatalf("settled event %+v", it)
+	}
+}
+
+// What the manager filed an event on counts as the connector's reply report at or before that position: reopened by
+// hand, a repeated report doesn't file it again; a report at a newer position, or mail / to-do evidence, doesn't count.
+func TestGroupStateHasSelfReplyReadsSettledOf(t *testing.T) {
+	it := &InboxItem{SettledOf: "1052"}
+	if !groupStateHasSelfReply(it, "1051") || !groupStateHasSelfReply(it, "1052") || groupStateHasSelfReply(it, "1053") {
+		t.Fatal("conversation evidence")
+	}
+	for _, ev := range []string{"todo:t1", "mail:7", ""} {
+		if groupStateHasSelfReply(&InboxItem{SettledOf: ev}, "1") {
+			t.Fatalf("%q counted", ev)
+		}
+	}
+}

@@ -94,3 +94,20 @@ func TestInboxMailAnsweredThenNewMailStays(t *testing.T) {
 		t.Fatalf("answered, then new mail: open %v, done_by %q; want left open", open, by)
 	}
 }
+
+// Reopened by hand after being filed on an answer, the item is not filed again on the same answer.
+func TestInboxMailAnsweredReopenedStays(t *testing.T) {
+	h, it := offPageHub(t, TierAction, time.Now().Add(-time.Hour))
+	h.markMail(true, true)
+	h.collectInbox(context.Background(), roundFull)
+	if open, _, by := h.itemState(it); open || by != "replied" {
+		t.Fatalf("not filed: open %v, done_by %q", open, by)
+	}
+	h.inbox.mu.Lock()
+	it.DoneAt, it.DoneBy = nil, ""
+	h.inbox.mu.Unlock()
+	h.collectInbox(context.Background(), roundFull)
+	if open, _, by := h.itemState(it); !open || by != "" {
+		t.Fatalf("reopened, filed again: open %v, done_by %q", open, by)
+	}
+}

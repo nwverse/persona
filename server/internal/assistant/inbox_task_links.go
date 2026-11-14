@@ -301,6 +301,7 @@ func (s *Service) fileTaskDone(ctx context.Context, items []*InboxItem) {
 			it.done(now, doneByManager)
 			b.chainAdd(it, InboxChainEntry{Kind: ChainDone, At: now.UTC(), By: doneByManager, Text: i18n.T(b.userLang(), "assistant-inbox_chain.done_task"),
 				Detail: clipRunesTo(t.Title, 60), Link: &InboxChainLink{Type: LinkTodo, ID: id}})
+			it.SettledOf = taskDoneEvidence(id)
 			b.settle(w)
 			writes = append(writes, w)
 		}
@@ -311,8 +312,11 @@ func (s *Service) fileTaskDone(ctx context.Context, items []*InboxItem) {
 
 // taskDoneFileable: an open item linked to a to-do that its finishing may file: no processing conversation of the AI
 // twin (that one decides, and its judge links the item to the task carrying the work on), nothing handling it, no
-// suggestion waiting. Under b.mu.
+// suggestion waiting, and not filed for this to-do before (reopened by hand, or by new messages, it stays). Under b.mu.
 func taskDoneFileable(it *InboxItem) bool {
 	return it.open() && it.Agent != nil && it.Agent.TodoID != "" && it.Agent.SessionID == "" && !it.handled() &&
-		currentSuggestion(it) == nil
+		currentSuggestion(it) == nil && it.SettledOf != taskDoneEvidence(it.Agent.TodoID)
 }
+
+// taskDoneEvidence is SettledOf for an item filed because its to-do finished.
+func taskDoneEvidence(todoID string) string { return "todo:" + todoID }

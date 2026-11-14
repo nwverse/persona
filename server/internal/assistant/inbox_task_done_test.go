@@ -76,6 +76,14 @@ func TestInboxTaskDoneFilesLinkedItem(t *testing.T) {
 			if !found {
 				t.Fatalf("no done_task chain entry: %+v", it.Chain)
 			}
+			// Reopened by hand, the same finished to-do doesn't file it again.
+			it.DoneAt, it.DoneBy = nil, ""
+			s.inbox.mu.Unlock()
+			s.linkInboxTaskURLs(ctx)
+			s.inbox.mu.Lock()
+			if !it.open() {
+				t.Fatalf("filed again after a reopen: %+v", it)
+			}
 		})
 	}
 }

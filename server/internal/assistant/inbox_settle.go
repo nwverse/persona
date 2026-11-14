@@ -142,6 +142,12 @@ func (s *Service) settleInbox(ctx context.Context) {
 		return
 	}
 	b.settlePass = now
+	for id := range b.settleAsked { // what is no longer a candidate is forgotten (asked again if it becomes one)
+		if it := b.items[id]; it == nil || !settleCandidate(it) {
+			delete(b.settleAsked, id)
+			delete(b.settleSeen, id)
+		}
+	}
 	var todo []*InboxItem
 	for _, it := range b.items {
 		if settleCandidate(it) && now.Sub(b.settleAsked[it.ID]) >= settleEvery {
@@ -182,6 +188,9 @@ type settleSnapshot struct {
 	connector, thread, anchor, last, start, settledOf string
 	group                                             bool
 	title, summary, context                           string
+	// others are the newest positions of the conversation's other open events: in a direct chat, the owner's message
+	// after one of those answers that one, not necessarily this.
+	others []string
 }
 
 // settleOne looks at one item: the filing when it filed it, else nil.
@@ -197,6 +206,11 @@ func (s *Service) settleOne(ctx context.Context, it *InboxItem) *inboxWrite {
 	snap := settleSnapshot{connector: it.Group.Connector, thread: it.Group.Thread, anchor: it.Lark.ReplyTo, last: it.Last,
 		start: it.Lark.StartPosition, settledOf: it.SettledOf, group: it.Lark.IsGroup, title: it.Title, summary: it.Summary,
 		context: it.Context}
+	for _, o := range b.items {
+		if o != it && o.open() && o.Group != nil && o.Group.Connector == snap.connector && o.Group.Thread == snap.thread {
+			snap.others = append(snap.others, o.Last)
+		}
+	}
 	asked := b.settleSeen[it.ID]
 	b.mu.Unlock()
 
@@ -216,10 +230,13 @@ func (s *Service) settleOne(ctx context.Context, it *InboxItem) *inboxWrite {
 	how, at, newest := settleVerdict(snap, msgs)
 	why := ""
 	if how == "" && newest != "" && newest != asked { // the model already said "open" to exactly these
-		how, why, at = s.askSettled(ctx, snap, msgs)
-		b.mu.Lock()
-		b.settleSeen[it.ID] = newest
-		b.mu.Unlock()
+		var answered bool
+		how, why, at, answered = s.askSettled(ctx, snap, msgs)
+		if answered { // a failed call is asked again next time
+			b.mu.Lock()
+			b.settleSeen[it.ID] = newest
+			b.mu.Unlock()
+		}
 	}
 	if how == "" {
 		return nil
@@ -238,22 +255,39 @@ func (s *Service) settleOne(ctx context.Context, it *InboxItem) *inboxWrite {
 // contextIDs are the message ids an event's context names, as the Lark plugin writes its lines ("… (id=<id>, 回复 …)").
 var contextIDs = lazyre.New(`\(id=([^,()\s]+)`)
 
+// settleFloor is the position after which messages are evidence: the event's newest, or what it was filed on once
+// (reopened by hand since, so only newer messages count).
+func settleFloor(snap settleSnapshot) string {
+	if positionAfter(snap.settledOf, snap.last) {
+		return snap.settledOf
+	}
+	return snap.last
+}
+
+// recalledText is how the Lark plugin writes a recalled message: it says nothing.
+const recalledText = "(撤回了一条消息)" // i18n-ignore: the connector's own words, matched, never shown
+
 // settleVerdict decides from the messages after the event's newest (last) what it can without a model: the owner's
-// own message in a direct chat, or one in a group quoting or in the thread of the event's messages, is a reply (how
-// SettledReplied, at the newest such message's position). newest is the newest later message's position when there
-// is something after the event to go on ("" nothing, or nothing newer than what SettledOf already filed it on once);
-// with how "" the model reads it.
+// own message in a direct chat (with no other open event of the chat in between, which it may be answering
+// instead), or one in a group quoting or in the thread of the event's messages, is a reply (how SettledReplied, at the
+// newest such message's position). newest is the newest later message's position when there is something after the
+// event to go on ("" nothing, or nothing newer than what SettledOf already filed it on once); with how "" the model
+// reads it. A recalled message of the owner's counts for nothing.
 func settleVerdict(snap settleSnapshot, msgs []settleMsg) (how, at, newest string) {
 	ours := map[string]bool{snap.anchor: true} // the event's messages: its context names them, else the window's own
 	for _, m := range contextIDs.FindAllStringSubmatch(snap.context, -1) {
 		ours[m[1]] = true
 	}
 	named := len(ours) > 1
+	floor := settleFloor(snap)
 	var later []settleMsg
 	for _, m := range msgs {
 		switch {
+		case positionAfter(m.Pos, floor):
+			if !m.Mine || m.Text != recalledText {
+				later = append(later, m)
+			}
 		case positionAfter(m.Pos, snap.last):
-			later = append(later, m)
 		case !named && !m.Mine && (snap.start == "" || !positionAfter(snap.start, m.Pos)):
 			ours[m.ID] = true
 		}
@@ -262,34 +296,43 @@ func settleVerdict(snap settleSnapshot, msgs []settleMsg) (how, at, newest strin
 		return "", "", ""
 	}
 	newest = later[len(later)-1].Pos
-	if snap.settledOf != "" && !positionAfter(newest, snap.settledOf) {
-		return "", "", "" // reopened by hand after it was filed on this: wait for something newer
-	}
 	for _, m := range later {
-		if m.Mine && (!snap.group || ours[m.ReplyTo] || m.Thread != "" && ours[m.Thread]) {
+		if !m.Mine {
+			continue
+		}
+		targeted := ours[m.ReplyTo] || m.Thread != "" && ours[m.Thread]
+		between := slices.ContainsFunc(snap.others, func(o string) bool { return positionAfter(o, snap.last) && positionAfter(m.Pos, o) })
+		if targeted || !snap.group && !between {
 			how, at = SettledReplied, m.Pos
 		}
 	}
 	return how, at, newest
 }
 
-// askSettled asks the triage model whether the event is over given what came after it: how "" when it is not, or the
-// model can't say; at is the position the verdict rests on (the owner's first later message for a reply, else the
-// newest later one).
-func (s *Service) askSettled(ctx context.Context, snap settleSnapshot, msgs []settleMsg) (how, why, at string) {
+// askSettled asks the triage model whether the event is over given what came after it (after settleFloor): how ""
+// when it is not; at is the position the verdict rests on (the owner's first later message for a reply, else the
+// newest later one); answered is false when the model could not be asked or said nothing usable. A "replied" with no
+// message of the owner's after the event is taken as "over": the chain never says the owner replied when they didn't.
+func (s *Service) askSettled(ctx context.Context, snap settleSnapshot, msgs []settleMsg) (how, why, at string, answered bool) {
+	floor := settleFloor(snap)
 	var later []prompts.InboxSettledLine
+	mine := ""
 	for _, m := range msgs {
-		if !positionAfter(m.Pos, snap.last) {
+		if !positionAfter(m.Pos, floor) || m.Mine && m.Text == recalledText {
 			continue
 		}
-		line := prompts.InboxSettledLine{Sender: m.Sender, Text: m.Text, Mine: m.Mine}
+		line := prompts.InboxSettledLine{Sender: m.Sender, Text: m.Text, Mine: m.Mine, ReplyTo: m.ReplyTo, Thread: m.Thread}
 		if t, err := time.Parse(time.RFC3339, m.At); err == nil {
 			line.At = t.Format("01-02 15:04")
 		}
 		later = append(later, line)
+		at = m.Pos
+		if m.Mine && mine == "" {
+			mine = m.Pos
+		}
 	}
 	if len(later) == 0 {
-		return "", "", ""
+		return "", "", "", false
 	}
 	hello := s.hello(ctx)
 	system := prompts.RenderInboxSettled(prompts.InboxSettled{Owner: hello.Owner})
@@ -301,18 +344,16 @@ func (s *Service) askSettled(ctx context.Context, snap settleSnapshot, msgs []se
 	}
 	if err := s.inboxModelJSON(ctx, purposeTriage, system, input, 0, &out); err != nil {
 		s.logf("inbox: asking whether %s is over: %v", snap.anchor, err)
-		return "", "", ""
+		return "", "", "", false
 	}
-	if out.State != SettledReplied && out.State != SettledOver {
-		return "", "", ""
+	why = clip(oneLine(out.Reason), 30)
+	switch {
+	case out.State == SettledReplied && mine != "":
+		return SettledReplied, why, mine, true
+	case out.State == SettledReplied || out.State == SettledOver:
+		return SettledOver, why, at, true
+	case out.State == "open":
+		return "", "", "", true
 	}
-	for _, m := range msgs {
-		if positionAfter(m.Pos, snap.last) {
-			at = m.Pos
-			if out.State == SettledReplied && m.Mine {
-				break // the owner's first message after it
-			}
-		}
-	}
-	return out.State, clip(oneLine(out.Reason), 30), at
+	return "", "", "", false
 }

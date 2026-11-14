@@ -57,10 +57,11 @@ type InboxSettledInput struct {
 	Later                   []InboxSettledLine
 }
 
-// InboxSettledLine is one message after the event: At as "01-02 15:04" ("" unknown), Mine the owner's own.
+// InboxSettledLine is one message after the event: At as "01-02 15:04" ("" unknown), Mine the owner's own; ReplyTo the
+// message it quotes and Thread the topic it is in (ids as the event's context names its messages), "" none.
 type InboxSettledLine struct {
-	At, Sender, Text string
-	Mine             bool
+	At, Sender, Text, ReplyTo, Thread string
+	Mine                              bool
 }
 
 func RenderInboxSettledInput(in InboxSettledInput) string { return render("inbox/settled_input", in) }

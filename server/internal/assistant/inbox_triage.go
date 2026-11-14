@@ -25,8 +25,9 @@ const triageConcurrency = 4
 // bots are FYI (#7986).
 const inboxTriageRev = 1
 
-// retriagePerPass is how many stale items one triage pass sorts again, besides the items with new content.
-const retriagePerPass = 24
+// retriagePerPass is how many stale items one triage pass sorts again, besides the items with new content (which it
+// keeps waiting no longer than a couple of model calls).
+const retriagePerPass = 8
 
 // triageInbox sorts open items whose content changed since they were last looked at into "Needs you" / "FYI" / "Noise"
 // with a one-line summary (the small-task model, inbox.triage). It runs in the background; one pass at a time.
@@ -44,7 +45,7 @@ func (s *Service) triageInbox(ctx context.Context) {
 				continue
 			}
 			todo = append(todo, it)
-		} else if b.retriageStale(it) {
+		} else if b.retriageStale(it, false) {
 			stale = append(stale, it)
 		}
 	}
@@ -100,6 +101,15 @@ func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
 	if it.Last != last { // new messages arrived meanwhile: the next pass sees them
 		return nil
 	}
+	if it.TriagedAt == last { // sorted again under new criteria (retriageStale)
+		if v.state == triagePaused || v.state == triageUnconfigured || v.state == triageTimeout {
+			delete(b.retriaged, it.ID) // the model wasn't there: a later pass tries again
+			return nil
+		}
+		if !b.retriageStale(it, true) { // filed, handled or re-sorted meanwhile
+			return nil
+		}
+	}
 	w := beginWrite(it)
 	settled := func() *inboxWrite { b.settle(w); return w }
 	fallback := b.ruleTier(it)
@@ -142,16 +152,19 @@ func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
 	return settled()
 }
 
-// retriageStale: an open "Needs you" item whose tier the model gave under older criteria (inboxTriageRev), not yet
-// sorted again this run. Left out: what an event's conversation handles or a suggestion waits on, a tier a policy sets
-// (it would set it again), a connector's rule tier that never goes to the model, and items without text. Under b.mu.
-func (b *inboxBook) retriageStale(it *InboxItem) bool {
+// retriageStale: an open "Needs you" item whose tier was given under older criteria (inboxTriageRev), not yet sorted
+// again this run (asked: it is being, so that is not checked). Only Lark and mail items and connectors' events (a
+// connector's other items carry its rules' tier). Left out: anything the AI twin or a follow-up touched (handling, a
+// suggestion, a due check, its agent record: their Needs you is theirs), a tier a policy sets (it would set it again),
+// and items without text. Under b.mu.
+func (b *inboxBook) retriageStale(it *InboxItem, asked bool) bool {
 	if !it.open() || it.Tier != TierAction || it.TriageRev >= inboxTriageRev || it.Context == "" || it.TriagedAt != it.Last ||
-		it.handled() || currentSuggestion(it) != nil || b.retriaged[it.ID] {
+		it.handled() || currentSuggestion(it) != nil || it.Handling != nil || it.Follow != nil || it.Agent != nil ||
+		!asked && b.retriaged[it.ID] {
 		return false
 	}
-	if it.Connector != nil && it.Connector.RuleTier != "" && it.Group == nil && it.TriagedBy == "" && it.Summary == "" {
-		return false // a connector's rule tier (a review request, a document comment): never the model's
+	if it.Connector != nil && it.Group == nil {
+		return false
 	}
 	if p := b.policyOf(it); p != nil && p.Tier != "" {
 		return false

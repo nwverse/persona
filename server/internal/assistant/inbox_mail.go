@@ -108,13 +108,15 @@ func (b *inboxBook) mailAnswered(it *InboxItem, list, unseen []assistantwire.Inb
 			answered = max(answered, m.UID)
 		}
 	}
-	if answered == 0 || slices.ContainsFunc(unseen, func(m assistantwire.InboxMailSummary) bool { return m.UID > answered }) {
-		return false
+	evidence := "mail:" + strconv.FormatUint(uint64(answered), 10)
+	if answered == 0 || it.SettledOf == evidence || slices.ContainsFunc(unseen, func(m assistantwire.InboxMailSummary) bool { return m.UID > answered }) {
+		return false // nothing answered, reopened by hand after being filed on this answer, or newer mail came since
 	}
 	b.roundWrite(it)
 	b.noteSelfReplied(it, now)
 	it.Read = true
 	it.done(now, "replied")
+	it.SettledOf = evidence
 	return true
 }
 

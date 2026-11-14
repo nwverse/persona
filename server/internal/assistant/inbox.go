@@ -140,8 +140,9 @@ type InboxItem struct {
 	// TriageRev is the tier criteria's revision (inboxTriageRev) the model last sorted the item under: an open "Needs
 	// you" item sorted under older criteria is sorted again once (inbox_triage.go retriageStale).
 	TriageRev int `json:"triage_rev,omitempty"`
-	// SettledOf is the source position of the evidence the manager filed the item on as handled elsewhere (your reply,
-	// the other side closing it; inbox_settle.go): reopened by hand, the same evidence never files it again.
+	// SettledOf is the evidence the manager filed the item on as handled elsewhere (inbox_settle.go): the newest source
+	// position it read for a conversation, "mail:<uid>" for an answered mail, "todo:<id>" for a finished to-do. Reopened
+	// by hand, the same evidence never files it again.
 	SettledOf string `json:"settled_of,omitempty"`
 	// ArrivedAt is the clock here when the item first held Last (ArrivedOf), as listed or saved: a bulk "Done" over a
 	// filter leaves what arrived after the list it acted on (inbox_bulk.go). Rows stored before have UpdatedAt.

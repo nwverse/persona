@@ -289,7 +289,7 @@ type groupAnswer struct {
 		Urgent    bool   `json:"urgent"`
 		Reopen    *bool  `json:"reopen"`
 		Continues string `json:"continues"`
-		Settled   string `json:"settled"`
+		Settled   any    `json:"settled"` // "replied" | "over"; anything else (false, null…) is ignored
 	} `json:"events"`
 }
 
@@ -486,9 +486,11 @@ func checkGroupAnswer(out groupAnswer, fresh []string, seen map[string]groupEven
 			}
 			pe.existing = ev
 		}
-		// Settled only means something for an event left open and not in "Needs you"; any other value is ignored.
-		if (d.Settled == SettledReplied || d.Settled == SettledOver) && d.Tier != TierAction && !seen[ev].Done {
-			pe.settled = d.Settled
+		// Settled only means something for an existing event left open and not in "Needs you" (a new one the owner never
+		// saw is not filed unseen; its tier says what it is); any other value is ignored.
+		if how, _ := d.Settled.(string); (how == SettledReplied || how == SettledOver) && d.Tier != TierAction && pe.existing != "" &&
+			!seen[ev].Done {
+			pe.settled = how
 		}
 		plan.events = append(plan.events, pe)
 	}
@@ -810,6 +812,7 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		}
 		it.Tier, it.Reason, it.TriagedBy = e.tier, clip(oneLine(e.reason), 30), "model"
 		it.Urgent = e.urgent && e.tier == TierAction
+		it.TriageRev = inboxTriageRev // decided now; a fallback append keeps the tier it had, and that tier's criteria
 	case prev.last != "":
 		// The fallback adds messages to an existing event; its structural title is only for new events. The saved tier,
 		// not the fill's provisional rule tier, is the original against which this batch's floor may raise it.
@@ -826,12 +829,13 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 			it.Title = t
 		}
 		it.Summary, it.Tier, it.Reason, it.TriagedBy, it.TitleBy = "", tier, b.byRules(), "rules", TitleByRules
+		it.TriageRev = inboxTriageRev
 	}
 	policyChanged := false
 	if !keepDone && !it.handled() { // what an event's conversation handles keeps its tier
 		policyChanged = b.applyPolicyTier(it)
 	}
-	it.TriagedAt, it.TriageRev = it.Last, inboxTriageRev
+	it.TriagedAt = it.Last
 	switch {
 	case fallbackFloorRaised && !policyChanged && higherTier(tierBefore, it.Tier) != tierBefore:
 		// Only an actual final rise from this batch's fallback rule floor bypasses noteTriaged's same-text dedup: a
@@ -956,7 +960,7 @@ func (b *inboxBook) foldNoise(connectorID, thread string, plan *groupPlan) {
 		cur := ""
 		if e.existing != "" {
 			if it := b.items[e.existing]; it != nil {
-				if e.dmJoined || !it.open() {
+				if e.dmJoined || !it.open() || e.settled != "" { // a settled event is filed as itself (putEvent)
 					out = append(out, e)
 					continue
 				}
