@@ -127,10 +127,12 @@ func TestResidentReloadRetriesOnlyNotStartedRequests(t *testing.T) {
 }
 
 // A call that never went out is said to be one (rpc.ErrNotSent), for a caller that must tell it from one that may have
-// reached the node: the caller's wait ran out between retries of the node's not-started refusals, or while the call
-// waited for the resident handover with no connection. A send that may have been taken stays unmarked.
+// reached the node: the node refused it as restarting until the retry budget or the caller's wait ran out between
+// tries, or it waited for the resident handover with no connection until the caller's wait ran out. A send that may
+// have been taken stays unmarked.
 func TestACallThatNeverWentOutSaysSo(t *testing.T) {
-	t.Run("refused as restarting until the wait ran out", func(t *testing.T) {
+	// restarting is a machine whose node refuses every session.send as restarting, counting the tries.
+	restarting := func(t *testing.T) (*Devices, *Machine, *atomic.Int32) {
 		d := newTestDevices(t)
 		m := newMachine(d, MachineConfig{ID: "example-machine", Kind: "ssh"})
 		var attempts atomic.Int32
@@ -155,7 +157,24 @@ func TestACallThatNeverWentOutSaysSo(t *testing.T) {
 		d.addEntry(m)
 		runMachine(t, m)
 		eventually(t, time.Second, "node ready", func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.online })
-		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		return d, m, &attempts
+	}
+	t.Run("refused as restarting until the retries ran out", func(t *testing.T) {
+		old := reloadRetryBudget
+		reloadRetryBudget = 250 * time.Millisecond
+		t.Cleanup(func() { reloadRetryBudget = old })
+		d, m, attempts := restarting(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := d.CallNode(ctx, m.cfg.ID, "session.send", json.RawMessage(`{"session_id":"example-session"}`))
+		if !errors.Is(err, rpc.ErrNotSent) || !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil || attempts.Load() < 2 {
+			t.Fatalf("a send the node refused as restarting until the retries ran out: %v (attempts %d, caller %v), want a deadline marked not sent",
+				err, attempts.Load(), ctx.Err())
+		}
+	})
+	t.Run("refused as restarting until the caller's wait ran out", func(t *testing.T) {
+		d, m, attempts := restarting(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 		defer cancel()
 		_, err := d.CallNode(ctx, m.cfg.ID, "session.send", json.RawMessage(`{"session_id":"example-session"}`))
 		if !errors.Is(err, rpc.ErrNotSent) || !errors.Is(err, context.DeadlineExceeded) || attempts.Load() < 2 {

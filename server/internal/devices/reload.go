@@ -54,6 +54,9 @@ func (m *Machine) expectedReload() bool {
 	return time.Now().Before(m.reloadUntil) || m.warmLocked(time.Now())
 }
 
+// reloadRetryBudget bounds how long call retries not-started refusals.
+var reloadRetryBudget = 20 * time.Second
+
 // call retries only an explicit not-started refusal or a close before writing. An ambiguous dropped write is never
 // replayed. The retry budget bounds waiting, not the operation's original execution deadline after the node is ready.
 // When the budget or the caller's wait runs out between tries, the last try had not started: that is said
@@ -67,7 +70,7 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 			return err
 		}
 		if deadline.IsZero() {
-			deadline = time.Now().Add(20 * time.Second)
+			deadline = time.Now().Add(reloadRetryBudget)
 		}
 		if time.Until(deadline) <= 0 {
 			return rpc.NotSent(context.DeadlineExceeded)
