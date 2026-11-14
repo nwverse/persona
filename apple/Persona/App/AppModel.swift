@@ -6,6 +6,7 @@ import SwiftUI
 import UIKit
 #endif
 import UserNotifications
+import PersonaWire
 
 /// App-wide state: server pairing, live connection, machines, sessions, interactions and per-session chats.
 @Observable
@@ -982,6 +983,14 @@ final class AppModel {
         guard let m = machine(ref) else { return nil }
         if let c = m.computer, c.enabled, c.screenSharing, let v = c.screenVideo, v.advertised { return v }
         if let b = m.browser, b.enabled, b.screenSharing, let v = b.screenVideo, v.advertised { return v }
+        return nil
+    }
+    /// Pixel scrolling as the extension showing this Mac's screen reports it (#7775): whether its node reads scroll records
+    /// and Persona Input may post them; nil when no shown extension's node reads them.
+    func screenInput(_ ref: MachineRef) -> MachineScreenInput? {
+        guard let m = machine(ref) else { return nil }
+        if let c = m.computer, c.enabled, c.screenSharing, let i = c.screenInput, i.reads { return i }
+        if let b = m.browser, b.enabled, b.screenSharing, let i = b.screenInput, i.reads { return i }
         return nil
     }
     nonisolated static func advertisesVideo(_ m: Machine) -> Bool {
