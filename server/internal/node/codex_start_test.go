@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -232,6 +233,8 @@ func TestCodexStartBypassLauncherArguments(t *testing.T) {
 			n, _, _, _ := codexStartHerdr(t, 0)
 			launchKeyHome(t)
 			dir := t.TempDir()
+			// Native starts read shell rc files; keep the fake launcher away from the user's rc.
+			t.Setenv("ZDOTDIR", dir)
 			self, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)
@@ -528,6 +531,197 @@ func TestCodexStartScopesOrcaHooksWithoutChangingExplicitLaunchers(t *testing.T)
 	}
 }
 
+func TestCodexStartPreservesNativeShellFunction(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Windows launchers do not use a Unix shell")
+	}
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("zsh not installed")
+	}
+	dir := t.TempDir()
+	file, out := filepath.Join(dir, "start.json"), filepath.Join(dir, "out")
+	program := filepath.Join(dir, "codex")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$PERSONA_TEST_LAUNCHER_MARK\" \"$@\" > \"$OUT\"\n"
+	if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rc := `export PATH="$PERSONA_TEST_CODEX_BIN:$PATH"
+function codex { PERSONA_TEST_LAUNCHER_MARK=from-function command codex --function-flag "$@"; }
+alias codex='codex --alias-already-expanded'
+`
+	if err := os.WriteFile(filepath.Join(dir, ".zshrc"), []byte(rc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct{ name, prompt string }{
+		{"with_first_message", specialPrompt},
+		{"without_first_message", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			b, _ := json.Marshal(codexStartFile{Argv: []string{"codex", "--alias-already-expanded"}, Prompt: tt.prompt})
+			if err := os.WriteFile(file, b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args, _ := json.Marshal([]string{file})
+			cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$")
+			cmd.Env = append(os.Environ(), "HOME="+dir, "ZDOTDIR="+dir, "SHELL=/bin/zsh",
+				"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "OUT="+out, "PERSONA_TEST_CODEX_BIN="+dir,
+				"PERSONA_HOME="+filepath.Join(dir, "state"), "PERSONA_AGENT_SANDBOX=off",
+				"PERSONA_CODEX_START_HELPER=1", "PERSONA_CODEX_START_ARGS="+string(args))
+			if b, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%v: %s", err, b)
+			}
+			got, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "from-function\n--function-flag\n--alias-already-expanded\n"
+			if tt.prompt != "" {
+				want += "--\n" + tt.prompt + "\n"
+			}
+			if string(got) != want {
+				t.Fatalf("launcher environment/flags or literal prompt lost: got %d bytes, want %d; prefix %q",
+					len(got), len(want), got[:min(100, len(got))])
+			}
+		})
+	}
+}
+
+func TestCodexStartRestoresShellContextAfterRC(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Windows launchers do not use a Unix shell")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, `project with "quotes"`)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	physicalDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, shell, prompt string
+	}{
+		{"zsh with prompt", "zsh", specialPrompt},
+		{"zsh without prompt", "zsh", ""},
+		{"bash with prompt", "bash", specialPrompt},
+		{"bash without prompt", "bash", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shell, err := exec.LookPath(tc.shell)
+			if err != nil {
+				t.Skipf("%s not installed", tc.shell)
+			}
+			home := filepath.Join(root, tc.shell+"-home")
+			bin := filepath.Join(root, tc.shell+"-bin")
+			caseName := strings.ReplaceAll(tc.name, " ", "-")
+			marker := filepath.Join(root, caseName+"-injected")
+			literal := "value with spaces;$(touch " + marker + ")"
+			if err := os.MkdirAll(home, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(bin, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			out := filepath.Join(root, caseName+".out")
+			program := filepath.Join(bin, "codex")
+			script := `#!/bin/sh
+{
+printf 'cwd=%s\n' "$(pwd -P)"
+printf 'PWD=%s\n' "$PWD"
+printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}"
+printf 'PERSONA_TEST_LITERAL=%s\n' "${PERSONA_TEST_LITERAL-unset}"
+printf 'HERDR_AGENT=%s\n' "${HERDR_AGENT-unset}"
+printf 'PERSONA_TEST_FUNCTION=%s\n' "${PERSONA_TEST_FUNCTION-unset}"
+if env | grep -q '^__PERSONA_CODEX_START_'; then printf 'carrier=leaked\n'; else printf 'carrier=clear\n'; fi
+for arg do printf 'arg=%s\n' "$arg"; done
+} > "$OUT"
+`
+			if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			rc := "export PATH=" + shellQuote(bin) + `:"$PATH"
+cd /
+export CODEX_HOME=/from-rc
+export PERSONA_TEST_LITERAL=from-rc
+export HERDR_AGENT=from-rc
+function codex { PERSONA_TEST_FUNCTION=from-function command codex --function-flag "$@"; }
+alias codex='codex --alias-already-expanded'
+`
+			rcName := ".zshrc"
+			if tc.shell == "bash" {
+				rcName = ".bashrc"
+			}
+			if err := os.WriteFile(filepath.Join(home, rcName), []byte(rc), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(root, caseName+"-start.json")
+			b, _ := json.Marshal(codexStartFile{
+				Argv:   []string{"CODEX_HOME=/from-launcher", "PERSONA_TEST_LITERAL=" + literal, "codex", "--launcher-flag", "argument with spaces"},
+				Prompt: tc.prompt,
+				Dir:    dir,
+				Agent:  "codex",
+			})
+			if err := os.WriteFile(file, b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args, _ := json.Marshal([]string{file})
+			cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$")
+			cmd.Env = append(os.Environ(), "HOME="+home, "ZDOTDIR="+home, "SHELL="+shell,
+				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "OUT="+out,
+				"PERSONA_HOME="+filepath.Join(root, "persona-home"), "PERSONA_AGENT_SANDBOX=off",
+				"PERSONA_CODEX_START_HELPER=1", "PERSONA_CODEX_START_ARGS="+string(args))
+			if b, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("CodexStart helper: %v: %s", err, b)
+			}
+			got, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "cwd=" + physicalDir + "\nPWD=" + dir + "\nCODEX_HOME=/from-launcher\nPERSONA_TEST_LITERAL=" + literal + "\nHERDR_AGENT=codex\nPERSONA_TEST_FUNCTION=from-function\ncarrier=clear\n"
+			want += "arg=--function-flag\narg=--launcher-flag\narg=argument with spaces\n"
+			if tc.prompt != "" {
+				want += "arg=--\narg=" + tc.prompt + "\n"
+			}
+			if string(got) != want {
+				t.Errorf("Codex context/args = %q, want %q", got, want)
+			}
+			if _, err := os.Stat(marker); err == nil {
+				t.Errorf("launcher assignment was evaluated as shell code; created %s", marker)
+			} else if !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCodexStartExecKeepsExplicitAssignmentsOutOfArgv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Windows launchers do not use a Unix shell")
+	}
+	t.Setenv("PERSONA_AGENT_SANDBOX", "off")
+	secretValue := "private value with spaces"
+	secretAssignment := "CODEX_HOME=" + secretValue
+	_, argv, env, _ := codexStartExec("/opt/bin/codex", []string{"codex", "--flag"}, nil, []string{secretAssignment})
+	joinedArgv := strings.Join(argv, "\x00")
+	if strings.Contains(joinedArgv, secretAssignment) || strings.Contains(joinedArgv, secretValue) {
+		t.Fatalf("explicit launcher secret appeared in helper argv: %q", argv)
+	}
+	var carrier string
+	for _, entry := range env {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok && strings.HasPrefix(name, "__PERSONA_CODEX_START_") && value == secretAssignment {
+			carrier = name
+		}
+	}
+	if carrier == "" {
+		t.Fatalf("explicit assignment was not preserved in an environment carrier")
+	}
+	if !slices.Contains(argv, carrier) {
+		t.Fatalf("helper argv does not refer to its environment carrier %q: %q", carrier, argv)
+	}
+}
+
 // codex-start's environment: the file's agent replaces a HERDR_AGENT the shell had (appended, the inherited one would
 // come first, the one getenv and herdr read); no agent (tab-start) leaves HERDR_AGENT as it was. The launcher's own
 // words go in after what the shell had, as before. `env` prints the environment exactly as it was exec'd.
@@ -604,5 +798,119 @@ alias dmcc='ANTHROPIC_BASE_URL=http://127.0.0.1:8 claude'
 	list, codex, _, _ = mergeLaunchers(launcherBegin + "\x1d\x1d/usr/local/bin/codex\n" + launcherEnd)
 	if len(list) != 2 || list[1].Name != "codex" || list[1].Agent != "codex" || len(codex["codex"]) != 1 {
 		t.Errorf("plain codex: %+v %v", list, codex)
+	}
+}
+
+func TestCodexStartUsesSupportedNativeShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Codex starts do not use a Unix shell")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not installed")
+	}
+	zsh, zerr := exec.LookPath("zsh")
+	for _, mode := range []struct {
+		name string
+		zsh  bool
+	}{{"zsh", true}, {"bash-fallback", false}} {
+		for _, userShell := range []string{"sh", "dash", "fish", "ksh"} {
+			t.Run(mode.name+"/SHELL-"+userShell, func(t *testing.T) {
+				if mode.zsh && zerr != nil {
+					t.Skip("zsh not installed")
+				}
+				root := t.TempDir()
+				home := filepath.Join(root, "home")
+				bin := filepath.Join(root, "bin")
+				traps := filepath.Join(root, "traps")
+				dir := filepath.Join(root, `project with "quotes"`)
+				for _, d := range []string{home, bin, traps, dir} {
+					if err := os.MkdirAll(d, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				physicalDir, err := filepath.EvalSymlinks(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(bash, filepath.Join(bin, "bash")); err != nil {
+					t.Fatal(err)
+				}
+				if mode.zsh {
+					if err := os.Symlink(zsh, filepath.Join(bin, "zsh")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				out := filepath.Join(root, "fake-codex.out")
+				literalMarker := filepath.Join(root, "literal-was-executed")
+				literal := "value with spaces;$(printf injected > " + shellQuote(literalMarker) + ")"
+				fake := `
+{
+printf 'cwd=%s\n' "$(pwd -P)"
+printf 'PWD=%s\n' "$PWD"
+if [[ ${CODEX_HOME+x} == x ]]; then printf 'CODEX_HOME=set:<%s>\n' "$CODEX_HOME"; else printf 'CODEX_HOME=unset\n'; fi
+printf 'PERSONA_TEST_LITERAL=%s\n' "$PERSONA_TEST_LITERAL"
+printf 'HERDR_AGENT=%s\n' "$HERDR_AGENT"
+printf 'FUNCTION=%s\n' "$PERSONA_TEST_FUNCTION"
+carrier=clear
+for name in $(compgen -e); do case "$name" in __PERSONA_CODEX_START_*) carrier=leaked;; esac; done
+printf 'carrier=%s\n' "$carrier"
+for arg do printf 'arg=%s\n' "$arg"; done
+} > "$OUT"
+`
+				if err := os.WriteFile(filepath.Join(bin, "codex"), []byte("#!"+bash+"\n"+fake), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				trapMarker := filepath.Join(root, "unsupported-shell-ran")
+				for _, name := range []string{"sh", "dash", "fish", "ksh"} {
+					trap := "#!/bin/sh\nprintf 'executed\\n' > " + shellQuote(trapMarker) + "\nexit 0\n"
+					if err := os.WriteFile(filepath.Join(traps, name), []byte(trap), 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				rc := "export PATH=" + shellQuote(bin) + "\ncd /\nexport CODEX_HOME=from-rc HERDR_AGENT=from-rc PERSONA_TEST_LITERAL=from-rc\n" +
+					"codex() { export PERSONA_TEST_FUNCTION=from-function; command codex --function-flag \"$@\"; }\n"
+				rcName := ".zshrc"
+				if !mode.zsh {
+					rcName = ".bashrc"
+				}
+				if err := os.WriteFile(filepath.Join(home, rcName), []byte(rc), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				startFile := filepath.Join(root, "start.json")
+				b, err := json.Marshal(codexStartFile{Argv: []string{"CODEX_HOME=", "PERSONA_TEST_LITERAL=" + literal, "codex", "argument with spaces"}, Dir: dir, Agent: "codex"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(startFile, b, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				args, _ := json.Marshal([]string{startFile})
+				cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$")
+				cmd.Dir = root
+				env := withoutEnv(os.Environ(), []string{"HOME", "ZDOTDIR", "SHELL", "PATH", "PWD", "OUT", "CODEX_HOME", "HERDR_AGENT", "PERSONA_TEST_LITERAL", "PERSONA_TEST_FUNCTION", "PERSONA_HOME", "PERSONA_AGENT_SANDBOX", "PERSONA_CODEX_START_HELPER", "PERSONA_CODEX_START_ARGS"})
+				cmd.Env = append(env, "HOME="+home, "ZDOTDIR="+home, "SHELL="+filepath.Join(traps, userShell), "PATH="+bin, "PWD="+root,
+					"OUT="+out, "CODEX_HOME=outer", "HERDR_AGENT=inherited", "PERSONA_TEST_LITERAL=outer", "PERSONA_HOME="+filepath.Join(root, "persona-home"),
+					"PERSONA_AGENT_SANDBOX=off", "PERSONA_CODEX_START_HELPER=1", "PERSONA_CODEX_START_ARGS="+string(args))
+				if b, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("CodexStart: %v: %s", err, b)
+				}
+				got, err := os.ReadFile(out)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := "cwd=" + physicalDir + "\nPWD=" + dir + "\nCODEX_HOME=set:<>\nPERSONA_TEST_LITERAL=" + literal + "\nHERDR_AGENT=codex\nFUNCTION=from-function\ncarrier=clear\narg=--function-flag\narg=argument with spaces\n"
+				if string(got) != want {
+					t.Errorf("fake Codex observation = %q, want %q", got, want)
+				}
+				for _, marker := range []string{literalMarker, trapMarker} {
+					if _, err := os.Stat(marker); err == nil {
+						t.Errorf("unexpected shell execution marker: %s", marker)
+					} else if !os.IsNotExist(err) {
+						t.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }
