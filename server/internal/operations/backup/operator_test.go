@@ -1,0 +1,434 @@
+package backup
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/secretkey"
+)
+
+type fakeDatabase struct {
+	dump     string
+	identity DatabaseIdentity
+}
+
+type fakeBackend struct {
+	mu              sync.Mutex
+	servers         map[string]map[string]*fakeDatabase
+	identities      map[string]DatabaseIdentity
+	created         []string
+	dropped         []string
+	renamed         []string
+	restoreErr      error
+	restorePart     string
+	dumpErr         error
+	dumpPart        string
+	failInstallPart string
+	installFailed   bool
+	installErr      error
+	active          map[string]int
+}
+
+func newFakeBackend() *fakeBackend {
+	return &fakeBackend{servers: map[string]map[string]*fakeDatabase{}, identities: map[string]DatabaseIdentity{}, active: map[string]int{}}
+}
+
+func fakeServer(target Target) string {
+	u, _ := url.Parse(target.URL)
+	return u.Host
+}
+
+func (f *fakeBackend) server(target Target) map[string]*fakeDatabase {
+	name := fakeServer(target)
+	if f.servers[name] == nil {
+		f.servers[name] = map[string]*fakeDatabase{}
+	}
+	return f.servers[name]
+}
+
+func (f *fakeBackend) add(target Target, name, dump string) {
+	f.server(target)[name] = &fakeDatabase{dump: dump, identity: f.identities[dump]}
+}
+
+func (f *fakeBackend) Identity(_ context.Context, target Target, part, database string) (DatabaseIdentity, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if database == "" {
+		database = target.Database
+	}
+	db := f.server(target)[database]
+	if db == nil {
+		return DatabaseIdentity{}, fmt.Errorf("%s database %s is missing", part, database)
+	}
+	identity := db.identity
+	identity.Schema = append([]Migration(nil), identity.Schema...)
+	return identity, nil
+}
+
+func (f *fakeBackend) Quiesced(_ context.Context, target Target, database string, missingOK bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if database == "" {
+		database = target.Database
+	}
+	if f.server(target)[database] == nil {
+		if missingOK {
+			return nil
+		}
+		return fmt.Errorf("%s database is missing", target.Part)
+	}
+	if f.active[target.Part+":"+database] != 0 {
+		return errors.New("writes are still active")
+	}
+	return nil
+}
+
+func (f *fakeBackend) Dump(_ context.Context, target Target, destination string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.dumpErr != nil && (f.dumpPart == "" || f.dumpPart == target.Part) {
+		return f.dumpErr
+	}
+	db := f.server(target)[target.Database]
+	if db == nil {
+		return errors.New("database disappeared before dump")
+	}
+	return os.WriteFile(destination, []byte(db.dump), 0o600)
+}
+
+func (f *fakeBackend) Create(_ context.Context, target Target, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.server(target)[name] != nil {
+		return errors.New("duplicate temporary database")
+	}
+	f.server(target)[name] = &fakeDatabase{}
+	f.created = append(f.created, name)
+	return nil
+}
+
+func (f *fakeBackend) Restore(_ context.Context, target Target, database, dumpPath string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.restoreErr != nil && (f.restorePart == "" || f.restorePart == target.Part) {
+		return f.restoreErr
+	}
+	raw, err := os.ReadFile(dumpPath)
+	if err != nil {
+		return err
+	}
+	identity, ok := f.identities[string(raw)]
+	if !ok {
+		return errors.New("unknown fake dump")
+	}
+	db := f.server(target)[database]
+	if db == nil {
+		return errors.New("temporary database is missing")
+	}
+	db.dump, db.identity = string(raw), identity
+	return nil
+}
+
+func (f *fakeBackend) Drop(_ context.Context, target Target, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.server(target), name)
+	f.dropped = append(f.dropped, name)
+	return nil
+}
+
+func (f *fakeBackend) Rename(_ context.Context, target Target, from, to string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failInstallPart == target.Part && !f.installFailed && strings.HasPrefix(from, "persona_staged_") && to == target.Database {
+		f.installFailed = true
+		if f.installErr != nil {
+			return f.installErr
+		}
+		return errors.New("injected staged database installation failure")
+	}
+	server := f.server(target)
+	if server[from] == nil || server[to] != nil {
+		return fmt.Errorf("invalid rename %s to %s", from, to)
+	}
+	server[to] = server[from]
+	delete(server, from)
+	f.renamed = append(f.renamed, from+"->"+to)
+	return nil
+}
+
+func (f *fakeBackend) Exists(_ context.Context, target Target, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.server(target)[name] != nil, nil
+}
+
+type backupFixture struct {
+	home       string
+	output     string
+	hub        Target
+	manager    Target
+	backend    *fakeBackend
+	managerKey []byte
+}
+
+func newBackupFixture(t *testing.T, managerName string) *backupFixture {
+	t.Helper()
+	root := t.TempDir()
+	home := filepath.Join(root, "runtime")
+	output := filepath.Join(root, "out", "install.backup")
+	hubURL := "postgres://persona:hub-secret@db.example:5432/persona?sslmode=disable"
+	managerURL, err := withDatabase(hubURL, managerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, filepath.Join(home, "hub.json"), []byte(`{"database_url":"`+hubURL+`","token":"hub-token-secret"}`))
+	writeFixtureFile(t, filepath.Join(home, "managers", "assistant", "manager.json"), []byte(`{"database_name":"`+managerName+`","usage":{"sources":[{"key":"usage-secret"}]}}`))
+	writeFixtureFile(t, filepath.Join(home, "secret.key"), bytes.Repeat([]byte{1}, secretkey.Size))
+	managerKey := bytes.Repeat([]byte{2}, secretkey.Size)
+	writeFixtureFile(t, filepath.Join(home, "managers", "assistant", "secret.key"), managerKey)
+	writeFixtureFile(t, filepath.Join(home, "managers", "assistant", "tailcat-hub.json"), []byte("tailcat-key"))
+	writeFixtureFile(t, filepath.Join(home, "managers", "assistant", "handles.key"), []byte("handles-key"))
+	writeFixtureFile(t, filepath.Join(home, "data", "facts", "note.md"), []byte("original knowledge"))
+	writeFixtureFile(t, filepath.Join(home, "extensions", "example", "manifest.json"), []byte("{}"))
+	writeFixtureFile(t, filepath.Join(home, "extensions", "example", "run"), []byte("extension executable"))
+	if err := os.Chmod(filepath.Join(home, "extensions", "example", "run"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, filepath.Join(home, "managers", "m-abcdef", "manager.json"), []byte("independent manager"))
+
+	backend := newFakeBackend()
+	hub := Target{Part: "hub", URL: hubURL, Database: "persona"}
+	manager := Target{Part: "manager", URL: managerURL, Database: managerName}
+	backend.identities["hub-one"] = DatabaseIdentity{ServerVersion: "18.1", Schema: []Migration{{Version: 1, Name: "0001_hub.sql", Part: "hub"}}}
+	backend.identities["manager-one"] = DatabaseIdentity{ServerVersion: "18.1", Schema: []Migration{{Version: 430, Name: "0430_sealing_key.sql", Part: "manager"}}, SealingKey: secretkey.Fingerprint(managerKey)}
+	backend.identities["hub-two"] = DatabaseIdentity{ServerVersion: "18.1", Schema: []Migration{{Version: 2, Name: "0002_hub.sql", Part: "hub"}}}
+	backend.identities["manager-two"] = DatabaseIdentity{ServerVersion: "18.1", Schema: []Migration{{Version: 431, Name: "0431_manager.sql", Part: "manager"}}, SealingKey: secretkey.Fingerprint(managerKey)}
+	backend.add(hub, hub.Database, "hub-one")
+	backend.add(manager, manager.Database, "manager-one")
+	return &backupFixture{home: home, output: output, hub: hub, manager: manager, backend: backend, managerKey: managerKey}
+}
+
+func writeFixtureFile(t *testing.T, name string, content []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *backupFixture) operator() *Operator {
+	return &Operator{backend: f.backend, now: func() time.Time { return time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC) }, random: rand.Reader}
+}
+
+func (f *backupFixture) options() Options {
+	return Options{Home: f.home, Output: f.output, WritesQuiesced: true}
+}
+
+func (f *backupFixture) mutate(t *testing.T) {
+	t.Helper()
+	f.backend.add(f.hub, f.hub.Database, "hub-two")
+	f.backend.add(f.manager, f.manager.Database, "manager-two")
+	writeFixtureFile(t, filepath.Join(f.home, "hub.json"), []byte(`{"database_url":"`+f.hub.URL+`","token":"changed-token"}`))
+	writeFixtureFile(t, filepath.Join(f.home, "data", "facts", "note.md"), []byte("changed knowledge"))
+	writeFixtureFile(t, filepath.Join(f.home, "managers", "m-abcdef", "manager.json"), []byte("independent manager changed"))
+}
+
+func assertNoTemporaryDatabases(t *testing.T, backend *fakeBackend) {
+	t.Helper()
+	for _, server := range backend.servers {
+		for name := range server {
+			if strings.HasPrefix(name, "persona_verify_") || strings.HasPrefix(name, "persona_staged_") {
+				t.Errorf("temporary database %s remains", name)
+			}
+		}
+	}
+}
+
+func TestWholeInstallCreateVerifyRestore(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	operator := fixture.operator()
+	created, err := operator.Create(context.Background(), fixture.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created.Verified {
+		t.Fatal("create returned before temporary-database verification")
+	}
+	info, err := os.Stat(fixture.output)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("bundle mode = %v, %v", info.Mode(), err)
+	}
+	manifest, _, err := readBundleManifest(fixture.output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Manager.SealingKey != secretkey.Fingerprint(fixture.managerKey) || len(manifest.Files) < 8 {
+		t.Fatalf("incomplete manifest: %+v", manifest)
+	}
+	if _, err := operator.Verify(context.Background(), Options{Home: fixture.home, Bundle: fixture.output}); err != nil {
+		t.Fatal(err)
+	}
+	assertNoTemporaryDatabases(t, fixture.backend)
+
+	fixture.mutate(t)
+	restored, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restored.Restored || restored.PreviousHubDB == "" || restored.PreviousManagerDB == "" || restored.PreviousFiles == "" {
+		t.Fatalf("restore did not preserve predecessors: %+v", restored)
+	}
+	if got := fixture.backend.server(fixture.hub)[fixture.hub.Database].dump; got != "hub-one" {
+		t.Fatalf("hub dump after restore = %q", got)
+	}
+	if got := fixture.backend.server(fixture.manager)[fixture.manager.Database].dump; got != "manager-one" {
+		t.Fatalf("manager dump after restore = %q", got)
+	}
+	if got := fixture.backend.server(fixture.hub)[restored.PreviousHubDB].dump; got != "hub-two" {
+		t.Fatalf("previous hub dump = %q", got)
+	}
+	if got := fixture.backend.server(fixture.manager)[restored.PreviousManagerDB].dump; got != "manager-two" {
+		t.Fatalf("previous manager dump = %q", got)
+	}
+	raw, err := os.ReadFile(filepath.Join(fixture.home, "hub.json"))
+	if err != nil || !bytes.Contains(raw, []byte("hub-token-secret")) {
+		t.Fatalf("hub.json was not restored: %q, %v", raw, err)
+	}
+	raw, _ = os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
+	if string(raw) != "original knowledge" {
+		t.Fatalf("knowledge after restore = %q", raw)
+	}
+	raw, _ = os.ReadFile(filepath.Join(fixture.home, "managers", "m-abcdef", "manager.json"))
+	if string(raw) != "independent manager changed" {
+		t.Fatalf("independent manager was touched: %q", raw)
+	}
+	if info, err := os.Stat(filepath.Join(fixture.home, "extensions", "example", "run")); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("extension executable mode = %v, %v", info.Mode(), err)
+	}
+	assertNoTemporaryDatabases(t, fixture.backend)
+}
+
+func TestRestoreFailureRollsBackFilesAndBothDatabases(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	fixture.mutate(t)
+	fixture.backend.failInstallPart = "manager"
+	_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+	if err == nil || !strings.Contains(err.Error(), "injected") {
+		t.Fatalf("restore error = %v", err)
+	}
+	if got := fixture.backend.server(fixture.hub)[fixture.hub.Database].dump; got != "hub-two" {
+		t.Fatalf("hub was not rolled back: %q", got)
+	}
+	if got := fixture.backend.server(fixture.manager)[fixture.manager.Database].dump; got != "manager-two" {
+		t.Fatalf("manager was not rolled back: %q", got)
+	}
+	raw, _ := os.ReadFile(filepath.Join(fixture.home, "hub.json"))
+	if !bytes.Contains(raw, []byte("changed-token")) {
+		t.Fatalf("files were not rolled back: %q", raw)
+	}
+	raw, _ = os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
+	if string(raw) != "changed knowledge" {
+		t.Fatalf("knowledge was not rolled back: %q", raw)
+	}
+	assertNoTemporaryDatabases(t, fixture.backend)
+	for _, server := range fixture.backend.servers {
+		for name := range server {
+			if strings.HasPrefix(name, "persona_previous_") {
+				t.Errorf("previous database %s was not renamed back", name)
+			}
+		}
+	}
+}
+
+func TestCreateRejectsMissingManagerDatabase(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	delete(fixture.backend.server(fixture.manager), fixture.manager.Database)
+	_, err := fixture.operator().Create(context.Background(), fixture.options())
+	if err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("missing manager error = %v", err)
+	}
+	if _, statErr := os.Stat(fixture.output); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("bundle exists after failure: %v", statErr)
+	}
+}
+
+func TestCreateRejectsMismatchedCurrentKey(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	writeFixtureFile(t, filepath.Join(fixture.home, "managers", "assistant", "secret.key"), bytes.Repeat([]byte{9}, secretkey.Size))
+	_, err := fixture.operator().Create(context.Background(), fixture.options())
+	if err == nil || !strings.Contains(err.Error(), "different secret.key") {
+		t.Fatalf("mismatched key error = %v", err)
+	}
+	if _, statErr := os.Stat(fixture.output); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("bundle exists after key failure: %v", statErr)
+	}
+}
+
+func TestInterruptedVerificationPublishesNothingAndCleansDatabases(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	fixture.backend.restoreErr = context.Canceled
+	_, err := fixture.operator().Create(context.Background(), fixture.options())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("interruption error = %v", err)
+	}
+	if _, statErr := os.Stat(fixture.output); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("bundle exists after interruption: %v", statErr)
+	}
+	assertNoTemporaryDatabases(t, fixture.backend)
+	matches, _ := filepath.Glob(filepath.Join(filepath.Dir(fixture.output), ".persona-backup-*"))
+	if len(matches) != 0 {
+		t.Fatalf("staging remains after interruption: %v", matches)
+	}
+}
+
+func TestLongManagerDatabaseNameDoesNotGrowTemporaryIdentifiers(t *testing.T) {
+	longName := strings.Repeat("manager_with_a_very_long_name_", 8)
+	fixture := newBackupFixture(t, longName)
+	if _, err := fixture.operator().Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	manifest, _, err := readBundleManifest(fixture.output)
+	if err != nil || manifest.ManagerDatabase != longName {
+		t.Fatalf("long manager identity was not retained: %v", err)
+	}
+	for _, name := range fixture.backend.created {
+		if len(name) > 63 {
+			t.Errorf("temporary identifier is %d bytes: %q", len(name), name)
+		}
+	}
+}
+
+func TestRestoreCanReplaceMissingExistingDatabases(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	delete(fixture.backend.server(fixture.hub), fixture.hub.Database)
+	delete(fixture.backend.server(fixture.manager), fixture.manager.Database)
+	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PreviousHubDB != "" || result.PreviousManagerDB != "" {
+		t.Fatalf("missing predecessors were reported: %+v", result)
+	}
+	assertNoTemporaryDatabases(t, fixture.backend)
+}
