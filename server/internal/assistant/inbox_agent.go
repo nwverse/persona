@@ -348,6 +348,11 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		if len(jobs) >= max(agentConcurrency(cfg)-running, 0) {
 			continue
 		}
+		if it.Agent.DeferredAt != nil {
+			// A missing conversation recovered with held work reaches its first message only after this capacity check.
+			// Admit now so that message includes every note and the replay establishes the same restoration state.
+			b.admitInboxSourceWake(it, now)
+		}
 		it.Agent.State, it.Agent.StartedAt, it.Agent.Attempts, it.Agent.RetryAfter = AgentRunning, &now, it.Agent.Attempts+1, nil
 		delete(b.listMemo.kept, it.ID) // saved once the start returns: listed as running meanwhile (inbox_list_memo.go)
 		a := b.inboxAgentFor(it, owner, linked[it.Agent.TodoID], larkDefault, loc)
@@ -506,9 +511,9 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 		a, h := it.Agent, it.Handling
 		switch {
 		case a == nil:
-		case a.DeferredAt != nil && (h == nil || h.State != HandlingAgent):
-			// A held wake has not started a processing turn. Replied-while-Agent is the exception: its current Agent
-			// keeps the existing stop and bounded-timeout supervision even while that wake waits for capacity.
+		case a.DeferredAt != nil && (h == nil || h.State != HandlingAgent || inboxDeferredAgentStop(it)):
+			// A held wake has not started a processing turn. Replied-while-Agent keeps its current Agent's supervision
+			// only until that Agent's settled stop is itself deferred; a known-settled stop must never time out as running.
 		case a.SessionID != "" && (a.State == AgentRunning || h != nil && (h.State == HandlingLooking || h.State == HandlingAgent)):
 			running = append(running, it)
 		case a.State != AgentRunning || a.SessionID != "":

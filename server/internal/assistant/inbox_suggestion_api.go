@@ -142,18 +142,18 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	switch {
 	case in.Action == suggestReject:
 		b.chainAdd(it, rejectedEntry(l, g.Text, now))
-		b.flushInboxWakes(it)
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteRejected, Text: g.Text}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 	case in.Action == suggestInstruct:
 		words := strings.TrimSpace(*in.Text)
 		b.chainAdd(it, instructedEntry(l, words, now))
-		b.flushInboxWakes(it)
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteInstructed, Text: words}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 	case !execute: // handback: the conversation does it
 		b.chainAdd(it, confirmedEntry(l, text, edited, now))
-		b.flushInboxWakes(it)
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteHandback, Text: text, Edited: edited}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 	case g.Kind == SuggestConclusion:
@@ -240,7 +240,6 @@ func (s *Service) confirmReply(ctx context.Context, it *InboxItem, g *InboxSugge
 		b.failHandling(it, i18n.T(b.userLang(), "assistant-inbox_chain.failed_send"), now)
 	} else {
 		it.Agent.SentOf = last
-		b.flushInboxWakes(it)
 		b.waitForOtherSide(it, defaultInboxFollow(now), ViaUser, now, loc, false)
 		b.tell(it, inboxNote{Name: prompts.NoteSent, Text: text, Edited: edited}, false, now)
 	}
@@ -287,7 +286,6 @@ func (s *Service) confirmAgent(ctx context.Context, it *InboxItem, g *InboxSugge
 				i18n.Args{"title": clip(oneLine(text), 40)})})
 		}
 		b.setHandling(it, HandlingAgent, "", now)
-		b.flushInboxWakes(it)
 		b.tell(it, inboxNote{Name: prompts.NoteAgentStarted, Text: text, Edited: edited, Machine: machine, Session: session}, false, now)
 		_ = res
 	}
