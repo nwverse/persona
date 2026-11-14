@@ -52,6 +52,7 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
     var markingDone by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var stale by rememberSaveable(route.itemId) { mutableStateOf(false) }
+    var lineageRevision by remember(route.itemId) { mutableIntStateOf(0) }
     val open = LocalLarkLinkOpener.current
     val clock = LocalInboxClock.current
     val zone = LocalInboxZone.current
@@ -66,6 +67,15 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
             }
         }
     }
+    val sayAction: (@Composable () -> Unit)? = record?.takeIf { !it.item.isDone && it.event.suggestion == null }?.let { current ->
+        { InboxSayAction(repository, current, oldMark, onStale = { stale = it }) }
+    }
+    val stateActions: (@Composable () -> Unit)? = if (sayAction == null) processingAction else ({
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            processingAction?.invoke()
+            sayAction?.invoke()
+        }
+    })
     fun go(target: ChainTarget) {
         val shown = record ?: return
         when (target) {
@@ -100,6 +110,7 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
                         finally { markingDone = false }
                     }
                 })
+            if (record != null) InboxSameMatterMenu(repository, record, onLinked = { lineageRevision++ })
         },
     ) {
         if (record == null) {
@@ -130,11 +141,11 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
         if (suggestion == null || record.item.isDone) {
             if (nowText != null) item("event-state") {
                 EventStateLine(EventMark.Now(nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
-                    key = record.event.now), Modifier.padding(bottom = Tokens.Space.s), processingAction)
+                    key = record.event.now), Modifier.padding(bottom = Tokens.Space.s), stateActions)
             } else if (oldMark != null) item("event-state") {
-                EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s), processingAction)
+                EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s), stateActions)
             } else item("event-state") {
-                EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s), processingAction)
+                EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s), stateActions)
             }
         }
         record.item.summary?.takeIf { it.isNotBlank() }?.let { summary ->
@@ -164,7 +175,7 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
             }
         }
         eventChain(record, inbox.sessions, inbox.mutes, ::go)
-        item("event-line") { InboxLineSection(repository, record, navigator) }
+        item("event-line") { InboxLineSection(repository, record, navigator, reload = lineageRevision) }
         if (record.event.related.isNotEmpty()) {
             item("event-related-header") { JSectionHeader(stringResource(R.string.inbox_event_related), count = record.event.related.size) }
             itemsIndexed(record.event.related, key = { _, it -> "event-related:${it.id}" }) { index, related ->
