@@ -3,7 +3,7 @@ import XCTest
 /// A bounded iOS-reference set (#6871), not another run of the existing continuity corpus. Every screen below remains
 /// the native production UI: PersonaCore is not created in a view or on the launch path in this phase.
 final class PerfReferenceTests: PerfTestCase {
-    private static let weather = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
+    private static let heavyChat = "server/a1f3c2d4-0000-4000-8000-000000000008"
     private static let streaming = "server/b2e4d6f8-0000-4000-8000-000000000004"
 
     @MainActor    private func referenceLaunch(_ arguments: [String]) {
@@ -45,15 +45,15 @@ final class PerfReferenceTests: PerfTestCase {
         app.revealAgentsSearch()
         let search = app.searchFields.firstMatch
         search.tap()
-        search.typeText("给天气 App 加主屏幕小组件")
+        search.typeText("整理构建脚本")
         let row = app.buttons.matching(NSPredicate(format: "identifier IN %@ AND label CONTAINS %@",
-                                                     ["agents.row", "agents.compactRow"], "给天气 App 加主屏幕小组件")).firstMatch
+                                                     ["agents.row", "agents.compactRow"], "整理构建脚本")).firstMatch
         see(row, "the fixed native chat row", timeout: 15)
         let ready = any("shell-composer-field")
         func roundTrip() {
             row.tapCenter()
             see(ready, "the native chat composer", timeout: 15)
-            app.buttons["shell-agents"].firstMatch.tapCenter()
+            back()
             see(app.buttons["agents.filter.all"], "the native Agents list after close", timeout: 15)
         }
         roundTrip()

@@ -10,6 +10,7 @@ import UIKit
 enum CoreReferenceProbe {
     private static var launchedAt: CFTimeInterval?
     private static var firstFrame: Double?
+    private static var memorySequence = 0
 
     static func launchStarted() {
         guard UserDefaults.standard.bool(forKey: "showCoreReference") else { return }
@@ -32,7 +33,8 @@ enum CoreReferenceProbe {
     static func memorySample() {
         guard UserDefaults.standard.bool(forKey: "showCoreReference") else { return }
         let footprint = FullPageMemory.footprint()
-        send(["kind": "memory", "phys_footprint_bytes": footprint])
+        memorySequence += 1
+        send(["kind": "memory", "phys_footprint_bytes": footprint, "sequence": memorySequence])
     }
 
     private static func send(_ result: [String: Any]) {

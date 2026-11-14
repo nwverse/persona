@@ -73,8 +73,37 @@ numbers on the same named device, build and workload used for the binding compar
 below remain additional limits, not substitutes for the iOS baseline. Android and HarmonyOS are compared with that
 baseline using equivalent workloads; simulator and host timings are labelled and never presented as physical-device
 results. Until an iOS measurement exists, the corresponding comparative cell stays "not measured", never "passed".
+The measurement commands, timing boundaries and non-comparability rules are in `docs/apple/reference-measurements.md`.
 
-## Architecture
+The first named-simulator reference used an Apple M5 Pro Mac with Xcode **27.1 (27A9275), Swift 6.4**, Rust 1.98.0,
+and an arm64 **iPhone 17 Pro / iOS 27.0** simulator (`FD14ED31-119A-4415-BF8D-5DBE25967622`). The app was optimized
+Debug, wholemodule, `PERF_SIGNPOST`, not Release. Source base `cf119132e9be23c6921424c93d72ce88401de2e7` plus
+measurement harness `64130151ec49ab7264a467abed55629ee331bc66`; production does not construct the core.
+
+| Native iOS simulator workload | Samples and result |
+| --- | --- |
+| Welcome launch, `XCTApplicationLaunchMetric` | 2.542693 / 2.599955 / 2.529024 s; median **2.542693 s**. Separate root-view-appearance samples, including initial warmup: 454.291 / 381.413 / 420.303 / 390.035 ms, median 405.169 ms. Different boundaries; no core construction or no-core launch regression comparison. |
+| Recorded Markdown stream | One warmup + three runs: cadence 57.044 / 56.953 / 56.591, custom hitch 49.939 / 49.913 / 57.035 ms/s, longest frame 97.317 / 82.389 / 95.127 ms. Visible text-change gap p50 / p95 33 / 51 ms. Cadence is not presented GPU FPS. |
+| Long native conversation, verified app-driven glide | One warmup + three runs: cadence 57.198 / 56.694 / 57.190, custom hitch 42.606 / 55.211 / 43.170 ms/s, longest frame 47.764 / 55.589 / 48.905 ms. Viewport 717 pt, actual offset 6033–6067 pt; not an accessibility-gesture FPS measurement. |
+| Native heavy chat, ten open/back cycles | `phys_footprint` warmed 82,775,040 → final 83,004,416 B, delta **229,376 B**; `resident_size` 623,788,032 → 627,277,824 B, delta **3,489,792 B**. Twelve observations include warmup and final settling. `AppModel` intentionally retains up to eight native stores; this is not a core lifecycle. |
+
+Real-C binding benchmarks used the same simulator and optimized build, with 100 warmups and 1,000 samples per metric;
+all samples are retained. Flush is outside dispatch/drain spans. `loadOlder` is dispatched to an opened chat, not a
+rejected event. p50 / p99 / max (microseconds): dispatch encoding + queue **1.375 / 2.250 / 4.167**; one-item drain +
+bincode decode + string-list apply **1.375 / 2.208 / 3.916**; separate patch JSON to native Item apply
+**3.375 / 5.250 / 232.042**. A 100-item patch costs **41.875 / 58.542 / 190.458** µs for drain/decode/string-list
+apply. These satisfy small fixed synthetic simulator limits, not a physical-device or future production-adapter
+claim. Native JSON decode + `ChatStore.apply` was **4.083 / 4.917 / 13.875** µs but has a different output contract
+and asynchronous row rebuild, so it is not an equivalent core comparison. Ten create/open/drain/background-close
+cycles with weak-release checks end at the same 63,867,616-byte `phys_footprint` as their warmed baseline (delta 0).
+
+An unsigned, generic-iOS **Release + PERF_SIGNPOST** payload comparison used the same build settings except removal of
+the two PersonaCore target dependencies. The link command contains `-lpersona_core`. The with-core App adds
+**763,344 B** to the executable and 763,346 B to logical payload; its local ZIP adds **355,744 B** (60,856,673 versus
+60,500,929 B). These are actual local linkage and compression diagnostics, not App Store processed, thinned or
+store-download measurements; the ≤1 MB download gate remains open. Xcode 26.0, physical devices and real store
+sizes are unmeasured. The no-core generator and reproducible report are in
+`native/app-core/scripts/apple-no-core-spec.py` and `native/app-core/scripts/apple-package-report.py`.
 
 ### Layout
 

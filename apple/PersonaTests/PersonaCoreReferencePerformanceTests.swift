@@ -46,6 +46,7 @@ final class PersonaCoreReferencePerformanceTests: XCTestCase {
             try client.dispatch(action)
             try await prepareWorker(client)
             list.removeAll(keepingCapacity: true)
+            decodedItems.removeAll(keepingCapacity: true)
             let start = ContinuousClock.now
             let patch = try client.drain(chat: chat)
             let drained = ContinuousClock.now
@@ -143,17 +144,11 @@ final class PersonaCoreReferencePerformanceTests: XCTestCase {
                     "budget_drain_decode_apply_p99_us": 1_000, "worker_flush_is_outside_timed_span": true])
     }
 
-    func testCoreTenOpenCloseMemory() async throws {        var baseline = 0
+    func testCoreTenOpenCloseMemory() async throws {
+        var baseline = 0
         var samples: [[String: Any]] = []
         for index in 0...10 {
-            var client: PersonaCoreClient? = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(run: { _ in }))
-            try client?.dispatch(.openChat(chat: chat, snapshot: snapshot))
-            try await prepareWorker(client!)
-            _ = try client?.drain(chat: chat)
-            weak var released = client
-            let owned = client
-            client = nil
-            await closeOnBackground(owned!)
+            weak var released = try await createDrainAndClose()
             for _ in 0..<100 where released != nil { await Task.yield() }
             XCTAssertNil(released, "the closed core client was retained")
             let bytes = FullPageMemory.footprint()
@@ -169,6 +164,16 @@ final class PersonaCoreReferencePerformanceTests: XCTestCase {
         try attach(["scope": "ten create/open/drain/close cycles, C destruction completed off the main thread",
                     "warmup_cycles": 1, "cycles": 10, "baseline_phys_footprint_bytes": baseline,
                     "final_delta_bytes": finalDelta, "budget_final_delta_bytes": 5 * 1_024 * 1_024, "samples": samples])
+    }
+
+    private func createDrainAndClose() async throws -> PersonaCoreClient? {
+        let client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(run: { _ in }))
+        try client.dispatch(.openChat(chat: chat, snapshot: snapshot))
+        try await prepareWorker(client)
+        _ = try client.drain(chat: chat)
+        weak var released = client
+        await closeOnBackground(client)
+        return released
     }
 
     private func prepareWorker(_ client: PersonaCoreClient) async throws {

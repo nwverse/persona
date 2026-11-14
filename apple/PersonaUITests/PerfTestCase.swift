@@ -159,7 +159,7 @@ class PerfTestCase: XCTestCase {
 
     var options: XCTMeasureOptions {
         let o = XCTMeasureOptions()
-        o.iterationCount = iterations
+        o.iterationCount = iterations + 1 // the explicitly tagged warmup, then the requested measured runs
         return o
     }
 

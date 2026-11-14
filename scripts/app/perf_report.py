@@ -190,6 +190,8 @@ def attachments(bundle, runner=None):
                     if path.resolve().parent != export or not path.is_file():
                         raise ValueError(f"missing or unsafe frame attachment: {filename}")
                     samples = read_exported_json(path)
+                    if isinstance(samples, dict):
+                        samples = [samples]  # one benchmark/lifecycle report object, not a frame array
                     if not isinstance(samples, list):
                         raise ValueError(f"frame attachment must contain a sample array: {filename}")
                     for i, sample in enumerate(samples):
@@ -267,6 +269,9 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
             required = 12  # one warmed baseline, ten real closes, one bounded settling sample
             if len(samples) != required:
                 issues.append(f"expected {required} raw memory samples, got {len(samples)}")
+            sequences = [sample.get("sequence") for sample in samples]
+            if sequences != list(range(1, required + 1)):
+                issues.append("memory observations must have unique, ordered sequence numbers 1...12")
             values = [sample["phys_footprint_bytes"] for sample in samples if finite(sample.get("phys_footprint_bytes"))]
             if values:
                 probe["statistics"]["phys_footprint_bytes"] = {"values": values}
@@ -275,6 +280,19 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
         probe.update(raw_count=len(samples), measured_count=len(samples), excluded_warm_up_indices=[],
                      statistic_sample_indices=list(range(len(samples))))
         probe["complete"] = not issues
+        return probe
+    if samples and all(isinstance(sample, dict) and sample.get("cycles") == 10 for sample in samples):
+        for sample in samples:
+            rows = sample.get("samples")
+            if not isinstance(rows, list) or len(rows) != 10:
+                issues.append("core lifecycle must contain ten samples")
+                continue
+            if not all(isinstance(row, dict) and finite(row.get("phys_footprint_bytes"))
+                       and finite(row.get("delta_from_warmed_bytes")) for row in rows):
+                issues.append("invalid core lifecycle footprint")
+        probe["trust"] = "core_ten_create_open_close_phys_footprint"
+        probe["complete"] = not issues
+        probe.update(raw_count=10, measured_count=10, excluded_warm_up_indices=[], statistic_sample_indices=[])
         return probe
     if samples and all(isinstance(sample, dict) and (isinstance(sample.get("raw_samples"), list)
                                                     or isinstance(sample.get("samples"), list)) for sample in samples):
