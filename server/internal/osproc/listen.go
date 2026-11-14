@@ -3,6 +3,7 @@ package osproc
 import (
 	"net"
 	"os"
+	"syscall"
 	"time"
 )
 
@@ -29,18 +30,17 @@ func FileListener(f *os.File) (net.Listener, error) {
 	return sealAccepts(ln)
 }
 
-// TCPListener is a TCP listener from Listen or FileListener: a net.TCPListener that accepts, takes deadlines and
-// closes through its acceptor.
+// TCPListener is a TCP listener from Listen or FileListener, with net.TCPListener's methods: it accepts, takes
+// deadlines and closes through its acceptor. It keeps net's listener to itself, so nothing accepts around the acceptor.
 type TCPListener struct {
-	*net.TCPListener
-	a acceptor
+	ln *net.TCPListener
+	a  acceptor
 }
 
-// UnixListener is a Unix listener from Listen or FileListener: a net.UnixListener that accepts, takes deadlines and
-// closes through its acceptor.
+// UnixListener is a Unix listener from Listen or FileListener, with net.UnixListener's methods, as TCPListener is.
 type UnixListener struct {
-	*net.UnixListener
-	a acceptor
+	ln *net.UnixListener
+	a  acceptor
 }
 
 // acceptor accepts for a listener from Listen: the listener itself where the system makes a connection close-on-exec
@@ -67,21 +67,24 @@ func sealAccepts(ln net.Listener) (net.Listener, error) {
 			_ = l.Close()
 			return nil, err
 		}
-		return &TCPListener{TCPListener: l, a: a}, nil
+		return &TCPListener{ln: l, a: a}, nil
 	case *net.UnixListener:
 		a, err := newAcceptor(l)
 		if err != nil {
 			_ = l.Close()
 			return nil, err
 		}
-		return &UnixListener{UnixListener: l, a: a}, nil
+		return &UnixListener{ln: l, a: a}, nil
 	}
 	return ln, nil // net.Listen and net.FileListener make no other kind of listener
 }
 
-func (l *TCPListener) Accept() (net.Conn, error)     { return l.a.Accept() }
-func (l *TCPListener) SetDeadline(t time.Time) error { return l.a.SetDeadline(t) }
-func (l *TCPListener) Close() error                  { return l.a.Close() }
+func (l *TCPListener) Accept() (net.Conn, error)             { return l.a.Accept() }
+func (l *TCPListener) SetDeadline(t time.Time) error         { return l.a.SetDeadline(t) }
+func (l *TCPListener) Close() error                          { return l.a.Close() }
+func (l *TCPListener) Addr() net.Addr                        { return l.ln.Addr() }
+func (l *TCPListener) File() (*os.File, error)               { return l.ln.File() }
+func (l *TCPListener) SyscallConn() (syscall.RawConn, error) { return l.ln.SyscallConn() }
 
 func (l *TCPListener) AcceptTCP() (*net.TCPConn, error) {
 	c, err := l.a.Accept()
@@ -91,9 +94,13 @@ func (l *TCPListener) AcceptTCP() (*net.TCPConn, error) {
 	return c.(*net.TCPConn), nil
 }
 
-func (l *UnixListener) Accept() (net.Conn, error)     { return l.a.Accept() }
-func (l *UnixListener) SetDeadline(t time.Time) error { return l.a.SetDeadline(t) }
-func (l *UnixListener) Close() error                  { return l.a.Close() }
+func (l *UnixListener) Accept() (net.Conn, error)             { return l.a.Accept() }
+func (l *UnixListener) SetDeadline(t time.Time) error         { return l.a.SetDeadline(t) }
+func (l *UnixListener) Close() error                          { return l.a.Close() }
+func (l *UnixListener) Addr() net.Addr                        { return l.ln.Addr() }
+func (l *UnixListener) File() (*os.File, error)               { return l.ln.File() }
+func (l *UnixListener) SyscallConn() (syscall.RawConn, error) { return l.ln.SyscallConn() }
+func (l *UnixListener) SetUnlinkOnClose(unlink bool)          { l.ln.SetUnlinkOnClose(unlink) }
 
 func (l *UnixListener) AcceptUnix() (*net.UnixConn, error) {
 	c, err := l.a.Accept()

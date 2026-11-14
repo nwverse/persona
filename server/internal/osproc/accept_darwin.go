@@ -18,10 +18,12 @@ import (
 // those few microseconds instead.
 //
 // Go leaves the lock out because a socket in blocking mode would hold it until the next connection came, and every
-// start with it. File on a listener and then Fd on the copy (the resident node's handover does both) put the socket,
-// which every copy shares, in that mode; so the acceptor puts it back in non-blocking mode first, as the poller expects
-// it anyway. A listener's own raw connection cannot wait for a connection (its Read is refused), so the acceptor waits
-// and accepts on a copy of the socket as an *os.File, whose raw connection can.
+// start with it. Fd on any copy of the socket puts it, and so every copy, in that mode (the resident node's handover
+// calls it, once its listener is closed or before it accepts); so the acceptor puts it back in non-blocking mode before
+// each accept, as the poller expects it anyway. Only an Fd landing between the two would still leave accept waiting
+// with the lock: nothing here calls Fd on a copy of a listener that is accepting. A listener's own raw connection cannot
+// wait for a connection (its Read is refused), so the acceptor waits and accepts on a copy of the socket as an
+// *os.File, whose raw connection can.
 type sealedAcceptor struct {
 	ln     socketListener
 	dup    *os.File        // the socket again: close-on-exec, in the poller

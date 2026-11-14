@@ -26,6 +26,10 @@ var listenFuncs = map[string][]string{
 // listenMethods listen by themselves on whatever value has them: an http.Server's.
 var listenMethods = []string{"ListenAndServe", "ListenAndServeTLS"}
 
+// listenTypes are net's listener types. No listener here is one, since osproc's keep net's to themselves: an assertion
+// or a switch case naming one never matches, and a value of one could only come from a net function above.
+var listenTypes = []string{"TCPListener", "UnixListener"}
+
 // listenAllowed are the references that may stay, as "<file under server/> <reference>", each with why nothing it
 // makes accepts a connection.
 var listenAllowed = map[string]string{
@@ -33,7 +37,7 @@ var listenAllowed = map[string]string{
 }
 
 // Every listener in the server module's production code comes from osproc.Listen or osproc.FileListener. Left out:
-// osproc itself, which makes them, and packages named *test, which only tests import.
+// osproc itself, which makes them, and a package's test helpers (db/dbtest, voice/voicetest), which only tests import.
 func TestListenersComeFromOsproc(t *testing.T) {
 	used := map[string]bool{}
 	fset := token.NewFileSet()
@@ -42,7 +46,7 @@ func TestListenersComeFromOsproc(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			if name := d.Name(); name == "testdata" || name == "osproc" || strings.HasSuffix(name, "test") {
+			if name := d.Name(); name == "testdata" || name == "osproc" || name == filepath.Base(filepath.Dir(p))+"test" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -63,6 +67,11 @@ func TestListenersComeFromOsproc(t *testing.T) {
 			key := rel + " " + ref.name
 			if _, ok := listenAllowed[key]; ok {
 				used[key] = true
+				continue
+			}
+			if ref.typ {
+				t.Errorf("%s: %s is net's listener type, which no listener here is (osproc's keep net's to themselves, "+
+					"#7765): use *osproc.TCPListener or *osproc.UnixListener", pos(fset, ref.node), ref.name)
 				continue
 			}
 			t.Errorf("%s: %s makes a listener whose connections a process started at that moment inherits on macOS: "+
@@ -92,7 +101,10 @@ func TestListenerRefs(t *testing.T) {
 		{`import . "net"; var _ ListenConfig; func f() { _, _ = FileListener(nil) }`, []string{"net.ListenConfig", "net.FileListener"}},
 		{`import ("crypto/tls"; "net/http"); func f(s *http.Server) { _ = s.ListenAndServe(); _ = http.ListenAndServeTLS; _ = tls.Listen }`,
 			[]string{".ListenAndServe", "http.ListenAndServeTLS", "tls.Listen"}},
-		{`import "github.com/nwverse/persona/server/internal/osproc"; var _, _ = osproc.Listen("tcp", "")`, nil},
+		{`import "net"; func f(l net.Listener) { _, _ = l.(*net.UnixListener); switch l.(type) { case *net.TCPListener: } }`,
+			[]string{"net.UnixListener", "net.TCPListener"}},
+		{`import . "net"; func f(l Listener) { _ = l.(*TCPListener) }`, []string{"net.TCPListener"}},
+		{`import "github.com/nwverse/persona/server/internal/osproc"; var _, _ = osproc.Listen("tcp", ""); var _ *osproc.UnixListener`, nil},
 		{`func f(s interface{ Listen(string) error }) { _ = s.Listen("tcp") }`, nil}, // a userspace network's, say
 	} {
 		f, err := parser.ParseFile(token.NewFileSet(), "x.go", "package x; "+c.src, parser.SkipObjectResolution)
@@ -112,10 +124,11 @@ func TestListenerRefs(t *testing.T) {
 type listenerRef struct {
 	node ast.Node
 	name string // as written for the package's own name: net.Listen, http.ListenAndServe; .ListenAndServe for a method
+	typ  bool   // one of listenTypes
 }
 
-// listenerRefs are f's references to listenFuncs, under whatever name f imports their package by (an alias or a dot
-// import), and its calls of listenMethods on a value.
+// listenerRefs are f's references to listenFuncs and listenTypes, under whatever name f imports their package by (an
+// alias or a dot import), and its calls of listenMethods on a value.
 func listenerRefs(f *ast.File) []listenerRef {
 	pkgs := map[string]string{} // the name f uses for a package of listenFuncs ("." for a dot import) -> its path
 	var dotted []string
@@ -134,26 +147,28 @@ func listenerRefs(f *ast.File) []listenerRef {
 		}
 	}
 	var refs []listenerRef
+	add := func(n ast.Node, p, name string) {
+		typ := p == "net" && slices.Contains(listenTypes, name)
+		if typ || slices.Contains(listenFuncs[p], name) {
+			refs = append(refs, listenerRef{n, path.Base(p) + "." + name, typ})
+		}
+	}
 	var visit func(ast.Node) bool
 	visit = func(n ast.Node) bool {
 		switch e := n.(type) {
 		case *ast.SelectorExpr:
 			if x, ok := e.X.(*ast.Ident); ok && pkgs[x.Name] != "" {
-				if p := pkgs[x.Name]; slices.Contains(listenFuncs[p], e.Sel.Name) {
-					refs = append(refs, listenerRef{e, path.Base(p) + "." + e.Sel.Name})
-				}
+				add(e, pkgs[x.Name], e.Sel.Name)
 				return false
 			}
 			if slices.Contains(listenMethods, e.Sel.Name) {
-				refs = append(refs, listenerRef{e, "." + e.Sel.Name})
+				refs = append(refs, listenerRef{e, "." + e.Sel.Name, false})
 			}
 			ast.Inspect(e.X, visit) // the selected name is a field or method, not a dot-imported function
 			return false
 		case *ast.Ident:
 			for _, p := range dotted {
-				if slices.Contains(listenFuncs[p], e.Name) {
-					refs = append(refs, listenerRef{e, path.Base(p) + "." + e.Name})
-				}
+				add(e, p, e.Name)
 			}
 		}
 		return true
