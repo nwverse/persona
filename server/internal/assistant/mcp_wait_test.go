@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/mcpwait"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -148,6 +149,23 @@ func TestMCPWaitQuestionPublishesAnswerThenComputer(t *testing.T) {
 		t.Fatalf("unexpected event after the question resolved: %s", event.Params)
 	default:
 	}
+}
+
+func TestMCPWaitInteractionKindOverride(t *testing.T) {
+	ft, events := newMCPWaitTest(t)
+	const callID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	outer := ft.s.mcpWaitContext(context.Background(), "mac", callID, true)
+	defer ft.s.endMCPWait(outer)
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitComputer)
+	ctx := mcpwait.WithInteractionKind(outer, "ix_native", proto.MCPWaitApproval)
+	resumeNative := pushMCPInteraction(ctx, proto.Interaction{ID: "ix_native", Kind: proto.IxQuestion})
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitApproval)
+	resumeNative()
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitComputer)
+	resumeEnum := pushMCPInteraction(ctx, proto.Interaction{ID: "ix_enum", Kind: proto.IxQuestion})
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitAnswer)
+	resumeEnum()
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitComputer)
 }
 
 func TestMCPWaitNodeRequestRequiresOptIn(t *testing.T) {

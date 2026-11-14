@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/mcpwait"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -135,7 +136,7 @@ func computerMac(t *testing.T, h *Manager, id string) (*Machine, func() (statuse
 	go func() { _ = nodeSide.Serve(ctx, h2nR) }()
 	t.Cleanup(func() { cancel(); _ = h2nW.Close(); _ = n2hW.Close() })
 	m := newMachine(h, MachineConfig{ID: id, Name: id})
-	m.peer, m.online, m.info = hubSide, true, proto.NodeInfo{OS: "darwin", BuiltinPrograms: fakeBuiltinPrograms(builtin)}
+	m.peer, m.online, m.info = hubSide, true, proto.NodeInfo{Protocol: nodeproto.Version, Capabilities: []string{nodeproto.MCPWait}, OS: "darwin", BuiltinPrograms: fakeBuiltinPrograms(builtin)}
 	h.fleetMu.Lock()
 	h.machines, h.byID[id] = append(h.machines, m), m
 	h.fleetMu.Unlock()
@@ -317,6 +318,52 @@ func TestComputerToolsCallTheNode(t *testing.T) {
 		if c.Tool != "list_apps" && c.Tool != "list_windows" {
 			t.Fatalf("not confirmed, yet it ran: %+v", c)
 		}
+	}
+}
+
+func TestMCPWaitComputerTargetCapability(t *testing.T) {
+	h, _ := extensionTestHub(t)
+	m, seen := computerMac(t, h, "mac")
+	m.mu.Lock()
+	m.info.Protocol, m.info.Capabilities = 0, nil // an old target cannot correlate a nested elicitation
+	m.mu.Unlock()
+	const callID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	kinds := make(chan proto.MCPWaitKind, 4)
+	ctx := mcpwait.WithCall(context.Background(), callID)
+	ctx = mcpwait.WithPush(ctx, func(kind proto.MCPWaitKind) func() {
+		kinds <- kind
+		return func() { kinds <- proto.MCPWaitApproval } // the enclosing manager-owned card is still open
+	})
+	if _, err := h.computerCall(ctx, m, "session", "conversation", "run_script", map[string]any{"script": "return 1"}); err != nil {
+		t.Fatal(err)
+	}
+	_, calls := seen()
+	if calls[len(calls)-1].CallID != "" {
+		t.Errorf("an incapable target received call_id %q", calls[len(calls)-1].CallID)
+	}
+	if len(kinds) != 2 {
+		t.Errorf("old-target wait transitions = %d, want unknown then the enclosing approval", len(kinds))
+	} else {
+		if first := <-kinds; first != proto.MCPWaitUnknown {
+			t.Errorf("old-target kind = %q, want unknown", first)
+		}
+		if restored := <-kinds; restored != proto.MCPWaitApproval {
+			t.Errorf("restored kind = %q, want approval", restored)
+		}
+	}
+
+	m.mu.Lock()
+	m.info.Protocol, m.info.Capabilities = nodeproto.Version, []string{nodeproto.MCPWait}
+	m.mu.Unlock()
+	if _, err := h.computerCall(ctx, m, "session", "conversation", "run_script", map[string]any{"script": "return 1"}); err != nil {
+		t.Fatal(err)
+	}
+	_, calls = seen()
+	if calls[len(calls)-1].CallID != callID || calls[len(calls)-1].WaitMachine != "" {
+		t.Errorf("capable-target correlation = %+v", calls[len(calls)-1])
+	}
+	if len(kinds) != 0 {
+		t.Errorf("a capable target caused %d fallback transitions", len(kinds))
 	}
 }
 

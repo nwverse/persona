@@ -8,15 +8,23 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/mcpwait"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
+
+func TestNodeAnnouncesMCPWaitCapability(t *testing.T) {
+	if !slices.Contains((&Node{}).capabilities(), nodeproto.MCPWait) {
+		t.Fatal("the node does not advertise nested MCP wait correlation")
+	}
+}
 
 func TestMCPWaitLocalLinesStopAtFinalResponse(t *testing.T) {
 	n := &Node{}

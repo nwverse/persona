@@ -58,7 +58,7 @@ func (s *Service) mcpWaitContext(ctx context.Context, machine, callID string, en
 	s.mcpWaitMu.Unlock()
 	r.publishLocked(r.base)
 	r.mu.Unlock()
-	return context.WithValue(mcpwait.WithCall(ctx, callID), mcpWaitContextKey{}, r)
+	return withMCPWaitReporter(ctx, r)
 }
 
 // mcpWaitElicitContext joins a nested elicitation to the reporter the manager issued for this call. It deliberately
@@ -73,7 +73,7 @@ func (s *Service) mcpWaitElicitContext(ctx context.Context, callID string) conte
 	if r == nil {
 		return ctx
 	}
-	return context.WithValue(mcpwait.WithCall(ctx, callID), mcpWaitContextKey{}, r)
+	return withMCPWaitReporter(ctx, r)
 }
 
 // endMCPWait removes only the registration owned by this request. A duplicate id could not replace the live entry.
@@ -97,6 +97,11 @@ func mcpWaitFrom(ctx context.Context) *mcpWaitReporter {
 	return r
 }
 
+func withMCPWaitReporter(ctx context.Context, r *mcpWaitReporter) context.Context {
+	ctx = mcpwait.WithPush(mcpwait.WithCall(ctx, r.callID), r.push)
+	return context.WithValue(ctx, mcpWaitContextKey{}, r)
+}
+
 func (r *mcpWaitReporter) publishLocked(kind proto.MCPWaitKind) {
 	if r.done {
 		return
@@ -108,13 +113,9 @@ func (r *mcpWaitReporter) publishLocked(kind proto.MCPWaitKind) {
 	r.notify(devicewire.NodeEvent{MachineID: r.machine, Event: proto.EventMCPWait, Params: params})
 }
 
-// pushMCPWait publishes kind and returns a one-time restoration that removes this push's own entry. Resolution order
+// push publishes kind and returns a one-time restoration that removes this push's own entry. Resolution order
 // therefore does not matter: the newest entry still open wins, with the call's base state underneath every card.
-func pushMCPWait(ctx context.Context, kind proto.MCPWaitKind) func() {
-	r := mcpWaitFrom(ctx)
-	if r == nil {
-		return func() {}
-	}
+func (r *mcpWaitReporter) push(kind proto.MCPWaitKind) func() {
 	kind = proto.NormalizeMCPWaitKind(kind)
 	r.mu.Lock()
 	if r.done {
@@ -154,6 +155,13 @@ func pushMCPWait(ctx context.Context, kind proto.MCPWaitKind) func() {
 	}
 }
 
+func pushMCPWait(ctx context.Context, kind proto.MCPWaitKind) func() {
+	if r := mcpWaitFrom(ctx); r != nil {
+		return r.push(kind)
+	}
+	return mcpwait.Push(ctx, kind)
+}
+
 // mcpWaitParams adds only the correlators the hub needs to relay an approval's wait kind back through the existing
 // devices.notify channel. The tool name and arguments stay in their existing fields, never in the signal.
 func mcpWaitParams(ctx context.Context, params map[string]any) {
@@ -163,6 +171,9 @@ func mcpWaitParams(ctx context.Context, params map[string]any) {
 }
 
 func pushMCPInteraction(ctx context.Context, ix proto.Interaction) func() {
+	if kind, ok := mcpwait.InteractionKindFrom(ctx, ix.ID); ok {
+		return pushMCPWait(ctx, kind)
+	}
 	switch ix.Kind {
 	case proto.IxPermission, proto.IxPlan:
 		return pushMCPWait(ctx, proto.MCPWaitApproval)
