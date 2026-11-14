@@ -100,6 +100,9 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
     def test_the_administrator_gate_stays_in_front_of_every_desktop_job(self):
         self.assertEqual(self.jobs["desktop-gate"]["needs"], "authorize")
         self.assertEqual(self.jobs["desktop-gate"]["if"], "github.event_name == 'push' && github.ref_type == 'tag'")
+        # The gate reads only secret presence, but presence is environment-scoped too: without this binding the
+        # documented environment-only configuration would always skip both signed platforms.
+        self.assertEqual(self.jobs["desktop-gate"]["environment"], "persona-desktop-release")
         for name in ("desktop-mac", "desktop-win"):
             self.assertEqual(self.jobs[name]["needs"], ["authorize", "desktop-gate"])
             self.assertNotIn("permissions", self.jobs[name])
