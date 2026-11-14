@@ -20308,6 +20308,13 @@ if os.environ.get("MOCK_SENT"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import sent_ledger_mock as _sent
 
+# MOCK_WEB_PUSH=1|failed (#7459, scripts/mock/web_push_mock.py): Settings › Notifications › When Persona is closed, the
+# routes of a browser's Web Push; without it they are an older hub's 404.
+_web_push = None
+if os.environ.get("MOCK_WEB_PUSH"):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import web_push_mock as _web_push
+
 
 def sessions_for_delta_app(obj, have):
     """A machine's whole list as an app on the delta protocol gets it (hub/sessions_push.go): the first one whole,
@@ -24159,6 +24166,7 @@ class H(BaseHTTPRequestHandler):
         if managers_route(self, "GET", p): return
         if file_operation_route(self, p): return
         if _sent and _sent.route(self, "GET", p, q): return
+        if _web_push and _web_push.route(self, "GET", p): return
         if providers_route(self, "GET", p, q, b""): return
         if MOCK_MESSAGING and p.startswith("/api/v1/messaging") and lark_messaging.route(self, "GET", p, q, b""): return
         if net_control(p, q): return self.send_json({"ok": True, **NET})
@@ -24424,6 +24432,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"mode": RESOLVE_MODE[0]})
         if p == "/mock/screen-steps": return self.send_json(mock_screen_steps(q))
         if p == "/mock/devices": return self.send_json({"devices": DEVICES})
+        if p == "/mock/desktops": return self.send_json(desktops_state())
         if p == "/mock/hello": return self.send_json(HELLO)
         if p == "/mock/phone":
             with FAULT_LOCK:
@@ -25225,6 +25234,7 @@ class H(BaseHTTPRequestHandler):
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if _sent and _sent.route(self, self.command, p, {}, self.last_body): return
+        if _web_push and _web_push.route(self, self.command, p, self.last_body): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
             sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
             if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
@@ -27154,6 +27164,9 @@ class H(BaseHTTPRequestHandler):
                     with FAULT_LOCK:
                         PHONES[self.connection] = {"send": send, "registration": msg}
                     continue
+                if msg.get("type") in ("register_desktop", "unregister_desktop"):
+                    desktop_registration(self.connection, msg)
+                    continue
                 if msg.get("type") == "tool_result":
                     with FAULT_LOCK:
                         TOOL_RESULTS.append(msg)
@@ -27316,6 +27329,7 @@ class H(BaseHTTPRequestHandler):
             CLIENTS.pop(self.connection, None)
             PHONES.pop(self.connection, None)
             FS_WATCHES.pop(self.connection, None)
+        desktop_registration(self.connection, None)
         LIVE[:] = [x for x in LIVE if x[0] is not send]
         self.close_connection = True
 
@@ -29594,6 +29608,42 @@ def plugins_route(handler, p, body):
 
 MOCK_HELP.append("MOCK_OUTSIDE_DIALOG=1  A Claude Code session in a plain terminal on the MacBook waits on a question only the computer "
                  "can answer (#5890): a message to it answers {ok, waits_on_computer}")
+
+
+# Desktop client registration (hub/desktops.go): `register_desktop` on an app's socket, withdrawn by `unregister_desktop`
+# (a hub with the feature desktop_unregister) or by the socket closing. GET /mock/desktops says who is registered now and
+# what happened in order, for the desktop shell's smoke (desktop/scripts/e2e-main.mjs).
+DESKTOPS = {}  # socket -> device_name
+DESKTOP_LOG = []  # {"event": "register" | "unregister" | "close", "device_name"}
+DESKTOP_LOCK = threading.Lock()
+
+
+def desktop_registration(connection, msg):
+    """A socket's register_desktop / unregister_desktop message, or its close (msg None)."""
+    with DESKTOP_LOCK:
+        if msg is not None and msg.get("type") == "register_desktop":
+            name = msg.get("device_name") if isinstance(msg.get("device_name"), str) else ""
+            DESKTOPS[connection] = name
+            DESKTOP_LOG.append({"event": "register", "device_name": name})
+        elif connection in DESKTOPS:  # a withdrawal only of a socket that registered
+            DESKTOP_LOG.append({"event": "unregister" if msg is not None else "close", "device_name": DESKTOPS.pop(connection)})
+
+
+def desktops_state():
+    with DESKTOP_LOCK:
+        return {"registered": sorted(DESKTOPS.values()), "log": list(DESKTOP_LOG)}
+
+
+_features_without_desktops = features
+
+
+def features():
+    return _features_without_desktops() + (["desktops", "desktop_unregister"] if os.environ.get("MOCK_DESKTOPS") == "1" else [])
+
+
+MOCK_HELP.append("MOCK_DESKTOPS=1  features list desktops and desktop_unregister, so a desktop client withdraws its registration with "
+                 "unregister_desktop instead of closing its socket (an older hub). Either way GET /mock/desktops says who is registered "
+                 "and the register / unregister / close events in order")
 
 
 _features_without_agent_archives = features
