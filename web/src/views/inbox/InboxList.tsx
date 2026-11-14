@@ -160,6 +160,17 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   // nothing ever came in, nothing filtered: is anything connected at all? (still unknown: the plain "All caught up")
   const sources = useInboxSources(ready && empty && !failed && !away && !items.length && !query && !source && !kind && !folder);
   const unconnected = sources && !sources.connected ? sources : null;
+  const filtered = Boolean(source || kind || query || folder);
+  // a chip or a folder narrows the list (the search alone says so in its own field)
+  const chipsOn = Boolean(source || kind || folder);
+  // "Clear filters" under a filtered list that shows nothing open: back to the whole Inbox (the chips are kept on this
+  // device, so a list left filtered last time opens filtered)
+  const clearFilters = () => {
+    setSource("");
+    setKind("");
+    setFolder("");
+    setQuery("");
+  };
   // Clean up all: the open items the list shows (its filters and search); the agents waiting are not items.
   const openInView = kind === "agent" ? [] : [...s.tiers.action, ...s.tiers.working, ...s.tiers.fyi, ...s.tiers.noise];
   const filterNames = [
@@ -167,7 +178,10 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
     KIND_FILTERS.find((k) => k.key === kind)?.label ?? "",
     folder === UNFILED ? t("inbox-folders.unfiled") : folderCrumbs(folder).at(-1)?.name ?? "",
   ];
-  const scope = bulkScope(filterNames, query, openInView.length);
+  // what it covers, said only once the list is in: loading or after a failed read there is nothing to count yet, and
+  // "Nothing to do" there claimed an Inbox nobody had read (audit item 84). Nothing open under filters or a search
+  // names them without a count: "Nothing to do" there read as the whole Inbox done (audit item 15).
+  const scope = !ready || failed ? "" : openInView.length || !filtered ? bulkScope(filterNames, query, openInView.length) : bulkScopeName(filterNames, query);
   // Selecting (#2059): the open items in sight can be picked (in the sections shown open; In progress is always open); the
   // agents waiting and the done items cannot. What is picked counts and is acted on only while the list shows it.
   const picking = picked !== null;
@@ -177,7 +191,6 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const order = ["lark", ...chips.map((a) => `mail:${a.id}`), ...connectors.map((c) => `c:${c.id}`)];
   const mailName = (account: string) => chips.find((a) => a.id === account)?.email ?? account;
   const groupOpen = (group: string, section: string, key: string) => folds[`${group}|${section}|${key}`] ?? openAtFirst(section, key);
-  const filtered = Boolean(source || kind || query || folder);
   // Done's groups (#2969). With the hub's day counts (#2967) every group they name is listed with its count, loaded or not,
   // and loads its own items when it opens; filtered or searched, the counts are of what is loaded ("n+" until the group
   // is complete). Without them, as before: what the history has loaded, "n+" on the last group while there is more.
@@ -333,13 +346,14 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           <button
             type="button"
             disabled={!openInView.length || picking}
-            title={t("inbox-inboxlist.clean_all_scope", { scope })}
+            title={scope ? t("inbox-inboxlist.clean_all_scope", { scope }) : undefined}
             onClick={runBulk}
+            data-clean-all
             className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-control bg-surface px-2.5 text-label whitespace-nowrap text-ink-2 shadow-btn transition-colors duration-150 hover:bg-hover hover:text-ink disabled:pointer-events-none disabled:opacity-45 max-sm:hidden"
           >
             <Icon name="check" size={12} stroke={2.6} />
             {t("inbox-inboxlist.clean_all")}
-            <span className="text-ink-3">{scope}</span>
+            {scope && <span className="text-ink-3">{scope}</span>}
           </button>
         </div>
         <IconButton icon="more" label={t("inbox-inboxlist.more")} onClick={more.open} active={Boolean(more.anchor)} />
@@ -356,7 +370,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
         {more.anchor && (
           <Menu anchor={more.anchor} onClose={more.close} align="right" width={240}
             items={[
-              { key: "clean-all", label: t("inbox-inboxlist.clean_all"), hint: scope, icon: "check", disabled: !openInView.length, onSelect: runBulk },
+              { key: "clean-all", label: t("inbox-inboxlist.clean_all"), hint: scope || undefined, icon: "check", disabled: !openInView.length, onSelect: runBulk },
               { key: "muted", label: t("inbox-inboxlist.muted_list"), icon: "bellOff", divider: true, onSelect: () => setMutesOpen(true) },
               { key: "rules", label: t("inbox-inboxlist.rules_list"), icon: "target", onSelect: () => setRulesOpen(true) },
               { key: "folders", label: t("inbox-folders.settings_menu"), icon: "folder", onSelect: () => setFoldersOpen(true) },
@@ -375,8 +389,15 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
         <TriageBanner triage={triage} />
         <UnreadNotice triage={triage} />
         {/* never loaded (an error and no items): its own empty state with "Retry", not "All caught up" under the error (#2970);
-            with agents waiting the list is not empty, so the reason stays a line over it */}
-        {ready && failed && !empty && <p className="mt-4 text-[12.5px] text-red">{error}</p>}
+            with agents waiting the list is not empty, so the reason stays a line over it, with its own Retry (audit item 84) */}
+        {ready && failed && !empty && (
+          <div className="mt-4 flex items-start gap-2" data-inbox-read-failed>
+            <p className="min-w-0 flex-1 text-[12.5px] break-words text-red">{error}</p>
+            <Button tone="secondary" size="sm" icon="retry" busy={loading} onClick={() => void reloadInbox()} className="touch-hit">
+              {loading ? t("inbox-inboxlist.retrying") : t("inbox-inboxlist.retry")}
+            </Button>
+          </div>
+        )}
         {!ready && <div className="mt-6 px-1"><Loading /></div>}
         {ready && failed && empty && (
           <div className="mt-10 flex flex-col items-center gap-2 text-center" role="status" data-inbox-failed>
@@ -408,13 +429,25 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
             </div>
           </div>
         )}
-        {ready && empty && !failed && !away && !unconnected && (
+        {/* nothing open where the chips, a folder or the search point: say so and offer the way back, not the green "All
+            caught up" (the Inbox outside the filters may still hold plenty, audit item 15) */}
+        {ready && empty && !failed && !away && !unconnected && filtered && (
+          <div className="mt-10 flex flex-col items-center gap-2 text-center" data-inbox-filtered-empty>
+            <span className="flex size-10 items-center justify-center rounded-full bg-field text-ink-3">
+              <Icon name={chipsOn ? "filter" : "search"} size={17} />
+            </span>
+            <p className="text-[13.5px] font-medium text-ink">{chipsOn ? t("inbox-inboxlist.empty_filtered") : t("inbox-inboxlist.empty_no_match")}</p>
+            <p className="max-w-80 text-[12.5px] text-ink-3">{chipsOn ? t("inbox-inboxlist.empty_filtered_hint") : t("inbox-inboxlist.empty_no_match_hint")}</p>
+            <Button tone="secondary" onClick={clearFilters} className="mt-2">{chipsOn ? t("inbox-inboxlist.clear_filters") : t("inbox-inboxlist.clear_search")}</Button>
+          </div>
+        )}
+        {ready && empty && !failed && !away && !unconnected && !filtered && (
           <div className="mt-10 flex flex-col items-center gap-2 text-center">
             <span className="flex size-10 items-center justify-center rounded-full bg-green-tint text-green">
               <Icon name="check" size={17} stroke={2.6} />
             </span>
-            <p className="text-[13.5px] font-medium text-ink">{query ? t("inbox-inboxlist.empty_no_match") : t("inbox-inboxlist.empty_all_done")}</p>
-            <p className="text-[12.5px] text-ink-3">{query ? t("inbox-inboxlist.empty_no_match_hint") : t("inbox-inboxlist.empty_all_done_hint")}</p>
+            <p className="text-[13.5px] font-medium text-ink">{t("inbox-inboxlist.empty_all_done")}</p>
+            <p className="text-[12.5px] text-ink-3">{t("inbox-inboxlist.empty_all_done_hint")}</p>
           </div>
         )}
 
