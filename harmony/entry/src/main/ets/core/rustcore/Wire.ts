@@ -44,7 +44,10 @@ export type Action =
   | { readonly kind: "open_chat"; readonly chat: string; readonly snapshot: ChatSnapshot }
   | { readonly kind: "close_chat"; readonly chat: string }
   | { readonly kind: "chat"; readonly chat: string; readonly event: ChatEvent }
-  | { readonly kind: "continue_fill"; readonly chat: string };
+  | { readonly kind: "wire_payload"; readonly chat: string; readonly payload: Payload }
+  | { readonly kind: "continue_fill"; readonly chat: string }
+  | { readonly kind: "hub_changed"; readonly chat: string }
+  | { readonly kind: "ack"; readonly chat: string; readonly seq: number };
 
 export type ChatEvent =
   | { readonly kind: "latest"; readonly batch: WireBatch }
@@ -52,13 +55,13 @@ export type ChatEvent =
   | { readonly kind: "after"; readonly batch: WireBatch }
   | { readonly kind: "reloaded"; readonly items_json: string; readonly history: string | null; readonly to_seq: number | null; readonly has_more: boolean }
   | { readonly kind: "older"; readonly items_json: string; readonly has_more: boolean }
-  | { readonly kind: "range"; readonly items_json: string; readonly more: boolean }
+  | { readonly kind: "range"; readonly fold_id: string | null; readonly items_json: string; readonly more: boolean }
   | { readonly kind: "reconnected" }
   | { readonly kind: "load_older" }
   | { readonly kind: "open_fold"; readonly fold_id: string }
   | { readonly kind: "fill_failed" }
   | { readonly kind: "older_failed" }
-  | { readonly kind: "range_failed" };
+  | { readonly kind: "range_failed"; readonly fold_id: string | null };
 
 export interface ChatPatch {
   readonly version: number;
@@ -66,6 +69,8 @@ export interface ChatPatch {
   readonly history: string | null;
   readonly has_more: boolean | null;
   readonly loaded_once: boolean;
+  readonly verified: boolean;
+  readonly acked: number | null;
   readonly ops: ListOp[];
 }
 
@@ -89,12 +94,20 @@ export type ListOp =
   | { readonly kind: "insert"; readonly index: number; readonly id: string; readonly json: string }
   | { readonly kind: "update"; readonly index: number; readonly id: string; readonly json: string };
 
+export type Payload =
+  | { readonly kind: "latest"; readonly body: string }
+  | { readonly kind: "newer"; readonly body: string }
+  | { readonly kind: "reloaded"; readonly body: string }
+  | { readonly kind: "older"; readonly body: string }
+  | { readonly kind: "range"; readonly fold_id: string | null; readonly body: string }
+  | { readonly kind: "frame"; readonly body: string };
+
 export type Request =
   | { readonly kind: "fetch_after"; readonly after_seq: number }
   | { readonly kind: "fetch_latest"; readonly fold_work: boolean }
   | { readonly kind: "subscribe"; readonly since_seq: number | null; readonly fold_work: boolean }
   | { readonly kind: "fetch_older"; readonly before_seq: number; readonly fold_work: boolean }
-  | { readonly kind: "fetch_range"; readonly from_seq: number; readonly through_seq: number };
+  | { readonly kind: "fetch_range"; readonly fold_id: string | null; readonly from_seq: number; readonly through_seq: number };
 
 export interface WireBatch {
   readonly items_json: string;
@@ -126,9 +139,23 @@ function writeAction(writer: Writer, value: Action): void {
       writer.string(value.chat);;
       writer.ChatEvent(value.event);;
       break;
-    case "continue_fill":
+    case "wire_payload":
       writer.u32(3);
       writer.string(value.chat);;
+      writer.Payload(value.payload);;
+      break;
+    case "continue_fill":
+      writer.u32(4);
+      writer.string(value.chat);;
+      break;
+    case "hub_changed":
+      writer.u32(5);
+      writer.string(value.chat);;
+      break;
+    case "ack":
+      writer.u32(6);
+      writer.string(value.chat);;
+      writer.u64(value.seq);;
       break;
   }
 }
@@ -139,7 +166,10 @@ function readAction(reader: Reader): Action {
     case 0: return { kind: "open_chat", chat: reader.string(), snapshot: reader.ChatSnapshot() };
     case 1: return { kind: "close_chat", chat: reader.string() };
     case 2: return { kind: "chat", chat: reader.string(), event: reader.ChatEvent() };
-    case 3: return { kind: "continue_fill", chat: reader.string() };
+    case 3: return { kind: "wire_payload", chat: reader.string(), payload: reader.Payload() };
+    case 4: return { kind: "continue_fill", chat: reader.string() };
+    case 5: return { kind: "hub_changed", chat: reader.string() };
+    case 6: return { kind: "ack", chat: reader.string(), seq: reader.u64() };
     default: throw new Error('unknown Action variant: ' + variant);
   }
 }
@@ -176,6 +206,7 @@ function writeChatEvent(writer: Writer, value: ChatEvent): void {
       break;
     case "range":
       writer.u32(5);
+      writer.option(value.fold_id, (item: string) => { writer.string(item); });;
       writer.string(value.items_json);;
       writer.bool(value.more);;
       break;
@@ -197,6 +228,7 @@ function writeChatEvent(writer: Writer, value: ChatEvent): void {
       break;
     case "range_failed":
       writer.u32(11);
+      writer.option(value.fold_id, (item: string) => { writer.string(item); });;
       break;
   }
 }
@@ -209,13 +241,13 @@ function readChatEvent(reader: Reader): ChatEvent {
     case 2: return { kind: "after", batch: reader.WireBatch() };
     case 3: return { kind: "reloaded", items_json: reader.string(), history: reader.option(() => reader.string()), to_seq: reader.option(() => reader.i64()), has_more: reader.bool() };
     case 4: return { kind: "older", items_json: reader.string(), has_more: reader.bool() };
-    case 5: return { kind: "range", items_json: reader.string(), more: reader.bool() };
+    case 5: return { kind: "range", fold_id: reader.option(() => reader.string()), items_json: reader.string(), more: reader.bool() };
     case 6: return { kind: "reconnected" };
     case 7: return { kind: "load_older" };
     case 8: return { kind: "open_fold", fold_id: reader.string() };
     case 9: return { kind: "fill_failed" };
     case 10: return { kind: "older_failed" };
-    case 11: return { kind: "range_failed" };
+    case 11: return { kind: "range_failed", fold_id: reader.option(() => reader.string()) };
     default: throw new Error('unknown ChatEvent variant: ' + variant);
   }
 }
@@ -230,6 +262,8 @@ function writeChatPatch(writer: Writer, value: ChatPatch): void {
   writer.option(value.history, (item: string) => { writer.string(item); });;
   writer.option(value.has_more, (item: boolean) => { writer.bool(item); });;
   writer.bool(value.loaded_once);;
+  writer.bool(value.verified);;
+  writer.option(value.acked, (item: number) => { writer.u64(item); });;
   writer.seq(value.ops, (item: ListOp) => { writer.ListOp(item); });;
 }
 
@@ -240,6 +274,8 @@ function readChatPatch(reader: Reader): ChatPatch {
     history: reader.option(() => reader.string()),
     has_more: reader.option(() => reader.bool()),
     loaded_once: reader.bool(),
+    verified: reader.bool(),
+    acked: reader.option(() => reader.u64()),
     ops: reader.seq(() => reader.ListOp()),
   };
 }
@@ -337,6 +373,53 @@ function readListOp(reader: Reader): ListOp {
   }
 }
 
+function registerPayload(writer: Writer, reader: Reader): void {
+  writer.register('Payload', (value: Payload) => writePayload(writer, value));
+  reader.register('Payload', () => readPayload(reader));
+}
+function writePayload(writer: Writer, value: Payload): void {
+  switch (value.kind) {
+    case "latest":
+      writer.u32(0);
+      writer.string(value.body);;
+      break;
+    case "newer":
+      writer.u32(1);
+      writer.string(value.body);;
+      break;
+    case "reloaded":
+      writer.u32(2);
+      writer.string(value.body);;
+      break;
+    case "older":
+      writer.u32(3);
+      writer.string(value.body);;
+      break;
+    case "range":
+      writer.u32(4);
+      writer.option(value.fold_id, (item: string) => { writer.string(item); });;
+      writer.string(value.body);;
+      break;
+    case "frame":
+      writer.u32(5);
+      writer.string(value.body);;
+      break;
+  }
+}
+
+function readPayload(reader: Reader): Payload {
+  const variant = reader.u32();
+  switch (variant) {
+    case 0: return { kind: "latest", body: reader.string() };
+    case 1: return { kind: "newer", body: reader.string() };
+    case 2: return { kind: "reloaded", body: reader.string() };
+    case 3: return { kind: "older", body: reader.string() };
+    case 4: return { kind: "range", fold_id: reader.option(() => reader.string()), body: reader.string() };
+    case 5: return { kind: "frame", body: reader.string() };
+    default: throw new Error('unknown Payload variant: ' + variant);
+  }
+}
+
 function registerRequest(writer: Writer, reader: Reader): void {
   writer.register('Request', (value: Request) => writeRequest(writer, value));
   reader.register('Request', () => readRequest(reader));
@@ -363,6 +446,7 @@ function writeRequest(writer: Writer, value: Request): void {
       break;
     case "fetch_range":
       writer.u32(4);
+      writer.option(value.fold_id, (item: string) => { writer.string(item); });;
       writer.i64(value.from_seq);;
       writer.i64(value.through_seq);;
       break;
@@ -376,7 +460,7 @@ function readRequest(reader: Reader): Request {
     case 1: return { kind: "fetch_latest", fold_work: reader.bool() };
     case 2: return { kind: "subscribe", since_seq: reader.option(() => reader.i64()), fold_work: reader.bool() };
     case 3: return { kind: "fetch_older", before_seq: reader.i64(), fold_work: reader.bool() };
-    case 4: return { kind: "fetch_range", from_seq: reader.i64(), through_seq: reader.i64() };
+    case 4: return { kind: "fetch_range", fold_id: reader.option(() => reader.string()), from_seq: reader.i64(), through_seq: reader.i64() };
     default: throw new Error('unknown Request variant: ' + variant);
   }
 }
@@ -415,6 +499,7 @@ function register(writer: Writer, reader: Reader): void {
   registerConfig(writer, reader);
   registerEffect(writer, reader);
   registerListOp(writer, reader);
+  registerPayload(writer, reader);
   registerRequest(writer, reader);
   registerWireBatch(writer, reader);
 }
@@ -432,6 +517,8 @@ export function encodeEffect(value: Effect): Uint8Array { const writer = new Wri
 export function decodeEffect(bytes: Uint8Array): Effect { const reader = new Reader(bytes); register(new Writer(), reader); const value = reader.Effect(); reader.finish(); return value; }
 export function encodeListOp(value: ListOp): Uint8Array { const writer = new Writer(); register(writer, new Reader(new Uint8Array())); writer.ListOp(value); return writer.finish(); }
 export function decodeListOp(bytes: Uint8Array): ListOp { const reader = new Reader(bytes); register(new Writer(), reader); const value = reader.ListOp(); reader.finish(); return value; }
+export function encodePayload(value: Payload): Uint8Array { const writer = new Writer(); register(writer, new Reader(new Uint8Array())); writer.Payload(value); return writer.finish(); }
+export function decodePayload(bytes: Uint8Array): Payload { const reader = new Reader(bytes); register(new Writer(), reader); const value = reader.Payload(); reader.finish(); return value; }
 export function encodeRequest(value: Request): Uint8Array { const writer = new Writer(); register(writer, new Reader(new Uint8Array())); writer.Request(value); return writer.finish(); }
 export function decodeRequest(bytes: Uint8Array): Request { const reader = new Reader(bytes); register(new Writer(), reader); const value = reader.Request(); reader.finish(); return value; }
 export function encodeWireBatch(value: WireBatch): Uint8Array { const writer = new Writer(); register(writer, new Reader(new Uint8Array())); writer.WireBatch(value); return writer.finish(); }
