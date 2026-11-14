@@ -11,6 +11,32 @@ GRADLE = (ROOT / "android/app/build.gradle.kts").read_text()
 SHA = "0123456789abcdef0123456789abcdef01234567"
 
 
+def commit_block(gradle):
+    """The Gradle statement that resolves the build commit: only this block is held to the no-git, explicit-input rules."""
+    return gradle.split("val buildCommit", 1)[1].split("}.lowercase()", 1)[0]
+
+
+def gradle_problems(gradle):
+    """What is wrong with how a build.gradle.kts carries the build commit. Other features' blocks (a BuildConfig switch
+    another change turns on, say) are none of its business: only the commit's own statements are checked."""
+    problems = []
+    block = commit_block(gradle)
+    if block.index('gradleProperty("personaBuildCommit")') > block.index('environmentVariable("PERSONA_BUILD_COMMIT")'):
+        problems.append("the property must come before the environment variable")
+    if '?: "unknown"' not in block:
+        problems.append("no commit must mean unknown")
+    if 'Regex("[0-9a-fA-F]{7,64}")' not in block:
+        problems.append("the value must be checked as a commit")
+    if re.search(r"rev-parse|ProcessBuilder|exec\(|\.git\b|\"git\"", block):
+        problems.append("the commit must not be read from git")
+    if 'resValue("string", "persona_build_commit", buildCommit)' not in gradle:
+        problems.append("the commit must be a generated string resource")
+    # It is never a BuildConfig field: a line that mentions the commit and buildConfigField together.
+    if any("buildConfigField" in line and ("persona_build_commit" in line or "buildCommit" in line) for line in gradle.splitlines()):
+        problems.append("the commit must not be a BuildConfig field")
+    return problems
+
+
 def resolved(env):
     """Run the CI script's own assignment with only [env] set and return what it resolves to."""
     line = next(line for line in CI.splitlines() if line.startswith("BUILD_COMMIT="))
@@ -31,8 +57,10 @@ class CiBuildCommitTest(unittest.TestCase):
 
     def test_gradle_gets_the_value_and_the_script_never_asks_git(self):
         self.assertIn('-PpersonaBuildCommit="$BUILD_COMMIT"', CI)
-        self.assertNotRegex(CI, r"git\s+(-C\s+\S+\s+)?(rev-parse|describe|log)")
-        self.assertNotIn(".config/persona", CI.split("BUILD_COMMIT=", 1)[1].split("\n", 1)[0])
+        # Only the commit's own assignment is held to it: another step of this script may use git for something else.
+        assignment = next(line for line in CI.splitlines() if line.startswith("BUILD_COMMIT="))
+        self.assertNotRegex(assignment, r"git\s|rev-parse")
+        self.assertNotIn(".config/persona", assignment)
 
 
 class LocalBuildCommitTest(unittest.TestCase):
@@ -50,17 +78,26 @@ class LocalBuildCommitTest(unittest.TestCase):
 
 class GradleBuildCommitTest(unittest.TestCase):
     def test_gradle_reads_only_the_property_then_the_environment_and_never_git(self):
-        block = GRADLE.split("val buildCommit", 1)[1].split("}.lowercase()", 1)[0]
-        self.assertLess(block.index('gradleProperty("personaBuildCommit")'), block.index('environmentVariable("PERSONA_BUILD_COMMIT")'))
-        self.assertIn('?: "unknown"', block)
-        self.assertNotRegex(GRADLE, r"rev-parse|ProcessBuilder|exec\(|\.git\b")
-        self.assertIn('Regex("[0-9a-fA-F]{7,64}")', block)
+        self.assertEqual(gradle_problems(GRADLE), [])
 
-    def test_the_commit_is_a_generated_resource_and_not_build_config_or_manifest(self):
+    def test_the_commit_is_a_generated_resource_and_not_manifest_metadata(self):
         self.assertIn('resValue("string", "persona_build_commit", buildCommit)', GRADLE)
-        self.assertNotIn("buildConfig", GRADLE)
-        self.assertNotIn("buildConfigField", GRADLE)
         self.assertNotIn("persona_build_commit", (ROOT / "android/app/src/main/AndroidManifest.xml").read_text())
+
+    def test_a_buildconfig_switch_for_another_feature_can_live_beside_the_commit(self):
+        # A debug-only Rust shadow change adds buildFeatures { buildConfig = true } under namespace; merging it must not fail here.
+        merged = GRADLE.replace("android {\n", "android {\n    buildFeatures { buildConfig = true }\n", 1)
+        self.assertNotEqual(merged, GRADLE)
+        self.assertEqual(gradle_problems(merged), [])
+        both = merged.replace("buildFeatures { resValues = true }", "buildFeatures { resValues = true; buildConfig = true }")
+        self.assertEqual(gradle_problems(both), [])
+
+    def test_the_commit_as_a_buildconfig_field_or_a_git_read_is_still_refused(self):
+        field = GRADLE.replace("        resValue(", '        buildConfigField("String", "BUILD_COMMIT", "\\"" + buildCommit + "\\"")\n        resValue(', 1)
+        self.assertIn("the commit must not be a BuildConfig field", gradle_problems(field))
+        git = GRADLE.replace('?: "unknown"', '?: "git rev-parse HEAD".execute().text', 1)
+        self.assertIn("the commit must not be read from git", gradle_problems(git))
+        self.assertIn("the commit must be a generated string resource", gradle_problems(GRADLE.replace('resValue("string", "persona_build_commit", buildCommit)', "")))
 
     def test_the_settings_module_reads_the_same_resource_name(self):
         reader = (ROOT / "android/feature/settings/src/main/kotlin/persona/feature/settings/AboutBuildCommit.kt").read_text()
