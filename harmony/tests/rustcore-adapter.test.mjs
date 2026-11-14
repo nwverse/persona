@@ -55,7 +55,7 @@ test('the ArkTS adapter owns one NAPI handle, decodes effects and closes idempot
 
 test('the ArkTS adapter selects targeted wake only when supplied', () => {
   globalThis.handle = 0;
-  globalThis.patchBytes = wire.encodeChatPatch({version: 1, covered: 0, history: null, has_more: null, loaded_once: false, ops: []});
+  globalThis.patchBytes = wire.encodeChatPatch({version: 1, covered: 0, history: null, has_more: null, loaded_once: false, verified: false, acked: null, ops: []});
   const core = new PersonaCore();
   const wakes = [];
   core.open({changed() {}, changedChat(chat, version) { wakes.push([chat, version]); }, run() {}});
