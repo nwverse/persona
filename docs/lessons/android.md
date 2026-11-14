@@ -1,5 +1,11 @@
 # Lessons: Android
 
+## Device drag evidence needs a live touch sequence and a real test count
+
+`View.startDragAndDrop` is not a standalone drag-event factory. Inject `ACTION_DOWN` first, start the drag during that same touch sequence, then inject move and up events with the same `downTime`. Include `DRAG_FLAG_GLOBAL | DRAG_FLAG_GLOBAL_URI_READ` for content URIs that need a read grant. Without the down event, WindowManager can log `perform drag` with touch `(0,0)` and immediately unregister the drag input channel; a helper that then returns success without checking imported state creates empty negative-test passes. Assert both that the system drag started and that the expected attachment or non-import outcome reached the draft.
+
+A Gradle `connectedDebugAndroidTest` invocation can print `BUILD SUCCESSFUL` and write a zero-test XML when its additional-output collector loses the adb device. That is not a passing device test. Check the suite's actual test count, or install the built test APK through the intended adb server and run `am instrument` directly; require the final `OK (N tests)` line with the expected count. Do not hide a missing-device failure behind the Gradle task's exit status.
+
 ## Selecting a message's words in place: what `SelectionContainer` leaves to you (#4210 T5)
 
 `rememberSelectionState()` and `SelectionContainer(state, …)` are public in Compose Foundation 1.12: `selectAll()`, `clear()`
