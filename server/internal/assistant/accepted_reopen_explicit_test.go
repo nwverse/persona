@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -355,11 +356,10 @@ func TestACardMessageReopensOnlyItsOwnTask(t *testing.T) {
 	if _, err := s.routeToTask(ctx, "conv1", accepted.ID, "Please cover the landscape case too"); err != nil {
 		t.Fatalf("the card message: %v", err)
 	}
-	if other.ID == "" || other.DoneAt == nil || other.DoneBy != db.DoneByReview {
+	if other.ID == "" || other.DoneAt == nil || other.DoneBy != db.DoneByReview || !slices.ContainsFunc(other.Agents, func(a TodoAgent) bool {
+		return a.SessionID == longAgent && a.ReleasedAt == nil
+	}) {
 		t.Fatalf("the other task did not take the agent and close: %+v", other)
-	}
-	if t2, ok := s.closedTaskOf(ctx, "box", longAgent); !ok || t2.ID != other.ID {
-		t.Fatalf("the agent is not the other task's: %+v %v", t2, ok)
 	}
 	closedUnchanged(t, s, other)
 	if got := todoNow(s, accepted.ID); got.DoneAt == nil {
