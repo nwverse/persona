@@ -382,14 +382,43 @@ Phase 2 lands in several PRs.
     `http_latest` steps without `has_more` are not wire pages; the decoder refuses them, as iOS's `ItemsResponse`
     would. The refusal rules rest on the crate's unit tests, which try every key a decoder reads with every kind of
     wrong value.
-  - Not done: no boundary action carries bytes, the runtime and the three entry points are unchanged, and no client
-    uses the decoder. Each client still decodes natively.
+  - At the time of that PR no boundary action carried bytes; the follow-up below adds them. Each client still
+    decodes natively in production.
   - Not full parity: envelope keys only other events use and nested structs the core does not read are not
     checked, and whole numbers must be integer literals, the only spelling the hub writes
     (`native/app-core/README.md`, "Transport decoding").
   - Not executed on iOS: the rules were read from the Swift sources and swift-foundation's `JSONDecoder`, and the
     wire cases' expectations are derived from the iOS sources too (checked by the hub's golden test and the Android
     replay). No shared wire case was added for the refusal rules, which wait for an iOS run to confirm them.
+- **Byte-carrying actions, and the wire corpus through the JNI and ArkTS boundaries (#7385 scope 3).**
+  - `Action::WirePayload` carries one response body or WebSocket frame as received, with the variant naming the
+    request it answers. The worker decodes it with `persona_core::transport`; `dispatch` only queues the bytes. A
+    frame of another type is ignored, and a frame iOS would drop is dropped without an error.
+  - Replays of the same 17 wire cases, with the JSON exactly as the files hold it: through the runtime (32 items
+    byte for byte; every case except the opened-fold range page is also compared with the equivalent hand-built
+    `ChatEvent`, and separate tests drive a range page into an opened fold and an older page into history), through
+    the real JNI binding and through ArkTS plus the transport decoder on the host. The generated Kotlin, Swift and
+    ArkTS codecs gain the new variant; no client uses it yet.
+  - Host measurement (best of 8, debug build): dispatching a 200 KB page costs about 21 µs against 1.8 µs for a
+    small action, i.e. a copy, not a decode. The optimized Android benchmark and its budgets are unchanged.
+  - Also fixed here: `ItemError`'s message quoted serde's error text, which repeats the offending value, so a
+    malformed cached item could put message text into diagnostics. It now carries a context and a line/column
+    position only, with a test.
+  - Still not done: no production client sends bytes; the Swift XCTest replay needs macOS and follows #7401; the
+    on-device cells stay blocked: no physical device.
+
+- **The core boundary's missing contracts (#7554).**
+  - `ChatPatch.verified` carries whether the chat's items are known complete, the rule Android used to derive per
+    client (`gap == None && (backlog || already verified)`), so no client re-implements the reducer's gap logic.
+  - `Action::Ack` echoes a host's sequence number in the patch, so an applied no-op is distinguishable from a
+    pending action. `Action::HubChanged` settles as if a gap were found, iOS's `settle(.fill)`.
+  - Folds are keyed by id and independent: different folds open and complete in either order, as on iOS, and
+    `Request::FetchRange`, `ChatEvent::Range` / `RangeFailed` and `Payload::Range` carry an optional `fold_id`.
+    Callers that send no id keep the older single-opening behaviour.
+  - The three codecs are regenerated; the existing 38-case / 94-step corpus still passes, with new tests for the
+    verified rule, hub-changed input, acknowledgement and two folds completing in either order. The Android host
+    JNI and ArkTS host replays cover the new fields.
+  - Not done: no production client uses these contracts yet; the adapters (#7366, #7448) consume them next.
 
 ### Migration rules (each domain)
 
