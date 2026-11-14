@@ -8,7 +8,9 @@ so `/workspace-board` and Settings showed their loaders until the next reconnect
 every 503 as "this hub has no board, update it", while the manager answers 503 `assistant_offline` while it restarts:
 tell an unsupported hub from a passing failure by the error's `code` (`not_supported`), not by its status, and offer
 Retry only for what a retry can fix. A message about the hub's version belongs on its own, without the controls of a
-page that cannot work there.
+page that cannot work there. The switch's module is on the first screen and its pages are lazy: exporting its read for
+their Retry renamed the first screen's imports (ja +120 B), while handing `retry` out through the hook they already
+import, and keeping the 404 as the stored failure rather than a flag of its own, left the first screen smaller than main.
 
 ## Removing a client-only prompt includes its hooks and fixture documentation (#6570)
 

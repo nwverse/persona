@@ -152,6 +152,7 @@ describe("workspace board switch: a read that fails", () => {
     await settle();
     held[0].answer({ error: "Not Found", code: "not_found" }, 404);
     await read;
-    expect(getWorkspaceBoardSetting()).toEqual({ enabled: true, canWrite: false, unsupported: true });
+    expect(getWorkspaceBoardSetting()).toMatchObject({ enabled: true, canWrite: false });
+    expect((getWorkspaceBoardSetting().error as ApiError).status).toBe(404);
   });
 });

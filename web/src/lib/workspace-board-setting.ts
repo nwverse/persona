@@ -10,11 +10,11 @@ export interface WorkspaceBoardSetting {
   /** null until the hub answered: nothing shows the board (or says it is off) before that. */
   enabled: boolean | null;
   canWrite: boolean;
-  /** The hub has no switch (404: a hub from before it). The board shows, as it did there, and only updating the hub
-   *  brings the switch: Settings says that rather than "read-only device". */
-  unsupported?: boolean;
-  /** What failed reading the switch while nothing was known of it yet (unset once the hub answered): the board page and
-   *  Settings say why (errorText) with Retry instead of loading forever; the next hello reads it again too. */
+  /** Why the switch could not be read, kept while it decides what the pages show; unset once the hub answers:
+   *  - while nothing is known yet, the board page and Settings say why (errorText) with Retry instead of loading
+   *    forever; the next hello reads it again too;
+   *  - a 404 is a hub from before the switch, which showed the board to everyone: the board shows, and Settings says
+   *    only updating the hub brings the switch, rather than "read-only device". */
   error?: unknown;
 }
 
@@ -28,7 +28,7 @@ let rev = 0;
 const listeners = new Set<() => void>();
 
 function set(next: WorkspaceBoardSetting) {
-  if (next.enabled === state.enabled && next.canWrite === state.canWrite && next.unsupported === state.unsupported && next.error === state.error) return;
+  if (next.enabled === state.enabled && next.canWrite === state.canWrite && next.error === state.error) return;
   state = next;
   listeners.forEach((l) => l());
 }
@@ -68,7 +68,7 @@ async function readSwitch(): Promise<void> {
   } catch (e) {
     if (mine !== rev) return;
     // a hub from before the switch showed the board to everyone and has nothing to turn it off with
-    if (e instanceof ApiError && e.status === 404) set({ enabled: true, canWrite: false, unsupported: true });
+    if (e instanceof ApiError && e.status === 404) set({ enabled: true, canWrite: false, error: e });
     // anything else: keep what we had (the next hello asks again); with nothing yet, say why, so the page can offer Retry
     else if (state.enabled === null) set({ ...state, error: e });
   }
