@@ -16552,15 +16552,16 @@ if os.environ.get("MOCK_CHAT_CONTENT") == "1":
         it("assistant", "text", 60 * 27 - 1, text="看起来是一家小馆子，周五晚上要提前订位。"),
     ]
 
-# MOCK_LONG_HISTORY=1: the weather chat with fifteen earlier exchanges in front, so its work line and thought sit in
+# MOCK_LONG_HISTORY=1 (or "oldest": the work line first): the weather chat with fifteen earlier exchanges in front, so its work line and thought sit in
 # the middle of a long chat and the list can scroll both ways around them (opening and closing them in place).
-if os.environ.get("MOCK_LONG_HISTORY") == "1":
+if os.environ.get("MOCK_LONG_HISTORY") in ("1", "oldest"):
     _hist = []
     for _k in range(15):
         _hist.append(it("user", "text", 600 - _k * 30, text="第 %d 个问题：顺便看一下这一块的写法有没有问题？" % (_k + 1)))
         _hist.append(it("assistant", "text", 599 - _k * 30, text="看过了，第 %d 块没有问题。命名可以再统一一点，"
                                                             "测试也覆盖到了主要的分支，我顺手把两处重复的判断合并了。" % (_k + 1)))
-    _all = _hist + ITEMS[WIDGET]
+    # "oldest": the work line comes first and the exchanges after it, so a tool row sits at the oldest end (#7237)
+    _all = ITEMS[WIDGET] + _hist if os.environ.get("MOCK_LONG_HISTORY") == "oldest" else _hist + ITEMS[WIDGET]
     for _i, _d in enumerate(_all):  # transcript order: the history first
         _d["seq"] = _i + 1
     ITEMS[WIDGET] = _all
