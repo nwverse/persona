@@ -17,8 +17,8 @@ public struct CoreContinuityShadow: ~Copyable, Sendable {
 
     public let client: PersonaCoreClient
     public let chat: String
-    private let changes = Mutex<[(String, UInt64)]>([])
-    private let effects = Mutex<[Effect]>([])
+    private let changes: Mutex<[(String, UInt64)]>
+    private let effects: Mutex<[Effect]>
 
     public init(chat: String) throws {
         self.chat = chat
