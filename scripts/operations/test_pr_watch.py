@@ -20,6 +20,7 @@ import pr_watch
 import pr_watch_common
 import pr_watch_events
 import pr_watch_merge
+import pr_watch_repair
 import pr_watch_review
 import pr_watch_verify
 
@@ -248,6 +249,78 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(review.call_count, 1)
         self.assertEqual(verify.call_count, 1)
 
+    def test_title_and_test_only_visual_exemption(self):
+        for title in ("test(web): wait for lazy details", "test(ios): correct an assertion",
+                      "fix(ios): repair a view", "fix(android): repair a layout"):
+            self.assertTrue(pr_watch_repair.test_or_fix(pr(title=title), ["web/src/views/ChatView.tsx"]))
+        self.assertFalse(pr_watch_repair.test_or_fix(pr(title="feat(ios): a new view"), ["apple/Persona/Views/ChatView.swift"]))
+        self.assertTrue(pr_watch_repair.test_or_fix(pr(title="feat(web): refine a test"),
+                                                     ["web/src/views/chat/ContextGroup.test.tsx"]))
+        self.assertFalse(pr_watch_repair.test_or_fix(pr(title="chore: change a view"),
+                                                      ["web/src/views/ChatView.tsx"]))
+
+    def test_fix_ui_change_runs_checks_without_visual_adapter(self):
+        names = "web/src/views/ChatView.tsx\n"
+        with patch.object(pr_watch_verify, "checked", return_value=names), \
+                patch.object(pr_watch_verify, "load_paths") as selector:
+            selector.return_value.select.return_value = {"web": True, "scripts": True}
+            commands = pr_watch_verify.persona_checks(".", pr(title="fix(web): repair a view"), 1, {})
+        self.assertEqual(commands, [("CI web", ["bash", "scripts/ci/web.sh"]),
+                                    ("CI scripts", ["bash", "scripts/ci/scripts.sh"])])
+
+    def test_feature_ui_change_still_requires_visual_adapter(self):
+        names = "web/src/views/ChatView.tsx\n"
+        with patch.object(pr_watch_verify, "checked", return_value=names), \
+                patch.object(pr_watch_verify, "load_paths") as selector:
+            selector.return_value.select.return_value = {"web": True, "scripts": True}
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_verify.persona_checks(".", pr(title="feat(web): a new view"), 1, {})
+
+    def test_verification_failure_uses_bounded_repair(self):
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", side_effect=pr_watch_common.WatchError("real test failed")), \
+                patch.object(self.watcher, "repair_verification", return_value=False) as repair:
+            self.watcher.process("example/one", 7)
+        repair.assert_called_once()
+        self.assertNotEqual(self.watcher.state.get("example/one", 7)["outcome"], "failed")
+
+    def test_repair_stops_after_two_rounds(self):
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=2)
+        with patch.object(self.watcher, "comment") as comment, \
+                patch.object(pr_watch_repair, "main_failure_comparison") as compare:
+            result = self.watcher.repair_verification(self.config["repositories"][0], pr(), self.root, pr_watch_common.WatchError("still failing"))
+        self.assertFalse(result)
+        compare.assert_not_called()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "repair_exhausted")
+        self.assertIn("two rounds", comment.call_args.args[2])
+
+    def test_main_owned_failure_is_not_a_passed_test(self):
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=0)
+        with patch.object(pr_watch_repair, "main_failure_comparison", return_value={"reproduced": True, "packages": ["./internal/node"]}), \
+                patch.object(self.watcher, "comment"):
+            result = self.watcher.repair_verification(self.config["repositories"][0], pr(), self.root, pr_watch_common.WatchError("--- FAIL: TestBase"))
+        self.assertTrue(result)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["verification"], "base_failure")
+    def test_main_comparison_requires_named_tests_and_packages(self):
+        comparison = pr_watch_repair.main_failure_comparison("example/one", pr(), ".", "CI server failed")
+        self.assertFalse(comparison["reproduced"])
+        self.assertEqual(pr_watch_repair.failed_test_names("--- PASS: TestGood\n--- FAIL: TestBad/case\n"), ["TestBad"])
+
+    def test_continuation_pr_links_original_issue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def fake_checked(argv, **kwargs):
+                if argv[:2] == ["git", "rev-parse"]:
+                    return SHA_B + "\n"
+                return ""
+            with patch.object(pr_watch_repair, "pr_snapshot", return_value=pr()), \
+                    patch.object(pr_watch_repair, "verify", return_value=[]), \
+                    patch.object(pr_watch_repair, "checked", side_effect=fake_checked), \
+                    patch.object(pr_watch_repair, "gh_json", return_value={"number": 9}) as created:
+                pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure")
+        self.assertIn("Refs #6", created.call_args.args[0][-1])
+
     def test_verification_does_not_import_pr_selector_or_receive_gh_credentials(self):
         with patch.object(pr_watch_verify, "checked", return_value="scripts/ci/paths.py\n"), \
                 patch.object(pr_watch_verify, "load_paths") as selector, \
@@ -286,12 +359,11 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)
 
     def test_verification_failure_is_not_an_infrastructure_retry(self):
-        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(title="feat: an example")), \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \
                 patch.object(pr_watch, "verify", side_effect=pr_watch_common.WatchError("real test failed")), \
-                patch.object(self.watcher, "merge") as merge:
+                patch.object(self.watcher, "repair_verification", side_effect=pr_watch_common.WatchError("real test failed")):
             self.watcher.process("example/one", 7)
-        merge.assert_not_called()
         self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "failed")
         self.assertEqual(len(self.comments), 1)
         self.assertIn("real test failed", self.comments[0])
@@ -451,11 +523,11 @@ class VerifyTests(unittest.TestCase):
                 patch.object(pr_watch_verify, "load_paths") as selector:
             selector.return_value.select.return_value = {"apple": True, "scripts": True}
             with self.assertRaises(pr_watch_common.WatchError):
-                pr_watch_verify.persona_checks(".", pr(), 1, {})
+                pr_watch_verify.persona_checks(".", pr(title="feat: an example"), 1, {})
         with patch.object(pr_watch_verify, "checked", side_effect=[path + "\n", "+import SwiftUI"]), \
                 patch.object(pr_watch_verify, "load_paths") as selector:
             selector.return_value.select.return_value = {"apple": True, "scripts": True}
-            commands = pr_watch_verify.persona_checks(".", pr(), 1, {"apple_command": ["verify", "{head}"],
+            commands = pr_watch_verify.persona_checks(".", pr(title="feat: an example"), 1, {"apple_command": ["verify", "{head}"],
                                                                       "ui_evidence_command": ["visual", "{worktree}"]})
         self.assertIn(("trusted Apple verification", ["verify", SHA_A]), commands)
         self.assertIn(("visual evidence", ["visual", "."]), commands)
@@ -510,7 +582,7 @@ class VerifyTests(unittest.TestCase):
                 patch.object(pr_watch_verify, "non_ui_apple_change", return_value=True) as classifier, \
                 patch.object(pr_watch_verify, "load_paths") as selector:
             selector.return_value.select.return_value = {"apple": True, "scripts": True, "server": True}
-            commands = pr_watch_verify.persona_checks(".", pr(), 1, {})
+            commands = pr_watch_verify.persona_checks(".", pr(title="chore: an example"), 1, {})
         self.assertEqual(commands, [("CI server", ["bash", "scripts/ci/server.sh"]),
                                     ("CI scripts", ["bash", "scripts/ci/scripts.sh"]),
                                     ("Apple non-UI review policy", ["true"])])
@@ -534,7 +606,7 @@ class VerifyTests(unittest.TestCase):
                 patch.object(pr_watch_verify, "load_paths") as selector:
             selector.return_value.select.return_value = {"apple": True, "core": True, "scripts": True}
             with self.assertRaises(pr_watch_common.WatchError):
-                pr_watch_verify.persona_checks(".", pr(), 1, {})
+                pr_watch_verify.persona_checks(".", pr(title="feat: an example"), 1, {})
 
     def test_extension_shared_changes_use_full_ci(self):
         with patch.object(pr_watch_verify, "extension_modules", return_value=None), \

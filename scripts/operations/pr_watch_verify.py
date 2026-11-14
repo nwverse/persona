@@ -5,7 +5,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from pr_watch_common import WatchError, bounded, checked, run, verification_env
+from pr_watch_common import WatchError, bounded, checked, run, test_or_fix, verification_env
 
 
 def command_with_prefix(command, arguments):
@@ -159,7 +159,7 @@ def persona_checks(worktree, pr, timeout, config):
         if selected.get(lane):
             commands.append(("CI " + lane, ["bash", "scripts/ci/" + lane + ".sh"]))
     if selected.get("apple"):
-        non_ui = non_ui_apple_change(worktree, base, head, names)
+        non_ui = test_or_fix(pr, names) or non_ui_apple_change(worktree, base, head, names)
         if non_ui:
             # Explicit maintainer policy for backend-only Apple PRs on a Linux
             # host. This does not claim an Apple build or UI acceptance.
@@ -170,7 +170,7 @@ def persona_checks(worktree, pr, timeout, config):
             commands.append(external_check(config["apple_command"], pr, worktree, "trusted Apple verification"))
     else:
         non_ui = False
-    if ui_change(names) and not non_ui:
+    if ui_change(names) and not non_ui and not test_or_fix(pr, names):
         if not config.get("ui_evidence_command"):
             raise WatchError("UI changes need the configured visual-evidence verifier (dark/light screenshots and manual inspection); tests alone are insufficient")
         commands.append(external_check(config["ui_evidence_command"], pr, worktree, "visual evidence"))

@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pr_watch_common import WatchError, atomic_json, bounded, checked, fingerprint, gh_json, pr_snapshot, repository, run, SHA, verification_env
 from pr_watch_merge import linked_issue, merge as generic_merge
 import pr_watch_merge
+import pr_watch_repair
 from pr_watch_review import review as semantic_review
 from pr_watch_verify import verify
 
@@ -312,6 +313,40 @@ class Watcher:
         self.log("%s#%s merged at %s" % (repo, number, pr["headRefOid"][:9]))
         return True
 
+    def repair_verification(self, config, pr, worktree, error):
+        """Attribute a failure, update a stale base, or perform one repair round."""
+        repo, number = config["name"], pr["number"]
+        old = self.state.get(repo, number)
+        rounds = int(old.get("repair_rounds", 0))
+        if rounds >= 2:
+            self.comment(repo, number, "Automatic verification repair stopped after two rounds.\n\n```text\n%s\n```" %
+                         bounded(str(error), 12000))
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           outcome="repair_exhausted", failure=str(error))
+            return False
+        comparison = pr_watch_repair.main_failure_comparison(repo, pr, str(worktree), str(error), git_root=config["checkout"])
+        if comparison.get("reproduced"):
+            self.log("%s#%s failure also reproduces on clean main; continue the remaining gates" % (repo, number))
+            self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
+                         bounded(str(error), 6000))
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           base_failures=comparison, verification="base_failure", checks=old.get("checks", []),
+                           outcome="passed_with_base_failures", failure=str(error))
+            return True
+        if pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"]):
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
+            self.comment(repo, number, "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
+            return False
+        self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                       repair_rounds=rounds + 1, outcome="repairing", failure=str(error))
+        pr_watch_repair.repair_with_model(repo, pr, str(worktree), str(error), self.config["reviewer"])
+        new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error))
+        self.comment(repo, number, "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
+        if new_number != number:
+            self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
+        return False
+
     def mergeable(self, pr):
         if pr["state"] != "OPEN" or pr["isDraft"]:
             return False
@@ -345,7 +380,7 @@ class Watcher:
             old = {}
         if old.get("head") == head and old.get("retry_after", 0) > time.time():
             return
-        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed"):
+        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "repair_exhausted", "passed_with_base_failures"):
             if self.dry_run or old.get("review_posted") or old.get("outcome") == "merged":
                 return
             # A dry run keeps semantic/test evidence but has no external side
@@ -360,6 +395,22 @@ class Watcher:
                 self.state.put(repo, number, head, evidence_key=evidence_key, failure_posted=True)
                 return
         if not self.mergeable(pr):
+            if pr["mergeable"] == "CONFLICTING" and not pr.get("isCrossRepository"):
+                worktree = None
+                try:
+                    rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
+                    if rounds >= 2:
+                        self.comment(repo, number, "The automatic repair limit was reached while updating the base; no merge was attempted.")
+                        return
+                    worktree = self.worktree(repo, number, pr)
+                    if pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"]):
+                        self.state.put(repo, number, head, evidence_key=evidence_key,
+                                       repair_rounds=rounds + 1, outcome="base_updated")
+                        self.comment(repo, number, "The watcher merged current main into the same-repository branch to resolve the stale base. The new head will be reviewed.")
+                except WatchError as error:
+                    self.log("%s#%s automatic base update failed: %s" % (repo, number, bounded(error, 500)))
+                finally:
+                    self.remove_worktree(repo, worktree)
             return
         phase = "merge"
         if old.get("head") == head and old.get("outcome") == "merge_failed":
@@ -402,7 +453,7 @@ class Watcher:
                                              review_posted=not self.dry_run, outcome="findings")
                 self.log("%s#%s has %d semantic finding(s); not merged" % (repo, number, len(findings)))
                 return
-            if current.get("verification") != "passed":
+            if current.get("verification") not in ("passed", "base_failure"):
                 self.phase(key, "repository verification")
                 phase = "verification"
                 results = verify(repo, pr, str(worktree), config["verify"], environ=verification_env())
@@ -425,6 +476,15 @@ class Watcher:
                                              review_posted=not self.dry_run)
                 self.finish_merge(config, current_pr, current)
         except WatchError as error:
+            if phase == "verification":
+                try:
+                    self.repair_verification(config, pr, worktree, error)
+                except WatchError as repair_error:
+                    self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
+                                 bounded(str(repair_error), 12000))
+                    self.state.put(repo, number, head, evidence_key=evidence_key,
+                                   outcome="failed", failure=str(repair_error))
+                return
             # A missing semantic answer never becomes approval. Verification
             # Infrastructure failures remain retryable with capped backoff;
             # verification failures and semantic findings stay terminal for

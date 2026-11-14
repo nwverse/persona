@@ -113,6 +113,18 @@ def pr_snapshot(repo, number, timeout=90, environ=None):
     return data
 
 
+def test_or_fix(pr, names):
+    """Maintainer policy: test/fix titles and test-only changes need no screenshots."""
+    if re.match(r"^(?:test|fix)(?:\([^)]*\))?:\s+", pr.get("title", ""), re.I):
+        return True
+    parts = {"test", "tests", "testdata", "fixtures", "__tests__", "e2e"}
+    return bool(names) and all(
+        any(part.lower() in parts or part.startswith("Persona") and part.endswith("Tests")
+            for part in Path(name).parts) or
+        Path(name).name.endswith(("_test.go", "_test.py", ".test.ts", ".test.tsx", ".test.js", ".test.mjs"))
+        for name in names)
+
+
 def verification_env():
     """Allow only non-secret process/toolchain inputs into PR-controlled builds."""
     import shutil
