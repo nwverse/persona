@@ -3,6 +3,8 @@ from contextlib import contextmanager
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
+from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).parent))
 from test_todo_decisions_mock import MockHub  # noqa: E402
@@ -11,9 +13,22 @@ IDS = ("ix_tests", "ix_ask_long")
 QUESTION_MODES = ("1", "actions", "swipe", "review")
 
 
+class CleaningMockHub(MockHub):
+    """The shared helper starts before its health check; clean up if that check raises."""
+    def __init__(self, **env):
+        try:
+            super().__init__(**env)
+        except Exception:
+            if hasattr(self, "process"):
+                self.stop()
+            elif hasattr(self, "log"):
+                self.log.close()
+            raise
+
+
 @contextmanager
 def question_hub(mode, cancel):
-    hub = MockHub(MOCK_AGENTS="1", MOCK_ASK_LONG=mode, MOCK_QUESTION_CANCEL=cancel, MOCK_RESOLVE="ok")
+    hub = CleaningMockHub(MOCK_AGENTS="1", MOCK_ASK_LONG=mode, MOCK_QUESTION_CANCEL=cancel, MOCK_RESOLVE="ok")
     try:
         yield hub
     finally:
@@ -89,6 +104,26 @@ class QuestionCancelMockTests(unittest.TestCase):
             self.assert_pending(hub, ("ix_ask_long",), False)
             self.assert_resolved(hub, ("ix_tests",))
             self.assert_ids(self.history(hub), ("ix_tests",))
+    def test_startup_failure_stops_the_process(self):
+        created = []
+        original_init = CleaningMockHub.__init__
+
+        def capture(hub, **env):
+            created.append(hub)
+            original_init(hub, **env)
+
+        with patch("test_todo_decisions_mock.urlopen", side_effect=URLError("forced health check")), \
+                patch("test_todo_decisions_mock.time.sleep", return_value=None), \
+                patch.object(CleaningMockHub, "__init__", capture):
+            with self.assertRaisesRegex(RuntimeError, "the mock hub did not start"):
+                CleaningMockHub(MOCK_ASK_LONG="1")
+        self.assertEqual(len(created), 1)
+        hub = created[0]
+        try:
+            self.assertIsNotNone(hub.process.poll())
+            self.assertTrue(hub.log.closed)
+        finally:
+            hub.stop()  # A regression must not leak the process this test started.
 
 
 if __name__ == "__main__":
