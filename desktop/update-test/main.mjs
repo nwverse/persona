@@ -4,7 +4,7 @@
 // baked into this build's app-update.yml.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { app } from "electron";
+import { app, autoUpdater as nativeUpdater } from "electron";
 import electronUpdater from "electron-updater";
 
 const { autoUpdater } = electronUpdater;
@@ -21,11 +21,17 @@ autoUpdater.on("checking-for-update", () => record({ event: "checking" }));
 autoUpdater.on("update-available", info => record({ event: "available", version: info.version }));
 autoUpdater.on("update-not-available", info => record({ event: "current", version: info.version }));
 autoUpdater.on("error", error => record({ event: "error", message: String(error?.message ?? error).slice(0, 2000) }));
+// The same path as the tray's Quit: the downloaded update installs on the way out.
+const quitSoon = () => setTimeout(() => { record({ event: "quit" }); app.quit(); }, 3000);
 autoUpdater.on("update-downloaded", info => {
   record({ event: "downloaded", version: info.version, file: info.downloadedFile });
-  // The same path as the tray's Quit: the downloaded update installs on the way out.
-  setTimeout(() => { record({ event: "quit" }); app.quit(); }, 3000);
+  if (process.platform !== "darwin") quitSoon();
 });
+// On macOS electron-updater's event only means the file was handed to Squirrel.Mac. Squirrel's own event says it
+// accepted the file; a refusal arrives through the error event above, and then nothing is installed.
+if (process.platform === "darwin") {
+  nativeUpdater.on("update-downloaded", () => { record({ event: "native-downloaded" }); quitSoon(); });
+}
 
 await import("../dist/main.js");
 

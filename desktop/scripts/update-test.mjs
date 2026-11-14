@@ -9,9 +9,11 @@
 //            and verify the new one, lets it quit, and checks that the reopened app is the new version.
 //   Linux    the same through an AppImage. The product ships no Linux package; this is evidence for the shared feed,
 //            download and checksum code on a computer that has neither macOS nor Windows.
-//   macOS    checks that the app finds and downloads the new ZIP and that its checksum matches. Installing needs a
-//            Developer ID signature (Squirrel.Mac refuses anything else), so the test records that refusal and says
-//            so; it never reports a macOS install it did not perform.
+//   macOS    runs the old version from a ZIP with an ad-hoc signature (no certificate), checks that it finds and
+//            downloads the new ZIP and that its checksum matches, then follows Squirrel.Mac's own verdict: when it
+//            accepts the file, quitting must install it and the reopened app must be the new version; when it
+//            refuses, the test records the refusal. It never reports an install it did not see. None of this is a
+//            Developer ID signed, notarized release; that still needs the certificate.
 //
 // Every child process and temporary directory is owned by this script and removed at the end. One verdict line.
 import { spawn } from "node:child_process";
@@ -196,6 +198,11 @@ async function windowsVersion(executable) {
   return text.trim();
 }
 
+async function macVersion(bundle) {
+  const { text } = await run("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", join(bundle, "Contents", "Info.plist")], { seconds: 60, quiet: true });
+  return text.trim();
+}
+
 async function windowsRunning(image) {
   const { text } = await run("tasklist", ["/FI", `IMAGENAME eq ${image}`, "/NH"], { seconds: 60, quiet: true });
   return text.toLowerCase().includes(image.toLowerCase());
@@ -258,49 +265,40 @@ async function main() {
   await writeFile(join(profile, "desktop-state.json"), `${JSON.stringify({ hub: `http://127.0.0.1:${port}/` })}\n`, "utf8");
   await rm(cacheDirectory(), { recursive: true, force: true });
   const first = launch(executable, profile);
-  const settled = await watch(profile, 300, seen => seen.find(entry => entry.event === "downloaded") ?? (seen.some(entry => entry.event === "available") ? seen.find(entry => entry.event === "error") : undefined));
+  // "Ready" is the moment the update can be installed. On macOS that is Squirrel.Mac's own verdict on the file,
+  // which arrives after electron-updater's download event; a refusal arrives as an error instead.
+  const ready = platform === "darwin" ? "native-downloaded" : "downloaded";
+  const settled = await watch(profile, 300, seen => seen.find(entry => entry.event === ready) ?? (seen.some(entry => entry.event === "available") ? seen.find(entry => entry.event === "error") : undefined));
   const seen = await events(profile);
   need("the packaged old version started", seen[0]?.event === "start" && seen[0].version === OLD && seen[0].packaged === true, seen[0]);
   need("it found the new version in the feed", seen.find(entry => entry.event === "available")?.version === NEW, requests.filter(entry => entry.path.endsWith(".yml")).map(entry => `${entry.path} ${entry.status}`));
   need("its main window loaded the saved hub address", requests.some(entry => entry.path === "/" && entry.status === 200));
   need("the feed served the package", requests.some(entry => entry.path === `/${next.path}` && (entry.status === 200 || entry.status === 206)));
 
-  let install = "not attempted";
   if (platform === "darwin") {
     // electron-updater checks the ZIP's sha512 before it hands the file to Squirrel.Mac and keeps the verified copy.
     const pending = join(cacheDirectory(), "pending");
     const files = (await readdir(pending).catch(() => [])).filter(name => name.endsWith(".zip"));
     const hashes = await Promise.all(files.map(name => sha512(join(pending, name))));
     need("the downloaded ZIP's sha512 matches the feed", hashes.includes(next.sha512), files);
-    if (settled?.event === "downloaded") {
-      step("Squirrel.Mac accepted the update", true, "unexpected for a build without a Developer ID signature");
-      install = "accepted by Squirrel.Mac; relaunch not checked";
-    } else {
-      need("Squirrel.Mac refused to install into a build without a Developer ID signature", settled?.event === "error", settled?.message?.slice(0, 300));
-      install = "not possible: macOS installs an update only into a Developer ID signed app";
-    }
-    stop(first);
-    await exited(first, 30);
   } else {
     need("it downloaded the new version", settled?.event === "downloaded" && settled.version === NEW, settled ?? seen.at(-1));
     // Read before the app quits: installing moves this file away.
     const downloaded = await sha512(settled.file).catch(() => undefined);
     need("the downloaded package's sha512 matches the feed", downloaded === next.sha512, basename(settled.file));
+  }
+
+  let install;
+  if (platform === "darwin" && settled?.event !== "native-downloaded") {
+    // Nothing is installed, and the test says so rather than passing an install it did not see.
+    need("Squirrel.Mac refused the update and said why", settled?.event === "error", settled?.message?.slice(0, 400) ?? seen.at(-1));
+    stop(first);
+    await exited(first, 30);
+    install = "not installed: Squirrel.Mac refused the update for this build";
+  } else {
+    if (platform === "darwin") step("Squirrel.Mac accepted the downloaded update", true, "ad-hoc signed test build");
     // Quitting installs. The harness does not install anything itself.
-    if (platform === "win32") {
-      const quit = await exited(first, 120);
-      if (!quit) stop(first);
-      need("the app quit on its own after the download", quit);
-      const deadline = Date.now() + 300_000;
-      let version = "";
-      for (;;) {
-        version = await windowsVersion(executable).catch(() => "");
-        if (version.startsWith(NEW) && !await windowsRunning(basename(settled.file))) break;
-        if (Date.now() > deadline) break;
-        await sleep(2000);
-      }
-      need("quitting installed the new version in place", version.startsWith(NEW), version);
-    } else {
+    if (platform === "linux") {
       // The AppImage updater replaces the file on quit and then starts the new one and waits for it, so the old
       // process does not exit by itself. The replaced file is the evidence; the test then stops what was started.
       executable = join(installed, next.path);
@@ -313,6 +311,24 @@ async function main() {
       stop(first);
       await exited(first, 30);
       need("quitting replaced the AppImage with the new version", replaced);
+    } else {
+      const quit = await exited(first, 120);
+      if (!quit) stop(first);
+      need("the app quit on its own after the download", quit);
+      const deadline = Date.now() + 300_000;
+      let version = "";
+      for (;;) {
+        if (platform === "win32") {
+          version = await windowsVersion(executable).catch(() => "");
+          if (version.startsWith(NEW) && !await windowsRunning(basename(settled.file))) break;
+        } else {
+          version = await macVersion(join(installed, `${PRODUCT}.app`)).catch(() => "");
+          if (version === NEW) { await sleep(3000); break; }
+        }
+        if (Date.now() > deadline) break;
+        await sleep(2000);
+      }
+      need("quitting installed the new version in place", version.startsWith(NEW), version);
     }
     // The reopened app is the new version and finds nothing newer.
     const before = (await events(profile)).length;

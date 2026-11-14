@@ -27,8 +27,11 @@ missing_for() {
 mac=false
 win=false
 # electron-builder and the updater compare versions as semver; a tag that is not one cannot be a desktop version.
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-  say "Desktop packages skipped: tag $tag is not v<major>.<minor>.<patch>[-prerelease]."
+if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+  # Installed apps follow the latest stable Release only; a prerelease would carry packages nothing updates to.
+  say "Desktop packages skipped: $tag is a prerelease tag, and desktop packages are published for stable versions only."
+elif [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  say "Desktop packages skipped: tag $tag is not v<major>.<minor>.<patch>."
 else
   missing="$(missing_for PERSONA_DESKTOP_APP_ID MAC_CSC_LINK MAC_CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER)"
   if [[ -z "$missing" ]]; then

@@ -46,13 +46,16 @@ class DesktopReleaseGateTests(unittest.TestCase):
         values, _ = self.gate("v1.2.0", set(MAC) | set(WIN))
         self.assertEqual(values, {"version": "1.2.0", "mac": "true", "win": "true"})
 
-    def test_the_version_is_the_tag_and_must_be_semver(self):
-        self.assertEqual(self.gate("v1.3.0-rc1", set(MAC) | set(WIN))[0]["version"], "1.3.0-rc1")
+    def test_the_version_is_the_tag_and_must_be_a_stable_semver(self):
+        self.assertEqual(self.gate("v10.20.30", set(MAC) | set(WIN))[0], {"version": "10.20.30", "mac": "true", "win": "true"})
         for tag in ("v1.2", "vnext", "v1.2.0+build", "v1.2.0 x"):
             with self.subTest(tag=tag):
                 values, summary = self.gate(tag, set(MAC) | set(WIN))
                 self.assertEqual((values["mac"], values["win"]), ("false", "false"))
                 self.assertIn("is not v<major>.<minor>.<patch>", summary)
+        values, summary = self.gate("v1.3.0-rc1", set(MAC) | set(WIN))
+        self.assertEqual(values, {"version": "1.3.0-rc1", "mac": "false", "win": "false"})
+        self.assertIn("is a prerelease tag", summary)
 
     def test_a_secret_value_never_reaches_the_gate(self):
         release = (ROOT / ".github/workflows/release.yml").read_text()
