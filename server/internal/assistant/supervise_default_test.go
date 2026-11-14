@@ -268,6 +268,108 @@ func TestDropMixedDigestKeepsNewerDurableSignal(t *testing.T) {
 	}
 }
 
+// A crash after the supervisor write but before queue reconciliation must still be recoverable on the next load.
+func TestRehomeAfterSupervisorWriteRecoversQueuedReview(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	ctx := context.Background()
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.Supervisor, v.State = "side1", reviewPending
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "crash-after-supervisor", Detail: "crash-after-supervisor-marker", At: time.Now()}
+	s.signal(g)
+	reserveUndelivered(t, s, g)
+	if !s.queueDigest("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "queued", At: g.At},
+		[]superviseSignal{g}, g.At, time.Time{}) {
+		t.Fatal("the review did not enter the old side's queue")
+	}
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.Supervisor = "conv1"; return true }); err != nil {
+		t.Fatal(err)
+	}
+	simulateSupervisionRestart(t, s) // the process stopped before rehomeQueuedSupervision ran
+
+	s.rehomeSupervisedTodos(ctx)
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
+	s.sendDigest(ctx)
+	waitFor(t, "the queued review recovered after the supervisor-write crash", func() bool {
+		return strings.Contains(strings.Join(f.noticesTo("conv1"), "\n"), g.Detail)
+	})
+}
+
+// relayWriteWatch records each durable relay state so a test can stop at any write and check that the review survives.
+type relayWriteWatch struct {
+	Store
+	writes []relayState
+}
+
+func (s *relayWriteWatch) PutSetting(ctx context.Context, key string, v any) error {
+	if key == relayKey {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		var state relayState
+		if err := json.Unmarshal(raw, &state); err != nil {
+			return err
+		}
+		s.writes = append(s.writes, state)
+	}
+	return s.Store.PutSetting(ctx, key, v)
+}
+
+func relayHasSignal(state relayState, g superviseSignal) bool {
+	for _, queue := range state.Queue {
+		for _, msg := range queue {
+			if msg.Signals == nil {
+				continue
+			}
+			for _, queued := range *msg.Signals {
+				if queued.id() == g.id() && queued.Key == g.Key {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// Queue removal/detach and the replay outbox entry must be one durable write: a stop between them loses the only copy.
+func TestRehomeQueueAndReplayShareOneDurableWrite(t *testing.T) {
+	st := &relayWriteWatch{Store: planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}}
+	s, _, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	ctx := context.Background()
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.Supervisor, v.State = "side1", reviewPending
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "atomic-rehome", Detail: "atomic rehome", At: time.Now()}
+	s.signal(g)
+	reserveUndelivered(t, s, g)
+	if !s.queueDigest("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "queued", At: g.At},
+		[]superviseSignal{g}, g.At, time.Time{}) {
+		t.Fatal("the review did not enter the old side's queue")
+	}
+	st.writes = nil
+
+	s.rehomeSupervisedTodos(ctx)
+	if len(st.writes) == 0 {
+		t.Fatal("rehome wrote no relay state")
+	}
+	for i, state := range st.writes {
+		_, pending := state.SupervisePending[g.id()]
+		if !relayHasSignal(state, g) && !pending {
+			t.Fatalf("relay write %d has neither the old queued signal nor its durable replay: stopping here loses it", i)
+		}
+	}
+}
+
 // blockedAssistantDrain holds the old side's real drain without fakeHub's global lock, so rehome and main can proceed.
 type blockedAssistantDrain struct {
 	Hub

@@ -295,6 +295,15 @@ func (s *Service) dropSupervisionFor(tasks []Todo) int {
 // digest. For an older message, other todo ids found in its text are turned into fresh unjudged signals rather than
 // silently losing their notification.
 func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string]bool, known []Todo) (int, []superviseSignal) {
+	return s.dropQueuedSupervisionTasksAtomic(conversation, ids, known, nil)
+}
+
+// superviseQueueReplay commits a rehome's outbox update with the queue change. taken and regather are the queue's
+// selected and remaining signals; the callback may also merge in-memory and already durable stretches. It returns
+// whether the durable outbox changed. The caller holds supervise.mu when it touches the in-memory book.
+type superviseQueueReplay func(pending map[string]superviseSignal, taken, regather []superviseSignal) bool
+
+func (s *Service) dropQueuedSupervisionTasksAtomic(conversation string, ids map[string]bool, known []Todo, replay superviseQueueReplay) (int, []superviseSignal) {
 	r := &s.relays
 	r.mu.Lock()
 	if !s.relayLocked(context.Background()) {
@@ -368,7 +377,17 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 		regather = append(regather, remaining...)
 	}
 	n := len(q) - len(kept)
-	if n == 0 && !changed {
+	dirty := n > 0 || changed
+	if replay != nil {
+		if r.st.SupervisePending == nil {
+			r.st.SupervisePending = map[string]superviseSignal{}
+		}
+		dirty = replay(r.st.SupervisePending, taken, regather) || dirty
+		if len(r.st.SupervisePending) == 0 {
+			r.st.SupervisePending = nil
+		}
+	}
+	if !dirty {
 		r.mu.Unlock()
 		return 0, taken
 	}
@@ -380,6 +399,9 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 	s.saveRelayLocked()
 	r.mu.Unlock()
 
+	if replay != nil {
+		return n, taken
+	}
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()

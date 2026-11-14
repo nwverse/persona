@@ -79,6 +79,10 @@ func (s *Service) rehomeSupervisedTodos(ctx context.Context) {
 		return
 	}
 	todos := s.todosOf(ctx, "*")
+	web := s.webBase(ctx)
+	// A crash may have persisted Supervisor=main without reaching the queue reconciliation below. Recover those
+	// orphaned queued signals first; the candidate loop alone would now skip the task as already rehomed.
+	s.rehomeMainQueuedSignals(ctx, main, todos, web)
 	rehomed := map[string]map[string]bool{} // old conversation → the tasks taken from its queued supervision
 	for _, t := range todos {
 		if t.DoneAt != nil || t.Supervision == nil {
@@ -109,10 +113,63 @@ func (s *Service) rehomeSupervisedTodos(ctx context.Context) {
 		}
 	}
 	if len(rehomed) > 0 {
-		web := s.webBase(ctx)
 		for sup, ids := range rehomed {
 			s.rehomeQueuedSupervision(ctx, sup, ids, todos, web)
 		}
+	}
+}
+
+// rehomeMainQueuedSignals recovers queue entries left behind when a previous process stopped after the supervisor write.
+// Structured signals name their tasks directly; a pre-structured message uses the same text-id fallback as normal rehome.
+func (s *Service) rehomeMainQueuedSignals(ctx context.Context, main string, todos []Todo, web string) {
+	mainTasks := map[string]bool{}
+	for _, t := range todos {
+		if t.DoneAt == nil && t.Supervision != nil && t.Supervision.Supervisor == main {
+			mainTasks[t.ID] = true
+		}
+	}
+	if len(mainTasks) == 0 {
+		return
+	}
+	r := &s.relays
+	r.mu.Lock()
+	if !s.relayLocked(ctx) {
+		r.mu.Unlock()
+		return
+	}
+	byConversation := map[string]map[string]bool{}
+	for conversation, queue := range r.st.Queue {
+		if conversation == main {
+			continue
+		}
+		for _, msg := range queue {
+			if msg.Tool != superviseTool {
+				continue
+			}
+			if msg.Signals != nil && len(*msg.Signals) > 0 {
+				for _, g := range *msg.Signals {
+					if mainTasks[g.Todo] {
+						if byConversation[conversation] == nil {
+							byConversation[conversation] = map[string]bool{}
+						}
+						byConversation[conversation][g.Todo] = true
+					}
+				}
+				continue
+			}
+			for id := range mainTasks {
+				if strings.Contains(msg.Text, id) {
+					if byConversation[conversation] == nil {
+						byConversation[conversation] = map[string]bool{}
+					}
+					byConversation[conversation][id] = true
+				}
+			}
+		}
+	}
+	r.mu.Unlock()
+	for old, ids := range byConversation {
+		s.rehomeQueuedSupervision(ctx, old, ids, todos, web)
 	}
 }
 
@@ -124,8 +181,6 @@ func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids m
 	b := &s.supervise
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
-	_, taken := s.dropQueuedSupervisionTasks(old, ids, known)
-
 	b.mu.Lock()
 	b.init()
 	var memory, remaining []superviseSignal
@@ -136,15 +191,17 @@ func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids m
 			remaining = append(remaining, g)
 		}
 	}
-	if len(memory) > 0 {
-		b.setQueuedLocked(old, nil)
-	}
-	taken = mergeSignals(taken, memory)
-	replay := mergeSignals(remaining, taken)
-	for _, g := range taken {
-		delete(b.sent, g.id())
-	}
-	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+	var replay []superviseSignal
+	_, _ = s.dropQueuedSupervisionTasksAtomic(old, ids, known, func(pending map[string]superviseSignal, queued, regather []superviseSignal) bool {
+		replay = mergeSignals(regather, remaining)
+		replay = mergeSignals(replay, queued)
+		replay = mergeSignals(replay, memory)
+		for _, g := range pending { // an earlier attempt may already have committed the replay before its supervisor write
+			if ids[g.Todo] {
+				replay = mergeSignals(replay, []superviseSignal{g})
+			}
+		}
+		dirty := false
 		for _, g := range replay {
 			cur, ok := b.pending[g.id()]
 			if !ok {
@@ -155,10 +212,20 @@ func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids m
 			if !ok {
 				cur = g
 			}
+			if old, exists := pending[g.id()]; !exists || old.Key != cur.Key {
+				dirty = true
+			}
 			b.pending[g.id()] = cur
 			pending[g.id()] = cur
 		}
+		return dirty
 	})
+	if len(memory) > 0 {
+		b.setQueuedLocked(old, nil)
+	}
+	for _, g := range replay {
+		delete(b.sent, g.id())
+	}
 	b.mu.Unlock()
 
 	if len(replay) > 0 {
