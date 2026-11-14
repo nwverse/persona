@@ -1,6 +1,7 @@
 """Read-only, structured semantic review of one checked-out PR head."""
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -111,54 +112,55 @@ def parse_result(text, anchors):
     return findings
 
 
-def split_diff(text, limit=180_000):
-    """Partition a complete diff by file, then by whole hunk when needed."""
+def split_diff(text, limit=180_000, worktree=None, base=None, head=None):
+    """Partition using Git's file names, never diff-looking added content."""
     if not text:
         return [""]
-    headers = []
-    for match in re.finditer(r"(?m)^diff --git ", text):
-        headers.append(match.start())
-    if not headers:
-        headers = [0]
-    files = [text[headers[index]:headers[index + 1] if index + 1 < len(headers) else len(text)]
-             for index in range(len(headers))]
-    pieces = []
-    for file_diff in files:
-        if len(file_diff) <= limit:
-            pieces.append(file_diff)
-            continue
-        lines = file_diff.splitlines(keepends=True)
-        first = next((index for index, line in enumerate(lines) if line.startswith("@@ ")), len(lines))
-        header = "".join(lines[:first])
-        if first == len(lines) and len(header) > limit:
-            raise WatchError("one diff header exceeds the semantic-review chunk bound; review this file manually")
-        hunks, current = [], []
-        for line in lines[first:]:
-            if line.startswith("@@ ") and current:
-                hunks.append("".join(current))
-                current = []
-            current.append(line)
-        if current:
-            hunks.append("".join(current))
-        piece = header
-        if not hunks:
-            hunks = [""]
-        for hunk in hunks:
-            if len(hunk) + len(header) > limit:
-                raise WatchError("one diff hunk exceeds the semantic-review chunk bound; review this file manually")
-            if piece != header and len(piece) + len(hunk) > limit:
-                pieces.append(piece)
-                piece = header
-            piece += hunk
-        pieces.append(piece)
+    if not all((worktree, base, head)):
+        raise WatchError("chunking needs the exact base, head and checkout")
+    listed = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z", base + "..." + head],
+                            cwd=worktree, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if listed.returncode:
+        raise WatchError("cannot list files for semantic-review chunks: " + bounded(listed.stderr, 500))
+    names = listed.stdout.decode("utf-8").split("\0")[:-1]
+    pieces = [checked(["git", "diff", "--unified=0", "--no-renames", base + "..." + head, "--", name], cwd=worktree)
+              for name in names]
+    if "".join(pieces) != text:
+        raise WatchError("semantic-review file chunks do not reproduce the complete diff")
     chunks, current = [], ""
     for piece in pieces:
+        if len(piece) > limit:
+            lines = piece.splitlines(keepends=True)
+            first = next((index for index, line in enumerate(lines) if line.startswith("@@ ")), len(lines))
+            header = "".join(lines[:first])
+            hunks, current_hunk = [], []
+            for line in lines[first:]:
+                # A content line begins with +, - or a space; only a raw @@
+                # starts a hunk. The file boundaries above come from Git.
+                if line.startswith("@@ ") and current_hunk:
+                    hunks.append("".join(current_hunk))
+                    current_hunk = []
+                current_hunk.append(line)
+            if current_hunk:
+                hunks.append("".join(current_hunk))
+            piece = header
+            if not hunks:
+                raise WatchError("one diff header exceeds the semantic-review chunk bound; review this file manually")
+            for hunk in hunks:
+                if len(hunk) + len(header) > limit:
+                    raise WatchError("one diff hunk exceeds the semantic-review chunk bound; review this file manually")
+                if piece != header and len(piece) + len(hunk) > limit:
+                    chunks.append(piece)
+                    piece = header
+                piece += hunk
         if current and len(current) + len(piece) > limit:
             chunks.append(current)
             current = ""
         current += piece
     if current:
         chunks.append(current)
+    if "".join(chunks) != text:
+        raise WatchError("semantic-review chunks do not reproduce the complete diff")
     return chunks
 
 
@@ -169,7 +171,7 @@ def review(repo, pr, worktree, config):
     anchors = changed_lines(worktree, base, head)
     diff = checked(["git", "diff", "--stat", base + "..." + head], cwd=worktree)
     files = checked(["git", "diff", "--name-only", "--no-renames", base + "..." + head], cwd=worktree)
-    chunks = split_diff(anchor_text)
+    chunks = split_diff(anchor_text, worktree=worktree, base=base, head=head)
     model = config.get("model")
     argv = argv_with_prefix(
         config.get("command", "claude"),

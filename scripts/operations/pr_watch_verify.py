@@ -64,8 +64,8 @@ def external_check(command, pr, worktree, name):
     return name, argv
 
 
-# Tests do not change the interface they exercise. Production code is allowed
-# only when neither its path nor its actual changed lines are visual.
+# Tests do not change the interface they exercise. Production source outside
+# the known UI paths must still be read; SwiftUI in any file stays gated.
 APPLE_NON_UI_PATHS = ("apple/",)
 APPLE_VISUAL_PATHS = (
     "apple/Packages/BeautifulUI/",
@@ -80,10 +80,12 @@ APPLE_VISUAL_PATHS = (
     "apple/Vision/",
 )
 APPLE_VISUAL_MARKERS = re.compile(
-    r"\b(?:SwiftUI|UIKit|AppKit|View|ViewModifier|Layout|GeometryReader|"
+    r"\b(?:SwiftUI|UIKit|AppKit|UIView|NSView|View|ViewModifier|ViewBuilder|"
+    r"NavigationStack|NavigationSplitView|TabView|GeometryReader|"
     r"Image|Color|Font|Theme|StyleSpec|ComponentSpec|ColorSpec|AppStyle|"
     r"localized|String\(localized|Text\s*\(|Button\s*\(|Label\s*\(|"
-    r"XCUIApplication|XCUITest)\b|\.(?:frame|padding|font|foregroundStyle|background|"
+    r"XCUIApplication|XCUITest)\b|@(?:MainActor|State|Binding|ObservedObject)\b|"
+    r"\.(?:frame|padding|font|foregroundStyle|background|sheet|fullScreenCover|"
     r"foregroundColor|opacity|offset|position|lineLimit|minimumScaleFactor)\s*\(")
 
 
