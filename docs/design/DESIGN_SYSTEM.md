@@ -185,7 +185,7 @@ Notes:
 - The names do not match Apple's text-style names (`caption` is footnote, `label` is Apple's caption). Keep the Persona names in code and use the table above in docs.
 - Emphasis tokens (`bodyStrong`, `secondaryStrong`, `captionStrong`, `labelStrong` and so on, `:356-365`) are the only way to change weight. `TypeScaleTests` forbids `.weight(` on a level.
 - All non-overridden Glass roles retain their existing `Tokens.Type` mappings from `spec/tokens/type.json`, including shared weights. Long-form reading uses the documented Android-specific values in `spec/tokens/type-glass.json` (`Tokens.TypeGlass`, #5780): body / bodyStrong / voice 16sp and callout / labelSmall 14sp, one point below the corresponding iOS levels. Emphasis is semibold, line height is left to the platform, and Brief / Board are unchanged. `scripts/assets/test_gen_tokens.py` checks the shared levels against `Theme.Font` and `Theme.Level` (DS-12, resolved 11-11).
-- Web has no type tokens: about 3,000 `text-[Npx]` uses across 20 sizes, some below 11 px.
+- Web's shared task-card type tokens in `web/src/styles.css` are `text-card-title` (14.5 px), `text-meta` (13 px), `text-label` (12 px), and `text-submeta` (11.5 px) for secondary meta. They set font size only and leave line height to the context. Elsewhere, about 3,000 `text-[Npx]` uses remain across 20 sizes, some below 11 px.
 - Mac uses fixed sizes times `Font.scale`, floor 11 pt.
 
 Dynamic Type behavior:
