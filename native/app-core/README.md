@@ -52,6 +52,13 @@ acknowledgements; Android derives scalar gap rules and conservatively re-reads h
 the existing serialized native request flow: different folds do not run in parallel as on iOS, because the core has
 one opening per chat and range responses carry no fold ID. These gaps remain follow-up work, not production parity.
 
+Enable the debug-only shadow with `-PpersonaContinuity=shadow` in JVM tests, or launch `DebugEntryActivity` with
+`--es debug.continuity shadow`, then force-stop and relaunch the app (use `kotlin` to turn it off). Kotlin remains
+authoritative: the shadow serially compares every input on its own background queue, waiting only for its own core,
+created after the first frame. `PersonaCoreShadow` reports and an in-memory count contain only the domain, differing
+rule and input kind with counts/flags; never items, identifiers, text, history or sequence values. Native failure
+disables that chat's shadow without changing Kotlin. Release source sets contain neither the shadow nor its preferences.
+
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes

@@ -36,24 +36,10 @@ class AndroidContinuityFrameScheduler : ContinuityFrameScheduler {
     }
 }
 
-/** Selection is test-only in PR A. Merely creating a Kotlin adapter never initializes JNI. */
-internal object ContinuityAdapters {
-    fun create(chat: String, applied: (ContinuityAdapter.Applied) -> Unit): ContinuityAdapter =
-        if (System.getProperty("persona.continuity", "kotlin") == "rust") {
-            RustContinuityAdapter(chat, shared, applied)
-        } else KotlinContinuityAdapter(chat)
-
-    private val shared by lazy {
-        val scheduler = System.getProperty("persona.continuity.frameScheduler")?.let {
-            Class.forName(it).getDeclaredConstructor().newInstance() as ContinuityFrameScheduler
-        } ?: AndroidContinuityFrameScheduler()
-        RustContinuityDriver(scheduler)
-    }
-}
-
 /** One lazy process-wide core; tests can own a separate driver and manual frames. */
 class RustContinuityDriver(
     private val scheduler: ContinuityFrameScheduler,
+    private val rejected: (() -> Unit)? = null,
     private val create: (CoreHost) -> RustCore = { RustCore(Config(), it) },
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -99,7 +85,7 @@ class RustContinuityDriver(
                     synchronized(owners) { requests.getOrPut(effect.chat) { mutableListOf() }.add(effect.request) }
                     changedChat(effect.chat, 0)
                 }
-                is Effect.Rejected -> error("Continuity action rejected")
+                is Effect.Rejected -> rejected?.invoke() ?: error("Continuity action rejected")
             }
         }
     }
@@ -239,8 +225,7 @@ class RustContinuityAdapter(
         }
         driver.dispatch(action)
         // ContinueFill has no hub-change signal. FIFO makes this conservative retry follow completion, never poll.
-        if (pendingHubChange && (input is ContinuityAdapter.Input.After || input is ContinuityAdapter.Input.Reload)) {
-            pendingHubChange = false
+        if (pendingHubChange && input is ContinuityAdapter.Input.After) {
             driver.dispatch(CoreAction.ContinueFill(owner))
         }
         return if (driver.synchronous) immediate ?: ContinuityAdapter.Applied(publicChat, state) else null
@@ -297,6 +282,7 @@ class RustContinuityAdapter(
             is Request.FetchOlder -> Action.FetchOlder(request.before_seq.toInt(), request.fold_work)
             is Request.FetchRange -> Action.FetchRange(request.from_seq.toInt(), request.through_seq.toInt())
         } }
+        if (requests.any { it is Action.FetchAfter || it is Action.FetchLatest }) pendingHubChange = false
         if (!changed && requests.isEmpty() && !driver.synchronous) return
         val result = synchronized(metadata) {
             val current = gap

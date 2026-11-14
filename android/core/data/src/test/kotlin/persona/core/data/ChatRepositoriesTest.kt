@@ -16,6 +16,7 @@ import org.junit.rules.TemporaryFolder
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatRepositoriesTest {
+    @get:Rule val shadowParity = ShadowParityRule()
     @get:Rule val temporary = TemporaryFolder()
 
     @Test fun unobservedSessionRevisionsNeverReadBodiesAndReopeningStillVerifiesTheLatestPage() = runTest {
