@@ -356,7 +356,7 @@ class Watcher:
                 return
             if old.get("outcome") == "failed":
                 self.comment(repo, number, "Automated review at `%s` did not pass. Not merged.\n\n```text\n%s\n```" %
-                             (head[:9], bounded(old.get("failure", "verification failed"), 4500)))
+                             (head[:9], bounded(old.get("failure", "verification failed"), 14000)))
                 self.state.put(repo, number, head, evidence_key=evidence_key, failure_posted=True)
                 return
         if not self.mergeable(pr):
@@ -389,7 +389,8 @@ class Watcher:
                 self.phase(key, "independent semantic review")
                 findings = semantic_review(repo, pr, str(worktree), self.config["reviewer"])
                 semantic = "findings" if findings else "passed"
-                current = self.state.put(repo, number, head, semantic=semantic, findings=findings,
+                current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                         semantic=semantic, findings=findings,
                                          review_fingerprint=fingerprint(repo, number, head, "semantic", findings))
             findings = current.get("findings", [])
             if current.get("semantic") == "findings":
@@ -405,7 +406,8 @@ class Watcher:
                 self.phase(key, "repository verification")
                 phase = "verification"
                 results = verify(repo, pr, str(worktree), config["verify"], environ=verification_env())
-                current = self.state.put(repo, number, head, verification="passed", checks=results)
+                current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                         verification="passed", checks=results)
             with self.merging(repo):
                 self.phase(key, "rechecking exact head")
                 current_pr = pr_snapshot(repo, number)
@@ -436,7 +438,7 @@ class Watcher:
             if not retry and not old.get("failure_posted"):
                 if not self.dry_run:
                     self.comment(repo, number, "Automated review at `%s` could not complete. Not merged.\n\n```text\n%s\n```" %
-                                 (head[:9], bounded(error, 4500)))
+                                 (head[:9], bounded(error, 14000)))
                 self.state.put(repo, number, head, evidence_key=evidence_key, failure_posted=True)
             self.log("%s#%s %s failed: %s" % (repo, number, phase, bounded(error, 700)))
         finally:

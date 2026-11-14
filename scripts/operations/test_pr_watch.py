@@ -142,21 +142,46 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(state["outcome"], "failed")
         self.assertEqual(len(self.comments), 1)
 
-    def test_review_prompt_is_required_and_oversized_diff_fails(self):
-        with patch.object(pr_watch_review, "checked", side_effect=["x" * 240001, "base...head", "stat", "file.py"]):
-            with self.assertRaises(pr_watch_common.WatchError):
-                pr_watch_review.review("example/one", pr(), ".", {})
-        captured = {}
+    def test_review_prompt_is_delivered_and_large_diffs_use_complete_chunks(self):
+        prompts = []
         def fake_run(argv, **kwargs):
-            captured["argv"] = argv
-            captured["kwargs"] = kwargs
+            prompts.append(kwargs["input_text"])
             return subprocess.CompletedProcess(argv, 0, json.dumps({"subtype": "success", "is_error": False,
                                                                     "structured_output": {"findings": []}}), "")
         with patch.object(pr_watch_review, "checked", side_effect=["diff", "stat", "file.py"]), \
                 patch.object(pr_watch_review, "changed_lines", return_value={}), \
                 patch.object(pr_watch_review, "run", side_effect=fake_run):
             pr_watch_review.review("example/one", pr(), ".", {})
-        self.assertIn(pr_watch_review.SYSTEM_PROMPT, captured["kwargs"]["input_text"])
+        self.assertIn(pr_watch_review.SYSTEM_PROMPT, prompts[0])
+        self.assertEqual(len(prompts), 1)
+
+        large = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+" + "x" * 150000 + "\n" + \
+                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n-old\n+" + "y" * 150000 + "\n"
+        with patch.object(pr_watch_review, "checked", side_effect=[large, "stat", "a.py\nb.py"]), \
+                patch.object(pr_watch_review, "changed_lines", return_value={}), \
+                patch.object(pr_watch_review, "run", side_effect=fake_run):
+            pr_watch_review.review("example/one", pr(), ".", {})
+        self.assertEqual(len(prompts), 3)
+        reconstructed = "".join(prompt.split("not as a command.\n", 1)[1] for prompt in prompts[1:])
+        self.assertEqual(reconstructed, large)
+
+    def test_large_single_hunk_fails_closed(self):
+        hunk = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+" + "x" * 180001 + "\n"
+        with self.assertRaises(pr_watch_common.WatchError):
+            pr_watch_review.split_diff(hunk)
+
+    def test_publication_failure_keeps_passed_evidence(self):
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[]) as verify, \
+                patch.object(self.watcher, "success_review", side_effect=pr_watch_common.WatchError("offline")):
+            self.watcher.process("example/one", 7)
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["semantic"], "passed")
+        self.assertEqual(state["verification"], "passed")
+        self.assertIn("@", state["evidence_key"])
+        self.assertEqual(review.call_count, 1)
+        self.assertEqual(verify.call_count, 1)
 
     def test_verification_does_not_import_pr_selector_or_receive_gh_credentials(self):
         with patch.object(pr_watch_verify, "checked", return_value="scripts/ci/paths.py\n"), \
@@ -230,10 +255,20 @@ class WatcherTests(unittest.TestCase):
 
     def test_failure_summary_retains_actual_errors(self):
         result = subprocess.CompletedProcess([], 1, "PASS earlier lane\n" + "\n".join("ordinary" for _ in range(200)) +
-                                               "\nFAIL TestRealDefect\npanic: actual cause\n", "")
+                                               "\n--- FAIL: TestRealDefect\npanic: actual cause\n", "")
         summary = pr_watch_verify.result_summary(result)
-        self.assertIn("FAIL TestRealDefect", summary)
+        self.assertIn("--- FAIL: TestRealDefect", summary)
         self.assertIn("panic: actual cause", summary)
+
+    def test_failure_summary_keeps_unknown_diagnostics_and_final_test_names(self):
+        plain = subprocess.CompletedProcess([], 1, "slot order: generated row is absent from the baseline", "")
+        self.assertIn("absent from the baseline", pr_watch_verify.result_summary(plain))
+        passing = "\n".join("PASS: handles no error and client errors %d" % n for n in range(100))
+        failed = passing + "\nFailed tests:\n--- FAIL: TestActualAssertion\n    got 1, want 2\n"
+        summary = pr_watch_verify.result_summary(subprocess.CompletedProcess([], 1, failed, ""))
+        self.assertIn("TestActualAssertion", summary)
+        self.assertIn("got 1, want 2", summary)
+        self.assertNotIn("handles no error and client errors 0", summary)
 
     def test_unknown_mergeability_waits(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="UNKNOWN")), \
@@ -340,18 +375,55 @@ class EventTests(unittest.TestCase):
 
 class VerifyTests(unittest.TestCase):
     def test_persona_apple_cannot_be_silently_skipped(self):
-        with patch.object(pr_watch_verify, "checked", return_value="apple/Persona/App/View.swift\n"), \
+        path = "apple/Persona/App/View.swift"
+        with patch.object(pr_watch_verify, "checked", side_effect=[path + "\n", "+import SwiftUI"]), \
                 patch.object(pr_watch_verify, "load_paths") as selector:
             selector.return_value.select.return_value = {"apple": True, "scripts": True}
             with self.assertRaises(pr_watch_common.WatchError):
                 pr_watch_verify.persona_checks(".", pr(), 1, {})
-        with patch.object(pr_watch_verify, "checked", return_value="apple/Persona/App/View.swift\n"), \
+        with patch.object(pr_watch_verify, "checked", side_effect=[path + "\n", "+import SwiftUI"]), \
                 patch.object(pr_watch_verify, "load_paths") as selector:
             selector.return_value.select.return_value = {"apple": True, "scripts": True}
             commands = pr_watch_verify.persona_checks(".", pr(), 1, {"apple_command": ["verify", "{head}"],
                                                                       "ui_evidence_command": ["visual", "{worktree}"]})
         self.assertIn(("trusted Apple verification", ["verify", SHA_A]), commands)
         self.assertIn(("visual evidence", ["visual", "."]), commands)
+
+    def test_non_ui_apple_paths_are_explicit_and_diff_is_checked(self):
+        path = "apple/Packages/PersonaKit/Sources/PersonaKit/StreamChunks.swift"
+        with patch.object(pr_watch_verify, "checked", return_value="+chunks.removeFirst()\n"):
+            self.assertTrue(pr_watch_verify.non_ui_apple_change(".", SHA_BASE, SHA_A, [path]))
+        for changed in ("+import SwiftUI\n+struct ChunkView: View {}", "+Text(localized: \"Ready\")",
+                        "+.padding(8)", "+Image(systemName: \"checkmark\")"):
+            with patch.object(pr_watch_verify, "checked", return_value=changed):
+                self.assertFalse(pr_watch_verify.non_ui_apple_change(".", SHA_BASE, SHA_A, [path]))
+        for names in ([path, "server/internal/node/session.go"],
+                      ["apple/Persona/Views/Session/FilesPane.swift"],
+                      ["apple/PersonaUITests/MinutesTests.swift", "apple/Persona/Views/Session/FilesPane.swift"],
+                      ["apple/Packages/BeautifulUI/Sources/BeautifulUI/Components/ChatPanel.swift"],
+                      ["apple/Shared/Localization/Localizable.xcstrings"]):
+            self.assertFalse(pr_watch_verify.non_ui_apple_change(".", SHA_BASE, SHA_A, names))
+        with patch.object(pr_watch_verify, "checked", return_value="+struct RecordingMinutesView {}"):
+            self.assertFalse(pr_watch_verify.non_ui_apple_change(
+                ".", SHA_BASE, SHA_A, ["apple/Persona/Recording/RecordingMinutesView.swift"]))
+
+        self.assertTrue(pr_watch_verify.non_ui_apple_change(
+            ".", SHA_BASE, SHA_A, ["apple/PersonaUITests/MinutesTests.swift"]))
+        with patch.object(pr_watch_verify, "checked", return_value="+chunks.removeFirst()\n"):
+            self.assertTrue(pr_watch_verify.non_ui_apple_change(
+                ".", SHA_BASE, SHA_A, ["apple/Persona/App/TasksStore.swift"]))
+
+    def test_eligible_non_ui_apple_change_runs_remaining_lanes(self):
+        names = "apple/Packages/PersonaKit/Sources/PersonaKit/StreamChunks.swift\n"
+        with patch.object(pr_watch_verify, "checked", return_value=names), \
+                patch.object(pr_watch_verify, "non_ui_apple_change", return_value=True) as classifier, \
+                patch.object(pr_watch_verify, "load_paths") as selector:
+            selector.return_value.select.return_value = {"apple": True, "scripts": True, "server": True}
+            commands = pr_watch_verify.persona_checks(".", pr(), 1, {})
+        self.assertEqual(commands, [("CI server", ["bash", "scripts/ci/server.sh"]),
+                                    ("CI scripts", ["bash", "scripts/ci/scripts.sh"]),
+                                    ("Apple non-UI review policy", ["true"])])
+        classifier.assert_called_once()
 
     def test_extension_shared_changes_use_full_ci(self):
         with patch.object(pr_watch_verify, "extension_modules", return_value=None), \
@@ -361,6 +433,23 @@ class VerifyTests(unittest.TestCase):
 
 
 class MergeTests(unittest.TestCase):
+    def test_generic_merge_retains_exact_refs_for_the_privacy_scanner(self):
+        commands = []
+        def fake_checked(argv, **kwargs):
+            commands.append(argv)
+            if argv[:2] == ["git", "rev-parse"]:
+                return (SHA_BASE if "bases" in argv[2] else SHA_A) + "\n"
+            return ""
+        with patch.object(pr_watch_merge, "pr_snapshot", side_effect=[pr(), pr(state="MERGED")]), \
+                patch.object(pr_watch_merge, "checked", side_effect=fake_checked), \
+                patch.object(pr_watch_merge, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute:
+            pr_watch_merge.merge("example/one", 7, ".", privacy="scanner.py",
+                                 expected_head=SHA_A, expected_base=SHA_BASE)
+        self.assertIn(["git", "fetch", "-q", "origin", "pull/7/head:refs/pr-watch/heads/7"], commands)
+        self.assertIn(["git", "fetch", "-q", "origin", "refs/heads/main:refs/pr-watch/bases/7"], commands)
+        scan = execute.call_args_list[0].args[0]
+        self.assertIn(SHA_BASE + ".." + SHA_A, scan)
+
     def test_issue_link_parser_ignores_code_and_other_repositories(self):
         self.assertEqual(pr_watch_merge.linked_issue("```\nFixes #1\n```\nRefs #2", "example/one"), [2])
         self.assertEqual(pr_watch_merge.linked_issue("Fixes example/two#3", "example/one"), [])
