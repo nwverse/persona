@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check archived #6871 observations and summary numbers against their unmodified raw JSON."""
 import hashlib
+import gzip
 import json
 import pathlib
 import statistics
@@ -100,7 +101,8 @@ class ReferenceEvidenceTests(unittest.TestCase):
         self.assertEqual(metric["values"], [5.26995975, 5.611702416, 6.161564292])
         manifest = json.loads((ARCHIVE / "launch-export-manifest.json").read_text())
         self.assertEqual(manifest[0]["attachments"][0]["deviceId"], "58B70B19-21DA-4051-B017-0D828579958A")
-        self.assertIn("source_dirty: yes", (ARCHIVE / "launch-environment.txt").read_text())
+        environment = gzip.decompress((ARCHIVE / "launch-environment.txt.gz").read_bytes()).decode()
+        self.assertIn("source_dirty: yes", environment)
         binding = json.loads((ARCHIVE / "binding-export-manifest.json").read_text())
         self.assertEqual(len(binding), 3)
         self.assertTrue(all(item["attachments"][0]["deviceId"] == "58B70B19-21DA-4051-B017-0D828579958A"
