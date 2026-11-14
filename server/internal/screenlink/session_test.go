@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -31,6 +32,7 @@ type phone struct {
 	mu       sync.Mutex
 	got      map[byte][]byte
 	recv     map[byte]uint64
+	changed  chan struct{} // closed, and replaced, each time got or recv changes (waitFor)
 	msgs     chan msg
 	carriers []*carrier
 }
@@ -50,7 +52,8 @@ type carrier struct {
 }
 
 func newPhone(t *testing.T, ack bool) *phone {
-	return &phone{t: t, ack: ack, got: map[byte][]byte{}, recv: map[byte]uint64{}, msgs: make(chan msg, 1024)}
+	return &phone{t: t, ack: ack, got: map[byte][]byte{}, recv: map[byte]uint64{}, changed: make(chan struct{}),
+		msgs: make(chan msg, 1024)}
 }
 
 func (p *phone) carry(conn io.ReadWriteCloser) *carrier {
@@ -74,6 +77,7 @@ func (p *phone) carry(conn io.ReadWriteCloser) *carrier {
 				if off <= have && off+uint64(len(data)) > have {
 					p.got[id] = append(p.got[id], data[have-off:]...)
 					p.recv[id] = off + uint64(len(data))
+					p.changedLocked()
 				}
 				recv := p.recv[id]
 				p.mu.Unlock()
@@ -86,6 +90,7 @@ func (p *phone) carry(conn io.ReadWriteCloser) *carrier {
 				id, off, _, _ := readChanOffset(body)
 				p.mu.Lock()
 				p.recv[id] = off
+				p.changedLocked()
 				p.mu.Unlock()
 				p.msgs <- msg{typ, body, c}
 			default:
@@ -94,6 +99,12 @@ func (p *phone) carry(conn io.ReadWriteCloser) *carrier {
 		}
 	}()
 	return c
+}
+
+// changedLocked wakes every waitFor: what the phone holds changed. p.mu is held.
+func (p *phone) changedLocked() {
+	close(p.changed)
+	p.changed = make(chan struct{})
 }
 
 func (c *carrier) send(typ byte, parts ...[]byte) {
@@ -129,15 +140,24 @@ func (p *phone) next(want byte) msg {
 	return msg{}
 }
 
-// waitFor polls cond for up to two seconds.
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting: %s", what)
+// waitFor waits up to two seconds for cond, a check of what the phone has received, to hold. It checks again each
+// time a message changes what the phone holds, so nothing polls.
+func (p *phone) waitFor(what string, cond func() bool) {
+	p.t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		// Take the channel before checking, so a change made after the check still wakes the wait.
+		p.mu.Lock()
+		changed := p.changed
+		p.mu.Unlock()
+		if cond() {
+			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		select {
+		case <-changed:
+		case <-deadline:
+			p.t.Fatalf("timed out waiting: %s", what)
+		}
 	}
 }
 
@@ -203,7 +223,7 @@ func TestRFBGoesBothWays(t *testing.T) {
 	}
 
 	go ss.Write([]byte("RFB 003.889\n"))
-	waitFor(t, "the greeting", func() bool { return string(p.received(RFB)) == "RFB 003.889\n" })
+	p.waitFor("the greeting", func() bool { return string(p.received(RFB)) == "RFB 003.889\n" })
 	c.send(TypeData, chanOffset(RFB, 0), []byte("RFB 003.008\n"))
 	if got := readN(t, ss, 12); string(got) != "RFB 003.008\n" {
 		t.Fatalf("Screen Sharing read %q", got)
@@ -232,7 +252,7 @@ func TestARelayReattachesAndResumesExactly(t *testing.T) {
 			}
 		}
 	}()
-	waitFor(t, "some of the stream", func() bool { return len(p.received(RFB)) > 40<<10 })
+	p.waitFor("some of the stream", func() bool { return len(p.received(RFB)) > 40<<10 })
 	up := pattern(5000)
 	upRead := make(chan []byte, 1)
 	go func() { b := make([]byte, 3000); io.ReadFull(ss, b); upRead <- b }()
@@ -271,46 +291,53 @@ func TestARelayReattachesAndResumesExactly(t *testing.T) {
 	if !bytes.Equal(upGot, up) {
 		t.Fatal("Screen Sharing got the phone's bytes out of order or twice")
 	}
-	waitFor(t, "the whole stream", func() bool { return len(p.received(RFB)) == len(down) })
+	p.waitFor("the whole stream", func() bool { return len(p.received(RFB)) == len(down) })
 	if !bytes.Equal(p.received(RFB), down) {
 		t.Fatal("the phone got Screen Sharing's bytes out of order or twice")
 	}
 }
 
 // The node reads Screen Sharing only while what the phone hasn't acknowledged fits the window, however long the
-// phone is away: memory doesn't grow with an outage.
+// phone is away: memory doesn't grow with an outage. In a synctest bubble (everything here is pipes, conds and
+// timers), so the check runs once the node has stopped, not after a guessed delay.
 func TestTheWindowBoundsWhatTheNodeHolds(t *testing.T) {
-	reg := NewRegistry(testLimits, nil)
-	local, ss := screenSharing(t)
-	s, relay := reg.Open("pair1", local)
-	defer s.End()
-	p := newPhone(t, false) // never acknowledges
-	p.carry(relay)
-	p.next(TypePaths)
+	synctest.Test(t, func(t *testing.T) {
+		reg := NewRegistry(testLimits, nil)
+		local, ss := screenSharing(t)
+		s, relay := reg.Open("pair1", local)
+		defer s.End()
+		p := newPhone(t, false) // never acknowledges
+		p.carry(relay)
+		p.next(TypePaths)
 
-	var mu sync.Mutex
-	written := 0
-	go func() {
-		chunk := make([]byte, 4<<10)
-		for {
-			if _, err := ss.Write(chunk); err != nil {
-				return
+		var mu sync.Mutex
+		written := 0
+		go func() {
+			// Far more than the window, but not without end: a node that ignores the window reads it all and the
+			// bubble still settles.
+			chunk := make([]byte, 4<<10)
+			for range 4 * testLimits.WindowRFB / len(chunk) {
+				if _, err := ss.Write(chunk); err != nil {
+					return
+				}
+				mu.Lock()
+				written += len(chunk)
+				mu.Unlock()
 			}
-			mu.Lock()
-			written += len(chunk)
-			mu.Unlock()
+		}()
+		// The phone stays away a while, short of StallAfter (which would close its relay as stuck); Sleep returns
+		// once the clock has moved and every goroutine is blocked, the writer included.
+		synctest.Sleep(testLimits.StallAfter / 2)
+		mu.Lock()
+		got := written
+		mu.Unlock()
+		if got > testLimits.WindowRFB+32<<10 {
+			t.Fatalf("the node read %d bytes with nothing acknowledged; window %d", got, testLimits.WindowRFB)
 		}
-	}()
-	time.Sleep(150 * time.Millisecond)
-	mu.Lock()
-	got := written
-	mu.Unlock()
-	if got > testLimits.WindowRFB+32<<10 {
-		t.Fatalf("the node read %d bytes with nothing acknowledged; window %d", got, testLimits.WindowRFB)
-	}
-	if got < testLimits.WindowRFB {
-		t.Fatalf("the node read only %d bytes; it should fill the window", got)
-	}
+		if got < testLimits.WindowRFB {
+			t.Fatalf("the node read only %d bytes; it should fill the window", got)
+		}
+	})
 }
 
 // A transport that leaves bytes unacknowledged for StallAfter is stuck: it is closed, and with no other the session
@@ -323,7 +350,7 @@ func TestAStuckTransportIsClosedAndTheSessionEnds(t *testing.T) {
 	c := p.carry(relay)
 	p.next(TypePaths)
 	go ss.Write([]byte("hello"))
-	waitFor(t, "the bytes", func() bool { return string(p.received(RFB)) == "hello" })
+	p.waitFor("the bytes", func() bool { return string(p.received(RFB)) == "hello" })
 	select {
 	case <-c.gone:
 	case <-time.After(2 * time.Second):
@@ -458,47 +485,52 @@ func openVideo(t *testing.T, ack bool, limits ...Limits) (*Session, *phone, *car
 // Moving video with a backlog older than VideoBacklog drops it: the phone is told where the stream goes on, the
 // helper is asked for a keyframe, frames before it are dropped, and the keyframe is the next thing that arrives. The
 // node moves on its own when the video relay drops (onto the session's other relay), and the phone can move it (use).
+// In a synctest bubble, so the backlog ages on the bubble's clock.
 func TestAStaleVideoBacklogIsDroppedForAKeyframe(t *testing.T) {
 	for _, how := range []string{"the relay drops", "the phone moves it"} {
 		t.Run(how, func(t *testing.T) {
-			_, p, cv, helper, id, _ := openVideo(t, false)
-			rfbRelay := p.carriers[0]
-			go helper.Write(append(videoFrameMsg(1, true, 100), videoFrameMsg(2, false, 100)...))
-			waitFor(t, "two frames", func() bool { return len(frames(t, p.received(id))) == 2 })
-			two := p.offset(id)
-			go helper.Write(videoFrameMsg(3, false, 100)) // the backlog: on its way, never acknowledged
-			time.Sleep(2 * testLimits.VideoBacklog)
+			synctest.Test(t, func(t *testing.T) {
+				_, p, cv, helper, id, _ := openVideo(t, false)
+				rfbRelay := p.carriers[0]
+				go helper.Write(append(videoFrameMsg(1, true, 100), videoFrameMsg(2, false, 100)...))
+				p.waitFor("two frames", func() bool { return len(frames(t, p.received(id))) == 2 })
+				two := p.offset(id)
+				go helper.Write(videoFrameMsg(3, false, 100)) // the backlog: on its way, never acknowledged
+				// The node reads it before the clock moves (it only moves once every goroutine is blocked), so the
+				// backlog is exactly this old when it moves.
+				synctest.Sleep(2 * testLimits.VideoBacklog)
 
-			keyReq := make(chan []byte, 1)
-			go func() { b := make([]byte, 5); io.ReadFull(helper, b); keyReq <- b }()
-			if how == "the relay drops" {
-				cv.conn.Close()
-			} else {
-				// The phone says it has the first two frames only: the third was lost on the old route.
-				rfbRelay.send(TypeUse, chanOffset(id, two))
-				p.next(TypeResumed)
-			}
-			reset := p.next(TypeReset)
-			rid, at, _, _ := readChanOffset(reset.body)
-			if rid != id || at <= two || reset.via != rfbRelay {
-				t.Fatalf("reset %d at %d (phone had %d)", rid, at, two)
-			}
-			select {
-			case b := <-keyReq:
-				if !bytes.Equal(b, keyframeRequest) {
-					t.Fatalf("the helper got %v, want a keyframe request", b)
+				keyReq := make(chan []byte, 1)
+				go func() { b := make([]byte, 5); io.ReadFull(helper, b); keyReq <- b }()
+				if how == "the relay drops" {
+					cv.conn.Close()
+				} else {
+					// The phone says it has the first two frames only: the third was lost on the old route.
+					rfbRelay.send(TypeUse, chanOffset(id, two))
+					p.next(TypeResumed)
 				}
-			case <-time.After(time.Second):
-				t.Fatal("the helper was not asked for a keyframe")
-			}
-			// The helper's next frame left before it saw the request: dropped. The keyframe goes.
-			before := len(p.received(id))
-			go helper.Write(append(videoFrameMsg(4, false, 100), videoFrameMsg(5, true, 100)...))
-			waitFor(t, "the keyframe", func() bool { return len(p.received(id)) > before })
-			got := frames(t, p.received(id)[before:])
-			if len(got) != 1 || got[0][1] != 5 || got[0][2] != 1 {
-				t.Fatalf("after the reset: %v, want the keyframe 5 alone", got)
-			}
+				reset := p.next(TypeReset)
+				rid, at, _, _ := readChanOffset(reset.body)
+				if rid != id || at <= two || reset.via != rfbRelay {
+					t.Fatalf("reset %d at %d (phone had %d)", rid, at, two)
+				}
+				select {
+				case b := <-keyReq:
+					if !bytes.Equal(b, keyframeRequest) {
+						t.Fatalf("the helper got %v, want a keyframe request", b)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("the helper was not asked for a keyframe")
+				}
+				// The helper's next frame left before it saw the request: dropped. The keyframe goes.
+				before := len(p.received(id))
+				go helper.Write(append(videoFrameMsg(4, false, 100), videoFrameMsg(5, true, 100)...))
+				p.waitFor("the keyframe", func() bool { return len(p.received(id)) > before })
+				got := frames(t, p.received(id)[before:])
+				if len(got) != 1 || got[0][1] != 5 || got[0][2] != 1 {
+					t.Fatalf("after the reset: %v, want the keyframe 5 alone", got)
+				}
+			})
 		})
 	}
 }
@@ -510,7 +542,7 @@ func TestAFreshVideoBacklogIsResent(t *testing.T) {
 	s, p, cv, helper, id, tok := openVideo(t, false, limits)
 	p.carriers[0].conn.Close() // only the video relay: the node can't move video by itself
 	go helper.Write(append(videoFrameMsg(1, true, 100), videoFrameMsg(2, false, 100)...))
-	waitFor(t, "two frames", func() bool { return len(frames(t, p.received(id))) == 2 })
+	p.waitFor("two frames", func() bool { return len(frames(t, p.received(id))) == 2 })
 	cv.conn.Close()
 	again, _ := s.Reattach(true)
 	c2 := p.carry(again)
@@ -519,7 +551,7 @@ func TestAFreshVideoBacklogIsResent(t *testing.T) {
 	c2.send(TypeUse, chanOffset(id, uint64(len(videoFrameMsg(1, true, 100)))))
 	p.next(TypeResumed)
 	go helper.Write(videoFrameMsg(3, false, 100))
-	waitFor(t, "frame 3", func() bool { return len(frames(t, p.received(id))) == 3 })
+	p.waitFor("frame 3", func() bool { return len(frames(t, p.received(id))) == 3 })
 	select {
 	case m := <-p.msgs:
 		t.Fatalf("unexpected message %d", m.typ)

@@ -196,27 +196,24 @@ func TestADirectRouteCarriesTheSession(t *testing.T) {
 
 	down := pattern(200 << 10)
 	go ss.Write(down[:1000])
-	waitFor(t, "bytes over the relay", func() bool { return len(p.received(RFB)) == 1000 })
+	p.waitFor("bytes over the relay", func() bool { return len(p.received(RFB)) == 1000 })
 	direct.send(TypeUse, chanOffset(RFB, p.offset(RFB)))
 	p.next(TypeResumed)
 	go ss.Write(down[1000 : 100<<10])
-	waitFor(t, "bytes over the direct route", func() bool { return len(p.received(RFB)) == 100<<10 })
+	p.waitFor("bytes over the direct route", func() bool { return len(p.received(RFB)) == 100<<10 })
 
 	dc.Close() // the direct route drops: RFB goes on over the relay by itself
 	go ss.Write(down[100<<10:])
-	waitFor(t, "the rest over the relay", func() bool { return len(p.received(RFB)) == len(down) })
+	p.waitFor("the rest over the relay", func() bool { return len(p.received(RFB)) == len(down) })
 	if !bytes.Equal(p.received(RFB), down) {
 		t.Fatal("bytes lost or repeated across the moves")
 	}
 
-	s.End()
-	waitFor(t, "the listener to close", func() bool {
-		c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(paths.Port)), 200*time.Millisecond)
-		if err == nil {
-			c.Close()
-		}
-		return err != nil
-	})
+	s.End() // the last session leaving closes the listener before End returns (Direct.leave)
+	if c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(paths.Port)), 200*time.Millisecond); err == nil {
+		c.Close()
+		t.Fatal("still listening after the last session ended")
+	}
 }
 
 // A change of the node's addresses, or the firewall starting to block, gives the phone new paths.
