@@ -60,8 +60,9 @@ public struct NativeChatStoreContinuityReplay {
                 }
             }
             try apply(try shadow.drain())
-            var previousPatchVersion = try shadow.drain().version
             try shadowCheck(shadow.wakeChatIDs() == [shadow.chat], "wake-chat")
+            var previousPatchVersion = try shadow.drain().version
+            var previousWakeCount = shadow.wakeChatIDs().count
             _ = shadow.drainEffects()
             for (index, event) in `case`.events.enumerated() {
                 let action: Action
@@ -72,13 +73,18 @@ public struct NativeChatStoreContinuityReplay {
                 }
                 try shadow.dispatch(action)
                 try shadow.flush()
+                // The worker publishes the patch, then invokes the host. Read the wake before draining it: a callback
+                // may not have returned yet even though flush has accounted for this action.
+                let wakes = shadow.wakeChatIDs()
+                try shadowCheck(wakes.count == previousWakeCount || wakes.count == previousWakeCount + 1,
+                                "wake-delivery-count", step: index)
                 let patch = try shadow.drain()
                 try apply(patch)
-                let wakes = shadow.wakeChatIDs()
                 try shadowCheck(wakes.allSatisfy { $0 == shadow.chat }, "wake-chat", step: index)
-                try shadowCheck(patch.version > previousPatchVersion ? wakes.count == index + 2 : wakes.count == index + 1,
+                try shadowCheck(patch.version > previousPatchVersion ? wakes.count == previousWakeCount + 1 : wakes.count == previousWakeCount,
                                 "wake-delivery", step: index)
                 previousPatchVersion = patch.version
+                previousWakeCount = wakes.count
                 let effects = shadow.drainEffects()
                 let requests = try effects.map { effect -> ContinuityJSON in
                     switch effect {
