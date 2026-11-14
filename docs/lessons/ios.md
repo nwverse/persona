@@ -606,7 +606,7 @@ Compact iPhone width uses only the shell. Regular-width iPad keeps its sidebar a
 
 - A control written in two branches (`if !expanded { plus }` beside the field, `if expanded { row(plus …) }` under it)
   is two views: each open and close removed one and inserted the other. In a 60 fps recording of the iPhone 17 Pro
-  simulator, closing with Hide Keyboard showed no + for 13 frames (about 160 ms) while the box travelled, then the
+  simulator, closing with Hide Keyboard showed no + for 12 frames (about 145 ms) while the box travelled, then the
   line's + faded in at its final place and stood still while the box's bottom edge went on another 28 pt. Keep such a
   control one view in one place in the tree and let a layout move it (`ComposerBoxLayout` places the field and the box's
   two corners for either shape); only what one shape alone has fades. Afterwards the + kept its distance to the box's
