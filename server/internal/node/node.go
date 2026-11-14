@@ -364,6 +364,13 @@ func New(version string) (*Node, error) {
 		n.screenStart = n.startScreenHelper // Persona Screen, the live screen's video helper (#3954)
 	}
 	n.links = screenlink.NewRegistry(screenlink.DefaultLimits, n.logger.Printf)
+	// Direct routes (#6398): a listener on this computer's LAN and Tailscale addresses, only while a screen session is
+	// live, and never when the macOS firewall would ask about it.
+	if d, err := screenlink.NewDirect(n.logger.Printf); err != nil {
+		n.logger.Printf("screen: no direct routes: %v", err)
+	} else {
+		n.links.EnableDirect(d)
+	}
 	n.configureCodex(proto.CodexConfig{})
 	n.hosts = host.NewRegistry(nodeHosts(proto.EngineHerdr, false, n.logger.Printf)...) // herdr until engine.use, botmux until the hub says
 	n.resetSignals()
@@ -1105,7 +1112,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
 		list := n.sessionList(ctx, true)
 		// update_busy: node.update.commit would refuse now; the manager waits on it before sending a build (node_update_idle).
-		return map[string]any{"sessions": list, "update_busy": updateWouldCut(AssistantsBusy(), list)}, nil
+		return map[string]any{"sessions": list, "update_busy": updateWouldCut(AssistantsBusy(), list, n.starts.listed(nil))}, nil
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, "", p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
