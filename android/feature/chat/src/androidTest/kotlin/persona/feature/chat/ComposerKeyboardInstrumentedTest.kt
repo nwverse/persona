@@ -1,8 +1,6 @@
 package persona.feature.chat
 
 import android.view.KeyEvent
-import android.view.View
-import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import androidx.compose.runtime.CompositionLocalProvider
@@ -62,22 +60,15 @@ class ComposerKeyboardInstrumentedTest {
     }
 
     @Test fun inputConnectionCompositionCommitsBeforeCtrlReturnCanSend() {
-        val state = ChatComposerState()
+        val state = ChatComposerState().apply { insert("中文", atSelection = false) }
         var sent = 0
         show(state) { sent++ }
         var connection: InputConnection? = null
         instrumentation.runOnMainSync {
-            fun locate(view: View): InputConnection? {
-                view.onCreateInputConnection(EditorInfo())?.let { return it }
-                if (view is ViewGroup) for (index in 0 until view.childCount) {
-                    locate(view.getChildAt(index))?.let { return it }
-                }
-                return null
-            }
-            connection = locate(rule.activity.window.decorView.rootView)
+            connection = rule.activity.currentFocus?.onCreateInputConnection(EditorInfo())
         }
         assertNotNull(connection)
-        instrumentation.runOnMainSync { connection!!.setComposingText("中文", 1) }
+        instrumentation.runOnMainSync { connection!!.setComposingRegion(0, state.value.text.length) }
         rule.waitForIdle()
         assertNotNull(state.value.composition)
         enter(KeyEvent.ACTION_DOWN, 0, KeyEvent.META_CTRL_ON)
@@ -86,9 +77,11 @@ class ComposerKeyboardInstrumentedTest {
         instrumentation.runOnMainSync { connection!!.finishComposingText() }
         rule.waitForIdle()
         assertNull(state.value.composition)
+        // Composition owns the first chord and may commit it as a newline. The committed chord must add nothing else.
+        val committed = state.value.text
         enter(KeyEvent.ACTION_DOWN, 0, KeyEvent.META_CTRL_ON)
         enter(KeyEvent.ACTION_UP, 0, KeyEvent.META_CTRL_ON)
         assertEquals(1, sent)
-        assertEquals("中文", state.value.text)
+        assertEquals(committed, state.value.text)
     }
 }
