@@ -1,13 +1,16 @@
 // End-to-end check of the keyboard around the web app's overlays (docs/web/web.md "Keyboard shortcuts", "Node menu"):
 //
-// - the session ⋯ menu uses the window's height: whole at 1280 × 820; at 1280 × 560 it opens beside its button, not over
-//   it, and a fade at the cut edge shows there is more (at the top once scrolled);
+// - the session ⋯ menu uses the window's height: whole at 1280 × 820; at 1280 × 560, too short for it, it opens beside
+//   its button, not over it, a fade at the cut edge shows there is more (at the top once scrolled), and End from the
+//   keyboard scrolls the last row into view;
 // - Escape anywhere in the ⌘K palette (after Tab moved the focus off its field) closes it and gives the focus back to
 //   where it was opened from; ⌘/ over the palette replaces it with the shortcut help, and ⌘K over the help the reverse;
 // - Tab in the shortcut help reaches "Change in Settings" after its scrolling list, and wraps to Close;
-// - Escape out of a menu's Rename leaves the focus on the row the menu was opened on, the menu still open;
+// - Escape out of a menu's Rename leaves the focus on the row the menu was opened on, the menu still open with its Rename
+//   row highlighted, so Enter renames again instead of opening the row;
 // - Escape in a search field (the To-dos page's) clears what was typed;
-// - a theme or language picked in one tab is taken by the other tabs of the browser.
+// - a theme, theme color or language picked in one tab is taken by the other tabs of the browser; the language's reload
+//   waits while the other tab holds a draft, with a toast, and comes once the draft is gone.
 //
 // Needs the web page against the fake hub with its Recent conversations, and Chrome (or any Chromium through --executable):
 //
@@ -104,11 +107,18 @@ async function sessionMenu(browser, theme) {
       check(m.top >= anchor.y + anchor.height, `menu: opens below its button, not over it, at 1280 × 560 (${theme})`, { menuTop: m.top, anchorBottom: anchor.y + anchor.height });
       check(m.bottom <= height - 8 + 1, `menu: kept inside the window at 1280 × 560 (${theme})`, m);
       check(m.scroll > m.client && m.down && !m.up, `menu: a fade at the bottom says there is more (${theme})`, m);
-      await page.evaluate(() => {
-        const el = document.querySelector("[role=menu]");
-        el.scrollTop = el.scrollHeight;
-      });
+      // End from the keyboard: the last row is scrolled into view, not highlighted out of sight
+      await page.keyboard.press("End");
       await settle(page);
+      const last = await page.evaluate(() => {
+        const el = document.querySelector("[role=menu]");
+        const rows = el.querySelectorAll("[role=menuitem]");
+        const box = el.getBoundingClientRect();
+        const r = rows[rows.length - 1].getBoundingClientRect();
+        return { rowBottom: r.bottom, menuBottom: box.bottom, scrollTop: el.scrollTop };
+      });
+      await shot(page, `11-session-menu-1280x${height}-end-${theme}`);
+      check(last.scrollTop > 0 && last.rowBottom <= last.menuBottom, `menu: End scrolls the last row into view (${theme})`, last);
       const end = await page.evaluate(() => {
         const el = document.querySelector("[role=menu]");
         return { down: Boolean(el.querySelector('[data-menu-more="down"]')), up: Boolean(el.querySelector('[data-menu-more="up"]')) };
@@ -193,6 +203,22 @@ async function renameAndSearch(browser, theme) {
   await shot(page, `72-rename-esc-${theme}`);
   check(renaming, `rename: R in the row's menu opens its field (${theme})`);
   check(f?.opener === true && menus === 1, `rename: Escape leaves the focus on the row, the menu open (${theme})`, { focus: f, menus });
+  const lit = await page.evaluate(() => {
+    const hl = document.querySelector("[role=menu] span[aria-hidden]");
+    const rows = [...document.querySelectorAll("[role=menu] [role=menuitem]")];
+    const r = rows.find((b) => b.textContent.includes("重命名"));
+    return hl && r ? { opacity: getComputedStyle(hl).opacity, at: Math.round(parseFloat(hl.style.top)), row: r.offsetTop } : null;
+  });
+  check(lit?.opacity === "1" && lit.at === lit.row, `rename: the Rename row stays highlighted (${theme})`, lit);
+  // Enter is the menu's: the Rename field again, not the conversation of the row underneath
+  const before = page.url();
+  await page.keyboard.press("Enter");
+  const again = await page
+    .waitForFunction(() => document.activeElement?.tagName === "INPUT" && Boolean(document.activeElement.closest("[role=menu]")), null, { timeout: 3000 })
+    .then(() => true, () => false);
+  check(again && page.url() === before, `rename: Enter after it renames again and stays on the page (${theme})`, { again, url: page.url() });
+  await page.keyboard.press("Escape");
+  await settle(page);
   await page.keyboard.press("Escape");
   await settle(page);
   const closed = { menus: await page.locator("[role=menu]").count(), focus: await focused(page) };
@@ -210,7 +236,7 @@ async function renameAndSearch(browser, theme) {
   await ctx.close();
 }
 
-// Two tabs of one browser: the theme and the language picked in one reach the other.
+// Two tabs of one browser: the theme, theme color and language picked in one reach the other.
 async function tabsFollow(browser) {
   const { ctx, page: a } = await context(browser, "light");
   await go(a, "/persona");
@@ -221,11 +247,25 @@ async function tabsFollow(browser) {
   await a.waitForFunction(() => document.documentElement.classList.contains("dark"), null, { timeout: 5000 }).catch(() => {});
   await shot(a, "78-other-tab-after-dark");
   check(await a.evaluate(() => document.documentElement.classList.contains("dark")), "tabs: the other tab turns dark with it");
+  await b.getByRole("radio", { name: /珊瑚橙/ }).first().click();
+  await a.waitForFunction(() => document.documentElement.dataset.accent === "coral", null, { timeout: 5000 }).catch(() => {});
+  check((await a.evaluate(() => document.documentElement.dataset.accent)) === "coral", "tabs: the other tab takes the theme color with it");
+
+  // The language: the first tab, in the background, holds a draft, so it waits and says so; once the draft is gone it reloads.
+  const composer = a.locator("textarea").first();
+  await composer.fill("还没发出去的话");
+  await a.evaluate(() => Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" }));
   await b.locator("select").filter({ has: b.locator('option[value="en"]') }).first().selectOption("en");
+  await settle(a, 1500);
+  const waiting = await a.evaluate(() => ({ lang: document.documentElement.lang, toast: document.body.textContent.includes("另一个标签页换了语言") }));
+  await shot(a, "78-other-tab-waits-over-draft");
+  check(waiting.lang !== "en" && waiting.toast, "tabs: over a draft the other tab keeps its language and says it changed", waiting);
+  await composer.fill("");
+  await a.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await a.waitForFunction(() => document.documentElement.lang === "en", null, { timeout: 10000 }).catch(() => {});
   await settle(a, 600);
   await shot(a, "78-other-tab-after-english");
-  check((await a.evaluate(() => document.documentElement.lang)) === "en", "tabs: the other tab reloads into English with it");
+  check((await a.evaluate(() => document.documentElement.lang)) === "en", "tabs: with the draft gone the other tab reloads into English");
   await ctx.close();
 }
 

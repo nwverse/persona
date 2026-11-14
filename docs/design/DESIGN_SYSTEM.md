@@ -1545,11 +1545,11 @@ Claude Code's AskUserQuestion, the assistant's ask_user and Codex's questions.
 
 ### 4.12 Keyboard and overlays (web)
 
-- Esc undoes one thing at a time, the innermost first: a search field with text clears it (`SearchField`; an empty one lets Esc go on), a menu's rename goes back to the menu with the focus on its Rename row, a menu closes onto its button, and then the topmost overlay closes (`useEscapeClose`). A modal closes on Esc from anywhere inside it, not only from its first field, and gives the focus back to what opened it.
+- Esc undoes one thing at a time, the innermost first: a search field with text clears it (`SearchField`; an empty one lets Esc go on), a menu's rename goes back to the menu, open with its Rename row highlighted and the focus on what opened it, a menu closes onto its button, and then the topmost overlay closes (`useEscapeClose`). A modal closes on Esc from anywhere inside it, not only from its first field, and gives the focus back to what opened it.
 - One modal from the keyboard at a time: the ⌘K palette and the ⌘/ shortcut help replace each other.
 - Tab stays inside a modal and reaches every control in it, including the ones after a scrolling body the browser lets the keyboard focus (`trapTabIn` in `web/src/ui/overlay.ts`).
-- A menu is as tall as the window allows; when rows are cut, a fade at that edge says there is more (`Menu`, `data-menu-more`), as the team panel's list does.
-- A choice kept in the browser (appearance, language) reaches every open tab: the others follow through the `storage` event, reloading for a language as the tab that chose it does.
+- A menu is as tall as the window allows and shows whole when the window can hold it, over its button if need be; only one taller than the window is cut, opening beside its button on a wide screen. A fade at a cut edge says there is more (`Menu`, `data-menu-more`), as the team panel's list does, and a row the keys move to past the cut scrolls into view.
+- A choice kept in the browser (appearance, theme color, text size, language) reaches every open tab: the others follow through the `storage` event. A language needs a reload, as in the tab that chose it, and that reload never lands on a draft or an open dialog or menu: it waits for a calm moment, as a new build's does, with a toast that offers it meanwhile.
 
 ## 5. Content
 
