@@ -25,6 +25,8 @@ internal class AppNavigator(
             (route.source as? RouteSource.InboxItem)?.let { this[SessionKey(route.machineId, route.sessionId)] = it }
         }
     }
+    /** An explicit non-inbox open supersedes provenance retained by an existing NavKey. */
+    private val inboxSourceSuppressions = mutableSetOf<SessionKey>()
 
     init { stacks.values.forEach(::restoreSecondaryParents) }
 
@@ -35,6 +37,8 @@ internal class AppNavigator(
 
     override fun selectTab(tab: AppTab) {
         openedFrom.clear()
+        inboxSources.clear()
+        inboxSourceSuppressions.clear()
         // Explicit Agents selection opens its list; targeted session navigation uses onSelectTab directly.
         if (tab == AppTab.Agents) {
             val stack = stacks.getValue(tab)
@@ -62,8 +66,16 @@ internal class AppNavigator(
         val route = inheritVisibleInboxSource(key)
         if (route == ConnectionSettingsRoute) return open(SettingsPageRoute(SettingsPage.Diagnostics))
         val chat = when (route) { is ChatRoute -> route; is InteractionRoute -> route.chat; else -> null }
-        (chat?.source as? RouteSource.InboxItem)?.let { source ->
-            inboxSources[SessionKey(chat.machineId, chat.sessionId)] = source
+        if (chat != null) {
+            val session = SessionKey(chat.machineId, chat.sessionId)
+            val source = chat.source as? RouteSource.InboxItem
+            if (source != null) {
+                inboxSources[session] = source
+                inboxSourceSuppressions.remove(session)
+            } else {
+                inboxSources.remove(session)
+                inboxSourceSuppressions.add(session)
+            }
         }
         if (chat != null && openAssistant(chat, true)) return route
         // A sourced assistant conversation belongs above the item that opened it, even when its kind is already known.
@@ -154,7 +166,10 @@ internal class AppNavigator(
 
     private fun inboxSource(page: NavKey): RouteSource.InboxItem? {
         val chat = page.chat() ?: return null
-        return chat.source as? RouteSource.InboxItem ?: inboxSources[SessionKey(chat.machineId, chat.sessionId)]
+        val session = SessionKey(chat.machineId, chat.sessionId)
+        inboxSources[session]?.let { return it }
+        if (session in inboxSourceSuppressions) return null
+        return chat.source as? RouteSource.InboxItem
     }
 
     /** Remove every destination owned by the confirmed closed session, including hidden tabs. */
@@ -170,6 +185,7 @@ internal class AppNavigator(
             }
         }
         inboxSources.remove(session)
+        inboxSourceSuppressions.remove(session)
         openedFrom.keys.retainAll { page -> stacks.values.any { page in it } }
     }
 
@@ -178,8 +194,19 @@ internal class AppNavigator(
      * else they go. Visited tabs stay composed, so this can come from a hidden tab: the tab on screen stays as it is.
      */
     fun groupGone(chat: ChatRoute, moved: ChatRoute?) {
-        val source = inboxSources.remove(SessionKey(chat.machineId, chat.sessionId))
-        if (moved != null && source != null) inboxSources[SessionKey(moved.machineId, moved.sessionId)] = source
+        val previous = SessionKey(chat.machineId, chat.sessionId)
+        val source = inboxSources.remove(previous)
+        val suppressed = inboxSourceSuppressions.remove(previous)
+        if (moved != null) {
+            val destination = SessionKey(moved.machineId, moved.sessionId)
+            if (source != null) {
+                inboxSources[destination] = source
+                inboxSourceSuppressions.remove(destination)
+            } else if (suppressed) {
+                inboxSources.remove(destination)
+                inboxSourceSuppressions.add(destination)
+            }
+        }
         fun shows(key: NavKey) = key.chat()?.let { sameConversation(it, chat) } == true
         // Callers rebuilding the replacement may only know its new ids and kind; provenance belongs to the existing page.
         val destination = moved?.let { if (it.source == null) it.copy(source = chat.source) else it }
