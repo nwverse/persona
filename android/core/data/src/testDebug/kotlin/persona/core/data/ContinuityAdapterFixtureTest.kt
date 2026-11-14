@@ -26,11 +26,16 @@ import persona.core.domain.FixtureReader
 class ContinuityAdapterFixtureTest(
     private val name: String,
     private val fixture: FixtureReader.Case,
-    private val rust: Boolean,
+    private val selection: String,
 ) {
     @Test fun replay() = runBlocking {
-        val driver = if (rust) RustContinuityDriver(FlushContinuityFrameScheduler()) else null
-        val adapter: ContinuityAdapter = if (driver == null) KotlinContinuityAdapter(CHAT) else RustContinuityAdapter(CHAT, driver)
+        val driver = if (selection == "rust") RustContinuityDriver(FlushContinuityFrameScheduler()) else null
+        val mismatches = java.util.concurrent.ConcurrentLinkedQueue<ContinuityMismatch>()
+        val adapter: ContinuityAdapter = when (selection) {
+            "rust" -> RustContinuityAdapter(CHAT, requireNotNull(driver))
+            "shadow" -> ShadowContinuityAdapter(CHAT, sink = { mismatches.add(it) }, afterFirstFrame = { it() })
+            else -> KotlinContinuityAdapter(CHAT)
+        }
         try {
             val input = fixture.value.getValue("input").jsonObject
             val initial = input.getValue("initial").jsonObject
@@ -74,6 +79,8 @@ class ContinuityAdapterFixtureTest(
             }
         } finally {
             adapter.close()
+            ShadowContinuityDiagnostics.awaitIdle()
+            assertEquals("$name shadow mismatches", emptyList<ContinuityMismatch>(), mismatches.toList())
             driver?.close()
         }
     }
@@ -83,8 +90,8 @@ class ContinuityAdapterFixtureTest(
 
         @JvmStatic @Parameterized.Parameters(name = "{0}")
         fun cases(): List<Array<Any>> = FixtureReader.read("continuity").flatMap { fixture ->
-            listOf(false, true).map { rust ->
-                arrayOf("${if (rust) "rust" else "kotlin"}/${fixture.value.getValue("name").jsonPrimitive.content}", fixture, rust)
+            listOf("kotlin", "rust", "shadow").map { selection ->
+                arrayOf("$selection/${fixture.value.getValue("name").jsonPrimitive.content}", fixture, selection)
             }
         }
     }

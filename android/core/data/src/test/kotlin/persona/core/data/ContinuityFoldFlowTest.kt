@@ -11,6 +11,7 @@ import persona.core.contracts.api.ChatSnapshot
 /** Runs on both selections. Native requests serialize folds; this is not iOS parallel-fold parity. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ContinuityFoldFlowTest {
+    @get:org.junit.Rule val shadowParity = ShadowParityRule()
     private val key = SessionKey("fixture", "fold-flow")
     private fun work(seq: Int) = Item("$seq#0", seq = seq, role = "assistant", kind = "tool_use")
     private fun fold(seq: Int) = work(seq).copy(id = "fold:$seq#0", kind = "fold",
