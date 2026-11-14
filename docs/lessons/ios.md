@@ -11,8 +11,8 @@ page's own frames. Unoptimized, a function reserves a stack slot on entry for ev
 modifier chain, and each intermediate holds everything before it, so the slots add up like a triangle: `observedAgentList`
 reserved 422 KB on entry for its ~45 modifiers. The device's main thread has 1008 KB (the crash report's
 `vmRegionInfo`); the simulator's has 8 MB, and Release specializes and reuses the storage, so neither the simulator, CI
-nor TestFlight showed it. Measured with `AgentsListStackTests` in the simulator: the page's first render reached 941 KB
-before the fix and 448 KB after.
+nor TestFlight showed it. Measured with `StackPeak` in the simulator: the page's first render reached 941 KB before
+the fix and 448 KB after; the Assistant page went from 906 to 573 KB and a conversation from 665 to 467 KB (#7309).
 
 - Erase a long chain in a few places (`AnyView(...)` at the stage boundaries): each segment then starts small. An erased
   type is the same on every update, so identity and state stay. The same tool as the Mac's cold-start split
@@ -21,8 +21,21 @@ before the fix and 448 KB after.
 - A crash in the stack guard with runtime frames on top: count the frames before reading it as recursion. Few frames
   mean big frames; look for the app's functions underneath, and measure where the stack goes (record the stack address
   at a few points) rather than guessing.
-- `StackPeak.measure` (in `AgentsListStackTests`) paints the unused stack, runs the render, and finds the lowest word
-  overwritten. Keep a page under half the device's stack (512 KB).
+- `StackPeak.measure` (`apple/PersonaTests/StackPeak.swift`) paints the unused stack, runs the render, and finds the
+  lowest word overwritten. Keep a page under half the device's stack (512 KB). Measure a page cold (alone in its test
+  process): the first render also builds the Swift runtime's type metadata, ~100 KB more than a warm one.
+- Where the stack goes, exactly: put a guard page at a set depth below the render (`mprotect`) and a SIGSEGV handler on
+  its own stack (`sigaltstack`) that walks the frame pointers and prints each frame's size with `dladdr`'s name. The
+  deepest path is often not the one a crash report shows (#7309: the conversation's footer, not its page getters).
+- Two checks keep it there. `MainPagesStackTests` renders every main page in the simulator (Debug) and fails one over
+  512 KB, naming the page and the depth; pages over it today have a ceiling there that may only go down.
+  `scripts/ci/apple_stack_frames.py`, in the apple lane after the Debug device build, fails a view function whose fixed
+  frame is over 64 KB (baseline `scripts/ci/apple_stack_frames_baseline.json`, only down). The second cannot see slots
+  sized at run time, which caused this crash; the first can.
+- A check failed: measure where the stack goes (above), then cut the chain that holds it with `stackSegment()` or
+  `AnyView` at its stage boundaries, and lift heavy members (a big struct, a binding to a big value) out of the chain
+  into a view or modifier of their own. Lower the ceiling or the baseline in the same change when a page or function
+  improves; never raise one.
 
 ## Keep a control's accessibility identifier off its surrounding container (#7033)
 
@@ -1853,6 +1866,12 @@ avoidance moves; the points on `Keyboard.dismiss()` and XCUITest's `typeText` be
 - iOS 27.1 simulator presents a row-attached popover, which omits cancel (outside tap cancels), not obvious to users.
 - Binary confirmations use `alert` with Cancel / Enable and object name ("Enable this computer?"). Save name separately in `@State` and do not clear on dismissal or disappearing title becomes empty.
 - Reserve `confirmationDialog` for choosing among several options; explicit-cancel confirmations use `alert`. Assert and tap Cancel in UI tests.
+
+## Two questions at once, and a scene change is not leaving the page (2026-11-14, #6113)
+
+- A remote copy and a serial upload can both meet a taken name at once. With one stored `conflict` holding its continuation, the second question replaced the first, whose continuation never resumed: the copy hung, and a stranded upload also blocked the serial queue. Keep a queue with one continuation per question, keyed by the question's id and removed before it is resumed (answered once); a row's Cancel answers only its own transfer's question, leaving the page answers all of them.
+- UIKit presents one modal at a time. When a question was answered without its alert's buttons, SwiftUI began closing the alert about 0.3 s later and took another 0.5 s (iOS 27 simulator); an alert for the next question asked for in that window was dropped and SwiftUI wrote `false` to its `isPresented` binding (a setter that turned that into Cancel silently cancelled the second transfer), or it was shown late and then never closed when its binding turned false. An alert's own button runs after UIKit has closed it, and the alert is modal, so: the setter answers nothing, answers come from the buttons (or Cancel on leaving the page), a following question waits `Theme.Motion.alertHandoff`, and when SwiftUI writes `false` while the question is still waiting (its alert was dropped behind another alert, sheet or picker) the alert asks again. Keep the title's name in its own state so it does not go blank on the way out.
+- `scenePhase` leaving `.active` (Control Center, a call, the app switcher) is not a page departure: pause polling only (`onTabVisibility(sceneAware: true)`), and keep the full stop on the tab-only `onTabVisibility`. A full stop there cancelled downloads and removed the file an open Save to Files (`.fileMover`) was about to move. `FilesPaneLifecycleTests` drives `scenePhase` through the environment on a hosted window and checks the presented `UIDocumentPickerViewController` / `UIAlertController`.
 
 ## Time-sensitive pushes treated as ordinary: missing entitlement (2026-11-04, #1572)
 
