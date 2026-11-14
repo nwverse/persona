@@ -169,3 +169,64 @@ func TestNewerFailureReplacesRetryDecision(t *testing.T) {
 		t.Fatalf("the newer failure did not replace the old decision: %+v, cards %+v", entry, cards)
 	}
 }
+
+func TestDueTransientRetryRetiresBeforeWake(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		later time.Duration
+	}{
+		{name: "inside the timestamp tolerance", later: time.Second},
+		{name: "outside the timestamp tolerance", later: 3 * time.Second},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeHub()
+			f.sessions["box"] = nil
+			f.hello.Agents.Triage.MaxRetries = 1
+			s := newServiceOn(t, f, &workMemStore{})
+			defer s.waitWorkEvents()
+			if err := s.putTriageSwitches(context.Background(), TriageSwitches{Enabled: true, Decide: true, Wake: true, AutoContinue: true}); err != nil {
+				t.Fatal(err)
+			}
+			failed := apiErrorTurn("s1", recoveryFirstError)
+			failed.UpdatedAt = time.Now().UTC().Add(-2 * time.Minute)
+			f.setSessions("box", failed)
+			triage(t, s, "s1")
+			pending := entryOf(t, s, "s1")
+			if pending.Work.On != proto.WaitTransient || pending.WakeAt == nil {
+				t.Fatalf("setup did not schedule a transient retry: %+v", pending)
+			}
+
+			recovered := stopped("s1", "")
+			recovered.UpdatedAt = pending.TurnAt.Add(c.later)
+			f.setSessions("box", recovered)
+			before := len(f.sentToAgents())
+			s.workTick(context.Background(), *pending.WakeAt)
+			if got := f.sentToAgents(); len(got) != before {
+				t.Fatalf("the recovered retry sent another continuation: %v", got[before:])
+			}
+			entry := entryOf(t, s, "s1")
+			if entry.Work.On == proto.WaitTransient || entry.WakeAt != nil || entry.Work.WakeAt != nil || entry.Retries != 0 {
+				t.Fatalf("the due retry was not retired: %+v", entry)
+			}
+		})
+	}
+}
+
+func TestCardTickRetiresRetryDecisionOnSuccessfulRow(t *testing.T) {
+	s, f := retryDecisionFixture(t, &workMemStore{})
+	defer s.waitWorkEvents()
+	pending := entryOf(t, s, "s1")
+	if pending.InteractionID == "" || len(s.workCards()) != 1 {
+		t.Fatalf("setup did not leave a retry card: %+v", pending)
+	}
+	recovered := stopped("s1", "")
+	recovered.UpdatedAt = pending.TurnAt.Add(time.Second)
+	f.setSessions("box", recovered)
+
+	ctx := context.Background()
+	s.cardTick(ctx, s.newWorkView(ctx), [2]string{"box", "s1"}, time.Now())
+	entry := entryOf(t, s, "s1")
+	if entry.Work.On == proto.WaitUser || entry.InteractionID != "" || entry.Work.InteractionID != "" || entry.Retries != 0 || len(s.workCards()) != 0 {
+		t.Fatalf("the card tick kept the recovered retry: %+v, cards %+v", entry, s.workCards())
+	}
+}

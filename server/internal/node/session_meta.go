@@ -339,6 +339,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 				end = off // the hidden turn's words and outcome are not evidence; recover before the tail as before
 			}
 			m.lastText, succeeded = transcripttail.LastWordsBefore(f, end)
+			m.answer = m.lastText // the bounded reader kept only the last words, TurnAnswer's fallback
 			recovered = true
 		}
 	}

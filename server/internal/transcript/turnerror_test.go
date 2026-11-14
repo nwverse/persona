@@ -169,6 +169,7 @@ func TestClaudeTurnSucceededEvidence(t *testing.T) {
 		{"a close without a model reply", []string{turnEndLine}, false},
 		{"a synthetic-only reply", []string{syntheticSentinel, turnEndLine}, false},
 		{"a reply followed by a model failure", []string{replyLine, apiErrorLine(t, "e", "API Error: 529 Overloaded", map[string]any{"error": "server_error"}), turnEndLine}, false},
+		{"a model error after the close", []string{replyLine, turnEndLine, apiErrorLine(t, "e2", "API Error: 529 Overloaded", map[string]any{"error": "server_error"})}, false},
 		{"an unclosed continuation after a worked failure", append(append([]string{}, failedAfterWork...), sentinelReply), false},
 		{"a closed continuation after a worked failure", append(append([]string{}, failedAfterWork...), sentinelReply, turnEndLine), true},
 		{"the reply has not closed", []string{replyLine}, false},
