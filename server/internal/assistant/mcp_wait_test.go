@@ -174,6 +174,33 @@ func TestMCPWaitInteractionKindOverride(t *testing.T) {
 	nextMCPWaitEvent(t, events, callID, proto.MCPWaitComputer)
 }
 
+func TestMCPWaitParamsPreserveFunctionalMachine(t *testing.T) {
+	const callID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	r := &mcpWaitReporter{machine: "origin", callID: callID}
+	ctx := withMCPWaitReporter(context.Background(), r)
+	for _, tc := range []struct {
+		name     string
+		params   map[string]any
+		machine  string
+		wantCall bool
+	}{
+		{name: "matching machine", params: map[string]any{"machine_id": "origin"}, machine: "origin", wantCall: true},
+		{name: "different machine", params: map[string]any{"machine_id": "target"}, machine: "target", wantCall: false},
+		{name: "phone call without machine", params: map[string]any{}, machine: "origin", wantCall: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mcpWaitParams(ctx, tc.params)
+			if got := tc.params["machine_id"]; got != tc.machine {
+				t.Fatalf("machine_id = %v, want %q", got, tc.machine)
+			}
+			gotCall, present := tc.params["call_id"]
+			if present != tc.wantCall || present && gotCall != callID {
+				t.Fatalf("call_id = %v, present %v; want present %v", gotCall, present, tc.wantCall)
+			}
+		})
+	}
+}
+
 func TestMCPWaitNodeRequestRequiresOptIn(t *testing.T) {
 	ft, events := newMCPWaitTest(t)
 	params := json.RawMessage(`{"name":"unknown","args":{},"wait_updates":true,"call_id":"10000000-0000-4000-8000-000000000004"}`)

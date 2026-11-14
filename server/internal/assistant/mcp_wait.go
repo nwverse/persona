@@ -163,11 +163,22 @@ func pushMCPWait(ctx context.Context, kind proto.MCPWaitKind) func() {
 }
 
 // mcpWaitParams adds only the correlators the hub needs to relay an approval's wait kind back through the existing
-// devices.notify channel. The tool name and arguments stay in their existing fields, never in the signal.
+// devices.notify channel. An existing machine_id belongs to the tool call and is never replaced; a mismatch with the
+// reporter's origin disables wait updates for that call. The tool name and arguments stay in their existing fields.
 func mcpWaitParams(ctx context.Context, params map[string]any) {
-	if r := mcpWaitFrom(ctx); r != nil {
-		params["call_id"], params["machine_id"] = r.callID, r.machine
+	r := mcpWaitFrom(ctx)
+	if r == nil {
+		return
 	}
+	if value, present := params["machine_id"]; present {
+		machine, ok := value.(string)
+		if !ok || machine != r.machine {
+			return
+		}
+	} else {
+		params["machine_id"] = r.machine
+	}
+	params["call_id"] = r.callID
 }
 
 func pushMCPInteraction(ctx context.Context, ix proto.Interaction) func() {
