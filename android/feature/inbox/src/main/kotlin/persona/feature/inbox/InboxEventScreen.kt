@@ -153,7 +153,8 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
             InboxHandOffBar(
                 repository = repository,
                 model = handOff,
-                enabled = !record.item.isDone,
+                // A completed item opened from history can still be handed off; live Done rows stay read-only.
+                enabled = !record.item.isDone || listedRecord == null,
                 onDraftReply = if (draftComposer != null) ({ drafting = true }) else null,
                 onOpen = ::openHandOff,
             )

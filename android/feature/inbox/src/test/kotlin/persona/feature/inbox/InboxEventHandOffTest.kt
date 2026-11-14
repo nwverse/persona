@@ -1,6 +1,6 @@
 package persona.feature.inbox
 
-import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -75,7 +75,7 @@ class InboxEventHandOffTest {
         rule.onNodeWithText("More…").performClick()
         rule.onNodeWithText("Agent 4").performClick()
         rule.onNodeWithTag("inbox-handoff-target").performClick()
-        rule.onNode(isToggleable()).assertIsOn()
+        rule.onNode(isToggleable()).assertIsOff()
     }
 
     @Test fun draftReplyUsesTheExistingAgentDraft() {
@@ -101,6 +101,17 @@ class InboxEventHandOffTest {
         show(done)
         rule.onNodeWithTag("inbox-handoff-target").assertDoesNotExist()
         rule.onNodeWithTag("inbox-handoff-chip-summary").assertDoesNotExist()
+    }
+
+    @Test fun aFinishedItemOpenedFromHistoryCanBeHandedOff() {
+        val repository = HandOffBarTestRepository(record = handOffBarRecord(done = true))
+        repository.historyRecord = repository.record
+        repository.snapshot.value = repository.snapshot.value.copy(records = emptyList())
+        show(repository)
+        rule.onNodeWithTag("inbox-handoff-chip-summary").performClick()
+        rule.onNodeWithText("View").performClick()
+        rule.waitForIdle()
+        assertEquals(1, repository.handOffRequests.size)
     }
 
     @Test fun missingItemsHaveNoInteractiveBar() {
