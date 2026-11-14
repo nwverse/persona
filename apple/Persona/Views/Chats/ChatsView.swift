@@ -320,7 +320,8 @@ struct ChatsView: View {
         // drawn here: drawn by the list alone, the chat came up under the system navigation bar again (SearchOpenTests).
         let _ = searching
         SplitNavigation(path: pushing, listKey: unified == nil ? "agents.list" : "sidebar.list",
-                        destinations: AgentsDestinations(unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch) {
+                        destinations: AgentsDestinations(unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch,
+                        columnColor: unified == nil ? nil : UnifiedSidebar.columnColor) {
             listColumn
         } empty: {
             if unified != nil {
@@ -430,6 +431,14 @@ struct ChatsView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { newSession.wrappedValue = true } label: { Label("New Session [Chats View 58e21b]", systemImage: Theme.Icon.compose) }
                     }
+                    #if os(iOS)
+                    // Where the system's Hide Sidebar was, in a glass circle of its own as that one: the column is slid
+                    // by a finger now (#4206).
+                    if widthClass == .regular && unified == nil {
+                        ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                        ToolbarItem(placement: .topBarTrailing) { SplitHideListButton() }
+                    }
+                    #endif
                 }
             }
             #else
@@ -1254,7 +1263,8 @@ private struct AgentsList: View {
         .overlay { if ScreenProbe.enabled { AgentsListProbe(feed: feed, sessions: base, asks: interactions, page: shell == nil ? nil : "agents") } }
         #endif
         .listSectionSpacing(repoTree ? .custom(Theme.Space.m) : compact ? .compact : .default)
-        .modifier(AgentsListPage(capsules: floating, workspaceSidebar: grouping == .repo && !repoTree))
+        .modifier(AgentsListPage(capsules: floating, workspaceSidebar: grouping == .repo && !repoTree,
+                                 column: unified == nil ? nil : UnifiedSidebar.columnColor))
         // In the split's sidebar column (iPhone Duo open) the bar sits above the list; on a phone it is the list's
         // first row (above).
         .modifier(TopBar(abovePage: widthClass == .regular && unified == nil) {
@@ -4631,10 +4641,14 @@ private struct AgentsEdge: ViewModifier {
 private struct AgentsListPage: ViewModifier {
     let capsules: Bool
     var workspaceSidebar = false
+    /// The Sidebar layout's column, beside the page or in the phone's drawer: its one color behind the list whatever the
+    /// style (`UnifiedSidebar.columnColor`, #4206).
+    var column: Color? = nil
 
     func body(content: Content) -> some View {
-        if workspaceSidebar { content.listStyle(.plain).scrollContentBackground(.hidden).background(Theme.WorkspaceSidebar.background) }
-        else if capsules { content.scrollContentBackground(.hidden).background(Theme.groupedPage) }
+        if workspaceSidebar { content.listStyle(.plain).scrollContentBackground(.hidden).background(column ?? Theme.WorkspaceSidebar.background) }
+        else if capsules { content.scrollContentBackground(.hidden).background(column ?? Theme.groupedPage) }
+        else if let column { content.scrollContentBackground(.hidden).background(column) }
         else { content.themedPage() }
     }
 }

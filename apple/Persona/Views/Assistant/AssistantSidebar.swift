@@ -971,16 +971,9 @@ struct AssistantSidebar: View {
                     EmptyView()
                 } tally: { placesTally }
                 if !placesFolded { actions(all) }
+                // No New Chat on the heading: the column has one, its foot's (#4206, the owner).
                 foldHeading(String(localized: "Persona Chats [Sidebar Layout]"), folded: $chatsFolded, id: "sidebar-fold-chats") {
-                    // New Chat at the end of the heading, with the chats it makes (the web's ✎, #3254).
-                    Button(action: newConversation) {
-                        ThemedIcon(Theme.Icon.compose).font(Theme.Font.label).foregroundStyle(.secondary)
-                            .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellXS)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("New Chat [Quick Actions ea4b29]")
-                    .accessibilityIdentifier("sidebar-chats-new")
+                    EmptyView()
                 } tally: { EmptyView() }
                 if !chatsFolded { conversations(all, archived: archived) }
             } else {

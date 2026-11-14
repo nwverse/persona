@@ -68,8 +68,18 @@ struct AssistantView: View {
     @State private var showRecordings = false
     /// The sidebar (Chat History, or a drag to the right anywhere on the page): docs/apple/ios.md「Persona top bar and sidebar」.
     @State private var drawer = AssistantDrawer()
-    /// Regular width (iPhone Duo open): the sidebar is a column beside the conversation; Chat History shows or hides it.
+    #if os(iOS)
+    /// Regular width (iPad, iPhone Duo open; the Separate layout): the sidebar is a column beside the conversation; Chat
+    /// History shows or hides it. As it was last left (`SplitListMemory`, #2624, #4206).
+    @State private var columns = SplitListMemory.startsClosed(Self.listKey) ? .detailOnly : SplitColumns.shown
+    /// Where the history column's shown state is kept.
+    private static let listKey = "assistant.list"
+    /// The history column as UIKit has it (`SplitColumnControl`).
+    @State private var columnState = SplitColumnState()
+    #else
+    /// Regular width: the sidebar is a column beside the conversation; Chat History shows or hides it.
     @State private var columns = SplitColumns.shown
+    #endif
     /// iPhone Duo's bars down the side: the top bar is the side rail, and the page's top is free.
     @Environment(\.shellRailEdge) private var railEdge
     /// A phone's tabs (iPhone Duo open): the column's own button folds it, at its top (#2623).
@@ -126,17 +136,31 @@ struct AssistantView: View {
             }
             #else
             NavigationSplitView(columnVisibility: $columns) {
-                // The system sizes the column on iPhone Duo (and moves the divide onto the fold); iPad, as the other tabs.
+                // One width, the other splits' (`SidebarWidth`, #4206).
                 sidebar(column: true)
                     .toolbarVisibility(.hidden, for: .navigationBar)
                     .modifier(SidebarWidth())
             } detail: {
                 stack
+                    #if os(iOS)
+                    // Slid by a finger, as the other splits' lists (`SplitColumnControl`, #4206).
+                    .background {
+                        SplitColumnControl(drags: true, state: columnState) { shown in
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) { columns = shown ? SplitColumns.shown : .detailOnly }
+                            SplitListMemory.keep(Self.listKey, shown: shown, state: columnState)
+                        }
+                    }
+                    .modifier(SplitPageMin())
+                    #endif
             }
             .modifier(SidebarTopFill(shown: columns != .detailOnly))
             .navigationSplitViewStyle(.balanced)
-            // The line beside the history: dragged wider, narrower or closed, remembered (#2624).
-            .modifier(SplitDividerHandle(columns: $columns, key: "assistant.list"))
+            #if os(iOS)
+            // Shown or not, remembered; beside the page or over it by the width (#2624, #4206).
+            .modifier(SplitListMemory(columns: $columns, key: Self.listKey, state: columnState))
+            #endif
             #endif
         } else {
             // The sidebar takes the whole height, like ChatGPT's: the tab bar fades away as it comes out
@@ -282,6 +306,7 @@ struct AssistantView: View {
                             sidebarShown: sidebarColumnShown,
                             sidebarCounts: embedded,
                             drawerTitle: drawerPage,
+                            newChatInSidebar: embedded && widthClass == .regular || padPlaces,
                             openSidebar: toggleSidebar,
                             // In a health conversation New opens Health's new conversation page, whose list has the
                             // space's past ones (#4329); elsewhere the assistant's.

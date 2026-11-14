@@ -40,6 +40,14 @@ import SwiftUI
     }
 }
 
+extension UnifiedSidebar {
+    /// The column's one color (#4206, the owner: as ChatGPT's, the shell drawer's neutral near-white / near-black, in every
+    /// style and at every width): behind its head, its list and its foot, in the strip over it on the iPad, and behind
+    /// the phone's drawer. The system sidebar's grey-blue it had stayed under the head and the foot only in the styles
+    /// whose list paints the page's own color, three bands down the column (#4855).
+    @MainActor static var columnColor: Color { Theme.Shell.drawer }
+}
+
 extension EnvironmentValues {
     /// The Sidebar layout's shared state, under its column and the page beside it; nil in the Separate layout.
     @Entry var unifiedSidebar: UnifiedSidebar? = nil
@@ -93,6 +101,7 @@ struct UnifiedSidebarColumn<Agents: View>: View {
     /// A phone's width: the column is the drawer's (`UnifiedSidebar.drawer`), which a pick closes. The split says so
     /// (`SplitDetail.drawer`): an iPad's sidebar column can read compact by its own width.
     @Environment(\.splitDetail) private var split
+    @Environment(\.splitShowList) private var showList
     private var inDrawer: Bool { split?.drawer == true }
     let state: UnifiedSidebar
     /// The Agents list, given the Persona rows to hold above its own.
@@ -111,6 +120,7 @@ struct UnifiedSidebarColumn<Agents: View>: View {
             persona(.footer)
         }
         .modifier(AssistantSidebarPresenters(ui: state.ui, open: open))
+        .background { UnifiedSidebar.columnColor.ignoresSafeArea() }
         // A container: on its own the identifier went onto every element in it, the rows' own lost.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("unified-sidebar")
@@ -145,6 +155,9 @@ struct UnifiedSidebarColumn<Agents: View>: View {
         state.shownPlace = page.isSidebarPlace ? page : nil
         router?.show(page)
         if inDrawer { state.drawer.close() }
+        // Laid over the page (the open Duo upright): a pick slides the column away, even one that leaves the page as it
+        // was (#4852); a pick that changes the page does it through the split's path too.
+        showList?.hideOverlay?()
     }
 }
 

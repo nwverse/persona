@@ -107,7 +107,8 @@ final class IPadLayoutTests: XCTestCase {
             let right = app.windows.firstMatch.frame.width - 40
             XCTAssertTrue(near(color(right, 2), color(right, 400)), "\(style): the strip above the detail changed")
             // Close the column: what is at the top there is the detail's color again, as below it.
-            let toggle = app.buttons.matching(NSPredicate(format: "label IN %@", ["隐藏边栏", "Hide Sidebar", "边栏", "Sidebar"])).firstMatch
+            // The column's own Hide Sidebar since the finger's slide (#4206), where the system's was.
+            let toggle = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label IN %@", "split-hide-list", ["隐藏边栏", "Hide Sidebar", "边栏", "Sidebar"])).firstMatch
             XCTAssertTrue(toggle.exists, "no sidebar button:\n\(app.debugDescription)")
             toggle.tap()
             sleep(1)
