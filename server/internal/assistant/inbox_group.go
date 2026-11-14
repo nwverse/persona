@@ -663,7 +663,7 @@ func (s *Service) appendEvent(ctx context.Context, source string, a connector.Gr
 // keepsWords reports whether the handling conversation or the user owns the item's title and summary. Grouping still
 // advances the tier, reason and urgency, but leaves those words and their provenance alone.
 func keepsWords(it *InboxItem) bool {
-	return it.TitleBy == TitleByAssistant || it.TitleBy == TitleByUser
+	return it.TitleBy == TitleByAssistant || it.TitleBy == TitleByUser || it.TitleBy == TitleByMerged
 }
 
 // fallbackEventTitle removes a redundant conversation-name prefix only when a real title remains.
