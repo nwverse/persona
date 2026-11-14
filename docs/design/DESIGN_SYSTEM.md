@@ -1014,6 +1014,7 @@ package-only Undo with retained recovery files; `docs/operations/hub-update.md` 
 | Page load | `Loadable` and `LoadableContent` (`apple/Persona/DesignSystem/Components.swift:739-770`); only about 9 call sites |
 | Row or button busy | `RowProgress`, `trailingProgress`, small `ProgressView` |
 | Load failure on a settings page | `LoadProblem` (`apple/Persona/DesignSystem/SettingsForm.swift:73`), no Retry |
+| List read failure (web) | `ListError` (`web/src/ui/ListError.tsx`): a red `role="alert"` line saying what could not be read and why, with **Retry** under it, in place of the rows; the paged session lists and the sidebar's Agents list (its complete list, and By to-do's unread to-dos) draw it, so a failed read never leaves a list blank or on "Loading…" |
 | Persistent notice | `NoticeBanner` |
 | Transient result | `Toast` shown by `ToastCapsule` (`apple/Persona/DesignSystem/Toasts.swift:7`) |
 | Chat API failure | Web: `ErrorNotice` (`web/src/ui/ErrorNotice.tsx`), a neutral card with the red mark only and **Error details**; the error the chat stopped on is its banner over the composer with its actions (Retry, Fix it, Edit last message) and ✕, an older one the record in the chat; apps: `APIErrorCard` with details and Retry |

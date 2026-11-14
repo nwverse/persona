@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel } from "./todo-tree";
+import { agentGroupLabel, agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel, worstTreeState } from "./todo-tree";
 import { makeSessionLookup, todoStatus, todoStatusLabel, type Todo } from "./todos";
 import { matchesFilter } from "./agent-filter";
 import { sessionSource } from "./agent-groups";
@@ -142,6 +142,26 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
       ["社群运营", "done", false, true],
       ["未归类", "done", true, false],
     ]);
+  });
+});
+
+describe("a group's word says what its rows say, never Done over agents that are not", () => {
+  const label = (all: Session[]) => agentGroupLabel(all, worstTreeState(all.map(agentTreeState)));
+  it("Not on a to-do holding a finished agent not looked at yet says 完成未看, as By status and the quick filter do", () => {
+    const tree = buildTodoTree([s("seen", "idle", "/code/a"), s("new", "unread", "/code/b")], machines, [], noMutes, NOW);
+    expect(tree.loose.map((g) => [g.state, g.label])).toEqual([["done", "完成未看"]]);
+    expect(label([s("seen", "idle", "/code/a"), s("new", "unread", "/code/b")])).toBe("完成未看");
+  });
+  it("Recent (not running) of stopped agents says 未运行", () => {
+    expect(label([s("gone", "offline", "/code/a"), s("gone2", "offline", "/code/b")])).toBe("未运行");
+  });
+  it("keeps the state's own word otherwise: Done for seen agents, Needs you / Working above it", () => {
+    expect(label([s("seen", "idle", "/code/a"), s("gone", "offline", "/code/b")])).toBeUndefined();
+    expect(label([s("asks", "needs_you", "/code/a"), s("new", "unread", "/code/b")])).toBeUndefined();
+    expect(label([s("runs", "working", "/code/a"), s("gone", "offline", "/code/b")])).toBeUndefined();
+    expect(label([])).toBeUndefined();
+    const seen = buildTodoTree([s("seen", "idle", "/code/a")], machines, [], noMutes, NOW);
+    expect(seen.loose[0]).not.toHaveProperty("label");
   });
 });
 
