@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"image"
 	"math"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -18,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/osproc"
 )
 
 type runFlags struct {
@@ -119,9 +120,9 @@ func newBench() (*bench, error) {
 	b.photos = photos()
 	// A fixed port, so a page left open by an earlier run comes back to this one by itself (it asks /state every
 	// 100 ms) instead of a new tab each run.
-	l, err := net.Listen("tcp", "127.0.0.1:38780")
+	l, err := osproc.Listen("tcp", "127.0.0.1:38780")
 	if err != nil {
-		if l, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
+		if l, err = osproc.Listen("tcp", "127.0.0.1:0"); err != nil {
 			return nil, err
 		}
 	}
