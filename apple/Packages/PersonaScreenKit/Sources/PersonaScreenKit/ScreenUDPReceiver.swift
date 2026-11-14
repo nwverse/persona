@@ -81,6 +81,12 @@ public struct ScreenUDPReceiver: Sendable {
         b.parity = max(b.parity, Int(h.parity))
         if b.whole == nil, b.shards[Int(h.index)] == nil {
             b.shards[Int(h.index)] = [UInt8](fragment)
+            // A keyframe is never given up (giving one up asks for another as large): its first shard says so, even
+            // from a node that marks every frame droppable.
+            if h.block == 0, h.index == 0, fragment.count > 17 {
+                let f = [UInt8](fragment.prefix(18))
+                if f[4] == 3, f[17] & 1 != 0 { m.droppable = false }
+            }
             if b.shards.count >= b.data { complete(&b, layout[Int(h.block)]) }
         }
         m.blocks[Int(h.block)] = b
@@ -250,10 +256,79 @@ public struct ScreenUDPLoss: Sendable {
         seen.removeAll { now - $0.at > Self.window }
     }
 
-    public func loss(at now: Double) -> Double? {
-        let recent = seen.filter { now - $0.at <= Self.window }
-        guard recent.count >= Self.enough, let lo = recent.map(\.number).min(), let hi = recent.map(\.number).max() else { return nil }
+    /// Over the last `window` seconds (10 by default), with at least `enough` packets to say.
+    public func loss(at now: Double, window: Double = ScreenUDPLoss.window, enough: Int = ScreenUDPLoss.enough) -> Double? {
+        let recent = seen.filter { now - $0.at <= window }
+        guard recent.count >= enough, let lo = recent.map(\.number).min(), let hi = recent.map(\.number).max() else { return nil }
         let span = Double(hi - lo + 1)
         return max(0, 1 - Double(recent.count) / span)
     }
 }
+
+/// The pacing a phone asks the node for (#7873): 1.25 × the fastest rate a message's packets arrived at over the last
+/// 3 s, between 1 and 150 Mbit/s; before any measurement, where the route starts. The node paces its packets; past a
+/// slow bottleneck they arrive at the bottleneck's rate, so the request settles just above it, and below one the
+/// arrival rate is the pacing itself, so the request grows a quarter at a time until it meets the bottleneck.
+public struct ScreenUDPPace: Sendable {
+    public static let lowest: UInt32 = 1_000
+    public static let highest: UInt32 = 150_000
+    /// Packets of one message before its arrival rate counts.
+    public static let train = 8
+    public static let window = 3.0
+
+    private struct Train { var first: Double; var last: Double; var bytes: Int; var packets: Int }
+    private var trains: [UInt64: Train] = [:]
+    private var rates: [(at: Double, kbps: Double)] = []
+
+    public init() {}
+
+    /// A data packet of `bytes` (whole, on the wire) for the message at `offset`.
+    public mutating func packet(offset: UInt64, bytes: Int, at now: Double) {
+        guard var t = trains[offset] else {
+            trains[offset] = Train(first: now, last: now, bytes: 0, packets: 1)
+            if trains.count > 64, let oldest = trains.keys.min() { trains[oldest] = nil }
+            return
+        }
+        t.packets += 1
+        t.bytes += bytes
+        t.last = now
+        trains[offset] = t
+        if t.packets >= Self.train, t.last > t.first {
+            rates.append((now, Double(t.bytes) * 8 / (t.last - t.first) / 1000))
+            rates.removeAll { now - $0.at > Self.window }
+        }
+    }
+
+    public func request(at now: Double, start: UInt32) -> UInt32 {
+        guard let best = rates.filter({ now - $0.at <= Self.window }).map(\.kbps).max() else { return start }
+        return UInt32(min(max(1.25 * best, Double(Self.lowest)), Double(Self.highest)))
+    }
+}
+
+/// Loss as a congestion signal for the video's rate (#7873): the helper adapts on the delay of frames that arrived and
+/// the quality tiers don't read loss, so a flow losing a tenth of its packets or more (a queue overflowing) cuts the
+/// cap the phone gives the helper by half the loss, at most every 2 s, and below 2 % it recovers by 5 % a second.
+public struct ScreenUDPCongestion: Sendable {
+    public static let congested = 0.10
+    public static let clear = 0.02
+    public static let lowest = 0.1
+    public private(set) var scale = 1.0
+    private var lastCut = -Double.infinity
+    private var lastLook = -Double.infinity
+
+    public init() {}
+
+    public mutating func look(loss: Double?, at now: Double) {
+        defer { lastLook = now }
+        guard let loss else { return }
+        if loss >= Self.congested {
+            if now - lastCut >= 2 {
+                scale = max(Self.lowest, scale * (1 - 0.5 * loss))
+                lastCut = now
+            }
+        } else if loss < Self.clear, lastLook.isFinite {
+            scale = min(1, scale * pow(1.05, min(now - lastLook, 2)))
+        }
+    }
+}
+

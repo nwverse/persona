@@ -177,6 +177,8 @@ import UIKit
     /// The UDP flow's parity and resends per byte of video (#7873), in 5 % steps: on mobile data the cap leaves room
     /// for them, so the bytes on the wire stay within it.
     @ObservationIgnored private var udpOverhead = 0.0
+    /// The share of the cap the flow lets the video use while it loses packets to congestion (#7873), in 5 % steps.
+    @ObservationIgnored private var udpScale = 1.0
     /// The tier each computer last settled on, by computer and kind of route, for this app run: the next stream starts
     /// there (`TierPolicy`'s `remembered`).
     @ObservationIgnored private static var settled: [String: Int] = [:]
@@ -207,9 +209,12 @@ import UIKit
     /// The UDP flow carrying the video (#7873), about once a second; nil when none does.
     func flowChanged(_ status: ScreenUDPStatus?) {
         let o = ((status?.overhead ?? 0) * 20).rounded(.up) / 20
-        guard o != udpOverhead else { return }
+        let sc = ((status?.scale ?? 1) * 20).rounded(.down) / 20
+        guard o != udpOverhead || sc != udpScale else { return }
+        let budgetMoves = sc != udpScale || net.expensive
         udpOverhead = o
-        if net.expensive { rebudget() }
+        udpScale = sc
+        if budgetMoves { rebudget() }
     }
 
     func routeChanged(_ change: PathChange) {
@@ -473,12 +478,13 @@ import UIKit
         onWire(Self.currentBudget(path: (net.expensive, net.constrained), mobileData: ScreenMobileData.current))
     }
 
-    /// A cap on mobile data with room for the UDP flow's parity and resends (#7873): video × (1 + overhead) stays
-    /// within it, so Data Saver's 1.5 Mbit/s and the card's per-hour figures hold.
+    /// The cap with the UDP flow in mind (#7873): its congestion scale on any network, and on mobile data room for its
+    /// parity and resends, so video × (1 + overhead) stays within Data Saver's 1.5 Mbit/s and the card's figures hold.
     private func onWire(_ b: ScreenVideoBudget) -> ScreenVideoBudget {
-        guard net.expensive, udpOverhead > 0 else { return b }
+        let divisor = net.expensive ? 1 + udpOverhead : 1
+        guard udpScale < 1 || divisor > 1 else { return b }
         var out = b
-        out.maxKbps = max(300, Int(Double(b.maxKbps) / (1 + udpOverhead)))
+        out.maxKbps = max(300, Int(Double(b.maxKbps) * udpScale / divisor))
         return out
     }
 

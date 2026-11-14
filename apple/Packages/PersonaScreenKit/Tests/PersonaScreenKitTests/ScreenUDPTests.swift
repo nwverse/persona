@@ -275,6 +275,54 @@ final class ScreenUDPTests: XCTestCase {
         XCTAssertFalse(r.requests(at: 0.011, rtt: 0.04, jitter: 0.005).nack.isEmpty)
     }
 
+    /// A keyframe is never given up, even when the node marked it droppable (a node before it knew better): its first
+    /// shard says it is one.
+    func testAKeyframeIsNeverGivenUp() {
+        var r = ScreenUDPReceiver(channel: 2, expected: 0)
+        var body = [UInt8](repeating: 0, count: 13 + 3000)
+        body[12] = 1 // the keyframe flag
+        let key = ScreenVideoWire.frame(3, body: Data(body))
+        let p = packets(key, at: 0, ratio: 0, droppable: true)
+        _ = r.fragment(p[0].0, p[0].1, at: 0) // the first shard only
+        for q in packets(pattern(300), at: UInt64(key.count), ratio: 0) { _ = r.fragment(q.0, q.1, at: 0.001) }
+        XCTAssertNil(r.requests(at: 1, rtt: 0.01, jitter: 0).skip)
+        XCTAssertEqual(r.givenUp, 0)
+    }
+
+    func testThePaceSettlesJustAboveABottleneckAndGrowsBelowOne() {
+        var p = ScreenUDPPace()
+        XCTAssertEqual(p.request(at: 0, start: 40_000), 40_000, "before any measurement: where the route starts")
+        // Packets of one message arriving at 3 Mbit/s (1,200 bytes every 3.2 ms): past a 3 Mbit/s bottleneck.
+        for i in 0 ..< 20 { p.packet(offset: 100, bytes: 1200, at: 1 + Double(i) * 0.0032) }
+        XCTAssertEqual(Double(p.request(at: 1.1, start: 40_000)), 3750, accuracy: 60)
+        // Gone after the window: the start again.
+        XCTAssertEqual(p.request(at: 5, start: 40_000), 40_000)
+        // A message too short to say anything.
+        var q = ScreenUDPPace()
+        for i in 0 ..< 5 { q.packet(offset: 7, bytes: 1200, at: Double(i) * 0.001) }
+        XCTAssertEqual(q.request(at: 0.01, start: 8_000), 8_000)
+    }
+
+    func testLossCutsTheRateAndItComesBackSlowly() {
+        var c = ScreenUDPCongestion()
+        c.look(loss: 0.0, at: 0)
+        XCTAssertEqual(c.scale, 1)
+        c.look(loss: 0.4, at: 1)
+        XCTAssertEqual(c.scale, 0.8, accuracy: 1e-9) // half the loss
+        c.look(loss: 0.4, at: 2)
+        XCTAssertEqual(c.scale, 0.8, accuracy: 1e-9, "at most every 2 s")
+        c.look(loss: 0.4, at: 3)
+        XCTAssertEqual(c.scale, 0.64, accuracy: 1e-9)
+        c.look(loss: 0.05, at: 4)
+        XCTAssertEqual(c.scale, 0.64, accuracy: 1e-9, "between the two: held")
+        c.look(loss: 0.0, at: 5)
+        XCTAssertEqual(c.scale, 0.64 * 1.05, accuracy: 1e-9)
+        for t in 6 ..< 60 { c.look(loss: 0, at: Double(t)) }
+        XCTAssertEqual(c.scale, 1, "back to the whole cap")
+        for t in 60 ..< 200 where t % 2 == 0 { c.look(loss: 0.9, at: Double(t)) }
+        XCTAssertEqual(c.scale, ScreenUDPCongestion.lowest, accuracy: 1e-9)
+    }
+
     // MARK: Parity
 
     func testParityFollowsTheLossWithinTheCap() {

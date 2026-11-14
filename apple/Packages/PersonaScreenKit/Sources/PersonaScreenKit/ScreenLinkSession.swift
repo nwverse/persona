@@ -48,6 +48,8 @@ public struct ScreenUDPStatus: Equatable, Sendable {
     /// Parity and resent bytes per byte of video, lately: what the budget must leave room for.
     public var overhead: Double
     public var rttMs: Double?
+    /// The share of its cap the video may use while the flow loses packets to congestion (`ScreenUDPCongestion`).
+    public var scale: Double = 1
 }
 
 public enum ScreenLinkError: Error, Equatable {
@@ -164,6 +166,8 @@ public actor ScreenLinkSession {
         var recentBlocks: [Int] = []
         var parity = 0
         var counters: [(at: Double, data: UInt64, parity: UInt64, resent: UInt64)] = []
+        var pace = ScreenUDPPace()
+        var congestion = ScreenUDPCongestion()
     }
     private var flows: [String: Flow] = [:]
     /// When each route may ask for a flow again after one failed, and how long the next wait is.
@@ -631,9 +635,11 @@ extension ScreenLinkSession {
     /// After a flow failed or was left, the route asks again after this, doubling to `flowRetryMax`.
     public static let flowRetryFirst = 30.0
     public static let flowRetryMax = 300.0
-    /// Pacing asked for, kbit/s: a LAN route takes bursts; a Tailscale route may sit behind a slow uplink.
+    /// Pacing asked for before the packets say (kbit/s, `ScreenUDPPace`): a LAN route takes bursts; a Tailscale route
+    /// may sit behind a slow uplink, and on cellular it likely does.
     public static let paceLAN: UInt32 = 150_000
     public static let paceTailscale: UInt32 = 40_000
+    public static let paceCellular: UInt32 = 8_000
 
     /// Turns the video over UDP on (the AEAD for a key) or off (nil: flows close and no more open).
     public func enableUDP(_ setup: ScreenUDPSetup?) {
@@ -736,6 +742,7 @@ extension ScreenLinkSession {
                 sendHello(route)
             }
         case let .data(h, fragment):
+            flows[route]?.pace.packet(offset: h.offset, bytes: p.count, at: t)
             flowData(route, h, fragment, at: t)
         case .resumed:
             flows[route]?.waitingResume = false
@@ -814,10 +821,15 @@ extension ScreenLinkSession {
         let t = now()
         f.lastPing = t
         if f.unanswered == nil { f.unanswered = t }
-        let cap = onCellular(f) ? ScreenUDPParity.cellularCap : ScreenUDPParity.wifiCap
+        // Loss over the last 2 s is the congestion signal; parity stays low while a link drops that much.
+        let recent = f.loss.loss(at: t, window: 2, enough: 20)
+        f.congestion.look(loss: recent, at: t)
+        var cap = onCellular(f) ? ScreenUDPParity.cellularCap : ScreenUDPParity.wifiCap
+        if let recent, recent >= ScreenUDPCongestion.congested { cap = min(cap, ScreenUDPParity.cellularCap) }
         f.parity = ScreenUDPParity.ratio(loss: f.loss.loss(at: t), cap: cap, recentBlocks: f.recentBlocks)
+        let start = f.kind == .lan ? Self.paceLAN : onCellular(f) ? Self.paceCellular : Self.paceTailscale
         flows[route] = f
-        sendFlow(route, .ping(micros: UInt64(t * 1e6), parity: UInt16(f.parity), paceKbps: f.kind == .lan ? Self.paceLAN : Self.paceTailscale))
+        sendFlow(route, .ping(micros: UInt64(t * 1e6), parity: UInt16(f.parity), paceKbps: f.pace.request(at: t, start: start)))
     }
 
     /// Every 5 ms while a flow is open: proving, pings, moving the video onto it, asking for what is missing.
@@ -962,7 +974,8 @@ extension ScreenLinkSession {
             overhead = max(overhead, ScreenUDPParity.overhead(dataBytes: b.data - a.data, parityBytes: b.parity - a.parity,
                                                               resentBytes: b.resent - a.resent))
         }
-        return ScreenUDPStatus(route: f.route, loss: f.loss.loss(at: t), parity: f.parity, overhead: overhead, rttMs: f.meter.srttMs)
+        return ScreenUDPStatus(route: f.route, loss: f.loss.loss(at: t), parity: f.parity, overhead: overhead, rttMs: f.meter.srttMs,
+                               scale: f.congestion.scale)
     }
 }
 
