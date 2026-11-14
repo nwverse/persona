@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -56,11 +57,39 @@ func TestGitHubUsesAuthorizedCLIWhenConnectorUnavailable(t *testing.T) {
 
 func TestGitHubCLIUnavailableNeverFallsBackAnonymously(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
 	transport := &noAnonymousGitHub{}
 	g := githubForge{base: "https://api.github.com", client: &http.Client{Transport: transport}}
 	_, _, err := g.PRMerge(context.Background(), "o/r", 9)
 	if err == nil || !strings.Contains(err.Error(), "no anonymous fallback") || transport.calls != 0 {
 		t.Fatalf("unavailable auth: %v anonymous_calls=%d", err, transport.calls)
+	}
+}
+
+func TestGitHubWithoutCLIUsesExplicitEnvironmentAuthorization(t *testing.T) {
+	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("PATH", t.TempDir())
+			t.Setenv("GH_TOKEN", "")
+			t.Setenv("GITHUB_TOKEN", "")
+			t.Setenv(name, "synthetic-test-credential")
+			calls := 0
+			client := &http.Client{Transport: probeRoundTrip(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.URL.Host != "api.github.com" || r.Method != http.MethodGet ||
+					r.Header.Get("Authorization") != "Bearer synthetic-test-credential" {
+					t.Fatal("request must use explicit authorization on the fixed GitHub host")
+				}
+				return &http.Response{StatusCode: 200, Header: make(http.Header),
+					Body: io.NopCloser(strings.NewReader(`{"merged":true,"merge_commit_sha":"` + mergeSHA + `"}`))}, nil
+			})}
+			g := githubForge{base: "https://api.github.com", client: client}
+			merged, sha, err := g.PRMerge(context.Background(), "o/r", 9)
+			if err != nil || !merged || sha != mergeSHA || calls != 1 {
+				t.Fatalf("environment authorization: merged=%v sha=%s error=%v calls=%d", merged, sha, err, calls)
+			}
+		})
 	}
 }
 
@@ -86,6 +115,7 @@ func TestGitHubCLIFailureRetainsHTTPDiagnostics(t *testing.T) {
 
 func TestGitHubCLIAuthenticationFailureDoesNotUseHTTP(t *testing.T) {
 	fakeDeliveryGH(t, "", 1)
+	t.Setenv("GH_TOKEN", "synthetic-test-credential")
 	transport := &noAnonymousGitHub{}
 	g := githubForge{base: "https://api.github.com", client: &http.Client{Transport: transport}}
 	_, _, err := g.PRMerge(context.Background(), "o/r", 9)

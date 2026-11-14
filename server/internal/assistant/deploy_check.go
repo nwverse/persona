@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -541,8 +543,18 @@ func (g githubForge) get(ctx context.Context, path string, out any) error {
 			return err
 		}
 	}
+	token := ""
 	if g.base == "https://api.github.com" {
-		return githubCLIGet(ctx, path, out)
+		if _, err := exec.LookPath("gh"); err == nil {
+			return githubCLIGet(ctx, path, out)
+		}
+		token = strings.TrimSpace(os.Getenv("GH_TOKEN"))
+		if token == "" {
+			token = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+		}
+		if token == "" {
+			return fmt.Errorf("authenticated GitHub CLI unavailable and no environment authorization (no anonymous fallback)")
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.base+path, nil)
 	if err != nil {
@@ -550,7 +562,15 @@ func (g githubForge) get(ctx context.Context, path string, out any) error {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "persona-hub")
-	resp, err := g.client.Do(req)
+	client := g.client
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+		// Environment authorization is only for this host, never a redirected request.
+		authenticated := *client
+		authenticated.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &authenticated
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("GitHub network error: %s", githubDiagnostic(err.Error()))
 	}

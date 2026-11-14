@@ -142,8 +142,12 @@ it does not claim a fresh request was made. There are no automatic request retri
 replaced it and does not provide that transport, the gate uses `gh api --include --method GET --hostname github.com`
 on the hub machine, under the hub user's existing GitHub CLI authorization. The CLI performs credential lookup and
 the request itself; Persona never calls `gh auth token`, exports credentials, or falls back to anonymous HTTP.
+When `gh` is not installed, the gate can instead make an authenticated HTTP GET using the hub service's explicitly
+configured `GH_TOKEN` (preferred) or `GITHUB_TOKEN`. It sends this authorization only to `api.github.com` and does not
+follow redirects. It does not extract CLI credentials or retry a failed CLI request through another transport.
 Install `gh` on the hub service's PATH and authorize it using the CLI's normal sign-in flow if this fallback is
-needed. A missing CLI, unavailable authorization, or failed request keeps verification unavailable, not unfinished.
+needed. Without either the CLI or explicit environment authorization, or after a failed request, verification stays
+unavailable, not unfinished.
 The service log identifies this authenticated route and records response status, quota and request ID. The existing
 public-host restriction still applies to connectors. A versioned plugin delivery-snapshot capability remains a
 possible follow-up, not a requirement for the authenticated CLI path.
@@ -163,8 +167,9 @@ the hub's binary. A hub built and installed by hand, a local `dev` build, gets t
 `python3 scripts/deploy/deployed_commits.py --commit <the built commit> --out "$PERSONA_HOME/bin"`, run in the checkout it
 was built from.
 
-GitHub is read through the hub's GitHub connector when it is signed in, else with `GH_TOKEN` / `GITHUB_TOKEN` from the assistant's environment when set, else anonymously (enough
-for a public repository; a private one without a token stays held as "cannot tell").
+GitHub reads require the signed-in connector, the authorized GitHub CLI, or (when the CLI is absent) explicit
+`GH_TOKEN` / `GITHUB_TOKEN` authorization in the hub service's environment, as described above. Without authorization,
+even a public repository stays held as "cannot tell"; the gate never uses anonymous HTTP.
 
 ### Deployed work is verified by the supervising assistant
 
