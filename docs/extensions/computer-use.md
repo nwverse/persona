@@ -105,12 +105,30 @@ In these cases tools still attempt the call, returning Cua Driver's original err
 
 The assistant's two tools (descriptions in `server/internal/prompts/mcp/computer/`):
 
-- **`computer_state {machine, app?, query?, screenshot?}`**
-  - With `app`: first use `cua.getApp(app)` in `run_script` to find its frontmost window (Cua Driver's own lookup), then `get_window_state`: accessibility tree (markdown) plus screenshot.
-  - Without: `get_accessibility_tree` (on-screen Apps and windows) plus `get_desktop_state` (full-screen screenshot).
-- **`computer_run {machine, steps | script, app?, observe?, timeout_ms?}`**
-  - `steps` → `run_steps`: a sequence of actions, finding targets by role and name or `element_token`; stops on the first failure.
-  - `script` → `run_script`: JS with loops and conditions, up to 120 seconds.
+- **`computer_state {machine, app?, pid?, window_id?, query?, screenshot?}`**
+  - With `app`: `list_windows` for the app's windows. With one process, `cua.getApp(app)` in `run_script` finds its frontmost window (Cua Driver's own lookup); with several, the manager chooses (below). Then `get_window_state`: accessibility tree (markdown) plus screenshot.
+  - With `pid` or `window_id`: that process's best window, or that window.
+  - Without any: `get_accessibility_tree` (on-screen Apps and windows) plus `get_desktop_state` (full-screen screenshot).
+- **`computer_run {machine, steps | script, app?, pid?, window_id?, observe?, timeout_ms?}`**
+  - `steps` → `run_steps`: a sequence of actions, finding targets by role and name or `element_token`; stops on the first failure. `pid` / `window_id` (or the process chosen of an app with several) go to `run_steps` as the default window of steps that name none.
+  - `script` → `run_script`: JS with loops and conditions, up to 120 seconds. Not with `pid` / `window_id`.
+- **An app with several processes (#7591)** (`extmgr/computer_window.go`): two processes can share an app's name and
+  bundle id (the user's browser and another copy of it with its own profile). Cua Driver's own lookup takes whichever it
+  finds first, so it once read another copy's small untitled window and the user's own could not be chosen.
+  - Each process's best window: a titled ordinary (layer 0) window, then on the current Space, on screen, in front of
+    the process's others.
+  - Between processes: the one with a titled window, then on the current Space, then the app active now (`list_apps`).
+    Window stacking does not decide between processes: the other copy's windows were stacked over the user's.
+  - Still more than one: nothing runs, and the result lists the candidates (pid, window_id, title, size, on the
+    current Space) for the model to call again with `pid` or `window_id`, asking the user by the titles when unsure.
+  - `computer_run`: the call's `app` with several processes is pinned to the chosen pid (not its window, so a dialog
+    over it in that process is still found). A step that names such an app itself, or a script that does
+    (`cua.getApp` takes no process), is refused with the candidates: a step's own app has Cua Driver choose again.
+  - `pid` / `window_id` are checked against the Mac (`list_windows`, `list_apps`) and stand for their app in per-app
+    approval and the protected-app checks. A pid of another app than the one named is an error, never a way around
+    them. LCU takes neither.
+  - The cost: one `list_windows` (about 75 ms on the Mac) per `computer_state` with an app, and per app a run's steps
+    or script name.
 
 **Session**: each chat's calls carry the same Cua Driver session name, `persona-<first 8 characters of chat id>`.
 - Tested locally (Cua Driver 0.38.0):
