@@ -12,13 +12,13 @@ enum SideSessionSamples {
 
     static func isSample(_ key: SessionKey) -> Bool { key.sessionID.hasPrefix(prefix) }
 
-    /// The parent the samples go under, from the lists as they are (`-openSession`, else the newest agent).
+    /// The parent the samples go under, from the lists as they are (`-openSession`, else the newest running agent that is no subtask).
     static func parent(_ sessions: [Session]) -> Session? {
         let named = UserDefaults.standard.string(forKey: "openSession")
         if let named, let s = sessions.first(where: { $0.machineRef.path + "/" + $0.sessionID == named || "\($0.machineID)/\($0.sessionID)" == named }) {
             return s
         }
-        return sessions.filter { !$0.assistant && !SideFold.isSideRow($0) && !isSample($0.key) }
+        return sessions.filter { !$0.assistant && $0.state.isLive && !$0.isSubtask && !SideFold.isSideRow($0) && !isSample($0.key) }
             .max { ($0.updatedAt ?? .distantPast) < ($1.updatedAt ?? .distantPast) }
     }
 
