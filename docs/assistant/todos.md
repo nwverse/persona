@@ -881,9 +881,12 @@ behavior. The existing `pr_url` and delivery judgment stay independent: multiple
 linked PRs never imply that a task is complete.
 
 The Web to-do creation dialog and detail use the optional **Repositories and
-links** group. Source options are disclosed per repository. No alias or base
-branch is required: an empty alias means no directory override and a missing ref
-means the remote default branch. This feature does no Git or remote issue lookup.
+work** group. The detail is read-only by default: it draws the saved
+repositories as rows with their issues and pull requests as links, so the
+associations the agent maintains are visible without opening an editor. Source
+options are disclosed per repository. No alias or base branch is required: an
+empty alias means no directory override and a missing ref means the remote
+default branch. This feature does no Git or remote issue lookup.
 An issue/PR URL must belong to the saved provider, instance and target repository;
 links retain numeric string IDs, including IDs beyond JavaScript's integer range.
 

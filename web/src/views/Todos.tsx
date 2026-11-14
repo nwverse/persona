@@ -1890,6 +1890,8 @@ function TodoDetail({
 
   const status = todoStatus(todo, lookup);
   const statusInfo = TODO_STATUS_INFO[shownStatus(todo, status)];
+  // The to-do's own PR, parsed once here (the list row and the repository section's fallback share it).
+  const legacyPR = prLink(todo.pr_url);
   const toneClass = {
     red: "bg-red-tint text-red",
     green: "bg-green-tint text-green",
@@ -1988,8 +1990,9 @@ function TodoDetail({
       )}
       <LatestReport todo={todo} />
 
-      {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}
-      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} className="mt-4" />
+      {/* Code task stages from the hub. Its PR link is not drawn again here: the repository links below are the one
+          place a task's issues and PRs are shown (legacy ones included). */}
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} className="mt-4" />
 
       {todo.origin && <TaskCompletionCheck todo={todo} />}
 
@@ -2008,7 +2011,8 @@ function TodoDetail({
         </div>
       </div>
 
-      <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
+      <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
+        legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} />
 
       <ThreadSection todo={todo} />
 

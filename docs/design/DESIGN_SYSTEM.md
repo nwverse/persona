@@ -2332,18 +2332,41 @@ options, style, theme or motion. See `docs/assistant/managers.md` for provider s
 
 ## Optional repository associations
 
-Coding-work metadata belongs in the existing Web to-do editor's collapsed
-**Repositories and links (optional)** group. Ordinary to-dos still require only a
-title. `TaskRepositoryBindingsEditor` is the controlled metadata editor;
-`TodoRepositoryBindings` owns existing-Todo requests and `NewTodoRepositoryBindings`
-contributes a draft to the parent's single creation request. These reuse `Button`,
-`Loading`, shared settings inputs, semantic tokens and toast Undo for draft
-removal. There is no new page or workspace control.
+Coding-work metadata belongs in the Web to-do detail's **Repositories and
+work** group; creation carries the same editor, folded, under its own optional
+button. Ordinary to-dos still require only a title. On the detail the group is
+read first and drawn as `Group` / `Row`: one row per saved repository (its icon,
+path and provider · host) with a `Pill` of its link count, and one link row per
+issue or pull request (kind mark, `PR #7` / `MR !7` / `#12`, and an external
+mark), so the associations an agent keeps show without an editor. Editing is
+the existing `Dialog` with a compact text button (**Manage links**), never an
+always-open form. `TaskRepositoryBindingsEditor` is the controlled editor;
+`TodoRepositoryBindings` owns existing-todo reads and writes and
+`NewTodoRepositoryBindings` contributes a draft to the parent's single creation
+request. These reuse `Group`, `Row`, `Pill`, `Button`, `IconButton`, `Menu`,
+`Dialog`, `Collapse`, `SearchField`, `Loading`, `RowFailed`, shared settings
+inputs, semantic tokens and toast Undo for draft removal. There is no new page
+or workspace control.
 
-Repository links are one URL per line. Directory aliases and source refs are in
-per-repository **Source options** disclosure. Empty aliases and default branches
-need no setup. Saved-source changes are explained beside that repository, while
-legacy PR display remains separate. Controls have labels, action groups wrap at
-narrow widths, and saving disables edits. Failed saves keep input; conflicts offer
-explicit **Discard edits and reload**. Manager/Todo/credential changes retire old
-results. New copy ships in English, Simplified Chinese and Japanese.
+Repositories are added through the search picker (name, path or host; ↑ ↓,
+Home/End, Enter takes the first match, Escape closes and returns the focus to
+its button), not a native `select`. Each repository's issues and PRs are link
+rows with their own **Add issue or PR** field: Enter adds, Escape cancels, and a
+URL of another repository is refused inline by `repositoryLinkView`, the same
+rule the manager applies. Directory aliases and source refs stay in the
+per-repository **Source options** disclosure; empty aliases and default branches
+need no setup. Saved-source changes (`removed`, `identity_changed`) and
+`unlisted` rows inferred from agent-added links are explained beneath their
+repository while the saved source stays. A to-do's `pr_url` is drawn inside
+this group (as a link row, with one line saying it predates the store) and never
+beside it, so one place holds a task's issues and PRs; a hub without the route
+shows only that legacy link.
+
+Controls have labels, action groups wrap at narrow widths, and saving disables
+edits. Failed saves keep input; conflicts offer explicit **Discard edits and
+reload**, which reads the store again rather than reusing the stale draft, and
+opening the editor always reads the newest store value and catalog because an
+agent may have added a link. Manager/Todo/credential changes retire old results.
+New copy ships in English, Simplified Chinese and Japanese. Evidence:
+`web/src/ui/TaskRepositoryBindingsEditor.test.tsx` and
+`web/e2e/todo-repositories-browser.py`.

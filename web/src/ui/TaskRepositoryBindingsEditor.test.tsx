@@ -10,75 +10,217 @@ import { NewTodoRepositoryBindings, TodoRepositoryBindings } from "./TaskReposit
 import { Toasts } from "./atoms";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-type Call = { path: string; init: RequestInit; answer: (body: unknown, status?: number) => void };
+type Call = { path: string; init: RequestInit; answered?: boolean; answer: (body: unknown, status?: number) => void };
 let root: Root, host: HTMLDivElement, calls: Call[];
 const identity = { provider: "github" as const, instance_url: "https://github.com", path: "example/web", canonical_url: "https://github.com/example/web" };
+const other = { provider: "github" as const, instance_url: "https://github.com", path: "example/docs", canonical_url: "https://github.com/example/docs" };
 const catalog: RepositoryCatalog = { manager: "assistant", catalog_revision: 4, repositories: [{ ...identity, id: "web", verified_at: "2026-01-01T00:00:00Z" }] };
 const set: TaskRepositorySet = { schema_version: 1, manager: "assistant", todo_id: "todo_example", revision: 1, repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, source_snapshot: { identity, clone_url: identity.canonical_url, catalog_revision: 4, transport_origin: "canonical_default" }, links: [{ kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7" }], catalog_state: "current" }] };
+const twoLinks: TaskRepositorySet = { ...set, revision: 2, repositories: [{ ...set.repositories[0], links: [
+  { kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7" },
+  { kind: "pull_request", number: "8", canonical_url: identity.canonical_url + "/pull/8" },
+] }] };
+
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === label)!;
 const click = async (label: string) => act(async () => { expect(button(label), label).toBeTruthy(); button(label).click(); });
-const answer = async (call: Call, body: unknown, status = 200) => act(async () => call.answer(body, status));
-const render = async (manager = "assistant", todoId = "todo_example") => act(async () => root.render(<><TodoRepositoryBindings manager={manager} todoId={todoId} owner={credentialOwner()} /><Toasts /></>));
-const typeLinks = async (value: string) => act(async () => {
- const node=document.querySelector("textarea")!;
- Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(node,value);
- node.dispatchEvent(new Event("input",{bubbles:true}));
+const answer = async (call: Call, body: unknown, status = 200) => { call.answered = true; await act(async () => call.answer(body, status)); };
+const pendingCall = (path: string) => [...calls].reverse().find((c) => c.path === path && !c.answered);
+/** The editor reads the catalog and the store in parallel: both are answered by their path, never by arrival order. */
+const answerEditor = async (catalogBody: unknown, setBody: unknown) => {
+  await answer(pendingCall("/assistant/repositories")!, catalogBody);
+  await answer(pendingCall("/todos/todo_example/repositories")!, setBody);
+};
+const legacy = (url: string) => ({ url, text: url.endsWith("/3211") ? "PR #3211" : "PR" });
+const render = async (manager = "assistant", todoId = "todo_example", prURL?: string) => act(async () => root.render(<><TodoRepositoryBindings manager={manager} todoId={todoId} owner={credentialOwner()} legacyPRs={prURL ? [legacy(prURL)] : []} /><Toasts /></>));
+const settle = async () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
+/** The editor's add-link field: named by its own label, not by a repository's link count. */
+const linkInput = () => document.querySelector<HTMLInputElement>('input[type="url"]')!;
+const typeInto = async (node: HTMLInputElement, value: string) => act(async () => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(node, value);
+  node.dispatchEvent(new Event("input", { bubbles: true }));
+});
+const press = async (node: Element, key: string) => act(async () => {
+  (node as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
 });
 
 beforeEach(async () => {
- await initI18n("en"); setToken("synthetic-task-repository-session");calls=[];
- host=document.createElement("div");document.body.append(host);root=createRoot(host);
- vi.stubGlobal("fetch",vi.fn((url: RequestInfo | URL,init: RequestInit={})=>new Promise<Response>((resolve)=>calls.push({path:String(url).split("/api/v1")[1],init,answer:(body,status=200)=>resolve(new Response(JSON.stringify(body),{status,headers:{"Content-Type":"application/json"}}))}))));
+  await initI18n("en"); setToken("synthetic-task-repository-session"); calls = [];
+  host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  vi.stubGlobal("fetch", vi.fn((url: RequestInfo | URL, init: RequestInit = {}) => new Promise<Response>((resolve) => calls.push({ path: String(url).split("/api/v1")[1], init, answer: (body, status = 200) => resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })) }))));
 });
-afterEach(async()=>{act(()=>root.unmount());host.remove();document.body.innerHTML="";vi.unstubAllGlobals();setToken("");await initI18n("zh-Hans");});
+afterEach(async () => { act(() => root.unmount()); host.remove(); document.body.innerHTML = ""; vi.unstubAllGlobals(); setToken(""); await initI18n("zh-Hans"); });
 
-it("loads only on request, saves two PRs atomically, and preserves drafts after conflicts", async()=>{
- await render();expect(calls).toHaveLength(0);
- await click("Repositories and links (optional)");
- expect(calls.map(c=>c.path).sort()).toEqual(["/assistant/repositories","/todos/todo_example/repositories"]);
- await answer(calls.find(c=>c.path==="/assistant/repositories")!,catalog);
- await answer(calls.find(c=>c.path!=="/assistant/repositories")!,set);
- await typeLinks(identity.canonical_url+"/pull/7\n"+identity.canonical_url+"/pull/8");
- await click("Save");
- const save=calls.at(-1)!;expect(save.init.method).toBe("PUT");
- expect(new Headers(save.init.headers).get("X-Persona-Manager")).toBe("assistant");
- expect(JSON.parse(save.init.body as string)).toMatchObject({expected_revision:1,expected_catalog_revision:4,repositories:[{repo_id:"web",requested_ref:{kind:"default"},links:[{url:identity.canonical_url+"/pull/7"},{url:identity.canonical_url+"/pull/8"}]}]});
- await answer(save,{code:"task_repositories_revision_conflict",error:"changed"},409);
- expect(document.querySelector("textarea")!.value).toContain("/pull/8");
- expect(document.querySelector('[role="alert"]')!.textContent).toContain("Your edits are kept");
-});
-
-it("ignores late results after manager, todo or credential changes",async()=>{
- await render();await click("Repositories and links (optional)");const old=[...calls];
- await render("other","todo_other");
- await answer(old[0],catalog);await answer(old[1],set);
- expect(document.querySelector("textarea")).toBeNull();
- await click("Repositories and links (optional)");const pending=calls.slice(2);
- setToken("replacement-task-repository-session");
- await answer(pending[0],{...catalog,manager:"other"});await answer(pending[1],{...set,manager:"other",todo_id:"todo_other"});
- expect(document.querySelector("textarea")).toBeNull();
+it("shows the Agent's saved links without an editor, and the load rides on the detail's version", async () => {
+  await render();
+  expect(calls.map((c) => c.path)).toEqual(["/todos/todo_example/repositories"]);
+  await answer(calls[0], twoLinks);
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).toContain("#7");
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).toContain("#8");
+  expect(document.querySelector("textarea")).toBeNull();
+  // The revision to edit from is the one that was shown, not a guess.
+  await click("Manage links");
+  expect(calls.slice(1).map((c) => c.path).sort()).toEqual(["/assistant/repositories", "/todos/todo_example/repositories"]);
+  await answerEditor(catalog, twoLinks);
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("#7");
+  expect(dialog.textContent).toContain("Pull request");
 });
 
-it("keeps an empty alias, default ref and multiline creation draft without requests per edit",async()=>{
- const context=repositoryRequestContext("assistant",credentialOwner(),()=>true);
- const { useState }=await import("react");
- function Draft(){const [value,onChange]=useState<import("../lib/task-repositories").CreateRepositoryBindings>();return <NewTodoRepositoryBindings context={context} value={value} onChange={onChange} pending={false}/>;}
- await act(async()=>root.render(<Draft/>));await click("Repositories and links (optional)");await answer(calls[0],catalog);
- await act(async()=>{const node=document.querySelector("select")!;node.value="web";node.dispatchEvent(new Event("change",{bubbles:true}));});
- await typeLinks(identity.canonical_url+"/pull/7\n");
- expect(document.querySelector("textarea")!.value.endsWith("\n")).toBe(true);
- await typeLinks(identity.canonical_url+"/pull/7\n"+identity.canonical_url+"/pull/8");
- expect(document.querySelector("input")!.value).toBe("");expect(calls).toHaveLength(1);
+it("adds a link by its URL, refuses another repository's, and saves the whole set with both revisions", async () => {
+  await render();
+  await answer(calls[0], set);
+  await click("Manage links");
+  await answerEditor(catalog, set);
+  await settle();
+  await click("Add issue or PR");
+  const input = linkInput();
+  await typeInto(input, "https://github.com/example/docs/pull/9");
+  await click("Add issue or PR");
+  expect(document.querySelector('[role="alert"]')!.textContent).toContain("Use an issue or pull request link from this repository.");
+  expect(input.value).toBe("https://github.com/example/docs/pull/9");
+  await typeInto(input, identity.canonical_url + "/pull/8");
+  await press(input, "Enter");
+  expect(document.querySelectorAll('[role="dialog"] [data-repository-link]')).toHaveLength(2);
+  await click("Save");
+  const save = calls.at(-1)!;
+  expect(save.init.method).toBe("PUT");
+  expect(new Headers(save.init.headers).get("X-Persona-Manager")).toBe("assistant");
+  // A saved link keeps its kind and number; a pasted one goes as its URL (the server reads both).
+  expect(JSON.parse(save.init.body as string)).toMatchObject({
+    expected_revision: 1, expected_catalog_revision: 4,
+    repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, links: [{ kind: "pull_request", number: "7" }, { url: identity.canonical_url + "/pull/8" }] }],
+  });
+  await answer(save, twoLinks);
+  // Saved: the dialog closes and the page's own rows are the newest saved value.
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).toContain("#8");
+});
+
+it("keeps the draft on a revision conflict, and reload truly reads the newest saved set", async () => {
+  await render();
+  await answer(calls[0], set);
+  await click("Manage links");
+  await answerEditor(catalog, set);
+  await settle();
+  await click("Add issue or PR");
+  await typeInto(linkInput(), identity.canonical_url + "/pull/8");
+  await press(linkInput(), "Enter");
+  await click("Save");
+  await answer(calls.at(-1)!, { code: "task_repositories_revision_conflict", error: "changed" }, 409);
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain("#8");
+  expect(document.querySelector('[role="alert"]')!.textContent).toContain("Your edits are kept");
+  // Discard and reload: the store's newer value (the Agent's own addition) replaces the draft.
+  await click("Discard edits and reload");
+  await answerEditor({ ...catalog, catalog_revision: 5 }, { ...set, revision: 3, repositories: [{ ...set.repositories[0], links: [
+    { kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7" },
+    { kind: "pull_request", number: "12", canonical_url: identity.canonical_url + "/pull/12" },
+  ] }] });
+  await settle();
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain("#12");
+  expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain("#8");
+});
+
+it("falls back to the legacy PR link on a hub without the association route", async () => {
+  await render("assistant", "todo_example", "https://example.com/pull/3211");
+  await answer(calls[0], { code: "not_found", error: "Not Found" }, 404);
+  const link = document.querySelector<HTMLAnchorElement>('[data-todo-repositories] a[href="https://example.com/pull/3211"]');
+  expect(link).toBeTruthy();
+  expect(link!.textContent).toBe("PR #3211");
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).toContain("Linked before repositories were stored here.");
+});
+
+it("shows the legacy link only until the store has links, never both", async () => {
+  await render("assistant", "todo_example", "https://example.com/pull/3211");
+  await answer(calls[0], twoLinks);
+  const section = document.querySelector("[data-todo-repositories]")!;
+  expect(section.querySelector('a[href="https://example.com/pull/3211"]')).toBeNull();
+  expect(section.textContent).toContain("#7");
+});
+
+it("ignores late results after manager, todo or credential changes", async () => {
+  await render();
+  const old = [...calls];
+  await render("other", "todo_other");
+  // The retired read's answer lands on a page that has moved on: nothing of it is drawn.
+  await answer(old[0], set);
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).not.toContain("#7");
+  const pending = calls.slice(1);
+  expect(pending).toHaveLength(1);
+  setToken("replacement-task-repository-session");
+  await answer(pending[0], { ...set, manager: "other", todo_id: "todo_other" });
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).not.toContain("#7");
+});
+
+it("keeps a source snapshot whose catalog entry changed or disappeared", async () => {
+  await render();
+  await answer(calls[0], { ...set, repositories: [{ ...set.repositories[0], catalog_state: "identity_changed" }] });
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).toContain("This saved repository now has a different source.");
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).toContain("#7");
+  await click("Manage links");
+  // The catalog no longer holds the repository: the saved identity and its links still edit normally.
+  await answerEditor({ ...catalog, catalog_revision: 5, repositories: [] }, { ...set, repositories: [{ ...set.repositories[0], catalog_state: "removed" }] });
+  await settle();
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain("The saved repository was removed.");
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain("#7");
+});
+
+it("keeps an empty alias, default ref and a controlled creation draft without requests per edit", async () => {
+  const context = repositoryRequestContext("assistant", credentialOwner(), () => true);
+  const { useState } = await import("react");
+  function Draft() { const [value, onChange] = useState<import("../lib/task-repositories").CreateRepositoryBindings>(); return <NewTodoRepositoryBindings context={context} value={value} onChange={onChange} pending={false} />; }
+  await act(async () => root.render(<Draft />));
+  await click("Repositories and links (optional)");
+  await answer(calls[0], catalog);
+  await act(async () => { button("Add repository").click(); });
+  await act(async () => { document.querySelector<HTMLElement>('[role="option"]')!.click(); });
+  expect(document.querySelector<HTMLInputElement>('input[maxlength="64"]')!.value).toBe("");
+  await click("Add issue or PR");
+  await typeInto(linkInput(), identity.canonical_url + "/pull/7");
+  await press(linkInput(), "Enter");
+  expect(calls).toHaveLength(1);
+  expect(document.querySelector("[data-task-repository-editor]")!.textContent).toContain("#7");
+  expect(document.querySelector("[data-task-repository-editor]")!.textContent).toContain("Pull request");
 });
 
 it("creates the Todo and association draft in one request, preserving old defaults", async () => {
- const context=repositoryRequestContext("assistant",credentialOwner(),()=>true);
- const pending=createTodoWithRepositories(context," New work "," Details ",undefined,{catalog_revision:4,repositories:[{repo_id:"web",requested_ref:{kind:"default"},links:[{url:identity.canonical_url+"/pull/7"},{url:identity.canonical_url+"/pull/8"},{url:""}]}]});
- expect(calls).toHaveLength(1);
- expect(calls[0].path).toBe("/todos");
- const body=JSON.parse(calls[0].init.body as string);
- expect(body).toMatchObject({title:"New work",notes:"Details",repository_bindings:{catalog_revision:4,repositories:[{repo_id:"web",requested_ref:{kind:"default"},links:[{url:identity.canonical_url+"/pull/7"},{url:identity.canonical_url+"/pull/8"}]}]}});
- expect(body.workspace).toBeUndefined();
- await answer(calls[0],{todo:{id:"new_todo",title:"New work"}});
- expect((await pending).id).toBe("new_todo");
+  const context = repositoryRequestContext("assistant", credentialOwner(), () => true);
+  const pending = createTodoWithRepositories(context, " New work ", " Details ", undefined, { catalog_revision: 4, repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, links: [{ url: identity.canonical_url + "/pull/7" }, { url: identity.canonical_url + "/pull/8" }, { url: "" }] }] });
+  expect(calls).toHaveLength(1);
+  expect(calls[0].path).toBe("/todos");
+  const body = JSON.parse(calls[0].init.body as string);
+  expect(body).toMatchObject({ title: "New work", notes: "Details", repository_bindings: { catalog_revision: 4, repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, links: [{ url: identity.canonical_url + "/pull/7" }, { url: identity.canonical_url + "/pull/8" }] }] } });
+  expect(body.workspace).toBeUndefined();
+  await answer(calls[0], { todo: { id: "new_todo", title: "New work" } });
+  expect((await pending).id).toBe("new_todo");
+});
+
+it("offers no empty-state sentence that promises an editor nobody can open", async () => {
+  const context = repositoryRequestContext("assistant", credentialOwner(), () => true);
+  const { useState } = await import("react");
+  function Draft() { const [value, onChange] = useState<import("../lib/task-repositories").CreateRepositoryBindings>(); return <NewTodoRepositoryBindings context={context} value={value} onChange={onChange} pending={false} />; }
+  await act(async () => root.render(<Draft />));
+  await click("Repositories and links (optional)");
+  await answer(calls[0], { ...catalog, repositories: [] });
+  await act(async () => { button("Add repository").click(); });
+  expect(document.querySelector("[data-repository-picker]")!.textContent).toContain("No saved repositories to add, or all of them are linked already.");
+});
+
+it("renders the picker as a searchable list, and Escape goes back to its button", async () => {
+  const context = repositoryRequestContext("assistant", credentialOwner(), () => true);
+  const { useState } = await import("react");
+  function Draft() { const [value, onChange] = useState<import("../lib/task-repositories").CreateRepositoryBindings>(); return <NewTodoRepositoryBindings context={context} value={value} onChange={onChange} pending={false} />; }
+  await act(async () => root.render(<Draft />));
+  await click("Repositories and links (optional)");
+  await answer(calls[0], { ...catalog, repositories: [{ ...identity, id: "web", name: "Web app", verified_at: "2026-01-01T00:00:00Z" }, { ...other, id: "docs", name: "Docs", verified_at: "2026-01-01T00:00:00Z" }] });
+  await act(async () => { button("Add repository").click(); });
+  const options = () => [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+  expect(options().map((o) => o.textContent)).toEqual([expect.stringContaining("Web app"), expect.stringContaining("Docs")]);
+  const search = document.querySelector<HTMLInputElement>('[data-repository-picker] input')!;
+  await typeInto(search, "docs");
+  expect(options()).toHaveLength(1);
+  expect(options()[0].textContent).toContain("Docs");
+  await press(search, "Escape");
+  // The list closes (its content leaves with the closing fold), and the focus goes back to the button that opened it.
+  expect(button("Add repository").getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(button("Add repository"));
 });

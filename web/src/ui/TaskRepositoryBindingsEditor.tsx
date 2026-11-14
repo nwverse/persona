@@ -1,12 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+// Repositories and their Issue/PR links: the to-do detail shows them as rows (the Agent keeps this store), and editing
+// opens a dialog. The store is metadata only: nothing here creates folders or moves a task's stage.
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../i18n";
 import { ApiError, errorText } from "../lib/api";
 import {
-  cleanRepositoryDraft, loadRepositoryCatalog, loadTaskRepositories, repositoryDraft, repositoryRequestContext, saveTaskRepositories, validRepositoryAlias,
-  type CreateRepositoryBindings, type RepositoryCatalog, type RepositoryRequestContext, type RequestedRef, type TaskRepository, type TaskRepositoryInput, type TaskRepositorySet,
+  cleanRepositoryDraft, loadRepositoryCatalog, loadTaskRepositories, repositoryDraft, repositoryLinkView, repositoryRequestContext,
+  saveTaskRepositories, validRepositoryAlias,
+  type CreateRepositoryBindings, type RepositoryCatalog, type RepositoryRequestContext, type RepositoryLinkInput, type RequestedRef,
+  type RepositoryLinkView, type TaskRepository, type TaskRepositoryInput, type TaskRepositorySet,
 } from "../lib/task-repositories";
-import { Button, Loading, toast } from "./atoms";
-import { settingsInputClass } from "../views/settings/SettingsParts";
+import type { RepositoryIdentity } from "../lib/repository-identity";
+import { Group, Pill, Row, RowFailed, settingsInputClass } from "../views/settings/SettingsParts";
+import { Button, Collapse, Dialog, IconButton, Loading, Menu, toast, useMenu } from "./atoms";
+import { Icon } from "./icons";
+import { SearchField } from "./SearchField";
 
 function useRequestContext(manager: string, owner: string) {
   const alive = useRef(true);
@@ -16,16 +23,169 @@ function useRequestContext(manager: string, owner: string) {
   return useMemo(() => repositoryRequestContext(manager, owner, () => alive.current && identity.current === `${manager}:${owner}`), [manager, owner]);
 }
 
-export type TaskRepositoryBindingsEditorProps = {
-  catalog: RepositoryCatalog; value: TaskRepositoryInput[]; snapshots?: TaskRepository[]; pending?: boolean;
-  onChange: (value: TaskRepositoryInput[]) => void;
-};
-/** Pure metadata editor reused by to-dos and downstream task workspace panels. */
+const providerName = (identity: RepositoryIdentity) => identity.provider === "gitlab" ? "GitLab" : "GitHub";
+const hostOf = (identity: RepositoryIdentity) => { try { return new URL(identity.instance_url).host; } catch { return identity.instance_url; } };
+const linkTag = (identity: RepositoryIdentity, view: RepositoryLinkView) => `${identity.provider === "gitlab" && view.kind === "pull_request" ? "!" : "#"}${view.number}`;
+
+/** One saved issue or pull request: what it is first, then its number, opening where it lives. */
+function LinkRow({ identity, view, onRemove, disabled }: { identity: RepositoryIdentity; view: RepositoryLinkView; onRemove?: () => void; disabled?: boolean }) {
+  const kind = t(view.kind === "issue" ? "task-repositories.issue" : "task-repositories.pull_request");
+  const tag = linkTag(identity, view);
+  return <div className="flex items-center gap-1 px-4" data-repository-link>
+    <Icon name={view.kind === "issue" ? "target" : "pullRequest"} size={14} className="shrink-0 text-ink-3" />
+    <a href={view.url} target="_blank" rel="noreferrer noopener" aria-label={`${kind} ${tag} · ${identity.path}`}
+      className="flex min-h-11 min-w-0 flex-1 items-center gap-2 text-[12.5px] text-ink-3 hover:underline">
+      <span className="shrink-0">{kind}</span>
+      <span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span>
+      <Icon name="external" size={11} className="ml-auto shrink-0 text-ink-3" />
+    </a>
+    {onRemove && <IconButton icon="x" size={24} iconSize={12} label={t("task-repositories.remove_link", { link: tag })} onClick={onRemove} disabled={disabled} className="min-h-11" />}
+  </div>;
+}
+
+/** Adds one link by its URL: Enter adds, Escape goes back, a URL of another repository says so. */
+function AddLink({ identity, links, pending, onAdd }: { identity: RepositoryIdentity; links: TaskRepositoryInput["links"]; pending?: boolean; onAdd: (link: RepositoryLinkInput) => void }) {
+  const [adding, setAdding] = useState(false);
+  const [input, setInput] = useState("");
+  const [invalid, setInvalid] = useState(false);
+  const add = () => {
+    const view = repositoryLinkView(identity, { url: input.trim() });
+    if (!view) { setInvalid(true); return; }
+    if (!(links ?? []).some((link) => repositoryLinkView(identity, link)?.url === view.url)) onAdd({ url: view.url });
+    setInput(""); setInvalid(false); setAdding(false);
+  };
+  if (!adding) return <Button icon="plus" tone="quiet" disabled={pending || (links?.length ?? 0) >= 50} onClick={() => setAdding(true)}>{t("task-repositories.add_link")}</Button>;
+  return <div className="space-y-2">
+    <label className="block text-[11.5px] text-ink-3">{t("task-repositories.link_url")}
+      <input className={`${settingsInputClass} mt-1 min-h-11`} type="url" autoFocus inputMode="url" autoComplete="off" spellCheck={false}
+        value={input} placeholder={t("task-repositories.link_placeholder")} aria-invalid={invalid} disabled={pending}
+        onChange={(e) => { setInput(e.target.value); setInvalid(false); }}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing) return;
+          if (e.key === "Enter") { e.preventDefault(); add(); }
+          else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setAdding(false); setInvalid(false); }
+        }} />
+    </label>
+    {invalid && <p role="alert" className="text-[11.5px] text-red">{t("task-repositories.link_invalid")}</p>}
+    <div className="flex flex-wrap justify-end gap-2">
+      <Button tone="quiet" onClick={() => { setAdding(false); setInvalid(false); }}>{t("common.cancel")}</Button>
+      <Button disabled={pending || !input.trim()} onClick={add}>{t("task-repositories.add_link")}</Button>
+    </div>
+  </div>;
+}
+
+/** One repository being edited: its row, its links, and the source options most people never open. */
+function RepositoryDraftRow({ row, entry, saved, pending, onChange, onRemove }: {
+  row: TaskRepositoryInput; entry?: RepositoryCatalog["repositories"][number]; saved?: TaskRepository; pending?: boolean;
+  onChange: (patch: Partial<TaskRepositoryInput>) => void; onRemove: () => void;
+}) {
+  const menu = useMenu();
+  const identity = saved?.source_snapshot.identity ?? entry;
+  const ref = row.requested_ref ?? { kind: "default" };
+  const links = row.links ?? [];
+  const aliasValid = validRepositoryAlias(row.directory_alias ?? "");
+  if (!identity) return null;
+  const name = entry && entry.canonical_url === identity.canonical_url ? entry.name || identity.path : identity.path;
+  return <Group>
+    <Row icon="folder" label={name} hint={`${providerName(identity)} · ${hostOf(identity)}`}>
+      {!!links.length && <Pill>{links.length}</Pill>}
+      <IconButton icon="more" label={t("task-repositories.options", { name })} onClick={menu.open} disabled={pending} className="min-h-11" />
+      {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align="right"
+        items={[{ key: "remove", label: t("task-repositories.remove"), icon: "x", danger: true, onSelect: onRemove }]} />}
+    </Row>
+    <div role="group" aria-label={t("task-repositories.links")} className="divide-y divide-line">
+      {links.map((link, index) => {
+        const view = repositoryLinkView(identity, link);
+        return view ? <LinkRow key={`${link.kind ?? ""}:${link.number ?? ""}:${"url" in link ? link.url : ""}:${index}`} identity={identity} view={view} disabled={pending}
+          onRemove={() => onChange({ links: links.filter((_, i) => i !== index) })} /> : null;
+      })}
+    </div>
+    <div className="px-4 py-2"><AddLink identity={identity} links={links} pending={pending} onAdd={(link) => onChange({ links: [...links, link] })} /></div>
+    {!!saved?.catalog_state && saved.catalog_state !== "current" && <p role="status" className="px-4 py-2 text-[11.5px] leading-snug text-ink-3">
+      {t(saved.catalog_state === "removed" ? "task-repositories.catalog_removed" : saved.catalog_state === "identity_changed" ? "task-repositories.identity_changed" : "task-repositories.unlisted")}
+    </p>}
+    <details className="px-4 text-[11.5px] text-ink-3">
+      <summary className="flex min-h-11 cursor-pointer items-center gap-2">
+        <Icon name="branch" size={13} />
+        <span className="min-w-0 flex-1 truncate">{t("task-repositories.source_options")}</span>
+        <span className="truncate" style={{ maxWidth: "50%" }}>{ref.kind === "default" ? t("task-repositories.default") : ref.value}</span>
+        <Icon name="chevron" size={11} />
+      </summary>
+      <div className="space-y-3 pt-1 pb-4">
+        <label className="block">{t("task-repositories.alias")}
+          <input className={`${settingsInputClass} mt-1 min-h-11`} maxLength={64} value={row.directory_alias ?? ""} aria-invalid={!aliasValid} disabled={pending}
+            onChange={(e) => onChange({ directory_alias: e.target.value })} />
+        </label>
+        {!aliasValid && <p role="alert" className="text-red">{t("task-repositories.alias_invalid")}</p>}
+        <label className="block">{t("task-repositories.source")}
+          <select className={`${settingsInputClass} mt-1 min-h-11`} value={ref.kind} disabled={pending}
+            onChange={(e) => onChange({ requested_ref: e.target.value === "default" ? { kind: "default" } : { kind: "branch", value: "" } })}>
+            <option value="default">{t("task-repositories.default")}</option>
+            <option value="branch">{t("task-repositories.branch")}</option>
+            {ref.kind !== "default" && ref.kind !== "branch" && <option value={ref.kind}>{t(`task-repositories.${ref.kind}`)}</option>}
+          </select>
+        </label>
+        {ref.kind !== "default" && <label className="block">{t("task-repositories.ref_value")}
+          <input className={`${settingsInputClass} mt-1 min-h-11`} value={ref.value} disabled={pending}
+            onChange={(e) => onChange({ requested_ref: { kind: ref.kind, value: e.target.value } as RequestedRef })} />
+        </label>}
+      </div>
+    </details>
+  </Group>;
+}
+
+/** Picks a saved repository by name, path or host: typing narrows the list, ↑ ↓ move, Enter takes the first match. */
+function RepositoryPicker({ catalog, selected, disabled, onPick }: { catalog: RepositoryCatalog; selected: TaskRepositoryInput[]; disabled?: boolean; onPick: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const box = useRef<HTMLDivElement | null>(null);
+  const available = catalog.repositories.filter((r) => !selected.some((s) => s.repo_id === r.id));
+  const rows = available.filter((r) => `${r.name ?? ""} ${r.path} ${hostOf(r)}`.toLowerCase().includes(query.trim().toLowerCase()));
+  // Closing hands the focus back to the button that opened this, not to the page.
+  const close = () => { setOpen(false); setQuery(""); box.current?.querySelector("button")?.focus(); };
+  const pick = (id: string) => { onPick(id); setOpen(false); setQuery(""); };
+  return <div ref={box}>
+    <Button icon="plus" tone="quiet" expanded={open} disabled={disabled || selected.length >= 20} onClick={() => open ? close() : setOpen(true)}>{t("task-repositories.add")}</Button>
+    <Collapse open={open}>
+      <div className="mt-2 space-y-2 rounded-control bg-inset p-2 shadow-hairline" data-repository-picker>
+        <SearchField value={query} onChange={setQuery} placeholder={t("task-repositories.search")} label={t("task-repositories.search")} tone="inset" autoFocus
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return;
+            if (e.key === "Enter" && rows[0]) { e.preventDefault(); pick(rows[0].id); }
+            else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+            else if (e.key === "ArrowDown") { e.preventDefault(); e.currentTarget.closest("[data-task-repository-editor]")?.querySelector<HTMLElement>('[role="option"]')?.focus(); }
+          }} />
+        <div role="listbox" aria-label={t("task-repositories.choose")} className="max-h-60 overflow-y-auto rounded-control bg-surface" onKeyDown={(e) => {
+          const items = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+          if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); return; }
+          if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
+          e.preventDefault();
+          const index = items.indexOf(document.activeElement as HTMLButtonElement);
+          const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1
+            : index + (e.key === "ArrowDown" ? 1 : items.length - 1);
+          items[items.length ? ((next % items.length) + items.length) % items.length : 0]?.focus();
+        }}>
+          {rows.map((row) => <button key={row.id} type="button" role="option" aria-selected={false} disabled={disabled} onClick={() => pick(row.id)}
+            className="flex min-h-11 w-full items-center gap-3 rounded-control px-3 py-2 text-left transition-colors hover:bg-hover focus-visible:bg-hover">
+            <Icon name="folder" size={15} className="shrink-0 text-ink-3" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[12.5px] font-medium text-ink">{row.name || row.path}</span>
+              <span className="block truncate text-[11.5px] text-ink-3">{row.path} · {hostOf(row)}</span>
+            </span>
+            <Icon name="plus" size={13} className="shrink-0 text-ink-3" />
+          </button>)}
+          {!rows.length && <p className="px-3 py-4 text-[11.5px] text-ink-3">{t(available.length ? "task-repositories.no_match" : "task-repositories.empty")}</p>}
+        </div>
+      </div>
+    </Collapse>
+  </div>;
+}
+
+export type TaskRepositoryBindingsEditorProps = { catalog: RepositoryCatalog; value: TaskRepositoryInput[]; snapshots?: TaskRepository[]; pending?: boolean; onChange: (value: TaskRepositoryInput[]) => void };
+/** Structured controlled editor, shared by to-do creation and the detail's link dialog. */
 export function TaskRepositoryBindingsEditor({ catalog, value, snapshots = [], pending, onChange }: TaskRepositoryBindingsEditorProps) {
   const latest = useRef({ value, pending });
   latest.current = { value, pending };
-  const available = catalog.repositories.filter((r) => !value.some((v) => v.repo_id === r.id));
-  const change = (index: number, patch: Partial<TaskRepositoryInput>) => onChange(value.map((r, i) => i === index ? { ...r, ...patch } : r));
   const remove = (index: number) => {
     const removed = value[index];
     onChange(value.filter((_, i) => i !== index));
@@ -37,53 +197,15 @@ export function TaskRepositoryBindingsEditor({ catalog, value, snapshots = [], p
       }
     } });
   };
-  return <div className="space-y-3" data-task-repository-editor>
-    {value.map((row, index) => {
-      const saved = snapshots.find((r) => r.repo_id === row.repo_id);
-      const entry = catalog.repositories.find((r) => r.id === row.repo_id);
-      const identity = saved?.source_snapshot.identity ?? entry;
-      const ref = row.requested_ref ?? { kind: "default" };
-      const links = row.links ?? [];
-      const aliasValid = validRepositoryAlias(row.directory_alias ?? "");
-      const urls = links.map((link) => "url" in link ? link.url : saved?.links.find((l) => l.kind === link.kind && l.number === link.number)?.canonical_url
-        ?? `${identity?.canonical_url}/${identity?.provider === "gitlab" ? link.kind === "issue" ? "-/issues" : "-/merge_requests" : link.kind === "issue" ? "issues" : "pull"}/${link.number}`);
-      return <fieldset key={row.repo_id} disabled={pending} className="min-w-0 space-y-3 rounded-control border border-line p-3">
-        <legend className="max-w-full break-words px-1 text-meta font-medium text-ink">{saved ? saved.source_snapshot.identity.path : entry?.name || identity?.path || row.repo_id}</legend>
-        <p className="break-all text-label text-ink-2">{identity?.canonical_url}</p>
-        {saved?.catalog_state && saved.catalog_state !== "current" && <p role="status" className="text-label text-ink-2">{t(saved.catalog_state === "removed" ? "task-repositories.catalog_removed" : "task-repositories.identity_changed")}</p>}
-        <label className="block text-label text-ink-2">{t("task-repositories.links")}
-          <textarea className={`${settingsInputClass} h-auto min-h-24 mt-1 resize-y py-2`} rows={4} value={urls.join("\n")} autoComplete="off" spellCheck={false}
-            onChange={(e) => change(index, { links: e.target.value.split("\n").map((url) => ({ url })) })} />
-        </label>
-        <details className="text-label text-ink-2">
-          <summary className="min-h-11 cursor-pointer py-3">{t("task-repositories.source_options")}</summary>
-          <div className="space-y-3 pt-2">
-            <label className="block">{t("task-repositories.alias")}
-              <input className={`${settingsInputClass} min-h-11 mt-1`} maxLength={64} value={row.directory_alias ?? ""} aria-invalid={!aliasValid}
-                onChange={(e) => change(index, { directory_alias: e.target.value })} />
-            </label>
-            {!aliasValid && <p role="alert">{t("task-repositories.alias_invalid")}</p>}
-            <label className="block">{t("task-repositories.source")}
-              <select className={`${settingsInputClass} min-h-11 mt-1`} value={ref.kind} onChange={(e) => change(index, { requested_ref: e.target.value === "default" ? { kind: "default" } : { kind: "branch", value: "" } })}>
-                <option value="default">{t("task-repositories.default")}</option><option value="branch">{t("task-repositories.branch")}</option>
-                {ref.kind !== "default" && ref.kind !== "branch" && <option value={ref.kind}>{t(`task-repositories.${ref.kind}`)}</option>}
-              </select>
-            </label>
-            {ref.kind !== "default" && <label className="block">{t("task-repositories.ref_value")}
-              <input className={`${settingsInputClass} min-h-11 mt-1`} value={ref.value} onChange={(e) => change(index, { requested_ref: { kind: ref.kind, value: e.target.value } as RequestedRef })} />
-            </label>}
-          </div>
-        </details>
-        <Button tone="quiet" onClick={() => remove(index)}>{t("task-repositories.remove")}<span className="sr-only"> {identity?.path}</span></Button>
-      </fieldset>;
-    })}
-    {available.length > 0 && value.length < 20 && <label className="block text-label text-ink-2">{t("task-repositories.add")}
-      <select className={`${settingsInputClass} min-h-11 mt-1`} disabled={pending} value="" onChange={(e) => {
-        if (e.target.value) onChange([...value, { repo_id: e.target.value, requested_ref: { kind: "default" }, links: [] }]);
-      }}><option value="">{t("task-repositories.choose")}</option>{available.map((r) => <option key={r.id} value={r.id}>{r.name || r.path}</option>)}</select>
-    </label>}
-    {!catalog.repositories.length && <p className="text-label text-ink-2">{t("task-repositories.empty")}</p>}
-    <p className="text-label text-ink-3">{t("task-repositories.hint")}</p>
+  return <div data-task-repository-editor>
+    {value.map((row, index) => <Fragment key={row.repo_id}>
+      <RepositoryDraftRow row={row} entry={catalog.repositories.find((r) => r.id === row.repo_id)}
+        saved={snapshots.find((r) => r.repo_id === row.repo_id)} pending={pending}
+        onChange={(patch) => onChange(value.map((r, i) => i === index ? { ...r, ...patch } : r))}
+        onRemove={() => remove(index)} />
+    </Fragment>)}
+    <RepositoryPicker catalog={catalog} selected={value} disabled={pending}
+      onPick={(id) => onChange([...value, { repo_id: id, requested_ref: { kind: "default" }, links: [] }])} />
   </div>;
 }
 
@@ -92,55 +214,131 @@ function errorMessage(error: unknown) {
   if (error instanceof ApiError && error.code?.startsWith("task_repositories_") && error.code !== "task_repositories_store_unavailable") return errorText(error);
   return t("task-repositories.failed");
 }
+/** A hub that does not serve the association store at all (the route is missing, not the to-do). */
+const isUnsupported = (error: unknown) => error instanceof ApiError && error.status === 404 && error.code !== "task_repositories_not_found";
 
-type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string };
+/** A to-do's own PR, as the page already parses it (the editor does not read the stage bar, a first-screen chunk). */
+type LegacyPR = { url: string; text: string };
+type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string; legacyPRs?: LegacyPR[]; version?: unknown };
 export function TodoRepositoryBindings(props: TodoRepositoryBindingsProps) {
   return <TodoRepositoryBindingsSession key={`${props.owner}:${props.manager}:${props.todoId}`} {...props} />;
 }
-function TodoRepositoryBindingsSession({ manager, owner, todoId }: TodoRepositoryBindingsProps) {
+function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], version }: TodoRepositoryBindingsProps) {
   const context = useRequestContext(manager, owner);
-  const [expanded, setExpanded] = useState(false);
   const [catalog, setCatalog] = useState<RepositoryCatalog>();
   const [saved, setSaved] = useState<TaskRepositorySet>();
   const [draft, setDraft] = useState<TaskRepositoryInput[]>([]);
+  const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [unsupported, setUnsupported] = useState(false);
   const lock = useRef(false);
-  const load = async () => {
+  const loads = useRef(0);
+  const editingNow = useRef(editing);
+  editingNow.current = editing;
+  const read = useCallback(async () => {
+    const n = ++loads.current;
+    const result = await loadTaskRepositories(context, todoId);
+    return n === loads.current && context.isCurrent() ? result : undefined;
+  }, [context, todoId]);
+  // Viewing reads the store: the Agent keeps it, so the detail is its newest word without opening an editor. StrictMode
+  // runs this effect twice (and the version re-runs it), so a second run joins the read in flight instead of being
+  // turned away by a lock; one that did that would leave the section on its spinner for good.
+  const inFlight = useRef<Promise<TaskRepositorySet | undefined> | undefined>(undefined);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (editingNow.current || !context.isCurrent()) return;
+    setError(""); setBusy(true);
+    inFlight.current ??= read();
+    void inFlight.current.then(
+      (result) => { if (!context.isCurrent() || !result) return; setSaved(result); setDraft(repositoryDraft(result.repositories)); setUnsupported(false); },
+      (failure) => { if (!context.isCurrent()) return; if (isUnsupported(failure)) setUnsupported(true); else setError(errorMessage(failure)); },
+    ).finally(() => { inFlight.current = undefined; if (context.isCurrent()) setBusy(false); });
+  }, [context, todoId, version, attempt, read]);
+  // Editing always starts from the store's newest value and catalog: the Agent may have added a link since the load.
+  const openEditor = async () => {
     if (lock.current || !context.isCurrent()) return;
     lock.current = true; setBusy(true); setError("");
     try {
-      const [catalog, saved] = await Promise.all([loadRepositoryCatalog(context), loadTaskRepositories(context, todoId)]);
-      if (context.isCurrent()) { setCatalog(catalog); setSaved(saved); setDraft(repositoryDraft(saved.repositories)); }
-    } catch (error) { if (context.isCurrent()) setError(errorMessage(error)); }
+      const [nextCatalog, latest] = await Promise.all([loadRepositoryCatalog(context), read()]);
+      if (!context.isCurrent() || !latest) return;
+      setCatalog(nextCatalog); setSaved(latest); setDraft(repositoryDraft(latest.repositories)); setEditing(true); setUnsupported(false);
+    } catch (failure) {
+      if (context.isCurrent()) { if (isUnsupported(failure)) setUnsupported(true); else setError(errorMessage(failure)); }
+    } finally { lock.current = false; if (context.isCurrent()) setBusy(false); }
+  };
+  const reloadForEdit = async () => {
+    if (lock.current || !context.isCurrent()) return;
+    lock.current = true; setBusy(true); setError("");
+    try {
+      const [nextCatalog, latest] = await Promise.all([loadRepositoryCatalog(context), read()]);
+      if (!context.isCurrent() || !latest) return;
+      setCatalog(nextCatalog); setSaved(latest); setDraft(repositoryDraft(latest.repositories));
+    } catch (failure) { if (context.isCurrent()) setError(errorMessage(failure)); }
     finally { lock.current = false; if (context.isCurrent()) setBusy(false); }
   };
   const save = async () => {
     if (lock.current || !saved || !catalog || !context.isCurrent()) return;
     lock.current = true; setBusy(true); setError("");
     try {
-      // Empty text rows are editing affordances, not empty links sent to the server.
-      const rows = cleanRepositoryDraft(draft);
-      const result = await saveTaskRepositories(context, todoId, saved.revision, catalog.catalog_revision, rows);
-      if (context.isCurrent()) { setSaved(result); setDraft(repositoryDraft(result.repositories)); toast(t("task-repositories.saved"), "ok"); }
-    } catch (error) { if (context.isCurrent()) setError(errorMessage(error)); }
+      const result = await saveTaskRepositories(context, todoId, saved.revision, catalog.catalog_revision, cleanRepositoryDraft(draft));
+      if (!context.isCurrent()) return;
+      setSaved(result); setDraft(repositoryDraft(result.repositories)); setEditing(false);
+      toast(t("task-repositories.saved"), "ok");
+    } catch (failure) { if (context.isCurrent()) setError(errorMessage(failure)); }
     finally { lock.current = false; if (context.isCurrent()) setBusy(false); }
   };
-  return <section className="mt-4 space-y-3">
-    <Button expanded={expanded} tone="quiet" disabled={busy} onClick={() => { setExpanded(!expanded); if (!expanded && !saved) void load(); }}>{t("task-repositories.title")}</Button>
-    {expanded && <div className="space-y-3">
-      {busy && <Loading label={t("common.loading")} />}
-      {catalog && saved && <TaskRepositoryBindingsEditor catalog={catalog} value={draft} snapshots={saved.repositories} pending={busy} onChange={setDraft} />}
-      {error && <p role="alert" className="text-label text-red">{error}</p>}
-      <div className="flex flex-wrap gap-2">
-        {saved && <Button disabled={busy || !draft.every((r) => validRepositoryAlias(r.directory_alias ?? ""))} busy={busy} onClick={() => void save()}>{t("common.save")}</Button>}
-        <Button tone="quiet" disabled={busy} onClick={() => void load()}>{t(saved ? "task-repositories.reload" : "task-repositories.retry")}</Button>
-      </div>
-    </div>}
+  const repositories = saved?.repositories ?? [];
+  const dirty = !!saved && JSON.stringify(cleanRepositoryDraft(draft)) !== JSON.stringify(repositoryDraft(saved.repositories));
+  if (unsupported && !legacyPRs.length) return null;
+  return <section className="mt-6" data-todo-repositories>
+    <Group title={t("task-repositories.section")} right={!unsupported &&
+      // It stays enabled while the editor opens: a disabled button that had the focus drops it to the page, and the
+      // dialog would then have nothing to hand it back to. Opening is guarded against a second press by its lock.
+      <Button icon={repositories.length ? "pencil" : "plus"} tone="quiet" size="sm" onClick={() => void openEditor()}>
+        {t(repositories.length ? "task-repositories.manage" : "task-repositories.add")}
+      </Button>}>
+      {unsupported
+        ? legacyPRs.map((p) => <Row key={p.url} icon="pullRequest" hint={t("task-repositories.legacy_note")}
+            label={<a href={p.url} target="_blank" rel="noreferrer noopener" className="text-accent-ink hover:underline">{p.text}</a>} />)
+        : <>
+          {repositories.map((repository) => <Fragment key={repository.repo_id}>
+            <Row icon="folder" label={repository.source_snapshot.identity.path}
+              hint={`${providerName(repository.source_snapshot.identity)} · ${hostOf(repository.source_snapshot.identity)}`}>
+              {!!repository.links.length && <Pill>{repository.links.length}</Pill>}
+            </Row>
+            {repository.links.map((link) => {
+              const view = repositoryLinkView(repository.source_snapshot.identity, link);
+              return view ? <LinkRow key={`${link.kind}:${link.number}`} identity={repository.source_snapshot.identity} view={view} /> : null;
+            })}
+            {!!repository.catalog_state && repository.catalog_state !== "current" && <p role="status" className="px-4 py-2 text-[11.5px] leading-snug text-ink-3">
+              {t(repository.catalog_state === "removed" ? "task-repositories.catalog_removed" : repository.catalog_state === "identity_changed" ? "task-repositories.identity_changed" : "task-repositories.unlisted")}
+            </p>}
+          </Fragment>)}
+          {!saved && !error && <div className="px-4 py-3"><Loading /></div>}
+          {saved && !repositories.length && legacyPRs.map((p) => <Row key={p.url} icon="pullRequest" hint={t("task-repositories.legacy_note")}
+            label={<a href={p.url} target="_blank" rel="noreferrer noopener" className="text-accent-ink hover:underline">{p.text}</a>} />)}
+          {saved && !repositories.length && <Row label={t("task-repositories.no_links")} hint={t("task-repositories.agent_hint")} wrapHint />}
+          {error && <RowFailed text={error} retry={t("task-repositories.retry")} onRetry={() => { setError(""); setAttempt((n) => n + 1); }} />}
+        </>}
+    </Group>
+    <Dialog open={editing} onClose={() => { if (!busy) setEditing(false); }} title={t("task-repositories.manage")} width={480}
+      footer={<>
+        <Button disabled={busy} onClick={() => setEditing(false)}>{t("common.cancel")}</Button>
+        <Button tone="primary" busy={busy} disabled={!catalog || !dirty || !draft.every((r) => validRepositoryAlias(r.directory_alias ?? ""))} onClick={() => void save()}>{t("common.save")}</Button>
+      </>}>
+      <p className="mb-4 text-[11.5px] leading-relaxed text-ink-3">{t("task-repositories.hint")}</p>
+      {catalog && <TaskRepositoryBindingsEditor catalog={catalog} value={draft} snapshots={saved?.repositories} pending={busy} onChange={setDraft} />}
+      {busy && !catalog && <Loading />}
+      {error && <div className="mt-3 space-y-2">
+        <p role="alert" className="text-[11.5px] text-red">{error}</p>
+        <Button tone="quiet" disabled={busy} onClick={() => void reloadForEdit()}>{t("task-repositories.reload")}</Button>
+      </div>}
+    </Dialog>
   </section>;
 }
 
-/** Creation remains one POST: the parent sends this optional draft with its Todo. */
+/** Creation remains one POST: the parent sends this optional controlled draft. */
 export function NewTodoRepositoryBindings({ context, value, onChange, pending }: {
   context: RepositoryRequestContext; value?: CreateRepositoryBindings; onChange: (value: CreateRepositoryBindings | undefined) => void; pending: boolean;
 }) {
@@ -151,16 +349,22 @@ export function NewTodoRepositoryBindings({ context, value, onChange, pending }:
   const load = async () => {
     if (busy || !context.isCurrent()) return;
     setBusy(true); setError("");
-    try { const catalog = await loadRepositoryCatalog(context); if (context.isCurrent()) setCatalog(catalog); }
+    try { const result = await loadRepositoryCatalog(context); if (context.isCurrent()) setCatalog(result); }
     catch { if (context.isCurrent()) setError(t("task-repositories.failed")); }
     finally { if (context.isCurrent()) setBusy(false); }
   };
+  const rows = value?.repositories ?? [];
   return <div className="space-y-3">
-    <Button expanded={expanded} tone="quiet" disabled={pending} onClick={() => { setExpanded(!expanded); if (!expanded && !catalog) void load(); }}>{t("task-repositories.title")}</Button>
+    <Button icon="folder" tone="quiet" expanded={expanded} disabled={pending}
+      onClick={() => { setExpanded(!expanded); if (!expanded && !catalog) void load(); }}>
+      {t("task-repositories.title")}
+      {!!rows.length && <Pill>{rows.length}</Pill>}
+    </Button>
     {expanded && <>
-      {busy && <Loading label={t("common.loading")} />}
-      {catalog && <TaskRepositoryBindingsEditor catalog={catalog} value={value?.repositories ?? []} pending={pending} onChange={(rows) => onChange(rows.length ? { catalog_revision: catalog.catalog_revision, repositories: rows } : undefined)} />}
-      {error && <><p role="alert" className="text-label text-red">{error}</p><Button tone="quiet" onClick={() => void load()}>{t("task-repositories.retry")}</Button></>}
+      {busy && <Loading />}
+      {catalog && <TaskRepositoryBindingsEditor catalog={catalog} value={rows} pending={pending}
+        onChange={(next) => onChange(next.length ? { catalog_revision: catalog.catalog_revision, repositories: next } : undefined)} />}
+      {error && <><p role="alert" className="text-[11.5px] text-red">{error}</p><Button tone="quiet" onClick={() => void load()}>{t("task-repositories.retry")}</Button></>}
     </>}
   </div>;
 }
