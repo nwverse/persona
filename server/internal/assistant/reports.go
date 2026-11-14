@@ -227,11 +227,12 @@ type todoStage struct {
 	Stage    string        `json:"stage"`
 	Kind     string        `json:"stage_kind,omitempty"`
 	PR       string        `json:"pr,omitempty"`
-	PRs      []string      `json:"prs,omitempty"`      // the PRs named before PR, newest last, at most stagePRsKept (#6507)
-	Delivery *TodoDelivery `json:"delivery,omitempty"` // delivery.go
-	Deploy   *deployWatch  `json:"deploy,omitempty"`   // deploy_check.go: held until the running hub has the work
-	Verified bool          `json:"verified,omitempty"` // explicit acceptance outranks delivery and reply keywords
-	Check    *TodoCheck    `json:"check,omitempty"`    // task_check.go
+	PRs      []string      `json:"prs,omitempty"`       // the PRs named before PR, newest last, at most stagePRsKept (#6507)
+	Delivery *TodoDelivery `json:"delivery,omitempty"`  // delivery.go
+	Deploy   *deployWatch  `json:"deploy,omitempty"`    // deploy_check.go: held until the running hub has the work
+	Verified bool          `json:"verified,omitempty"`  // explicit acceptance outranks delivery and reply keywords
+	Check    *TodoCheck    `json:"check,omitempty"`     // task_check.go
+	PRStatus *TodoPRStatus `json:"pr_status,omitempty"` // Observed forge facts, not a task state.
 }
 
 const reportStagesKey = "assistant.todo_stages"
@@ -239,7 +240,7 @@ const reportStagesKey = "assistant.todo_stages"
 // empty: st keeps nothing (its row can go).
 func (st todoStage) empty() bool {
 	return st.Stage == "" && st.Kind == "" && st.PR == "" && len(st.PRs) == 0 && st.Delivery == nil && st.Deploy == nil && !st.Verified &&
-		st.Check == nil
+		st.Check == nil && st.PRStatus == nil
 }
 
 // stagePRsKept bounds a task's earlier PRs (todoStage.PRs).

@@ -840,6 +840,7 @@ describe("sending in order, and with no row yet", () => {
       await flush();
       expect(host.querySelector("[data-chat-title]")?.textContent).toBe(t("chat-chatview.not_found_title"));
       expect(host.textContent).not.toContain("nope-0000");
+      await vi.waitFor(() => expect(host.querySelector("[data-chat-not-found]")).not.toBeNull());
       const notice = host.querySelector("[data-chat-not-found]");
       expect(notice?.textContent).toContain(t("chat-notfoundnotice.body"));
       expect(host.textContent).not.toContain(t("runtime-session.missing"));
