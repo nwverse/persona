@@ -1423,7 +1423,12 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
   strip works as in an Agent chat: take back to edit, delete and move withdraw them (`cancel_async_message`, the moved ones written again in
   the new order, never one that went in meanwhile), and Send now is Claude Code's own (`interrupt` with `send_now`). A Codex chat has no
   queue (`turn/steer`), and the Agent SDK bridge forwards neither request.
-  - **Loop prevention**: each chat tracks the current message's hops from the user's input (user 0, relay +1, expires after 1 hour); don't send beyond 3 hops.
+  - **Loop prevention**: each chat tracks the current message's hops from the user's input (user 0, a request +1, expires after 1 hour); don't send beyond 3 hops.
+    A hop is a request, not a message (#7391, `hopLocked`): a chat's first message back to the chat whose request it works on is the answer and keeps
+    that hop; a second message back, a message to a third chat, the message after an answer and `conversation_new` cost one. An answer to a question
+    of its own leaves the answer it owes free. So a main chat that hands work to others goes back and forth with each of them three times
+    (main → worker at hop 1, its answer at 1, … the third request and its answer at 3); counting every message refused the worker's second answer
+    (hop 4). Two chats that keep writing to each other still stop after 2 × 3 messages however slowly they write, which the rate limit alone would not do.
     Per chat, at most 3 sends to the same target and 10 total within 10 minutes (memory only, reset on hub restart). User messages reset hops to 0.
   - Sending to archived chats restores them.
 - **App**: swipe left to Archive in sidebar (not main chat; also long-press). Sidebar changes `ScrollView` + `LazyVStack` to `List`, removing insets, separators, backgrounds
