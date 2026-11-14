@@ -179,6 +179,45 @@ func TestAgentStartUnknownKeepsPendingTaskAndLinksByCreationID(t *testing.T) {
 	}
 }
 
+// A creation-id confirmation can arrive after the start wait has ended and the user has closed the prepared card.
+// That exact session still belongs on the done card for cleanup; an unrelated manual session gains no link (#5732).
+func TestAgentStartUnknownLinksDelayedCreationIDAfterTaskClosed(t *testing.T) {
+	s, f := newQuietService(t)
+	shortAgentStartTimeout(t)
+	f.slowStart = true
+	res, err := s.runTool(context.Background(), "server", "conv1", "agent_start",
+		json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"看看 CI"}`))
+	if err != nil || !strings.Contains(res, "may already be starting") {
+		t.Fatalf("unknown start: res=%q err=%v", res, err)
+	}
+	todo := onlyTodo(s)
+	now := time.Now().UTC()
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].DoneAt = &now
+	s.todos.mu.Unlock()
+
+	linked := s.autoLinkTodos("box", []proto.Session{
+		{SessionID: "s-late", MachineID: "box", Cwd: "/code/app", Agent: "claude", StartedByPersona: true, Status: proto.StatusWorking,
+			Hierarchy: &proto.SessionHierarchy{CreationID: todo.ID}, UpdatedAt: now},
+		{SessionID: "manual", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusWorking, UpdatedAt: now},
+	})
+	if !linked {
+		t.Fatal("a retained delayed creation-id link was not reported to the session-list caller")
+	}
+	got := todoNow(s, todo.ID)
+	if got.DoneAt == nil || len(got.Agents) != 1 || got.Agents[0].SessionID != "s-late" || got.Agents[0].Source != "assistant_start" {
+		t.Fatalf("the delayed creation-id session is not retained on the closed card: %+v", got)
+	}
+	if active := s.todos.activeBySession[[2]string{"box", "s-late"}]; active != "" {
+		t.Fatalf("the done card became active again as %q", active)
+	}
+	for _, a := range got.Agents {
+		if a.SessionID == "manual" {
+			t.Fatalf("an unrelated manual session was auto-linked: %+v", got.Agents)
+		}
+	}
+}
+
 // Definite failures stay errors: a request the node refused before running anything, and an unreachable machine
 // (nothing was started) — never a neutral "may be starting" result.
 func TestAgentStartDefiniteFailuresStayErrors(t *testing.T) {

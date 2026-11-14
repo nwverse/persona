@@ -120,16 +120,70 @@ func (b *todoBook) linkedNow(key [2]string) bool {
 	return false
 }
 
+// linkDelayedDoneCreation handles a session whose persisted creation id names a card closed after its start outcome
+// became unknown. It is not a general done-card auto-link: only that exact identity qualifies, prior/dismissed links are
+// left alone, and the session does not fall through to workspace or chat adoption. handled means the done identity was
+// recognized (including an already linked session), so the ordinary open-todo passes must skip it; linked reports a new
+// retained link whose change notifications the outer autoLinkTodos caller publishes with the others.
+func (s *Service) linkDelayedDoneCreation(machine string, c proto.Session, creationID, startError string) (handled, linked bool) {
+	key := [2]string{machine, c.SessionID}
+	s.todos.writing.Lock()
+	s.todos.mu.RLock()
+	target := s.todos.todos[creationID]
+	done := target != nil && target.DoneAt != nil
+	eligible := done && s.todos.activeBySession[key] == ""
+	if eligible {
+		for _, a := range target.Agents {
+			if a.MachineID == machine && a.SessionID == c.SessionID {
+				eligible = false // automatic links are never reactivated, including dismissed ones
+				break
+			}
+		}
+	}
+	s.todos.mu.RUnlock()
+	if !done {
+		s.todos.writing.Unlock()
+		return false, false
+	}
+	if !eligible {
+		s.todos.writing.Unlock()
+		return true, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := s.writeTodoAgentLink(ctx, creationID, machine, c.SessionID, c.Title, c.Cwd, c.Agent, startError, "assistant_start", creationID, true)
+	s.todos.writing.Unlock()
+	if err != nil {
+		s.logf("todos: delayed creation-id link %s on %s/%s: %v", creationID, machine, c.SessionID, err)
+		return true, false
+	}
+	return true, true
+}
+
 // autoLinkTodos links the online agents of machine that join a todo on their own: spawned by an agent of an open todo
 // (persona_from, the session's spawn_from), or in a workspace linked to one; never one that works for another todo
-// now, or that was ever on the todo (dismissed included). Memory first, so the report says it at once; the store
-// after, undone when it fails. True when any was linked.
+// now, or that was ever on the todo (dismissed included). Open-todo links are memory first, so the report says them at
+// once, then go to the store and are undone when it fails; the delayed done-creation path above uses the direct durable
+// write shared with the immediate start confirmations. True when any was linked, so the caller publishes every change.
 func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
+	startErrors := s.startErrorsOf(machine, sessions)
+	doneCreations := map[[2]string]bool{}
+	doneLinked := false
+	for _, c := range sessions {
+		if c.Status == proto.StatusOffline {
+			continue
+		}
+		if creationID := c.CreationID(); creationID != "" {
+			handled, linked := s.linkDelayedDoneCreation(machine, c, creationID, startErrors.of(c))
+			doneCreations[[2]string{machine, c.SessionID}] = handled
+			doneLinked = doneLinked || linked
+		}
+	}
+
 	s.todos.writing.Lock()
 	defer s.todos.writing.Unlock()
 	now := time.Now().UTC()
 	var pending []pendingAutoLink
-	startErrors := s.startErrorsOf(machine, sessions)
 
 	s.todos.mu.Lock()
 	link := func(c proto.Session, target *Todo, source, via string) {
@@ -165,6 +219,9 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 			continue
 		}
 		key := [2]string{machine, c.SessionID}
+		if doneCreations[key] {
+			continue
+		}
 
 		// 1. Assistant start: a to-do made before session.start carries the same creation id. This links an
 		// unanswered start without guessing from cwd or adopting a manually opened session (#5732).
@@ -265,7 +322,7 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 			}()
 		}
 	}
-	return len(pending) > 0
+	return doneLinked || len(pending) > 0
 }
 
 // updateTodoAgentSnapshots keeps the title and start error of the agents that work for todos as their sessions now
