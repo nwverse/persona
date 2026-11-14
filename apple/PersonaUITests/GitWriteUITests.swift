@@ -168,7 +168,7 @@ final class GitWriteUITests: XCTestCase {
         let create = app.buttons["git.branch.create"]
         XCTAssertTrue(create.waitForExistence(timeout: 10), app.debugDescription)
         try shot(app, "10-create")
-        create.tap()
+        tapSettled(create)
         tapSettled(dialogButton(app, "git.branch.confirm", "新建"))
         XCTAssertTrue(toast(app, "已新建分支 fix/rain-color").waitForExistence(timeout: 10), app.debugDescription)
         let state = try await control("")
@@ -184,7 +184,7 @@ final class GitWriteUITests: XCTestCase {
         message.tap()
         message.typeText("先放一放")
         try shot(app, "11-stashes")
-        app.buttons["git.stash.push"].tap()
+        tapSettled(app.buttons["git.stash.push"])
         XCTAssertTrue(toast(app, "已收起改动").waitForExistence(timeout: 10), app.debugDescription)
         let kept = app.buttons.matching(NSPredicate(format: "identifier == 'git.stash' AND label CONTAINS %@", "先放一放")).firstMatch
         XCTAssertTrue(kept.waitForExistence(timeout: 10), app.debugDescription)
