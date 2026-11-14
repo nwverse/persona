@@ -558,7 +558,12 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   Mac hasn't allowed video yet (`permission` missing, so no stream is opened).
   Connection Stats (⋯, off by default) reads the video once a second: frames shown and megabits that arrived, the
   helper's capture, encode and network from `timing`, the phone's decode, and their total first when encode, network
-  and decode are all known (a helper before `timing` gives the phone's numbers only).
+  and decode are all known (a helper before `timing` gives the phone's numbers only). Over VNC it shows RFB's bitrate
+  and frame rate and, on a line of its own, **Round trip to the hub** (#6558): while the overlay is shown and the app is
+  in front, the page pings the app's own connection to that Mac's hub every 2 s (`LiveConnection.roundTrip`, the
+  heartbeat's kind of ping) and shows the median of the last 5 from the last 20 s (`HubRoundTrips`). It is the same leg
+  the web overlay times ("Connection stats on the web"), and like it never sits on the first line. Bitrates have two
+  decimals under 1 Mbps, one above, as on the web.
 - **Permission and login**: only input on that Mac answers macOS's Screen Recording question — someone at the Mac, or
   the user's own taps through Screen Sharing. Nothing in Persona answers it, and Agents' computer-use calls can't target
   System Settings' Privacy & Security or the system alert. Video needs the same login as Screen Sharing (the `pair`
