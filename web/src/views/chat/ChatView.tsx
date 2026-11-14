@@ -2565,6 +2565,7 @@ export const Header = memo(function Header({
           align={topCenter && mediaMatches(NARROW) ? "right" : "left"}
           width={360}
           header={session?.space_name ? t("chat-chatview.space_header", { name: session.space_name }) : undefined}
+          headerAsWritten
           items={spaceRows}
         />
       )}
