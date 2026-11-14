@@ -256,6 +256,8 @@ class WatcherTests(unittest.TestCase):
         self.assertFalse(pr_watch_repair.test_or_fix(pr(title="feat(ios): a new view"), ["apple/Persona/Views/ChatView.swift"]))
         self.assertTrue(pr_watch_repair.test_or_fix(pr(title="feat(web): refine a test"),
                                                      ["web/src/views/chat/ContextGroup.test.tsx"]))
+        self.assertTrue(pr_watch_repair.test_or_fix(pr(title="feat(web): refine a test"),
+                                                     ["web/src/views/chat/ContextGroup.test.tsx"]))
         self.assertFalse(pr_watch_repair.test_or_fix(pr(title="chore: change a view"),
                                                       ["web/src/views/ChatView.tsx"]))
 
@@ -338,7 +340,8 @@ class WatcherTests(unittest.TestCase):
                 return []
             with patch.object(pr_watch_repair, "pr_snapshot", return_value=pr()), \
                     patch.object(pr_watch_repair, "verify", side_effect=fake_verify), \
-                    patch.object(pr_watch_repair, "checked", side_effect=fake_checked):
+                    patch.object(pr_watch_repair, "checked", side_effect=fake_checked), \
+                    patch.object(pr_watch_repair, "repair_repository_copy", return_value=nullcontext(directory)):
                 pr_watch_repair.commit_and_push_repair("example/one", pr(), directory, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]})
         self.assertIn(SHA_B, calls)
         commit_index = next(index for index, argv in enumerate(calls) if isinstance(argv, list) and "commit" in argv)
@@ -364,9 +367,10 @@ class WatcherTests(unittest.TestCase):
             with patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: pr(head=SHA_B if number == 9 else SHA_A)), \
                     patch.object(pr_watch_repair, "verify", return_value=[]), \
                     patch.object(pr_watch_repair, "checked", side_effect=fake_checked), \
+                    patch.object(pr_watch_repair, "run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
                     patch.object(pr_watch_repair, "gh_json", side_effect=[[], {"number": 9}]) as created:
                 pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]}, allow_merge_only=True)
-        self.assertIn("Refs #6", created.call_args.args[0][-1])
+        self.assertIn("Refs #6", created.call_args_list[1].args[0][-1])
 
     def test_every_failed_lane_must_reproduce_on_main(self):
         failures = [{"command": ["test", "one"], "output": "--- FAIL: TestA\n"},

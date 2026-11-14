@@ -271,8 +271,9 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     if not isinstance(verify_config, dict) or not verify_config:
         raise WatchError("automatic repair requires the repository's real verification configuration")
     identity_pr = original_pr or pr
-    if pr_snapshot(repo, identity_pr["number"])["headRefOid"] != identity_pr["headRefOid"]:
-        raise WatchError("PR head moved during automatic repair; nothing was pushed")
+    if identity_pr["number"] != pr["number"]:
+        if pr_snapshot(repo, identity_pr["number"])["headRefOid"] != identity_pr["headRefOid"]:
+            raise WatchError("PR head moved during automatic repair; nothing was pushed")
     scanner = Path(__file__).resolve().parents[2] / "scripts" / "privacy_check.py"
     checked(["git", "diff", "--check"], cwd=worktree)
     paths = checked(["git", "diff", "--cached", "--name-only", "--no-renames", "-z"], cwd=worktree)
@@ -312,12 +313,14 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     if checked(["git", "status", "--porcelain"], cwd=worktree).strip():
         raise WatchError("repair verification changed the checkout after its local commit")
     identity_pr = original_pr or pr
-    if pr_snapshot(repo, identity_pr["number"])["headRefOid"] != identity_pr["headRefOid"]:
-        raise WatchError("PR head moved during automatic repair; nothing was pushed")
+    if identity_pr["number"] != pr["number"]:
+        if pr_snapshot(repo, identity_pr["number"])["headRefOid"] != identity_pr["headRefOid"]:
+            raise WatchError("PR head moved during automatic repair; nothing was pushed")
     head = repaired_pr["headRefOid"]
     branch = "pr-watch/repair-%s-%s" % (pr["number"], head[:12]) if pr.get("isCrossRepository") else pr["headRefName"]
-    if pr_snapshot(repo, pr["number"])["headRefOid"] != pr["headRefOid"]:
-        raise WatchError("PR head moved before the repair push was accepted")
+    if identity_pr["number"] != pr["number"]:
+        if pr_snapshot(repo, pr["number"])["headRefOid"] != pr["headRefOid"]:
+            raise WatchError("PR head moved before the repair push was accepted")
     checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
     if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != base:
         raise WatchError("base moved before the repair push; nothing was pushed")
@@ -328,17 +331,21 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             if latest["headRefOid"] != head:
                 raise WatchError("continuation PR has an older or different head; repair it in a fresh branch")
             return existing[0]["number"], results
-        if run(["git", "ls-remote", "--exit-code", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).returncode == 0:
-            remote = checked(["git", "ls-remote", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).split()[0]
-            if remote != head:
-                raise WatchError("continuation branch exists at a different head; choose a fresh repair branch")
-        checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
-    if not pr.get("isCrossRepository"):
-        checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
-    if pr.get("isCrossRepository"):
         issues = linked_issue(pr.get("body", ""), repo)
         if not issues:
             raise WatchError("cannot open a continuation PR without an issue link")
+        result = run(["git", "ls-remote", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60)
+        if result.returncode == 2 and not result.stdout.strip():
+            checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
+        elif result.returncode:
+            raise WatchError("cannot verify continuation branch before publishing: " + bounded(result.stderr, 800))
+        elif result.stdout.strip():
+            remote = result.stdout.split()[0]
+            if remote != head:
+                raise WatchError("continuation branch exists at a different head; choose a fresh repair branch")
+    if not pr.get("isCrossRepository"):
+        checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
+    if pr.get("isCrossRepository"):
         body = "Refs #%d\n\nContinuation of #%s with an automated verification repair.\n\nOriginal failure:\n```text\n%s\n```" % (
             issues[0], pr["number"], bounded(failure, 4000))
         owner = repo.split("/", 1)[0]

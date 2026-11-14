@@ -128,11 +128,15 @@ def test_or_fix(pr, names):
     if re.match(r"^(?:test|fix)(?:\([^)]*\))?:\s+", pr.get("title", ""), re.I):
         return True
     parts = {"test", "tests", "testdata", "fixtures", "__tests__", "e2e"}
-    return bool(names) and all(
-        any(part.lower() in parts or part.startswith("Persona") and part.endswith("Tests")
-            for part in Path(name).parts) or
-        Path(name).name.endswith(("_test.go", "_test.py", ".test.ts", ".test.tsx", ".test.js", ".test.mjs"))
-        for name in names)
+    def test_file(name):
+        path = Path(name)
+        parts = path.parts
+        if len(parts) > 1 and parts[1] in ("PersonaTests", "PersonaUITests"):
+            return True
+        if path.name.endswith(("_test.go", "_test.py", ".test.ts", ".test.tsx", ".test.js", ".test.mjs")):
+            return True
+        return any(part.lower() in parts and "test" in path.name.lower() for part in parts)
+    return bool(names) and all(test_file(name) for name in names)
 
 
 def verification_env():
