@@ -1062,6 +1062,7 @@ The T4 consumption boundary is `PrepareBackendWorkspace`, `InspectBackendWorkspa
 `server/internal/assistant/task_workspaces.go`. Acquire before Engine start, check the current task
 intent immediately before starting, and keep the stable use ID until the session stops. An ambiguous
 acquire/release retains the use claim for inspection. Cleanup and use admission share the Todo lock;
-Node verifies Git again on acquire. Cancel/completion racing preparation prevents a late Ready result
+Node verifies Git again on acquire. Sandboxed Engine consumers must allow the returned `common_dir`
+paths for Git writes as well as the root and repository paths. Cancel/completion racing preparation prevents a late Ready result
 from authorizing a start. Engine opening, session recovery and user interface assembly are separate
 consumers of these primitives.

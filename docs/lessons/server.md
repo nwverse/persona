@@ -2246,3 +2246,20 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - It showed up as a test that failed 21 times in 200 under load, and the first reading was "the test's ordering".
   Before making such a test deterministic, make the losing order happen on purpose (a store that runs the other
   side inside the read) and look at what the caller gets.
+
+## Shared preparation inputs must stay outside Manager implementation (#7357)
+
+Repository binding types were first delivered under the assistant package. Once the database and
+naming contracts consumed them, the Hub inherited that Manager dependency through the database,
+even though the Hub's new code only routed requests. Put the pure shared definitions and validators
+in `repositorywire`, retaining the delivered import path with aliases and forwarding helpers. Check
+the full Hub dependency guard as well as the Manager tests when adding shared persistent contracts.
+
+A preparation request can be saved before the Node admits it. After a rejected correction, the newest
+business operation can therefore differ from the operation that still owns the physical resources.
+Record that Node operation explicitly and target further correction/cleanup through its trusted
+record. Cover repeated corrections and cancellation before any Node effect, not only one failed fetch.
+
+Default cleanup retains branches. A workspace-private bare repository must survive removal of its
+worktree for that promise to hold. Verify the retained branch's actual commit after cleanup, including
+local commits; a directory-exists assertion alone does not show that the branch data survived.
