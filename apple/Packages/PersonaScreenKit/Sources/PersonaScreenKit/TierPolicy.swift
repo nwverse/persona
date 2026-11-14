@@ -83,6 +83,8 @@ public struct TierPolicy: Sendable {
     public private(set) var bias: TierLadder.Bias
     public private(set) var capKbps: Int
     public private(set) var maxFps: Int
+    /// The most pixels per point the phone allows (Data Saver on mobile data: 1); nil, no limit.
+    public private(set) var maxScale: Double?
     public private(set) var last: Change
     public let display: Display
 
@@ -107,17 +109,17 @@ public struct TierPolicy: Sendable {
 
     /// The stream's first tier: from the route (`link`; nil before one is measured, read as the relay over Wi-Fi), or
     /// the tier this computer last settled on over the same route (`remembered`, an index into the same ladder).
-    public init(display: Display, bias: TierLadder.Bias, capKbps: Int, maxFps: Int, link: LinkStats?, remembered: Int? = nil,
-                now: Double) {
+    public init(display: Display, bias: TierLadder.Bias, capKbps: Int, maxFps: Int, maxScale: Double? = nil, link: LinkStats?,
+                remembered: Int? = nil, now: Double) {
         self.display = display
         self.bias = bias
         self.capKbps = capKbps
         self.maxFps = maxFps
-        let tiers = TierLadder.make(points: display.pointSize, pixels: display.pixelSize, maxSize: display.maxSize, bias: bias,
-                                    capKbps: capKbps, maxFps: maxFps)
+        self.maxScale = maxScale
+        let tiers = Self.tiers(display: display, bias: bias, capKbps: capKbps, maxFps: maxFps, maxScale: maxScale)
         ladder = tiers
         let start = remembered.map { min(max($0, 0), tiers.count - 1) }
-            ?? Self.index(rung: Self.rung(link), in: tiers, display: display, bias: bias, maxFps: maxFps)
+            ?? Self.index(rung: Self.rung(link), in: tiers, display: display, bias: bias, maxFps: maxFps, maxScale: maxScale)
         index = start
         shortUntil = now + Self.early
         tierSince = now
@@ -203,7 +205,7 @@ public struct TierPolicy: Sendable {
     public mutating func path(_ change: PathChange, now: Double) -> Change? {
         forgetProof()
         shortUntil = now + Self.early
-        let start = Self.index(rung: Self.rung(change.to), in: ladder, display: display, bias: bias, maxFps: maxFps)
+        let start = Self.index(rung: Self.rung(change.to), in: ladder, display: display, bias: bias, maxFps: maxFps, maxScale: maxScale)
         guard start > index else { return nil }
         return move(to: start, target: ladder[start].minKbps, reason: .networkChanged, now: now)
     }
@@ -215,12 +217,14 @@ public struct TierPolicy: Sendable {
         return rebuild(reason: .choice, now: now)
     }
 
-    /// The phone's caps changed (cellular, Low Data Mode, Low Power Mode, heat): a new ladder, the tier the rate fits.
-    public mutating func setBudget(capKbps cap: Int, maxFps fps: Int, now: Double) -> Change? {
-        guard cap != capKbps || fps != maxFps else { return nil }
+    /// The phone's caps changed (cellular, Low Data Mode, Low Power Mode, heat, Data Saver): a new ladder, the tier the
+    /// rate fits.
+    public mutating func setBudget(capKbps cap: Int, maxFps fps: Int, maxScale scale: Double? = nil, now: Double) -> Change? {
+        guard cap != capKbps || fps != maxFps || scale != maxScale else { return nil }
         let reason: TierReason = fps < maxFps ? .phoneWarm : .networkChanged
         capKbps = cap
         maxFps = fps
+        maxScale = scale
         return rebuild(reason: reason, now: now)
     }
 
@@ -288,8 +292,7 @@ public struct TierPolicy: Sendable {
     private mutating func rebuild(reason: TierReason, now: Double) -> Change {
         let rate = helperTarget ?? last.targetKbps
         let current = tier
-        ladder = TierLadder.make(points: display.pointSize, pixels: display.pixelSize, maxSize: display.maxSize, bias: bias,
-                                 capKbps: capKbps, maxFps: maxFps)
+        ladder = Self.tiers(display: display, bias: bias, capKbps: capKbps, maxFps: maxFps, maxScale: maxScale)
         windows.removeAll()
         lastUp = nil
         // The best tier the current rate fits, no richer in pixels a second than the one before (a new bias moves
@@ -312,10 +315,20 @@ public struct TierPolicy: Sendable {
         }
     }
 
+    /// The ladder under the phone's caps, without the tiers above `maxScale` (Data Saver: 1× only; every ladder ends on 1×
+    /// tiers, so it never empties).
+    static func tiers(display: Display, bias: TierLadder.Bias, capKbps: Int, maxFps: Int, maxScale: Double?) -> [TierLadder.Tier] {
+        let all = TierLadder.make(points: display.pointSize, pixels: display.pixelSize, maxSize: display.maxSize, bias: bias,
+                                  capKbps: capKbps, maxFps: maxFps)
+        guard let maxScale else { return all }
+        let kept = all.filter { $0.scale <= maxScale }
+        return kept.isEmpty ? Array(all.suffix(1)) : kept
+    }
+
     /// The tier of `ladder` for a rung of the uncapped ladder: the best one no richer in pixels a second.
-    static func index(rung: Int, in ladder: [TierLadder.Tier], display: Display, bias: TierLadder.Bias, maxFps: Int) -> Int {
-        let full = TierLadder.make(points: display.pointSize, pixels: display.pixelSize, maxSize: display.maxSize, bias: bias,
-                                   capKbps: CapturePlan.maxKbps, maxFps: maxFps)
+    static func index(rung: Int, in ladder: [TierLadder.Tier], display: Display, bias: TierLadder.Bias, maxFps: Int,
+                      maxScale: Double? = nil) -> Int {
+        let full = tiers(display: display, bias: bias, capKbps: CapturePlan.maxKbps, maxFps: maxFps, maxScale: maxScale)
         let ref = full[min(rung, full.count - 1)].pixelRate
         return ladder.indices.first { ladder[$0].pixelRate <= ref } ?? ladder.count - 1
     }

@@ -106,6 +106,23 @@ suppressed in the foreground remains eligible after the last matching phone sock
 leaves. Important interaction alerts and the existing urgent activity fast path
 remain unchanged.
 
+## Calls to computers in the log (#7509)
+
+The hub's calls to a node (`devices.Machine.call`, `devices/calllog.go`) leave one line each in the hub's journal
+when they fail (a quick cancel excepted), and when they work but are slow (2 s and more), are a session start, or are
+the sampled one in 200 per computer. `result` is `ok`, `deadline` (the wait ran out), `canceled`, `closed` (the
+connection closed; `sent=true` means the request was out and the node may have done it), `offline` (no connection to
+send it on) or `error` (the node answered with an error; `code` when it has one).
+
+```text
+[m1] rpc call method=session.start result=closed took=1m2.31s via=ssh sent=true err="rpc: connection closed"
+[m1] connection over ssh closed with 2 call(s) out: ping, session.start (reason: "node exited")
+[m1] connection ended: via=ssh lasted=3h2m1s planned=false restarting=false reason="node exited"
+[m1] connected over ssh: … (trigger: reconnect after 1m58s down; the ssh connection ended: node exited)
+```
+
+`journalctl -u jarvisd | grep "rpc call"` lists them; filter on `result=` and `method=`.
+
 ## Connecting to herdr
 
 - Node directly uses herdr Unix socket (`$HERDR_SOCKET_PATH`, otherwise `$XDG_CONFIG_HOME/herdr/herdr.sock`, default `~/.config/herdr/herdr.sock`). Each call opens a connection, writes one `{"id","method","params"}` line, reads one response; 64 MB line cap, 10-second timeout. Herdr CLI is a thin client for the same API, with an extra ping per call; result shape identical. Socket failure or old herdr unknown method (`invalid_request` + `unknown variant`) falls back to CLI. Method names follow `herdr api schema --json`; pane run = `pane.send_input` + `keys:["Enter"]`; `pane.process_info` requires `pane_id`, since target would return focused pane.

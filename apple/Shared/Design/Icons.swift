@@ -740,6 +740,8 @@ extension Theme {
         static let glossary = "character.book.closed"
         /// Hub transcription on Wi-Fi only (#3862 phase 5): Wi-Fi.
         static let wifiOnly = pluginWifi
+        /// Mobile data (#6396): the live screen's picture on cellular or a personal hotspot.
+        static let mobileData = "cellularbars"
         /// The calendar event a meeting recording is named after (docs/apple/recording.md).
         static let calendarEvent = "calendar.day.timeline.left"
         /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).

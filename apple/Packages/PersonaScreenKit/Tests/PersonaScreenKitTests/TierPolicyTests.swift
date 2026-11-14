@@ -202,6 +202,19 @@ final class TierPolicyTests: XCTestCase {
         XCTAssertEqual(smoother.map { label($0.tier) }, "1512x982@30", "never richer in pixels a second than before")
     }
 
+    /// Data Saver on mobile data (#6396): at most one pixel per point, so only the 1× tiers.
+    func testDataSaverKeepsToOnePixelPerPoint() {
+        let p = TierPolicy(display: display, bias: .auto, capKbps: 1_500, maxFps: 60, maxScale: 1,
+                           link: LinkStats(kind: .relay, via: .cellular), now: 0)
+        XCTAssertEqual(p.ladder.map(label), ["1512x982@30", "1512x982@15"])
+        var q = policy(LinkStats(kind: .relay, via: .cellular), cap: 4_000)
+        q.helper(timing(target: 2_500, sent: 2_500))
+        let c = q.setBudget(capKbps: 1_500, maxFps: 60, maxScale: 1, now: 1)
+        XCTAssertEqual(c.map { label($0.tier) }, "1512x982@30", "choosing Data Saver moves the stream at once")
+        XCTAssertEqual(c?.targetKbps, 1_500)
+        XCTAssertEqual(q.setBudget(capKbps: 4_000, maxFps: 60, maxScale: nil, now: 2)?.reason, .networkChanged)
+    }
+
     func testAFrameRateCapIsThePhoneBeingWarm() {
         var p = policy(LinkStats(kind: .lan, via: .wifi))
         p.helper(timing(target: 9_000, sent: 9_000))
