@@ -112,6 +112,16 @@ node web/e2e/knowledge-kind-chips.mjs <loopback-web-origin> <artifact-directory>
 
 Run against an exclusively owned mock-backed web server; the runner only reads. On `/kb/projects` it checks that every kind chip reads its kind's name alone, then picks each other kind by clicking its chip and holds that kind's list read (`page.route`), so the kind is still loading: **Loading** must show under the chips, and every chip's box is measured. It then lets the read through and measures again once the list is drawn: no chip may move, change or go. It runs at 1280 x 820 and on a 390 x 844 touch phone, light and dark in Chinese and light in English, and saves the chip row with the first and the last kind picked, and with the last kind while it loads. A three-minute watchdog ends the run with a timeout verdict; it exits 1 on a failed check. Browser and mock checks only.
 
+## The complete Agents list with hundreds of Agents
+
+```sh
+MOCK_SESSIONS_LIST=1 MOCK_SESSIONS_MANY=400 MOCK_LEADERS=1 MOCK_TASKS=1 MOCK_RECENT=1 MOCK_HISTORY=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && npx vite build && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite preview --port <web port> --strictPort &)
+node web/e2e/sidebar-many-agents.mjs <loopback-web-origin> <artifact-directory>
+```
+
+Run against an exclusively owned mock with 400 extra Agents on no to-do (the mock's default pins keep the complete list). A dev server works too; the production build is what the long-task numbers are for. With By to-do and 4x CPU it checks, at 390 × 844 touch: no row under a folded group (`aside [inert] a` is 0, the sidebar under 2,000 elements), none of Not on a to-do's rows on the Agents page while it is folded, at most 90 of its 400 rows once opened, its heading stuck under the Agents controls and rows (not empty boxes) on screen in the middle of the list, and the last rows drawn at its end with the count still bounded. At 1280 × 800 with the group open in the sidebar: a bounded number of rows, Tab walking the rows in order across the parts, and an open Agent far down the group (Session 330) drawn and scrolled into view, also when it is opened from elsewhere while the group is folded (the group opens for it). By machine, with the mock's 400 Agents as tabs of one open workspace at 390 × 844: a bounded number of its tab rows in the sidebar and on the Agents page, and the sidebar under 3,000 elements. It prints the long tasks of a cold Overview and Agents page and of a By machine page switch, saves five screenshots and `results.json`, prints one line per check and a verdict, and exits nonzero on a failure or its four-minute timeout. Browser and mock only.
+
 ## Bounded list verification
 
 The runtime chat uses the exact lookup added in server PR #6086 when `hello.features` advertises `sessions_lookup`: `GET /sessions?summary=0&limit=50&machine_id=<id>&session_id=<id>`. Initial entry, coalesced invalidations, reconnect and visibility recovery load only that complete record. Responses are identity-checked; missing rows and unauthorized reads never substitute another session or trigger a collection scan. Complete snapshots replace optional fields so stopped background/subagent/workflow/queued tasks do not survive as stale arrays.
