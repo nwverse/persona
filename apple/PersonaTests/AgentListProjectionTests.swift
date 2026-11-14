@@ -451,4 +451,84 @@ import Testing
         settings.searchScope = .title
         #expect(AgentListProjection.build(input([tree, other], settings: settings)).base.isEmpty)
     }
+
+    /// Search In › Title (#7443): an Agent is found by its title (and its space's or tab's name, as the web reads it),
+    /// not by its last reply or its folder; Full Text still finds all three.
+    @Test func titleScopeFindsByTitleOnly() throws {
+        var byTitle = try session("Fix the login form", cwd: "/code/web")
+        byTitle.lastText = "Done."
+        var byReply = try session("Release notes", cwd: "/code/docs")
+        byReply.lastText = "The login form now keeps what was typed."
+        var byPath = try session("Clean up styles", cwd: "/code/login-form")
+        byPath.lastText = "Removed two unused rules."
+        let all = [byTitle, byReply, byPath]
+        var settings = AgentListProjection.Settings()
+        settings.query = "login form"
+        #expect(Set(AgentListProjection.build(input(all, settings: settings)).base.map(\.sessionID))
+                == ["Fix the login form", "Release notes", "Clean up styles"])
+        settings.searchScope = .title
+        #expect(AgentListProjection.build(input(all, settings: settings)).base.map(\.sessionID) == ["Fix the login form"])
+        settings.query = "keeps"
+        #expect(AgentListProjection.build(input(all, settings: settings)).base.isEmpty)
+        settings.query = "styles"
+        #expect(AgentListProjection.build(input(all, settings: settings)).base.map(\.sessionID) == ["Clean up styles"])
+    }
+
+    /// Untouched, the search is Full Text, as before #7443: the list's result does not change with the stored default.
+    @Test func fullTextIsTheDefaultAndUnchanged() throws {
+        var a = try session("alpha", cwd: "/code/alpha")
+        a.lastText = "Wrote the parser."
+        var b = try session("beta", cwd: "/code/parser")
+        b.branch = "main"
+        #expect(AgentListProjection.Settings().searchScope == .all)
+        var settings = AgentListProjection.Settings()
+        settings.query = "parser"
+        let before = AgentListProjection.build(input([a, b], settings: settings)).base.map(\.sessionID)
+        settings.searchScope = AgentSearchScope.all.applied(query: settings.query, searching: true)
+        #expect(AgentListProjection.build(input([a, b], settings: settings)).base.map(\.sessionID) == before)
+        #expect(Set(before) == ["alpha", "beta"])
+    }
+
+    /// The scopes are the web's (`SEARCH_SCOPES` in web/src/lib/agent-chatlist-filter.ts), in its order, Full Text first.
+    @Test func scopesFollowTheWebsOrder() {
+        #expect(AgentSearchScope.allCases.map(\.rawValue) == ["all", "title", "conversation", "user", "assistant", "errors"])
+        #expect(AgentSearchScope.key == "agents.searchScope")
+    }
+
+    /// A scope narrows only what is searched: nothing typed and the search closed, the whole list shows (Errors too);
+    /// an open search under Errors shows the Agents with an error before anything is typed, as the web's does.
+    @Test func aScopeAppliesOnlyWhileSearching() throws {
+        var failed = try session("failed")
+        failed.turnError = "Upstream gateway timeout"
+        let fine = try session("fine")
+        for scope in AgentSearchScope.allCases {
+            #expect(scope.applied(query: "", searching: false) == .all)
+            #expect(scope.applied(query: "x", searching: false) == scope)
+        }
+        #expect(AgentSearchScope.title.applied(query: "", searching: true) == .all)
+        #expect(AgentSearchScope.errors.applied(query: "", searching: true) == .errors)
+        var settings = AgentListProjection.Settings()
+        settings.searchScope = AgentSearchScope.errors.applied(query: "", searching: false)
+        #expect(AgentListProjection.build(input([failed, fine], settings: settings)).base.count == 2)
+        settings.searchScope = AgentSearchScope.errors.applied(query: "", searching: true)
+        #expect(AgentListProjection.build(input([failed, fine], settings: settings)).base.map(\.sessionID) == ["failed"])
+    }
+
+    /// By Repository: a worktree with no Agent is found by its name or path under Full Text only; under Title it is
+    /// not a result (it has no title), and with nothing searched the list is as before.
+    @Test func aWorktreeWithoutAnAgentIsAFullTextResultOnly() {
+        let machine = Machine(id: "fixture-box", name: "Box", kind: "ssh", online: true)
+        let empty = HostWorkspace(machineID: "fixture-box", source: "orca", sourceID: "ws-login", title: "login-page",
+                                  cwd: "/code/login-page", group: "")
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "repo"
+        let rest = AgentListProjection.build(.init(sessions: [], machines: [machine], settings: settings, workspaces: [empty]))
+        #expect(!rest.tree.isEmpty)
+        settings.query = "login"
+        let fullText = AgentListProjection.build(.init(sessions: [], machines: [machine], settings: settings, workspaces: [empty]))
+        #expect(!fullText.tree.isEmpty)
+        settings.searchScope = .title
+        let title = AgentListProjection.build(.init(sessions: [], machines: [machine], settings: settings, workspaces: [empty]))
+        #expect(title.tree.isEmpty)
+    }
 }

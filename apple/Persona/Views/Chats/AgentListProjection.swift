@@ -1,8 +1,20 @@
 import Foundation
 
+/// What the Agents search reads (#7443): the web's Filter › Search in (`SEARCH_SCOPES`), in its order. Chosen in the
+/// list's ⋯ menu (Search In) and kept, as the grouping is.
 nonisolated enum AgentSearchScope: String, CaseIterable, Identifiable, Sendable {
     case all, title, conversation, user, assistant, errors
     var id: String { rawValue }
+
+    /// Where the choice is kept: a user setting, as the row style's (`agents.rowStyle`). No screen ever wrote the
+    /// developer key it had before (`dev.searchScope`), so nothing moves over.
+    static let key = "agents.searchScope"
+
+    /// The scope a list applies: none until something is searched, so a closed search shows the whole list; an open
+    /// search under Errors shows the Agents with an error before anything is typed, as the web's does.
+    func applied(query: String, searching: Bool) -> Self {
+        !query.isEmpty || (searching && self == .errors) ? self : .all
+    }
 }
 
 nonisolated struct AgentEvidenceSnippet: Equatable, Sendable {
@@ -416,8 +428,12 @@ nonisolated struct AgentListProjection: Sendable {
                     (settings.machine.isEmpty || workspace.machineRef.path == settings.machine) &&
                     (!settings.multiHub || HubFilter.matches(settings.hub, workspace.group))
             }
+            // A worktree with no Agent has no title, conversation or error: a search in anything but Full text does
+            // not find it by its name or path (#7443).
+            let scoped = settings.searchScope != .all && (!settings.query.isEmpty || settings.searchScope == .errors)
             result.tree = RepoTree.build(result.unpinned.filter { $0.state.isLive }, machines: input.machines.map(\.ref),
-                                         workspaces: catalog, includeEmpty: settings.filter == .all, search: settings.query)
+                                         workspaces: catalog, includeEmpty: settings.filter == .all && !scoped,
+                                         search: scoped ? "" : settings.query)
             result.byHost = settings.machine.isEmpty && result.tree.count > 1
             for host in result.tree {
                 for repo in host.repos {
