@@ -176,7 +176,15 @@ func (s *Service) createScreenInteraction(machine string, sess proto.Session) {
 		s.announce(ix)
 	}
 	if d == nil {
-		go s.upgradeScreenCard(machine, sess.SessionID, id, p)
+		s.fleet.mu.Lock()
+		if s.runCtx().Err() == nil {
+			s.fleet.upgrades.Add(1)
+			go func() {
+				defer s.fleet.upgrades.Done()
+				s.upgradeScreenCard(machine, sess.SessionID, id, p)
+			}()
+		}
+		s.fleet.mu.Unlock()
 	}
 }
 
@@ -230,8 +238,15 @@ const screenUpgradeEvery, screenUpgradeFor = 500 * time.Millisecond, 30 * time.S
 func (s *Service) upgradeScreenCard(machine, session, id string, p *pending) {
 	every, span := cmp.Or(s.fleet.upgradeEvery, screenUpgradeEvery), cmp.Or(s.fleet.upgradeFor, screenUpgradeFor)
 	end := time.Now().Add(span)
+	runCtx := s.runCtx()
 	for {
-		time.Sleep(every)
+		timer := time.NewTimer(every)
+		select {
+		case <-runCtx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 		cur, ok := s.nodeSession(machine, session)
 		if !ok || cur.Status != proto.StatusBlocked {
 			return
@@ -242,7 +257,7 @@ func (s *Service) upgradeScreenCard(machine, session, id string, p *pending) {
 		if !still {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(runCtx, 5*time.Second)
 		_, d, err := s.screenDialog(ctx, machine, session)
 		cancel()
 		if err == nil && d != nil {
