@@ -1235,6 +1235,32 @@ or writes them: the main chat's fixed payload stays as it was.
   `views/chat/MessageActions.save-prompt.test.tsx`; end to end against the mock hub (`MOCK_SAVED_PROMPTS=1`), wide and phone,
   light and dark: `node web/e2e/saved-prompts.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`.
 
+### Exporting a conversation (#7375)
+
+**Export Conversation…** in every chat's ⋯ (Agent chats and Persona conversations) saves the whole conversation as one
+Markdown file, or copies it, whatever the page has loaded (`views/chat/ExportDialog.tsx`, a chunk of its own; the rules
+in `lib/chat-export.ts`, checked against `spec/fixtures/chat-export`).
+
+- **Reading**: from the latest page back to the first (`GET …/items?turns=10&lazy_images=1&fold_work=1&before_seq=`),
+  the dialog saying how many items are in. Each message the pages carry cut (`full_size`) is read whole
+  (`…/items/{id}/full`, three at a time, at most 200; one that fails stays cut and the file says how much is left out).
+  A history rewritten while reading (the pages' `history` changes: a rewind, a compaction) starts over once, then says
+  the conversation changed. It stops at 20,000 items or 400 pages; the file then begins with where it starts. Closing
+  the dialog stops it.
+- **The file**: the title, the agent, the computer, the folder and when it was exported; then each part under
+  `## <who> · <time>` (local time): You, the assistant's name for a message Persona typed in, another session by its
+  name, the agent (or, in a Persona conversation, the assistant) for its replies, replies in a row under one heading. A
+  notice is an italic line; pictures are `[Image]`; folded work and the while-you-were-away recap are left out. Fences
+  are longer than any run of backticks inside them.
+- **Include work steps** (off by default) reads the pages unfolded (no `fold_work`) and writes thinking and each tool
+  call (its name and what it was given, its input as JSON, its result or error, each at most 4,000 characters) as
+  `<details>` blocks inside the agent's part, so a Markdown viewer shows the conversation with the work folded.
+- **Download .md** names the file after the chat's title and the day (`exportFileName`: no characters file systems
+  refuse); **Copy** puts the same text on the clipboard. The dialog shows how many messages the file holds and its size.
+- iOS and Android do not offer it yet; they are to write the same file (`spec/fixtures/chat-export/README.md`).
+- Checks: `lib/chat-export.test.ts` (the fixtures, reading, limits), `views/chat/ExportDialog.test.tsx`; end to end against
+  the mock hub, wide and phone, light and dark: `node web/e2e/chat-export.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`.
+
 ### Unified main-chat entry (#930)
 
 The same system as iOS ([unified-entry.md](../assistant/unified-entry.md)): the hub's chat activity is inserted into assistant chats (`displayLines` in `lib/feed.ts`: each item goes at the end of the turn when it happened,
@@ -2334,6 +2360,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Loop and background task labels, sub-Agents | Yes | #433, #1963, #5030, #5120 | On the web a sub-Agent is a card in the message stream that opens in place, never a conversation of its own, and so is a child session (a Codex subagent, an Agent a Paseo Agent created), which no list shows or counts on its own; iOS still uses a label bar (#5045) and lists child sessions (#5140) |
 | While-you-were-away recap, background task wake-up bar and drawer, API error cards | Yes | #433 | The drawer is a centered dialog (a bottom sheet on iOS); "Jump to the step that started it" in notification details is not done |
 | Long-press a message (copy / select / quote / edit / handoff / context / share card) | Yes | #433, #4528 | Hover menu + right click, long press on touch; handoff in Agent chats and context where messages can be sent; share card is not done (it's the phone's share sheet) |
+| Export a conversation as Markdown (the whole chat, optionally with its work steps) | Web first | #7375 | Chat ⋯ › Export Conversation…; see "Exporting a conversation" |
 | In-session search (body, thinking, tool names, tool input and output, system events; tapping a hit expands and scrolls to it, "Back to where you were") | Yes | #2977 | Opened from chat ⋯; a centered dialog on wide screens, a bottom sheet on narrow ones (a full-screen page on Android); see "In-session search" above |
 | Full-screen image view / edit | Yes | #433, #1753 | Swipe left / right, box select / pen, wheel / pinch zoom and pan; the "Images viewed this turn" gallery (`TurnImages.tsx`) uses the same viewer and can zoom too (#2029) |
 | Links open in the app | Yes | #297 | See "Links open inside the page" |
@@ -2397,7 +2424,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 
 ### Machines and settings
 
-- **VNC** (`/screen/<machine id>`, #1184, [computer-use.md](../extensions/computer-use.md) "Live view"): a separate page that skips sign-in and the sidebar; noVNC is loaded on demand only on this page. It connects to that Mac's Screen Sharing (5900) via the hub's port forwarding, view only by default; after "Take over", keyboard and mouse go to it. The App opens the same page in a WebView, with the token in the fragment and kept only in memory.
+- **VNC** (`/screen/<machine id>`, #1184, [computer-use.md](../extensions/computer-use.md) "Live view"): a separate page that skips sign-in and the sidebar; noVNC is loaded on demand only on this page. It connects to that Mac's Screen Sharing (5900) via the hub's port forwarding, view only by default; after "Take over", keyboard and mouse go to it. The App opens the same page in a WebView, with the token in the fragment and kept only in memory. The top bar's **Connection stats** (#6558, off by default, kept per Mac) shows a draggable panel with the bitrate and frame rate measured on this connection and, on a line of its own, the round trip to the hub ([computer-use.md](../extensions/computer-use.md) "Connection stats on the web").
 
 | Phone feature | Web | Round | Notes |
 | --- | --- | --- | --- |
@@ -2407,6 +2434,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | "Browser (ego lite)" in machine details (toggle, install, first-time setup guide, readiness, browser sign-in) | Yes | #2979 | |
 | Live screen from machine details (iOS "VNC") | Yes | #3247 | The top bar's "View screen" opens the web `/screen/<machine>` in a new tab (an in-App WebView on iOS); shown while the Mac is online, `cua` or `ego` is on for it and Screen Sharing answers, whatever Cua Driver's state. iOS keeps VNC inside the two sections; the web puts it in the top bar because either extension opens the screen, so it belongs to neither section, and one page-level entry does not move with Cua Driver's state |
 | Empty state of the machine list, refresh failure notice | Yes | #2979 | Also shown when data already exists, saying it is showing the previous data |
+| Live screen's Connection Stats (iOS ⋯ › Connection Stats) | Yes, VNC | #6558 | The top bar's toggle; bitrate, frame rate and the round trip to the hub. The video channel's numbers wait for the web video path |
 | Load charts, per-core bar chart on Linux | Yes | #433 | |
 | Subscription usage (Codex / Claude 5-hour and weekly windows, pace hints) | Yes | #2432 | Two thin bars at the bottom of the sidebar that open a popover; on the machines page on iOS, at the bottom of the section column on Mac (#2889); Android lists all accounts and windows at the top of the machine monitoring page (#3038) |
 | "Engine" in machine details (engines the node detected, versions and descriptions, selectable even offline, retry on save failure) | Yes | #2071 | Chosen directly on the machine page, rather than on a separate page as on iOS |
