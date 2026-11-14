@@ -58,4 +58,13 @@ mod binding {
     pub fn core_config() -> Buffer {
         registry::config().into()
     }
+
+    /// Projects the Agents list from a JSON input string. Pure function, no runtime handle needed.
+    #[napi(catch_unwind)]
+    pub fn core_project_sort(input: String) -> Result<String> {
+        let input: persona_core::sort::Input =
+            serde_json::from_str(&input).map_err(|e| napi_ohos::Error::from_reason(e.to_string()))?;
+        let projection = persona_core::sort::project(&input);
+        serde_json::to_string(&projection).map_err(|e| napi_ohos::Error::from_reason(e.to_string()))
+    }
 }
