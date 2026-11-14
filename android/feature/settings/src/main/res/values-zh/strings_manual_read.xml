@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_manual_read">手动标记已读</string>
+    <string name="settings_manual_read_footer">打开 Agent 时不再自动清除未读，需在它的菜单里点“标记已读”。默认关闭。保存在 hub 上，所有设备保持一致。</string>
+    <string name="settings_manual_read_readonly">只读设备不能修改这个设置。</string>
+    <string name="settings_manual_read_old_hub">这个 hub 还不支持此设置，更新 hub 后可用。</string>
+    <string name="settings_manual_read_failed">修改失败：%1$s</string>
+</resources>

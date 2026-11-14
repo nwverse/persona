@@ -4,6 +4,7 @@ import persona.core.contracts.JsonCodec
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.HubPreferenceSet
 import persona.core.contracts.api.HubPreferencesTransport
+import persona.core.contracts.api.ReadSettings
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.encodeToString
 import okhttp3.HttpUrl
@@ -38,4 +39,12 @@ class HttpHubPreferencesTransport(
     override suspend fun markRead(session: SessionKey) {
         request("POST", listOf("sessions", session.machineId, session.sessionId, "seen"), """{"manual":true}""")
     }
+    override suspend fun readSettings(): ReadSettings? = try {
+        JsonCodec.decodeFromString<ReadSettings>(request("GET", listOf("read-settings")))
+    } catch (failure: HubFailure) {
+        // A hub from before Manual mark as read (#7356): off, and nothing to turn on.
+        if (failure.status == 404) null else throw failure
+    }
+    override suspend fun putReadSettings(manual: Boolean) =
+        JsonCodec.decodeFromString<ReadSettings>(request("PUT", listOf("read-settings"), """{"manual":$manual}"""))
 }
