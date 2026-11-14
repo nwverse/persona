@@ -170,8 +170,8 @@ final class LarkSendTests: XCTestCase {
         let list = app.scrollViews.containing(.staticText, identifier: "能赶上，下午三点前给你确认").firstMatch
         list.swipeUp() // at the end, as after reading the unread ones
         sleep(1)
-        let currentList = app.scrollViews.containing(.staticText, identifier: "新包发你了").firstMatch
-        let last = currentList.staticTexts["新包发你了"]
+        let currentList = app.scrollViews.containing(.staticText, identifier: "文档我晚上看").firstMatch
+        let last = currentList.staticTexts["新包发你了"].firstMatch
         XCTAssertTrue(last.waitForExistence(timeout: 5), "the chat's last message is there")
         let field = app.textFields["lark.box"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
@@ -190,8 +190,10 @@ final class LarkSendTests: XCTestCase {
         reply.tap()
         XCTAssertTrue(app.staticTexts["回复 我"].waitForExistence(timeout: 3), "the quote bar is up")
         sleep(1) // and the keyboard with it
-        assertAtEnd(app, last, "the quote bar does not cover the last message")
+        let quotedList = app.scrollViews.containing(.staticText, identifier: "文档我晚上看").firstMatch
+        let quotedLast = quotedList.staticTexts["新包发你了"].firstMatch
         shot(app, "lark-keyboard-quote")
+        assertAtEnd(app, quotedLast, "the quote bar does not cover the last message")
         // The quote stays as the chat's draft: the next run quotes the same message. (The bar going away as the
         // reply is sent: testQuotedReplyShowsTheQuoteWhileItGoes.)
     }
