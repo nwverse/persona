@@ -214,6 +214,13 @@ internal fun InteractionForm(
     fun act(action: AnswerAction, value: AnswerDraft = draft) {
         if (RequestExpiry.expired(interaction.expiresAt, Instant.now())) return
         if (stoppedWork && !interaction.stoppedWorkAnswerAllowed(action, value)) return
+        // A stopped card's page turn is navigation only, as on Web. AnswerBuilder may resolve Advance when every
+        // question is answered, so only the last page's Submit may produce that Resolution (#6839).
+        if (stoppedWork && action == AnswerAction.Advance) {
+            if (!editable || value.page >= interaction.questions.orEmpty().lastIndex) return
+            update(value.copy(page = value.page + 1))
+            return
+        }
         val result = AnswerBuilder.build(interaction, action, value, context)
         if (!result.allowed || (stoppedWork && !interaction.stoppedWorkResultAllowed(result))) return
         if (result.resolution == null) update(result.draft)
@@ -221,6 +228,9 @@ internal fun InteractionForm(
     }
     fun enabled(action: AnswerAction): Boolean {
         if (stoppedWork && !interaction.stoppedWorkAnswerAllowed(action, draft)) return false
+        if (stoppedWork && action == AnswerAction.Advance) {
+            return editable && draft.page < interaction.questions.orEmpty().lastIndex
+        }
         val result = AnswerBuilder.build(interaction, action, draft, context)
         return result.allowed && (!stoppedWork || interaction.stoppedWorkResultAllowed(result))
     }

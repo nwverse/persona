@@ -11,9 +11,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -152,15 +155,35 @@ class StoppedAgentWorkCardUiTest {
         assertTrue("A multi-question pick updates the draft without resolving", sent.isEmpty())
         rule.onNodeWithText(submit).assertIsNotEnabled()
         rule.onNodeWithText(previous).performClick()
-        // The old second-page Continue is still in the draft. Advance must validate that complete answer set too.
-        rule.onNodeWithText(next).performClick()
-        assertEquals("Advance must not submit a retained non-defer answer", emptyList<Resolution>(), sent)
-        rule.onNodeWithText(next).assertIsNotEnabled()
+        // The page indicator has no independent navigation. Next must turn the page without submitting the old answer.
+        rule.onNodeWithText("1 / 2").assert(!hasClickAction())
+        rule.onNodeWithText(next).assertIsEnabled().performClick()
+        rule.onNodeWithText(secondPrompt).assertIsDisplayed()
+        assertTrue("Advance on a stopped card only turns the page", sent.isEmpty())
+        rule.onNodeWithText(submit).assertIsNotEnabled()
         // Replacing the retained answer with defer makes the complete post-action answer set valid again.
-        rule.onNodeWithText("2. Leave it").performClick()
-        rule.onNodeWithText("2. Leave it").performClick()
+        rule.onNodeWithText("2. Leave it").assertIsEnabled().performClick()
         rule.onNodeWithText(submit).assertIsEnabled().performClick()
         assertEquals(listOf(Resolution(answers = mapOf(firstPrompt to "Leave it", secondPrompt to "Leave it"))), sent)
+    }
+
+    @Test fun runningWorkAdvanceStillSubmitsCompleteAnswerSet() {
+        val sent = mutableListOf<Resolution>()
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                InteractionPanel(listOf(multiWork), null, 600.dp, null, emptySet(), { _, resolution -> sent += resolution },
+                    null, {}, blockedReason = null)
+            }
+        }
+        val previous = resources.getString(R.string.chat_question_previous)
+        val next = resources.getString(R.string.chat_question_next)
+        rule.onNodeWithText("1. Handled, continue").performClick()
+        rule.onNodeWithText("1. Handled, continue").performClick()
+        rule.onNodeWithText(previous).performClick()
+        rule.onNodeWithText(next).assertIsEnabled().performClick()
+        assertEquals(listOf(Resolution(answers = mapOf(
+            firstPrompt to "Handled, continue", secondPrompt to "Handled, continue",
+        ))), sent)
     }
 
     @Test fun stoppedWorkCardScreenshotsAcrossStyles() {
