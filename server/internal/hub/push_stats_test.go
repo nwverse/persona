@@ -386,3 +386,47 @@ func TestPushInterceptsBodyStoredAsSummary(t *testing.T) {
 		t.Fatalf("stored summary length %d (suffix ellipsis %v), want %d runes ending with …", n, strings.HasSuffix(long.Body, "…"), pushInterceptBodyMaxRunes)
 	}
 }
+
+// Rows written before the summary limit may still hold a full body: a restart must sanitize them in memory and write
+// the sanitized list back, so the old full text does not stay in the database until some unrelated write.
+func TestPushInterceptsSanitizeOldRowsOnLoad(t *testing.T) {
+	h, _ := lnHub(t)
+	store := h.push.store.(*lnStore)
+	longBody := strings.Repeat("密", pushInterceptBodyMaxRunes+80)
+	legacy := []pushIntercept{{
+		At: h.push.now().UTC(), Level: assistantwire.LevelP1, Reason: interceptReasonP1,
+		Title: "legacy card", Body: longBody, Manager: "manager-a",
+	}}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	store.vals[lnInterceptsSettingKey] = append([]byte(nil), raw...)
+	store.mu.Unlock()
+
+	restarted := newPusher(t.TempDir(), store, t.Logf)
+	view := restarted.lnInterceptsView("", 0)
+	if len(view) != 1 {
+		t.Fatalf("reloaded view = %d entries, want 1", len(view))
+	}
+	if n := len([]rune(view[0].Body)); n != pushInterceptBodyMaxRunes || !strings.HasSuffix(view[0].Body, "…") {
+		t.Fatalf("reloaded body length %d, want a %d-rune summary", n, pushInterceptBodyMaxRunes)
+	}
+	if !restarted.waitInterceptsSaved(5 * time.Second) {
+		t.Fatal("the sanitized list was not written back")
+	}
+	store.mu.Lock()
+	persisted := append([]byte(nil), store.vals[lnInterceptsSettingKey]...)
+	store.mu.Unlock()
+	if bytes.Contains(persisted, []byte(longBody)) {
+		t.Fatal("the full legacy body is still in the stored setting row after reload")
+	}
+	var back []pushIntercept
+	if err := json.Unmarshal(persisted, &back); err != nil || len(back) != 1 {
+		t.Fatalf("persisted rows = %+v (err %v), want one sanitized row", back, err)
+	}
+	if len([]rune(back[0].Body)) != pushInterceptBodyMaxRunes {
+		t.Fatalf("persisted body length %d, want the summary limit", len([]rune(back[0].Body)))
+	}
+}

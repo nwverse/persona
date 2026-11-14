@@ -358,30 +358,30 @@ func (p *Pusher) saveIntercepts() {
 		sent := slices.Clone(p.sent)
 		p.lnMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
-		failed := false
+		failedIntercepts, failedSent := false, false
 		if saveIntercepts {
 			if err := p.store.PutSetting(ctx, lnInterceptsSettingKey, list); err != nil {
 				p.logf("push grading: save held pushes: %v", err)
-				failed = true
+				failedIntercepts = true
 			}
 		}
 		if saveSent {
 			if err := p.store.PutSetting(ctx, pushSentSettingKey, sent); err != nil {
 				p.logf("push grading: save delivered pushes: %v", err)
-				failed = true
+				failedSent = true
 			}
 		}
 		cancel()
-		if !failed {
+		if !failedIntercepts && !failedSent {
 			continue
 		}
-		// The change must not be lost: a failed write marks its list dirty again and the writer retries after a
-		// backoff instead of hammering a failing database. waitInterceptsSaved keeps waiting until the retry lands.
+		// A failed write marks only its own list dirty again and the writer retries after a backoff instead of
+		// hammering a failing database or rewriting the key that already landed. waitInterceptsSaved waits it out.
 		p.lnMu.Lock()
-		if saveIntercepts {
+		if failedIntercepts {
 			p.lnDirty = true
 		}
-		if saveSent {
+		if failedSent {
 			p.sentDirty = true
 		}
 		p.lnMu.Unlock()
@@ -440,15 +440,24 @@ func (p *Pusher) loadLnState() {
 	var stored []pushIntercept
 	if load(lnInterceptsSettingKey, &stored) {
 		cutoff := p.now().Add(-lnInterceptAge)
+		sanitized := false
 		p.lnMu.Lock()
 		p.intercepts = p.intercepts[:0]
 		for _, e := range stored {
-			if e.At.After(cutoff) {
-				// Rows written before the summary limit may still hold a full body: sanitize at load so a later save
-				// replaces them and nothing serves the old full text.
-				e.Body = summaryBody(e.Body)
-				p.intercepts = append(p.intercepts, e)
+			if !e.At.After(cutoff) {
+				sanitized = true // an expired row is dropped from memory and must be removed on disk too
+				continue
 			}
+			// Rows written before the summary limit may still hold a full body: sanitize at load, mark the list
+			// dirty and write it back, so the old full text cannot sit in the database until some unrelated write.
+			if sum := summaryBody(e.Body); sum != e.Body {
+				sanitized = true
+				e.Body = sum
+			}
+			p.intercepts = append(p.intercepts, e)
+		}
+		if sanitized && p.store != nil {
+			p.scheduleSaveLocked()
 		}
 		p.lnMu.Unlock()
 	}
