@@ -581,7 +581,7 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
   - **Shared with the browser** (#6558): `spec/fixtures/screen-tiers` holds the ladder's and the signals' scenarios
     (input and expected output, one per file), which `TierFixtureTests` writes from these Swift types
     (`PERSONA_WRITE_TIER_FIXTURES=1`) and otherwise checks unchanged. The browser's port (`web/src/screen/tiers/`)
-    replays them, so a change on either side fails both until they agree. The policy's scenarios follow.
+    replays them, so a change on either side fails both until they agree; so do the policy's timelines (route starts, every way down and up, a route change, a new bias, Data Saver and a warm device).
   - **Signals** (the phone's, from the frames): queueing above the 10 s floor of the one-way delay (p50 / p95 over
     0.5 s, rising or falling over 1 s), the rate the link carried while busy (frames queued behind one another: their
     bytes over their arrival gaps, so quiet stretches don't read as a slow link), bursts of large frames, late frames,
