@@ -40,8 +40,11 @@ that fallback; an existing host does not need a new callback.
 
 `CoreContinuityShadow` is a test-only adapter used by fixture comparisons. Native `ChatStore` remains the
 iOS behavioral reference and the production default. The shadow harness applies the same action, drains one patch and
-compares items, continuity fields and per-step effects; it does not select Rust for production or put message contents
-into diagnostics. Independent chat wakes and fold/reload rules must remain covered before any later adapter integration.
+compares items, continuity fields and per-step effects; every event's wake is checked against its chat and whether the
+patch changed. Diagnostics contain only a rule and an input shape, never message contents or expected/actual item JSON.
+The shadow does not select Rust for production. Real `AppModel` tests with manually released `APIClient` responses
+cover independent concurrent folds, coalescing two opens of one fold, overlapping reloads retaining newer pushes, and
+per-owner subscriptions; fold/reload rules must remain covered before any later adapter integration.
 
 The package and fixture replay are not proof of physical-device performance, download-size, launch or memory budgets.
 Those remain unmeasured until a named device/simulator, optimized build and workload are reported.
