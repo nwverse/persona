@@ -319,6 +319,7 @@ async function hubChangeScenario() {
     const targetSession = win.webContents.session.storagePath;
     if (targetURL !== otherHub.href || targetSession === previousSession) throw new Error(`wrong replacement window or session: ${JSON.stringify({ targetURL, expected: otherHub.href, previousSession, targetSession })}`);
     if (!win.webContents.getURL().startsWith(otherHub.href)) throw new Error("the replacement still shows the previous hub");
+    await until("second hub window is shown", () => !win.isDestroyed() && win.isVisible() && !win.webContents.isLoading());
     await until("second hub sign-in page", () => page("!!document.querySelector('input[type=password]') || document.body.innerText.includes('Let this browser in from a device')"));
     // This call returning either platform value proves the new window's production IPC is reachable. macOS may
     // report Notification.isSupported() false before sign-in; the notify() assertion below is the authorization check.
