@@ -237,7 +237,10 @@ func (c *Connector) applyNotifications(ctx context.Context, ns []notification, c
 		if err != nil {
 			continue // read again next time
 		}
-		thing.Thread, thing.Kind, thing.Label, thing.Last = thread, kind, label, stamp
+		thing.Thread, thing.Kind, thing.Label = thread, kind, label
+		if thing.Last == "" { // describe's newest comment or review names a PR's or issue's move; else the notification
+			thing.Last = stamp
+		}
 		thing.Tags = tagsOf(n, run, kind, thing.Sender)
 		st.mu.Lock()
 		st.seen[n.ID] = stamp
@@ -439,6 +442,9 @@ func (c *Connector) describe(ctx context.Context, n notification, me string) (co
 	if len(moves) > 0 {
 		last := moves[len(moves)-1]
 		t.Sender, t.Preview = last.who, strings.TrimSpace(last.verb+" "+firstLine(last.text))
+		// The move is the newest comment or review, not the notification (#7471): a push, an edit of the body or title,
+		// a label bumps the notification's time but adds no message, and the same Last says so to the hub.
+		t.Last = last.at.UTC().Format(time.RFC3339)
 	}
 
 	switch {
