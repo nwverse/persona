@@ -56,6 +56,11 @@ type Hello struct {
 	// SecretHandoffGate: the hub lets only a device that may approve a hand-off card say yes to one, and names it in
 	// HTTPRequest.HandoffApprover. An older hub never sends it; a manager then shows no hand-off card at all.
 	SecretHandoffGate bool `json:"secret_handoff_gate,omitempty"`
+	// QuietPush: the hub's push tiering switch (the low-distraction switch, docs/server/server.md) is on. The manager
+	// then holds back what is its own to send, by the same levels the hub filters pushes by: a supervised card is not
+	// handed to the owner on a timeout, a P1 escalation and conclusion / progress cards post nothing. An older hub never
+	// sends it: off. A change of the switch sends manager.updated.
+	QuietPush bool `json:"quiet_push,omitempty"`
 }
 
 // NotifyTimings are hub.json's notify section, and manager.json's hook_timeout_minutes, in milliseconds (0: the
@@ -264,10 +269,6 @@ const (
 	LevelP1 = "P1" // worth knowing: a conclusion, an explicit notify_user; held for the briefing in low-distraction mode
 	LevelP2 = "P2" // background news: silent in low-distraction mode
 )
-
-// QuietModeSettingKey is the hub_settings key of the low-distraction switch (a JSON bool, no row: off). The hub writes it
-// (its push settings route); the assistant reads it too, to keep what low-distraction mode holds back off its own channels.
-const QuietModeSettingKey = "hub.ln_mode"
 
 // NotifyTodo is the to-do a NotifyDecide push asks about: its id, when the decision now waiting was asked (what
 // POST /api/v1/todos/{id}/accept takes, so an OK from an earlier round takes nothing) and the option it recommends.

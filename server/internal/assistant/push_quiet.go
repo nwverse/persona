@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 )
@@ -15,45 +14,25 @@ import (
 // progress reach the owner through the briefing and the board instead of a card (quietHoldsAsk, leaderReportLevel).
 // With the switch off, everything is as before.
 
-// quietSwitchTTL bounds how often the assistant reads the switch while it keeps asking: the hub's own cache is as fresh.
-const quietSwitchTTL = 15 * time.Second
-
-// quietSwitch is the switch as last read. A read that fails keeps the last answer (off before the first good one), so an
-// outage never turns holding back on by itself.
+// quietSwitch overrides the hub's answer in tests.
 type quietSwitch struct {
-	mu     sync.Mutex
-	on     bool
-	readAt time.Time
-	// force, when set, answers instead of the store (tests).
+	mu sync.Mutex
+	// force, when set, answers instead of the hub's hello (tests).
 	force *bool
 }
 
-// quietModeOn says whether the hub's low-distraction switch is on, read from hub_settings at most once per quietSwitchTTL.
+// quietModeOn says whether the hub's push tiering switch is on, as its hello last said (Hello.QuietPush; the hub sends
+// manager.updated when the switch changes). The manager never reads the hub's settings itself (db/settings.go: each
+// side has its own), and an older hub that does not send it is off.
 func (s *Service) quietModeOn(ctx context.Context) bool {
 	b := &s.pushQuiet
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.force != nil {
-		return *b.force
+	force := b.force
+	b.mu.Unlock()
+	if force != nil {
+		return *force
 	}
-	if !b.readAt.IsZero() && time.Since(b.readAt) < quietSwitchTTL {
-		return b.on
-	}
-	b.readAt = time.Now()
-	st := s.store()
-	if st == nil {
-		return b.on
-	}
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-	defer cancel()
-	var on bool
-	found, err := st.Setting(rctx, assistantwire.QuietModeSettingKey, &on)
-	if err != nil {
-		s.logf("low-distraction mode: read the switch: %v (keeping %v)", err, b.on)
-		return b.on
-	}
-	b.on = found && on
-	return b.on
+	return s.hello(ctx).QuietPush
 }
 
 // quietHoldsAsk: low-distraction mode keeps ask a off the Feishu bot: a conclusion (task_review accepted, cannot) or a "Please verify"

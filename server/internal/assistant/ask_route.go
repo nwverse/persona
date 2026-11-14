@@ -56,9 +56,10 @@ type askRoute struct {
 	// timeout only puts it back on the apps (ringAsks), not ringing them a second time. An approval restored so (a
 	// permission or a plan) is not: no conversation may answer it, so its timeout rings.
 	maybeTold bool
-	// In low-distraction mode (push_quiet.go) a card that runs past its last rung does not reach the user: it goes back to its task's
-	// supervisor once more (reminded), and after that it stays with the last rung (parked) until someone answers or
-	// escalates it, or the switch goes off, when it climbs to the user as before.
+	// With push tiering on (push_quiet.go) a card that runs past its last rung does not reach the user: it goes back to
+	// its task's supervisor once more (reminded), and when that hold runs out too it stays there (parked) until someone
+	// answers or escalates it, or the switch goes off, when it climbs on as before. Neither is kept over a restart: a
+	// restored route starts again from the supervisor, which is then reminded once more.
 	reminded, parked bool
 }
 
@@ -242,8 +243,8 @@ func (s *Service) routedTo(id, self string, main bool) (string, bool) {
 // does not count (busyLocked): it is being worked through, not waiting to be looked at. A conversation still on a turn
 // askBusyMax after the card came is stuck instead, and its time counts again.
 //
-// In low-distraction mode a card past its last rung is not the user's: its task's supervisor is reminded of it once (quietRemind), then
-// it stays with the last rung; only ask_escalate hands it to the user.
+// With push tiering on a card past its last rung is not the user's: its task's supervisor is reminded of it once
+// (quietRemind), then it stays with that supervisor; only ask_escalate hands it to the user.
 func (s *Service) askTick(now time.Time) {
 	type up struct {
 		todo, to string
@@ -266,17 +267,19 @@ func (s *Service) askTick(now time.Time) {
 		if now.Sub(r.since) < askHoldFor {
 			continue
 		}
+		if quiet && r.reminded {
+			r.parked, r.since = true, now // reminded once already: it stays with the task's supervisor
+			s.logf("ask %s: not handled after its reminder; push tiering on: kept with %s, not pushed to the user", id, r.at())
+			continue
+		}
 		r.step++
 		r.since, r.held = now, now
 		switch to := r.at(); {
 		case to != "":
 			ups = append(ups, up{r.todo, to, p.ix, r.step})
-		case quiet && !r.reminded:
+		case quiet:
 			r.step, r.reminded = 0, true // back to the task's supervisor, once
 			reminds = append(reminds, up{r.todo, r.ladder[0], p.ix, 0})
-		case quiet:
-			r.step, r.parked = len(r.ladder)-1, true // it stays with the last rung
-			s.logf("ask %s: not handled after its reminder; low-distraction mode: kept with %s, not pushed to the user", id, r.ladder[r.step])
 		default:
 			toUser[r.todo] = append(toUser[r.todo], id)
 		}
@@ -362,8 +365,9 @@ func (s *Service) ringAsks(todo string, ids []string, d *proto.Delegate, esc esc
 		}
 		switch {
 		case esc.held:
+			s.recordConfirmationNotification(ix)
+			s.heldAnnounced(ix.ID) // no Feishu card or channel message, now or when the channels catch up
 			if !pushed {
-				s.recordConfirmationNotification(ix)
 				s.notifyInteractionAt(ix, s.machineName(ix.MachineID), false, esc.level, esc.key)
 			}
 		case esc.level != "":
@@ -497,8 +501,9 @@ func (s *Service) toolAskEscalate(ctx context.Context, self string, args json.Ra
 	if esc.held {
 		return fmt.Sprintf("Low-distraction mode is on and this is not the user's alone (why_owner %q, no p0): %d card(s) of task %s "+
 			"went to their Needs you list and briefing without a push, with your reason and recommendation. Their answers go to the "+
-			"agents and are kept as the task's decisions; don't ask them the same again. If waiting would do real harm, say why "+
-			"in a new escalation with p0.", a.WhyOwner, len(rung), t.ID), nil
+			"agents and are kept as the task's decisions; don't ask them the same again. These cards cannot be escalated again: "+
+			"next time, when the user must act on it themselves now, escalate with p0 or the right why_owner from the start.",
+			a.WhyOwner, len(rung), t.ID), nil
 	}
 	return fmt.Sprintf("The user is asked now: %d card(s) of task %s went to them as one, with your reason and "+
 		"recommendation. Their answers go to the agents and are kept as the task's decisions; don't ask them the same again.", len(rung), t.ID), nil

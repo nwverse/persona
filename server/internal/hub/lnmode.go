@@ -381,6 +381,7 @@ func (h *Hub) lnRoutes(api *http.ServeMux) {
 			writeErr(w, http.StatusServiceUnavailable, err)
 			return
 		}
+		h.assistantUpdated() // the managers hold back their own cards by the switch too (Hello.QuietPush)
 		writeJSON(w, map[string]any{"enabled": body.Enabled})
 	})
 	api.HandleFunc("GET /api/v1/push/intercepts", func(w http.ResponseWriter, r *http.Request) {

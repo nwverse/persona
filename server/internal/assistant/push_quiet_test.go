@@ -2,7 +2,9 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +47,24 @@ func (e *routeEnv) heldNotices(todo string) []Notification {
 	return out
 }
 
+// feishuCards turns the Lark bot on with every agent card wanted, and counts the cards it is given to post.
+func (e *routeEnv) feishuCards() func() int {
+	var mu sync.Mutex
+	n := 0
+	e.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
+		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", PublicURL: "https://hub.example.com",
+			Features: FeishuFeatures{Main: true, Cards: true, AllCards: true}}, nil
+	})
+	e.f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) {
+		mu.Lock()
+		n++
+		mu.Unlock()
+		return map[string]any{"message_id": "om_x"}, nil
+	})
+	e.f.answerApp(AppFeishu, FeishuUpdateCard, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
+	return func() int { mu.Lock(); defer mu.Unlock(); return n }
+}
+
 func (e *routeEnv) announced(id string) bool {
 	e.s.chans.mu.Lock()
 	defer e.s.chans.mu.Unlock()
@@ -75,10 +95,12 @@ func TestQuietPermissionCardStaysWithItsSupervisor(t *testing.T) {
 	if n.Level != assistantwire.LevelP1 || n.Kind != assistantwire.NotifyPush || !strings.Contains(n.Title, "修登录崩溃") {
 		t.Fatalf("held notice %+v", n)
 	}
-	e.s.askTick(time.Now().Add(6 * askHoldFor)) // up to the main conversation again
-	e.s.askTick(time.Now().Add(8 * askHoldFor)) // past the top again: parked, nothing more
+	e.s.askTick(time.Now().Add(6 * askHoldFor)) // its hold with the leader runs out again: it stays there
 	e.s.askTick(time.Now().Add(20 * askHoldFor))
 	e.settle()
+	if got := e.f.noticesTo("conv1"); len(got) != 1 {
+		t.Fatalf("the main conversation was given the card again after the reminder: %d messages", len(got))
+	}
 	if got := e.cardPushes("ix1"); len(got) != 0 {
 		t.Fatalf("the owner was pushed the card: %v", got)
 	}
@@ -87,6 +109,9 @@ func TestQuietPermissionCardStaysWithItsSupervisor(t *testing.T) {
 	}
 	if !e.lastShown("ix1").Delegating || e.announced("ix1") {
 		t.Fatal("the card left its supervisors")
+	}
+	if todo, ok := e.s.routedTo("ix1", "lead1", false); !ok || todo != e.todo.ID {
+		t.Fatal("the card is not with the task's leader")
 	}
 	// The supervisor may still escalate what is the owner's alone.
 	if _, err := runJSON(t, e.s, "lead1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "要推远端",
@@ -116,7 +141,8 @@ func TestQuietParkedCardClimbsOnceTheSwitchIsOff(t *testing.T) {
 	}
 	off := false
 	e.s.setQuietForTest(&off)
-	e.s.askTick(time.Now().Add(12 * askHoldFor))
+	e.s.askTick(time.Now().Add(12 * askHoldFor)) // leader → main conversation
+	e.s.askTick(time.Now().Add(16 * askHoldFor)) // → the owner
 	waitFor(t, "the push", func() bool { return e.pushesOf("ix1") == 1 })
 	if got := e.cardPushes("ix1"); got[0] != "" {
 		t.Fatalf("a timeout's push names level %q, want the hub's own", got[0])
@@ -170,6 +196,7 @@ func TestEscalateLevelByWhyOwner(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newRouteEnv(t, nil, true)
 			pushQuietFor(t, e.s, tc.quiet)
+			cards := e.feishuCards()
 			e.raise(askPermission("ix1", "worker-1"))
 			e.noticeWith("lead1", "interaction_id=ix1")
 			args := map[string]any{"todo_id": e.todo.ID, "reason": "要推到远端分支"}
@@ -185,8 +212,16 @@ func TestEscalateLevelByWhyOwner(t *testing.T) {
 			if got := e.cardPushes("ix1"); len(got) != 1 || got[0] != tc.level {
 				t.Fatalf("pushes at %v, want one at %s", got, tc.level)
 			}
-			if got := e.announced("ix1"); got != tc.announce {
-				t.Fatalf("Feishu bot and channels given the card: %v, want %v", got, tc.announce)
+			if tc.announce {
+				waitFor(t, "the Feishu card", func() bool { return cards() == 1 })
+			} else {
+				time.Sleep(100 * time.Millisecond)
+				if n := cards(); n != 0 {
+					t.Fatalf("a held escalation posted %d Feishu cards", n)
+				}
+				if !e.announced("ix1") {
+					t.Fatal("a held card is not marked announced: the channels' catch-up would post it")
+				}
 			}
 			if shown := e.lastShown("ix1"); shown.Delegating || shown.Delegate == nil {
 				t.Fatalf("not on the owner's Needs you list: %+v", shown)
@@ -305,6 +340,8 @@ func TestQuietTaskReportPostsNothing(t *testing.T) {
 
 // Leader reports carry a level for the extensions only with the switch on: progress, reached and stuck P1, a decision P0.
 func TestLeaderReportLevel(t *testing.T) {
+	// (A plan waiting for Start is a decision report with Plan set: leaderReportsSync gives it P1, see
+	// TestLeaderPlanWaitingIsADecision.)
 	s, _ := newTaskService(t)
 	ctx := context.Background()
 	pushQuietFor(t, s, false)
@@ -338,49 +375,18 @@ func TestPlanWaitingForStartIsNotP0(t *testing.T) {
 	}
 }
 
-// switchStore is a store with only settings, for reading the switch.
-type switchStore struct {
-	Store
-	vals map[string]bool
-	err  error
-}
-
-func (st *switchStore) Setting(_ context.Context, key string, out any) (bool, error) {
-	if st.err != nil {
-		return false, st.err
-	}
-	v, ok := st.vals[key]
-	if ok {
-		*out.(*bool) = v
-	}
-	return ok, nil
-}
-
-// The switch is read from hub_settings; a store that fails keeps the last answer (off before the first good one).
-func TestQuietModeReadsTheHubSwitch(t *testing.T) {
-	st := &switchStore{vals: map[string]bool{}}
-	s := &Service{store: func() Store { return st }, logf: t.Logf}
+// The switch is the hub's hello: QuietPush on is on, an older hub that sends nothing is off.
+func TestQuietModeFollowsTheHubsHello(t *testing.T) {
+	s, f := newTaskService(t)
 	ctx := context.Background()
-	stale := func() { s.pushQuiet.mu.Lock(); s.pushQuiet.readAt = time.Time{}; s.pushQuiet.mu.Unlock() }
 	if s.quietModeOn(ctx) {
-		t.Fatal("on without a row")
+		t.Fatal("on without the hub saying so")
 	}
-	st.vals[assistantwire.QuietModeSettingKey] = true
-	if s.quietModeOn(ctx) {
-		t.Fatal("read again before its time")
-	}
-	stale()
+	f.mu.Lock()
+	f.hello.QuietPush = true
+	f.mu.Unlock()
 	if !s.quietModeOn(ctx) {
-		t.Fatal("off with the row on")
-	}
-	st.err = context.DeadlineExceeded
-	stale()
-	if !s.quietModeOn(ctx) {
-		t.Fatal("a failed read turned it off")
-	}
-	fresh := &Service{store: func() Store { return st }, logf: t.Logf}
-	if fresh.quietModeOn(ctx) {
-		t.Fatal("a failed first read turned it on")
+		t.Fatal("off with the hub's switch on")
 	}
 }
 
