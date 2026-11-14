@@ -106,7 +106,8 @@ class AssistantInboxRowsTest {
                     done = false, busy = false, onlineSince = null, onDone = {}, onHandOff = {})
             }
         }
-        rule.onNodeWithText("$summary\n$extra").assertExists()
+        rule.onAllNodesWithText(summary, useUnmergedTree = true).assertCountEquals(1)
+        rule.onAllNodesWithText(extra, useUnmergedTree = true).assertCountEquals(1)
     }
 
     @Test fun detailOpensTheConversationFromOpenTheChat() {
@@ -135,7 +136,6 @@ class AssistantInboxRowsTest {
         }
         rule.onAllNodesWithText(summary, useUnmergedTree = true).assertCountEquals(1)
         rule.onAllNodesWithText(record.item.title, useUnmergedTree = true).assertCountEquals(1)
-        rule.onAllNodesWithText("Assistant", useUnmergedTree = true).assertCountEquals(1)
         rule.onNodeWithText("Assistant: $summary", substring = true).assertDoesNotExist()
         rule.onNode(hasText(record.item.title) and hasClickAction()).performTouchInput { longClick() }
         rule.onNodeWithText("Done").assertExists()

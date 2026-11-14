@@ -57,6 +57,7 @@ const usage = `用法：
   persona-link discover [--wait <秒>] [--json]    局域网里有哪些 hub（mDNS）；听到了退出码 0，否则 1
   persona-link status [--json]                    模式、链路、hub、本机 node、后台服务的状态；连着（被动模式：在监听）时
                                                  退出码 0，否则 1
+  persona-link reconnect                            请正在运行的连接器立即重连（Windows 也适用，桌面设置界面用这个命令）
   persona-link logs [-f] [-n <行数>]              看日志（~/.persona/link.log）；-f 一直跟着
   persona-link uninstall [--purge]                停掉并删掉 systemd 用户服务（Windows：计划任务）；--purge 连凭据、状态、日志、
                                                  连接器的 TLS 身份和 ~/.persona/bin/persona-link 一起删
@@ -114,6 +115,8 @@ func main() {
 		err = uninstall(e, args)
 	case "status":
 		err = status(e, args)
+	case "reconnect":
+		err = reconnectNow(e, args)
 	case "logs", "log":
 		err = logs(e, args)
 	case "run":
@@ -153,7 +156,7 @@ var errUsage = errors.New("usage")
 
 // helpTopics are the subcommands `<sub> -h` answers for (supervise is not for people: its -h shows the whole usage).
 var helpTopics = map[string]bool{"pair": true, "mode": true, "node": true, "discover": true, "install": true,
-	"uninstall": true, "status": true, "logs": true, "log": true, "run": true, "supervise": true, "ssh": true,
+	"uninstall": true, "status": true, "reconnect": true, "logs": true, "log": true, "run": true, "supervise": true, "ssh": true,
 	"address": true, "tray": true, "name": true}
 
 // wantsHelp says whether args ask for help (-h, -help or --help anywhere).
