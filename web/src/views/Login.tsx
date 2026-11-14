@@ -13,6 +13,8 @@ import type { PasswordState } from "../lib/password";
 const PasswordLogin = lazy(() => import("./PasswordLogin").then((m) => ({ default: m.PasswordLogin })));
 
 const code = "whitespace-nowrap rounded-[5px] bg-field px-1 py-0.5 font-mono text-[11.5px] text-ink-2 shadow-hairline";
+// what went wrong, under the button of the form it came from (the link's, or the master key's)
+const formError = "text-center text-[12.5px] text-red";
 
 // Sign in without a terminal (docs/assistant/onboarding.md 4.2, 4.5): first a login code from a device that is already signed
 // in (Settings › Devices › Connect a new device › Browser makes a `#token=jp_…` link: opened here it signs in by itself, App.tsx), then a
@@ -115,7 +117,7 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
           </Button>
         </form>
 
-        <p className="mt-3 min-h-5 text-center text-[12.5px] text-red" role="alert">
+        <p className={`mt-3 min-h-5 ${formError}`} role="alert">
           {error}
         </p>
         <p className="text-center text-[11.5px] leading-relaxed text-ink-3">{t("login.credential_note")}</p>
@@ -160,7 +162,7 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
                   {busy === "master" ? <Spinner /> : t("login.connect")}
                 </Button>
               </div>
-              <p className="mt-2 text-center text-[12.5px] text-red" role="alert">
+              <p className={`mt-2 ${formError}`} role="alert">
                 {masterError}
               </p>
             </form>

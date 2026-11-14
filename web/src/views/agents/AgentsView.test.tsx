@@ -45,6 +45,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   el.remove();
+  history.replaceState(null, "", "/");
 });
 
 describe.each([["paged", ["sessions_list"]], ["legacy", []]])("personal agents, %s list", (_, features) => {
@@ -73,8 +74,11 @@ describe("a link to a personal agent's conversation the hub doesn't have (web us
     expect(document.querySelector("h1")?.textContent).toBe(t("not-found.agent_title"));
     expect(document.body.textContent).toContain(t("not-found.agent_detail"));
     expect(document.body.textContent).not.toContain("404");
-    expect(document.querySelector<HTMLAnchorElement>('a[href="/a"]')?.textContent).toBe(t("not-found.agent_back"));
     expect(document.querySelector("textarea")).toBeNull();
+    history.replaceState(null, "", "/a/does-not-exist");
+    const back = [...document.querySelectorAll("button")].find((b) => b.textContent === t("not-found.agent_back"));
+    await act(async () => back!.click());
+    expect(location.pathname).toBe("/a");
   });
 
   it("keeps the conversation and its error for another failure", async () => {

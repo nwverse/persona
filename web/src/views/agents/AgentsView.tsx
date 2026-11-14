@@ -22,10 +22,11 @@ import {
 } from "../../lib/agents";
 import { ApiError, errorText } from "../../lib/api";
 import { ago, clock, uuid } from "../../lib/format";
-import { href, onLinkClick } from "../../lib/router";
+import { href, navigate, onLinkClick } from "../../lib/router";
 import { Button, Collapse, cx, EASE, IconButton, Loading, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
+import { Empty } from "../session/files/parts";
 import { SearchField } from "../../ui/SearchField";
 import { formatDate, t } from "../../i18n";
 import { composing } from "../../lib/send-history";
@@ -331,16 +332,14 @@ function MissingAgent({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   return (
     <div className="flex h-full flex-col">
       <Header title={t("not-found.agent_title")} onToggleSidebar={onToggleSidebar} />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-[760px] flex-col px-5 py-6 sm:px-8">
-          <div role="status" className="flex flex-col items-start gap-3 rounded-card bg-surface p-4 shadow-card">
-            <p className="text-[13.5px] font-medium text-ink">{t("not-found.agent_title")}</p>
-            <p className="text-[12.5px] text-ink-2">{t("not-found.agent_detail")}</p>
-            <a href={href({ name: "agents" })} onClick={(e) => onLinkClick(e, { name: "agents" })} className="text-[12.5px] font-medium text-accent-ink hover:underline">
-              {t("not-found.agent_back")}
-            </a>
-          </div>
-        </div>
+      {/* as a space that is gone (SpacePage): the shared empty state and the way back, no composer */}
+      <div className="flex min-h-0 flex-1 flex-col pb-[10vh]" role="status">
+        <Empty
+          icon="chat"
+          title={t("not-found.agent_title")}
+          detail={t("not-found.agent_detail")}
+          action={<Button tone="secondary" icon="arrowLeft" onClick={() => navigate({ name: "agents" })}>{t("not-found.agent_back")}</Button>}
+        />
       </div>
     </div>
   );

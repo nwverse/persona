@@ -245,8 +245,10 @@ describe("an address that is no page (web usability audit item 42)", () => {
     await open("/foo-bar-unknown");
     for (let i = 0; i < 20 && !host.textContent?.includes(t("not-found.page_title")); i++) await act(() => new Promise((r) => setTimeout(r, 10)));
     expect(host.textContent).toContain(t("not-found.page_title"));
-    expect(host.querySelector<HTMLAnchorElement>('a[href="/overview"]')?.textContent).toBe(t("not-found.page_back"));
     expect(location.pathname).toBe("/foo-bar-unknown");
     expect(document.title).toMatch(new RegExp(`^(\\(\\d+\\) )?${t("app.title_not_found")} · Persona$`));
+    const back = [...host.querySelectorAll("button")].find((b) => b.textContent === t("not-found.page_back"));
+    await act(async () => back!.click());
+    expect(location.pathname).toBe("/overview");
   });
 });

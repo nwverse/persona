@@ -126,15 +126,17 @@ try {
     await p.goto(`${web}/foo-bar-unknown`);
     const shown = await p.waitForSelector(`text=${zh.notFound.page_title}`, { timeout: 15_000 }).then(() => true, () => false);
     check(shown, `42 ${theme}: an unknown address says the page isn't there`);
-    check(await p.locator(`a[href="/overview"]:has-text("${zh.notFound.page_back}")`).count() === 1, `42 ${theme}: with the way to Overview`);
     check(new URL(p.url()).pathname === "/foo-bar-unknown", `42 ${theme}: and keeps the address`, p.url());
     await shoot(p, `42-unknown-${theme}`);
+    await p.click(`main button:has-text("${zh.notFound.page_back}")`);
+    check(await p.waitForURL((u) => u.pathname === "/overview", { timeout: 10_000 }).then(() => true, () => false), `42 ${theme}: with the way to Overview`, p.url());
     await p.goto(`${web}/a/does-not-exist`);
     const missing = await p.waitForFunction((title) => document.querySelector("main h1")?.textContent === title, zh.notFound.agent_title, { timeout: 15_000 }).then(() => true, () => false);
     check(missing, `39 ${theme}: /a/<missing> says the conversation isn't there`);
     check(await p.locator("main textarea").count() === 0, `39 ${theme}: no message box left loading`);
-    check(await p.locator('main a[href="/a"]').count() === 1, `39 ${theme}: with the way back to the list`);
     await shoot(p, `39-missing-agent-${theme}`);
+    await p.click(`main button:has-text("${zh.notFound.agent_back}")`);
+    check(await p.waitForURL((u) => u.pathname === "/a", { timeout: 10_000 }).then(() => true, () => false), `39 ${theme}: with the way back to the list`, p.url());
     await ctx.close();
   });
 
