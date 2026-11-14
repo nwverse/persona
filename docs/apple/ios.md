@@ -247,6 +247,7 @@ Chat page:
 - Node menus (#3098, web #2329, `docs/integrations/terminal.md` ("Node menus")): running herdr Agent long-press adds Split pane ▸ Right / Down, Git ▸ Pull / Push / Fetch (pane cwd; Push asks first in a system confirmation, #1883), Close tab… (system confirms all panes and Agents close); space ⋯ adds Run Agent here… and Git ▸ (workspace cwd). Run Agent here… sheet loads `GET /machines/{mid}/panes`, lists workspace shell panes with no Agent/bound session and directly startable Claude Code launchers (Codex starts from New Session in a tab of its own; the footer says so only on a computer with a Codex launcher, `NodeMenu.runHereFooter`, #5275; screenshots: fake hub `MOCK_TERMINAL_PANES=1`, plus `MOCK_NO_CODEX=macbook` for a computer without Codex, and `-tab dev -showRunAgentHere macbook -showRunHereLauncher claude`), Run calls `panes/agent` and, once the list is refreshed, opens the started agent's chat (`NodeMenu.startedChat`, #3287); if no idle shell, create New terminal tab (`POST /panes`) then select. herdr only (not Orca, herdr-core or alternative hosts); rename retains Rename…. Logic `Views/Chats/NodeActions.swift` (`NodeMenu` pure + `NodeActions` execution/confirmation, `nodeActionPrompts()` on Agents list); menus stay Equatable, no changing push-data reads; the Git result is the node's `outcome` in the app's strings (`NodeMenu.GitOp.outcome`, else the node's message), a failure the hub's reason in the app's language in a red toast (#1888). `NodeMenuTests`.
 - New worktree… (#3099, web #2431, `docs/integrations/terminal.md` ("New worktree…")): herdr space ⋯ sheet `NewWorktreeSheet` calls `worktree/prepare` for repo ("persona · Current branch main"), branch and checkout path (tracks branch like herdr/web until manually edited, clears to resume; immediate `git check-ref-format` validation), Create calls `worktree/create`. Git refusal shown unchanged; old hub/node says "Persona on this computer is too old; update to create worktrees". No phone terminal page to navigate to; after creation sheet becomes New chat prefilled with workspace / checkout directory (`SpacePreset`), starting inside new worktree. Logic `WorktreeForm` (`Views/Chats/NodeActions.swift`), tests `WorktreeFormTests`, `NodeMenuUITests`.
 - A new agent's own worktree (#6115, web #6301, `AgentWorktree.swift`): New Agent asks `POST /machines/{mid}/worktree/status` `{cwd}` for the picked folder; when it is in a Git repository (`path` set) a Worktree section offers In a New Worktree, an optional branch (placeholder `persona/<first message or folder>`, as the node names it) and Checks out to `<checkouts>/<slug>`. Start then calls `worktree/add` and starts the agent in the `path` it returns; a refusal shows next to the start button and nothing starts. Close Agent (`CloseAgentSheet`) and Delete Chat ask the same status for the agent's folder; one Persona made (`ours`) adds Keep Worktree (default) / Remove, Delete the branch too, the counts it loses (`dirty`, and `unmerged` with the branch) and I understand these changes will be lost, which the button waits for. `worktree/remove` runs only after the close / delete succeeded, retries `worktree_in_use` for a few seconds, and sends `force` only for a confirmed loss. Delete Chat stays the system alert unless the agent is in one of ours (the computer is asked first, 4 s at most); then it is a sheet with the section. Mock: `MOCK_WORKTREES=1 MOCK_AGENT_WORKTREE=1`; UI test `AgentWorktreeUITests`.
+- New Agent in one of the computer's workspaces (#7259, `WorkspaceStart.swift`, `WorkspaceStartPicker.swift`; the web's `lib/workspace-start.ts` has the same rule): when the chosen computer's catalog lists workspaces of an engine that keeps checkouts (`source` `orca` or `paseo`, `available` and `online`), a Workspace row above Folder opens Choose Workspace: Choose by Folder on top, then the workspaces grouped by project (`projectName`, else the last element of `projectPath`; none: Other Workspaces, last), main checkout first, then worktrees, then folders, each with its title (else branch, else folder name), Main checkout / Worktree / Folder with the branch when the title doesn't say it, and the folder. A pick hides the folder rows and the worktree switch, says the kind and folder under the row, and the start sends `workspace_id` and `host` = the row's source; a Git one offers New Child Worktree… (Orca) or New Worktree… (Paseo, made by Paseo through `worktree/prepare`/`create` with `kind`). Nothing is preselected (the folder stays remembered per computer); no such workspace (an offline computer, Paseo not enabled) shows no row. The groups are derived when the computer or the catalog's `revision` changes, not in `body` (P4); the catalog is read when the computer changes. Tests `WorkspaceStartTests`.
 - New Agent in Claude's desktop app (#5480, `DesktopStart.swift`; the computer's side: `docs/integrations/claude-integration.md`, "New sessions in the desktop app"): with the launcher whose `source` is `claude_desktop` (`Launcher.startsInDesktopApp`), a folder not picked on the sheet (the one filled in from the last start does not count, `cwdPicked`) is a temporary session: the Folder row reads Temporary Session, Start Chat is ready, and the start carries no folder, which the computer turns into the app's scratch folder. A folder picked (a row, the browser, a card, a workspace) is used; Use a Temporary Session goes back; a space's sheet keeps its folder; a recent-setup card shows a temporary session as one. The directory browser starts in the folder that holds most of this computer's Claude desktop app sessions' folders (`DesktopStart.projectsFolder`, the computer's rule for the scratch folder, worked out when the computer or launcher changes) and offers New Folder…, a name in the folder browsed that the computer makes when the session starts. Run Agent Here does not offer the launcher. The Codex App's launcher `codex-app` (`source` `codex_app`, #5726) works the same way: no folder picked is a chat among the App's chats in no project (the computer gives it a folder where the App keeps those), still with its first message as any Codex start; browsing starts in the folder of the App's projects, its own folders for chats in no project (`<home>/Documents/Codex/<date>/<name>`, `AppGroups.isCodexChatFolder`) left out. Mock: `MOCK_DESKTOP_APPS=1` (the MacBook offers `claude-desktop` and `codex-app`); UI test `DesktopStartUITests`.
 - Attachments in New Agent (#2321, web `NewAgent.tsx`, `NewAgentAttachments.swift`): under First Message, Add Images or Files offers the composer's sources (Photos, Take Photo where there is a camera, Files). Photos stay in the sheet as image attachments (at most 4, `MessagePhotos`, shared with the composer) and go with the first message; files upload to the chosen computer when picked (`FileUploads`, a row each with progress and ×) and their paths follow what was typed, one per line, as the web sends them (`FirstMessage`). Start Chat waits while an upload runs and says so. A file is on the computer it was uploaded to: picking another computer takes the uploaded files out, stops uploads still going, and a note under First Message says so; nothing is uploaded again and photos stay. A Codex launcher takes no attachments, as on the web: no add menu, and attachments picked before hold Start Chat back (Codex takes no attachments) with the web's sentence under them until they are removed. A to-do handed to a new Agent (`TodoHandoffSheet`) gets the same row, its context block still first. DEBUG `-openNewAgentAttachments photo,<file name>,…` attaches the made-up photo and uploads 3 MB made-up files once the computer's launchers are in. UI test `NewAgentAttachmentsTests`.
   Reuses `session.close`: mark local copy Not running only after remote confirmation (history/title/content retained); failure keeps confirmation with error, retry/cancel; no false success without hub.
@@ -526,6 +527,7 @@ Chat page:
     into the current folder under their own names, up to 2 GB; one after another, a row with progress and ✕ per file under the list. A taken name first asks Replace / Keep Both (Keep Both saves "name 2") before anything is sent;
     a folder that cannot be written (outside the home, `~/.persona`, `~/.persona`, `~/Library`), an outdated personad on the computer, and files over the cap each get a one-line reason. Leaving the page lets uploads finish; a pending name question counts as cancel.
     A file's long-press menu (also a VoiceOver action) has Save to Files: downloads to a temporary folder with progress, then the system's location picker; the temporary file is removed either way.
+  - **Copy To, Duplicate, Compress** (#5830; progress #6113, `FolderTransfers`, contract in `docs/protocol/protocol.md` "Changing files"): the row menu and selection bar copy into another folder, duplicate beside the original, or make a zip there. A remote operation that takes over one second joins the transfers below the list in an `AttachmentRow` with file / byte counts and Cancel after the first successful operation read (an older chain without operation lookup keeps the previous no-row behavior); a quick one never flashes a row. Remote operations start independently of the serial upload / download queue, so a long transfer cannot delay their progress or Cancel. Leaving or hiding the file page pauses only polling; the POST continues and `onTabVisibility` resumes polling when the page returns to the front, even before the transfers bar first appears. MachineDetail and Chat retain the same `FolderTransfers` across file-page reconstruction so returning does not lose the operation; Chat items and polling are scoped by `SessionKey`, and file polling uses `onTabVisibility(sceneAware: true)` so both the selected tab and an active scene are required. A scene change (Control Center, a call, the app switcher) only pauses that polling: downloads, the file waiting in Save to Files and a name question stay; only leaving the page (the tab-only `onTabVisibility`) answers questions Cancel, stops downloads and removes the pending file. A remote copy and an upload can both meet a taken name at once: each question has its own continuation and is asked in order (the alert closes, then opens for the next), and a row's Cancel answers only its own. The original POST still decides success, a name conflict or failure, and a conflict retry uses a fresh operation id. Cancel stops the POST and the node's partial output is removed.
   - **Rename, move, move to the trash** (#315, `Views/Session/FolderEdits.swift`): a file's or folder's long-press menu (and VoiceOver actions) adds Rename (an alert with the name, refused names said before asking),
     Move (a sheet with the browser's folders from its top, opened on the current one; Move Here is off for the folder they are already in, and the folders being moved can't be opened), and Move to Trash (asks first).
     ⋯ › Select turns the list into checkmarks with a bar under it: the count, Move, and the trash button; Done ends it. A trash toast has Undo (puts it back through `files/restore`); there is no permanent delete.
@@ -648,8 +650,9 @@ Previously the system `TabView` removed the old tab from the window on switching
 the hidden page is merely transparent and noninteractive, **still mounted**, so `onDisappear` never fires: without a signal it would keep polling and mark messages read for the user.
 
 - Pass down `tabIsActive` (true outside any page): `ShellPageSlide` sets it from `ShellState.page` in the new shell; regular-width iPad and open Duo `TabView` use `TabActivityScope` on each tab's content.
-- `.tabActiveTask` / `.tabActiveTask(id:)` cancels when the page goes behind and restarts from scratch when foregrounded. `.onTabVisibility(appear:disappear:)` replaces paired
-  `onAppear` / `onDisappear`, each called once; the system briefly remounting the old tab during a switch does not count as appearance.
+- `.tabActiveTask` / `.tabActiveTask(id:)` cancels when the page goes behind or the scene becomes inactive, and restarts from scratch when foregrounded. `.onTabVisibility(appear:disappear:)` replaces paired
+  `onAppear` / `onDisappear`, each called once; the system briefly remounting the old tab during a switch does not count as appearance. Its default deliberately ignores `scenePhase`: business lifecycles
+  such as voice end on a real page departure, not Control Center or a background transition. Polling that must stop in an inactive scene opts into `onTabVisibility(sceneAware: true, ...)`; file-operation polling uses this option.
 - Used for Lark chat's 60-second fallback polling and read reporting (catch up on foregrounding), and Machines-page (`MachinesView`) / machine-detail (`MachineDetailView`, including its computer-control and browser sections) polling, and the readiness pages' polling while a step can finish on another computer (`ReadinessPoll` in `ReadinessViews.swift`, which also requires the Mac app to be active).
 - Shared `ChatView` transcript streams and visible/read ownership use paired visibility edges on iPhone as well as Mac. Hidden chats keep their store and scroll state but unsubscribe; returning resumes with the store's `since_seq`, without recreating the page or downloading all history.
 - **Not for** generating replies, Agent tasks, dictation or timers (work-row stopwatch, terminal 250ms tick, header auto-collapse). These continue regardless of the foreground page; releasing a display subscription does not interrupt work on the hub.
@@ -1367,6 +1370,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   | A number changes | `.contentTransition(.numericText)` |
   | The finger lets go of a drawer / of something it dragged aside | `drawer(velocity:)` (no bounce) / `springBack` |
   | Moving with the keyboard | `keyboard` (the system's spring) |
+  | An alert follows another (queued "already exists" questions) | `alertHandoff`: a 1 s wait before it asks; UIKit drops a presentation made while the one before is closing (#6113) |
   | The composer and the 「+」 panel | their `composer…` / `hold…` / `attach…` tokens, measured from Telegram |
   | The meeting recording's level meter (`RecordingLevelMeter`) | `recordingLevelFrame`: a 1/30 s clock; fixed-height bars scaled vertically (`Theme.Size.recordingMeter…`); one still frame with Reduce Motion, Low Power Mode or off screen |
   | A timeline row arrives in the live recording sheet | `reveal` with a small rise (`Theme.Recording.arrivalOffset`); opacity only with Reduce Motion |
@@ -1771,6 +1775,44 @@ The hub's `main_background_folded` (`GET` / `PUT /api/v1/assistant`, on unless c
 counts as on and hides the switch) is Settings › Assistant › **Fold background rounds**. Off, the main conversation
 and Needs You look exactly as before. Tests: `ChatBackgroundRoundsTests`.
 
+## Agent follow-up settings (#7005)
+
+The web's Settings › Assistant groups "Starting tasks" and "Agent follow-up" (`web/src/views/settings/AssistantSettings.tsx`,
+`AgentAutoNaming.tsx`) on iPhone and iPad, as one page one tap below the profile: **Assistant Profile › On Its Own ›
+Agent Follow-Up** (`AgentFollowUpView`, `AgentFollowUpModel`; Settings search finds it, `SettingsPage.agentFollowUp`). The
+profile shows the row only when the hub sends at least one of its fields, and the page shows each row only for a field the
+hub sends (`GET /api/v1/assistant`, the value in effect). Who it is for: people who hand work to Agents from Persona.
+
+| Section | Row | Field (default) | Control |
+| --- | --- | --- | --- |
+| Starting tasks | Start What I Ask Right Away | `start_requested_tasks` (on) | switch |
+| | New Tasks Prefer | `task_workspace_preference` (`prefer-existing`) | menu: Existing / New Workspaces |
+| Follow-up | Main Chat Supervises Its Own Tasks | `main_supervises_own_tasks` (off) | switch |
+| | Follow Up Every Agent Persona Starts | `agent_tasks` (off) | switch |
+| Tidying up | Stop Idle Agents After | `idle_close_hours` (12; 0 never; at most 8760) | menu: Never, 1, 2, 4, 8, 12, 24, 48 hours, 1 week, Custom… |
+| | Archive Closed Sessions After | `archive_closed_days` (3; 0 never; at most 3650) | menu: Never, 1, 3, 7, 14, 30, 90 days, Custom… |
+| Session names | Fix Unhelpful Session Names | `agent_auto_naming` (on) | switch |
+| | Name Changes per Session (while on) | `agent_auto_naming_max` (1; 1–1000) | menu: 1, 3, 5, 10, Unlimited (1000, the hub's most), Custom… |
+| | Update Names Regularly (while on) | `agent_auto_naming_interval_hours` ≠ 0 (off; on starts at 24) | switch |
+| | Update Every (while regular) | `agent_auto_naming_interval_hours` (1–8760) | menu: 6, 12, 24 hours, 2 days, 1 week, Custom… |
+
+- **Values**: a menu lists a value set elsewhere (the web, the assistant) among its presets, worded in the largest whole
+  unit (`AgentFollowUpText`). Custom… asks for a whole number in an alert, within the hub's bounds. Each footer says the
+  defaults in one sentence; with regular updates on and at most one name change the footer says to raise the limit, as
+  the web's note does.
+- **Writes**: a change shows at once and is one sparse `PUT /api/v1/assistant` with that field alone, naming the manager
+  that answered the read (`X-Persona-Manager`, the default's too: the hub takes the session-name settings only from a
+  request that names its manager, so those rows need `manager` in the read). The hub's answer is kept for that field
+  and handed to `AppModel.assistantConfig`; a refusal puts the page's value back with a toast. A control waits while its
+  own write is out.
+- **Not here**: `inbox_signals` (Tell supervisors about new messages) moves to the Inbox's own settings (#4524), and
+  `default_permission_mode` has no page in the app yet.
+- **Mock hub**: the default mock sends every field with the hub's defaults and checks a `PUT` as the hub does;
+  `MOCK_LEGACY_HUB=1` has none of them. Debug launch: `-openAssistantPage agentFollowUp`.
+- **Tests**: `AgentFollowUpTests` (reads, each change's request and header, the hub's answer, rollback, the menus'
+  words) and `AgentFollowUpUITests` against the mock hub (light / dark shots with `TEST_RUNNER_PERSONA_SHOTS`);
+  `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` on this page.
+
 ## Background supervisor (#5083)
 
 The hub's built-in background supervisor (`docs/assistant/unified-entry.md`, "Background supervisor") on iPhone, iPad,
@@ -1785,10 +1827,11 @@ Mac and Vision Pro. Nothing here shows on a hub from before it.
   the app is open, and only the assistant settings say which one it is: a new assistant conversation with
   `origin: "task"` that the settings held do not list has them read again, once for a conversation
   (`AppModel.unreadTaskConversations`), so the row has the three actions no longer than that request takes.
-- **The switch**: Settings › Assistant › **Main Chat Supervises Its Own Tasks** is the hub's `main_supervises_own_tasks`
-  (`GET` / `PUT /api/v1/assistant`), off by default: while it is off the background supervisor follows up the tasks
-  Persona hands out. It is read and written through `AppModel.assistantConfig` (`setMainSupervisesOwnTasks`: shown at
-  once, put back when the hub refuses), as the two switches above it. A hub that omits the field has no switch.
+- **The switch**: Assistant Profile › Agent Follow-Up › **Main Chat Supervises Its Own Tasks** (on the profile itself
+  before #7005) is the hub's `main_supervises_own_tasks` (`GET` / `PUT /api/v1/assistant`), off by default: while it is
+  off the background supervisor follows up the tasks Persona hands out. The page writes it like its other rows
+  ("Agent follow-up settings" below) and hands the hub's answer to `AppModel.assistantConfig`. A hub that omits the
+  field has no switch.
 - **Its model**: Settings › Models lists the use `assistant.supervise` after the categories and the other uses set
   apart. A hub since #5806 lists it in its catalog: the list reads it there, where the catalog puts it, and sends no
   request by its id (`ModelConfigurationModel.asksApart`). A hub before #5806 leaves it out, so `load` asks for it by
@@ -1804,7 +1847,8 @@ Mac and Vision Pro. Nothing here shows on a hub from before it.
 Mock hub: `MOCK_BACKGROUND_SUPERVISOR=1` adds the conversation (with `MOCK_ORIGINS=1` for the other sources); the
 switch and the model use are there without it, and `MOCK_LEGACY_HUB=1` has none of the three.
 `MOCK_SUPERVISE_LISTED=1` is a hub since #5806: the catalog lists the use and every built-in use has a description.
-Tests: `BackgroundSupervisorTests`, and `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` against the mock hub.
+Tests: `BackgroundSupervisorTests`, and `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` against the mock hub
+(on the Agent Follow-Up page).
 
 ## Standing authorizations (#7002)
 
