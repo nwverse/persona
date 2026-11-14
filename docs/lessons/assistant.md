@@ -429,6 +429,22 @@ To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves 
 and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.
 
 - Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions.
+
+## Size a tool's text in tokens, not characters (#7316)
+
+Claude Code refuses an MCP tool's output past 25,000 tokens (`MAX_MCP_OUTPUT_TOKENS`, which Persona does not set) and
+saves it to a file instead, so a result over it costs the call and the reads that recover it: on one install, 54 `kb_get`
+failures in 30 days, all on projects, then about 70 Bash / Read / sub-agent calls. Characters are a poor measure. With
+Claude's tokenizer on knowledge-base text, CJK alone was 1.08 tokens a character, but Chinese mixed with English words,
+digits and markdown (summaries, logs, chat messages) cost up to a third more than "one token a CJK character, two ASCII
+characters a token"; indented JSON was 1.8 characters a token, numeric ids 2.2, English prose 3.1. "One token a CJK
+character, 3.5 ASCII characters a token" put whole `kb_get` results at two thirds of their real count. `kb_get`'s
+ceiling (`estTokens`, `assistant/kb_get_fit.go`) counts a rune past ASCII as 1.25 tokens and an ASCII byte as half of
+one, which stayed within 15% under the real count on all of these, and stops at 20,000. The size came from the data,
+not the model: linking a group chat to a project adds all its members to the project's people, so one project's
+meta.json held 3,708 ids, 92% of a 129,000-character result. Fold such lists in the tool's text rather than count on
+the store staying small.
+
 ## A source read by pages must settle what left the page (#5993)
 
 The Inbox's mail rounds read each account's newest 40 INBOX messages, and every rule that files a mail item (read

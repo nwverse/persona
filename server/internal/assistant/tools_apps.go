@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -110,14 +111,18 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		if err != nil {
 			return "", fmt.Errorf("%s/%s: %w", a.Kind, a.ID, err)
 		}
-		// meta.json as the file has it (one edited by hand into something else: its text, as it is).
-		meta := []byte(d.Meta)
+		// meta.json as the file has it (one edited by hand into something else: its text, as it is), a project's people
+		// folded to the first few (kb_get_fit.go).
+		meta, folded := []byte(d.Meta), ""
+		if a.Kind == kb.KindProject {
+			meta, folded = foldPeople(meta, d.Links, filepath.Join(d.Path, "meta.json"))
+		}
 		var indented bytes.Buffer
-		if json.Valid(d.Meta) && json.Indent(&indented, bytes.TrimSpace(d.Meta), "", "  ") == nil {
+		if json.Valid(meta) && json.Indent(&indented, bytes.TrimSpace(meta), "", "  ") == nil {
 			meta = append(indented.Bytes(), '\n')
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "Path: %s\n\nmeta.json:\n%s\n", d.Path, meta)
+		fmt.Fprintf(&b, "Path: %s\n\nmeta.json:\n%s%s\n", d.Path, meta, folded)
 		if d.Summary != "" {
 			fmt.Fprintf(&b, "\nsummary.md:\n%s\n", d.Summary)
 		}
@@ -173,7 +178,7 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		case d.Recent != "":
 			fmt.Fprintf(&b, "\nMessages, last 7 days:\n%s\n", d.Recent)
 		}
-		return b.String(), nil
+		return fitKBGet(b.String(), d.Path), nil
 	case "kb_update":
 		if e.Store.ReadOnly() {
 			return "", kb.ErrReadOnly
