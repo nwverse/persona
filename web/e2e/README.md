@@ -155,3 +155,23 @@ checked and sends nothing, that Auto is posted and shown at once, and that Full 
 asks first. It then checks that the session waits (`bypass_pending`, the chip still on the mode it runs in) until the
 mock's restart comes up in Full access. It prints one line per check and a verdict, and exits nonzero on a failure or
 its five-minute timeout.
+
+## The Inbox by keyboard, its filtered empty state and long lists (web usability audit)
+
+```sh
+PORT=<port> MOCK_INBOX_EXTRA=300 MOCK_INBOX_HISTORY=busy python3 scripts/mock/mock_hub.py &
+(cd web && npx vite build --outDir <scratch>/dist && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite preview --outDir <scratch>/dist --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/inbox-keyboard-long-list.mjs http://127.0.0.1:<web port> <artifact-directory>
+```
+
+Run against an exclusively owned web server backed by the mock hub with the flags above (`npx vite` works too; a
+production build is what the timings mean). It uses only the mock's invented data and answers the read failure in the
+browser. In English, light and dark, at 1280 x 820 unless named: chips that leave nothing show the neutral filtered
+empty state with no green check and **Clean up all** without "Nothing to do", and **Clear filters** brings the rows
+back; a failed read has its own **Retry** and a Clean up all with no scope; the detail's small line has the time right
+after its words, not at the line's end; **Edit** on a drafted reply puts the caret at the end of the text; Select and
+Done keep the keyboard on the one button, also after Esc on a row's tick; at 390 x 844 a row opened by keyboard moves
+the focus to the item, and Esc or the browser's Back returns it to that row. Last, a 390 x 844 touch phone at CPU 4x
+opens the long Inbox and records how many rows were there at the first draw (at most 100), that all of them come in the
+end, the elements under `main` and the long tasks. Screenshots and `results.json` go to the artifact directory; a
+four-minute watchdog ends the run, and it prints a final pass / fail / timeout line.
