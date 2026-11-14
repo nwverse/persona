@@ -68,7 +68,15 @@ class RepairIntegrationTests(unittest.TestCase):
         self.assertTrue(pr_watch_repair.update_branch_with_main("example/one", pr, str(self.repo), self.main))
         self.assertEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.head)
 
-    def test_head_change_before_repair_push_is_refused(self):
+    def test_worker_clone_cleanup_never_removes_source_checkout(self):
+        with pr_watch_repair.repair_repository_copy(str(self.repo)) as copy:
+            self.assertTrue(Path(copy, ".git").is_dir())
+            self.assertFalse(Path(copy, ".git").is_file())
+            self.assertNotEqual(Path(copy), self.repo)
+        self.assertTrue(self.repo.exists())
+        self.assertTrue(Path(self.repo, ".git").exists())
+
+
         (self.repo / "repair.txt").write_text("repair\n")
         with patch.object(pr_watch_repair, "verify", return_value=[]), \
                 patch.object(pr_watch_repair, "checked", side_effect=lambda argv, **kwargs: self.git(*argv[1:], cwd=kwargs.get("cwd")) if argv[0] == "git" else ""), \
