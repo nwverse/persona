@@ -109,8 +109,8 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'PersonaKit unit tests' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaKit" --scratch-path "$SPM/PersonaKit"
   # The live screen's video codec and capture decisions (#3954), shared by Persona Link's helper and the iOS app.
   ci_run 'PersonaScreenKit unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaScreenKit" --scratch-path "$SPM/PersonaScreenKit" -Xswiftc -warnings-as-errors
-  # The Persona Link menu bar app's package (apple/PersonaLink): its own SwiftPM package, outside apple/project.yml.
-  ci_run 'Persona Link unit tests' 600 xcrun swift test --package-path "$SOURCE/apple/PersonaLink" --scratch-path "$SPM/PersonaLink" -Xswiftc -warnings-as-errors
+  # The independent Link package contains only Persona Screen; PersonaScreenKit's tests cover its capture decisions.
+  # There is no menu-bar app or separate Link UI test target to build.
   # Blocking calls on the main actor (docs/apple/performance.md, "Automated checks"). The lint is built in a fixed
   # folder beside its build output: the snapshot above moves on every run, and a package whose folder moved is rebuilt
   # from scratch, swift-syntax included (seen with Xcode 27.2). Unchanged files keep their times (no -t), so an

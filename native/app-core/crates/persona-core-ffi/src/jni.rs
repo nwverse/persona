@@ -4,6 +4,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+#[cfg(target_os = "android")]
 use std::time::Duration;
 
 use jni::JNIEnv;
@@ -15,7 +16,7 @@ use jni::sys::jlongArray;
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong, jvalue};
 use persona_core_runtime::Host;
 
-use crate::{PersonaCore, start};
+use crate::{PersonaCore, create};
 
 struct JHost {
     vm: JavaVM,
@@ -62,8 +63,11 @@ impl Host for JHost {
     }
 }
 
-fn core<'a>(handle: jlong) -> Option<&'a PersonaCore> {
-    unsafe { (handle as *const PersonaCore).as_ref() }
+fn core(handle: jlong) -> Option<Arc<persona_core_runtime::Runtime>> {
+    if handle == 0 {
+        return None;
+    }
+    crate::runtime(handle as usize as *const PersonaCore)
 }
 
 fn boolean(value: bool) -> jboolean {
@@ -88,11 +92,11 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_create(
             changed,
             run,
         };
-        start(&config, Arc::new(host))
+        create(&config, Arc::new(host))
     }))
     .ok()
     .flatten()
-    .map_or(0, |core| Box::into_raw(core) as jlong)
+    .map_or(0, |core| core as jlong)
 }
 
 #[unsafe(no_mangle)]
@@ -102,12 +106,12 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_dispatch(
     handle: jlong,
     action: JByteArray,
 ) -> jboolean {
-    let Some(core) = core(handle) else { return JNI_FALSE };
+    let Some(runtime) = core(handle) else { return JNI_FALSE };
     catch_unwind(AssertUnwindSafe(|| {
         let Ok(action) = env.convert_byte_array(&action) else {
             return false;
         };
-        core.runtime.dispatch(&action)
+        runtime.dispatch(&action)
     }))
     .map_or(JNI_FALSE, boolean)
 }
@@ -119,12 +123,12 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_drain(
     handle: jlong,
     chat: JString,
 ) -> jbyteArray {
-    let Some(core) = core(handle) else {
+    let Some(runtime) = core(handle) else {
         return std::ptr::null_mut();
     };
     catch_unwind(AssertUnwindSafe(|| {
         let chat: String = env.get_string(&chat).ok()?.into();
-        let patch = core.runtime.drain(&chat);
+        let patch = runtime.drain(&chat);
         env.byte_array_from_slice(&patch).ok().map(JByteArray::into_raw)
     }))
     .ok()
@@ -139,16 +143,17 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_flush(
     handle: jlong,
     timeout_ms: jint,
 ) -> jboolean {
-    let Some(core) = core(handle) else { return JNI_FALSE };
-    let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
-    catch_unwind(AssertUnwindSafe(|| core.runtime.flush(timeout))).map_or(JNI_FALSE, boolean)
+    if handle != 0 {
+        boolean(unsafe { crate::persona_core_flush(handle as *mut PersonaCore, timeout_ms.max(0) as u32) })
+    } else {
+        JNI_FALSE
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeBridge_destroy(_env: JNIEnv, _class: JClass, handle: jlong) {
     if handle != 0 {
-        let core = unsafe { Box::from_raw(handle as *mut PersonaCore) };
-        let _ = catch_unwind(AssertUnwindSafe(move || drop(core)));
+        unsafe { crate::persona_core_free(handle as *mut PersonaCore) }
     }
 }
 
@@ -160,8 +165,8 @@ pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_enableDiagno
     handle: jlong,
 ) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        if let Some(core) = core(handle) {
-            core.runtime.enable_diagnostics();
+        if let Some(runtime) = core(handle) {
+            runtime.enable_diagnostics();
         }
     }));
 }
@@ -174,9 +179,9 @@ pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_flushDiagnos
     handle: jlong,
     timeout_ms: jint,
 ) -> jboolean {
-    let Some(core) = core(handle) else { return JNI_FALSE };
+    let Some(runtime) = core(handle) else { return JNI_FALSE };
     let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
-    catch_unwind(AssertUnwindSafe(|| core.runtime.flush_diagnostic(timeout))).map_or(JNI_FALSE, boolean)
+    catch_unwind(AssertUnwindSafe(|| runtime.flush_diagnostic(timeout))).map_or(JNI_FALSE, boolean)
 }
 
 #[cfg(target_os = "android")]
@@ -186,10 +191,10 @@ pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_diagnostics(
     _class: JClass,
     handle: jlong,
 ) -> jlongArray {
-    let Some(core) = core(handle) else {
+    let Some(runtime) = core(handle) else {
         return std::ptr::null_mut();
     };
-    let counters = catch_unwind(AssertUnwindSafe(|| core.runtime.diagnostics())).unwrap_or_default();
+    let counters = catch_unwind(AssertUnwindSafe(|| runtime.diagnostics())).unwrap_or_default();
     env.new_long_array(counters.len() as i32)
         .and_then(|array| {
             env.set_long_array_region(&array, 0, &counters)?;
