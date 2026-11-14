@@ -21,7 +21,7 @@ struct TodosView: View {
     @State private var creatingNotes = ""
     /// The New To-Do sheet's notes mic (#2188).
     @State private var dictation = Dictation()
-    /// Folded sections the user opened (Shelved and Done start folded), and merged rows opened to their members.
+    /// Folded sections the user opened (Shelved, Done and Cancelled start folded), and merged rows opened to their members.
     @State private var unfolded: Set<TodoSection> = []
     @State private var openedGroups: Set<String> = []
     /// Restores from Shelved kept on this device (`TodoRestores`), and the moment the sections are read at: a minute's
@@ -260,8 +260,8 @@ struct TodosView: View {
     }
 
     /// By project (#7077, the web's grouping by project): a section per knowledge-base project with open to-dos, where its
-    /// most pressing one comes in the list, then Unsorted; then Done, folded, as by status. The search and the filter
-    /// narrow them as they narrow the sections.
+    /// most pressing one comes in the list, then Unsorted; then Done and Cancelled, folded, as by status. The search and
+    /// the filter narrow them as they narrow the sections.
     @ViewBuilder private func projectSections(_ result: TodoTriageResult) -> some View {
         let calendar = TodoCalendar.userCalendar
         let open = TodoSection.allCases.filter { $0 != .done }.flatMap { section in
@@ -289,9 +289,15 @@ struct TodosView: View {
             sectionView(.done, groups: done, count: done.reduce(0) { $0 + $1.members.count }, folded: folded)
                 .listSectionSpacing(folded ? .custom(Theme.Space.flush) : .compact)
         }
+        let cancelled = TodoListLogic.sorted(result.groups(.cancelled), by: listSort, calendar: calendar)
+        if !cancelled.isEmpty {
+            let folded = TodoSection.cancelled.startsFolded && !isUnfolded(.cancelled)
+            sectionView(.cancelled, groups: cancelled, count: cancelled.reduce(0) { $0 + $1.members.count }, folded: folded)
+                .listSectionSpacing(folded ? .custom(Theme.Space.flush) : .compact)
+        }
     }
 
-    /// A folded section (Shelved, Done) is open when the user opened it, or while searching.
+    /// A folded section (Shelved, Done, Cancelled) is open when the user opened it, or while searching.
     private func isUnfolded(_ section: TodoSection) -> Bool {
         unfolded.contains(section) || !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
