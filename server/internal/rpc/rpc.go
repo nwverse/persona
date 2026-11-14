@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"sync/atomic"
 )
@@ -75,6 +76,7 @@ type Peer struct {
 	nextID    atomic.Int64
 	mu        sync.Mutex
 	pending   map[string]chan message
+	methods   map[string]string // the method of each pending call, by id: what Close reports as cut off
 	suspended bool
 	closed    chan struct{}
 	once      sync.Once
@@ -87,6 +89,11 @@ type Peer struct {
 	// event, and most calls are meant to finish on the other side anyway. A peer that does not know the event ignores
 	// it, as before: its handler runs on.
 	Cancels map[string]bool
+
+	// OnClose, when set, is told once why the peer closed and the methods of the calls still waiting for an answer
+	// then (sorted; a method twice for two calls): they fail with ErrDropped or ErrClosed, which alone says nothing of
+	// what was cut off. Called from Close, outside the peer's lock; set it before Serve or any call.
+	OnClose func(err error, inflight []string)
 
 	running map[string]context.CancelFunc // requests being handled, by id: what a cancelEvent ends
 	// Only bounded peers couple accepted work to closure; legacy peers retain their cancellation semantics.
@@ -114,7 +121,7 @@ func ConnContext(ctx context.Context) context.Context {
 
 // New creates a peer. prefix distinguishes request ids by side ("h" for hub, "n" for node).
 func New(prefix string, w io.Writer) *Peer {
-	return &Peer{prefix: prefix, w: w, pending: map[string]chan message{}, running: map[string]context.CancelFunc{}, closed: make(chan struct{}), wsem: make(chan struct{}, 1)}
+	return &Peer{prefix: prefix, w: w, pending: map[string]chan message{}, methods: map[string]string{}, running: map[string]context.CancelFunc{}, closed: make(chan struct{}), wsem: make(chan struct{}, 1)}
 }
 
 // Serve reads messages until r fails; it returns the read error.
@@ -179,6 +186,7 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 				ch <- m // publish the reply before WaitPending can observe its completion
 			}
 			delete(p.pending, m.ID)
+			delete(p.methods, m.ID)
 			p.mu.Unlock()
 		}
 	}
@@ -321,10 +329,12 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 		return errors.New("rpc: runtime pending-call budget exceeded")
 	}
 	p.pending[id] = ch
+	p.methods[id] = method
 	p.mu.Unlock()
 	defer func() {
 		p.mu.Lock()
 		delete(p.pending, id)
+		delete(p.methods, id)
 		p.mu.Unlock()
 	}()
 	var req message
@@ -404,13 +414,23 @@ func (p *Peer) NotifyContext(ctx context.Context, event string, params any) erro
 
 func (p *Peer) Close(err error) {
 	p.once.Do(func() {
+		var inflight []string
+		p.mu.Lock() // taken before the waiters wake: they drop their entries as they return
+		if p.OnClose != nil {
+			for _, m := range p.methods {
+				inflight = append(inflight, m)
+			}
+		}
 		p.err = err
 		close(p.closed)
-		p.mu.Lock()
 		if p.runtimeCancel != nil {
 			p.runtimeCancel()
 		}
 		p.mu.Unlock()
+		if p.OnClose != nil {
+			sort.Strings(inflight)
+			p.OnClose(err, inflight)
+		}
 	})
 }
 
