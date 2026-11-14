@@ -1501,8 +1501,13 @@ The workspace catalog, selection and management actions follow the current assis
 
 Removal uses the confirmation sheet pattern in section 4.4 because it needs branch and uncommitted-file choices. The dialog identifies the workspace and explains which files and running sessions will be lost. Keep the branch by default; require an explicit discard choice for uncommitted files. Confirmation stays unavailable until the computer supplies a valid preview. A changed target requires another preview, and an uncertain dispatched removal offers status reconciliation rather than another destructive submission. Renaming uses the existing text-entry dialog pattern and preserves workspace, branch and Agent identities.
 
-Backend naming (#7100) is a collapsed advanced panel in Assistant settings and
-Todo details, reusing `Group`, `Button` and the standard settings input. It
+Backend naming (#7100) is a single collapsed row inside Assistant settings’
+Starting tasks group, directly after the workspace preference. It appears only
+for a confirmed matching assistant with `prefer-new`; missing or unknown values
+keep it hidden. Hiding never clears saved rules. Todo details retain their own
+independent advanced entry. Both reuse `Button` and the standard settings input.
+The editor aligns fields in compact rows on desktop and stacks them on phones;
+template guidance and preview options open separately on request. It
 serves people configuring coding tasks; ordinary tasks need no new fields.
 Three labeled template fields show inherited values, with explicit **Use
 inherited**, **Save** and **Restore inheritance** controls. Preview uses the

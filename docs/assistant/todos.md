@@ -934,9 +934,13 @@ belong to the workspace preparation service.
 
 ## Backend workspace naming
 
-People configuring coding tasks can open **Workspace naming** in advanced
-Assistant settings or a to-do's details. It applies only to explicitly selected
-backend preparation. It does not change Engine creation, legacy `new`, `existing`
+People configuring coding tasks can open **Workspace naming** inside Assistant
+settings’ **Starting tasks** group after choosing **New workspaces**.
+The entry waits for the matching assistant’s confirmed preference; other, missing
+or unknown preferences hide it without deleting saved rules. A to-do’s details
+keep an independent naming entry. Template help and preview options open only on
+request, and the editor uses compact desktop rows that stack on narrow screens.
+It applies only to explicitly selected backend preparation. It does not change Engine creation, legacy `new`, `existing`
 or `none`, existing preferences, task progress or cleanup.
 
 The fields are `base_directory` (default `{home}/workspace`),

@@ -48,5 +48,7 @@
   "path_too_long": "The generated path is too long. Shorten the folder template.",
   "fragment_normalized": "The starting branch is normalized to one folder-safe fragment in the generated name.",
   "node_unavailable": "The selected computer is offline or does not support naming previews. Check its connection and version.",
-  "check_fields": "Check the highlighted fields and retry. Your draft is kept."
+  "check_fields": "Check the highlighted fields and retry. Your draft is kept.",
+  "template_help": "Template guide",
+  "preview_options": "Preview options"
 }

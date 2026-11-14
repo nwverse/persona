@@ -5,7 +5,7 @@ import { useStore } from "../lib/store";
 import { loadTaskRepositories, repositoryRequestOptions, type RepositoryLayout, type TaskRepository } from "../lib/task-repositories";
 import { loadWorkspaceRules, previewWorkspaceNaming, RULE_FIELDS, rulesPatch, sameRules, saveWorkspaceRules, WORKSPACE_NAMING_VERSION,
   type NamingDiagnostic, type WorkspaceNamingPreview as Preview, type WorkspaceNamingSettings, type WorkspaceRules } from "../lib/workspace-naming";
-import { Group, settingsInputClass } from "../views/settings/SettingsParts";
+import { settingsInputClass } from "../views/settings/SettingsParts";
 import { Button, Loading } from "./atoms";
 import { useRepositoryRequestContext } from "./TaskRepositoryBindingsEditor";
 
@@ -14,20 +14,25 @@ export function WorkspaceRulesEditor({ value, inherited, disabled, diagnostics =
   value: WorkspaceRules; inherited: WorkspaceRules; disabled?: boolean; diagnostics?: NamingDiagnostic[]; onChange: (value: WorkspaceRules) => void;
 }) {
   const id = useId();
-  return <div className="space-y-4">
+  return <div className="space-y-2">
     {RULE_FIELDS.map((field) => {
       const error = diagnostics.find((d) => d.field === field && d.severity === "error");
-      return <div key={field} className="space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <label htmlFor={`${id}-${field}`} className="text-label font-medium text-ink">{t(`workspace-naming.${field}`)}</label>
+      return <div key={field} className="grid min-w-0 grid-cols-1 items-center gap-x-3 gap-y-1 sm:grid-cols-3">
+        <label htmlFor={`${id}-${field}`} className="text-label text-ink">{t(`workspace-naming.${field}`)}</label>
+        <input id={`${id}-${field}`} className={`${settingsInputClass} min-w-0 font-mono text-label pointer-coarse:min-h-11`} spellCheck={false} disabled={disabled}
+          value={value[field] ?? inherited[field] ?? ""} onChange={(e) => onChange({ ...value, [field]: e.target.value })}
+          aria-invalid={value[field] === "" || !!error} aria-describedby={`${id}-${field}-status${error ? ` ${id}-${field}-error` : ""}`} />
+        <div className="flex min-w-0 items-center justify-between gap-2 sm:justify-end">
+          <span id={`${id}-${field}-status`} className="text-meta text-ink-3">{t(value[field] === undefined ? "workspace-naming.inherited" : "workspace-naming.overridden")}</span>
           <Button tone="quiet" size="sm" disabled={disabled || value[field] === undefined} onClick={() => { const next = { ...value }; delete next[field]; onChange(next); }}>{t("workspace-naming.inherit")}<span className="sr-only"> {t(`workspace-naming.${field}`)}</span></Button>
         </div>
-        <input id={`${id}-${field}`} className={`${settingsInputClass} min-h-11 font-mono`} spellCheck={false} disabled={disabled}
-          value={value[field] ?? inherited[field] ?? ""} onChange={(e) => onChange({ ...value, [field]: e.target.value })}
-          aria-invalid={value[field] === "" || !!error} aria-describedby={`${id}-${field}-help`} />
-        <p id={`${id}-${field}-help`} className={`break-words text-meta ${error ? "text-red" : "text-ink-3"}`}>{error ? t(`workspace-naming.${error.code}`, { field: t(`workspace-naming.${field}`) }) : <>{t(value[field] === undefined ? "workspace-naming.inherited" : "workspace-naming.overridden")} · {t(`workspace-naming.help_${field}`)}</>}</p>
+        {error && <p id={`${id}-${field}-error`} role="alert" className="break-words text-meta text-red col-span-full">{t(`workspace-naming.${error.code}`, { field: t(`workspace-naming.${field}`) })}</p>}
       </div>;
     })}
+    <details className="text-meta text-ink-3">
+      <summary className="cursor-pointer py-2 pointer-coarse:min-h-11">{t("workspace-naming.template_help")}</summary>
+      <dl className="space-y-2 pb-2">{RULE_FIELDS.map((field) => <div key={field}><dt className="font-medium text-ink-2">{t(`workspace-naming.${field}`)}</dt><dd className="break-words">{t(`workspace-naming.help_${field}`)}</dd></div>)}</dl>
+    </details>
   </div>;
 }
 
@@ -122,9 +127,11 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
     } catch (error) { if (context.isCurrent() && generation === sequence.current) failure(error, t("workspace-naming.preview_failed")); }
     finally { if (context.isCurrent() && generation === sequence.current) setPreviewBusy(false); }
   };
-  const content = <div className="space-y-4 p-4">
-    <Button tone="quiet" expanded={open} onClick={() => { setOpen(!open); if (!open && !loaded) void load(); }}>{t("workspace-naming.title")}</Button>
-    {open && <>
+  return <div data-workspace-naming data-settings-group="workspace-naming" className="min-w-0">
+    <Button tone="quiet" icon={open ? "chevronDown" : "chevronRight"} expanded={open}
+      className="min-h-11 w-full justify-start rounded-none px-4 text-left font-normal text-ink"
+      onClick={() => { setOpen(!open); if (!open && !loaded) void load(); }}>{t("workspace-naming.title")}</Button>
+    {open && <div className="min-w-0 space-y-3 border-t border-line px-4 py-3">
       <p className="text-label text-ink-2">{t("workspace-naming.scope")}</p>
       {busy && !loaded && <Loading />}
       {loaded && !supported && <p className="text-label text-ink-2">{t("workspace-naming.unsupported")}</p>}
@@ -135,25 +142,29 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
           <Button tone="quiet" disabled={busy} onClick={() => { invalidate(); setDraft({}); }}>{t("workspace-naming.reset")}</Button>
           {!sameRules(draft, saved) && <span className="text-meta text-ink-3">{t("workspace-naming.unsaved")}</span>}
         </div>
-        <label className="block text-label text-ink-2">{t("workspace-naming.computer")}
-          <select aria-label={t("workspace-naming.computer")} className={`${settingsInputClass} mt-2 min-h-11`} value={machine} onChange={(e) => { invalidate(); setMachine(e.target.value); }}>
-            <option value="">{t("workspace-naming.choose_computer")}</option>{machines.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
-          </select>
-        </label>
-        <label className="block text-label text-ink-2">{t("workspace-naming.layout")}
-          <select aria-label={t("workspace-naming.layout")} className={`${settingsInputClass} mt-2 min-h-11`} value={layout} onChange={(e) => { invalidate(); setLayout(e.target.value as RepositoryLayout); }}>
-            <option value="container">{t("workspace-naming.container")}</option><option value="root">{t("workspace-naming.root")}</option>
-          </select>
-        </label>
-        {todoId && repositories.map((repo) => <label key={repo.repo_id} className="flex min-h-11 items-center gap-2 text-label text-ink-2">
-          <input type="checkbox" checked={selected.includes(repo.repo_id)} onChange={(e) => { invalidate(); setSelected(e.target.checked ? [...selected, repo.repo_id] : selected.filter((id) => id !== repo.repo_id)); }} />{repo.source_snapshot.identity.path}
-        </label>)}
-        <Button tone="secondary" busy={previewBusy} disabled={!machine} onClick={() => void preview()}>{t("workspace-naming.preview")}</Button>
-        <WorkspaceNamingPreview result={result} loading={previewBusy} />
+        <details className="min-w-0 border-t border-line text-label text-ink-2">
+          <summary className="min-h-11 cursor-pointer py-3">{t("workspace-naming.preview_options")}</summary>
+          <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+            <label className="block min-w-0 text-label text-ink-2">{t("workspace-naming.computer")}
+              <select aria-label={t("workspace-naming.computer")} className={`${settingsInputClass} mt-2 min-h-11`} value={machine} onChange={(e) => { invalidate(); setMachine(e.target.value); }}>
+                <option value="">{t("workspace-naming.choose_computer")}</option>{machines.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+              </select>
+            </label>
+            <label className="block text-label text-ink-2">{t("workspace-naming.layout")}
+              <select aria-label={t("workspace-naming.layout")} className={`${settingsInputClass} mt-2 min-h-11`} value={layout} onChange={(e) => { invalidate(); setLayout(e.target.value as RepositoryLayout); }}>
+                <option value="container">{t("workspace-naming.container")}</option><option value="root">{t("workspace-naming.root")}</option>
+              </select>
+            </label>
+          </div>
+          {todoId && repositories.map((repo) => <label key={repo.repo_id} className="flex min-h-11 items-center gap-2 text-label text-ink-2">
+            <input type="checkbox" checked={selected.includes(repo.repo_id)} onChange={(e) => { invalidate(); setSelected(e.target.checked ? [...selected, repo.repo_id] : selected.filter((id) => id !== repo.repo_id)); }} />{repo.source_snapshot.identity.path}
+          </label>)}
+          <Button tone="secondary" busy={previewBusy} disabled={!machine} onClick={() => void preview()}>{t("workspace-naming.preview")}</Button>
+          <div className="mt-3"><WorkspaceNamingPreview result={result} loading={previewBusy} /></div>
+        </details>
       </>}
       {error && <><p role="alert" className="text-label text-red">{error}</p>{loaded && supported && <Button tone="quiet" disabled={busy} onClick={() => { invalidate(); void load(true); }}>{t("workspace-naming.reload")}</Button>}</>}
       {!loaded && !busy && <Button tone="quiet" onClick={() => void load()}>{t("task-repositories.retry")}</Button>}
-    </>}
+    </div>}
   </div>;
-  return todoId ? content : <Group anchor="workspace-naming">{content}</Group>;
 }

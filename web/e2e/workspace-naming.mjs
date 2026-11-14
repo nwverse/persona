@@ -21,31 +21,53 @@ try {
       await context.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
       const page = await context.newPage(); activePage = page; page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(origin + "/settings?tab=persona");
+      const preference = page.getByLabel("When dispatching tasks, prefer", { exact: true });
+      await preference.selectOption("prefer-new");
+      const dispatch = page.locator('[data-settings-group="dispatch-tasks"]');
       const group = page.locator('[data-settings-group="workspace-naming"]');
-      await group.getByRole("button", { name: "Workspace naming", exact: true }).click();
+      await group.waitFor();
+      assert.equal(await dispatch.locator('[data-workspace-naming]').count(), 1, "naming belongs to Dispatch tasks");
+      await dispatch.scrollIntoViewIfNeeded();
+      await dispatch.screenshot({ path: join(shots, `collapsed-${scheme}-${width}.png`) });
+      assert((await group.boundingBox()).height <= 50, "collapsed entry is one settings row");
+      const trigger = group.getByRole("button", { name: "Workspace naming", exact: true });
+      await trigger.focus(); await page.keyboard.press("Enter");
       const task = group.getByLabel("Task folder template", { exact: true });
       await task.waitFor();
+      await dispatch.screenshot({ path: join(shots, `expanded-${scheme}-${width}.png`) });
       await task.fill("{yyyy}{mmdd}/task-{task-id}-{task-slug}");
       if (await group.getByRole("button", { name: "Save", exact: true }).isEnabled()) await group.getByRole("button", { name: "Save", exact: true }).click();
       await page.waitForFunction(() => [...document.querySelectorAll('[data-settings-group="workspace-naming"] button')].some((b) => b.textContent.trim() === "Save" && b.disabled));
       await page.reload();
       await group.getByRole("button", { name: "Workspace naming", exact: true }).click();
       await task.waitFor(); assert.equal(await task.inputValue(), "{yyyy}{mmdd}/task-{task-id}-{task-slug}", "settings persisted through reload");
+      await group.getByText("Preview options", { exact: true }).click();
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
       await group.locator("[data-naming-root]").waitFor();
       assert.match(await group.locator("[data-naming-root]").innerText(), /^\/home\/example\/workspace\/\d{8}\/task-todo_example-example-task$/);
       await group.getByLabel("Folder layout", { exact: true }).selectOption("root");
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
       await group.locator("[data-naming-root]").waitFor();
-      assert.equal(await group.locator("dt").first().innerText(), ".", "root layout uses internal dot mapping");
+      assert.equal(await group.locator("[aria-live] dt").first().innerText(), ".", "root layout uses internal dot mapping");
       await group.scrollIntoViewIfNeeded();
       assert(await group.evaluate((el) => el.scrollWidth <= el.clientWidth), "no horizontal overflow");
       await group.screenshot({ type: "jpeg", quality: 80, path: join(shots, `settings-${scheme}-${width}.jpg`) });
       await task.fill("../unsafe");
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
-      await group.getByRole("alert").waitFor();
+      await group.getByRole("alert").first().waitFor();
       assert.equal(await task.inputValue(), "../unsafe", "failed preview preserves draft");
       await group.screenshot({ type: "jpeg", quality: 80, path: join(shots, `invalid-${scheme}-${width}.jpg`) });
+
+      await preference.selectOption("prefer-existing");
+      await group.waitFor({ state: "hidden" });
+      await preference.selectOption("prefer-new");
+      await group.getByRole("button", { name: "Workspace naming", exact: true }).click();
+      assert.equal(await task.inputValue(), "{yyyy}{mmdd}/task-{task-id}-{task-slug}", "hiding preserves saved rules");
+      if (width === 390) {
+        await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
+        assert(await group.evaluate((el) => el.scrollWidth <= el.clientWidth), "settings fit at 200% text");
+        await group.screenshot({ path: join(shots, `large-text-${scheme}-${width}.png`) });
+      }
 
       // Direct API state is supplied by the real fixture, not browser interception.
       const todo = await (await page.request.get(origin + "/api/v1/_qa/todo")).json();
@@ -59,9 +81,10 @@ try {
       await page.waitForFunction(() => [...document.querySelectorAll("input")].some((el) => el.value === "custom/{task-id}/{repo}" && !document.body.textContent.includes("Unsaved changes")));
       await page.reload(); await page.getByRole("button", { name: "Workspace naming", exact: true }).click();
       await field.waitFor(); assert.equal(await field.inputValue(), "custom/{task-id}/{repo}", "task override persisted");
+      await editor.getByText("Preview options", { exact: true }).click();
       await editor.getByRole("button", { name: "Preview naming", exact: true }).click();
       await editor.locator("[data-naming-root]").waitFor();
-      assert.equal(await editor.locator("dl").count(), 2, "both repository names previewed");
+      assert.equal(await editor.locator("[aria-live] dl").count(), 2, "both repository names previewed");
       if (width === 390) await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
       assert(await editor.evaluate((el) => el.scrollWidth <= el.clientWidth), "task editor fits at enlarged text");
       if (width === 390) {

@@ -66,3 +66,15 @@ it("shows field validation without suggesting a connection problem", async () =>
   expect(document.body.textContent).toContain("Check the highlighted fields");
   expect(document.body.textContent).not.toContain("Check its connection and version");
 });
+
+it("keeps the draft across collapse and restores an individual inherited field", async () => {
+  await render(); await click("Workspace naming"); await answer(calls[0], settings);
+  expect([...document.querySelectorAll("details")].every((node) => !node.open)).toBe(true);
+  await type("custom/{task-id}"); await click("Workspace naming");
+  expect(document.querySelector("input")).toBeNull();
+  await click("Workspace naming"); expect(calls).toHaveLength(1);
+  expect(document.querySelectorAll("input")[1].value).toBe("custom/{task-id}");
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Use inherited Task folder template")!.click());
+  expect(document.querySelectorAll("input")[1].value).toBe(defaults.task_directory_template);
+  expect(button("Save").disabled).toBe(true);
+});
