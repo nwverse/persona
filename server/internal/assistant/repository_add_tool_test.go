@@ -21,7 +21,7 @@ func answerRepositoryCard(t *testing.T, s *Service, answer proto.Resolution, ins
 		defer close(done)
 		card, ok := awaitCard(s)
 		if !ok {
-			t.Error("no import confirmation card")
+			t.Error("no repository confirmation card")
 			return
 		}
 		inspect(card)
