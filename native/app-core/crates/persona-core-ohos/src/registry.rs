@@ -80,8 +80,10 @@ pub fn close(handle: i64) -> Result<()> {
         let mut map = lock();
         map.as_mut().and_then(|map| map.remove(&handle))
     };
-    // A final lease may join the worker and release the host; do not hold the registry lock across either callback.
-    drop(removed);
+    // Explicit close owns worker termination; a normal lease drop never joins the worker.
+    if let Some(runtime) = removed {
+        runtime.shutdown();
+    }
     Ok(())
 }
 

@@ -66,7 +66,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct Runtime {
     sender: Sender<Message>,
     shared: Arc<Shared>,
-    worker: Option<JoinHandle<()>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Runtime {
@@ -81,7 +81,7 @@ impl Runtime {
         Runtime {
             sender,
             shared,
-            worker: Some(worker),
+            worker: Mutex::new(Some(worker)),
         }
     }
 
@@ -155,11 +155,16 @@ impl Runtime {
     /// Waits until every queued action is applied, up to `timeout`. Zero checks once without waiting. For tests and
     /// shutdown; never on a main thread.
     pub fn flush(&self, timeout: Duration) -> bool {
-        let mut pending = lock(&self.shared.pending);
         if timeout.is_zero() {
-            return *pending == 0;
+            return self
+                .shared
+                .pending
+                .try_lock()
+                .map(|pending| *pending == 0)
+                .unwrap_or(false);
         }
         let deadline = Instant::now() + timeout;
+        let mut pending = lock(&self.shared.pending);
         while *pending > 0 {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -226,6 +231,18 @@ impl Runtime {
         self.shared.diagnostics.get_or_init(|| Arc::new(Diagnostics::default()));
     }
 
+    /// Requests worker shutdown and joins it outside any handle-registry lock. An ordinary operation must never call
+    /// this on its final lease: only the client's close/shutdown operation owns worker termination.
+    pub fn shutdown(&self) {
+        let _ = self.sender.send(Message::Stop);
+        if let Some(worker) = self.worker.lock().unwrap_or_else(PoisonError::into_inner).take()
+            && worker.thread().id() != std::thread::current().id()
+        {
+            // The host's release callback runs on the worker; it must not join itself.
+            let _ = worker.join();
+        }
+    }
+
     fn done(&self, count: u64) {
         let mut pending = lock(&self.shared.pending);
         *pending = pending.saturating_sub(count);
@@ -237,13 +254,9 @@ impl Runtime {
 
 impl Drop for Runtime {
     fn drop(&mut self) {
+        // Dropping a lease is not closing the client. The registry's close explicitly calls `shutdown` instead.
         let _ = self.sender.send(Message::Stop);
-        if let Some(worker) = self.worker.take() {
-            // The host's release callback runs on the worker. A final handle released there must not join itself.
-            if worker.thread().id() != std::thread::current().id() {
-                let _ = worker.join();
-            }
-        }
+        let _ = self.worker.get_mut().unwrap_or_else(PoisonError::into_inner).take();
     }
 }
 
@@ -615,7 +628,7 @@ mod tests {
             fn changed(&self, _version: u64) {}
             fn run(&self, _effect: &[u8]) {}
         }
-        let runtime = Runtime::new(Arc::new(NoopHost));
+        let runtime = Arc::new(Runtime::new(Arc::new(NoopHost)));
         assert!(runtime.flush(Duration::ZERO));
         let action = wire::encode(&Action::OpenChat {
             chat: "probe".into(),
@@ -626,6 +639,12 @@ mod tests {
         }
         assert!(!runtime.flush(Duration::ZERO));
         assert!(runtime.flush(Duration::from_secs(5)));
+        // A contended pending lock must not turn a zero-duration probe into an unbounded wait.
+        let guard = lock(&runtime.shared.pending);
+        assert!(!runtime.flush(Duration::ZERO));
+        drop(guard);
+        assert!(runtime.flush(Duration::ZERO));
+        runtime.shutdown();
     }
 
     #[test]

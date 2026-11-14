@@ -57,6 +57,8 @@ pub struct PersonaCore {
 
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 static CORES: Mutex<Option<HashMap<u64, Arc<Runtime>>>> = Mutex::new(None);
+#[cfg(feature = "test-support")]
+static DRAIN_STARTED: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
 
 fn cores() -> std::sync::MutexGuard<'static, Option<HashMap<u64, Arc<Runtime>>>> {
     CORES.lock().unwrap_or_else(PoisonError::into_inner)
@@ -69,6 +71,16 @@ fn runtime(core: *const PersonaCore) -> Option<Arc<Runtime>> {
     cores().as_ref()?.get(&(core.expose_provenance() as u64)).cloned()
 }
 
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub fn notify_drain_started_for_test(sender: std::sync::mpsc::Sender<()>) {
+    let previous = DRAIN_STARTED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .replace(sender);
+    assert!(previous.is_none(), "only one drain-start observer may be installed");
+}
+
 fn close(core: *mut PersonaCore) {
     if core.is_null() {
         return;
@@ -76,8 +88,9 @@ fn close(core: *mut PersonaCore) {
     let removed = cores()
         .as_mut()
         .and_then(|cores| cores.remove(&(core.expose_provenance() as u64)));
-    // The last lease joins the worker and releases its host. Neither can run under the registry lock.
-    drop(removed);
+    if let Some(runtime) = removed {
+        runtime.shutdown();
+    }
 }
 
 #[repr(C)]
@@ -169,6 +182,10 @@ pub unsafe extern "C" fn persona_core_drain(
     let Ok(chat) = std::str::from_utf8(unsafe { slice(chat, length) }) else {
         return PersonaCoreBytes::empty();
     };
+    #[cfg(feature = "test-support")]
+    if let Some(observer) = DRAIN_STARTED.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        let _ = observer.send(());
+    }
     catch_unwind(AssertUnwindSafe(|| runtime.drain(chat)))
         .map_or_else(|_| PersonaCoreBytes::empty(), PersonaCoreBytes::from_vec)
 }
