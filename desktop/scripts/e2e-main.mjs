@@ -40,6 +40,21 @@ const closed = [];
 const external = []; // addresses handed to the system browser
 const notifyRequests = []; // what the renderer asked for over the production IPC
 const badges = []; // every count the renderer sent
+const localSettings = []; // the shell-owned options window, observed without exposing it to the hub page
+app.on("browser-window-created", (_event, window) => {
+  const record = url => {
+    if (!url.endsWith("/setup.html") || localSettings.includes(window)) return;
+    localSettings.push(window);
+    // Chromium's headless platform gives new native windows a 1x1 off-screen frame. Exercise the same request the
+    // person made by making that test window visible; on native runners production show()/focus() already did this.
+    if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+      window.setBounds({ x: 0, y: 0, width: 720, height: 640 });
+      window.show();
+    }
+  };
+  window.webContents.on("did-start-navigation", (_event, url) => record(url));
+  record(window.webContents.getURL());
+});
 Notification.isSupported = () => true;
 Notification.prototype.show = function show() { shown.push({ title: this.title, body: this.body, notification: this }); };
 Notification.prototype.close = function close() { closed.push(this.title); };
@@ -197,6 +212,30 @@ async function rootScenario() {
   });
   await screen("Inbox", "/inbox", "document.querySelectorAll('main [data-inbox-list-scroll] [data-item]').length > 0", "06-inbox");
   await screen("To-dos", "/todos", "document.querySelectorAll('main [data-testid=\"todo-title\"]').length > 0 && !!document.querySelector('main [data-testid=\"todos-detail-column\"]')", "07-todos");
+  await step("signed-in desktop options keep the hub session and Link separate", async () => {
+    await go("/settings");
+    await until("desktop options entry", () => page("!!document.querySelector('[data-settings-group=\"desktop-options\"] button')"));
+    const before = localSettings.length;
+    await shot("08-settings-light");
+    nativeTheme.themeSource = "dark";
+    await until("settings dark theme", () => page("matchMedia('(prefers-color-scheme: dark)').matches"));
+    await shot("09-settings-dark");
+    nativeTheme.themeSource = "light";
+    await until("settings light theme", () => page("!matchMedia('(prefers-color-scheme: dark)').matches"));
+    await page("document.querySelector('[data-settings-group=\"desktop-options\"] button').click(); true");
+    const options = await until("local options window", () => localSettings[before]);
+    options.show();
+    await until("visible settled local options", async () => options.isVisible() && options.getBounds().width >= 600 && await options.webContents.executeJavaScript("document.fonts.status === 'loaded' && (document.querySelector('details').open = true)"));
+    await until("absent-Link explanation", () => options.webContents.executeJavaScript("document.querySelector('#link-state').textContent.includes('not installed') && !!document.querySelector('#link-install-guide') && !document.querySelector('#link-install-guide').hidden"));
+    const image = await options.webContents.capturePage();
+    if (image.getSize().width < 600 || image.getSize().height < 400) throw new Error(`local options capture ${JSON.stringify(image.getSize())}`);
+    await writeFile(join(output, "10-local-options.png"), image.toPNG());
+    const boundary = await options.webContents.executeJavaScript("({node: typeof require !== 'undefined', hub: !!window.personaDesktop, commands: Object.keys(window.desktopSetup).sort()})");
+    if (boundary.node || boundary.hub) throw new Error(`local window boundary ${JSON.stringify(boundary)}`);
+    options.close();
+    await until("hub window stays signed in", async () => !win.isDestroyed() && await signedIn() && (await path()) === `${prefix}/settings`);
+    return { localWindows: localSettings.length, boundary, hubPath: await path() };
+  });
 
   let target;
   await step("window closed to the tray", async () => {

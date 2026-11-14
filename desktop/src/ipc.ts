@@ -51,12 +51,13 @@ export function installDesktopIPC(window: BrowserWindow, deps: {
   readonly hub: () => HubAddress | undefined;
   readonly notifications: DesktopNotifications;
   readonly presence: () => { active: boolean; notifies: boolean };
+  readonly openLocalSettings: () => void;
 }): () => void {
   const authorized = (event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => {
     const hub = deps.hub();
     return event.sender === window.webContents && !window.isDestroyed() && event.senderFrame === event.sender.mainFrame && !!hub && inHub(hub, event.sender.getURL());
   };
-  const names = ["desktop:notification-permission", "desktop:badge", "desktop:notify", "desktop:notifications-clear", "desktop:notification-close", "desktop:presence"];
+  const names = ["desktop:notification-permission", "desktop:badge", "desktop:notify", "desktop:notifications-clear", "desktop:notification-close", "desktop:presence", "desktop:open-local-settings"];
   for (const name of names) ipcMain.removeAllListeners(name);
   for (const name of ["desktop:login-get", "desktop:login-set"]) ipcMain.removeHandler(name);
   ipcMain.on("desktop:notification-permission", event => {
@@ -79,6 +80,10 @@ export function installDesktopIPC(window: BrowserWindow, deps: {
   });
   ipcMain.on("desktop:presence", event => {
     event.returnValue = authorized(event) ? deps.presence() : { active: false, notifies: false };
+  });
+  ipcMain.on("desktop:open-local-settings", event => {
+    // A request to show the separate local window only. No Link command, hub credential or local data crosses here.
+    if (authorized(event)) deps.openLocalSettings();
   });
   ipcMain.handle("desktop:login-get", event => {
     if (!authorized(event)) return { enabled: false };

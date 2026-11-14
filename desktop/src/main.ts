@@ -119,6 +119,7 @@ async function showMain(): Promise<void> {
   const removeIPC = installDesktopIPC(current, {
     hub: () => hub,
     presence: () => desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported()),
+    openLocalSettings: () => { void showSetup(); },
     notifications: new DesktopNotifications(route => {
       current.show();
       current.focus();
