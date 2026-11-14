@@ -2139,7 +2139,7 @@ function TodoDetail({
         <span>{t("todos.created_at", { time: clock(todo.created_at) })}</span>
       </div>
       {failedStart && (
-        <p className="mt-2 text-[12.5px] leading-[1.6] text-red" data-testid="todo-detail-start-failed">
+        <p className="mt-2 text-meta leading-[1.6] text-red" data-testid="todo-detail-start-failed">
           {t("todos.start_failed", { error: todo.start_error ?? "" })}
         </p>
       )}
@@ -2398,7 +2398,7 @@ function TodoDetail({
             busy={retrying}
             disabled={retrying}
             onClick={() => void retry()}
-            className="h-8.5 px-3.5 text-[13px] whitespace-nowrap"
+            className="h-8.5 px-3.5 text-meta whitespace-nowrap"
           >
             {t("todos.retry")}
           </Button>

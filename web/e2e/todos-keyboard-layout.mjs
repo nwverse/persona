@@ -70,7 +70,8 @@ async function open(browser, theme, viewport, path) {
   const page = await ctx.newPage();
   page.setDefaultTimeout(10000);
   await page.goto(`${base}${path}${path.includes("?") ? "&" : "?"}token=mock`);
-  await page.waitForSelector('[data-testid="todos-sections"] [data-testid="todo-section"]', { timeout: 20000 });
+  // attached, not visible: a phone's width opened at a to-do hides the list under it
+  await page.waitForSelector('[data-testid="todos-sections"] [data-testid="todo-section"]', { state: "attached", timeout: 20000 });
   await page.waitForTimeout(500);
   return { ctx, page };
 }
