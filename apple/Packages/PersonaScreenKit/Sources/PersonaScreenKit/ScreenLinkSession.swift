@@ -667,9 +667,13 @@ extension ScreenLinkSession {
         sendHello(route)
     }
 
-    /// Asks a direct route's node for a flow: UDP turned on, the node offers it, none open, and not waiting to retry.
+    /// Asks a direct route's node for a flow: UDP turned on, the node offers it, none open, not waiting to retry, and
+    /// the phone not on cellular. On a slow, congested cellular link a flow brought nothing over TCP (#7873's shaped
+    /// cellular class: as many stalls or more, a worse tail), so it stays for the LAN and Tailscale over Wi-Fi; leaving
+    /// Wi-Fi leaves the flow (a network change), and coming back asks again at once.
     private func askFlow(_ id: Int) {
-        guard udp != nil, paths?.udp == 1, let l = links[id], let route = l.route, l.attached, flows[route] == nil else { return }
+        guard udp != nil, paths?.udp == 1, let l = links[id], let route = l.route, l.attached, flows[route] == nil,
+              l.via != .cellular, relayVia != .cellular else { return }
         let t = now()
         if let r = flowRetry[route], t < r.at { return }
         if let at = flowAsked[id], t - at < Self.flowProve * 3 { return }

@@ -326,6 +326,27 @@ final class ScreenLinkUDPTests: XCTestCase {
         XCTAssertEqual(next, c, "the stream goes on at the reset")
     }
 
+    /// On cellular (the route's interface, or the phone's path under Tailscale) no flow is asked for; back on Wi-Fi one is.
+    func testNoFlowOnCellular() async throws {
+        let shared = AutoNode.SharedReceive()
+        let (phoneR, nodeR) = PipeEnd.pair()
+        _ = AutoNode(nodeR, delayMs: 30, shared: shared)
+        let paths = ScreenLinkPaths(token: "tok", cert: "pin", port: 4000, candidates: [.init(kind: "tailscale", addr: "100.64.0.9")], udp: 1)
+        let s = ScreenLinkSession(rfbRelay: phoneR, first: ScreenLinkMessage.paths(paths).framed())
+        let events = Collected(s)
+        await s.enableUDP(ScreenUDPSetup { TestAESGCM($0) })
+        await s.setRelayVia(.cellular)
+        let (phoneD, nodeD) = PipeEnd.pair()
+        let (_, nodeU) = DatagramEnd.pair()
+        let route = UDPRouteNode(tls: nodeD, udp: nodeU)
+        await until("paths read") { events.all().contains { if case .paths = $0 { true } else { false } } }
+        await s.addDirect(ExportingPipe(phoneD), route: "tailscale:a", kind: .tailscale, via: .other)
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        XCTAssertFalse(route.tlsMessages().contains { if case .udpOpen = $0 { true } else { false } }, "asked for a flow on cellular")
+        await s.setRelayVia(.wifi)
+        await until("asked for a flow back on Wi-Fi") { route.tlsMessages().contains { if case .udpOpen = $0 { true } else { false } } }
+    }
+
     /// Without the app turning UDP on, no flow is asked for and the route carries the video as before.
     func testWithoutUDPNoFlowIsAskedFor() async throws {
         let r = try await rig(udp: false)
