@@ -1,5 +1,5 @@
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
 import { ago, clock, sessionCan, shortPath, stateOf, tabLabel, uuid } from "../lib/format";
 import { foldedState } from "../lib/child-sessions";
@@ -16,6 +16,7 @@ import { interactionAsk } from "../lib/inbox";
 import { usageLimitLabel } from "../lib/usage-limit";
 import { plainMarkdown } from "../lib/plain-markdown";
 import { composing } from "../lib/send-history";
+import { useScrollMemory } from "../lib/scroll-memory";
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { useScoped } from "../lib/current-assistant";
 import { dropTodo, refresh, refreshTodos, useStore, withTaskRows } from "../lib/store";
@@ -427,12 +428,19 @@ export function TodosView({
   // The id a row click in this page pushed (/todos → /todos?id=…). Back from that detail pops the entry, as iOS pops
   // its NavigationStack, so the browser's Back does not return to the detail just left; a deep link replaces instead.
   const pushedId = useRef<string | undefined>(undefined);
+  const listColumn = useRef<HTMLDivElement>(null);
+  const listBox = useRef<HTMLDivElement>(null);
+  const detailColumn = useRef<HTMLDivElement>(null);
+  // The to-do a row opened and where the list was scrolled then: on a phone's width the list is hidden under the
+  // detail, and the focus on its row goes with it (audit item 74).
+  const fromList = useRef<{ id: string; top: number } | undefined>(undefined);
   // stable across pushes, so the memoized rows keep the same props
   const openFromList = useCallback(
     (id: string) => {
       setActiveId(id);
       if (id === selectedId) return; // already this entry (a deep link stays a deep link)
       pushedId.current = id;
+      fromList.current = { id, top: listBox.current?.scrollTop ?? 0 };
       navigate(`/todos?id=${encodeURIComponent(id)}`);
     },
     [selectedId],
@@ -443,6 +451,38 @@ export function TodosView({
       history.back();
     } else navigate("/todos", true);
   };
+  const back = useRef(backToList);
+  back.current = backToList;
+  // On a phone's width a to-do opened from the list takes the focus to the detail's Back, as a page pushed on iOS
+  // does; back on the list (Back, Esc, the browser's Back), the list is scrolled where it was and the focus is on that
+  // to-do's row again. Side by side, the focus stays on the row and nothing moves.
+  useLayoutEffect(() => {
+    const list = listColumn.current;
+    const from = fromList.current;
+    if (!list || !from) return;
+    if (detailOnNarrow && selectedId === from.id) {
+      if (list.getClientRects().length) fromList.current = undefined;
+      else detailColumn.current?.querySelector<HTMLElement>("[data-testid=todos-back] button")?.focus();
+    } else if (!detailOnNarrow) {
+      fromList.current = undefined;
+      if (listBox.current) listBox.current.scrollTop = from.top;
+      list.querySelector<HTMLElement>(`[data-todo="${CSS.escape(from.id)}"]`)?.focus();
+    }
+  }, [detailOnNarrow, selectedId]);
+  // Esc on a phone's width goes back to the list, as Back does; a dialog or a menu over the page and a field being
+  // edited keep it.
+  useEffect(() => {
+    if (!detailOnNarrow) return;
+    const onKey = (e: KeyboardEvent) => {
+      const list = listColumn.current;
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || !list || list.getClientRects().length) return;
+      if (document.querySelector("[role=menu],[role=dialog]") || (e.target as Element | null)?.closest?.("input,textarea,select,[contenteditable=true]")) return;
+      e.preventDefault();
+      back.current();
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [detailOnNarrow]);
 
   // `open`: the row's checkbox shows it open (`checksAsOpen`): a failed start waiting on the owner is ticked to close it
   const toggleDone = useCallback(async (todo: Todo, open = !todo.done_at) => {
@@ -641,6 +681,7 @@ export function TodosView({
       <div className="flex min-h-0 flex-1">
         {/* Left Column: Todo List */}
         <div
+          ref={listColumn}
           data-testid="todos-list-column"
           data-narrow-hidden={detailOnNarrow || undefined}
           // the edge parts the list from the detail beside it; on a phone the list is the whole page and has none
@@ -669,7 +710,7 @@ export function TodosView({
           </div>
 
           {/* List Content */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+          <TodoListScroller box={listBox}>
             {(!todosLoaded && todos.length === 0) || (grouping === "direction" && directionPending) ? (
               <div className="flex justify-center py-16" data-testid="todos-loading">
                 <Loading />
@@ -816,11 +857,12 @@ export function TodosView({
               </div>
               )
             )}
-          </div>
+          </TodoListScroller>
         </div>
 
         {/* Right Column: Todo Detail */}
         <div
+          ref={detailColumn}
           data-testid="todos-detail-column"
           data-narrow-shown={detailOnNarrow || undefined}
           className={cx("min-h-0 flex-1 flex-col overflow-y-auto md:flex", detailOnNarrow ? "flex" : "hidden")}
@@ -911,6 +953,17 @@ export function TodosView({
           </div>
         </Dialog>
       )}
+    </div>
+  );
+}
+
+/** The list's scroller: where it was scrolled comes back on a return to the page (Back from another page, audit item
+ *  88), as on Overview (lib/scroll-memory.ts). */
+function TodoListScroller({ box, children }: { box: RefObject<HTMLDivElement | null>; children: ReactNode }) {
+  useScrollMemory(box, "/todos");
+  return (
+    <div ref={box} data-testid="todos-list-scroller" className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+      {children}
     </div>
   );
 }
@@ -1976,7 +2029,8 @@ function TodoDetail({
             : "offline";
 
   return (
-    <div className="flex min-h-full flex-col p-6 sm:p-8">
+    // a page's reading width (DESIGN_SYSTEM 2.5 "Widths", as the inbox's detail): a wide window centers it (audit item 75)
+    <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col p-6 sm:p-8" data-testid="todo-detail">
       {/* Title Row with ⋯ menu */}
       <div className="flex items-center justify-between gap-3">
         <input
@@ -2598,6 +2652,15 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
   );
 }
 
+/** ⌘↩ / Ctrl+↩ anywhere in a dialog's form submits it (audit item 70), as New Agent, Compose and the inbox's hand-off do
+ *  (lib/shortcuts.ts keeps Mod+Enter for dialogs); a multi-line field keeps Enter for its new lines. The form's own
+ *  submit decides, so one busy or incomplete stays as it is. */
+function submitOnModEnter(e: React.KeyboardEvent<HTMLFormElement>) {
+  if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || composing(e.nativeEvent)) return;
+  e.preventDefault();
+  e.currentTarget.requestSubmit();
+}
+
 function DecisionDialog({
   open,
   todoId,
@@ -2626,7 +2689,7 @@ function DecisionDialog({
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!question.trim() || !choice.trim()) return;
+    if (!question.trim() || !choice.trim() || busy) return;
     setBusy(true);
     try {
       await addTodoDecision(todoId, { question, choice, reason, supersedes_id: supersedes?.id });
@@ -2643,7 +2706,7 @@ function DecisionDialog({
   const field = "w-full rounded-control border border-line bg-canvas px-3 py-1.5 text-[13.5px] text-ink outline-none focus:border-accent";
   return (
     <Dialog open={open} onClose={onClose} title={supersedes ? t("todos.supersede") : t("todos.decision_title")}>
-      <form onSubmit={submit} className="flex flex-col gap-3.5">
+      <form onSubmit={submit} onKeyDown={submitOnModEnter} className="flex flex-col gap-3.5">
         {supersedes && (
           <p className="text-[12.5px] leading-[1.6] text-ink-3">
             {t("todos.supersede_hint", { choice: supersedes.choice })}
@@ -2722,7 +2785,7 @@ function NewTodoDialog({
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || busy) return;
     setBusy(true);
     try {
       const todo = await createTodo(title, notes, due());
@@ -2742,7 +2805,7 @@ function NewTodoDialog({
 
   return (
     <Dialog open={open} onClose={onClose} title={t("todos.new_todo")}>
-      <form onSubmit={submit} className="flex flex-col gap-3.5">
+      <form onSubmit={submit} onKeyDown={submitOnModEnter} className="flex flex-col gap-3.5">
         <div>
           <label className="mb-1 block text-[12px] font-medium text-ink-2">{t("todos.title_label")}</label>
           <input
@@ -3155,6 +3218,14 @@ export function HandoverDialog({
             rows={2}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
+            // ⌘↩ / Ctrl+↩ hands it over, as the dialog's button (submitOnModEnter)
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || composing(e.nativeEvent)) return;
+              e.preventDefault();
+              if (busy) return;
+              if (tab === "new") void (mid && submitNew());
+              else void submitExisting();
+            }}
             placeholder={t("todos.prompt_placeholder")}
             className="w-full resize-none rounded-control border border-line bg-canvas px-3 py-1.5 text-[13px] text-ink outline-none focus:border-accent"
           />
