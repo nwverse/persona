@@ -666,6 +666,23 @@ class WatcherTests(unittest.TestCase):
             second.single_instance()
         second.instance.close()
 
+    def test_superseded_verification_dequeues_before_fresh_review(self):
+        self.watcher.state.put("example/one", 8, SHA_B,
+                               evidence_key="example/one#8@" + SHA_BASE + ".." + SHA_B,
+                               format=1, outcome="failed", semantic="passed")
+        self.watcher.enqueue("example/one", 7, SHA_A, "poll")
+        self.watcher.enqueue("example/one", 8, SHA_B, "poll")
+        self.assertEqual(self.watcher.tasks.get()[2], ("example/one", 8))
+        self.watcher.tasks.task_done()
+        self.assertEqual(self.watcher.tasks.get()[2], ("example/one", 7))
+        self.watcher.tasks.task_done()
+
+    def test_findings_and_exhausted_repairs_do_not_get_migration_priority(self):
+        for outcome, fields in (("findings", {"semantic": "findings"}),
+                                ("repair_exhausted", {"repair_exhausted": True})):
+            self.watcher.state.put("example/one", 8, SHA_B, outcome=outcome, format=1, **fields)
+            self.assertEqual(self.watcher.queue_priority("example/one", 8), 1)
+
     def test_config_has_no_implicit_merge_or_repositories(self):
         path = self.root / "config.json"
         path.write_text(json.dumps({"repositories": [{"name": "example/one", "checkout": str(self.root), "verify": {}}]}))
