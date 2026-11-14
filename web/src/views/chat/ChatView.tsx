@@ -1726,7 +1726,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // the turn (a background workflow, background wait or subagent: `backgroundOnly`, where the stream shows only quiet fold
   // rows) and, unchanged, for Agent chats, whose dock keeps the full cindy status bar. Gating on the foreground/background
   // phase (not on the live line being mounted) keeps the bar out even while a transcript loads or a state push is in flight.
-  const dockBarShown = !assistant || backgroundOnly;
+  // A Persona chat on either route — the Persona tab's prop, or on the generic /s route the session's own assistant
+  // flag — so the dock never repeats its foreground turn (#6230). Background work keeps the bar either way.
+  const dockBarShown = !(assistant || session?.assistant) || backgroundOnly;
   const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
