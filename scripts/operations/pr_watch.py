@@ -356,7 +356,7 @@ class Watcher:
             checked(["python3", "-I", str(scanner), "--range", pr["baseRefOid"] + ".." + updated_head],
                     cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
             if pr.get("isCrossRepository"):
-                new_number = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], str(error), config["verify"], allow_merge_only=True)
+                new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], str(error), config["verify"], allow_merge_only=True)
                 self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                                outcome="continuation", continuation=new_number, repair_rounds=rounds + 1)
                 self.comment(repo, number, "The stale fork PR was updated in an isolated checkout; continuation PR #%d was opened." % new_number)
@@ -382,9 +382,10 @@ class Watcher:
             return False
         checked(["git", "reset", "--hard", pr["headRefOid"]], cwd=worktree, timeout=90)
         pr_watch_repair.repair_with_model(repo, pr, str(worktree), str(error), self.config["reviewer"])
-        new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
+        new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
         self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                       repair_rounds=rounds + 1, outcome="repair_published", failure=str(error))
+                       repair_rounds=rounds + 1, outcome="repair_published", failure=str(error),
+                       checks=repair_checks)
         self.comment(repo, number, "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
         if new_number != number:
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
@@ -475,7 +476,7 @@ class Watcher:
                         checked(["python3", "-I", str(scanner), "--range", pr["baseRefOid"] + ".." + updated_head],
                                 cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
                         if pr.get("isCrossRepository"):
-                            new_number = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], "conflicting base", config["verify"], allow_merge_only=True)
+                            new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], "conflicting base", config["verify"], allow_merge_only=True)
                             self.state.put(repo, number, head, evidence_key=evidence_key,
                                            outcome="continuation", continuation=new_number, repair_rounds=rounds + 1)
                             self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)

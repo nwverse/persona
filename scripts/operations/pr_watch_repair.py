@@ -97,8 +97,8 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
             result = run(command, cwd=base_worktree, timeout=timeout, environ=environ if environ is not None else verification_env())
             output = result.stdout + "\n" + result.stderr
             ids = failure_test_ids(output)
-            reproduced = (result.returncode != 0 and bool(failure_signature(output))
-                          and failure_signature(output) == failure_signature(failure))
+            reproduced = (result.returncode != 0 and ids and ids == failure_test_ids(failure)
+                          and bool(failure_signature(output)) and failure_signature(output) == failure_signature(failure))
             return {"reproduced": reproduced, "command": command,
                     "output": bounded(output, 6000),
                     "reason": "The same failure signature reproduces on clean main." if reproduced else
@@ -325,7 +325,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             latest = pr_snapshot(repo, existing[0]["number"])
             if latest["headRefOid"] != head:
                 raise WatchError("continuation PR has an older or different head; repair it in a fresh branch")
-            return existing[0]["number"]
+            return existing[0]["number"], results
         if run(["git", "ls-remote", "--exit-code", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).returncode == 0:
             remote = checked(["git", "ls-remote", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).split()[0]
             if remote != head:
@@ -345,5 +345,5 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
         actual = pr_snapshot(repo, created["number"])
         if actual["headRefOid"] != head:
             raise WatchError("continuation PR head does not match the verified repair")
-        return created["number"]
-    return pr["number"]
+        return head, results
+    return pr["number"], results
