@@ -39,10 +39,17 @@ enum Message {
 }
 
 #[derive(Default)]
+struct Queue {
+    pending: u64,
+    stopping: bool,
+}
+
+#[derive(Default)]
 struct Shared {
     patches: Mutex<Patches>,
-    /// Actions queued and not yet applied, for `flush`.
-    pending: Mutex<u64>,
+    /// Pending accounting, the stop flag and action sends share one lock. An action accepted before shutdown is
+    /// processed before Stop; no later action can be accepted into an abandoned queue.
+    queue: Mutex<Queue>,
     idle: Condvar,
     /// Once-lock means ordinary dispatch/drain only read a null pointer; all instrumentation is opt-in.
     #[cfg(target_os = "android")]
@@ -89,21 +96,33 @@ impl Runtime {
     pub fn dispatch(&self, action: &[u8]) -> bool {
         #[cfg(target_os = "android")]
         let sent = if self.shared.diagnostics.get().is_some() {
-            let mut sent = Ok(());
+            let mut sent = Err(std::sync::mpsc::SendError(Message::Stop));
             diagnostics::measure_queue(&self.shared, || {
-                *diagnostics::timed_lock(&self.shared, &self.shared.pending, false) += 1;
+                let mut queue = diagnostics::timed_lock(&self.shared, &self.shared.queue, false);
+                if queue.stopping {
+                    return;
+                }
+                queue.pending += 1;
                 diagnostics::measure_send(&self.shared, || {
                     sent = self.sender.send(Message::Action(action.to_vec()));
                 });
             });
             sent
         } else {
-            *lock(&self.shared.pending) += 1;
+            let mut queue = lock(&self.shared.queue);
+            if queue.stopping {
+                return false;
+            }
+            queue.pending += 1;
             self.sender.send(Message::Action(action.to_vec()))
         };
         #[cfg(not(target_os = "android"))]
         let sent = {
-            *lock(&self.shared.pending) += 1;
+            let mut queue = lock(&self.shared.queue);
+            if queue.stopping {
+                return false;
+            }
+            queue.pending += 1;
             self.sender.send(Message::Action(action.to_vec()))
         };
         if sent.is_ok() {
@@ -158,22 +177,22 @@ impl Runtime {
         if timeout.is_zero() {
             return self
                 .shared
-                .pending
+                .queue
                 .try_lock()
-                .map(|pending| *pending == 0)
+                .map(|queue| queue.pending == 0)
                 .unwrap_or(false);
         }
         let deadline = Instant::now() + timeout;
-        let mut pending = lock(&self.shared.pending);
-        while *pending > 0 {
+        let mut queue = lock(&self.shared.queue);
+        while queue.pending > 0 {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 return false;
             }
-            pending = self
+            queue = self
                 .shared
                 .idle
-                .wait_timeout(pending, left)
+                .wait_timeout(queue, left)
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
@@ -234,19 +253,27 @@ impl Runtime {
     /// Requests worker shutdown and joins it outside any handle-registry lock. An ordinary operation must never call
     /// this on its final lease: only the client's close/shutdown operation owns worker termination.
     pub fn shutdown(&self) {
-        let _ = self.sender.send(Message::Stop);
-        if let Some(worker) = self.worker.lock().unwrap_or_else(PoisonError::into_inner).take()
+        {
+            let mut queue = lock(&self.shared.queue);
+            if queue.stopping {
+                return;
+            }
+            queue.stopping = true;
+            let _ = self.sender.send(Message::Stop);
+        }
+        let worker = self.worker.lock().unwrap_or_else(PoisonError::into_inner).take();
+        // Drop the mutex guard before joining: the host's release callback may reenter shutdown through a weak lease.
+        if let Some(worker) = worker
             && worker.thread().id() != std::thread::current().id()
         {
-            // The host's release callback runs on the worker; it must not join itself.
             let _ = worker.join();
         }
     }
 
     fn done(&self, count: u64) {
-        let mut pending = lock(&self.shared.pending);
-        *pending = pending.saturating_sub(count);
-        if *pending == 0 {
+        let mut queue = lock(&self.shared.queue);
+        queue.pending = queue.pending.saturating_sub(count);
+        if queue.pending == 0 {
             self.shared.idle.notify_all();
         }
     }
@@ -291,9 +318,9 @@ impl Worker {
                 Ok(Message::Stop) | Err(_) => return,
                 Ok(Message::Action(bytes)) => {
                     self.guarded(|worker| worker.action(&bytes));
-                    let mut pending = lock(&self.shared.pending);
-                    *pending = pending.saturating_sub(1);
-                    if *pending == 0 {
+                    let mut queue = lock(&self.shared.queue);
+                    queue.pending = queue.pending.saturating_sub(1);
+                    if queue.pending == 0 {
                         self.shared.idle.notify_all();
                     }
                 }
@@ -640,7 +667,7 @@ mod tests {
         assert!(!runtime.flush(Duration::ZERO));
         assert!(runtime.flush(Duration::from_secs(5)));
         // A contended pending lock must not turn a zero-duration probe into an unbounded wait.
-        let guard = lock(&runtime.shared.pending);
+        let guard = lock(&runtime.shared.queue);
         assert!(!runtime.flush(Duration::ZERO));
         drop(guard);
         assert!(runtime.flush(Duration::ZERO));

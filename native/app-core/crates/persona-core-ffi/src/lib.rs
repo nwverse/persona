@@ -58,7 +58,7 @@ pub struct PersonaCore {
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 static CORES: Mutex<Option<HashMap<u64, Arc<Runtime>>>> = Mutex::new(None);
 #[cfg(feature = "test-support")]
-static DRAIN_STARTED: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
+static DRAIN_STARTED: Mutex<Option<(u64, std::sync::mpsc::Sender<()>)>> = Mutex::new(None);
 
 fn cores() -> std::sync::MutexGuard<'static, Option<HashMap<u64, Arc<Runtime>>>> {
     CORES.lock().unwrap_or_else(PoisonError::into_inner)
@@ -73,11 +73,11 @@ fn runtime(core: *const PersonaCore) -> Option<Arc<Runtime>> {
 
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
-pub fn notify_drain_started_for_test(sender: std::sync::mpsc::Sender<()>) {
+pub fn notify_drain_started_for_test(core: *mut PersonaCore, sender: std::sync::mpsc::Sender<()>) {
     let previous = DRAIN_STARTED
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .replace(sender);
+        .replace((core.expose_provenance() as u64, sender));
     assert!(previous.is_none(), "only one drain-start observer may be installed");
 }
 
@@ -183,7 +183,13 @@ pub unsafe extern "C" fn persona_core_drain(
         return PersonaCoreBytes::empty();
     };
     #[cfg(feature = "test-support")]
-    if let Some(observer) = DRAIN_STARTED.lock().unwrap_or_else(PoisonError::into_inner).take() {
+    if DRAIN_STARTED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|(handle, _)| *handle == core.expose_provenance() as u64)
+        && let Some((_, observer)) = DRAIN_STARTED.lock().unwrap_or_else(PoisonError::into_inner).take()
+    {
         let _ = observer.send(());
     }
     catch_unwind(AssertUnwindSafe(|| runtime.drain(chat)))

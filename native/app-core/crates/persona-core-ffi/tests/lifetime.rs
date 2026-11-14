@@ -173,15 +173,23 @@ fn last_lease_drain_does_not_join_a_callback_that_is_still_finishing() {
     recv_ready(&ready); // The worker is now in its callback, not merely scheduled.
     let core = SendPointer(core);
     let (drain_started, drain_started_rx) = channel();
-    notify_drain_started_for_test(drain_started);
+    notify_drain_started_for_test(core.0, drain_started);
     let drained = std::thread::spawn(move || drain_shared(core));
     drain_started_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("drain acquired its lease before close");
     // The callback is held, but drain has already leased the runtime. Close can only join the worker on its own path.
-    let closer = std::thread::spawn(move || free_shared(core));
-    let _ = hold_tx.send(());
+    let (close_finished_tx, close_finished_rx) = channel();
+    let closer = std::thread::spawn(move || {
+        free_shared(core);
+        let _ = close_finished_tx.send(());
+    });
     assert!(drained.join().expect("drain thread panicked"));
+    assert!(
+        close_finished_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        "close must not return while its worker callback is held"
+    );
+    let _ = hold_tx.send(());
     closer.join().expect("close thread panicked");
     release
         .recv_timeout(Duration::from_secs(5))
