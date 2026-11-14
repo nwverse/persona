@@ -235,7 +235,7 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
   - Avatars: `look_uploads` (`POST /api/v1/looks/uploads` and `DELETE /api/v1/looks/uploads/{id}` in the REST table, #2404; the apps offer making an avatar from an image only when the hub lists it).
   - Extensions ([extensions.md](../extensions/extensions.md)): `extensions` (`GET /api/v1/extensions` and the relay under `/api/v1/extensions/{id}/`), `extension_manager` (an extension's detail, form, settings, secrets and switch under `/api/v1/extensions/{id}/-/`), `extension_ui_slots` ("UI slots", `extension_ui` events), `extension_auto_upgrade` ("Auto-upgrade", `extension_upgrade` events), `extension_market_spec` (`PUT /api/v1/extensions/-/markets/{id}` with `spec`: a market moves and keeps its id), `extension_operations` (install, upgrade, uninstall in steps with progress, see "Extension install, upgrade and uninstall progress" below), `extension_auth` (extension sign-in `/api/v1/extensions/{id}/-/auth…`, `extension_auth` events, the install step `tools`, "Sign-in (auth)"), `extension_ui_v3` ("UI version 3"), `extension_widgets`, `extension_shortcuts` and `extension_notify_actions` (widgets, Shortcuts and notification buttons, "System-level placements"), `extension_secret_references` (a secret may hold a provider's reference: `PUT …/{id}/-/secrets/{name}` with `{reference}`, `secrets[].reference`, `secret_users` and `handoff_rules` in the details, `DELETE …/{id}/-/handoff-rules/{rule}`, [secret-providers.md](../extensions/secret-providers.md)). `plugins`, `plugin_manager`, `plugin_ui_slots` and `plugin_auto_upgrade` are the same under the old names (`/api/v1/plugins/…`, `plugin_ui` and `plugin_upgrade` events), kept for the apps out there until at least 2027-05-05 ("Naming and compatibility").
 - Added by the hub:
-  - Always: `sessions_list` (see "Bounded Agents lists"), `sessions_lookup` (see "Exact runtime-session detail"), `sessions_pane_source` (see "Pane/host origins"), `sessions_manager` (see "One manager's sessions"), `sessions_page_counts` and `agents_page_counts` (see "Counts with the page"), `sessions_hierarchy` (see "Session hierarchy"), `sessions_catalog` (see "Projects and spaces"), `sessions_todo` (see "Sessions by to-do"), `sessions_quick_filters` (see "Quick filters"), `machine_rename` (see "Renaming a computer").
+  - Always: `sessions_list` (see "Bounded Agents lists"), `sessions_lookup` (see "Exact runtime-session detail"), `sessions_search` (see "Ranked runtime search"), `sessions_pane_source` (see "Pane/host origins"), `sessions_manager` (see "One manager's sessions"), `sessions_page_counts` and `agents_page_counts` (see "Counts with the page"), `sessions_hierarchy` (see "Session hierarchy"), `sessions_catalog` (see "Projects and spaces"), `sessions_todo` (see "Sessions by to-do"), `sessions_quick_filters` (see "Quick filters"), `machine_rename` (see "Renaming a computer").
   - `mcp_wait_v1`: token-bearing MCP calls may opt into ephemeral, enum-only wait updates over the existing node and device channels (see "MCP tools (`personad mcp`)"). The node forwards that opt-in only when this hub feature is present, and reads that feature afresh for each local call. A manager independently names `mcp_wait_v1` in `manager.hello`; the hub sends it hub-mediated approval updates only while its current connection declares that capability. A target node separately names it in `node.info` to promise that `computer.call` preserves `call_id` through a nested `computer.elicit`; without that target capability the manager omits the id and reports `unknown` for the delegated RPC. Missing opt-in, capability or updates otherwise keeps the old single-response behavior and the `Still waiting` fallback.
   - `meeting_attendance` only while the default manager (the one recording routes go to) is connected and names it in its `manager.hello` capabilities (an extension's report cannot add it): attending a recorded meeting (the `attendance` / `attending_session` upload fields, `…/live`, `…/ask` and the `meeting_attendance_default` setting, see "Recording sync"). The phone offers a role only when the hub lists it, since an older hub or manager accepts the fields and ignores them.
   - `meeting_conversation` only while the default manager names both `meeting_attendance` and `meeting_conversation` in its `manager.hello` capabilities, the same way: the meeting conversation's phase 1 (the upload's `room` and `private`, the room conversation, `…/ask` answered by it, `…/just-me`, `…/private`, `…/followup`, the origins `meeting` and `meeting_followup`, the `meeting_live` event and the fields phase 1 adds to `GET …/live` and `detail.meta`; see "Meeting conversation (#3862)").
@@ -1314,6 +1314,61 @@ The new fields are stored in the existing interaction JSON payload; no database 
 
 <a id="工作区看板"></a>
 
+## Saved Agent searches
+
+The default manager owns reusable runtime-Agent query definitions in its Postgres setting `agents.saved_searches`.
+The hub forwards these routes unchanged; explicit `X-Persona-Manager` pins a captured owner, otherwise the default
+manager is used. The web deliberately uses the default rather than the sidebar's current Assistant. These routes
+do not execute or interpret a search, start sessions, run commands or send messages. Applying a query remains a
+client action through the existing palette. No new migration or browser-local persistence is required.
+
+| Method and path | Body | Response |
+| --- | --- | --- |
+| `GET /api/v1/saved-agent-searches` | none | `SavedAgentSearches` |
+| `POST /api/v1/saved-agent-searches` | `{revision: decimal string, action, ...fields}` | full confirmed `SavedAgentSearches` |
+
+```text
+SavedAgentSearches { revision: decimal string, searches: SavedAgentSearch[], can_write: bool }
+SavedAgentSearch { id, name, query, created_at: RFC3339, updated_at: RFC3339 }
+```
+
+The revision is a canonical nonnegative int64 decimal string on the wire (no leading zeros except `"0"`), preserving
+identity in JavaScript. It is stored as int64 in Settings. An absent key starts at revision `"0"` with `searches: []`;
+a failed read is never an empty success. GET and POST require a real store with both `Setting` and `CompareSetting`.
+Full-role connections may write; answer-role connections and extension tokens with `agents.read` may only read.
+No extension write scope is granted. `can_write` reflects the request role, not a promise that the next write succeeds.
+
+| Action | Fields beyond revision/action |
+| --- | --- |
+| `add` | `name`, `query`; server creates `search_` + 24 lowercase hex ID and UTC timestamps |
+| `update` | `id`, `name`, `query`; preserves identity, creation time and position |
+| `delete` | `id`; removes that entry without resetting collection revision |
+| `move` | `id`, optional `before_id`; absent/empty appends, an existing different anchor inserts before it |
+| `restore` | full captured `item`, optional `before_id`; restores a deleted identity only when ID/name are absent |
+
+Every action has an exact field set; unknown, duplicate, differently cased or mixed-action members are rejected.
+The body limit is 16 KiB. Names are trimmed, control-free, 1–64 Unicode code points, unique by Unicode case-fold.
+Queries are trimmed, valid UTF-8, control-free and 1–1,024 bytes; a leading `>` is rejected because the palette treats
+it as command mode. Relative-time expressions stay relative. At most 50 records are retained. Restored timestamps
+must be valid, nonzero and ordered; restore preserves the captured metadata. IDs and anchors must use the generated
+ID syntax. A missing anchor or self-move is invalid.
+
+A mutation checks the supplied revision against the read document, then atomically replaces it using
+`CompareSetting`. A successful mutation increments revision exactly once, including a valid no-op; int64 overflow
+is refused. Only after success does the manager broadcast `saved_agent_searches` with `{revision: decimal string}`;
+its normal manager stamp identifies the owner. No query text or names are included in the event. The client reloads
+that owner while its view is open, and never retries a conflicting write automatically.
+
+Errors: 400 `invalid_request` / `limit_reached`, 403 `forbidden`, 404 `search_not_found` for a missing entry,
+409 `conflict` for stale/CAS revisions, 409 `duplicate_name` for conflicting names/restore IDs, 503 `not_supported`
+when durable CAS is unavailable, and 503 `storage_unavailable` for read/write failure or corrupt stored data.
+A missing route on an older manager is 404. Clients distinguish missing entries from an unsupported endpoint and
+name validation from revision conflict. Failed actions emit no event and change no persisted collection.
+
+Undo is a `restore` using the revision acknowledged by the delete, never a blind overwrite of the whole collection.
+Another write invalidates that Undo. The visible entry order is the stored array order. Newer reads must not replace
+a dirty editor's draft or retarget an in-flight request after credential/default-manager changes.
+
 ## Workspace board
 
 Workflow, upgrades and persistence are covered in [Workspace board](../web/workspace-board.md). The APIs below belong to the manager (the hub forwards them unchanged over the bus `http.request`, see "Forwarding App requests"; `503 assistant_offline` when the manager isn't there), and the two events are sent by the manager via `ws.broadcast` and pushed unchanged by the hub. The APIs use the hub machine's Postgres as the only persistent state, with no fallback to in-memory or JSON file writes. `answer` may GET the board and the list; POST requires `full`. `can_write` says whether the current request's role can edit; it grants no extra file, Git or Agent permissions.
@@ -1917,6 +1972,7 @@ Server → client:
 | `machines` | `machines` (also after a rename: the whole list, with the new `name`) |
 | `file_transfer` | `transfer` (`FileTransfer`): a computer-to-computer transfer started, progressed (at most once a second) or ended; `manager` identifies a non-default manager. Only full devices that declared `file_transfer` receive it; not in the event log, so clients `GET` the current transfers after reconnecting ([file-transfer.md](file-transfer.md)) |
 | `managers` | No payload: the manager roster changed (created, renamed, connected, disconnected, deleted, new reported bot identities); clients re-read `GET /api/v1/managers` ("Bus" below, [managers.md](../assistant/managers.md) "Clients"). Only sent to connections that asked for feature `managers` (`?features=` or `client_hello.features`), not in the event log |
+| `saved_agent_searches` | `revision` (decimal string): the default manager committed a saved-query mutation; re-read the collection while its view is open, respecting the message's manager stamp. No query/name payload; see "Saved Agent searches" |
 | `workspace_board` | `revision`: a board change was saved; the client re-reads the full state; doesn't indicate an Agent state change |
 | `workspace_board_settings` | `enabled`: the board switch changed (`PUT /api/v1/workspace-board/settings`); clients show or hide the entry accordingly |
 | `kb_selection` | —: the knowledge base's selection was saved (`PUT /api/v1/kb/selection`, or a per-item change from the assistant); clients re-read `GET /api/v1/kb/selection` |
@@ -2228,6 +2284,7 @@ Any of `limit`, `cursor`, `since`, `summary`, `state`, `project`, `group`, or `c
 | `manager` | Runtime only: a manager's id; only the sessions on its computers. Requires the independently advertised `sessions_manager` capability, and does not opt into the bounded API by itself. See "One manager's sessions" below. |
 | `provider` | Runtime `agent` or personal-agent `provider`. Empty values on older runtime nodes stay empty; no agent name is guessed. |
 | `q` | Case-insensitive substring, at most 256 Unicode characters. Runtime title, cwd, repository, branch, space/slot/agent names and last preview; personal-agent title/provider/account id. With an opt-in parameter this is **row search**, never remote transcript/message search. |
+| `search` | Runtime only, opt-in ranked search, 1–1,024 UTF-8 bytes. Requires `sessions_search`; separate from legacy `q`. See "Ranked runtime search" below. |
 | `counts` | `1`/`true` returns aggregates instead of rows. `0`/`false` selects a normal page. The same filters apply. |
 | `since` | Opaque `revision` from the completed baseline/previous delta. Returns only changed rows and removals, including state/title-only changes when `updated_at` did not advance. Keep the same filters; changing a filter requires a new first-page baseline. |
 
@@ -2257,6 +2314,62 @@ GET /api/v1/agents/sessions?summary=1&limit=50&source=demo
 - A cursor traverses a **frozen filtered snapshot**: updates, deletions and inserts while scrolling cannot duplicate, omit or reorder rows in that snapshot. Every page returns its snapshot's same `revision` and `total`.
 - Snapshot retention is five minutes, with at most 32 active views per collection. A restart, expiry or eviction returns HTTP **409**, `code: "cursor_expired"`; restart at page one. Cursors bind filters and summary mode; a mismatched/tampered cursor returns 400.
 - The runtime collection includes Codex history. It uses the manager's already-decorated state, ownership, hidden/deleted-session rules and task metadata; it does not recompute business state in the hub.
+
+#### Ranked runtime search (`sessions_search`, #7624)
+
+The runtime collection advertises `sessions_search` independently. It searches the hub's already-indexed Agent
+metadata and latest available text, including unloaded historical sessions. It does not fetch transcripts, call models,
+search every past message, or search the separate personal-agent collection. Assistant conversations are excluded:
+the existing `assistant_search` contract owns them. Older hubs can ignore unknown parameters, so clients must gate
+on the capability and require `search_hits` in a successful response before calling the result complete.
+
+```http
+GET /api/v1/sessions?search=machine%3Astudio%20parser&summary=1&roots=1&limit=40
+```
+
+`search` accepts one nonempty, valid UTF-8 query of at most 1,024 bytes. The page size defaults to 40, with a maximum
+of 100; `q`, `since`, `counts`, `with_counts`, `catalog` and exact `session_id` lookup cannot be combined with it,
+even when those parameters are empty or false. Existing filtering and permission constraints still apply. Legacy
+`q` remains a contiguous substring and existing list/delta ordering is unchanged.
+
+The normal page fields are retained, with `search_hits` always present (an empty object for no matches). Its keys
+are the same JSON-encoded `[machine_id, session_id]` tuples used by runtime removals. Each value is
+`{score, evidence?: {role, before, match, after}}`; `role` is `user`, `agent`, `error` or `title`. Evidence contains a
+bounded fragment of actual indexed text, not model-generated explanation. Its match may fall after the summary's
+truncated title or preview, so a client must not discard the row by matching the compact summary again. The map
+contains only identities in the returned page, not other matches or inaccessible sessions.
+
+All whitespace-separated terms must match the same session, though different terms may match different fields.
+Explicit operators use case-insensitive substring values except exact states; values within a dimension are OR,
+dimensions and remaining words are AND. Unknown operators/values remain literal terms. Plain words never silently
+become filters. Supported spellings follow the existing web matcher:
+
+| Dimension | Operators |
+| --- | --- |
+| Computer ID/display name | `machine:`, `host:` |
+| Project name/folder | `project:`, `repo:`, `cwd:`, `path:` |
+| Agent runtime ID/name | `harness:`, `agent:`, `launcher:` |
+| Model | `model:` |
+| Unified state | `state:`, `status:`, `is:<state>`; `is:unknown` remains literal |
+| Pinned session | `is:pinned`, `is:pin`; workspace pins do not imply session pins |
+| Error or attention | `is:error`, `is:errors`, `is:failed`, `is:blocked` |
+| Recent update | `since:`, `after:`, `updated:` with `24h`, `7d`, `30d` and existing aliases |
+
+Time aliases retain current client behavior: `1d`, `2d`, `48h` select the 24-hour bucket; `1w` selects seven days and
+`1m` thirty days. The last recognized time operator wins. This search's time window is unrelated to the legacy
+`since` delta checkpoint. The shared corpus under `spec/fixtures/session-search/` checks client/server behavior.
+
+Global ranking is title prefix 100, title substring 80, all terms in title/project/computer/space/tab/folder 60,
+other indexed metadata/latest text 40, and operators-only 30. Add 5 unless the displayed state is offline. Sort by
+score descending, then update time descending and composite identity ascending. This happens before paging, not
+by sorting each newest-first page in the browser. `roots=1` preserves existing child-folding and folded-state rules.
+
+The first page freezes its ranking, evidence, membership, machine-name/pin/attention context and time cutoff.
+Continuations repeat the same query and filters but use that frozen result. Normal five-minute/32-view cursor limits
+apply; a 409 expiry requires an explicit new search. Authorization/private-session filtering precedes decoding,
+matching and totals; cursor scope includes the authorized machine set, manager and private-data policy. Runtime
+search remains hub-wide for ordinary credentials unless `manager` is explicitly supplied; a sidebar Assistant choice
+or an `X-Persona-Manager` header does not silently narrow it. Extension tokens remain limited to their own manager.
 
 #### Pane/host origins (`sessions_pane_source`, #994)
 
@@ -3253,7 +3366,7 @@ hub → node requests:
 | `plugin.node.sync` / `plugin.node.renew` / `plugin.node.status` | `sync {programs: [{id, version, digest}], installed: [id]}` → `{programs: [state]}`: those not in `programs` are stopped and their packages deleted; those not in `installed` are deleted along with their data. `renew {ids, lease_seconds}`; `status` → `{programs}` |
 | `plugin.node.dial` | `{id, plugin}` → `{}`: connects to this plugin program's HTTP socket and opens a stream `id` (after that, bytes flow over `stream.*` events, same as `port.dial`); if the program isn't running or doesn't serve HTTP it returns `code: not_running` |
 | `plugin.node.call` | `{id, method, params?}` → the program's answer: a plugin protocol method (programs on the hub call it via `nodes.call`); if the program isn't running it returns `code: not_running` |
-| `port.dial` | `{id, port, keep_awake?, pair?, link?, attach?}` → `{}`, or `{link: 1}` when it opened a screen session for 5900 with `pair` (`link`; `attach` rejoins a live one without dialing, else `session_gone`; [computer-use.md](../extensions/computer-use.md) "Live screen routes (#6398)"): connects to this local port (the address it was bound to at scan time, otherwise 127.0.0.1 then ::1; local only) and opens a stream `id`; if nothing is listening it errors with `code: port_gone`. After that both sides pass bytes over the `stream.*` events below |
+| `port.dial` | `{id, port, keep_awake?, pair?, link?, attach?}` → `{}`, or `{link: 1}` when it opened a screen session for 5900 with `pair` (`link`; `attach` rejoins a live one without dialing, else `session_gone`; [computer-use.md](../extensions/computer-use.md) "Live screen routes (#6398)"): connects to this local port (the address it was bound to at scan time, otherwise 127.0.0.1 then ::1; local only) and opens a stream `id`; if nothing is listening it errors with `code: port_gone`. After that both sides pass bytes over the `stream.*` events below. On a Mac a paired 5900 stream is also read for the phone's pixel scroll records (RFB client message type 200), which never reach Screen Sharing ([computer-use.md](../extensions/computer-use.md) "Pixel scrolling (#7775)") |
 | events `plugin.node.state` / `plugin.node.event` | node → hub: `{id, version, state, error?}` (came up, stopped on lease expiry), `{id, event, params}` (events the program sends; the hub forwards them to programs on the hub) |
 | `credential.gh_token` | `{host}` → `{token}`: runs `gh auth token --hostname <host>` non-interactively on this machine, for the GitHub connector (`github.auth.from_machine`). Only the hub can call it (the hook / MCP `node.sock` doesn't accept it); the token is never logged. gh not installed reports `code: no_gh`; not signed in (or signed in via the keychain, unreadable over ssh) reports `code: not_signed_in`; old nodes report unknown method |
 | `connector.list` | → `{connectors:[{id, status, error?, guide?, via}]}`: connectors this computer itself can provide (currently only `imessage` on Mac; other systems return an empty list). `status` is `ok` / `not_configured` (no Messages data) / `no_permission` (no Full Disk Access; `guide` gives step-by-step instructions to enable it on this Mac, worded two ways depending on whether `via` is `ssh` or a resident `launchd` node) / `error` |
@@ -3450,6 +3563,7 @@ The answer is `{name,role,managers:[{id,name,role,online}],owner,owner_notes,ass
   `agents`, `kb` (`{off?,text_days?,attachment_days?,attachment_days_by_source?,extra_dirs?}`, the knowledge base, `docs/assistant/knowledge.md` ("Who owns what")), the models (`ai`, `kb.ai`, `inbox.triage_ai` / `judge_ai`, `inbox.agent.machine`) and `hook_timeout_minutes` (`notify.hook_timeout_ms`).
   `owner` and `owner_notes` are still in the answer, empty. An older hub still fills these fields from its hub.json; a section the manager's `manager.json` has replaces them.
 - `mutes` `{spaces,sessions,allowed?}`: the hub's mutes (`GET /api/v1/mutes`) of the manager's own machines only (as `fleet.mutes`), so a manager has them before it pushes anything; left out while the hub cannot read them (they follow with `fleet.mutes` once it can) and by older hubs. `manager.updated` carries no `mutes`.
+- `quiet_push` (bool, left out when off and by older hubs): the hub's push tiering switch (`docs/server/server.md`, push levels) is on; the manager then holds back what is its own to send by the same levels (`server/internal/assistant/push_quiet.go`). Turning the switch on or off sends `manager.updated`.
 - The assistant keeps this answer. Where it might have changed (the linked group changed center, the machine list changed), the hub coalesces for 200 milliseconds and recomputes; if it differs from what it last gave, it sends
   `manager.updated` with the new answer as params (as above, without `name`, `role`, `managers`). On receiving it the assistant rereads its settings and its `manager.json` and reports a snapshot.
 
