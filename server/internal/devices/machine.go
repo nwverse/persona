@@ -101,6 +101,8 @@ type Machine struct {
 	dialErrAt       time.Time
 	lastSeen        time.Time
 	sessions        []proto.Session
+	sessionsListed  bool                     // the current connection has really supplied a snapshot, successful empty ones included
+	sessionsReady   chan struct{}            // closed once the current connection's first sessions.list has been handled
 	lists           proto.SessionListDecoder // decodes the node's lists, only the sessions whose bytes changed (onEvent)
 	sessionRevision uint64                   // local ordering of session snapshots, independent of node transcript revisions
 	watched         map[string]bool          // sessions the hub watches (session.watch): watched again on a new connection
@@ -125,9 +127,11 @@ type Machine struct {
 	reloadUntil                time.Time     // a resident announced exec; never extends display/reconnect grace
 	storeWait                  time.Duration // how long a node event waits on the store (nodeStoreWait; tests: shorter)
 	engineMu                   sync.Mutex
-	link                       *mgrLink      // kind link: the link Persona Link keeps open, nil while there is none
-	linkDown                   error         // why the last link went away
-	linkUp                     chan struct{} // a link arrived
+	// eventRetire admits an ordinary event callback or retires its connection; never lets a retired event follow the replacement.
+	eventRetire sync.Mutex
+	link        *mgrLink      // kind link: the link Persona Link keeps open, nil while there is none
+	linkDown    error         // why the last link went away
+	linkUp      chan struct{} // a link arrived
 	// presence: what its Persona Link last said about the user (presence.go).
 	presence *presence
 	// herdrAsked: when the node last said whether herdr's server answers (herdr.go, its row).
@@ -706,6 +710,7 @@ func (m *Machine) setSessions(list []proto.Session) {
 	}
 	m.mu.Lock()
 	m.sessions = list
+	m.sessionsListed = true
 	m.sessionRevision++
 	m.lastSeen = time.Now().UTC()
 	m.mu.Unlock()
