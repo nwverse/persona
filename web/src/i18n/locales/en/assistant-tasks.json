@@ -67,7 +67,6 @@
   "starting_agent": "Starting the agent",
   "status_starting": "Starting",
   "needs_more": "{title} +{count}",
-  "no_activity": "Nothing yet",
   "list_separator": ", ",
   "retrying": "Retrying",
   "retry": "Retry",
@@ -227,5 +226,9 @@
   "handoff_active_now": "last active just now",
   "handoff_not_active": "no activity yet",
   "handoff_gone": "This task no longer exists",
-  "handoff_closed": "Closed before an Agent started"
+  "handoff_closed": "Closed before an Agent started",
+  "agent_idle": "Idle",
+  "agent_stopped": "Stopped",
+  "todo_chip": "To-do: {state}",
+  "todo_waiting_merge": "Waiting to merge"
 }

@@ -4,6 +4,7 @@
 // side panel.
 import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
+import { agentRowKey, agentRowLabel, agentRowMark, agentRowTone, todoChipLabel, todoChipState } from "../../lib/task-row-status";
 import { assistantEntries, needsYouBySupervisor, type NeedsYouItem } from "../../lib/assistant-entries";
 import { useRestoredTodos } from "../../lib/todo-restore";
 import {
@@ -1021,14 +1022,6 @@ function TaskHandoffs({ item }: { item: FeedItem }) {
   return <HandoffCards handoffs={withFailureBelow(handoffs, failedBelow)} />;
 }
 
-/** The colour of a row's status word: Needs you attention, a usage limit orange, a cut or failed task red. */
-function statusTone(state: string, toStart: boolean): string {
-  if (toStart || state === "needs_you") return "text-attention";
-  if (state === "usage_limit") return "text-orange";
-  if (state === "interrupted" || state === "failed") return "text-red";
-  return "text-ink-2";
-}
-
 /** One slot, one row: live task/session state wins over historical feed metadata. */
 function ProgressTaskRow({ card, conversation, activity, countsOpen }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork; countsOpen: boolean }) {
   const todo = useTodo(card.todo_id);
@@ -1055,9 +1048,9 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen }: { card: T
   const liveLine = backgroundWorkLine(liveWork);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did
   const parked = liveWork || finished || state === "cancelled" ? undefined : parkedLine(todo);
-  const statusLabel = liveWork ? stateName("working") : parked ? t("assistant-tasks.review_parked") : accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : state === "not_started" ? t("assistant-tasks.status_starting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
-  // the mark tells the state at a glance, in the colors the dock and the board use (TaskMark)
-  const mark: TodoStatus = liveWork ? "working" : accepted || state === "accepted" ? "done" : state === "cancelled" ? "done" : toStart ? "needs_you" : (TODO_STATUS_INFO[state as TodoStatus] ? state as TodoStatus : "not_started");
+  // the status column is the Agent's own state, drawn with the Agents' marks; the to-do's own state is its chip (#6492)
+  const agentKey = agentRowKey({ live: !!liveWork, status: state, lead: task?.lead, todo: !!todo, agents: todo?.agents?.length ?? 0 });
+  const chip = todoChipState({ toStart, status: state, done: finished, stage: todo?.stage, pr, todo });
   const ask = useStore((s) => taskAsk(todo ? taskInteraction(todo, s.interactions, task?.lead) : undefined));
   // what a waiting task waits for (#3274): its agent's own line for it
   const waits = useStore((s) => (todo && state === "waiting" ? waitingLine(todo, taskSessionLookup(s)) : undefined));
@@ -1074,15 +1067,18 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen }: { card: T
     : limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   return (
     <button type="button" data-task-slot={card.id} data-counts-open={countsOpen ? "true" : "false"} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
-      <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} /></span>
+      <span data-task-mark={agentKey} className="flex w-4 shrink-0 justify-center"><StatusMark state={agentRowMark(agentKey)} size="sm" /></span>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold" title={title}>{title}</div>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate text-sm font-semibold" title={title}>{title}</span>
+          {chip && <span data-task-todo-state className="shrink-0 whitespace-nowrap rounded-full bg-field px-1.5 text-xs text-ink-2">{todoChipLabel(chip)}</span>}
+        </div>
         <BackgroundWorkDetail activity={liveWork} detail={detail} pr={prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined} />
         {!finished && state !== "cancelled" && meter && <TaskProgressMeter value={meter.value} total={meter.total} blocked={blocked} title={title} />}
       </div>
       {/* the status in its own right-aligned column (the rows' states scan down it), then the row's end: › where it opens
           something, ✓ once finished, ⓘ for a usage limit (#5569) */}
-      <span data-task-status={state} className={cx("max-w-[40%] shrink-0 truncate text-right text-xs", statusTone(state, toStart))}>{statusLabel}</span>
+      <span data-task-status={agentKey} className={cx("max-w-[40%] shrink-0 truncate text-right text-xs", agentRowTone(agentKey))}>{agentRowLabel(agentKey)}</span>
       <span className="flex w-4 shrink-0 justify-center">
         {finished ? <Icon name="check" className="text-green" /> : state === "usage_limit" ? <Icon name="info" className="text-orange" /> : <Icon name="chevronRight" className="text-ink-3" />}
       </span>

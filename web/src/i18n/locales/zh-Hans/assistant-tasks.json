@@ -61,7 +61,6 @@
   "starting_agent": "正在开 Agent",
   "status_starting": "启动中",
   "needs_more": "{title} 等 {count} 个",
-  "no_activity": "还没有动静",
   "list_separator": "、",
   "retrying": "正在重试",
   "retry": "重试",
@@ -210,5 +209,9 @@
   "handoff_active_now": "刚刚活跃过",
   "handoff_not_active": "还没有动静",
   "handoff_gone": "没有这个任务了",
-  "handoff_closed": "还没开 Agent 就结束了"
+  "handoff_closed": "还没开 Agent 就结束了",
+  "agent_idle": "空闲",
+  "agent_stopped": "已停",
+  "todo_chip": "待办：{state}",
+  "todo_waiting_merge": "等合并"
 }
