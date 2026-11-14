@@ -19,14 +19,11 @@ import (
 
 // startDevices makes the machines of hub.json before the managers report them: shown as before a restart while they
 // come back (what the last hub process saw them report, saveDevicesWarm), offline otherwise, as their manager last
-// reported them (machine_entries.go); a call waits for the carrier meanwhile.
+// reported them (machine_entries.go); a call waits for its manager meanwhile (waitDevicesFor).
 func (h *Hub) startDevices(ctx context.Context) {
 	d := &h.devices
 	d.mu.Lock()
 	d.entries, d.started = slices.Clone(h.cfg.Machines), true
-	if d.up == nil {
-		d.up = make(chan struct{})
-	}
 	d.mu.Unlock()
 	if err := h.loadMachineOwners(ctx); err != nil {
 		h.logf("devices: ownership unavailable; dedicated local machines stay unassigned: %v", err)
@@ -92,27 +89,49 @@ func (m *Machine) markUnknownLocked() {
 	m.sessions = list
 }
 
-// devicesUp: the manager that carries the machines is connected and has reported them.
-func (h *Hub) devicesUp() bool {
+// devicesUp: the carrier is connected and has reported its machines (devicesUpFor): hub.json's machines nobody moved,
+// and what names no machine.
+func (h *Hub) devicesUp() bool { return h.devicesUpFor(devicesOwner) }
+
+// devicesUpFor: manager owner is connected and has reported its machines.
+func (h *Hub) devicesUpFor(owner string) bool {
 	d := &h.devices
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.upOpen
+	return d.upOpen[owner]
 }
 
-// waitDevices returns nil once the manager is up; errManagerOffline at once while it is not, unless the hub just
-// started (its machines shown as before): then a call waits for it that long.
-func (h *Hub) waitDevices(ctx context.Context) error {
+// upChanLocked is owner's up channel, made at the first ask (the maps too); d.mu is held.
+func (d *devicesState) upChanLocked(owner string) chan struct{} {
+	if d.up == nil {
+		d.up, d.upOpen = map[string]chan struct{}{}, map[string]bool{}
+	}
+	up, ok := d.up[owner]
+	if !ok {
+		up = make(chan struct{})
+		d.up[owner] = up
+	}
+	return up
+}
+
+// waitDevicesFor returns nil once manager owner is up; errManagerOffline at once while it is not, unless the hub just
+// started (its machines shown as before) and owner has not reported since: then a call waits for it that long. A
+// manager of the roster that is away is waited for like the carrier; a machine nobody is known to carry
+// (unknownMachineOwner: the ownership could not be read, ownership.go) is offline at once.
+func (h *Hub) waitDevicesFor(ctx context.Context, owner string) error {
+	if owner == unknownMachineOwner {
+		return errManagerOffline
+	}
 	d := &h.devices
 	d.mu.Lock()
-	if d.upOpen {
+	if d.upOpen[owner] {
 		d.mu.Unlock()
 		return nil
 	}
-	if d.up == nil {
-		d.up = make(chan struct{})
+	up, until := d.upChanLocked(owner), d.warmUntil
+	if d.reportedSince[owner] { // its start is over: from now on a call without it fails at once
+		until = time.Time{}
 	}
-	up, until := d.up, d.warmUntil
 	d.mu.Unlock()
 	if !time.Now().Before(until) {
 		return errManagerOffline
@@ -129,12 +148,17 @@ func (h *Hub) waitDevices(ctx context.Context) error {
 	return errManagerOffline
 }
 
-// awaitManager is waitDevices for what cannot wait long (a WebSocket handshake, a peer's request): at most limit.
-// True once the manager is up.
+// awaitManager is awaitManagerFor the carrier.
 func (h *Hub) awaitManager(ctx context.Context, limit time.Duration) bool {
+	return h.awaitManagerFor(ctx, devicesOwner, limit)
+}
+
+// awaitManagerFor is waitDevicesFor what cannot wait long (a WebSocket handshake, a peer's request): at most limit.
+// True once manager owner is up.
+func (h *Hub) awaitManagerFor(ctx context.Context, owner string, limit time.Duration) bool {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
-	return h.waitDevices(ctx) == nil
+	return h.waitDevicesFor(ctx, owner) == nil
 }
 
 // applyDeviceStatesFrom takes devices.state from manager owner: every machine it carries, in the apps' order. The
@@ -256,16 +280,14 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		d.recEntries = map[string][]devicewire.RecMachine{}
 	}
 	d.recEntries[owner] = st.Entries
-	if owner == devicesOwner { // hub.json's machines, the hub's start: the carrier's
+	if owner == devicesOwner { // hub.json's entries another one absorbed: the carrier's to say
 		d.absorbed = st.Absorbed
-		if d.up == nil {
-			d.up = make(chan struct{})
-		}
-		if !d.upOpen {
-			close(d.up)
-			d.upOpen = true
-		}
-		d.warmUntil = time.Time{} // the hub's start is over: from now on a call without the manager fails at once
+	}
+	// Its machines are reachable and the calls waiting for it go (waitDevicesFor); not on a report sent after it was
+	// removed from the roster (machine_entries.go: that one is dropped too).
+	if !d.upOpen[owner] && !d.reportedForgot[owner] {
+		close(d.upChanLocked(owner))
+		d.upOpen[owner] = true
 	}
 	fresh := d.fresh[owner]
 	delete(d.fresh, owner)
@@ -353,6 +375,10 @@ func (h *Hub) devicesConnected(owner string) {
 		d.fresh = map[string]bool{}
 	}
 	d.fresh[owner] = true
+	if d.conns == nil {
+		d.conns = map[string]uint64{}
+	}
+	d.conns[owner]++
 	d.mu.Unlock()
 	for _, m := range h.machinesNow() {
 		m.mu.Lock()
@@ -431,15 +457,13 @@ func (h *Hub) connectionEnded(m *Machine, why string) {
 func (h *Hub) devicesGone(owner string) {
 	d := &h.devices
 	d.mu.Lock()
-	if d.upOpen && owner == devicesOwner {
-		d.up = make(chan struct{})
-		d.upOpen = false
-	}
+	conns := d.conns[owner]
 	d.mu.Unlock()
+	h.upGone(owner, conns)
 	// The hub's own stop (the manager gets its SIGTERM at the same time): the next hub shows them as they were
 	// (startDevices). A moment's wait lets the hub's stop begin first.
 	time.Sleep(500 * time.Millisecond)
-	if h.stopping.Load() || h.busConnOf(owner) != nil || owner == devicesOwner && h.devicesUp() {
+	if h.stopping.Load() || h.busConnOf(owner) != nil || h.devicesUpFor(owner) {
 		return
 	}
 	d.mu.Lock()
@@ -467,6 +491,23 @@ func (h *Hub) devicesGone(owner string) {
 			h.sessionsChanged(m)
 		}
 	}
+}
+
+// upGone forgets owner's up state with the connection that ended, unless a newer one is there already: current now, or
+// connected (devicesConnected) since conns was read. A manager reports only after its handshake, so an up state found
+// with no newer connection is the old connection's; one found after a newer handshake is that connection's and stays.
+func (h *Hub) upGone(owner string, conns uint64) {
+	if h.busConnOf(owner) != nil {
+		return
+	}
+	d := &h.devices
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.conns[owner] != conns || !d.upOpen[owner] {
+		return
+	}
+	delete(d.up, owner) // the next wait for it gets a channel of its own (upChanLocked)
+	delete(d.upOpen, owner)
 }
 
 // offlineLocal shows m offline with error why until its manager reports it again: its streams close, its sessions'

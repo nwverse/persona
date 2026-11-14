@@ -259,9 +259,10 @@ func (m *Machine) reachable() bool {
 	m.mu.Lock()
 	p := m.peer
 	managed, connected := m.managed, m.connected
+	owner := cmp.Or(m.owner, devicesOwner)
 	m.mu.Unlock()
 	if managed {
-		return connected && m.hub.devicesUp()
+		return connected && m.hub.devicesUpFor(owner) // its own manager's state (devices_reports.go)
 	}
 	if p == nil {
 		return false

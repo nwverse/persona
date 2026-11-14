@@ -346,7 +346,7 @@ func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id str
 	if id != devicesOwner {
 		key = id + " " + key // each manager's own (the carrier's keys as before)
 	}
-	if h.busConnOf(id) == nil && (id != devicesOwner || !h.awaitManager(r.Context(), linkManagerWait)) {
+	if h.busConnOf(id) == nil && !h.awaitManagerFor(r.Context(), id, linkManagerWait) { // the hub just started: it is on its way
 		if keep && h.writeKept(w, key) {
 			return
 		}

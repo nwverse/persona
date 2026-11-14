@@ -90,11 +90,14 @@ func (h *Hub) serveNodeOpen(w http.ResponseWriter, r *http.Request, from, mid st
 		writeErr(w, http.StatusNotFound, i18n.Err("hub-peer_node.no_machine", i18n.Args{"id": strconv.Quote(mid)}))
 		return
 	}
-	if !h.awaitManager(r.Context(), linkManagerWait) { // the hub just started: the manager is on its way
+	// The hub just started: the machine's manager is on its way (bounded); one that is connected takes it (relayLinkConn).
+	owner := h.machineOwner(mid)
+	if !h.awaitManagerFor(r.Context(), owner, linkManagerWait) && h.busConnOf(owner) == nil {
 		writeErr(w, http.StatusBadGateway, errAssistantOffline)
 		return
 	}
-	taken, err := h.handToManager(context.Background(), devicewire.Accept{Kind: devicewire.AcceptNode, MachineID: mid})
+	a := devicewire.Accept{Kind: devicewire.AcceptNode, MachineID: mid}
+	taken, err := h.handToManagerVia(context.Background(), owner, devicewire.MethodAccept, &a)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err)
 		return

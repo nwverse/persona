@@ -31,11 +31,14 @@ type busNode struct {
 
 func (b *busNode) Call(ctx context.Context, method string, params, out any) error {
 	owner := b.h.machineOwner(b.id)
-	if caller, ok := callerOf(ctx); ok && caller != owner { // a manager's device.call, the machine moved since its check
+	caller, ok := callerOf(ctx)
+	if ok && caller != owner { // a manager's device.call, the machine moved since its check
 		return &rpc.Error{Code: devicewire.CodeNoDevice, Message: fmt.Sprintf("%s on machine %q: another manager's now", clip(method, 64), clip(b.id, 64))}
 	}
-	if owner == devicesOwner {
-		if err := b.h.waitDevices(ctx); err != nil {
+	// Anyone but its manager waits for the manager (the hub just started: it is on its way, bounded); the manager's own
+	// call reaches its machine as soon as it is connected, report or not.
+	if !ok {
+		if err := b.h.waitDevicesFor(ctx, owner); err != nil {
 			return fmt.Errorf("%s: %w", b.id, err)
 		}
 	}
