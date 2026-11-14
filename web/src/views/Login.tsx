@@ -17,7 +17,8 @@ const code = "whitespace-nowrap rounded-[5px] bg-field px-1 py-0.5 font-mono tex
 // Sign in without a terminal (docs/assistant/onboarding.md 4.2, 4.5): first a login code from a device that is already signed
 // in (Settings › Devices › Connect a new device › Browser makes a `#token=jp_…` link: opened here it signs in by itself, App.tsx), then a
 // pasted pairing / login link. The hub's own token and the commands that print it are folded under "Advanced". `error` is
-// what went wrong with a token that came in the link.
+// what went wrong with a token that came in the link. Each form says what went wrong under its own button, where the eye
+// is, and editing its field takes that away (web usability audit item 41).
 export function Login({ onDone, error: linkError = "" }: { onDone: () => void; error?: string }) {
   const [passwordMode, setPasswordMode] = useState(false);
   useEffect(() => {
@@ -28,7 +29,9 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
   const [link, setLink] = useState("");
   const [master, setMaster] = useState("");
   const [busy, setBusy] = useState<"" | "link" | "master">("");
+  // the link form's error (a link's token that didn't work starts there) and the master key's
   const [error, setError] = useState(linkError);
+  const [masterError, setMasterError] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [noHub, setNoHub] = useState(false);
   useEffect(() => void rememberHub(here()), []);
@@ -38,14 +41,15 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
     const tok = (from === "link" ? link : master).trim();
     if (!tok || busy) return;
     setBusy(from);
-    setError("");
+    const fail = from === "link" ? setError : setMasterError;
+    fail("");
     try {
       await pair(tok);
       onDone();
     } catch (err) {
       const msg = errorText(err);
       const invalid = (err instanceof ApiError && err.status === 401) || msg === "invalid token";
-      setError(invalid ? t(from === "link" ? "login.invalid_link" : "login.invalid_token") : msg);
+      fail(invalid ? t(from === "link" ? "login.invalid_link" : "login.invalid_token") : msg);
     } finally {
       setBusy("");
     }
@@ -94,7 +98,10 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
               autoFocus
               type="text"
               value={link}
-              onChange={(e) => setLink(e.target.value)}
+              onChange={(e) => {
+                setLink(e.target.value);
+                setError("");
+              }}
               placeholder={t("login.link_placeholder")}
               aria-label={t("login.link_placeholder")}
               autoComplete="off"
@@ -139,7 +146,10 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
                   <input
                     type="password"
                     value={master}
-                    onChange={(e) => setMaster(e.target.value)}
+                    onChange={(e) => {
+                      setMaster(e.target.value);
+                      setMasterError("");
+                    }}
                     placeholder={t("login.master_placeholder")}
                     aria-label={t("login.master_placeholder")}
                     autoComplete="off"
@@ -150,6 +160,9 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
                   {busy === "master" ? <Spinner /> : t("login.connect")}
                 </Button>
               </div>
+              <p className="mt-2 text-center text-[12.5px] text-red" role="alert">
+                {masterError}
+              </p>
             </form>
           </Disclosure>
         </div>
