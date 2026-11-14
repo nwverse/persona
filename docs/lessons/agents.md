@@ -313,8 +313,11 @@ as the user's: the skills switched off in `~/.claude/settings.json` came back (a
 machine). The one way in is the ancestor walk: for a directory below the home, Claude Code still reads
 `~/.claude/CLAUDE.md` and `~/.claude/rules` as the home's project instructions (about 5.2k tokens there), as it does for
 a guest (above). Exclude those with `claudeMdExcludes` and carry over only what should follow the user (here the
-`skillOverrides` set to `"off"`). To check on the real CLI without a model, point `ANTHROPIC_BASE_URL` at a local mock
-that records request bodies and count a marker line from each file in what Claude Code sends.
+`skillOverrides` set to `"off"`). "Not `~/.claude`" is not the same as "private": `claude_start_dir`, a wrapper's
+`CLAUDE_CONFIG_DIR` and an explicit `config_dir` elsewhere are profiles the user set up and may run plain `claude` in,
+and the user's switches live in the one `claude_start_dir` names when it is set. Only the directories Persona creates
+count as private. To check on the real CLI without a model, point `ANTHROPIC_BASE_URL` at a local mock that records
+request bodies and count a marker line from each file in what Claude Code sends.
 
 ## Read colors to determine whether Claude's input box is empty (#1434)
 

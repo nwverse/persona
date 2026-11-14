@@ -3,29 +3,65 @@ package node
 import (
 	"path/filepath"
 	"slices"
+
+	"github.com/nwverse/persona/server/internal/identity"
 )
 
-// What of the user's own Claude Code setup reaches an assistant conversation in a private profile (#7318): a config
-// directory that is neither ~/.claude nor the node's own default ($CLAUDE_CONFIG_DIR; assistant_config_dir.go). Claude
-// Code reads that profile's settings and instructions instead of the user's, except in two ways:
+// What of the user's own Claude Code setup reaches an assistant conversation in a private profile (#7318): one of the
+// config directories Persona creates for its assistant (<data dir>/profiles/<launcher>, assistantProfileSelection).
+// Every other directory, ~/.claude, the node's own default ($CLAUDE_CONFIG_DIR), the machine's claude_start_dir, a
+// wrapper's CLAUDE_CONFIG_DIR or an explicit config_dir elsewhere, is one the user set up and may run plain claude in,
+// so it is left as it is. Claude Code reads a private profile's settings and instructions instead of the user's,
+// except in two ways:
 //   - its directory below the home still has Claude Code walk up to the home and read ~/.claude as the home's project
 //     .claude (docs/lessons/agents.md, #5786), so ~/.claude/CLAUDE.md and every ~/.claude/rules file, written for
 //     coding Agents, came in as project instructions. They are excluded; what the assistant needs of them belongs in
 //     About me, which its own instructions carry.
 //   - the skills the user turned off in their own settings.json came back, as that file is not read. Only those
 //     switches are carried over: the user's env, hooks, permissions and plugins stay in their profile.
-// In the user's own profile nothing changes. A guest's settings set their own excludes and keep no skill switches
-// (guestSettingsFile), so none of this reaches a guest.
+// A guest's settings set their own excludes and keep no skill switches (guestSettingsFile), so none of this reaches a
+// guest.
 
-// privateProfile: profile (a conversation's Claude config directory, "" for none) is neither ~/.claude nor the user's
-// own default.
-func (n *Node) privateProfile(profile string) bool {
-	return profile != "" && n.home != "" && !sameScopePath(profile, filepath.Join(n.home, ".claude")) &&
-		!sameScopePath(profile, n.defaultClaudeDir())
+// assistantProfilesRoot is the directory Persona creates assistant profiles in (assistantProfileSelection).
+func (n *Node) assistantProfilesRoot() string {
+	root := n.dir
+	if root == "" {
+		root = identity.DataDir(n.home)
+	}
+	return filepath.Join(root, "profiles")
 }
 
-// assistantUserSetup adds to an assistant start's merged settings s, for a conversation in cwd and profile, the
-// excludes of ~/.claude's instructions (both spellings of a symlinked home, merged with any already there) and the
+// userClaudeDir is the profile the user's own plain claude runs in on this machine: the machine's claude_start_dir when
+// set (launcherCommandQ), else the node's own default (defaultClaudeDir).
+func (n *Node) userClaudeDir() string {
+	if d := n.claudeStartDir.Load(); d != nil {
+		if dir, ok := absConfigDir(*d, n.home); ok {
+			return dir
+		}
+	}
+	return n.defaultClaudeDir()
+}
+
+// privateProfile: profile (a conversation's Claude config directory, "" for none) is one Persona created, below
+// assistantProfilesRoot, and none of the user's own (~/.claude, the node's default, claude_start_dir).
+func (n *Node) privateProfile(profile string) bool {
+	if profile == "" || n.home == "" {
+		return false
+	}
+	root := n.assistantProfilesRoot()
+	if !sessionScopeWithin(root, profile) || sameScopePath(root, profile) {
+		return false
+	}
+	for _, own := range []string{filepath.Join(n.home, ".claude"), n.defaultClaudeDir(), n.userClaudeDir()} {
+		if sameScopePath(profile, own) {
+			return false
+		}
+	}
+	return true
+}
+
+// assistantUserSetup adds to an assistant start's merged settings s, for a conversation in cwd and a private profile,
+// the excludes of ~/.claude's instructions (both spellings of a symlinked home, merged with any already there) and the
 // user's skill switches that are off (userSkillsOff; a name s sets keeps its value).
 func (n *Node) assistantUserSetup(s map[string]any, cwd, profile string) {
 	if !n.privateProfile(profile) {
@@ -58,15 +94,15 @@ func (n *Node) assistantUserSetup(s map[string]any, cwd, profile string) {
 	}
 }
 
-// userSkillsOff is the skillOverrides a conversation in a private profile takes from the user's own settings.json: its
-// entries whose value is "off", less the names the conversation's own settings files set (its profile's settings.json,
-// cwd's .claude/settings.json and settings.local.json), which keep their values. nil in the user's own profile. The
-// skill catalog (visibleClaudeSkills) reads the same, so it lists what the conversation can use.
+// userSkillsOff is the skillOverrides a conversation in a private profile takes from the user's own settings.json (in
+// userClaudeDir): its entries whose value is "off", less the names the conversation's own settings files set (its
+// profile's settings.json, cwd's .claude/settings.json and settings.local.json), which keep their values. nil in any
+// other profile. The skill catalog (visibleClaudeSkills) reads the same, so it lists what the conversation can use.
 func (n *Node) userSkillsOff(profile, cwd string) map[string]any {
 	if !n.privateProfile(profile) {
 		return nil
 	}
-	user, err := readSettingsFile(filepath.Join(n.defaultClaudeDir(), "settings.json"))
+	user, err := readSettingsFile(filepath.Join(n.userClaudeDir(), "settings.json"))
 	if err != nil {
 		return nil
 	}

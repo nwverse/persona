@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -95,25 +96,30 @@ func TestPrivateProfileExcludesTheHomeClaudeInstructions(t *testing.T) {
 		}
 	}
 
-	// A node whose own default is another directory: a conversation there is in the user's profile too.
+	// A node whose own default is a directory below Persona's profile root: a conversation there is in the user's
+	// profile too, also when the machine's plain claude starts in another one.
 	n := userSetupNode(t, real)
-	own := filepath.Join(real, "claude-main")
+	own := filepath.Join(real, ".persona", "profiles", "main")
 	t.Setenv("CLAUDE_CONFIG_DIR", own)
-	if got := excludesOf(writtenSettings(t, n, filepath.Join(real, ".persona", "assistant"), "", own)); len(got) != 0 {
-		t.Errorf("the node's own profile: excludes %v", got)
+	for _, start := range []string{"", "~/.claude-main"} {
+		n.claudeStartDir.Store(&start)
+		if got := excludesOf(writtenSettings(t, n, filepath.Join(real, ".persona", "assistant"), "", own)); len(got) != 0 {
+			t.Errorf("the node's own profile, claude_start_dir %q: excludes %v", start, got)
+		}
 	}
 }
 
 // The skills the user turned off in their own settings.json stay off in a private profile; nothing else of that file
 // comes along (env, hooks, permissions, plugins, model, other switch values), and a name the conversation's own
-// settings set keeps its value. In the user's own profile only the assistant's fixed switches are written.
+// settings set (its profile's settings.json, cwd's .claude/settings.json and settings.local.json, the start's) keeps
+// its value. In the user's own profile only the assistant's fixed switches are written.
 func TestPrivateProfileCarriesTheUserSkillSwitchesOff(t *testing.T) {
 	home := t.TempDir()
 	n := userSetupNode(t, home)
 	cwd := filepath.Join(home, ".persona", "assistant")
 	profile := filepath.Join(home, ".persona", "profiles", "claude")
 	writeFile(t, filepath.Join(home, ".claude", "settings.json"), `{
-		"skillOverrides": {"lark-doc": "off", "notes": "off", "kept": "on", "named": "name-only", "explicit": "off", "profile-set": "off", "project-set": "off"},
+		"skillOverrides": {"lark-doc": "off", "notes": "off", "kept": "on", "named": "name-only", "explicit": "off", "profile-set": "off", "project-set": "off", "shared-set": "off"},
 		"env": {"USER_SECRET": "user-token"},
 		"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "cat ~/diary.md"}]}]},
 		"permissions": {"allow": ["Bash"]},
@@ -122,6 +128,7 @@ func TestPrivateProfileCarriesTheUserSkillSwitchesOff(t *testing.T) {
 	}`)
 	writeFile(t, filepath.Join(profile, "settings.json"), `{"skillOverrides":{"profile-set":"on"}}`)
 	writeFile(t, filepath.Join(cwd, ".claude", "settings.local.json"), `{"skillOverrides":{"project-set":"on"}}`)
+	writeFile(t, filepath.Join(cwd, ".claude", "settings.json"), `{"skillOverrides":{"shared-set":"on"}}`)
 	settings := filepath.Join(t.TempDir(), "settings.json")
 	writeFile(t, settings, `{"skillOverrides":{"explicit":"on"}}`)
 
@@ -137,6 +144,12 @@ func TestPrivateProfileCarriesTheUserSkillSwitchesOff(t *testing.T) {
 			t.Errorf("skill %s: %v, want %v (%v)", name, overrides[name], value, overrides)
 		}
 	}
+	// Not off for the user, or set by the conversation's own settings: the start leaves it alone.
+	for _, name := range []string{"kept", "named", "profile-set", "project-set", "shared-set"} {
+		if v, set := overrides[name]; set {
+			t.Errorf("skill %s: the start sets it to %v", name, v)
+		}
+	}
 	raw, _ := json.Marshal(s)
 	for _, bad := range []string{"USER_SECRET", "user-token", "diary.md", "permissions", "notes@me", "user-model"} {
 		if strings.Contains(string(raw), bad) {
@@ -148,6 +161,58 @@ func TestPrivateProfileCarriesTheUserSkillSwitchesOff(t *testing.T) {
 	overrides, _ = writtenSettings(t, n, cwd, settings, filepath.Join(home, ".claude"))["skillOverrides"].(map[string]any)
 	if len(overrides) != 5 || overrides["explicit"] != "on" || overrides["lark-doc"] != nil {
 		t.Errorf("the user's own profile: %v", overrides)
+	}
+}
+
+// Only a profile Persona created is private. On a machine whose plain claude starts in claude_start_dir, that profile is
+// the user's own: a conversation there (a pre-existing one resolves to it, legacyAssistantProfile) gets neither excludes
+// nor switches, and the switches a private profile carries are the ones the user turned off there, not in a stale
+// ~/.claude. A directory the user or a wrapper set up elsewhere stays as it is too; one an explicit pick puts below
+// Persona's profile root is private.
+func TestClaudeStartDirIsTheUserProfile(t *testing.T) {
+	home := t.TempDir()
+	n := userSetupNode(t, home)
+	start := "~/.claude-main"
+	n.claudeStartDir.Store(&start)
+	cwd := filepath.Join(home, ".persona", "assistant")
+	writeFile(t, filepath.Join(home, ".claude", "settings.json"), `{"skillOverrides":{"stale":"off"}}`)
+	writeFile(t, filepath.Join(home, ".claude-main", "settings.json"), `{"skillOverrides":{"mine":"off"}}`)
+	fixed := map[string]any{"design": "off", "doctor": "off", "plugin-authoring": "off", "ui-ux-pro-max": "off"}
+
+	for _, profile := range []string{filepath.Join(home, ".claude-main"), filepath.Join(home, ".claude-work")} {
+		if n.privateProfile(profile) {
+			t.Errorf("%s counts as private", profile)
+		}
+		s := writtenSettings(t, n, cwd, "", profile)
+		if got := excludesOf(s); len(got) != 0 {
+			t.Errorf("%s: excludes %v", profile, got)
+		}
+		if overrides, _ := s["skillOverrides"].(map[string]any); !maps.Equal(overrides, fixed) {
+			t.Errorf("%s: skill switches %v, want %v", profile, overrides, fixed)
+		}
+	}
+
+	for _, profile := range []string{filepath.Join(home, ".persona", "profiles", "claude"), filepath.Join(home, ".persona", "profiles", "other")} {
+		s := writtenSettings(t, n, cwd, "", profile)
+		if !slices.Contains(excludesOf(s), filepath.Join(home, ".claude", "CLAUDE.md")) {
+			t.Errorf("%s: excludes %v", profile, excludesOf(s))
+		}
+		overrides, _ := s["skillOverrides"].(map[string]any)
+		if overrides["mine"] != "off" || overrides["stale"] != nil {
+			t.Errorf("%s: skill switches %v, want mine off and no stale", profile, overrides)
+		}
+	}
+	// Persona's profile root itself is no conversation's profile.
+	if n.privateProfile(filepath.Join(home, ".persona", "profiles")) {
+		t.Error("the profile root counts as private")
+	}
+
+	// With no claude_start_dir the user's switches come from the node's default.
+	none := ""
+	n.claudeStartDir.Store(&none)
+	overrides, _ := writtenSettings(t, n, cwd, "", filepath.Join(home, ".persona", "profiles", "claude"))["skillOverrides"].(map[string]any)
+	if overrides["stale"] != "off" || overrides["mine"] != nil {
+		t.Errorf("no claude_start_dir: skill switches %v, want stale off and no mine", overrides)
 	}
 }
 
@@ -190,9 +255,9 @@ func TestSkillCatalogMatchesThePrivateProfileSettings(t *testing.T) {
 	n := f.n
 	n.home = os.Getenv("HOME")
 	cwd := filepath.Join(n.home, ".persona", "assistant")
-	profile := filepath.Join(n.home, ".persona", "profiles", "claude")
-	for _, name := range []string{"lark-doc", "worklog"} { // the home's .claude/skills, above cwd
-		writeFile(t, filepath.Join(n.home, ".claude", "skills", name, "SKILL.md"), "---\nname: "+name+"\n---\nInstructions\n")
+	profile := filepath.Join(n.dir, "profiles", "claude")  // the one a new conversation gets
+	for _, name := range []string{"lark-doc", "worklog"} { // cwd's own project skills
+		writeFile(t, filepath.Join(cwd, ".claude", "skills", name, "SKILL.md"), "---\nname: "+name+"\n---\nInstructions\n")
 	}
 	for _, name := range []string{"notes", "explicit"} {
 		writeFile(t, filepath.Join(profile, "skills", name, "SKILL.md"), "---\nname: "+name+"\n---\nInstructions\n")
