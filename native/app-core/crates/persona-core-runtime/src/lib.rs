@@ -74,6 +74,8 @@ pub struct Runtime {
     sender: Sender<Message>,
     shared: Arc<Shared>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    /// Registry-backed clients own shutdown explicitly; ordinary leased operations never take its JoinHandle.
+    join_on_drop: bool,
 }
 
 impl Runtime {
@@ -89,6 +91,7 @@ impl Runtime {
             sender,
             shared,
             worker: Mutex::new(Some(worker)),
+            join_on_drop: true,
         }
     }
 
@@ -253,20 +256,36 @@ impl Runtime {
     /// Requests worker shutdown and joins it outside any handle-registry lock. An ordinary operation must never call
     /// this on its final lease: only the client's close/shutdown operation owns worker termination.
     pub fn shutdown(&self) {
-        {
-            let mut queue = lock(&self.shared.queue);
-            if queue.stopping {
-                return;
-            }
-            queue.stopping = true;
-            let _ = self.sender.send(Message::Stop);
-        }
+        self.stop();
+        self.join_worker();
+    }
+
+    /// Mark that a client registry has already requested shutdown. Ordinary borrowed calls may finish their operation,
+    /// but only the close path may wait for the worker and release its host.
+    pub fn shutdown_requested(&self) -> bool {
+        lock(&self.shared.queue).stopping
+    }
+
+    fn join_worker(&self) {
         let worker = self.worker.lock().unwrap_or_else(PoisonError::into_inner).take();
         // Drop the mutex guard before joining: the host's release callback may reenter shutdown through a weak lease.
         if let Some(worker) = worker
             && worker.thread().id() != std::thread::current().id()
         {
             let _ = worker.join();
+        }
+    }
+
+    /// Registry handles own worker shutdown, independently of any ordinary lease's destruction.
+    pub fn set_explicit_shutdown(&mut self) {
+        self.join_on_drop = false;
+    }
+
+    fn stop(&self) {
+        let mut queue = lock(&self.shared.queue);
+        if !queue.stopping {
+            queue.stopping = true;
+            let _ = self.sender.send(Message::Stop);
         }
     }
 
@@ -281,9 +300,16 @@ impl Runtime {
 
 impl Drop for Runtime {
     fn drop(&mut self) {
-        // Dropping a lease is not closing the client. The registry's close explicitly calls `shutdown` instead.
-        let _ = self.sender.send(Message::Stop);
-        let _ = self.worker.get_mut().unwrap_or_else(PoisonError::into_inner).take();
+        // A direct Runtime requests stop on drop. A registry close owns stopping explicitly, so an ordinary
+        // borrowed lease only releases its Arc and never changes queue state or joins the worker.
+        if self.join_on_drop {
+            self.stop();
+            if let Some(worker) = self.worker.get_mut().unwrap_or_else(PoisonError::into_inner).take()
+                && worker.thread().id() != std::thread::current().id()
+            {
+                let _ = worker.join();
+            }
+        }
     }
 }
 
@@ -675,9 +701,9 @@ mod tests {
     }
 
     #[test]
-    fn worker_release_does_not_join_itself() {
+    fn worker_host_release_runs_on_the_worker_without_joining_itself() {
         struct ReleaseHost {
-            runtime: Arc<Mutex<Option<Runtime>>>,
+            released: std::sync::mpsc::Sender<()>,
         }
         impl Host for ReleaseHost {
             fn changed(&self, _version: u64) {}
@@ -685,18 +711,19 @@ mod tests {
         }
         impl Drop for ReleaseHost {
             fn drop(&mut self) {
-                self.runtime.lock().unwrap().take();
+                let _ = self.released.send(());
             }
         }
-        let runtime = Arc::new(Mutex::new(None));
-        *runtime.lock().unwrap() = Some(Runtime::new(Arc::new(ReleaseHost {
-            runtime: runtime.clone(),
-        })));
-        let guard = runtime.lock().unwrap();
-        guard.as_ref().unwrap().dispatch(&wire::encode(&Action::OpenChat {
+        let (released, released_rx) = std::sync::mpsc::channel();
+        let runtime = Runtime::new(Arc::new(ReleaseHost { released }));
+        assert!(runtime.dispatch(&wire::encode(&Action::OpenChat {
             chat: "release".into(),
             snapshot: ChatSnapshot::default(),
-        }));
-        assert!(guard.as_ref().unwrap().flush(Duration::from_secs(5)));
+        })));
+        assert!(runtime.flush(Duration::from_secs(5)));
+        runtime.shutdown();
+        released_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("worker host release must complete without joining itself");
     }
 }

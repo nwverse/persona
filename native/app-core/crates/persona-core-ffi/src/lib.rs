@@ -130,7 +130,11 @@ unsafe fn slice<'a>(pointer: *const u8, length: usize) -> &'a [u8] {
 
 pub(crate) fn create(config: &[u8], host: Arc<dyn Host>) -> Option<*mut PersonaCore> {
     let _: Config = wire::decode(config).ok()?;
-    let runtime = Arc::new(Runtime::new(host));
+    let runtime = Arc::new_cyclic(|_| {
+        let mut runtime = Runtime::new(host);
+        runtime.set_explicit_shutdown();
+        runtime
+    });
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     if handle == u64::MAX {
         // Reserve zero for null and never wrap an ID while a client may still hold it.
