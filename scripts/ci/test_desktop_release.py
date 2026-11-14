@@ -100,6 +100,9 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
     def test_the_administrator_gate_stays_in_front_of_every_desktop_job(self):
         self.assertEqual(self.jobs["desktop-gate"]["needs"], "authorize")
         self.assertEqual(self.jobs["desktop-gate"]["if"], "github.event_name == 'push' && github.ref_type == 'tag'")
+        # The gate reads only secret presence, but presence is environment-scoped too: without this binding the
+        # documented environment-only configuration would always skip both signed platforms.
+        self.assertEqual(self.jobs["desktop-gate"]["environment"], "persona-desktop-release")
         for name in ("desktop-mac", "desktop-win"):
             self.assertEqual(self.jobs[name]["needs"], ["authorize", "desktop-gate"])
             self.assertNotIn("permissions", self.jobs[name])
@@ -141,13 +144,13 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
             self.assertIn(f"`{name}`", text)
             self.assertIn(f"secrets.{name}", release)
 
-
-if __name__ == "__main__":
-    unittest.main()
-
     def test_desktop_ci_never_receives_signing_credentials(self):
         # Signing and notarization are release-only; a manually dispatched branch cannot sign arbitrary code.
         text = (ROOT / ".github/workflows/desktop-test.yml").read_text()
         self.assertNotIn("inputs.signed", text)
         for name in sorted(set(MAC) | set(WIN)):
             self.assertNotIn(f"secrets.{name}", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
