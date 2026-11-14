@@ -150,7 +150,11 @@ async function fuseCheck(file) {
 async function packageCheck(file) {
   const archive = platform === "darwin" ? join(file, "..", "..", "Resources", "app.asar") : platform === "win32" ? join(file, "..", "resources", "app.asar") : join(desktop, "release", "linux-unpacked", "resources", "app.asar");
   const files = asar.listPackage(archive).map(name => name.replaceAll("\\", "/"));
-  need("only the three public resources enter the setup directory", ["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"].every(name => files.includes(name)) && !files.some(name => name.startsWith("/dist/setup/") && !["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"].includes(name)));
+  const publicResources = ["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"];
+  const allowed = new Set(publicResources);
+  const missing = publicResources.filter(name => !files.includes(name));
+  const unexpected = files.filter(name => name.startsWith("/dist/setup/") && !allowed.has(name));
+  need("only the three public resources enter the setup directory", missing.length === 0 && unexpected.length === 0, { missing, unexpected, archive });
   need("no test driver or privileged preload enters the public resource directory", !files.some(name => name.includes("first-run")) && !files.includes("/dist/setup/setup-preload.cjs") && files.includes("/dist/setup-preload.cjs"));
 }
 async function launch(file, profile, home, linkLog) {
