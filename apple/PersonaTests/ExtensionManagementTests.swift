@@ -95,6 +95,7 @@ struct ExtensionManagementTests {
 
     @Test func packEnabledReasonMatchesEveryHubAndRecordedState() throws {
         #expect(ExtensionText.enabledReason(for: try packDetail(pack: false), memberNames: [:]) == .ordinary)
+        #expect(ExtensionText.enabledReason(for: try packDetail(), memberNames: [:]) == .packAlone)
         #expect(ExtensionText.enabledReason(for: try packDetail(follow: false, off: ["notes"]), memberNames: [:]) == .packAlone)
         #expect(ExtensionText.enabledReason(for: try packDetail(follow: true, off: ["notes"]), memberNames: [:]) == .packFollows)
         #expect(ExtensionText.enabledReason(for: try packDetail(follow: true), memberNames: [:]) == .packFollows)
