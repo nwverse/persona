@@ -347,8 +347,8 @@ and uses the same TestFlight: the same Internal / Friends groups and public link
   "files that are only readable by the root user" (macOS verifies signatures as the user running the App). auto-tf's umask is 077;
   the script's `cp -R` made the copied archive entirely 0700 / 0600, which never showed up when testing in an interactive shell (umask 022). The release script now starts with `umask 022` and copies archives with `ditto` (preserves permissions).
   It checks the `.app` before export and the App unpacked from the `.pkg` afterwards: every file a+r, every directory a+rx, otherwise no upload. The iPhone script was changed too (ipas aren't checked for this; 110 passed there).
-- **Automatic release**: after releasing the iPhone build, if this commit includes changes used by the Mac App (`apple/Mac`, `apple/Shared`, `apple/Persona` except a few iOS-only
-  files, `apple/Packages`, `project.yml`, `Package.resolved`), release Mac next with the same number. Report the Mac result separately; its failure doesn't affect the iPhone release.
+- **Automatic release (historical)**: after releasing the iPhone build, if a commit included changes used by the Mac App (its native-Mac source directory, `apple/Shared`, `apple/Persona` except a few iOS-only
+  files, `apple/Packages`, `project.yml`, `Package.resolved`), the former process released Mac next with the same number. This step is retired with `PersonaMac`; use the Electron packaging workflow.
 
 ## Publishing personad (`scripts/release/publish.sh`, 2026-10-31)
 

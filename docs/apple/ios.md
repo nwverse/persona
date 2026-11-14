@@ -1539,7 +1539,7 @@ Windows shows the PowerShell line → countdown (the `ConnectDeviceText` algorit
   both setting `AppModel.addComputer`, presented by `.addComputerPresentation()` at the root; pages that are themselves sheets use `.addComputerSheet($request)` on themselves.
 - Lists and the Machines page: `trust == "pending"` comes first, labeled "Waiting for your confirmation"; online offers "It's my computer" / "No", offline offers "Delete" (buttons only with hub feature `machine_trust`); `error_code` gets Chinese text
   (`AddComputerText.machineProblem`), with the hub's raw message in Machines-page Details. New Agent (and handing a to-do to an Agent, starting one from mail / Knowledge, all through `NewChatView.offered`) excludes pending computers.
-- Screenshots: `-showAddComputer YES` (`add:<mac|linux|windows>:<name>` fills and submits; `<machine id>` opens confirmation for that machine; Mac uses the same arguments with `scripts/app/mac_shot.sh`); UI tests `AddComputerTests` (`docs/operations/testing.md` ("Readiness scenarios")).
+- Screenshots: `-showAddComputer YES` (`add:<mac|linux|windows>:<name>` fills and submits; `<machine id>` opens confirmation for that machine; iOS uses `scripts/app/sim.sh`, desktop uses the Electron smoke); UI tests `AddComputerTests` (`docs/operations/testing.md` ("Readiness scenarios")).
 
 ## Mac signed in (2026-11-01)
 

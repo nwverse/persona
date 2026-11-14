@@ -43,11 +43,11 @@ Pitfalls, unusual behavior, and the decisions made at the time (formerly in `CLA
   #1080 used `contentShape(.contextMenuPreview, …)` in `TaskViews.swift`; that member is `@available(macOS, unavailable)`. iOS built, unit tests and screenshots worked, but Mac on master no longer compiled.
   Use `menuPreviewShape(_:)` for long-press preview shapes (sets the shape on iOS, does nothing on Mac).
 
-- The Mac app (`PersonaMac`, `docs/archive/apple/mac.md`) shares pages with iOS. Add same-name Mac versions of iOS-only SwiftUI modifiers / enum members in `apple/Mac/Compat/` (system symbols marked unavailable yield to same-name declarations in the module).
-  Write same-name AppKit types for UIKit views under `apple/Mac/`; add only `#if os(iOS)` to iOS files. Like the app, the Mac target defaults to MainActor isolation: Compat pure-data types and `NSImage` helpers used by decoding threads must be `nonisolated`.
+- The Mac app (`PersonaMac`, `docs/archive/apple/mac.md`) shared pages with iOS. It added same-name Mac versions of iOS-only SwiftUI modifiers / enum members in its native-Mac compatibility layer (system symbols marked unavailable yielded to same-name declarations in the module).
+  It wrote same-name AppKit types for UIKit views under that layer; only `#if os(iOS)` was added to iOS files. Like the app, the Mac target defaulted to MainActor isolation: Compat pure-data types and `NSImage` helpers used by decoding threads had to be `nonisolated`.
 - Do not put a page's split navigation (`SplitNavigation`, the iOS Persona page's `NavigationSplitView`) inside another `NavigationSplitView`'s detail column. The inner detail column lays out as if the outer sidebar is still ahead of it,
   shifting the entire chat right by one sidebar width and clipping the composer (2026-10-31). The Mac shell's six-item sidebar is a column in an HStack.
-- When a Mac is locked, `screencapture` captures only the lock screen. Use `scripts/app/mac_shot.sh` for screenshots (the app renders its own PNG with `cacheDisplay`; `docs/archive/apple/mac.md`, “Build, run, screenshot”).
+- When a Mac is locked, `screencapture` captures only the lock screen. The retired native app rendered its own PNG with `cacheDisplay`; `docs/archive/apple/mac.md`, “Build, run, screenshot”.
   It cannot render frosted glass / Liquid Glass; SwiftUI `List` rows must be redrawn separately. In dark mode, List-row text uses light-scheme colors; whether this is a screenshot issue is still unconfirmed.
   Use `-macAppearance` for light/dark mode; `-AppleInterfaceStyle Dark` does not work as a launch argument.
 - Running `Persona.app/Contents/MacOS/Persona` directly accepts launch arguments (`-demo.on YES -tab dev`…); unsigned Debug builds are not sandboxed and may write `/tmp`. With `open`, use `open -n Persona.app --args -demo.on YES …` to pass arguments (without `--args` they are lost, tested 2026-11-02).

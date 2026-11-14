@@ -107,10 +107,7 @@ TypeScript SDK. Android needs JDK 21 and SDK `platforms;android-37.0` / `build-t
 Xcode 26.0.1, XcodeGen and rsync. Local scripts fail on missing required tools rather than claim success. They do not deploy or publish.
 Android also needs NDK `29.0.14206865` and the pinned Rust `aarch64-linux-android` / `x86_64-linux-android` targets to package
 `:core:rustcore-android` (its setup, ABI/size report and owned-device fixture replay: `android/core/rustcore-android/README.md`).
-The unsigned Mac app/notification-extension build keeps shipping entitlements. Before the ad-hoc signed offline Mac test invocation,
-`scripts/ci/apple_entitlements.py` removes only profile-authorized push, time-sensitive notification and shared Keychain permissions from
-the disposable source snapshot. The sandbox, other permissions and project hardened-runtime settings remain unchanged; the checked-in
-project and release entitlements are not edited. A valid ad-hoc signature carrying restricted permissions can still be rejected before `main`.
+The retired native-Mac offline-test entitlement preparation was removed with that target. iOS keeps its shipping entitlements and local ad-hoc test signing; no legacy profile-stripping helper is run.
 On Apple failure, collect the simulator UDID log, boot command/status log, installed runtime metadata, `xcrun simctl list --json`, available
 disk space, and any xcresult bundles before deleting the owned simulator. The workflow uploads the allowlisted diagnostics as
 `apple-<lane>-diagnostics-<run id>-<attempt>` artifacts for seven days. Source/configuration files, keys and result-bundle symlink targets

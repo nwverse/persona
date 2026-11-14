@@ -35,6 +35,6 @@ The real smoke starts an isolated Vite server and the repository's synthetic hub
 
 ## Migration boundaries
 
-The retired `PersonaMac` target and `apple/Mac/` are removed separately, with iOS, watchOS, visionOS and shared package checks. The Mac menu bar UI and Windows `linktray` are removed only after the independent Link installation, pairing/reconnect/status/service controls and Persona Screen packaging have a verified replacement. The CLI/service must continue to work without the desktop app.
+The retired `PersonaMac` target and the native-Mac source directory are removed separately, with iOS, watchOS, visionOS and shared package checks. The Mac menu bar UI and Windows `linktray` are removed only after the independent Link installation, pairing/reconnect/status/service controls and Persona Screen packaging have a verified replacement. The CLI/service must continue to work without the desktop app.
 
 Remaining platform acceptance, signed/notarized artifacts, Windows installation, a published auto-update and final old-tray removal belong to the migration issue (#6770), not to a claim that the shell alone completes the migration.
