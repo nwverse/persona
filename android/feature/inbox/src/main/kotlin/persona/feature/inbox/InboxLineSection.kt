@@ -23,6 +23,7 @@ import persona.core.designsystem.JSectionHeader
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.LocalAppFeedback
 import persona.core.designsystem.Tokens
+import persona.core.designsystem.currentLocale
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.text
 import persona.core.domain.inbox.InboxTier
