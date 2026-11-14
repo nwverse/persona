@@ -1269,6 +1269,34 @@ capsule, one per open item handed to it, at most two.
 
 Today there are seven mechanisms and the same action can use different ones (DS-24). Archive in the sidebar, to-do swipe delete and mail-account delete have no confirmation and no Undo. Only the Mac discards edits with a prompt.
 
+Saved Agent searches (#7753) reuse the command palette and one replacement `Dialog`, switching between its list and
+editor instead of stacking modals. Empty-query shortcuts follow recent chats; applying one fills the search field
+without executing an Agent action. A version conflict keeps the editor draft and shows the current saved values;
+replacing them requires explicit review. Delete is reversible through a revision-guarded Undo, while ordering uses
+visible up/down controls as a keyboard alternative. Returning restores the prior query and focus. These secondary
+controls and their code load on intent, not as another primary destination.
+
+The web command palette's runtime-Agent search (#7624) adds a status line and More/retry controls outside the
+listbox. Local results appear immediately; bounded server pages supply authoritative matches and evidence. New
+results preserve the selected identity rather than the previous numeric row position; a removed selection requires
+a new keyboard choice before Enter opens anything. Loading, failed, expired and loaded-only fallback scopes are
+stated explicitly. This reuses the existing palette, controls and localization without a new search destination.
+
+The optional web workflow board's manual view supports bulk metadata edits (#7583). **Select** reveals native
+checkboxes and a selection bar using the existing `Button` and `Menu` components. **Select all visible** counts only
+cards in the current filters and, on a narrow board, the displayed column; hidden cards are not silently included.
+The bar wraps whole controls without wrapping button text. Movement, pinning and archive/restore use the reversible
+rung: immediate feedback, one atomic write, and **Undo last change** while its acknowledged board revision is current.
+A conflict reloads without replaying the operation or its inverse. This pattern belongs to the optional Agents board,
+not Assistant's primary chat. Older managers and view-only connections retain the existing single-card experience.
+
+The optional workflow board's **Activity** view (#7599) is a read-only `Dialog`, with a matching expandable section
+inside workspace details. It fetches compact revision summaries only after opening and paged before/after changes
+only after expanding. A new-activity hint preserves the reading position until the user requests the latest page.
+Historical names remain as recorded; current workspace navigation appears only for an existing card. An update that
+involves several cards stays one group, including when reached through a card's history. This uses the same buttons,
+loading/retry states and timestamps as other secondary views, and adds no primary destination or rollback control.
+
 ### 4.5 Push, notifications and reminders
 
 - The system prompt appears right after pairing and at launch, with no in-app explanation first (`apple/Persona/App/PushRegistrar.swift:41-53`, the options at `:174`). Requested options include time-sensitive. When denied, Settings explains and deep-links; allowing it there registers when the app comes back (#1861).
@@ -1713,7 +1741,7 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 
 - Text uses `Theme.Font` levels only. Shapes use `scaledFrame`.
 - A heading's counts and an agent row's time sit beside the name, and go under it when the name would keep less than half the width (`BesideOrUnder`: `CountsHeading`, `TimeBesideOrUnder`); the choice is by measured width, not text size.
-- Rows with name plus chips stack at accessibility sizes (`NameWithChips`). Use `firstFittingText` when several candidate labels exist.
+- Rows with name plus chips keep the chips right after the name while the name keeps half the width (or all it needs), else put them on a line under it, by measured width at every text size (`NameWithChips`). Use `firstFittingText` when several candidate labels exist.
 - A date, or a date and a time, in a form row is a `FormDatePicker` (`apple/Persona/DesignSystem/FormDatePicker.swift`, #6108): the system's compact picker beside its label at the usual sizes; at the accessibility sizes, where the compact date and time are wider than the row and were cut off, the label on its own line and a wheel under it across the row (the wheel's words don't grow; that is the system's wheel). A sheet holding one sets its height with `formSheetDetents`, which opens it full height at those sizes. Used by New To-Do, the to-do's page (Due, Remind At) and "Change Due Date…"; new date rows use it too.
 - Caps are allowed for glyphs in fixed-size buttons and for top bars that must fit a small iPhone. They must be named, and the control must keep a 44 pt hit area.
 - A bar of fixed items (the message long-press bar, `MessageActionBar`) keeps its items at the default text size (`barTypeSize`), as the system's tab bars and toolbars do, so every word that fits there fits up to the accessibility sizes; each item has the Large Content Viewer (`accessibilityShowsLargeContentViewer`), so a long press shows its name large. Its words are short enough for their items at that size in every language (rule 3 (a) in section 1.2; Japanese 「文字選択」 for Select Text). At the accessibility sizes the actions become a list, one a row with its icon and whole name, growing up to `listTypeSize` (xxxLarge), and the lifted message is placed by the list's measured size (rule 3 (c)); never "…", never an icon left alone (#5019).

@@ -5,16 +5,19 @@ import SwiftUI
 /// the route (`ScreenRoutePrefs`: choose the fastest route automatically) and the picture's quality on mobile data
 /// (`ScreenMobileData`). Both are this iPhone's, for every computer.
 struct LiveScreenSettingsView: View {
-    @AppStorage(ScreenMobileData.key) private var mobileData: String?
+    /// Nothing is written until a choice is made here: an absent key still reads as Data Saver and keeps the page's
+    /// one-time question (`ScreenMobileData.shouldAsk`).
+    @StoredValue(ScreenMobileData.key) private var mobileData: ScreenMobileData = .saver
     @StoredValue(ScreenRoutePrefs.automaticKey) private var automatic = true
 
-    /// Settings shows the page only when it can change something: direct routes are offered (the route's section), or
-    /// some computer offers the live screen's video channel (quality on mobile data applies to it).
-    static func isShown(machines: [Machine]) -> Bool {
+    /// Settings shows the page only when it can change something for a computer here: with direct routes offered, one
+    /// that shows its live screen (the route's section); else one that offers the live screen's video channel (quality on
+    /// mobile data applies to it). No computer, no page: someone using only the assistant never sees it.
+    static func isShown(machines: [Machine], routesOffered: Bool = ScreenRoutes.offered) -> Bool {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-showScreenVideoDemo") { return true }
         #endif
-        return ScreenRoutes.offered || machines.contains(where: AppModel.advertisesVideo)
+        return machines.contains(where: routesOffered ? AppModel.showsScreen : AppModel.advertisesVideo)
     }
 
     var body: some View {
@@ -29,9 +32,7 @@ struct LiveScreenSettingsView: View {
                 }
             }
             Section {
-                Picker(String(localized: "Quality on Mobile Data"), selection: Binding(
-                    get: { mobileData.flatMap(ScreenMobileData.init(rawValue:)) ?? .saver },
-                    set: { mobileData = $0.rawValue })) {
+                Picker(String(localized: "Quality on Mobile Data"), selection: $mobileData) {
                     ForEach(ScreenMobileData.allCases, id: \.self) { m in
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                             Text(m.title)
