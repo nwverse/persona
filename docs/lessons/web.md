@@ -34,6 +34,26 @@ page that cannot work there. The switch's module is on the first screen and its 
 their Retry renamed the first screen's imports (ja +120 B), while handing `retry` out through the hook they already
 import, and keeping the 404 as the stored failure rather than a flag of its own, kept it within a few dozen bytes of main.
 
+## A folded sidebar group kept every row mounted (web usability audit, 2026-11-14)
+
+`Collapse` keeps its children unless it is `lazy`, and the sidebar's folds were not: with 400 Agents the rows under
+folded groups stayed in the DOM, inert, about 8,800 elements that every page switch laid out again (230–310 ms long
+tasks on a 4x-throttled phone, none with 74 Agents). Sidebar folds are lazy by default now, so a test that looks for a
+folded group's rows (to check they are inert) opens the group first. Two smaller costs hid behind the big DOM: each
+group heading read its height in a layout effect (`getBoundingClientRect`), and one set a custom property on the
+scroller, which restyles everything under it before the next heading's read. Take such heights from a
+`ResizeObserver`: its first report comes after the browser's own layout and before the paint, and `flushSync` applies
+state from it in that frame. Measure with a production build (`vite preview`), CDP CPU throttling and a `longtask`
+observer, against the same mock with fewer sessions (`web/e2e/sidebar-many-agents.mjs`).
+
+Dropping what is not drawn has three costs to pay for. A broadcast to mounted listeners (Collapse all / Expand all)
+misses the groups that are gone, so note each broadcast and have a group take the one it missed when it mounts again
+(`src/lib/fold-all.ts`). Rows split into one wrapper per part remount when they cross a part boundary (React keys are
+per parent), losing focus to `body`: keep every row a keyed sibling under one parent and mark where parts start. And a
+lazily loaded chunk rendered by something always on screen (the sidebar) takes the whole app down when its download
+fails, since no error boundary sits above it: keep such code in the always-loaded bundle, or put a boundary with a
+plain fallback around it.
+
 ## Removing a client-only prompt includes its hooks and fixture documentation (#6570)
 
 The star toast was browser-local, but readiness refresh and successful Agent creation loaded its rule lazily.
@@ -1004,7 +1024,7 @@ Writes without items (titles, modes) also advance `updated_at`, returning empty 
 ## Wrap horizontal rows when they do not fit; do not rely on horizontal scrolling (#3594)
 
 Scrollbars are globally hidden, and mouse wheels scroll vertically only. Overflowing horizontal rows (Settings categories) hide later items from mouse users, who cannot scroll to them. Wrap the row (button text stays single-line) or use a menu.
-If the header grows, elements below it (App.tsx connection-status pill) cannot assume 56px; Settings writes actual header height to `<main>` `--page-header`.
+Nothing may float under a page's header assuming its height: the connection-status pill once sat at `--page-header` (Settings wrote its taller header's height there) and still covered fields and titles, so it is now a strip above the page that pushes it down (`App.tsx`, web usability audit item 87).
 
 ## Do not fade answers in again after remounting (2026-11-06, #4107)
 
