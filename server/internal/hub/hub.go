@@ -291,6 +291,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 		return err
 	}
 	h.push = newPusher(cfg.dir, h.store, h.logf)
+	h.push.web = newWebPusher(h.store, h.logf) // browsers' subscriptions and the VAPID key, in the hub's settings (#7459)
 	h.push.traffic = h.recordTraffic
 	h.push.desktopOnline = h.desktopOnline
 	h.push.desktopOpen = h.desktopOpen
@@ -495,7 +496,7 @@ func (h *Hub) callPhoneWithWait(ctx context.Context, name string, args json.RawM
 	}
 	select {
 	case r := <-ch:
-		return r
+		return annotateHealthSnapshot(name, r)
 	case <-ctx.Done():
 		if confirmed {
 			return proto.TextResult("Timed out waiting for the user to approve this on the phone. The approval may still be "+
