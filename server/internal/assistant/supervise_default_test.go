@@ -432,6 +432,21 @@ func (h *blockedAssistantDrain) count(session string) int {
 	return len(h.texts[session])
 }
 
+// setSuperviseTimingsForTest waits out an in-flight digest and stops its timer before changing timings. Every
+// production read is under at least one of these locks; the tests must not write the configuration concurrently.
+func setSuperviseTimingsForTest(s *Service, timings superviseTimings) {
+	b := &s.supervise
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.timer != nil {
+		b.timer.Stop()
+	}
+	b.timer, b.timerAt = nil, time.Time{}
+	s.superviseTimes = timings
+}
+
 // A restart drops supervise.queued while the persisted relay queue survives. Even when the old side has already started
 // draining its head, rehoming must replay that head's structured review for main rather than waiting for another restart.
 func TestLegacySideDrainingReviewRehomesAfterRestart(t *testing.T) {
@@ -479,7 +494,7 @@ func TestLegacySideDrainingReviewRehomesAfterRestart(t *testing.T) {
 	if got := storedSupervisePending(t, s)[g.id()]; got.Key != g.Key {
 		t.Fatalf("the old draining head acknowledged main's replay before delivery: %+v", got)
 	}
-	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
+	setSuperviseTimingsForTest(s, superviseTimings{gather: 1, every: 1, urgent: time.Hour})
 	s.sendDigest(ctx)
 	waitFor(t, "the draining side's review replayed to main", func() bool {
 		got := h.text("conv1")
@@ -490,10 +505,10 @@ func TestLegacySideDrainingReviewRehomesAfterRestart(t *testing.T) {
 	}
 	// The detached head stays behind a failed old-side send. Another restart must not reinterpret it as legacy text.
 	before := h.count("conv1")
-	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	setSuperviseTimingsForTest(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
 	simulateSupervisionRestart(t, s)
 	s.rehomeSupervisedTodos(ctx)
-	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
+	setSuperviseTimingsForTest(s, superviseTimings{gather: 1, every: 1, urgent: time.Hour})
 	s.sendDigest(ctx)
 	if got := h.count("conv1"); got != before {
 		t.Fatalf("the detached head generated another main turn after restart: before %d, after %d", before, got)
@@ -542,16 +557,16 @@ func TestLegacySideDrainingTextNoticeRehomesAfterRestart(t *testing.T) {
 	}
 
 	s.rehomeSupervisedTodos(ctx)
-	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
+	setSuperviseTimingsForTest(s, superviseTimings{gather: 1, every: 1, urgent: time.Hour})
 	s.sendDigest(ctx)
 	waitFor(t, "the pre-structured draining notice replayed to main", func() bool {
 		return strings.Contains(h.text("conv1"), todo.ID)
 	})
 	before := h.count("conv1")
-	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	setSuperviseTimingsForTest(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
 	simulateSupervisionRestart(t, s)
 	s.rehomeSupervisedTodos(ctx)
-	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
+	setSuperviseTimingsForTest(s, superviseTimings{gather: 1, every: 1, urgent: time.Hour})
 	s.sendDigest(ctx)
 	if got := h.count("conv1"); got != before {
 		t.Fatalf("the text fallback repeated after its head was detached: before %d, after %d", before, got)
