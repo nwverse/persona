@@ -569,7 +569,8 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
 
 The live screen, picture and input together, takes the fastest route the phone can reach: the same local network,
 Tailscale, or the hub relay ([#6398](https://github.com/nwverse/persona/issues/6398) has the design). The node's end is
-`internal/screenlink`. What is in place: the screen session over the hub's relays; the direct routes come next.
+`internal/screenlink`. What is in place: the screen session over the hub's relays and the node's direct routes; the
+iPhone's side comes next.
 
 - **Screen session**: a phone that asks for one gets its RFB stream and its video stream as channels of one session at
   the node, keyed by `pair`: channel 1 is the connection to Screen Sharing (still followed for the login, so video binds
@@ -600,6 +601,20 @@ Tailscale, or the hub relay ([#6398](https://github.com/nwverse/persona/issues/6
   on, asks Persona Screen for a keyframe (between two of the phone's messages, never inside one) and drops frames until
   it comes, so a late picture replaces a burst of old ones and the rate control isn't misled by their delay. When the
   transport carrying a channel fails, the node moves it to the channel's own relay (or another transport) by itself.
+- **Direct routes** (`screenlink.Direct`): while at least one session is live, the node listens on one TCP port bound
+  to each of its candidate addresses (never the wildcard), and closes the listener with the last session. Candidates
+  come from its own interfaces, with no Tailscale API or command: private IPv4 and unique-local IPv6 on Ethernet or
+  Wi-Fi (`lan`, with the prefix length so the phone can tell whether it is on the same network), and Tailscale's ranges
+  (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) on a point-to-point interface (`tailscale`). Loopback, link-local, global
+  addresses (not in v1), proxies' tunnels and their fake-IP range (RFC 2544's benchmark block, 198.18/15), other VPNs, and VM or container
+  bridges are left out, and so are MagicDNS names. At most 8; the node reads them again every 5 s and sends new `paths`
+  when they change. A connection must finish TLS 1.3 with ALPN `persona-screen/1` against a self-signed P-256
+  certificate made per node process (named `screen.persona.invalid`; `paths` carries its SHA-256 for the phone to
+  pin), then send `attach` with a live session's token, all within 3 s; at most 16 handshakes at once and 8 direct
+  transports per session. Its pongs carry the TCP packets retransmitted and sent on it since the last pong (macOS
+  `TCP_CONNECTION_INFO`, Linux `TCP_INFO`), the phone's measure of loss. When macOS's application firewall is on and the
+  node isn't explicitly allowed through it (read with `socketfilterfw`, at most once a minute, never changed), the node
+  doesn't listen and `paths` says `unavailable: "firewall"`, so no prompt appears on the Mac.
 - **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
   again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
   or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
