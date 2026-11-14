@@ -383,7 +383,10 @@ class Watcher:
                                checks=getattr(error, "checks", []))
                 return False
             return "base_failure"
-        updated_head = pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"])
+        updated_head = pr_watch_repair.update_branch_with_main(
+            repo, pr, str(worktree), pr["baseRefOid"], self.config["reviewer"],
+            before_conflict=lambda: self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                                                  repair_rounds=rounds + 1, outcome="repairing"))
         if updated_head:
             # main may have moved on since the PR was read (#7840): the merged head stands on the main it brought in
             base = pr_watch_repair.merged_main(str(worktree), updated_head)
@@ -520,10 +523,14 @@ class Watcher:
                         if not self.state.get(repo, number).get("repair_exhausted"):
                             self.state.put(repo, number, head, evidence_key=evidence_key,
                                            repair_exhausted=True, outcome="repair_exhausted")
-                            self.comment(repo, number, "The automatic repair limit was reached while updating the base; no merge was attempted.")
+                            if not self.dry_run:
+                                self.comment(repo, number, "The automatic repair limit was reached while updating the base; no merge was attempted.")
                         return
                     worktree = self.worktree(repo, number, pr)
-                    updated_head = pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"])
+                    updated_head = pr_watch_repair.update_branch_with_main(
+                        repo, pr, str(worktree), pr["baseRefOid"], self.config["reviewer"],
+                        before_conflict=lambda: self.state.put(repo, number, head, evidence_key=evidence_key,
+                                                              repair_rounds=rounds + 1, outcome="repairing"))
                     if updated_head:
                         base = pr_watch_repair.merged_main(str(worktree), updated_head)
                         merged_pr = dict(pr, headRefOid=updated_head, baseRefOid=base)
