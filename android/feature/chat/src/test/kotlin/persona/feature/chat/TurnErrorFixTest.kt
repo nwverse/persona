@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -151,7 +152,7 @@ class TurnErrorFixTest {
                     chrome = ChatChromeBindings(onFixModel = { _, launcher, _ -> repaired = launcher }))
             }
         }
-        rule.onNodeWithText("Fix it").assertExists()
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("Fix it").fetchSemanticsNodes().isNotEmpty() }
         val out = File(System.getProperty("persona.shots") ?: "build/turn-error-launcher-shots").also { it.mkdirs() }
         for (night in listOf(false, true)) {
             rule.runOnIdle { dark = night }
