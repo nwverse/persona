@@ -41,8 +41,8 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
   const request = useRef<AbortController | null>(null);
   const reading = useRef<AbortController | null>(null);
   const admitted = useRef(false);
-  const uploadButton = useRef<HTMLDivElement>(null);
-  const actions = useRef<HTMLDivElement>(null);
+  const uploadButton = useRef<HTMLButtonElement>(null);
+  const cancelButton = useRef<HTMLButtonElement>(null);
   const current = () => active.current && credentialOwner() === owner;
 
   async function refresh() {
@@ -65,7 +65,7 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
   }, [manager, owner]);
   useEffect(() => {
     // Cancel, not Install, takes the focus: Enter must not install what the user has only just seen.
-    if (view?.phase === "preview") actions.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    if (view?.phase === "preview") cancelButton.current?.focus();
   }, [view?.phase]);
 
   function close() {
@@ -77,7 +77,7 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
     if (result && current()) {
       void importSkill(manager, { op: "cancel", reference: result.reference, environment: result.environment }, undefined, current).catch(() => {});
     }
-    uploadButton.current?.querySelector("button")?.focus();
+    uploadButton.current?.focus();
   }
   async function check(file?: File) {
     if (!file || admitted.current) return;
@@ -126,6 +126,7 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
   return (
     <>
       <Group
+        anchor="skills"
         title={
           <span className="flex items-center gap-2">
             {t("settings-skills.title")}
@@ -133,11 +134,9 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
           </span>
         }
         right={
-          <div ref={uploadButton}>
-            <Button tone="quiet" icon="upload" className="-mb-1 touch-hit" onClick={() => setView({ phase: "select" })}>
-              {t("settings-skills.upload")}
-            </Button>
-          </div>
+          <Button ref={uploadButton} tone="quiet" icon="upload" className="-mb-1 touch-hit" onClick={() => setView({ phase: "select" })}>
+            {t("settings-skills.upload")}
+          </Button>
         }
         footer={machine ? t("settings-skills.footer_where", { machine }) : t("settings-skills.footer_shared")}
       >
@@ -167,11 +166,11 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
         title={t("settings-skills.dialog_title")}
         width={480}
         footer={
-          <div ref={actions} className="flex flex-1 items-center gap-2">
+          <div className="flex flex-1 items-center gap-2">
             {phase === "success" || phase === "undoing" ? (
               <Button tone="quiet" icon="undo" busy={phase === "undoing"} onClick={() => result && void write("undo", result)}>{t("settings-skills.undo")}</Button>
             ) : !done && (
-              <Button tone="quiet" disabled={committing} onClick={close}>{t("common.cancel")}</Button>
+              <Button ref={cancelButton} tone="quiet" disabled={committing} onClick={close}>{t("common.cancel")}</Button>
             )}
             <span className="flex-1" />
             {(phase === "preview" || phase === "installing") && result && (
