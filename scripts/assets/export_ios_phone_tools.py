@@ -10,7 +10,9 @@ PhoneToolCatalogTest compares against.
     python3 scripts/assets/export_ios_phone_tools.py --check   # exit 1 if the fixture is out of date
 
 Tools of iOS-only sources (reminders and the iPhone system integrations: alarms, messages, calls, shortcuts, media,
-home), write-only health tools (phone_health_write_sample) and the iPhone-only maps tools are left out.
+home), write-only health tools (phone_health_write_sample), the iPhone-only maps tools, place search and the two
+workout tools (a health gap: Android has no workout reader yet) are left out. Descriptions are exported verbatim: any
+sentence an iPhone declares that Android does not yet is listed by name in PhoneToolCatalogTest, never trimmed here.
 """
 import argparse
 import json
@@ -27,14 +29,8 @@ IOS_ONLY_TOOLS = {
     "phone_maps_search_nearby", "phone_maps_navigate", "phone_maps_route",
     # Android has no place search yet (the fixture never had it; --check failed on main before #2281).
     "phone_location_search",
-    # Android has no workout reader yet; the fixture never had these.
+    # Health gap, not an iPhone-only feature: Android has no workout reader yet. Remove these two when it gets one.
     "phone_workouts_recent", "phone_workout_detail",
-}
-# Sentences that describe iPhone-only behavior; Android declares the tool without them.
-IOS_ONLY_DESCRIPTION_SUFFIX = {
-    "phone_health_summary": " When the iPhone is locked the app cannot read HealthKit: it returns the last snapshot saved "
-                            "while the device was unlocked (\"source\": \"snapshot\" with \"as_of\"), or a device_locked error "
-                            "when no snapshot exists yet.",
 }
 
 
@@ -86,19 +82,11 @@ def multiline(body):
 
 def schema_property(call):
     if call == "LabeledEntry.schema":
-        return {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "value": {"type": "string", "description": "The phone number or email address."},
-                "label": {
-                    "type": "string",
-                    "description": "mobile, iphone, home, work, main or other.",
-                    "enum": ["mobile", "iphone", "home", "work", "main", "other"],
-                },
-            },
-            "required": ["value"],
-        }
+        # Parsed from the Swift struct, so a change on iOS shows up in --check instead of being frozen here.
+        text = open(os.path.join(SOURCES, "ContactsTool.swift"), encoding="utf-8").read()
+        at = text.index("Schema.object(", text.index("static var schema: JSONValue"))
+        properties, required = schema_object(text[at:matching(text, text.index("(", at))])
+        return {"type": "object", "additionalProperties": False, "properties": properties, "required": required}
     if call.startswith("Schema.array("):
         m = re.match(r'^Schema\.array\(\s*("""[\s\S]*?"""|"(?:[^"\\]|\\.)*")\s*,\s*of:\s*(.*)\)$', call, re.S)
         if not m:
@@ -166,9 +154,6 @@ def tools():
             desc = re.search(r'description:\s*("""\n.*?\n[ ]*""")', spec, re.S)
             description = multiline(desc.group(1)[3:-3]) if desc else swift_string(
                 re.search(r'description:\s*"((?:[^"\\]|\\.)*)"', spec).group(1))
-            suffix = IOS_ONLY_DESCRIPTION_SUFFIX.get(tool)
-            if suffix and description.endswith(suffix):
-                description = description[:-len(suffix)]
             schema_at = spec.index("Schema.object(")
             schema = spec[schema_at:matching(spec, spec.index("(", schema_at))]
             properties, required = schema_object(schema)
