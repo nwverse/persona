@@ -28,6 +28,20 @@ pub struct Input {
 pub struct Machine {
     pub id: String,
     pub name: String,
+    /// The hub group this machine belongs to, if not the default. `group|id` forms the full path,
+    /// matching iOS's `MachineRef.path`.
+    #[serde(default)]
+    pub group: Option<String>,
+}
+
+impl Machine {
+    /// The full path: `group|id` for a non-default hub group, bare `id` for the default.
+    fn path(&self) -> String {
+        match self.group.as_deref() {
+            Some(group) if !group.is_empty() => format!("{group}|{}", self.id),
+            _ => self.id.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -162,6 +176,9 @@ struct Row {
     is_waiting: bool,
     background_waiting: bool,
     pinned: bool,
+    /// The open agent that was Unread when opened (`AppModel.heldInList`): keeps its rank-1 position,
+    /// stays visible, and prevents its space from folding into quiet spaces (#2213).
+    held: bool,
     muted: bool,
     awaits_reply: bool,
     space_id: String,
@@ -199,7 +216,8 @@ impl Row {
             sort_date: sort_date.and_then(utc_timestamp),
             is_waiting: state.is_quiet() && session.is_waiting(),
             background_waiting: state == AgentState::Working && session.background_waiting,
-            pinned: pinned || held,
+            pinned,
+            held,
             muted,
             awaits_reply: session.awaits_reply,
             space_id: session.space_id.clone().unwrap_or_else(|| "-".to_owned()),
@@ -210,7 +228,7 @@ impl Row {
     }
 
     fn stays(&self) -> bool {
-        !self.state.is_quiet() || self.pinned || self.is_waiting || self.awaits_reply()
+        !self.state.is_quiet() || self.pinned || self.held || self.is_waiting || self.awaits_reply()
     }
 
     fn awaits_reply(&self) -> bool {
@@ -226,11 +244,12 @@ impl Row {
     }
 
     /// The index into the eight By Status sections. Needs You never drops because of a mute.
+    /// A held agent that has become quiet keeps its Unread rank, as iOS's `rank` does (#2213).
     fn rank(&self) -> usize {
         if self.state == AgentState::NeedsYou {
             return 0;
         }
-        let unread = self.state == AgentState::Unread;
+        let unread = self.state == AgentState::Unread || (self.held && self.state.is_quiet());
         let live = self.state == AgentState::Working || unread || self.is_waiting;
         if live && self.muted {
             return 6;
@@ -312,13 +331,23 @@ impl Query {
         if session.assistant {
             return false;
         }
-        let machine = input.machines.iter().find(|machine| machine.id == session.machine_id);
+        let machine = input.machines.iter().find(|machine| {
+            machine.id == session.machine_id
+                && machine.group.as_deref().unwrap_or("") == session.app_hub_group.as_deref().unwrap_or("")
+        });
         let machine_name = machine.map_or("", |machine| machine.name.as_str()).to_lowercase();
-        let machine_id = session.machine_id.to_lowercase();
+        let machine_path = {
+            let group = session.app_hub_group.as_deref().unwrap_or("");
+            if group.is_empty() {
+                session.machine_id.to_lowercase()
+            } else {
+                format!("{group}|{}", session.machine_id).to_lowercase()
+            }
+        };
         if !self
             .machines
             .iter()
-            .all(|word| machine_id.contains(word) || machine_name.contains(word))
+            .all(|word| machine_path.contains(word) || machine_name.contains(word))
         {
             return false;
         }
@@ -586,14 +615,10 @@ fn state_groups(rows: &[&Row], quick: Quick, settings: &Settings, by_rank: bool,
         .iter()
         .enumerate()
         .filter(|(rank, _)| {
+            // Show every section that has rows, including kept rows that a quick filter retained.
+            // iOS's stateSections shows every nonempty section; the quick filter narrows `filtered`,
+            // not which sections appear.
             live.iter().any(|row| row.rank() == *rank)
-                && match quick {
-                    Quick::NeedsYou => *rank == 0,
-                    Quick::Unread => *rank == 1,
-                    Quick::Working => matches!(*rank, 3 | 4),
-                    Quick::BackgroundWaiting => *rank == 4,
-                    _ => true,
-                }
         })
         .map(|(rank, (key, title))| {
             let id = format!("state/{key}");
@@ -609,29 +634,46 @@ fn state_groups(rows: &[&Row], quick: Quick, settings: &Settings, by_rank: bool,
 }
 
 fn machine_groups(rows: &[&Row], input: &Input, quick: Quick, by_rank: bool) -> Vec<Group> {
-    input
+    let recent_sort = input.settings.sort == "updated";
+    let mut machines_with_rows: Vec<(&Machine, Vec<&Row>)> = input
         .machines
         .iter()
         .filter_map(|machine| {
-            let members = ordered(
-                rows.iter()
-                    .copied()
-                    .filter(|row| row.machine_path == machine.id && row.state.is_live()),
-                quick == Quick::All && by_rank,
-            );
+            let path = machine.path();
+            let members: Vec<&Row> = rows
+                .iter()
+                .copied()
+                .filter(|row| row.machine_path == path && row.state.is_live())
+                .collect();
             if members.is_empty() {
                 return None;
             }
-            let id = format!("machine/{}", machine.id);
-            Some(plain_group(
+            Some((machine, members))
+        })
+        .collect();
+    // Under Recently Updated, machines sort by their newest session's sortDate, then by path.
+    if recent_sort {
+        machines_with_rows.sort_by(|(a, a_rows), (b, b_rows)| {
+            let a_date = a_rows.iter().filter_map(|r| r.sort_date).max();
+            let b_date = b_rows.iter().filter_map(|r| r.sort_date).max();
+            b_date.cmp(&a_date).then_with(|| a.path().cmp(&b.path()))
+        });
+    }
+    machines_with_rows
+        .into_iter()
+        .map(|(machine, members)| {
+            let path = machine.path();
+            let members = ordered(members, quick == Quick::All && by_rank);
+            let id = format!("machine/{path}");
+            plain_group(
                 id,
                 machine.name.clone(),
                 members,
-                is_folded(&format!("machine/{}", machine.id), &input.settings),
+                is_folded(&format!("machine/{path}"), &input.settings),
                 quick,
                 &input.settings,
-                Some(format!("machine-{}", machine.id)),
-            ))
+                Some(format!("machine-{path}")),
+            )
         })
         .collect()
 }
@@ -700,7 +742,7 @@ fn space_groups(rows: &[&Row], input: &Input, quick: Quick, recent_sort: bool) -
             });
         space.priority = space.priority.min(priority(row.counted_state()));
         space.sort_date = space.sort_date.max(row.sort_date);
-        space.quiet &= row.state.is_quiet() && !row.is_waiting && !row.awaits_reply();
+        space.quiet &= row.state.is_quiet() && !row.is_waiting && !row.awaits_reply() && !row.held;
         space.members.push(row);
     }
     let mut spaces: Vec<Space> = spaces.into_values().collect();

@@ -208,10 +208,10 @@ fn awaiting_reply_is_not_folded_like_plain_idle() {
 #[test]
 fn held_in_list_keeps_position_and_stays_visible() {
     // An Unread agent that is opened keeps its rank-1 position and is not folded into idle, per
-    // `AppModel.heldInList` (#2213). Derived from the iOS rule, not from this Rust implementation.
+    // `AppModel.heldInList` (#2213). It does NOT enter the Pinned section; it stays in its rank section.
     let input: Input = serde_json::from_value(serde_json::json!({
         "sessions": [
-            {"machine_id": "m", "session_id": "a", "state": "unread", "updated_at": "2026-01-01T00:00:01Z"},
+            {"machine_id": "m", "session_id": "a", "state": "idle", "updated_at": "2026-01-01T00:00:01Z"},
             {"machine_id": "m", "session_id": "b", "state": "working", "updated_at": "2026-01-01T00:00:02Z"},
             {"machine_id": "m", "session_id": "c", "state": "idle", "updated_at": "2026-01-01T00:00:03Z"},
         ],
@@ -226,16 +226,25 @@ fn held_in_list_keeps_position_and_stays_visible() {
     }))
     .expect("held input");
     let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
-    // "a" is Unread (rank 1) and held → stays in the pinned group, not dropped into idle.
-    let pinned = actual["groups"][0]["rows"].as_array().expect("pinned rows");
-    assert!(pinned.iter().any(|v| v == "m/a"), "held agent stays pinned");
-    // "c" is idle without awaits_reply → goes into state/idle (folded by default).
-    let idle = actual["groups"]
-        .as_array()
-        .expect("groups")
-        .iter()
-        .find(|g| g["id"] == "state/idle")
-        .expect("idle group");
+    // "a" is idle but held → keeps rank 1 (unread), stays visible, NOT in the pinned section.
+    let groups = actual["groups"].as_array().expect("groups");
+    // No pinned section should exist (nothing is explicitly pinned).
+    assert!(
+        !groups.iter().any(|g| g["id"] == "pinned"),
+        "held agent does not create a pinned section"
+    );
+    // "a" appears in the unread section (rank 1), not idle.
+    let unread = groups.iter().find(|g| g["id"] == "state/unread").expect("unread group");
+    assert!(
+        unread["rows"]
+            .as_array()
+            .expect("unread rows")
+            .iter()
+            .any(|v| v == "m/a"),
+        "held agent keeps unread rank"
+    );
+    // "c" is idle without held → goes into state/idle.
+    let idle = groups.iter().find(|g| g["id"] == "state/idle").expect("idle group");
     assert!(idle["rows"].as_array().expect("idle rows").iter().any(|v| v == "m/c"));
 }
 
