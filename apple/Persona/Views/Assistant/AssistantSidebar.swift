@@ -928,23 +928,12 @@ struct AssistantSidebar: View {
     #if os(iOS)
     // MARK: The Sidebar layout's parts (#6332)
 
-    /// The head: the assistant (its switcher) and Search, as the whole sidebar's. Search's words filter Persona's chats
-    /// here and the Agents under them (the column binds the Agents list's search to the same words).
+    /// The head: the assistant (its switcher). Search is the foot's, over the whole window (#4206, the owner).
     private var unifiedHeader: some View {
         topBar
             .padding(.horizontal, Theme.Space.xl)
             .padding(.top, besideBar ? AssistantTopBar.topInset : Theme.Space.s)
             .padding(.bottom, Theme.Space.s)
-            .background {
-                if let drawer {
-                    SidebarClosed(drawer: drawer) {
-                        ui.query = ""
-                        ui.searchOpen = false
-                        searching = false
-                    }
-                }
-            }
-            .modifier(AskChatSearch(ui: ui))
     }
 
     /// The main conversation, held over the list as the web's is (#5581): it never scrolls away. A line under it.
@@ -961,24 +950,20 @@ struct AssistantSidebar: View {
     }
 
     /// The rows the Agents list holds above its own: the places to go and Persona's chats, each under a heading that
-    /// folds it; while searching, the chats found. Rows of the host's list (insets, no lines, its color through).
+    /// folds it. Rows of the host's list (insets, no lines, its color through). Search is the foot's (#4206).
     private var unifiedRows: some View {
         let all = shownConversations
         let archived = shownArchived
         return Group {
-            if ui.query.isEmpty {
-                foldHeading(String(localized: "Pages [Sidebar Layout]"), folded: $placesFolded, id: "sidebar-fold-places") {
-                    EmptyView()
-                } tally: { placesTally }
-                if !placesFolded { actions(all) }
-                // No New Chat on the heading: the column has one, its foot's (#4206, the owner).
-                foldHeading(String(localized: "Persona Chats [Sidebar Layout]"), folded: $chatsFolded, id: "sidebar-fold-chats") {
-                    EmptyView()
-                } tally: { EmptyView() }
-                if !chatsFolded { conversations(all, archived: archived) }
-            } else {
-                results(searchRows(all))
-            }
+            foldHeading(String(localized: "Pages [Sidebar Layout]"), folded: $placesFolded, id: "sidebar-fold-places") {
+                EmptyView()
+            } tally: { placesTally }
+            if !placesFolded { actions(all) }
+            // No New Chat on the heading: the column has one, its foot's (#4206, the owner).
+            foldHeading(String(localized: "Persona Chats [Sidebar Layout]"), folded: $chatsFolded, id: "sidebar-fold-chats") {
+                EmptyView()
+            } tally: { EmptyView() }
+            if !chatsFolded { conversations(all, archived: archived) }
         }
         .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.s, bottom: 0, trailing: Theme.Space.s))
         .listRowSeparator(.hidden)
@@ -1047,8 +1032,13 @@ enum AssistantSidebarPart {
     var query = ""
     var searchOpen = false
     #if os(iOS)
-    /// The open iPhone Duo's search, over the whole window (`footerSearch`).
+    /// The search over the whole window: the open iPhone Duo's (`footerSearch`), and the Sidebar layout's one search from
+    /// its foot (#4206).
     var fullSearch = false
+    /// What it starts looking through: the Agents where an Agent's chat is in front (#4206).
+    var searchScope = AssistantFullSearch.Scope.chats
+    /// The Agent picked in it: its chat opens once the search has gone.
+    var pickedAgent: SessionKey?
     #endif
     var ending: Session?
     var renaming: Session?
@@ -1128,8 +1118,11 @@ struct AssistantSidebarPresenters: ViewModifier {
         }
         #if os(iOS)
         .fullScreenCover(isPresented: Bindable(ui).fullSearch, onDismiss: openPicked) {
-            AssistantFullSearch { key in
+            AssistantFullSearch(scope: ui.searchScope) { key in
                 ui.picked = key
+                ui.fullSearch = false
+            } openAgent: { key in
+                ui.pickedAgent = key
                 ui.fullSearch = false
             }
         }
@@ -1144,6 +1137,13 @@ struct AssistantSidebarPresenters: ViewModifier {
     }
 
     private func openPicked() {
+        #if os(iOS)
+        if let agent = ui.pickedAgent {
+            ui.pickedAgent = nil
+            model.open(agent) // the Agents' chat, beside the sidebar as a notification's would (#4206)
+            return
+        }
+        #endif
         guard let key = ui.picked else { return }
         ui.picked = nil
         #if DEBUG
@@ -1188,6 +1188,9 @@ extension AssistantSidebar {
                         Haptics.tap()
                         collapse()
                     }
+                } else if part == .header {
+                    // The Sidebar layout searches from its foot, over the whole window, Persona's chats and the Agents
+                    // (#4206, the owner): no field here.
                 } else if besideBar {
                     // The same button as the top bar's beside it (2026-11-04: on iPhone Duo open, this one stood lower
                     // and larger than Chat History / New Chat in the next column).
@@ -1870,23 +1873,68 @@ extension AssistantSidebar {
         }
     }
 
+    /// The foot's New Chat pill, in the Theme Color (#1312).
+    private var newChatLabel: some View {
+        Label("New Chat [Quick Actions ea4b29]", systemImage: Theme.Icon.compose)
+            .font(Theme.Font.bodyStrong)
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, Theme.Space.xl)
+            .scaledFrame(height: Theme.Size.avatarL)
+            .background(Theme.accent, in: .capsule)
+            .contentShape(.capsule)
+    }
+
+    /// A round button of the Sidebar layout's foot, in the capsule they share.
+    private func footButton(_ symbol: String, label: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            ThemedIcon(symbol)
+                .font(Theme.Font.heading)
+                .foregroundStyle(Color.primary)
+                .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(id)
+    }
+
+    /// The Sidebar layout's search, over the whole window: on the Agents while an Agent's chat is in front (the tab
+    /// follows what is in front there), else on Persona's chats (#4206).
+    private func openFullSearch() {
+        #if os(iOS)
+        ui.searchScope = model.selectedTabNow == .chats ? .agents : .chats
+        ui.fullSearch = true
+        #endif
+    }
+
     /// The shell's foot, ChatGPT's: a New Chat pill in the Theme Color on the left (#1312), Settings in a glass circle on the right.
     private var shellFooter: some View {
         HStack(spacing: Theme.Space.m) {
             Button(action: newConversation) {
-                Label("New Chat [Quick Actions ea4b29]", systemImage: Theme.Icon.compose)
-                    .font(Theme.Font.bodyStrong)
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .padding(.horizontal, Theme.Space.xl)
-                    .scaledFrame(height: Theme.Size.avatarL)
-                    .background(Theme.accent, in: .capsule)
-                    .contentShape(.capsule)
+                // Its name while it fits, else its icon alone: beside Search and Settings in the open Duo's 320 pt
+                // column the name was cut to "…" (#4206; a button's words never wrap or cut).
+                ViewThatFits(in: .horizontal) {
+                    newChatLabel.labelStyle(.titleAndIcon)
+                    newChatLabel.labelStyle(.iconOnly)
+                }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("New Chat [Quick Actions ea4b29]")
             .accessibilityIdentifier("sidebar-new")
+            .layoutPriority(1) // offered the row's room before the spacer, so the name shows wherever it fits
             Spacer(minLength: Theme.Space.s)
-            if let openSettings {
+            if part == .footer, let openSettings {
+                // The Sidebar layout's foot (#4206, the owner): Search and Settings in one capsule. Search is the
+                // column's one, over the whole window, Persona's chats and the Agents.
+                HStack(spacing: Theme.Space.flush) {
+                    footButton(Theme.Icon.search, label: String(localized: "Search"), id: "sidebar-search", action: openFullSearch)
+                    footButton(Theme.Icon.settings, label: String(localized: "Settings"), id: "sidebar-settings", action: openSettings)
+                        .overlay(alignment: .topTrailing) { if onOpenExtension == nil { ExtensionSettingsBadge() } }
+                }
+                .surface(interactive: true, in: .capsule)
+            } else if let openSettings {
                 Button(action: openSettings) {
                     ThemedIcon(Theme.Icon.settings)
                         .font(Theme.Font.heading)

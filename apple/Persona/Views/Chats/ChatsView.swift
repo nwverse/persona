@@ -338,7 +338,7 @@ struct ChatsView: View {
         // On a phone the sidebar is the drawer, the Persona conversation the page under everything it opens (#6332).
         .environment(\.splitDrawer, unified?.drawer)
         #endif
-        .modifier(UnifiedFront(unified: unified, atRoot: path.isEmpty, query: $query))
+        .modifier(UnifiedFront(unified: unified, atRoot: path.isEmpty))
         #if os(iOS)
         .tabActiveTask(id: model.api.map { PersonalAgentEntryModel.Connection($0) }) {
             await personalEntry.watch(model.api)
@@ -4537,12 +4537,11 @@ struct QuietSpaceRow: View {
 /// padding left about 100 pt under the filter chips); otherwise the grouped list.
 /// The Sidebar layout's bookkeeping on the Agents page (#6332): the Persona row is shaded while the page beside the
 /// sidebar is the conversation itself, a place's while it is that place; the app's tab says which side is in front (a
-/// relaunch goes back to an Agent's chat that was open); the sidebar's search words filter the Agents too.
+/// relaunch goes back to an Agent's chat that was open, and the foot's Search starts on the Agents then, #4206).
 private struct UnifiedFront: ViewModifier {
     @Environment(AppModel.self) private var model
     let unified: UnifiedSidebar?
     let atRoot: Bool
-    @Binding var query: String
 
     func body(content: Content) -> some View {
         if let unified {
@@ -4560,7 +4559,6 @@ private struct UnifiedFront: ViewModifier {
                     unified.shownPlace = nil
                     if model.selectedTab != .chats { model.selectedTab = .chats }
                 }
-                .onChange(of: unified.ui.query) { _, words in if query != words { query = words } }
         } else {
             content
         }

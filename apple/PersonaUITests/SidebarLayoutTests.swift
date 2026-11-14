@@ -103,6 +103,43 @@ final class SidebarLayoutTests: XCTestCase {
         XCTAssertTrue(element("assistant-sidebar-button").waitForExistence(timeout: 10), "not on the conversation:\n\(app.debugDescription)")
     }
 
+    /// The column's one search (#4206, the owner): Search at the foot opens it over the whole window, with Persona's chats
+    /// and the Agents as its scopes, starting on the chats beside the conversation and on the Agents beside an Agent's
+    /// chat; an Agent found opens beside the sidebar. No search field in the column's head.
+    @MainActor func testSearchFromTheFootHasChatsAndAgents() {
+        launch(["-tab", "assistant"])
+        let main = element("sidebar-main"), search = element("sidebar-search")
+        XCTAssertTrue(main.waitForExistence(timeout: 20), "no Persona row:\n\(app.debugDescription)")
+        XCTAssertTrue(search.exists, "no Search at the foot")
+        XCTAssertFalse(element("assistant-sidebar-search").exists, "a search button still in the column's head")
+        XCTAssertFalse(app.searchFields.firstMatch.exists, "a search field still in the column")
+        search.tap()
+        let field = element("full-search-field")
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "Search opened no page:\n\(app.debugDescription)")
+        // The scope's segments: Chats (对话 in Chinese) and Agents.
+        let scope = element("full-search-scope")
+        XCTAssertTrue(scope.waitForExistence(timeout: 5), "no scopes:\n\(app.debugDescription)")
+        let chats = scope.buttons.matching(NSPredicate(format: "label IN %@", ["Chats", "对话"])).firstMatch
+        let agents = scope.buttons["Agents"].firstMatch
+        XCTAssertTrue(chats.exists && chats.isSelected, "not on Persona's chats beside the conversation:\n\(app.debugDescription)")
+        XCTAssertTrue(app.buttons.matching(identifier: "full-search-row").firstMatch.waitForExistence(timeout: 5), "no chats listed")
+        shot("search-chats")
+        agents.tap()
+        let agent = app.buttons.matching(identifier: "full-search-agent").firstMatch
+        XCTAssertTrue(agent.waitForExistence(timeout: 5), "no Agents listed:\n\(app.debugDescription)")
+        shot("search-agents")
+        agent.tap()
+        let title = app.buttons["chat.title"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 10), "the Agent found did not open:\n\(app.debugDescription)")
+        XCTAssertGreaterThan(title.frame.minX, main.frame.maxX, "the Agent's chat is not beside the sidebar")
+        // Beside an Agent's chat, Search starts on the Agents.
+        search.tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "Search opened no page")
+        XCTAssertTrue(agents.waitForExistence(timeout: 5) && agents.isSelected, "not on the Agents beside an Agent's chat:\n\(app.debugDescription)")
+        app.buttons["full-search-close"].firstMatch.tap()
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5), "the search did not close")
+    }
+
     /// An Agent's chat asked for at launch (as a notification, a Live Activity or a link does): beside the sidebar.
     @MainActor func testAnAgentsChatFromOutsideOpensBesideTheSidebar() {
         launch(["-tab", "dev", "-openSession", agent])

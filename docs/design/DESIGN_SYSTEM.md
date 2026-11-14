@@ -731,10 +731,14 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 - An Agent chat's header folds into a slim bar (iOS `ChromeHeader` and `compactChrome` in `apple/Persona/Views/Chat/ChatView.swift`, `docs/apple/ios.md`; Android on Glass `JFoldingHeader` and `ChatSlimBar`, #4339 C4): it follows the list's own scrolling (toward the newest it folds, back into the history it opens), is never left half way when the finger lifts (folded at the newest end, else the nearer end), and folds by itself after 3 s without a touch while nothing is presented over the page. The slim bar is back and a centered capsule (the agent's mark, the state's dot, the title; Connecting… while the hub is out of reach) that opens the header again; nothing on its right. The open header's second line leads with the state's words (iOS `ChatView.stateWords`): "Working N min" while a turn runs ("N hr M min" past an hour; the work line has the seconds), the state's name otherwise, "Working (Background)" once the turn ended and a workflow keeps the agent going, "Waiting in the background" when all it runs only waits; that wait is drawn with the clock for its dot, in the lighter tone, in the slim bar's dot too. Android also opens it when a new request arrives, and never folds by itself while animations are off. The open header's title opens Session Info.
 - Sidebar layout (Settings › Appearance › Navigation, #6332; the drawer on a phone, a column at regular width; on a
   phone a page it opens has the persona's face where a back would be): the web sidebar's structure in one column
-  (`UnifiedSidebarColumn`): the assistant and Search, the main conversation held at the top, then one list (Pages and
+  (`UnifiedSidebarColumn`): the assistant, the main conversation held at the top, then one list (Pages and
   Persona Chats folding under their headings, then the Agents with their heading's ⋯ / Personal Agents / New Session, quick
   filters, grouping, Needs You and groups, the Agents page's own rows), and at the foot the Needs You jump, the usage, New
-  Chat and Settings. A pick replaces the page beside it. Two pieces are new: **the Needs You jump**
+  Chat (the only one where the column is beside the page, #4206), and Search and Settings in one capsule. A pick replaces
+  the page beside it. **Search** is one page over the whole window (#4206, the owner; it replaced a field in the head
+  that filtered the column in place): the field at its foot, two scopes at its top, Chats (Persona's, by what was said
+  too, #7123) and Agents, starting on the side that is in front; no "All" scope yet. Who it serves: anyone looking for a
+  conversation or an Agent, who gets one place to look and sees which kind they are looking through. Two pieces are new: **the Needs You jump**
   (`SidebarNeedsJump`): "N need you" with an arrow toward the section, a capsule in a band of its own above the column's
   foot that never covers a row and stays while anything waits (no foot jumping as the list scrolls); it is a way to the
   one home of those requests, not a second home, and counts what the switch and tabs count (`agentsWaiting`). **The usage

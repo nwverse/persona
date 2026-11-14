@@ -774,7 +774,7 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   hides the system tab bar, which iOS drew down the side with the switch at its foot, and the pages draw `ShellSwitch` at their top (`pageTabSwitch`): Assistant in its floating bar in the face's place
   (tapping the chosen Assistant opens the face's menu, as in the shell; the link's state and a copy's confirmation show under it), Agents and Messages as a row over the page column
   (`PageTabSwitchRow`; Agents' list options stay on the list's ⋯). Assistant's sidebar column has the button that folds it at its top trailing corner, where Search was (`collapse`); the page's
-  Chat History button only shows while it is folded, to bring it back. Search moves to the foot's row beside Persona's name and where it runs, and opens over the whole window as ChatGPT's (#3705, `AssistantFullSearch`): the field at the foot over the keyboard, × beside it, the conversations above, the latest first, narrowed as you type; a row opens its conversation. Both searches (this one and the sidebar's own) also find a chat by what was said in it (#6284, `AssistantChatSearch.swift`): when the hub lists `assistant_search`, the current assistant's `GET /api/v1/assistant/search` is asked 200 ms after the last key, each query cancelling the one before (`docs/protocol/protocol.md` ("Assistant chat search (#6282)")); the local matches (title, last message, a direction's name) show at once and the manager's results come first once they arrive, archived chats included. A row found by a message shows that sentence under its title with the match in bold (`SearchSaidLine`), starting a few characters before the match, fewer as the text grows (8, then 5 above Large, 2 from xxxLarge: `AssistantSearchMerge.lead(for:)`), so the match stays on the line; VoiceOver reads the sentence in the last message's place. Opening it lands on that message through the hub link landing (`MessageJump`, paging back as a link's `?at=` does, opening a folded turn that holds it): it comes to the middle under the quote's accent band, held `Theme.Quote.landingHold` (1.6 s, a quote's tap holds 0.7 s) and then faded, as the web rings its hit (#6446); a row found by its title opens as usual. While the manager's index is still reading older chats a line under the heading says so; offline, without the feature or on a 404 (an older manager) the local matches are the whole answer. The main conversation's
+  Chat History button only shows while it is folded, to bring it back. Search moves to the foot's row beside Persona's name and where it runs, and opens over the whole window as ChatGPT's (#3705, `AssistantFullSearch`): the field at the foot over the keyboard, × beside it, the conversations above, the latest first, narrowed as you type; a row opens its conversation. Its Chats | Agents scopes at the top look through the Agents too (#4206, "Sidebar layout (#6332)", Search). Both searches (this one and the sidebar's own) also find a chat by what was said in it (#6284, `AssistantChatSearch.swift`): when the hub lists `assistant_search`, the current assistant's `GET /api/v1/assistant/search` is asked 200 ms after the last key, each query cancelling the one before (`docs/protocol/protocol.md` ("Assistant chat search (#6282)")); the local matches (title, last message, a direction's name) show at once and the manager's results come first once they arrive, archived chats included. A row found by a message shows that sentence under its title with the match in bold (`SearchSaidLine`), starting a few characters before the match, fewer as the text grows (8, then 5 above Large, 2 from xxxLarge: `AssistantSearchMerge.lead(for:)`), so the match stays on the line; VoiceOver reads the sentence in the last message's place. Opening it lands on that message through the hub link landing (`MessageJump`, paging back as a link's `?at=` does, opening a folded turn that holds it): it comes to the middle under the quote's accent band, held `Theme.Quote.landingHold` (1.6 s, a quote's tap holds 0.7 s) and then faded, as the web rings its hit (#6446); a row found by its title opens as usual. While the manager's index is still reading older chats a line under the heading says so; offline, without the feature or on a 404 (an older manager) the local matches are the whole answer. The main conversation's
   long press holds the face's long-press items: whose Persona (several hubs), Knowledge, Details, Copy Directory, Copy Info (`MainChatPlaceItems`); the switch's Assistant, tapped while chosen, keeps the
   whole menu, as in the shell. Persona's badge rides on the switch's Assistant; the link's state shows beside the switch, a copy's confirmation as a toast. Pushed pages of Persona's column
   have no switch: Back goes to it (Agents' and Messages' rows stay over their pushed chats). On Agents the empty page has the row as an inset of the column's stack, and each
@@ -836,7 +836,7 @@ compact width: iPhone Duo closed, an iPad's narrow split) the column is the draw
 regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro keep their own navigation.
 
 - **The column** (`UnifiedSidebarColumn`, `Persona/Views/Shell/UnifiedSidebar.swift`), in the web's order: the assistant
-  (its switcher) and Search; the main conversation held at the top while the rest scrolls (as the web's, #5581); one
+  (its switcher); the main conversation held at the top while the rest scrolls (as the web's, #5581); one
   list, the Agents list (`AgentsList`, `sidebarRows`) with the Persona sidebar's rows over its own
   (`AssistantSidebar(part: .rows)`): **Pages** (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Health, Machines,
   Messages when it is on, the extensions' pages) and **Persona Chats** (Pinned, Recent, All Chats), each heading folding
@@ -845,12 +845,21 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   filters and the grouping, Needs You and the groups, the same rows as the Agents page. At the foot: "N need you ↓"
   (`SidebarNeedsJump`, the count the Separate layout's switch and tabs show, `agentsWaiting`) in a band of its own above
   the usage, so it never covers a row; a tap scrolls the list to the Agents' Needs You, the arrow says which way it is.
-  Then the two fullest subscription accounts (`SidebarUsageStrip`, `UsageWindows.top`; a tap opens Machines), New Chat
-  and Settings. That New Chat is the only one wherever the sidebar has it at its foot beside the page (#4206, the owner):
+  Then the two fullest subscription accounts (`SidebarUsageStrip`, `UsageWindows.top`; a tap opens Machines), New Chat,
+  and Search and Settings in one capsule (#4206, the owner). That New Chat is the only one wherever the sidebar has it at its foot beside the page (#4206, the owner):
   the page's top bar keeps its place empty, so the face stays in the middle (`AssistantTopBar.newChatInSidebar`; the
-  iPad's Persona column in the Separate layout too), and the Persona Chats heading has none. A phone keeps the top bar's. The parts share their search and dialogs through `AssistantSidebarUI`, presented around the column
-  (`AssistantSidebarPresenters`): a sheet on a list row went with the row as it scrolled away. Search's words filter
-  Persona's chats and the Agents under them.
+  iPad's Persona column in the Separate layout too), and the Persona Chats heading has none. A phone keeps the top bar's.
+  The parts share their dialogs through `AssistantSidebarUI`, presented around the column (`AssistantSidebarPresenters`):
+  a sheet on a list row went with the row as it scrolled away.
+- **Search** (#4206, the owner; it replaced #6332's field in the head, which filtered the column in place): the foot's
+  Search opens the whole-window search (`AssistantFullSearch`, the open Duo's from #3705) at every width, with two
+  scopes over the results: **Chats**, Persona's, as #3705's and #7123's (titles, last messages, and what was said, from
+  the manager's index, opened at the message found), and **Agents** (every Agent's chat but sub-agents' and archived
+  ones, matched as the Agents list's search matches, `Session.matchesScope(.all)`, with where the words were found under
+  the title, else its state and computer; the latest 50). It starts on the Agents while an Agent's chat is in front
+  (`AppModel.selectedTabNow`, which follows what is in front in this layout), else on the chats. A chat found opens as
+  the column's rows do; an Agent found opens beside the sidebar (`AppModel.open`) once the search has gone. There is no
+  "All" scope yet.
 - **Its color** (`UnifiedSidebar.columnColor`, #4206, #4855): one neutral near-white / near-black down the whole column,
   as ChatGPT's (`Theme.Shell.drawer`, the shell drawer's), in every style and at every width: behind the head, the list
   (`AgentsListPage(column:)`) and the foot, in the strip over the column on the iPad (`SidebarTopFill(color:)`) and
