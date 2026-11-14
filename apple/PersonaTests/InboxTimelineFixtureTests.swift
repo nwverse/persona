@@ -77,8 +77,8 @@ struct InboxTimelineFixtureTests {
 
     @Test func liveAgentStatesUseTheAgentsListNames() throws {
         for (rawState, stateName) in Self.liveStateNames {
-            let state = try #require(AgentState(rawValue: rawState), rawState)
-            #expect(state.label == stateName.text, rawState)
+            let state = try #require(AgentState(rawValue: rawState), "\(rawState)")
+            #expect(state.label == stateName.text, "\(rawState)")
         }
     }
 
