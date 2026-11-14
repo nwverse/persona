@@ -51,6 +51,7 @@ import { resetInboxForTests, shortTime, sourceLine } from "../../lib/inbox";
 import { rowMeta } from "../../lib/inbox-now";
 import { chainRows, type ChainEntry } from "../../lib/inbox-events";
 import { ApiError } from "../../lib/api";
+import enInboxEvent from "../../i18n/locales/en/inbox-inboxevent.json";
 import { resetMailForTests } from "../../lib/mail";
 import { getState } from "../../lib/store";
 import type { AgentState, Session } from "../../lib/types";
@@ -129,6 +130,9 @@ afterEach(() => {
 });
 
 describe("收件箱事件：详情", () => {
+  it("calls the section Timeline in English", () => {
+    expect(enInboxEvent.chain).toBe("Timeline");
+  });
   it("matches every shared timeline case, including via and reported icons", () => {
     for (const c of timeline.cases) {
       const chain = c.input.item.chain;
