@@ -150,10 +150,12 @@ async function executable() {
     const file = join(installed, "Persona.app", "Contents", "MacOS", "Persona");
     const identity = await run("codesign", ["-dvvv", join(installed, "Persona.app")], { quiet: true });
     const authority = identity.text.match(/^Authority=(.+)$/m)?.[1];
-    const designated = await run("codesign", ["-d", "--requirements", "-", join(installed, "Persona.app")], { quiet: true });
-    const team = designated.text.match(/team-identifier=([A-Z0-9]+)/)?.[1];
+    const team = identity.text.match(/^TeamIdentifier=(.+)$/m)?.[1];
     if (process.env.PERSONA_DESKTOP_TEST_SIGNED_MAC === "1") {
+      // The default Developer ID designated requirement is system-synthesized and need not contain a literal
+      // team-identifier token. Use the verified signature and Gatekeeper's trust decision, not a DR string prefix.
       need("the release package has a consistent Developer ID team signature", identity.code === 0 && authority?.startsWith("Developer ID Application:") && !!team && team !== "not set", { authority: authority ?? "unavailable", team: team ?? "unavailable" });
+      need("macOS verifies the signed package's signature and notarization", (await run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", join(installed, "Persona.app")], { quiet: true })).code === 0 && (await run("spctl", ["--assess", "--type", "execute", "--verbose=2", join(installed, "Persona.app")], { quiet: true })).code === 0, "signature classification is Developer ID; codesign/spctl output is withheld from evidence");
       macSignature = "developer-id";
     } else {
       // This launches the unsigned development artifact; it is not Developer ID acceptance and must not change its
@@ -190,12 +192,14 @@ async function launch(file, profile, home, linkLog) {
   const debugPort = await freePort();
   const env = { ...process.env, HOME: home, USERPROFILE: home, PERSONA_DESKTOP_DISABLE_UPDATE: "1", PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION: "1", ...(linkLog ? { PERSONA_TEST_LINK_LOG: linkLog } : {}) };
   for (const name of Object.keys(env)) if (name === "PERSONA_HUB_URL" || name.startsWith("PERSONA_DESKTOP_E2E") || name === "PERSONA_DESKTOP_SMOKE" || name === "ELECTRON_RUN_AS_NODE" || name === "NODE_OPTIONS") delete env[name];
-  for (const name of ["PERSONA_DESKTOP_REQUIRE_SIGNING", "PERSONA_DESKTOP_TEST_SIGNED_MAC", "PERSONA_DESKTOP_TEST_PACKAGE", "PERSONA_DESKTOP_TEST_BUILD_CONFIG", "PERSONA_DESKTOP_APP_ID", "CSC_LINK", "CSC_KEY_PASSWORD", "CSC_IDENTITY_AUTO_DISCOVERY", "APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"]) delete env[name];
-  need("build and signing environment stays outside the app", !env.PERSONA_DESKTOP_REQUIRE_SIGNING && !env.PERSONA_DESKTOP_TEST_SIGNED_MAC && !env.CSC_LINK && !env.APPLE_API_KEY);
+  for (const name of ["PERSONA_DESKTOP_REQUIRE_SIGNING", "PERSONA_DESKTOP_TEST_SIGNED_MAC", "PERSONA_DESKTOP_TEST_PACKAGE", "PERSONA_DESKTOP_TEST_BUILD_CONFIG", "PERSONA_DESKTOP_APP_ID", "CSC_LINK", "CSC_KEY_PASSWORD", "CSC_IDENTITY_AUTO_DISCOVERY", "APPLE_API_KEY", "APPLE_API_KEY_P8", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"]) delete env[name];
+  need("build and signing environment stays outside the app", !env.PERSONA_DESKTOP_REQUIRE_SIGNING && !env.PERSONA_DESKTOP_TEST_SIGNED_MAC && !env.CSC_LINK && !env.APPLE_API_KEY && !env.APPLE_API_KEY_P8);
   need("the packaged app has no Node runtime overrides", !env.ELECTRON_RUN_AS_NODE && !env.NODE_OPTIONS);
   const args = [`--user-data-dir=${profile}`, `--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${debugPort}`];
   if (platform === "linux") args.unshift("--disable-gpu");
-  need("the acceptance launcher does not disable the Chromium sandbox", !args.includes("--no-sandbox"));
+  delete env.CHROME_DEVEL_SANDBOX;
+  const forbiddenSandboxFlag = args.find(arg => /^--(?:no-sandbox|disable-setuid-sandbox|disable-namespace-sandbox)(?:=|$)/.test(arg));
+  need("the acceptance launcher does not disable the Chromium sandbox", !forbiddenSandboxFlag && !env.CHROME_DEVEL_SANDBOX);
   const child = spawn(file, args, { cwd: work, env, stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32" });
   owned.add(child);
   const keep = data => { log += data; };
@@ -324,7 +328,10 @@ async function main() {
   }
   const suppliedConfig = process.env.PERSONA_DESKTOP_TEST_BUILD_CONFIG;
   const config = suppliedConfig ? resolve(suppliedConfig) : join(desktop, "electron-builder.unsigned.yml");
-  if (!suppliedConfig || config === join(desktop, "electron-builder.unsigned.yml")) {
+  if (process.env.PERSONA_DESKTOP_TEST_PACKAGE) {
+    // The preceding package job owns the builder configuration. This driver executes, never rebuilds, that artifact.
+    buildConfiguration = "not-rebuilt-supplied-artifact";
+  } else if (!suppliedConfig || config === join(desktop, "electron-builder.unsigned.yml")) {
     buildConfiguration = config;
   } else {
     const source = JSON.parse(await readFile(config, "utf8"));
@@ -379,10 +386,14 @@ await mkdir(output, { recursive: true });
 const report = JSON.stringify({
   ...firstRunVerdict({ platform, signature: macSignature, failure, blocked, passed: steps.length }),
   arch: process.arch,
-  shippingTarget: platform !== "linux",
+  shippingPlatform: platform !== "linux",
   ...(failure ? { failure } : {}),
   ...(artifactSHA256 ? { artifactSHA256 } : {}),
   ...(buildConfiguration ? { buildConfiguration } : {}),
+  ...(process.env.PERSONA_DESKTOP_TEST_PACKAGE ? { sourceArtifact: process.env.PERSONA_DESKTOP_TEST_PACKAGE } : {}),
+  artifactKind: platform === "darwin" ? "universal-zip" : "unpacked",
+  installationAccepted: false,
+  signedReleaseAccepted: false,
   ...result,
   steps,
   scenarios: clients.map(client => client.diagnostics()),

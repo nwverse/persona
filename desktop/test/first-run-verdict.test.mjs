@@ -13,7 +13,7 @@ test("only the declared unsigned macOS hub scenario may report a structural pass
   const verdict = firstRunVerdict({ platform: "darwin", signature: "ad-hoc", blocked: [macBlock], passed: 18 });
   assert.equal(verdict.ok, true);
   assert.equal(verdict.status, "setup-passed-hub-blocked");
-  assert.equal(verdict.fullFirstRunAccepted, false);
+  assert.equal(verdict.functionalFirstRunAccepted, false);
   assert.match(verdict.label, /BLOCKED/);
   assert.doesNotMatch(verdict.label, /^PASS$/);
 });
@@ -22,7 +22,7 @@ test("signed macOS, Windows and Linux must run the full path", () => {
   for (const [platform, signature] of [["darwin", "developer-id"], ["win32", "not-applicable"], ["linux", "not-applicable"]]) {
     const verdict = firstRunVerdict({ platform, signature, blocked: [macBlock], passed: 18 });
     assert.equal(verdict.ok, false);
-    assert.equal(verdict.fullFirstRunAccepted, false);
+    assert.equal(verdict.functionalFirstRunAccepted, false);
   }
 });
 
@@ -36,7 +36,7 @@ test("no hidden or additional block can become a green full-acceptance result", 
   ]) {
     const verdict = firstRunVerdict(input);
     assert.equal(verdict.ok, false);
-    assert.equal(verdict.fullFirstRunAccepted, false);
+    assert.equal(verdict.functionalFirstRunAccepted, false);
   }
 });
 
@@ -44,6 +44,6 @@ test("a completed Windows or signed macOS path is the only full acceptance", () 
   for (const [platform, signature] of [["win32", "not-applicable"], ["darwin", "developer-id"]]) {
     const verdict = firstRunVerdict({ platform, signature, blocked: [], passed: 21 });
     assert.equal(verdict.ok, true);
-    assert.equal(verdict.fullFirstRunAccepted, true);
+    assert.equal(verdict.functionalFirstRunAccepted, true);
   }
 });

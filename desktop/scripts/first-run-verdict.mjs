@@ -1,8 +1,8 @@
 // A signature-blocked macOS scenario is visible evidence, never a skipped or full-acceptance pass.
 export function firstRunVerdict({ platform, signature, failure, blocked, passed }) {
-  const base = { platform, signature: signature ?? "not-applicable", passed, blocked, fullFirstRunAccepted: false };
+  const base = { platform, signature: signature ?? "not-applicable", passed, blocked, functionalFirstRunAccepted: false };
   if (failure || passed === 0) return { ...base, ok: false, status: "failed", label: `FAIL (${failure ?? "no checks ran"})` };
-  if (blocked.length === 0) return { ...base, ok: true, status: "passed", fullFirstRunAccepted: true, label: "PASS" };
+  if (blocked.length === 0) return { ...base, ok: true, status: "passed", functionalFirstRunAccepted: true, label: "PASS" };
   const item = blocked[0];
   const unsignedMacHubOnly = platform === "darwin" && signature === "ad-hoc" && blocked.length === 1
     && item.scenario === "hub setup, web pairing and chat"
