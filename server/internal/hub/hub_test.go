@@ -248,7 +248,7 @@ func newTestHub(t *testing.T) *Hub {
 	cfg.Machines = nil
 	cfg.dir = shortTempDir(t)
 	h := &Hub{
-		cfg: cfg, version: "test", logger: log.New(io.Discard, "", 0),
+		deployCtx: context.Background(), cfg: cfg, version: "test", logger: log.New(io.Discard, "", 0),
 		byID: map[string]*Machine{}, clients: map[*client]struct{}{},
 		calls: map[string]chan proto.ToolResult{},
 		push:  newPusher(cfg.dir, nil, func(string, ...any) {}),
@@ -262,6 +262,8 @@ func newTestHub(t *testing.T) *Hub {
 	h.upd.dir = filepath.Join(cfg.dir, "update")
 	h.upd.exec = func(string) error { return errors.New("exec is not run in tests") }
 	h.upd.startWatch = func(string, string) error { return nil }
+	h.startHelloWriters()
+	t.Cleanup(h.stopHelloWriters)
 	return h
 }
 
@@ -322,6 +324,7 @@ func TestPhoneToolsPersist(t *testing.T) {
 	h.store = database
 	tools := []proto.Tool{{Name: "phone_device_info", Description: "info", InputSchema: json.RawMessage(`{"type":"object"}`)}}
 	h.setPhoneTools(db.PhoneToolRegistration{DeviceID: "legacy", Tools: tools})
+	waitHelloWrites(t, h)
 	if got := h.phoneToolList(); len(got) != 3 || got[0].Name != "phone_device_info" {
 		t.Fatalf("tools = %+v", got)
 	}

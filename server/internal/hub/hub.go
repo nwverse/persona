@@ -24,7 +24,7 @@ type Hub struct {
 	// errs: the hub's own error reports on their way to the managers (error_reports.go).
 	errs hubErrors
 
-	deployCtx     context.Context // canceled with the hub; accepted node updates resume from Postgres
+	deployCtx     context.Context // canceled with the hub; node updates and hello writes finish before the database closes
 	nodeWorkers   sync.WaitGroup
 	shutdown      *shutdownBudget
 	wsStopping    bool // guarded by mu; prevents new WaitGroup additions during shutdown
@@ -116,6 +116,10 @@ type Hub struct {
 	// Never held with mu taken first; the write it covers runs outside mu (#5358).
 	phoneToolsMu sync.Mutex
 	phoneWrites  phoneWriteQueue
+
+	// helloWrites persists client metadata in ordered, coalescing consumers (hello_writes.go).
+	helloWrites      helloWriteWorkers
+	phoneToolUpdates phoneToolUpdates
 
 	// askVia replaces fleet.ask in tests that play the manager (waitInteraction).
 	askVia func(context.Context, proto.Interaction) (proto.Resolution, error)
@@ -268,6 +272,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 		budget.step(h, "close database", database.CloseContext)
 	}()
 	h.store = database
+	h.startHelloWriters()
 	go func() {
 		select {
 		case <-stop.Done():
@@ -375,9 +380,34 @@ func (h *Hub) loadPhoneTools() {
 // phoneToolsTimeout bounds a phone tool registration's write (the pool has no statement_timeout); tests shorten it.
 var phoneToolsTimeout = 5 * time.Second
 
-// setPhoneTools saves a phone's tools, then lists them. The write runs outside h.mu, the hub's global lock: a stalled
-// database used to stop every broadcast and client message with it (#5358).
+// setPhoneTools records a phone's latest tool set. With a store, one consumer writes registrations in message order;
+// only the newest pending registration for each device is saved. The connection's live tool names were already
+// updated by onClientMessage, so calls to that phone do not wait for persistence (#6889).
 func (h *Hub) setPhoneTools(registration db.PhoneToolRegistration) {
+	if h.store == nil {
+		h.writePhoneTools(registration)
+		return
+	}
+	q := &h.phoneToolUpdates
+	h.helloWrites.tools.Add(1)
+	q.mu.Lock()
+	if q.pending == nil {
+		q.pending = map[string]db.PhoneToolRegistration{}
+	}
+	if _, queued := q.pending[registration.DeviceID]; !queued {
+		q.order = append(q.order, registration.DeviceID)
+	}
+	q.pending[registration.DeviceID] = registration
+	q.reports++
+	q.mu.Unlock()
+	h.startHelloWriters()
+	wakeHelloWriter(h.helloWrites.toolsWake)
+}
+
+// writePhoneTools saves a phone's tools, then lists them. The write runs outside h.mu, the hub's global lock: a stalled
+// database used to stop every broadcast and client message with it (#5358). Only the phone-tool consumer calls this
+// for a persistent hub, so an older registration cannot finish after and replace a newer one.
+func (h *Hub) writePhoneTools(registration db.PhoneToolRegistration) {
 	defer h.wakePhoneWrites()
 	h.phoneToolsMu.Lock()
 	defer h.phoneToolsMu.Unlock()

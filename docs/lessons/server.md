@@ -122,6 +122,23 @@ scenario through the manager as well, where the wait is the manager's own
 (`server/internal/hub/subscribe_readloop_test.go`). As of this change `fs_watch` still calls the node from the read
 loop (`fsWatchSet`, up to 10 s).
 
+## App connection bookkeeping uses ordered background snapshots (2026-11-15, #6889)
+
+`client_hello` and `register_phone` also waited in the app connection's read loop: `hub.client_apps` did a settings
+load and save, the device and user locales did up to two of each, and every phone registration waited for
+`ReplacePhoneTools`. A slow store therefore delayed the hello ack and every later frame just as a slow node did for
+subscriptions. Record connection-local metadata in place, so the next reply and direct phone routing use the new
+language and tools at once, but move persistence to one ordered consumer per setting group. Client-app and locale
+changes are history-dependent: apply every change in message order and coalesce only the final snapshot writes. Phone
+registrations are complete replacements, so pending ones can coalesce to the newest per device. Join the consumers to
+the hub's worker shutdown and drain accepted reports before closing the database.
+
+A failed load is not an empty setting. `loadClientAppsLocked` used to clear the map and its caller still saved it, so
+one transient read error could drop every other device. Load into temporary state, publish it only after a complete
+successful read, and otherwise apply and save nothing; the next message retries. The same rule covers both locale
+settings together: in particular, an absent `user_locale` plus a failed `hub.device_locales` read must not publish or
+save a first device's language.
+
 ## A Go file named after a platform builds only there (#5563)
 
 Go reads a file name's last `_<word>` (before `_test`) as a build constraint when the word is a GOOS or GOARCH:
