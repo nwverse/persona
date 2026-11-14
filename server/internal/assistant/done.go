@@ -72,7 +72,8 @@ func doneSignals(replies []prompts.TaskDoneReply) taskDoneSignals {
 
 // directOwnerMarker reports whether any occurrence of marker starts a direct requirement at the line or a
 // sentence/clause boundary. Subordinate and narrative uses ("if …", "evaluates whether …") are not owner actions;
-// skipping one such occurrence must not suppress a later direct one (#5732).
+// skipping one such occurrence must not suppress a later direct one. A comma inside that same if-sentence does not end
+// its conditional scope; a new sentence or an independent "otherwise" clause does (#5732).
 func directOwnerMarker(lower, marker string) bool {
 	for from := 0; from < len(lower); {
 		i := strings.Index(lower[from:], marker)
@@ -82,8 +83,15 @@ func directOwnerMarker(lower, marker string) bool {
 		i += from
 		before := strings.TrimSpace(lower[:i])
 		direct := before == ""
-		for _, end := range []string{".", "!", "?", ":", ";", ","} {
+		for _, end := range []string{".", "!", "?", ":", ";"} {
 			direct = direct || strings.HasSuffix(before, end)
+		}
+		if strings.HasSuffix(before, ",") {
+			clause := before
+			if end := strings.LastIndexAny(clause, ".!?"); end >= 0 {
+				clause = strings.TrimSpace(clause[end+1:])
+			}
+			direct = !strings.HasPrefix(clause, "if ") || strings.HasSuffix(clause, "otherwise,")
 		}
 		if direct {
 			return true
