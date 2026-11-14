@@ -108,6 +108,39 @@ describe("All chats when its read failed", () => {
     expect(host.textContent).toContain("对话 keep");
   });
 
+  it("puts focus on the first chat when Retry works, as its button goes with the error", async () => {
+    await mount();
+    act(() => retryButton()!.focus());
+    expect(document.activeElement?.textContent?.trim()).toBe("重试");
+
+    // still down: Retry stays, and so does focus
+    await act(async () => retryButton()!.click());
+    await flush();
+    expect(document.activeElement).toBe(retryButton());
+
+    hub.down = false;
+    await act(async () => retryButton()!.click());
+    await flush();
+    expect(failedBlock()).toBe(false);
+    const first = host.querySelector("a[href]");
+    expect(first?.textContent).toContain("主对话"); // the main chat, pinned on top
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("leaves focus alone when it is somewhere else once Retry works", async () => {
+    hub.state = { assistant: { machine_id: "server", main: "main", conversations: [conv("main"), conv("keep")] }, sessions: {} };
+    await mount();
+    const search = host.querySelector<HTMLInputElement>("input")!;
+    hub.down = false;
+    await act(async () => {
+      retryButton()!.click();
+      search.focus();
+    });
+    await flush();
+    expect(partialLine()).toBe("");
+    expect(document.activeElement).toBe(search);
+  });
+
   it("reads it again on the next hello once the hub is back, and drops the error", async () => {
     await mount();
     expect(failedBlock()).toBe(true);

@@ -98,11 +98,17 @@ async function entries(kind: string, signal: AbortSignal): Promise<{ list: KBEnt
   return { list, details, failed };
 }
 
-function useMapData(view: View, reload: number): Load {
+/** A view's map: read from scratch when the view or `reload` changes (Loading, then the map or the error), and quietly on
+ *  `refresh()`: what is drawn stays while it reads, and a drawn map stays when that read fails. */
+function useMapData(view: View, reload: number): [Load, () => void] {
   const [state, setState] = useState<Record<View, Load>>({ topics: null, projects: null });
+  const [refreshes, setRefreshes] = useState(0);
+  const started = useRef("");
   useEffect(() => {
     const ac = new AbortController();
-    setState((s) => ({ ...s, [view]: null }));
+    const quiet = started.current === `${view}:${reload}`;
+    started.current = `${view}:${reload}`;
+    if (!quiet) setState((s) => ({ ...s, [view]: null }));
     (async () => {
       try {
         if (view === "topics") {
@@ -121,12 +127,15 @@ function useMapData(view: View, reload: number): Load {
           setState((s) => ({ ...s, projects: { root: buildProjectMap(list, details), failed, empty: list.length === 0, off: false } }));
         }
       } catch (e) {
-        if (!isAbort(e)) setState((s) => ({ ...s, [view]: { error: errorText(e) } }));
+        if (isAbort(e)) return;
+        const error = errorText(e);
+        setState((s) => (quiet && s[view] && "root" in s[view] ? s : { ...s, [view]: { error } }));
       }
     })();
     return () => ac.abort();
-  }, [view, reload]);
-  return state[view];
+  }, [view, reload, refreshes]);
+  const refresh = useCallback(() => setRefreshes((x) => x + 1), []);
+  return [state[view], refresh];
 }
 
 // ── pinch to zoom ───────────────────────────────────────
@@ -215,11 +224,12 @@ const VIEWS: View[] = ["topics", "projects"];
 export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const [view, setView] = useState<View>("topics");
   const [reload, setReload] = useState(0);
-  const load = useMapData(view, reload);
-  // A map that could not be read while the hub was away is read again once it is back (its hello), as Retry would; one
-  // that was read is not, since reading it again means every entry's detail.
-  const failed = Boolean(load && "error" in load);
-  useEffect(() => (failed ? onHubEvent("hello", () => setReload((x) => x + 1)) : undefined), [failed]);
+  const [load, refresh] = useMapData(view, reload);
+  // A map that could not be read while the hub was away, or only in part (some entries' details failed), is read again
+  // once it is back (its hello), quietly: what is drawn stays until the new read lands. A map read whole is not, since
+  // reading it again means every entry's detail.
+  const failed = Boolean(load && ("error" in load || load.failed > 0));
+  useEffect(() => (failed ? onHubEvent("hello", () => refresh()) : undefined), [failed, refresh]);
   const [sel, setSel] = useState("");
   const [, bump] = useState(0);
   const [zoom, setZoom] = useState(1);

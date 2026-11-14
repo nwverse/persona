@@ -128,6 +128,43 @@ describe("the knowledge map", () => {
     await hello();
     expect(pending("/kb/topics")).toHaveLength(2);
   });
+
+  it("reads a map drawn without some entries again on the next hello, keeping it drawn meanwhile", async () => {
+    const topics = { items: [{ kind: "topics", id: "alpha", name: "Alpha topic", relevance: 0 }, { kind: "topics", id: "beta", name: "Beta topic", relevance: 0 }] };
+    const detail = (id: string) => ({ detail: { kind: "topics", id, path: "", meta: {}, summary: "" } });
+    const missing = () => host.textContent?.includes("有 1 个主题没读到") ?? false;
+    act(() => root.render(<KnowledgeMap onToggleSidebar={() => {}} />));
+    await answer(pending("/assistant")[0], {});
+    await answer(pending("/kb/topics")[0], topics);
+    await answer(pending("/kb/topics/alpha")[0], detail("alpha"));
+    await fail(pending("/kb/topics/beta")[0]);
+    expect(missing()).toBe(true);
+    expect(host.textContent).toContain("Beta topic");
+
+    await hello();
+    expect(pending("/kb/topics")).toHaveLength(2);
+    // reading: the map stays, with no Loading in its place
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(host.textContent).toContain("Alpha topic");
+    // a read that fails again keeps the map as it was
+    await fail(pending("/kb/topics")[1]);
+    await answer(pending("/assistant")[1], {});
+    expect(offline()).toBe(false);
+    expect(missing()).toBe(true);
+
+    await hello();
+    expect(pending("/kb/topics")).toHaveLength(3);
+    await answer(pending("/assistant")[2], {});
+    await answer(pending("/kb/topics")[2], topics);
+    await answer(pending("/kb/topics/alpha")[1], detail("alpha"));
+    await answer(pending("/kb/topics/beta")[1], detail("beta"));
+    expect(missing()).toBe(false);
+    expect(host.textContent).toContain("Beta topic");
+
+    // whole now: a later hello does not read every entry again
+    await hello();
+    expect(pending("/kb/topics")).toHaveLength(3);
+  });
 });
 
 describe("an entry's page", () => {

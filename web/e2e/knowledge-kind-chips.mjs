@@ -8,9 +8,11 @@
 //   (cd web && PERSONA_HUB_URL=http://127.0.0.1:18794 npx vite --port 5294 --strictPort &)
 //   node web/e2e/knowledge-kind-chips.mjs http://127.0.0.1:5294 <artifact directory> [--channel chrome]
 //
-// Only reads: the runner picks each kind in turn by clicking its chip and measures every chip's box right after the
-// click and again once the list settled. Prints one line per check and a verdict; exits 1 on a failed check and 2 on its
-// three-minute timeout. Screenshots of the chip row with the first and the last kind picked go to the artifact directory.
+// Only reads: the runner picks each kind in turn by clicking its chip, holds that kind's list read (so the kind is still
+// loading, with Loading under the chips), measures every chip's box, lets the read through and measures again once the
+// list is drawn. Prints one line per check and a verdict; exits 1 on a failed check and 2 on its three-minute timeout.
+// Screenshots of the chip row with the first and the last kind picked, and of a kind while it loads, go to the artifact
+// directory.
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
@@ -40,6 +42,7 @@ const NAMES = {
   "zh-Hans": ["项目", "主题", "会话", "人", "文档", "会议", "日程", "录音"],
   en: ["Projects", "Topics", "Chats", "People", "Docs", "Meetings", "Events", "Recordings"],
 };
+const LOADING = { "zh-Hans": "加载中", en: "Loading" };
 const LAYOUTS = [
   { name: "wide", viewport: { width: 1280, height: 820 } },
   { name: "phone", viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
@@ -70,25 +73,51 @@ try {
         const first = await chips(page);
         check(JSON.stringify(first.map((c) => c.text)) === JSON.stringify(NAMES[lang]), `${label}: each chip reads its kind's name alone`, first.map((c) => c.text).join(" "));
         const clip = async (name) => {
-          const r = await page.locator('[role="tablist"]').boundingBox();
+          // no chip row (a build that hides it while a kind loads): the top of the list pane, as wide as the window allows
+          const r = (await (await page.$('[role="tablist"]'))?.boundingBox()) ?? { x: 12, y: 120, width: Math.min(layout.viewport.width, 420) - 60, height: 60 };
           await page.screenshot({ path: join(out, `kb-chips-${lang}-${theme}-${layout.name}-${name}.png`), clip: { x: Math.max(0, r.x - 12), y: Math.max(0, r.y - 60), width: Math.min(layout.viewport.width, r.width + 60), height: r.height + 220 } });
         };
         await clip("projects");
-        let moved = [];
+        const loading = page.getByRole("status").filter({ hasText: LOADING[lang] });
+        const moved = [];
+        const unheld = [];
         for (const kind of KINDS.slice(1)) {
           const i = KINDS.indexOf(kind);
+          // Hold this kind's list read until its chips are measured: the mock answers in milliseconds, so without the
+          // hold the list would usually be drawn before the first measure.
+          let release;
+          const held = new Promise((r) => (release = r));
+          let seen = false;
+          const list = new RegExp(`/api/v1/kb/${kind}(\\?.*)?$`);
+          await page.route(list, async (route) => {
+            seen = true;
+            await held;
+            await route.continue().catch(() => {});
+          });
           await page.click(`[role="tablist"] [role="tab"]:nth-child(${i + 1})`);
-          await page.waitForSelector(`[role="tablist"] [role="tab"]:nth-child(${i + 1})[aria-selected="true"]`, { timeout: 10_000 });
+          const picked = await page.waitForSelector(`[role="tablist"] [role="tab"]:nth-child(${i + 1})[aria-selected="true"]`, { timeout: 2_000 }).then(() => true, () => false);
+          if (!picked) moved.push(`${kind} while it loads: its chip is not shown picked`);
+          const shows = await loading.first().waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false);
+          // the read is held, so this waits safely: the pressed chip's scale and the colours finish their 150 ms change
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(250);
           const now = await chips(page);
-          await page.waitForTimeout(600);
+          if (!seen || !shows) unheld.push(`${kind}${seen ? "" : " (read not held)"}${shows ? "" : " (no Loading)"}`);
+          if (kind === "recordings") await clip("recordings-loading");
+          release();
+          await loading.first().waitFor({ state: "detached", timeout: 10_000 }).catch(() => unheld.push(`${kind} (still loading)`));
+          await page.unroute(list);
+          await page.waitForTimeout(300);
           const settled = await chips(page);
-          for (const [when, list] of [["right after the click", now], ["once drawn", settled]]) {
-            list.forEach((c, j) => {
+          for (const [when, boxes] of [["while it loads", now], ["once drawn", settled]]) {
+            if (boxes.length !== first.length) moved.push(`${kind} ${when}: ${boxes.length} of ${first.length} chips shown`);
+            boxes.forEach((c, j) => {
               if (c.box !== first[j].box || c.text !== first[j].text) moved.push(`${kind} ${when}: ${first[j].text} ${first[j].box} → ${c.text} ${c.box}`);
             });
           }
         }
-        check(moved.length === 0, `${label}: no chip moves as each kind is picked`, moved.slice(0, 3).join("; "));
+        check(unheld.length === 0, `${label}: each kind loads with Loading under the chips while its list read is held`, unheld.join("; "));
+        check(moved.length === 0, `${label}: no chip moves as each kind is picked, while it loads and once drawn`, moved.slice(0, 3).join("; "));
         await clip("recordings");
         await context.close();
       }

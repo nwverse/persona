@@ -5,7 +5,7 @@
 // copies its id.
 import { conversationChannel, useChannels } from "../../lib/channels";
 import { ChannelMark, OriginMark } from "../../ui/ChannelMark";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import { ago, stateOf } from "../../lib/format";
 import { plainMarkdown } from "../../lib/plain-markdown";
@@ -61,13 +61,16 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   }, [live]);
   const nowMs = useNow(60_000);
 
+  /** Reads the list; true when it went through. */
   const load = useCallback(async () => {
     try {
       const a = await api<AssistantInfo & { conversations: Conversation[] }>("/assistant?archived=1");
       setFetched(a.conversations ?? []);
       setError("");
+      return true;
     } catch (e) {
       setError(errorText(e));
+      return false;
     }
   }, []);
   useEffect(() => {
@@ -78,10 +81,20 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   const failed = error !== "";
   useEffect(() => onHubEvent("hello", (msg) => (failed || !isResumed(msg)) && void load()), [load, failed]);
   const [retrying, setRetrying] = useState(false);
+  const [retried, setRetried] = useState(0);
   const retry = () => {
     setRetrying(true);
-    void load().finally(() => setRetrying(false));
+    void load().then((ok) => {
+      setRetrying(false);
+      if (ok) setRetried((x) => x + 1);
+    });
   };
+  // Retry goes with the error once the read works: focus that fell to the page's body goes to the first chat instead
+  const page = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!retried || (document.activeElement && document.activeElement !== document.body)) return;
+    page.current?.querySelector<HTMLElement>("a[href]")?.focus();
+  }, [retried]);
 
   const all = useMemo(
     () =>
@@ -150,7 +163,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[760px] px-4 py-5 sm:px-8 sm:py-6">
+        <div ref={page} className="mx-auto max-w-[760px] px-4 py-5 sm:px-8 sm:py-6">
           <label className="mb-5 flex h-9 items-center gap-2 rounded-control bg-surface px-3 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
             <Icon name="search" size={13} stroke={2} className="text-ink-3" />
             <input
@@ -188,7 +201,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
             </Empty>
           )}
           {error && fetched === null && all.length > 0 && (
-            <div role="status" className="-mt-3 mb-4 flex items-center gap-2 px-1 text-[12px] text-ink-3">
+            <div role="status" className="-mt-3 mb-4 flex items-center gap-2 px-1 text-label text-ink-3">
               <span className="min-w-0 flex-1" title={error}>{t("assistant-history-load.load_partial")}</span>
               <Button size="sm" tone="quiet" icon="retry" busy={retrying} onClick={retry} className="touch-hit">{t("assistant-history-load.retry")}</Button>
             </div>

@@ -15,6 +15,7 @@
   "hits_one": "{count} match",
   "hits_other": "{count} matches",
   "empty_tag": "Nothing tagged #{tag} in {kind}",
+  "empty_tag_body": "Clear the filter to see everything in {kind}.",
   "empty_projects": "No projects yet",
   "empty_chats": "No chats yet",
   "empty_people": "No people yet",

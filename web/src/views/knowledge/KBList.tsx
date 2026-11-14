@@ -461,7 +461,8 @@ const EMPTY_TITLE: Record<KBKind, string> = {
 };
 
 /** Where a kind's entries come from, for its empty page: topics are curated, events come from a connected calendar and
- *  recordings from the phone; the rest from the archived chats. */
+ *  recordings from the phone; the rest from the archived chats. Under a tag the page is empty because of the filter, so
+ *  it says how to see the rest instead. */
 const EMPTY_BODY: Partial<Record<KBKind, string>> = {
   topics: t("knowledge-kblist.empty_topics_body"),
   events: t("knowledge-kblist.empty_events_body"),
@@ -475,7 +476,7 @@ function Empty({ kind, tag }: { kind: KBKind; tag?: string }) {
         <KBIcon name={KIND_ICON[kind]} size={18} />
       </span>
       <p className="text-[13.5px] font-medium text-ink">{tag ? t("knowledge-kblist.empty_tag", { tag, kind: KIND_TITLE[kind] }) : EMPTY_TITLE[kind]}</p>
-      <p className="mt-1 max-w-[340px] text-[12.5px] leading-relaxed text-ink-3">{EMPTY_BODY[kind] ?? t("knowledge-kblist.empty_body")}</p>
+      <p className="mt-1 max-w-[340px] text-[12.5px] leading-relaxed text-ink-3">{tag ? t("knowledge-kblist.empty_tag_body", { kind: KIND_TITLE[kind] }) : EMPTY_BODY[kind] ?? t("knowledge-kblist.empty_body")}</p>
     </div>
   );
 }

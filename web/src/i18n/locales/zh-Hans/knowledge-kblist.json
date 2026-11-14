@@ -14,6 +14,7 @@
   "hits_99_plus": "99+ 处",
   "hits_other": "{count} 处",
   "empty_tag": "没有带 #{tag} 的{kind}",
+  "empty_tag_body": "清除筛选，查看全部{kind}。",
   "empty_projects": "还没有项目",
   "empty_chats": "还没有会话",
   "empty_people": "还没有人",

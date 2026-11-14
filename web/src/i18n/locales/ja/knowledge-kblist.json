@@ -14,6 +14,7 @@
   "hits_99_plus": "99+件",
   "hits_other": "{count}件",
   "empty_tag": "#{tag}の付いた{kind}はありません",
+  "empty_tag_body": "絞り込みを解除すると、すべての{kind}が表示されます。",
   "empty_projects": "プロジェクトはまだありません",
   "empty_chats": "チャットはまだありません",
   "empty_people": "人物はまだいません",
