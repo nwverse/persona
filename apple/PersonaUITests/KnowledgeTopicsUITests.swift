@@ -71,6 +71,22 @@ final class KnowledgeTopicsUITests: XCTestCase {
         wait("the hub did not get kb_topics on again") { self.get("/api/v1/assistant")["kb_topics"] as? Bool == true }
     }
 
+    /// The iPad in landscape has room for the outline and the detail column side by side (the web map's side panel).
+    @MainActor func testTheIPadMapHasADetailColumn() throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("the iPad's two columns") }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launch(["-tab", "assistant", "-openAssistantPage", "knowledge", "-showKnowledgeMap", "YES"])
+        let detail = app.descendants(matching: .any)["kb.map.detail"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 30), "no detail column beside the outline:\n\(app.debugDescription)")
+        shot(app, "ipad-map")
+        let point = app.descendants(matching: .any).matching(identifier: "kb.map.point").firstMatch
+        XCTAssertTrue(point.waitForExistence(timeout: 10), "no point in the outline")
+        point.tap()
+        XCTAssertTrue(app.staticTexts["来自"].waitForExistence(timeout: 10), "the point's sources are not in the detail column") // i18n-ignore
+        shot(app, "ipad-map-point")
+    }
+
     // MARK: Helpers
 
     @MainActor private func launch(_ args: [String]) -> XCUIApplication {

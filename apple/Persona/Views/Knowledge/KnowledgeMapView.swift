@@ -22,18 +22,24 @@ struct KnowledgeMapView: View {
     @State private var sheet: KBOpenPoint?
     @State private var pushed: KBMapTarget?
     @State private var settings = false
+    /// Two columns: a regular width with room for both (an iPad in landscape, or without its sidebar).
+    @State private var wide = false
 
     var body: some View {
         GeometryReader { geo in
-            if sizeClass == .regular, geo.size.width >= Theme.Size.sidebarMin + Theme.Size.splitDetailMin {
-                HStack(spacing: Theme.Space.flush) {
-                    outline(wide: true).frame(minWidth: Theme.Size.sidebarMin, maxWidth: .infinity)
-                    Divider()
-                    detailColumn.frame(minWidth: Theme.Size.splitDetailMin, maxWidth: .infinity)
+            let twoColumns = sizeClass == .regular && geo.size.width >= Theme.Size.sidebarMin + Theme.Size.splitDetailMin
+            Group {
+                if twoColumns {
+                    HStack(spacing: Theme.Space.flush) {
+                        outline(wide: true).frame(minWidth: Theme.Size.sidebarMin, maxWidth: .infinity)
+                        Divider()
+                        detailColumn.frame(minWidth: Theme.Size.splitDetailMin, maxWidth: .infinity)
+                    }
+                } else {
+                    outline(wide: false)
                 }
-            } else {
-                outline(wide: false)
             }
+            .onChange(of: twoColumns, initial: true) { _, now in wide = now }
         }
         .themedGroupedPage()
         .detailTitle(String(localized: "Knowledge Map"))
@@ -328,7 +334,7 @@ struct KnowledgeMapView: View {
             #if DEBUG
             // `-showKnowledgeMapPoint YES`: the first point opened (screenshots), its sheet on the iPhone, selected on the iPad.
             if which == .topics, UserDefaults.standard.bool(forKey: "showKnowledgeMapPoint"), let first = trees[which]?.pointsUnder.first {
-                if sizeClass == .regular { selected = first } else if let p = first.point { sheet = KBOpenPoint(point: p, links: first.links, crumbs: first.crumbs) }
+                if wide { selected = first } else if let p = first.point { sheet = KBOpenPoint(point: p, links: first.links, crumbs: first.crumbs) }
             }
             #endif
         } catch {
