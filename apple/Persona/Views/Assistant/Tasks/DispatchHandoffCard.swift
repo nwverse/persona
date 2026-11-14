@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// One dispatch, one card per task (docs/design/task-cards.md §3.2; the web's `HandoffCard`): an arrow, the task's title with
 /// how its Agent came to it (New, Already Active, Resumed), when the Agent last moved and its state, and an arrow out. A plan
