@@ -58,7 +58,12 @@ impl Host for JHost {
         let Ok(mut env) = self.vm.attach_current_thread_permanently() else {
             return;
         };
-        let Ok(chat) = env.new_string(chat) else { return };
+        let Ok(chat) = env.new_string(chat) else {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            return;
+        };
         self.call(
             &mut env,
             method,
@@ -71,6 +76,9 @@ impl Host for JHost {
             return;
         };
         let Ok(array) = env.byte_array_from_slice(effect) else {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
             return;
         };
         self.call(&mut env, self.run, &[jvalue { l: array.as_raw() }]);

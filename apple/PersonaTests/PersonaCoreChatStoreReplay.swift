@@ -32,13 +32,26 @@ public struct NativeChatStoreContinuityReplay {
         func apply(_ patch: ChatPatch) {
             for operation in patch.ops {
                 switch operation {
-                case let .remove(index: index): list.remove(at: Int(index))
-                case let .insert(index: index, id: _, json: json): list.insert(json, at: Int(index))
-                case let .update(index: index, id: _, json: json): list[Int(index)] = json
+                case let .remove(index: index):
+                    guard index < list.count else {
+                        throw CoreContinuityShadow.Mismatch(rule: "patch-remove-index", inputShape: "out-of-bounds")
+                    }
+                    list.remove(at: Int(index))
+                case let .insert(index: index, id: _, json: json):
+                    guard index <= list.count else {
+                        throw CoreContinuityShadow.Mismatch(rule: "patch-insert-index", inputShape: "out-of-bounds")
+                    }
+                    list.insert(json, at: Int(index))
+                case let .update(index: index, id: _, json: json):
+                    guard index < list.count else {
+                        throw CoreContinuityShadow.Mismatch(rule: "patch-update-index", inputShape: "out-of-bounds")
+                    }
+                    list[Int(index)] = json
                 }
             }
         }
         apply(try shadow.drain())
+        try check(shadow.wakeChatIDs() == [shadow.chat], "shadow wake chat", shadow.wakeChatIDs(), [shadow.chat])
         _ = shadow.drainEffects()
         for (index, event) in `case`.events.enumerated() {
             let action: Action

@@ -44,11 +44,9 @@ impl Host for CHost {
         }
     }
     fn changed_chat(&self, chat: &str, version: u64) {
-        let callback = CHAT_CALLBACKS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        let callback = cores()
             .as_ref()
-            .and_then(|callbacks| callbacks.get(&self.handle).copied());
+            .and_then(|entries| entries.get(&self.handle).and_then(|entry| entry.changed_chat));
         if let Some(changed) = callback {
             unsafe { (changed.0)(self.host.context, chat.as_ptr(), chat.len(), version) }
         } else {
@@ -76,12 +74,16 @@ pub struct PersonaCore {
 }
 
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
-static CORES: Mutex<Option<HashMap<u64, Arc<Runtime>>>> = Mutex::new(None);
-static CHAT_CALLBACKS: Mutex<Option<HashMap<u64, PersonaCoreChatCallback>>> = Mutex::new(None);
+struct CoreEntry {
+    runtime: Arc<Runtime>,
+    changed_chat: Option<PersonaCoreChatCallback>,
+}
+
+static CORES: Mutex<Option<HashMap<u64, CoreEntry>>> = Mutex::new(None);
 #[cfg(feature = "test-support")]
 static DRAIN_STARTED: Mutex<Option<(u64, std::sync::mpsc::Sender<()>)>> = Mutex::new(None);
 
-fn cores() -> std::sync::MutexGuard<'static, Option<HashMap<u64, Arc<Runtime>>>> {
+fn cores() -> std::sync::MutexGuard<'static, Option<HashMap<u64, CoreEntry>>> {
     CORES.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -89,7 +91,10 @@ fn runtime(core: *const PersonaCore) -> Option<Arc<Runtime>> {
     if core.is_null() {
         return None;
     }
-    cores().as_ref()?.get(&(core.expose_provenance() as u64)).cloned()
+    cores()
+        .as_ref()?
+        .get(&(core.expose_provenance() as u64))
+        .map(|entry| entry.runtime.clone())
 }
 
 #[cfg(feature = "test-support")]
@@ -109,11 +114,8 @@ fn close(core: *mut PersonaCore) {
     let removed = cores()
         .as_mut()
         .and_then(|cores| cores.remove(&(core.expose_provenance() as u64)));
-    if let Some(callbacks) = CHAT_CALLBACKS.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
-        callbacks.remove(&(core.expose_provenance() as u64));
-    }
-    if let Some(runtime) = removed {
-        runtime.shutdown();
+    if let Some(entry) = removed {
+        entry.runtime.shutdown();
     }
 }
 
@@ -168,7 +170,13 @@ pub(crate) fn create(config: &[u8], host: Arc<dyn Host>, handle: u64) -> Option<
         NEXT_HANDLE.store(u64::MAX, Ordering::Relaxed);
         return None;
     }
-    cores().get_or_insert_with(HashMap::new).insert(handle, runtime);
+    cores().get_or_insert_with(HashMap::new).insert(
+        handle,
+        CoreEntry {
+            runtime,
+            changed_chat: None,
+        },
+    );
     Some(handle as *mut PersonaCore)
 }
 
@@ -196,15 +204,12 @@ pub unsafe extern "C" fn persona_core_set_changed_chat(
     core: *mut PersonaCore,
     callback: PersonaCoreChatCallback,
 ) -> bool {
-    if runtime(core).is_none() {
-        return false;
-    }
     let handle = core.expose_provenance() as u64;
-    CHAT_CALLBACKS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get_or_insert_with(HashMap::new)
-        .insert(handle, callback);
+    let mut entries = cores();
+    let Some(entry) = entries.as_mut().and_then(|entries| entries.get_mut(&handle)) else {
+        return false;
+    };
+    entry.changed_chat = Some(callback);
     true
 }
 

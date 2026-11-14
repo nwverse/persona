@@ -9,7 +9,7 @@ use persona_core_runtime::wire::{self, Config};
 use persona_core_runtime::{Host, Runtime};
 
 #[cfg(feature = "ohos")]
-use napi_ohos::bindgen_prelude::{Error, Result, Status};
+use napi_ohos::bindgen_prelude::{Error, FnArgs, Result, Status};
 #[cfg(feature = "ohos")]
 use napi_ohos::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 
@@ -95,7 +95,7 @@ pub fn config() -> Vec<u8> {
 #[cfg(feature = "ohos")]
 pub struct CoreHost {
     changed: Arc<ThreadsafeFunction<i64>>,
-    changed_chat: Option<Arc<ThreadsafeFunction<(String, i64)>>>,
+    changed_chat: Option<Arc<ThreadsafeFunction<FnArgs<(String, i64)>>>>,
     effects: Arc<ThreadsafeFunction<Vec<u8>>>,
 }
 
@@ -111,7 +111,7 @@ impl CoreHost {
 
     pub fn with_changed_chat(
         changed: ThreadsafeFunction<i64>,
-        changed_chat: ThreadsafeFunction<(String, i64)>,
+        changed_chat: ThreadsafeFunction<FnArgs<(String, i64)>>,
         effects: ThreadsafeFunction<Vec<u8>>,
     ) -> Arc<Self> {
         Arc::new(CoreHost {
@@ -136,7 +136,10 @@ impl Host for CoreHost {
             return;
         };
         let Ok(version) = i64::try_from(version) else { return };
-        let _ = callback.call(Ok((chat.to_owned(), version)), ThreadsafeFunctionCallMode::NonBlocking);
+        let _ = callback.call(
+            Ok(FnArgs::from((chat.to_owned(), version))),
+            ThreadsafeFunctionCallMode::NonBlocking,
+        );
     }
 
     fn run(&self, effect: &[u8]) {

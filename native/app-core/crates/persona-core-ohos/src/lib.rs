@@ -7,7 +7,7 @@ pub mod registry;
 #[cfg(feature = "ohos")]
 mod binding {
     use napi_derive_ohos::napi;
-    use napi_ohos::bindgen_prelude::{Buffer, Result};
+    use napi_ohos::bindgen_prelude::{Buffer, FnArgs, Result};
     use napi_ohos::threadsafe_function::ThreadsafeFunction;
 
     use crate::registry::{self, CoreHost};
@@ -25,7 +25,7 @@ mod binding {
     pub fn core_create_with_chat(
         config: Buffer,
         changed: ThreadsafeFunction<i64>,
-        changed_chat: ThreadsafeFunction<(String, i64)>,
+        changed_chat: ThreadsafeFunction<FnArgs<(String, i64)>>,
         effects: ThreadsafeFunction<Vec<u8>>,
     ) -> Result<i64> {
         registry::create(
