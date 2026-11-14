@@ -440,7 +440,7 @@ A `received` entry's `via` is the item's `source`; a `triaged` entry's is `assis
 | `sent` | Persona sends on your behalf (`/reply`, confirmed reply suggestion): "Sent a Lark message" / "Sent an email" / "Posted a comment" | Lark chat tail (where reply lands); replied mail; others source page |
 | `agent` | Handling chat opens a sub-chat: "Opened sub-chat: <title>" | That sub-chat |
 | `confirmed` / `rejected` / `instructed` | You confirm / reject / say something (`detail` = executed content or your words; edited text has `edited: true`) | Expand inline |
-| `self_replied` | You reply directly at the source, outside Persona: "You replied in Lark"; item still becomes done (`done_by=replied`) | Source page |
+| `self_replied` | You reply directly at the source, outside Persona: "You replied in the source"; without a processing conversation the item becomes done (`done_by=replied`), while with one it stays open in `waiting` or `agent` | Source page |
 | `failed` | Handling fails / times out (`detail` = reason) | Expand inline |
 | `concluded` | Manager conclusion (`detail` = conclusion) | Expand inline |
 | `done` | Handled: "You marked done" / "You ignored it" / "Read elsewhere; done" / "Muted, done" / "Manager reviewed; no action needed." **An added kind outside the contract table**; Apps render unknown kinds from `text` with a generic icon | Expand inline |
