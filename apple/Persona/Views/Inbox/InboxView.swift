@@ -1525,6 +1525,7 @@ struct InboxDetailView: View {
                     .foregroundStyle(Theme.accent)
                     .lineLimit(1)
                     .fixedSize()
+                    .layoutPriority(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Theme.Space.page)
@@ -1532,7 +1533,6 @@ struct InboxDetailView: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(showsOriginalSource ? String(localized: "Collapse") : String(localized: "View original"))
         .accessibilityIdentifier("inbox.detail.source")
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }

@@ -32,17 +32,21 @@ final class InboxSourceCollapsedTests: XCTestCase {
     }
 
     @MainActor func testChatDetailReportsReadOnlyAfterViewOriginal() throws {
+        try post("/api/v1/inbox/done", body: ["ids": [Self.chatItem], "done": false])
         let baseline = try chatReadReports().count
         openDetail(Self.chatItem)
         let toggle = sourceToggle()
         requireHittable(toggle, "View original on the collapsed chat detail")
         assertLabel("看原文", on: toggle, "the collapsed chat source toggle")
+        XCTAssertFalse(app.textFields["lark.box"].exists, "the chat reader was built before View original")
 
         sleep(2)
         XCTAssertEqual(try chatReadReports().count, baseline,
                        "opening the chat detail reported a read before View original")
 
         toggle.tap()
+        XCTAssertTrue(app.textFields["lark.box"].waitForExistence(timeout: 10),
+                      "View original did not build the chat reader:\n\(app.debugDescription)")
         let reports = try waitForReports(after: baseline, fetch: chatReadReports)
         XCTAssertGreaterThan(reports.count, baseline, "View original did not report the \(Self.chatFeed) chat as read")
         assertLabel("收起", on: toggle, "the expanded chat source toggle")
@@ -55,13 +59,14 @@ final class InboxSourceCollapsedTests: XCTestCase {
         let toggle = sourceToggle()
         requireHittable(toggle, "View original on the collapsed mail detail")
         assertLabel("看原文", on: toggle, "the collapsed mail source toggle")
+        let body = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "议程见附件，有问题随时说")).firstMatch
+        XCTAssertFalse(body.exists, "the mail reader was built before View original")
 
         sleep(2)
         XCTAssertEqual(try mailSeenReports().count, baseline,
                        "opening the mail detail reported seen before View original")
 
         toggle.tap()
-        let body = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "议程见附件，有问题随时说")).firstMatch
         XCTAssertTrue(body.waitForExistence(timeout: 10), "View original did not load the mail body:\n\(app.debugDescription)")
         let reports = try waitForReports(after: baseline, fetch: mailSeenReports)
         XCTAssertGreaterThan(reports.count, baseline,
@@ -100,7 +105,8 @@ final class InboxSourceCollapsedTests: XCTestCase {
 
     @MainActor private func assertLabel(_ label: String, on element: XCUIElement, _ what: String,
                                         timeout: TimeInterval = 5) {
-        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", label), object: element)
+        // VoiceOver reads the source preview as well as the action.
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", label), object: element)
         XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: timeout), .completed,
                        "\(what) does not say \(label):\n\(app.debugDescription)")
     }
@@ -131,9 +137,10 @@ final class InboxSourceCollapsedTests: XCTestCase {
         wait(for: [done], timeout: 10)
     }
 
+    /// The mail area records flags here; its earlier route preempts the separate `/mock/mail_flags` writer.
     /// Only this message's seen writes; the unseen setup write, flag writes and other accounts or UIDs do not affect it.
     private func mailSeenReports() throws -> [[String: Any]] {
-        try records("/mock/mail_flags", key: "flags").filter {
+        try records("/mock/mail", key: "flags").filter {
             $0["account_id"] as? String == Self.mailAccount
                 && ($0["uid"] as? NSNumber)?.intValue == Self.mailUID
                 && $0["mailbox"] as? String == "INBOX"
