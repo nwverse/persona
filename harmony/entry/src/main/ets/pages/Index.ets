@@ -516,30 +516,38 @@ struct Index {
     if (kind === 'collapse') return Symbols.collapse;
     return Symbols.spaces;
   }
-  @Builder spaceRow(kind: string, title: string) {
+  private spaceTitle(kind: string): string {
+    if (kind === 'hub') return this.model.profile.name || tr('hub');
+    if (kind === 'persona') return tr('main_chat');
+    if (kind === 'todo') return tr('todos');
+    if (kind === 'health') return tr('health_home_title');
+    if (kind === 'devices') return tr('machines');
+    return tr(kind);
+  }
+  @Builder spaceRow(kind: string) {
     ListItem() {
       Row({ space: Tokens.inset }) {
         SymbolGlyph(this.spaceSymbol(kind)).fontSize(Tokens.symbolFont).fontColor([Colors.secondary]).width(Tokens.symbol)
-        Text(title).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+        Text(this.spaceTitle(kind)).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
       }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).constraintSize({ minHeight: Tokens.touch }).width('100%')
     }.onClick(() => this.openSpace(kind)).id('spaces.' + kind)
   }
   @Builder spacesContent() {
     Column() {
       List() {
-        this.spaceRow('persona', tr('main_chat'))
+        this.spaceRow('persona')
         ForEach(this.conversationRowBindings, (binding: BoundRow<ResourceRow>) => {
           ListItem() { this.row(binding) }.onClick(() => { this.spacesShown = false; if (this.model.section !== 0) this.changeSection(0); this.openRow(binding.value); })
         }, (binding: BoundRow<ResourceRow>) => binding.key)
-        this.spaceRow('inbox', tr('inbox'))
-        this.spaceRow('todo', tr('todos'))
-        this.spaceRow('knowledge', tr('knowledge'))
-        this.spaceRow('health', tr('health_home_title'))
-        if (this.applications.visible) this.spaceRow('applications', tr('applications'))
-        this.spaceRow('devices', tr('machines'))
-        this.spaceRow('settings', tr('settings'))
-        this.spaceRow('hub', this.model.profile.name || tr('hub'))
-        if (this.wide() && !this.rail()) this.spaceRow('collapse', tr('collapse'))
+        this.spaceRow('inbox')
+        this.spaceRow('todo')
+        this.spaceRow('knowledge')
+        this.spaceRow('health')
+        if (this.applications.visible) this.spaceRow('applications')
+        this.spaceRow('devices')
+        this.spaceRow('settings')
+        this.spaceRow('hub')
+        if (this.wide() && !this.rail()) this.spaceRow('collapse')
       }.width('100%').layoutWeight(1)
     }.width('100%').height('100%').padding({ bottom: this.spacesInset + Tokens.footer }).id('shell.spaces.content')
       .onAreaChange(() => this.measureSpaces())
@@ -642,13 +650,13 @@ struct Index {
       }, (binding: BoundRow<ResourceRow>) => binding.key)
       }.backgroundColor(Colors.canvas).borderRadius(Tokens.card)
       ListItemGroup() {
-      this.spaceRow('inbox', tr('inbox'))
-      this.spaceRow('todo', tr('todos'))
-      this.spaceRow('knowledge', tr('knowledge'))
-      this.spaceRow('health', tr('health_home_title'))
-      if (this.applications.visible) this.spaceRow('applications', tr('applications'))
-      this.spaceRow('devices', tr('machines'))
-      this.spaceRow('settings', tr('settings'))
+      this.spaceRow('inbox')
+      this.spaceRow('todo')
+      this.spaceRow('knowledge')
+      this.spaceRow('health')
+      if (this.applications.visible) this.spaceRow('applications')
+      this.spaceRow('devices')
+      this.spaceRow('settings')
       }.backgroundColor(Colors.canvas).borderRadius(Tokens.card)
     }.width('100%').height('100%').backgroundColor(Colors.grouped).padding({ bottom: Tokens.listTail })
   }
