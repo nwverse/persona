@@ -2917,6 +2917,25 @@ _TODO_LIST = os.environ.get("MOCK_TODO_LIST", "")
 if _TODO_LIST:
     TODOS_INIT[:] = _todo_list_fixture(_TODO_LIST)
 
+# MOCK_TODO_CONCERNS=1 (#3582): one concern working, one waiting for its report in Other open, and one closed by its
+# report, for the To-dos list's light / dark captures. The dedicated agent keeps the rest of the fixture unchanged.
+if os.environ.get("MOCK_TODO_CONCERNS") == "1":
+    _concern_sid = "c3d5e7f9-0000-4000-8000-358200000001"
+    SESSIONS.append(sess("macbook", _concern_sid, "Compare backup schedules", "/Users/me/code/persona", "working",
+                         "working", "persona", 7, "1", 1, 4, "Comparing nightly and weekly backup schedules."))
+    TODOS_INIT.extend([
+        {"id": "todo_concern_working", "title": "Which backup schedule should we use?", "kind": "concern", "notes": "",
+         "done_at": None, "created_at": ago(hours=2), "updated_at": ago(minutes=4), "origin": "conv_demo", "spaces": [],
+         "agents": [{"machine_id": "macbook", "session_id": _concern_sid, "linked_at": ago(minutes=30), "released_at": None,
+                     "title": "Compare backup schedules", "cwd": "/Users/me/code/persona", "agent": "claude", "start_error": "",
+                     "source": "manual", "via": ""}]},
+        {"id": "todo_concern_open", "title": "When should the monthly report arrive?", "kind": "concern", "notes": "",
+         "done_at": None, "created_at": ago(hours=3), "updated_at": ago(minutes=20), "origin": "conv_demo", "spaces": [], "agents": []},
+        {"id": "todo_concern_closed", "title": "Is the nightly backup covered?", "kind": "concern", "notes": "",
+         "done_at": ago(minutes=15), "created_at": ago(hours=4), "updated_at": ago(minutes=15), "origin": "conv_demo",
+         "done_by": "reported", "done_reason": "The nightly backup is already covered.", "spaces": [], "agents": []},
+    ])
+
 
 def _lead_supervision(leader, state=""):
     return {"supervisor": leader, "done_when": [], "state": state, "round": 0, "reviews": [], "updated_at": ago(minutes=30)}
