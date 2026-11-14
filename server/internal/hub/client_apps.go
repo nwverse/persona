@@ -35,6 +35,8 @@ type clientApps struct {
 	saved     map[string]time.Time // seen_at as last written
 	pendingMu sync.Mutex
 	pending   []clientAppUpdate
+	flushing  bool
+	changed   chan struct{}
 }
 
 // noteClientApp records what c said in client_hello (its meta is already set).
@@ -80,7 +82,10 @@ func (h *Hub) updateClientApp(cred string, change func(assistantwire.ClientApp, 
 		return
 	}
 	a := &h.apps
-	h.helloWrites.apps.Add(1)
+	h.startHelloWriters()
+	if !h.admitHelloReport(h.helloWrites.appsSlot, helloStoreTimeout, &h.helloWrites.appsDrop, clientAppsSetting) {
+		return
+	}
 	a.pendingMu.Lock()
 	a.pending = append(a.pending, update)
 	a.pendingMu.Unlock()

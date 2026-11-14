@@ -32,11 +32,14 @@ type helloStore struct {
 	holdLoads      bool
 	failAppsLoad   atomic.Bool
 	failDeviceLoad atomic.Bool
+	failUserLoad   atomic.Bool
+	failAppsPut    atomic.Bool
 
 	stateMu       sync.Mutex
 	toolCalls     int
 	registrations []db.PhoneToolRegistration
 	putsByKey     map[string]int
+	attemptsByKey map[string]int
 }
 
 func newHelloStore() *helloStore {
@@ -49,6 +52,7 @@ func newHelloStore() *helloStore {
 		putRelease:    make(chan struct{}),
 		toolsRelease:  make(chan struct{}),
 		putsByKey:     map[string]int{},
+		attemptsByKey: map[string]int{},
 	}
 }
 
@@ -75,15 +79,24 @@ func (s *helloStore) Setting(ctx context.Context, key string, out any) (bool, er
 	if key == deviceLocalesSetting && s.failDeviceLoad.CompareAndSwap(true, false) {
 		return false, errors.New("device locales load failed")
 	}
+	if key == userLocaleSetting && s.failUserLoad.Load() {
+		return false, errors.New("user locale load failed")
+	}
 	return s.settingsStore.Setting(ctx, key, out)
 }
 
 func (s *helloStore) PutSetting(ctx context.Context, key string, value any) error {
+	s.stateMu.Lock()
+	s.attemptsByKey[key]++
+	s.stateMu.Unlock()
 	select {
 	case s.putStarted <- key:
 	default:
 	}
 	<-s.putRelease
+	if key == clientAppsSetting && s.failAppsPut.CompareAndSwap(true, false) {
+		return errors.New("client apps save failed")
+	}
 	if err := s.settingsStore.PutSetting(ctx, key, value); err != nil {
 		return err
 	}
@@ -123,6 +136,12 @@ func (s *helloStore) putCount(key string) int {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	return s.putsByKey[key]
+}
+
+func (s *helloStore) putAttempts(key string) int {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.attemptsByKey[key]
 }
 
 func (s *helloStore) savedSetting(t *testing.T, key string, out any) {
@@ -637,22 +656,34 @@ func TestHelloSettingsLifecycle(t *testing.T) {
 			phone := &client{hub: h, device: "dev_phone", role: roleFull, out: make(chan []byte, 16)}
 			h.onClientHello(phone, []byte(`{"platform":"ios","version":"1.0","locale":"en"}`))
 			h.onClientMessage(context.Background(), phone, []byte(`{"type":"register_phone","device_id":"phone","tools":[{"name":"phone_contacts"}]}`))
-			select {
-			case <-store.putStarted:
-			case <-time.After(readLoopLimit):
-				t.Fatal("the final setting save did not start")
+			for {
+				select {
+				case key := <-store.putStarted:
+					if key == clientAppsSetting {
+						goto appWriteHeld
+					}
+				case <-time.After(readLoopLimit):
+					t.Fatal("the first client-app save did not start")
+				}
 			}
+		appWriteHeld:
 			select {
 			case <-store.toolsStarted:
 			case <-time.After(readLoopLimit):
-				t.Fatal("the final phone-tool save did not start")
+				t.Fatal("the first phone-tool save did not start")
 			}
 
-			// Production cancels deployCtx before joining nodeWorkers. Settle every goroutine instead of using a
-			// wall-clock negative assertion: a join that does not include these workers is observably closed here.
+			// These reports are still queued, not merely part of an in-flight Store call, when shutdown starts.
+			h.onClientHello(phone, []byte(`{"platform":"ios","version":"2.0","locale":"en"}`))
+			other := &client{hub: h, device: "dev_other", role: roleFull, out: make(chan []byte, 16)}
+			h.onClientMessage(context.Background(), other, []byte(`{"type":"register_phone","device_id":"other","tools":[{"name":"phone_contacts"}]}`))
+
+			// Production cancels deployCtx, then explicitly stops the hello consumers after socket handlers finish.
+			// Settle every goroutine instead of using a wall-clock negative assertion.
 			cancelDeploy()
 			joined := make(chan struct{})
 			go func() {
+				h.stopHelloWriters()
 				h.nodeWorkers.Wait()
 				close(joined)
 			}()
@@ -664,14 +695,22 @@ func TestHelloSettingsLifecycle(t *testing.T) {
 			}
 			store.release()
 			waitHelloLoop(t, joined, "the worker join after release")
-			waitHelloWrites(t, h)
-			for _, key := range []string{clientAppsSetting, deviceLocalesSetting, userLocaleSetting} {
+			if got := store.putCount(clientAppsSetting); got != 2 {
+				t.Fatalf("shutdown saved %s %d times, want the held and queued snapshots", clientAppsSetting, got)
+			}
+			for _, key := range []string{deviceLocalesSetting, userLocaleSetting} {
 				if got := store.putCount(key); got != 1 {
 					t.Fatalf("shutdown saved %s %d times, want its last snapshot once", key, got)
 				}
 			}
-			if got := store.savedRegistrations(); len(got) != 1 {
-				t.Fatalf("shutdown lost the last phone-tool registration: %+v", got)
+			var apps map[string]assistantwire.ClientApp
+			store.savedSetting(t, clientAppsSetting, &apps)
+			if apps["dev_phone"].Version != "2.0" {
+				t.Fatalf("shutdown lost the hello queued behind the held save: %+v", apps)
+			}
+			registrations := store.savedRegistrations()
+			if len(registrations) != 2 || registrations[0].DeviceID != "phone" || registrations[1].DeviceID != "other" {
+				t.Fatalf("shutdown lost or reordered the queued phone-tool registration: %+v", registrations)
 			}
 		})
 	})

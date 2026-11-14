@@ -44,6 +44,8 @@ type userLangs struct {
 	byDevice   map[string]deviceLocale // deviceLangKey -> its last locale
 	pendingMu  sync.Mutex
 	pending    []userLangUpdate
+	flushing   bool
+	changed    chan struct{}
 }
 
 func (h *Hub) loadUserLang(ctx context.Context) {
@@ -126,7 +128,10 @@ func (h *Hub) noteUserLang(key string, l i18n.Lang) {
 		return
 	}
 	g := &h.langs
-	h.helloWrites.langs.Add(1)
+	h.startHelloWriters()
+	if !h.admitHelloReport(h.helloWrites.langsSlot, helloStoreTimeout, &h.helloWrites.langsDrop, deviceLocalesSetting) {
+		return
+	}
 	g.pendingMu.Lock()
 	g.pending = append(g.pending, update)
 	g.pendingMu.Unlock()

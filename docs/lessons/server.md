@@ -143,8 +143,16 @@ load and save, the device and user locales did up to two of each, and every phon
 subscriptions. Record connection-local metadata in place, so the next reply and direct phone routing use the new
 language and tools at once, but move persistence to one ordered consumer per setting group. Client-app and locale
 changes are history-dependent: apply every change in message order and coalesce only the final snapshot writes. Phone
-registrations are complete replacements, so pending ones can coalesce to the newest per device. Join the consumers to
-the hub's worker shutdown and drain accepted reports before closing the database.
+registrations are complete replacements, so pending ones can coalesce to the newest per device. The consumers have
+their own lifetime, not `deployCtx`'s: `runHub` stops them in a bounded shutdown step only after `serveHTTP` has closed
+and joined the app socket handlers, then joins `nodeWorkers`, and closes the database last. Deploy cancellation alone
+must not strand a report read while those connections are closing.
+
+Each pending set is capped at 1,024 entries; phone capacity counts distinct pending devices, so replacing one already
+queued takes no new slot. Normally admission is a nonblocking semaphore send. At the cap, only the producing read loop
+waits, for at most the existing Store timeout; it then drops that report and logs once for the affected queue rather
+than once per dropped report. Consumers return capacity as soon as they detach a batch, not when its Store write ends.
+Tests use a separate idle condition—pending empty and no flush in flight—so they still wait for the final save.
 
 A failed load is not an empty setting. `loadClientAppsLocked` used to clear the map and its caller still saved it, so
 one transient read error could drop every other device. Load into temporary state, publish it only after a complete

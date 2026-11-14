@@ -24,7 +24,7 @@ type Hub struct {
 	// errs: the hub's own error reports on their way to the managers (error_reports.go).
 	errs hubErrors
 
-	deployCtx     context.Context // canceled with the hub; node updates and hello writes finish before the database closes
+	deployCtx     context.Context // canceled with the hub; node updates finish before the database closes
 	nodeWorkers   sync.WaitGroup
 	shutdown      *shutdownBudget
 	wsStopping    bool // guarded by mu; prevents new WaitGroup additions during shutdown
@@ -264,6 +264,10 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	}
 	defer func() {
 		cancel()
+		budget.step(h, "hello writes", func(context.Context) error {
+			h.stopHelloWriters()
+			return nil
+		})
 		budget.step(h, "node connections", func(context.Context) error {
 			h.nodeWorkers.Wait()
 			return nil
@@ -393,26 +397,51 @@ func (h *Hub) setPhoneTools(registration db.PhoneToolRegistration) {
 		return
 	}
 	q := &h.phoneToolUpdates
-	h.helloWrites.tools.Add(1)
+	h.startHelloWriters()
 	q.mu.Lock()
-	if q.pending == nil {
-		q.pending = map[string]db.PhoneToolRegistration{}
+	if replacePendingPhoneToolsLocked(q, registration) {
+		q.mu.Unlock()
+		wakeHelloWriter(h.helloWrites.toolsWake)
+		return
 	}
-	if _, queued := q.pending[registration.DeviceID]; queued {
-		// The surviving replacement belongs at its own latest message position, not the device's first queued position.
-		for i, id := range q.order {
-			if id == registration.DeviceID {
-				q.order = append(q.order[:i], q.order[i+1:]...)
-				break
-			}
+	q.mu.Unlock()
+	// Only a distinct pending device consumes room. Replacing an already queued device needs no slot and can never
+	// leave one connection stuck behind its own repeated registration for that device.
+	if !h.admitHelloReport(h.helloWrites.toolsSlot, phoneToolsTimeout, &h.helloWrites.toolsDrop, "phone tools") {
+		return
+	}
+	q.mu.Lock()
+	replaced := replacePendingPhoneToolsLocked(q, registration)
+	if !replaced {
+		if q.pending == nil {
+			q.pending = map[string]db.PhoneToolRegistration{}
+		}
+		q.pending[registration.DeviceID] = registration
+		q.order = append(q.order, registration.DeviceID)
+	}
+	q.mu.Unlock()
+	if replaced {
+		// Another producer queued this device while this one waited for admission. Its existing slot covers the update.
+		releaseHelloReports(h.helloWrites.toolsSlot, 1)
+	}
+	wakeHelloWriter(h.helloWrites.toolsWake)
+}
+
+// replacePendingPhoneToolsLocked replaces a queued device and moves it to its latest message position. The caller
+// holds q.mu; false means the device needs a newly admitted pending entry.
+func replacePendingPhoneToolsLocked(q *phoneToolUpdates, registration db.PhoneToolRegistration) bool {
+	if _, queued := q.pending[registration.DeviceID]; !queued {
+		return false
+	}
+	q.pending[registration.DeviceID] = registration
+	for i, id := range q.order {
+		if id == registration.DeviceID {
+			copy(q.order[i:], q.order[i+1:])
+			q.order[len(q.order)-1] = registration.DeviceID
+			break
 		}
 	}
-	q.order = append(q.order, registration.DeviceID)
-	q.pending[registration.DeviceID] = registration
-	q.reports++
-	q.mu.Unlock()
-	h.startHelloWriters()
-	wakeHelloWriter(h.helloWrites.toolsWake)
+	return true
 }
 
 // writePhoneTools saves a phone's tools, then lists them. The write runs outside h.mu, the hub's global lock: a stalled

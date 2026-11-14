@@ -10,6 +10,13 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
+const (
+	// helloPendingLimit bounds each disconnected Store backlog. It is far above ordinary device counts and prevents one
+	// connection inventing ids from consuming unbounded memory or putting an unbounded number of writes ahead of others.
+	helloPendingLimit = 1024
+	helloStoreTimeout = 5 * time.Second
+)
+
 // helloWriteWorkers keeps persistence off an app connection's read loop. There is one consumer for each setting
 // group; its queue applies reports in message order and coalesces everything waiting into one snapshot save. Phone
 // registrations additionally coalesce by device, so only the newest queued tool set for a device is written.
@@ -17,8 +24,9 @@ type helloWriteWorkers struct {
 	once                           sync.Once
 	cancel                         context.CancelFunc
 	appsWake, langsWake, toolsWake chan struct{}
+	appsSlot, langsSlot, toolsSlot chan struct{}
+	appsDrop, langsDrop, toolsDrop sync.Once
 	workers                        sync.WaitGroup
-	apps, langs, tools             sync.WaitGroup // reports queued but not yet consumed; tests use wait
 }
 
 type clientAppUpdate struct {
@@ -34,28 +42,31 @@ type userLangUpdate struct {
 
 // phoneToolUpdates has its own lock: phoneToolsMu covers the store write and must never be taken by the read loop.
 type phoneToolUpdates struct {
-	mu      sync.Mutex
-	pending map[string]db.PhoneToolRegistration
-	order   []string
-	reports int // accepted messages, including several coalesced into one device snapshot
+	mu       sync.Mutex
+	pending  map[string]db.PhoneToolRegistration
+	order    []string
+	flushing bool
+	changed  chan struct{}
 }
 
 func (h *Hub) startHelloWriters() {
 	w := &h.helloWrites
 	w.once.Do(func() {
-		parent := h.deployCtx
-		if parent == nil {
-			parent = context.Background()
-		}
-		ctx, cancel := context.WithCancel(parent)
+		// The hub stops these workers explicitly after its app connections are gone. Deriving their lifetime from
+		// deployCtx would strand reports read while shutdown is closing those connections.
+		ctx, cancel := context.WithCancel(context.Background())
 		w.cancel = cancel
 		w.appsWake, w.langsWake, w.toolsWake = make(chan struct{}, 1), make(chan struct{}, 1), make(chan struct{}, 1)
+		w.appsSlot = make(chan struct{}, helloPendingLimit)
+		w.langsSlot = make(chan struct{}, helloPendingLimit)
+		w.toolsSlot = make(chan struct{}, helloPendingLimit)
+		h.apps.changed = make(chan struct{})
+		h.langs.changed = make(chan struct{})
+		h.phoneToolUpdates.changed = make(chan struct{})
 		start := func(wake <-chan struct{}, flush func() bool) {
 			w.workers.Add(1)
-			h.nodeWorkers.Add(1)
 			go func() {
 				defer w.workers.Done()
-				defer h.nodeWorkers.Done()
 				helloWriteLoop(ctx, wake, flush)
 			}()
 		}
@@ -67,17 +78,24 @@ func (h *Hub) startHelloWriters() {
 
 func helloWriteLoop(ctx context.Context, wake <-chan struct{}, flush func() bool) {
 	for {
-		if flush() {
-			continue
+		// Prefer cancellation over an already signaled wake. Reports behind an in-flight write therefore take the
+		// explicit drain path instead of happening to survive because select chose the wake case.
+		select {
+		case <-ctx.Done():
+			// stopHelloWriters runs only after the app connections are gone. Store calls retain their own bounds;
+			// drain every report accepted before that point before joining the hub's other workers.
+			for flush() {
+			}
+			return
+		default:
 		}
 		select {
 		case <-ctx.Done():
-			// Store calls have their own bounded contexts. Drain what the connections already reported before joining
-			// the hub's other workers; no report accepted before shutdown is silently discarded.
 			for flush() {
 			}
 			return
 		case <-wake:
+			flush()
 		}
 	}
 }
@@ -89,12 +107,71 @@ func (h *Hub) stopHelloWriters() {
 	h.helloWrites.workers.Wait()
 }
 
-// wait is the consumers' idle signal for tests: every report queued before it has either been saved or skipped after
-// a failed load. Tests call it only after their producers have stopped, as required by sync.WaitGroup.
+// waitHelloWrites is the consumers' idle signal for tests. Production counts nothing per report: each generation
+// channel covers both an empty pending set and no flush in flight, under the same lock that protects that state.
+// Unlike a WaitGroup or Cond, an outside worker can safely notify a waiter inside a synctest bubble.
 func (h *Hub) waitHelloWrites() {
-	h.helloWrites.apps.Wait()
-	h.helloWrites.langs.Wait()
-	h.helloWrites.tools.Wait()
+	waitHelloIdle(&h.apps.pendingMu, &h.apps.changed, func() bool { return len(h.apps.pending) > 0 || h.apps.flushing })
+	waitHelloIdle(&h.langs.pendingMu, &h.langs.changed, func() bool { return len(h.langs.pending) > 0 || h.langs.flushing })
+	waitHelloIdle(&h.phoneToolUpdates.mu, &h.phoneToolUpdates.changed, func() bool {
+		return len(h.phoneToolUpdates.order) > 0 || h.phoneToolUpdates.flushing
+	})
+}
+
+func waitHelloIdle(mu *sync.Mutex, changed *chan struct{}, busy func() bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	for busy() {
+		generation := *changed
+		if generation == nil {
+			return
+		}
+		mu.Unlock()
+		<-generation
+		mu.Lock()
+	}
+}
+
+func finishHelloFlush(mu *sync.Mutex, flushing *bool, changed *chan struct{}, pending func() bool) {
+	mu.Lock()
+	*flushing = false
+	if !pending() && *changed != nil {
+		close(*changed)
+		*changed = make(chan struct{})
+	}
+	mu.Unlock()
+}
+
+// admitHelloReport reserves room without blocking in the ordinary case. At the bound, only the producer whose
+// connection brought the next report waits, up to that write's existing Store timeout. One overflow log per consumer
+// avoids turning a flood into another flood; reconnecting apps send these reports again.
+func (h *Hub) admitHelloReport(slot chan struct{}, timeout time.Duration, logOnce *sync.Once, name string) bool {
+	select {
+	case slot <- struct{}{}:
+		return true
+	default:
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	select {
+	case slot <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		// Do not drop if capacity became available at the deadline itself.
+		select {
+		case slot <- struct{}{}:
+			return true
+		default:
+		}
+		logOnce.Do(func() { h.logf("%s pending queue full; dropping reports", name) })
+		return false
+	}
+}
+
+func releaseHelloReports(slot chan struct{}, n int) {
+	for range n {
+		<-slot
+	}
 }
 
 func wakeHelloWriter(ch chan struct{}) {
@@ -107,12 +184,13 @@ func wakeHelloWriter(ch chan struct{}) {
 func (h *Hub) flushClientApps() bool {
 	a := &h.apps
 	a.pendingMu.Lock()
-	waiting := len(a.pending) > 0
-	a.pendingMu.Unlock()
-	if !waiting {
+	if len(a.pending) == 0 {
+		a.pendingMu.Unlock()
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	a.flushing = true
+	a.pendingMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), helloStoreTimeout)
 	// Load before detaching the batch. Reports that arrive while the first load is held join this same snapshot;
 	// on failure, everything detached is skipped without a save and the next report retries.
 	loaded := h.prepareClientApps(ctx)
@@ -120,56 +198,61 @@ func (h *Hub) flushClientApps() bool {
 	batch := a.pending
 	a.pending = nil
 	a.pendingMu.Unlock()
+	releaseHelloReports(h.helloWrites.appsSlot, len(batch))
 	if loaded && len(batch) > 0 {
 		h.writeClientAppsLoaded(ctx, batch)
 	}
 	cancel()
-	h.helloWrites.apps.Add(-len(batch))
+	finishHelloFlush(&a.pendingMu, &a.flushing, &a.changed, func() bool { return len(a.pending) > 0 })
 	return true
 }
 
 func (h *Hub) flushUserLangs() bool {
 	g := &h.langs
 	g.pendingMu.Lock()
-	pending := append([]userLangUpdate(nil), g.pending...)
-	g.pendingMu.Unlock()
-	if len(pending) == 0 {
+	if len(g.pending) == 0 {
+		g.pendingMu.Unlock()
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	g.flushing = true
+	pending := append([]userLangUpdate(nil), g.pending...)
+	g.pendingMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), helloStoreTimeout)
 	loaded := h.prepareUserLangs(ctx, pending)
 	g.pendingMu.Lock()
 	batch := g.pending
 	g.pending = nil
 	g.pendingMu.Unlock()
+	releaseHelloReports(h.helloWrites.langsSlot, len(batch))
 	// A keyed report may have arrived behind an initially keyless pending batch. Cover it before applying anything.
 	loaded = loaded && h.prepareUserLangs(ctx, batch)
 	if loaded && len(batch) > 0 {
 		h.writeUserLangsLoaded(ctx, batch)
 	}
 	cancel()
-	h.helloWrites.langs.Add(-len(batch))
+	finishHelloFlush(&g.pendingMu, &g.flushing, &g.changed, func() bool { return len(g.pending) > 0 })
 	return true
 }
 
 func (h *Hub) flushPhoneTools() bool {
 	q := &h.phoneToolUpdates
 	q.mu.Lock()
+	if len(q.order) == 0 {
+		q.mu.Unlock()
+		return false
+	}
+	q.flushing = true
 	batch := make([]db.PhoneToolRegistration, 0, len(q.order))
 	for _, id := range q.order {
 		batch = append(batch, q.pending[id])
 	}
-	n := q.reports
-	q.reports = 0
 	clear(q.pending)
 	q.order = nil
 	q.mu.Unlock()
-	if len(batch) == 0 {
-		return false
-	}
+	releaseHelloReports(h.helloWrites.toolsSlot, len(batch))
 	for _, registration := range batch {
 		h.writePhoneTools(registration)
 	}
-	h.helloWrites.tools.Add(-n)
+	finishHelloFlush(&q.mu, &q.flushing, &q.changed, func() bool { return len(q.order) > 0 })
 	return true
 }
