@@ -82,7 +82,7 @@ type Pusher struct {
 	prefsEdit sync.Mutex
 
 	// lnMu guards the low-distraction mode state (lnmode.go): the cached switch, the per-key push times for the
-	// 12-hour rule and the held-push list.
+	// 12-hour rule, the held-push list and the delivered-push counts.
 	lnMu         sync.Mutex
 	lnCached     *bool
 	lnCachedAt   time.Time
@@ -90,7 +90,9 @@ type Pusher struct {
 	lnVersion    uint64 // bumped by setLnMode, so a refresh that read before it does not undo it
 	lnLastPush   map[string]time.Time
 	intercepts   []pushIntercept
+	sent         []pushSent
 	lnDirty      bool // the held-push list changed since the last save
+	sentDirty    bool // the delivered-push list changed since the last save
 	lnWriting    bool // the one saver goroutine is running
 }
 
