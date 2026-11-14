@@ -6,7 +6,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/nwverse/persona/server/internal/assistant/repository"
+	repository "github.com/nwverse/persona/server/internal/repositorywire"
 )
 
 func decodeTodoRepositories(id string, revision int64, raw []byte) (repository.TaskSet, error) {

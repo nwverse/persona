@@ -34,7 +34,7 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"repositories_list", "repository_get", "view_show", "view_update", "view_get",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
-	"todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
+	"todo_workspace", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
 	"direction_name", "leader_progress"}
 
 // Tools are the assistant's tools (assistant.tools).
@@ -141,6 +141,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 		}
 		return res, err
+	case "todo_workspace":
+		return s.toolTodoWorkspace(ctx, machine, self, args)
 	case "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set":
 		return s.toolTodoRepositories(ctx, machine, self, name, args)
 	case "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete":

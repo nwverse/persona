@@ -243,6 +243,19 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 		}
 		return json.Marshal(map[string]any{"session": s, "ok": ok})
 	}
+	if strings.HasPrefix(p.Method, "task.workspace.") && p.Method != "task.workspace.capabilities" {
+		var named struct {
+			Plan struct {
+				Source struct {
+					Manager   string `json:"manager"`
+					MachineID string `json:"machine_id"`
+				} `json:"source"`
+			} `json:"plan"`
+		}
+		if json.Unmarshal(p.Params, &named) != nil || named.Plan.Source.Manager != from || named.Plan.Source.MachineID != p.Device {
+			return nil, &rpc.Error{Code: "invalid_params", Message: "workspace routing identity mismatch"}
+		}
+	}
 	var out json.RawMessage
 	if err := m.call(ctx, p.Method, p.Params, &out); err != nil {
 		return nil, err

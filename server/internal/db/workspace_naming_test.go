@@ -26,7 +26,7 @@ func TestWorkspaceNamingUpgradeRepositoryMigrationCollision(t *testing.T) {
 			if _, err = d.pool.Exec(ctx, `DELETE FROM schema_migrations WHERE name='0513_assistant_search_plain.sql'`); err != nil {
 				t.Fatal(err)
 			}
-			query := `UPDATE schema_migrations SET version=513,name='0513_todo_repositories.sql' WHERE name='0514_todo_repositories.sql'`
+			query := `UPDATE schema_migrations SET version=513,name='0513_todo_repositories.sql' WHERE name='0516_todo_repositories.sql'`
 			if both {
 				query = `INSERT INTO schema_migrations(version,name,part) VALUES(513,'0513_todo_repositories.sql','manager')`
 			}
