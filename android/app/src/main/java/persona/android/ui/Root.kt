@@ -305,8 +305,11 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
     }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns) }
     fun openResolved(route: ResolvedRoute): AppTab {
+        // The restored ledger can hold the source even when the visible key does not. Check it before this direct open
+        // updates the ledger: a sourced assistant stays a secondary page instead of replacing the embedded home.
+        val hadInboxOrigin = navigator.hasInboxOrigin(route.key)
         navigator.noteDirectOpen(route.key)
-        return if (openAssistant(route.key, true)) AppTab.Persona else route.open(stacks)
+        return if (!hadInboxOrigin && openAssistant(route.key, true)) AppTab.Persona else route.open(stacks)
     }
     /** Opens [route]; a card outside any session (#4808) also has Agents open its sheet, as its notification does. */
     fun openWithCard(route: ResolvedRoute) {

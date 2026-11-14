@@ -14,12 +14,15 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onStart
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import persona.core.contracts.InboxChainEntry
+import persona.core.contracts.InboxChainLink
 import persona.core.contracts.InboxEventFields
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.MailInboxItem
@@ -215,6 +218,77 @@ class InboxSourceCollapsedTest {
             sourceCallCounts(repository, transport))
     }
 
+    private fun verifyCollapsedUntilSourceChainClick(source: Source) {
+        val base = record(source, hasEvent = true)
+        val chainText = when (source) {
+            Source.Chat -> "Open the positioned source chat"
+            Source.Mail -> "Open the source mail by UID"
+        }
+        val link = when (source) {
+            Source.Chat -> InboxChainLink(type = "source", position = JsonPrimitive(CHAT_POSITION.toString()))
+            Source.Mail -> InboxChainLink(type = "source", uid = LATEST_MAIL_UID)
+        }
+        val record = base.copy(event = base.event.copy(chain = listOf(
+            InboxChainEntry("source-chain", kind = "received", text = chainText, link = link),
+        )))
+        val pages = InboxItemPages()
+        val repository = RecordingRepository(record)
+        val transport = RecordingMailTransport()
+        val stack = mutableStateListOf<NavKey>(inboxRowPage(record, pages))
+        val navigator = StackNavigator(stack)
+
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                CompositionLocalProvider(LocalInboxItemPages provides pages) {
+                    when (val route = stack.last()) {
+                        is InboxEventRoute -> InboxEventScreen(repository, route, navigator)
+                        is LarkRoute -> LarkScreen(repository, route, navigator)
+                        is MailRoute -> MailScreen(repository, transport, route, navigator)
+                        else -> error("Unexpected route in source-chain test: $route")
+                    }
+                }
+            }
+        }
+
+        advancePastReadWindow()
+        assertNoSourceReads(repository, transport)
+        rule.onNodeWithText(chainText).assertExists().performClick()
+        // Compose the destination before advancing its visible-read window.
+        rule.waitForIdle()
+        advancePastReadWindow()
+
+        when (source) {
+            Source.Chat -> {
+                assertEquals(LarkRoute(FEED_ID, record.item.id, CHAT_POSITION), stack.last())
+                assertEquals(listOf(FEED_ID to CHAT_POSITION), repository.conversationCalls)
+                assertEquals(listOf(FEED_ID to CHAT_POSITION), repository.conversationSubscriptions)
+                assertTrue("The source chain did not expose the visible chat to its read gate", repository.visibleCalls.isNotEmpty())
+                assertEquals(listOf(CHAT_MESSAGE_ID), repository.visibleCalls.last())
+                assertTrue(transport.itemCalls.isEmpty())
+                assertTrue(transport.messageCalls.isEmpty())
+                assertTrue(transport.seenCalls.isEmpty())
+            }
+            Source.Mail -> {
+                assertEquals(MailRoute(record.item.id), stack.last())
+                assertEquals(listOf(record.item.id), transport.itemCalls)
+                assertEquals(listOf(LATEST_MAIL_UID), transport.messageCalls)
+                assertEquals(listOf(LATEST_MAIL_UID to true), transport.seenCalls)
+                assertTrue(repository.conversationCalls.isEmpty())
+                assertTrue(repository.conversationSubscriptions.isEmpty())
+                assertTrue(repository.visibleCalls.isEmpty())
+            }
+        }
+
+        val callsBeforeBack = sourceCallCounts(repository, transport)
+        rule.onNodeWithContentDescription(back).performClick()
+        advancePastReadWindow()
+
+        assertEquals(listOf(InboxEventRoute(record.item.id)), stack.toList())
+        assertEquals("Returning from a source-chain page mounted or read the source again", callsBeforeBack,
+            sourceCallCounts(repository, transport))
+    }
+
     @Test fun eventChatStaysCollapsedUntilViewOriginal() {
         verifyCollapsedUntilViewOriginal(Source.Chat, hasEvent = true)
     }
@@ -229,6 +303,14 @@ class InboxSourceCollapsedTest {
 
     @Test fun nonEventMailStaysCollapsedUntilViewOriginal() {
         verifyCollapsedUntilViewOriginal(Source.Mail, hasEvent = false)
+    }
+
+    @Test fun eventChatSourceChainOpensPositionedBodyOnlyOnClick() {
+        verifyCollapsedUntilSourceChainClick(Source.Chat)
+    }
+
+    @Test fun eventMailSourceChainOpensBodyOnlyOnClick() {
+        verifyCollapsedUntilSourceChainClick(Source.Mail)
     }
 
     @Test fun legacyItemsAndDirectSourceRoutesKeepTheirExistingPages() {

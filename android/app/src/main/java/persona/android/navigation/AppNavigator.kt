@@ -56,6 +56,9 @@ internal class AppNavigator(
         ChatRoute(session.machineId, session.sessionId, source = source)
     }.sortedWith(compareBy(ChatRoute::machineId, ChatRoute::sessionId))
 
+    /** Root applies the same latest-ledger guard before embedding a direct assistant destination in Persona home. */
+    fun hasInboxOrigin(key: NavKey): Boolean = inboxSource(key) != null
+
     override fun selectTab(tab: AppTab) {
         openedFrom.clear()
         inboxSources.clear()
@@ -124,7 +127,7 @@ internal class AppNavigator(
             }?.key
         }
         noteOpened(route)
-        if (chat != null && openAssistant(chat, true)) return route
+        if (chat != null && inboxSource(route) == null && openAssistant(chat, true)) return route
         // A sourced assistant conversation belongs above the item that opened it, even when its kind is already known.
         // A kindless conversation reopened from the other tab instead restores its existing page and saved UI state.
         val fromInbox = chat != null && chat.source is RouteSource.InboxItem &&
@@ -144,7 +147,20 @@ internal class AppNavigator(
             }
         }
         if (resolved != null) {
+            // A kindless reopen must not let Router.restore replace a known-kind page (and its Navigation3 UI state)
+            // merely because the incoming key now names less metadata. Interaction requests still replace normally
+            // unless they name the very same request.
+            val retained = if (chat?.kind == null) {
+                stacks.getValue(resolved.tab).firstOrNull { page ->
+                    page.chat()?.kind != null && sameKindlessTarget(page, route)
+                }
+            } else null
             val tab = resolved.restore(stacks)
+            if (retained != null) {
+                val stack = stacks.getValue(tab)
+                val restoredAt = stack.indexOfFirst { it == route }
+                if (restoredAt >= 0) stack[restoredAt] = retained
+            }
             onSelectTab(tab)
             return stacks.getValue(tab).lastOrNull() ?: route
         }
@@ -167,15 +183,19 @@ internal class AppNavigator(
             stack.removeAll { page -> page is ChatRoute && sameConversation(page, chat) }
         }
         val stack = stacks.getValue(target)
-        if (stack.last() != route) stack.add(route)
+        // The sourced-Persona path does not use Router.restore, but an already-visible kindless reopen needs the same
+        // exact-key retention. A page buried below a newer detail keeps the existing push/pop chain behavior.
+        val retained = if (chat?.kind == null) stack.lastOrNull()?.takeIf { sameKindlessTarget(it, route) } else null
+        if (retained == null && stack.last() != route) stack.add(route)
         restoreSecondaryParents(stack)
-        return route
+        return retained ?: route
     }
 
     /** A child conversation opened above an inbox conversation belongs to the same return chain. */
     private fun inheritVisibleInboxSource(key: NavKey): NavKey {
         if (selectedTab() != AppTab.Persona) return key
-        val source = stacks.getValue(AppTab.Persona).lastOrNull()?.chat()?.source as? RouteSource.InboxItem ?: return key
+        val visible = stacks.getValue(AppTab.Persona).lastOrNull() ?: return key
+        val source = inboxSource(visible) ?: return key
         return when (key) {
             is ChatRoute -> if (key.source == null) key.copy(source = source) else key
             is InteractionRoute -> if (key.chat.source == null) key.copy(chat = key.chat.copy(source = source)) else key
@@ -189,7 +209,7 @@ internal class AppNavigator(
         stacks.forEach { (tab, stack) ->
             stack.filterIsInstance<ChatRoute>().forEach chatEntry@ { chat ->
                 val owner = chatTab(chat) ?: return@chatEntry
-                if (owner == AppTab.Persona && openAssistant(chat, visible == chat)) {
+                if (owner == AppTab.Persona && inboxSource(chat) == null && openAssistant(chat, visible == chat)) {
                     stack.removeAll { it == chat }
                     return@chatEntry
                 }
@@ -222,7 +242,8 @@ internal class AppNavigator(
             val persona = stacks.getValue(AppTab.Persona)
             // A retained Persona stack may belong to an older item, or contain only the list. Return to the latest
             // item's actual detail unless its detail, native source page or processing conversation is already on top.
-            if (persona.lastOrNull()?.inboxItemId() != source.itemId) {
+            val visibleItem = persona.lastOrNull()?.let(::displayedInboxItemId)
+            if (visibleItem != source.itemId) {
                 persona.add(InboxItemRoute(source.itemId))
                 restoreSecondaryParents(persona)
             }
@@ -239,6 +260,15 @@ internal class AppNavigator(
         inboxSources[session]?.let { return it }
         if (session in inboxSourceSuppressions || hasExplicitInboxReturns) return null
         return chat.source as? RouteSource.InboxItem
+    }
+
+    /** Latest provenance names the visible processing page's item; an unrelated sourced page can still name its own. */
+    private fun displayedInboxItemId(page: NavKey): String? {
+        val chat = page.chat() ?: return page.inboxItemId()
+        val session = SessionKey(chat.machineId, chat.sessionId)
+        inboxSources[session]?.let { return it.itemId }
+        if (session in inboxSourceSuppressions) return null
+        return page.inboxItemId()
     }
 
     /** Remove every destination owned by the confirmed closed session, including hidden tabs. */
@@ -278,14 +308,24 @@ internal class AppNavigator(
         }
         fun shows(key: NavKey) = key.chat()?.let { sameConversation(it, chat) } == true
         // Callers rebuilding the replacement may only know its new ids and kind; provenance belongs to the existing page.
-        val destination = moved?.let { if (it.source == null) it.copy(source = chat.source) else it }
+        val destination = moved?.let {
+            if (it.source == null && chat.source != null) it.copy(source = chat.source) else it
+        }
         stacks.values.forEach { stack ->
             val at = stack.indexOfFirst { shows(it) }.takeIf { it >= 0 } ?: return@forEach
+            val previous = stack[at]
             val from = stack.firstNotNullOfOrNull { page -> openedFrom[page]?.takeIf { shows(page) } }
             stack.removeAll { shows(it) }
             if (destination != null && stack.none { it is ChatRoute && sameConversation(it, destination) }) {
-                stack.add(at, destination)
-                from?.let { openedFrom[destination] = it }
+                // A known-kind request remains that exact request through migration; a kindless reopen can then retain
+                // its InteractionRoute instead of receiving a plain ChatRoute. Legacy kindless pages keep old behavior.
+                val replacement = if (previous is InteractionRoute && previous.chat.kind != null) {
+                    previous.copy(chat = destination)
+                } else {
+                    destination
+                }
+                stack.add(at, replacement)
+                from?.let { openedFrom[replacement] = it }
             }
         }
         openedFrom.keys.retainAll { page -> stacks.values.any { page in it } }
@@ -322,3 +362,11 @@ private fun NavKey.inboxItemId(): String? = when (this) {
 
 private fun sameConversation(left: ChatRoute, right: ChatRoute): Boolean =
     left.machineId == right.machineId && left.sessionId == right.sessionId
+
+/** Only an identical conversation/request keeps its old key; a new interaction request keeps replacement semantics. */
+private fun sameKindlessTarget(existing: NavKey, reopened: NavKey): Boolean = when {
+    existing is ChatRoute && reopened is ChatRoute -> sameConversation(existing, reopened)
+    existing is InteractionRoute && reopened is InteractionRoute ->
+        sameConversation(existing.chat, reopened.chat) && existing.requestId == reopened.requestId
+    else -> false
+}

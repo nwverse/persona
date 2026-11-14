@@ -5,7 +5,9 @@ import persona.core.contracts.SessionKey
 import persona.core.navigation.*
 import persona.feature.inbox.*
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppNavigatorTest {
@@ -666,6 +668,220 @@ class AppNavigatorTest {
         assertEquals(second, navigator.inboxReturns().single().source)
     }
 
+    @Test fun aColdLedgerOnlyAssistantSurvivesGroupMigrationAndLateMetadataAsAPage() {
+        val retained = ChatRoute("machine~group", "handling")
+        val moved = ChatRoute("machine", "handling")
+        val source = RouteSource.InboxItem("item")
+        stacks.getValue(AppTab.Agents).add(retained)
+        selected = AppTab.Agents
+        var metadataKnown = false
+        val kind: (SessionKey) -> ConversationKind? = { key ->
+            if (metadataKnown && key.sessionId == "handling") ConversationKind.Assistant else null
+        }
+        val router = assistantNavigator(kind, listOf(retained.copy(source = source)))
+        assertTrue(router.hasInboxOrigin(retained))
+
+        // Group migration moves the ledger entry before late session metadata identifies the assistant.
+        router.groupGone(retained, moved)
+        assertTrue(router.hasInboxOrigin(moved))
+        metadataKnown = true
+        router.restoreChatTabs()
+
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(listOf<NavKey>(AssistantRoute, moved), stacks.getValue(AppTab.Persona))
+        assertSame(moved, stacks.getValue(AppTab.Persona).last())
+        assertEquals(listOf<NavKey>(AgentsRoute), stacks.getValue(AppTab.Agents))
+        router.back()
+        assertEquals(
+            listOf<NavKey>(AssistantRoute, InboxRoute, InboxItemRoute("item")),
+            stacks.getValue(AppTab.Persona),
+        )
+    }
+
+    @Test fun everyChildOfAColdRestoredAssistantUsesItsLedgerSource() {
+        val second = RouteSource.InboxItem("second")
+        val kind: (SessionKey) -> ConversationKind = {
+            if (it.sessionId == "agent-child") ConversationKind.Agent else ConversationKind.Assistant
+        }
+
+        for ((child, tab) in inboxChildren()) {
+            resetStacks()
+            val handling = ChatRoute("machine", "handling", ConversationKind.Assistant)
+            val detail = InboxEventRoute("second")
+            stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, detail, handling))
+            selected = AppTab.Persona
+            // The cold visible key has no provenance; only the separately restored ledger names the second item.
+            val router = assistantNavigator(kind, listOf(handling.copy(source = second)))
+
+            router.navigate(child)
+
+            assertEquals("Child: $child", tab, selected)
+            assertEquals("Child: $child", withInboxSource(child, second), stacks.getValue(tab).last())
+            assertEquals(second, router.inboxReturns().single { it.sessionId == handling.sessionId }.source)
+            router.back()
+            assertEquals("Child: $child", AppTab.Persona, selected)
+            assertEquals("Child: $child", handling, stacks.getValue(AppTab.Persona).last())
+            router.back()
+            assertEquals("Child: $child", detail, stacks.getValue(AppTab.Persona).last())
+        }
+    }
+
+    @Test fun everyChildOfAMigratedAssistantUsesTheLatestLedgerSource() {
+        val first = RouteSource.InboxItem("first")
+        val second = RouteSource.InboxItem("second")
+        val kind: (SessionKey) -> ConversationKind = {
+            if (it.sessionId == "agent-child") ConversationKind.Agent else ConversationKind.Assistant
+        }
+
+        for ((child, tab) in inboxChildren()) {
+            resetStacks()
+            val handling = ChatRoute("machine~group", "handling", ConversationKind.Assistant, first)
+            val moved = ChatRoute("machine", "handling", ConversationKind.Assistant)
+            val movedWithKeySource = moved.copy(source = first)
+            val detail = InboxEventRoute("second")
+            stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, detail, handling))
+            selected = AppTab.Persona
+            val router = assistantNavigator(kind, listOf(handling.copy(source = second)))
+            router.groupGone(handling, moved)
+            assertTrue(router.hasInboxOrigin(movedWithKeySource))
+
+            // The migrated key still says first; the ledger's second item must win for every child type.
+            router.navigate(child)
+
+            assertEquals("Child: $child", tab, selected)
+            assertEquals("Child: $child", withInboxSource(child, second), stacks.getValue(tab).last())
+            assertEquals(second, router.inboxReturns().single { it.sessionId == handling.sessionId }.source)
+            router.back()
+            assertEquals("Child: $child", AppTab.Persona, selected)
+            assertEquals("Child: $child", movedWithKeySource, stacks.getValue(AppTab.Persona).last())
+            router.back()
+            assertEquals("Child: $child", detail, stacks.getValue(AppTab.Persona).last())
+        }
+    }
+
+    @Test fun explicitSourceSuppressionLeavesEveryChildUnsourced() {
+        val first = RouteSource.InboxItem("first")
+        val second = RouteSource.InboxItem("second")
+        val kind: (SessionKey) -> ConversationKind = {
+            if (it.sessionId == "agent-child") ConversationKind.Agent else ConversationKind.Assistant
+        }
+
+        for ((child, tab) in inboxChildren()) {
+            resetStacks()
+            val handling = ChatRoute("machine", "handling", ConversationKind.Assistant, first)
+            val detail = InboxEventRoute("second")
+            stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, detail, handling))
+            selected = AppTab.Persona
+            val router = AppNavigator(
+                stacks, { selected }, { selected = it },
+                chatTab = { route ->
+                    if (kind(SessionKey(route.machineId, route.sessionId)) == ConversationKind.Assistant) {
+                        AppTab.Persona
+                    } else {
+                        AppTab.Agents
+                    }
+                },
+                inboxReturns = listOf(handling.copy(source = second)),
+            )
+            router.noteOpened(handling.copy(source = null))
+            assertFalse(router.hasInboxOrigin(handling))
+
+            router.navigate(child)
+
+            assertEquals("Child: $child", tab, selected)
+            assertEquals("Child: $child", child, stacks.getValue(tab).last())
+            assertEquals("Child: $child", emptyList<ChatRoute>(), router.inboxReturns())
+            router.back()
+            assertEquals("Child: $child", AppTab.Persona, selected)
+            assertEquals("Child: $child", handling, stacks.getValue(AppTab.Persona).last())
+            router.back()
+            assertEquals("Child: $child", detail, stacks.getValue(AppTab.Persona).last())
+        }
+    }
+
+    @Test fun aKindlessReopenKeepsAKnownKindChatKeyThroughGroupMigration() {
+        val first = RouteSource.InboxItem("first")
+        val second = RouteSource.InboxItem("second")
+        val existing = ChatRoute("machine~group", "agent", ConversationKind.Agent, first)
+        val moved = ChatRoute("machine", "agent", ConversationKind.Agent, first)
+        val detail = InboxEventRoute("second")
+        val router = agentsOwnAgentChats()
+        stacks.getValue(AppTab.Agents).addAll(listOf(existing, TerminalRoute("machine~group", "agent")))
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, detail))
+        selected = AppTab.Persona
+
+        router.navigate(existing.copy(kind = null, source = second))
+
+        // Router.restore pops the terminal, then the navigator restores the exact known-kind key it found.
+        assertEquals(listOf<NavKey>(AgentsRoute, existing), stacks.getValue(AppTab.Agents))
+        assertSame(existing, stacks.getValue(AppTab.Agents).last())
+        assertEquals(second, router.inboxReturns().single().source)
+        router.groupGone(existing, moved)
+        assertEquals(listOf<NavKey>(AgentsRoute, moved), stacks.getValue(AppTab.Agents))
+        assertSame(moved, stacks.getValue(AppTab.Agents).last())
+        assertEquals(second, router.inboxReturns().single().source)
+        router.back()
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(detail, stacks.getValue(AppTab.Persona).last())
+    }
+
+    @Test fun aKindlessSameRequestReopenKeepsTheOriginalInteractionKeyAndLatestSource() {
+        val first = RouteSource.InboxItem("first")
+        val second = RouteSource.InboxItem("second")
+        val existing = InteractionRoute(
+            ChatRoute("machine~group", "agent", ConversationKind.Agent, first), "request",
+        )
+        val movedChat = ChatRoute("machine", "agent", ConversationKind.Agent, first)
+        val detail = InboxEventRoute("second")
+        val router = agentsOwnAgentChats()
+        stacks.getValue(AppTab.Agents).addAll(
+            listOf(existing, TerminalRoute("machine~group", "agent")),
+        )
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, detail))
+        selected = AppTab.Persona
+        val reopened = InteractionRoute(existing.chat.copy(kind = null, source = second), existing.requestId)
+
+        router.navigate(reopened)
+
+        assertEquals(listOf<NavKey>(AgentsRoute, existing), stacks.getValue(AppTab.Agents))
+        assertSame(existing, stacks.getValue(AppTab.Agents).last())
+        assertEquals(second, router.inboxReturns().single().source)
+
+        // A known-kind request keeps its request wrapper and key provenance when its hub group changes.
+        router.groupGone(existing.chat, movedChat)
+        val moved = InteractionRoute(movedChat, existing.requestId)
+        assertEquals(listOf<NavKey>(AgentsRoute, moved), stacks.getValue(AppTab.Agents))
+        val migrated = stacks.getValue(AppTab.Agents).last()
+        assertEquals(second, router.inboxReturns().single().source)
+
+        // The same kindless reopen after migration still reuses the exact migrated InteractionRoute key.
+        selected = AppTab.Persona
+        router.navigate(InteractionRoute(movedChat.copy(kind = null, source = second), existing.requestId))
+        assertEquals(listOf<NavKey>(AgentsRoute, moved), stacks.getValue(AppTab.Agents))
+        assertSame(migrated, stacks.getValue(AppTab.Agents).last())
+        assertEquals(second, router.inboxReturns().single().source)
+        router.back()
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(detail, stacks.getValue(AppTab.Persona).last())
+    }
+
+    @Test fun aKindlessDifferentRequestReopenStillReplacesTheInteractionKey() {
+        val first = RouteSource.InboxItem("first")
+        val second = RouteSource.InboxItem("second")
+        val existing = InteractionRoute(ChatRoute("machine", "agent", ConversationKind.Agent, first), "request")
+        val reopened = InteractionRoute(existing.chat.copy(kind = null, source = second), "other-request")
+        val router = agentsOwnAgentChats()
+        stacks.getValue(AppTab.Agents).add(existing)
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, InboxEventRoute("second")))
+        selected = AppTab.Persona
+
+        router.navigate(reopened)
+
+        assertEquals(listOf<NavKey>(AgentsRoute, reopened), stacks.getValue(AppTab.Agents))
+        assertSame(reopened, stacks.getValue(AppTab.Agents).last())
+        assertEquals(second, router.inboxReturns().single().source)
+    }
+
     @Test fun aDirectTerminalDeepLinkClearsTheChatsInboxOriginBeforeTwoBacks() {
         val detail = InboxEventRoute("item")
         val chat = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("item"))
@@ -733,6 +949,26 @@ class AppNavigatorTest {
         assertEquals(AppTab.Persona, selected)
         assertEquals(listOf<NavKey>(AgentsRoute), stacks.getValue(AppTab.Agents))
         assertEquals(listOf<NavKey>(AssistantRoute, InboxRoute, detail), stacks.getValue(AppTab.Persona))
+    }
+
+    private fun resetStacks() {
+        stacks.values.forEach { stack ->
+            while (stack.size > 1) stack.removeAt(stack.lastIndex)
+        }
+    }
+
+    private fun inboxChildren(): List<Pair<NavKey, AppTab>> = listOf(
+        ChatRoute("machine", "agent-child", ConversationKind.Agent) to AppTab.Agents,
+        ChatRoute("machine", "assistant-child", ConversationKind.Assistant) to AppTab.Persona,
+        InteractionRoute(
+            ChatRoute("machine", "request-child", ConversationKind.Assistant), "request",
+        ) to AppTab.Persona,
+    )
+
+    private fun withInboxSource(key: NavKey, source: RouteSource.InboxItem): NavKey = when (key) {
+        is ChatRoute -> key.copy(source = source)
+        is InteractionRoute -> key.copy(chat = key.chat.copy(source = source))
+        else -> error("Not a conversation child: $key")
     }
 
     /** Uses Root's production decision; only its selection side effect is reproduced here. */
