@@ -90,13 +90,13 @@ fun sideSearchHits(rows: List<AgentSession>, listed: List<AgentSession>, setting
 }
 
 /**
- * The side session a search found inside [parent]'s row, so that opening it lands with that side shown (#7944): the
- * hub's ([Session.hitSessionId], a paged search) or, when the row did not match by itself, the first of its held sides
- * the query finds. Null without a query or a side hit.
+ * The side session a search found inside [parent]'s row, so that opening it lands with that side shown (#7944): when
+ * the row did not match by itself, the first of its held sides the query finds. Null without a query or a side hit.
+ * The hub's ranked search (`search=`, whose `search_hits[…].hit_session_id` names the side) is not one this app reads
+ * yet; a paged list's `q` finds a parent by its own fields only.
  */
 fun AgentListSettings.sideHit(parent: Session, rows: List<Session>, machineNames: Map<String, String> = emptyMap()): SessionKey? {
     if (query.isEmpty()) return null
-    parent.hitSessionId?.takeIf { it.isNotBlank() && it != parent.sessionId }?.let { return SessionKey(parent.machineId, it) }
     val plain = copy(queryAncestors = emptySet())
     if (plain.admits(parent, machineNames = machineNames)) return null
     return sideSessions(rows, parent.key).firstOrNull { plain.admits(it, machineNames = machineNames) }?.key

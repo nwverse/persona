@@ -321,13 +321,16 @@ returning to the parent. Sides are not subagent cards in the parent's chat (`chi
 chat shows the rows folded through it (`sideChildren`). A side's own question or approval shows in the parent's chat as
 **From side session · title** and as its own card in the side's chat; a card from a row folded through a side shows in
 that side's chat only (`chatPageCards`). Notifications, Needs you rows (`NeedsYouLine.Agent.side`) and search hits
-(the hub's `hit_session_id` on a `roots=1` row, or a held side the query finds, `sideHit`; a local search keeps the
-parent's row, `sideSearchHits`) name the side: the route opens the parent, which then opens the side over itself once.
+(a held side the query finds, `sideHit`; a local search keeps the parent's row, `sideSearchHits`) name the side: the
+route opens the parent, which then opens the side over itself once. A paged list searches with `q`, which finds a
+parent by its own fields; the hub's ranked `search=` (whose `search_hits[…].hit_session_id` names the side) is not read
+yet.
 There is no action to start a side session. Hiding follows the hub's `folded_under`, as for children; the feature gates
 the control, the sheet, the card routing and the landing, so without it everything stays as before (a hub whose
 managers do not all fold sides sends no side rows folded, except from a newer manager, whose sides then read as
 children, as an older app shows them). Covered by
-`SessionHierarchyTest`, `SideSessionsTest`, `SideSessionHomeTest`, `NeedsYouLinksTest`, the capsule's `ChildSessionsTest`
+`SessionHierarchyTest`, `SideSessionsTest`, `SideFoldFixturesTest` (`spec/fixtures/side-fold/cases.json`),
+`SideSessionHomeTest`, `NeedsYouLinksTest`, the capsule's `ChildSessionsTest`
 and `SideSessionsShotsTest` (the control, the ⋯ row and the sheet in Glass, Brief and Board, light/dark,
 `feature/chat/build/side-sessions-shots/`).
 

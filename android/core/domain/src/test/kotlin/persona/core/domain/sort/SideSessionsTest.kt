@@ -116,7 +116,7 @@ class SideSessionsTest {
         assertEquals(asking.key, settings.sideHit(parent, named))
         assertNull(settings.sideHit(parent.copy(title = "Changelog"), named))
         assertNull(AgentListSettings().sideHit(parent, named))
-        assertEquals(SessionKey("m", "s9"), settings.copy(query = "zzz").sideHit(parent.copy(hitSessionId = "s9"), named))
+        assertNull(settings.copy(query = "zzz").sideHit(parent, named))
         assertTrue(buildAgentList(named.map(::AgentSession), settings = settings.copy(query = "nothing here")).groups.all { it.rows.isEmpty() })
     }
 }

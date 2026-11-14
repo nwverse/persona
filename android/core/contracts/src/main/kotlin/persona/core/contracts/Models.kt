@@ -378,11 +378,6 @@ data class Session(
      * desktop app's side chat or /btw question, #5935). Whether it folds is the hub's [foldedAs], never this.
      */
     @SerialName("parent_agent_id") val parentAgentId: String? = null,
-    /**
-     * A search hit inside a folded side session (`roots=1`, #7944): this row is the side's topmost parent and this names
-     * the side, so the hit opens the parent with that side shown. Absent otherwise and from older hubs.
-     */
-    @SerialName("hit_session_id") val hitSessionId: String? = null,
     @WireTime @SerialName("started_at") val startedAt: String? = null,
     /** Why the source only lets the phone read this session. */
     @SerialName("read_only_reason") val readOnlyReason: String? = null,

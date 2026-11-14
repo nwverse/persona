@@ -27,10 +27,9 @@ class SessionHierarchyTest {
     }
 
     @Test fun sideSessionFieldsDecodeAndOnlyASideUnreadMakesTheParentUnread() {
-        val parent = JsonCodec.decodeFromString(Session.serializer(), """{"machine_id":"m","session_id":"p","state":"idle","hit_session_id":"s",
+        val parent = JsonCodec.decodeFromString(Session.serializer(), """{"machine_id":"m","session_id":"p","state":"idle",
             "children":{"total":3,"working":1,"sides":2,"sides_working":1,"sides_needs_you":0,"sides_unread":1}}""")
         assertEquals(SessionChildren(3, working = 1, sides = 2, sidesWorking = 1, sidesUnread = 1), parent.children)
-        assertEquals("s", parent.hitSessionId)
         assertEquals(AgentState.Working, parent.foldedState)
         assertEquals(AgentState.Unread, parent.copy(children = parent.children?.copy(working = 0, sidesWorking = 0)).foldedState)
         assertEquals(AgentState.Idle, parent.agentState)
