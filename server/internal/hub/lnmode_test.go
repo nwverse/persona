@@ -118,7 +118,7 @@ func TestLnModeOffPushesEverything(t *testing.T) {
 	if calls := len(f.calls(t, 3)); calls != 3 {
 		t.Fatalf("APNs got %d calls, want 3", calls)
 	}
-	if got := h.push.lnInterceptsView(0); len(got) != 0 {
+	if got := h.push.lnInterceptsView("", 0); len(got) != 0 {
 		t.Fatalf("nothing may be intercepted with the switch off, got %d", len(got))
 	}
 }
@@ -143,7 +143,7 @@ func TestLnModeP0AlwaysPushesAndSameKeyOnce(t *testing.T) {
 	if calls := len(f.calls(t, 1)); calls != 1 {
 		t.Fatalf("APNs got %d calls, want 1", calls)
 	}
-	view := h.push.lnInterceptsView(0)
+	view := h.push.lnInterceptsView("", 0)
 	if len(view) != 2 {
 		t.Fatalf("got %d intercepts, want 2 dedup entries", len(view))
 	}
@@ -191,7 +191,7 @@ func TestLnModeP2IsSilentAndRecorded(t *testing.T) {
 	if calls := len(f.calls(t, 0)); calls != 0 {
 		t.Fatalf("APNs got %d calls for a P2 push, want 0", calls)
 	}
-	view := h.push.lnInterceptsView(0)
+	view := h.push.lnInterceptsView("", 0)
 	if len(view) != 1 || view[0].Reason != interceptReasonP2 || view[0].Level != assistantwire.LevelP2 {
 		t.Fatalf("intercepts = %+v, want one P2 silent entry", view)
 	}
@@ -212,7 +212,7 @@ func TestLnModeP1HeldAndMergedWithinMinute(t *testing.T) {
 	if *attempts != 0 {
 		t.Fatalf("P1 alerted %d times in ln mode, want 0", *attempts)
 	}
-	view := h.push.lnInterceptsView(0)
+	view := h.push.lnInterceptsView("", 0)
 	if len(view) != 1 {
 		t.Fatalf("same-minute P1 cards made %d entries, want 1 merged", len(view))
 	}
@@ -258,7 +258,7 @@ func TestLnModeSwitchAndInterceptsPersist(t *testing.T) {
 	if !restarted.lnModeOn() {
 		t.Fatal("the ln mode switch did not survive a restart")
 	}
-	view := restarted.lnInterceptsView(0)
+	view := restarted.lnInterceptsView("", 0)
 	if len(view) != 1 || view[0].RelatedKey != "persisted" {
 		t.Fatalf("restored intercepts = %+v, want the held P2 entry", view)
 	}
@@ -276,7 +276,7 @@ func TestLnInterceptsViewShape(t *testing.T) {
 	if err := h.deliverPush(lnNotification(assistantwire.LevelP1, "k2", "second")); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(map[string]any{"intercepts": h.push.lnInterceptsView(0)})
+	raw, err := json.Marshal(map[string]any{"intercepts": h.push.lnInterceptsView("", 0)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,8 +350,8 @@ func TestLnOffPayloadWithoutAPS(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.push.sendFrom("manager-a", build, "", nil, quietNone, nil) // P1: held, no panic
-	if *attempts != 1 || len(h.push.lnInterceptsView(0)) != 1 {
-		t.Fatalf("pushes %d, intercepts %d; want 1 and 1", *attempts, len(h.push.lnInterceptsView(0)))
+	if *attempts != 1 || len(h.push.lnInterceptsView("", 0)) != 1 {
+		t.Fatalf("pushes %d, intercepts %d; want 1 and 1", *attempts, len(h.push.lnInterceptsView("", 0)))
 	}
 }
 
@@ -366,7 +366,7 @@ func TestLnMergeStaysWithinManager(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	view := h.push.lnInterceptsView(0)
+	view := h.push.lnInterceptsView("", 0)
 	if len(view) != 2 || len(view[0].Also) != 0 || len(view[1].Also) != 0 {
 		t.Fatalf("view = %+v, want two separate entries", view)
 	}
@@ -386,7 +386,7 @@ func TestLnSamePRP1IsOneEntry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	view := h.push.lnInterceptsView(0)
+	view := h.push.lnInterceptsView("", 0)
 	if len(view) != 1 || len(view[0].Also) != 2 || view[0].RelatedKey != pr {
 		t.Fatalf("view = %+v, want one entry for the PR with two merged titles", view)
 	}
