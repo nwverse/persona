@@ -14,14 +14,14 @@ function method(name){
  for(;i<source.length&&depth;i++){const c=source[i];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';}else if(c==='"'||c==="'"||c==='`')quote=c;else if(c==='{')depth++;else if(c==='}')depth--;}
  assert.equal(depth,0,name);return source.slice(start,i);
 }
-const names=['routeTarget','openRow','mainDestination','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown'];
+const names=['routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown'];
 const NativeNavigation=new Function('NavigationContext','ResourceRow','mainConversationData','Wire','return '+stripTypeScriptTypes('class NativeNavigation {'+names.map(method).join('\n')+'}'))(NavigationContext,ResourceRow,mainConversationData,Wire);
 function row(id='source',manager='owner-b',kind='conversation'){const r=new ResourceRow(id,id,kind);r.manager=manager;r.machine='machine';r.session=id;return r;}
 function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};}
 function fixture(){const shell=new NativeNavigation(),pushed=[];let gen=1;
  const primary={profile:{id:'hub'},selected:row('primary','owner-a'),connected:true,error:'',connectionGeneration:()=>gen,scope:()=> 'hub/owner-a',owns:(g,s)=>g===gen&&s==='hub/owner-a',reportError(e){this.error=e.message;},hideConversation(){},async listResources(){}};
  const detail={selected:row('previous'),connected:true,async select(r){this.selected=r;},hideConversation(){},showConversation(){},watchDecisions(){}};
- primary.viewFor=async()=>detail;shell.model=primary;shell.detailModel=primary;shell.activeChild='';shell.routeRevision=0;shell.creatingConversations=new Map();shell.chatReady=false;shell.detailRoute='';shell.stack={size:()=>pushed.length,clear:()=>pushed.splice(0),pushPath:r=>pushed.push(r),getAllPathName:()=>pushed.map(r=>r.name),getParamByIndex:i=>pushed[i]?.param};shell.savePath=()=>{};
+ primary.viewFor=async()=>detail;shell.mainReadWaiters=[];shell.model=primary;shell.detailModel=primary;shell.activeChild='';shell.routeRevision=0;shell.creatingConversations=new Map();shell.chatReady=false;shell.detailRoute='';shell.stack={size:()=>pushed.length,clear:()=>pushed.splice(0),pushPath:r=>pushed.push(r),getAllPathName:()=>pushed.map(r=>r.name),getParamByIndex:i=>pushed[i]?.param};shell.savePath=()=>{};
  return {shell,primary,detail,pushed,bump:()=>gen++};
 }
 test('global settings remain workspace-owned and chat settings retain the captured target',()=>{
@@ -84,7 +84,7 @@ test('native extension pushes have distinct route identities and an eight-page l
 test('the default main read cannot steal a same-owner navigation opened while it is pending',async()=>{
  const {shell,primary,pushed}=fixture(),wait=deferred();let posts=0;
  const repo={call:async(path,method)=>{assert.equal(path,'/api/v1/assistant');if(method==='POST')posts++;return wait.promise;}};
- primary.repo=()=>repo;primary.section=0;shell.defaultMainPending=false;
+ primary.repo=()=>repo;primary.section=0;shell.defaultMainPending=false;shell.mainReadWaiters=[];
  const selected=primary.selected,pending=shell.resolveMainDestination();
  shell.stack.pushPath({name:'resources',param:'knowledge'});
  wait.resolve({main:'main',machine_id:'machine',conversations:[{id:'main'}]});await pending;
@@ -93,13 +93,13 @@ test('the default main read cannot steal a same-owner navigation opened while it
 test('a default main read uses the same response after a main conversation moves to another machine',async()=>{
  const {shell,primary,pushed}=fixture();let calls=0;
  const repo={async call(path,method){calls++;assert.equal(path,'/api/v1/assistant');assert.notEqual(method,'POST');return {main:'main',machine_id:'old',main_machine_id:'new',conversations:[{id:'main',machine_id:'old'},{id:'main',machine_id:'new'}]};}};
- primary.repo=()=>repo;primary.section=0;primary.mainId='cached';shell.defaultMainPending=false;
+ primary.repo=()=>repo;primary.section=0;primary.mainId='cached';shell.defaultMainPending=false;shell.mainReadWaiters=[];
  await shell.resolveMainDestination();assert.equal(calls,1);assert.equal(pushed.length,1);assert.equal(JSON.parse(pushed[0].param).machine,'new');assert.equal(primary.mainId,'main');
 });
 test('unavailable and empty default directories never create or select a conversation',async()=>{
  for(const failure of [true,false]){
   const {shell,primary,pushed}=fixture();let calls=0;const selected=primary.selected;
-  primary.repo=()=>repo;primary.section=0;shell.defaultMainPending=false;
+  primary.repo=()=>repo;primary.section=0;shell.defaultMainPending=false;shell.mainReadWaiters=[];
   const repo={async call(path,method){calls++;assert.notEqual(method,'POST');if(failure)throw Error('offline');return {main:'absent',machine_id:'machine',conversations:[]};}};
   await shell.resolveMainDestination();assert.equal(calls,1);assert.equal(pushed.length,0);assert.equal(primary.selected,selected);
  }
@@ -109,7 +109,7 @@ test('unavailable and empty default directories never create or select a convers
 test('an explicit new conversation retires a pending default read without starting another one', async () => {
  const {shell,primary,pushed}=fixture(), directory=deferred(), creation=deferred();let reads=0;
  const repo={async call(){reads++;return directory.promise;}};primary.repo=()=>repo;primary.section=0;primary.newConversation=()=>creation.promise;
- shell.navigationIntent=0;shell.defaultMainPending=false;shell.navigationRestoredScope=primary.scope();
+ shell.navigationIntent=0;shell.defaultMainPending=false;shell.mainReadWaiters=[];shell.navigationRestoredScope=primary.scope();
  const pending=shell.resolveMainDestination();shell.newConversation();
  directory.resolve({main:'main',machine_id:'machine',conversations:[{id:'main'}]});await pending;
  assert.equal(reads,1);assert.equal(pushed.length,0);
@@ -141,7 +141,7 @@ test('an old owner creation does not suppress the new owners automatic read',asy
  const {shell,primary}=fixture(),create=deferred();primary.newConversation=()=>create.promise;shell.navigationIntent=0;shell.newConversation();
  primary.scope=()=> 'hub/owner-b';primary.section=0;primary.ready=true;primary.mainId='main-b';primary.mainMachineId='machine';
  primary.owns=(g,s)=>g===primary.connectionGeneration()&&s===primary.scope();let reads=0;primary.repo=()=>({async call(){reads++;return {main:'main-b',machine_id:'machine',conversations:[{id:'main-b'}]};}});
- shell.navigationRestoredScope=primary.scope();shell.defaultMainPending=false;shell.ensureMainDestination();await new Promise(r=>setImmediate(r));assert.equal(reads,1);
+ shell.navigationRestoredScope=primary.scope();shell.defaultMainPending=false;shell.mainReadWaiters=[];shell.ensureMainDestination();await new Promise(r=>setImmediate(r));assert.equal(reads,1);
  create.resolve(row('created-in-A','owner-a'));await new Promise(r=>setImmediate(r));assert.equal(shell.creatingConversations.size,0);
 });
 
@@ -180,4 +180,15 @@ test('main row visibility survives an authoritative main identity arriving after
 test('inbox handoff opening is a transient route intent and never part of saved navigation',async()=>{
  const {shell,primary,pushed}=fixture(),r=row('inbox-intent','owner-a','inbox');r.raw=JSON.stringify({open_handoff:true});await shell.openLinkedResource(r);
  const target=pushed[0];assert.equal(JSON.parse(JSON.parse(target.param).raw).open_handoff,false);assert.equal(shell.pendingInboxHandoff,shell.childKey(target.name,target.param));assert.equal(r.data().open_handoff,true);
+});
+
+
+test('tapping main during its initial read waits and fulfills the latest explicit navigation once',async()=>{
+ const {shell,primary,pushed}=fixture(),first=deferred();let reads=0;primary.section=0;primary.repo=()=>repo;const repo={async call(){reads++;return reads===1?first.promise:{main:'main',machine_id:'machine',conversations:[{id:'main'}]};}};shell.navigationIntent=0;shell.defaultMainPending=false;
+ const background=shell.resolveMainDestination(),tap=shell.openMain();first.resolve({main:'main',machine_id:'machine',conversations:[{id:'main'}]});await background;await tap;assert.equal(reads,2);assert.equal(pushed.length,1);
+});
+
+test('leaving before a queued main read finishes retires the explicit destination request',async()=>{
+ const {shell,primary,pushed}=fixture(),first=deferred();let reads=0;primary.section=0;primary.repo=()=>({async call(){reads++;return first.promise;}});shell.navigationIntent=0;shell.defaultMainPending=false;
+ const background=shell.resolveMainDestination(),tap=shell.openMain();shell.routeRevision++;first.resolve({main:'main',machine_id:'machine',conversations:[{id:'main'}]});await background;await tap;assert.equal(reads,1);assert.equal(pushed.length,0);
 });

@@ -141,7 +141,7 @@ export struct SettingsPage {
   @Monitor('management.extensionDetailMissing') extensionRemoved(): void { if (this.mounted && this.active && this.page === 'extension_detail' && this.management.extensionDetailMissing) this.onBack(); }
   @Monitor('active') machineVisibilityChanged(): void { this.appearanceRevision++; if (!this.active) { this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); } else if (this.mounted) { this.loadSettingsPage(); this.loadLook(); } }
   @Monitor('model.connected') settingsConnectionChanged(): void { if (this.mounted && this.active) { if (this.model.connected) this.loadSettingsPage(); this.loadLook(); } }
-  @Monitor('model.profile', 'model.forgottenEpoch') scheduleOwnerChanged(): void { this.appearanceRevision++; this.syncCatalogRows(); this.syncManagementRows(); this.management.scheduleReceiptChat(this.model); this.loadLook(); }
+  @Monitor('model.profile', 'model.forgottenEpoch', 'model.connected') scheduleOwnerChanged(): void { this.appearanceRevision++; this.syncCatalogRows(); this.syncManagementRows(); this.management.scheduleReceiptChat(this.model); this.loadLook(); }
   @Monitor('page') settingsPageChanged(): void { this.appearanceRevision++; }
   @Monitor('management.catalogRows') catalogRowsChanged(): void { this.syncCatalogRows(); }
 
@@ -1078,44 +1078,60 @@ export struct SettingsPage {
     }.width('100%').height('100%')
   }
 
-  @Builder appearancePage() {
-    this.appearanceSettings(this.model, this.agentWorkspace, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration())
+  private appearanceSelector(kind: string, revision: number): (index: number) => void {
+    const owner = this.model, workspace = this.agentWorkspace, scope = owner.scope(), generation = owner.connectionGeneration();
+    return (index: number): void => {
+      if (kind === 'language') this.applyLanguage(index, owner, revision, scope, generation);
+      else if (kind === 'color') this.applyColorMode(index, owner, revision, scope, generation);
+      else if (kind === 'style') this.applyStyle(index, owner, revision, scope, generation);
+      else if (kind === 'density') this.applyDensity(index, owner, revision, scope, generation);
+      else if (kind === 'group') this.applyAgentGrouping(index, owner, workspace, revision, scope, generation);
+    };
   }
-
-  @Builder appearanceSettings(owner: ClientModel, workspace: AgentWorkspace, revision: number, scope: string, generation: number) {
+  private appearanceAvatarAction(revision: number, accent: boolean): (key: string) => void {
+    const owner = this.model, scope = owner.scope(), generation = owner.connectionGeneration();
+    return (key: string): void => { if (this.appearanceCurrent(owner, revision, scope, generation)) { if (accent) this.look.setAccent(key); else this.look.setAvatar(key); } };
+  }
+  private appearanceRefreshAction(revision: number): () => void {
+    const owner = this.model, scope = owner.scope(), generation = owner.connectionGeneration();
+    return (): void => { if (this.appearanceCurrent(owner, revision, scope, generation)) this.loadLook(); };
+  }
+  @Builder appearancePage() {
     List() {
-      DeviceLookPicker({ model: this.look, active: this.appearanceCurrent(owner, revision, scope, generation),
-        onAvatarSelected: (key: string): void => { if (this.appearanceCurrent(owner, revision, scope, generation)) this.look.setAvatar(key); },
-        onAccentSelected: (id: string): void => { if (this.appearanceCurrent(owner, revision, scope, generation)) this.look.setAccent(id); },
-        onRefresh: (): void => { if (this.appearanceCurrent(owner, revision, scope, generation)) this.loadLook(); } })
+      ForEach([this.appearanceRevision], (revision: number) => {
+        DeviceLookPicker({ model: this.look, active: this.appearanceCurrent(this.model, revision, this.model.scope(), this.model.connectionGeneration()),
+          onAvatarSelected: this.appearanceAvatarAction(revision, false),
+          onAccentSelected: this.appearanceAvatarAction(revision, true),
+          onRefresh: this.appearanceRefreshAction(revision) })
+      }, (revision: number) => String(revision))
       ListItem() {
         Row({ space: Tokens.gap }) {
           Text(tr('language')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
           Select([{ value: tr('system') }, { value: 'English' }, { value: '简体中文' }, { value: '日本語' }])
-            .selected(['default', 'en-US', 'zh-CN', 'ja-JP'].indexOf(owner.language))
-            .value(owner.language === 'default' ? tr('system') : owner.language === 'en-US' ? 'English' : owner.language === 'zh-CN' ? '简体中文' : '日本語')
-            .constraintSize({ minHeight: Tokens.touch }).enabled(!owner.languageChanging && this.appearanceCurrent(owner, revision, scope, generation))
-            .onSelect((index: number) => this.applyLanguage(index, owner, revision, scope, generation)).id('appearance.language')
-        }.constraintSize({ minHeight: Tokens.touch }).padding(Tokens.inset).width('100%')
+            .selected(['default', 'en-US', 'zh-CN', 'ja-JP'].indexOf(this.model.language))
+            .value(this.model.language === 'default' ? tr('system') : this.model.language === 'en-US' ? 'English' : this.model.language === 'zh-CN' ? '简体中文' : '日本語')
+            .constraintSize({ minHeight: Tokens.touch }).enabled(!this.model.languageChanging && this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('language', this.appearanceRevision)).id('appearance.language')
+        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
       }
       ListItem() {
         Row({ space: Tokens.gap }) {
           Text(tr('color_mode')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
-          Select([{ value: tr('system') }, { value: tr('light') }, { value: tr('dark') }]).selected(owner.appearance)
-            .value(tr(['system', 'light', 'dark'][owner.appearance] || 'system'))
-            .constraintSize({ minHeight: Tokens.touch }).enabled(this.appearanceCurrent(owner, revision, scope, generation))
-            .onSelect((index: number) => this.applyColorMode(index, owner, revision, scope, generation)).id('appearance.color-mode')
-        }.constraintSize({ minHeight: Tokens.touch }).padding(Tokens.inset).width('100%')
+          Select([{ value: tr('system') }, { value: tr('light') }, { value: tr('dark') }]).selected(this.model.appearance)
+            .value(tr(['system', 'light', 'dark'][this.model.appearance] || 'system'))
+            .constraintSize({ minHeight: Tokens.touch }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('color', this.appearanceRevision)).id('appearance.color-mode')
+        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
       }
       ListItem() {
         Row({ space: Tokens.gap }) {
           Text(tr('style')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
           Select([{ value: tr('app_style_system') }, { value: tr('app_style_glass') }, { value: tr('app_style_brief') }, { value: tr('app_style_board') }])
-            .selected(['system', 'glass', 'brief', 'board'].indexOf(owner.style) < 0 ? 0 : ['system', 'glass', 'brief', 'board'].indexOf(owner.style))
-            .value(tr(['system', 'glass', 'brief', 'board'].includes(owner.style) ? 'app_style_' + owner.style : 'app_style_system'))
-            .constraintSize({ minHeight: Tokens.touch }).enabled(this.appearanceCurrent(owner, revision, scope, generation))
-            .onSelect((index: number) => this.applyStyle(index, owner, revision, scope, generation)).id('appearance.style')
-        }.constraintSize({ minHeight: Tokens.touch }).padding(Tokens.inset).width('100%')
+            .selected(['system', 'glass', 'brief', 'board'].indexOf(this.model.style) < 0 ? 0 : ['system', 'glass', 'brief', 'board'].indexOf(this.model.style))
+            .value(tr(['system', 'glass', 'brief', 'board'].includes(this.model.style) ? 'app_style_' + this.model.style : 'app_style_system'))
+            .constraintSize({ minHeight: Tokens.touch }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('style', this.appearanceRevision)).id('appearance.style')
+        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
       }
       ListItem() {
         Row({ space: Tokens.gap }) {
@@ -1123,28 +1139,24 @@ export struct SettingsPage {
           Select([{ value: tr('agent_density_standard') }, { value: tr('agent_density_compact') }])
             .selected(this.look.density === 'compact' ? 1 : 0)
             .value(tr(this.look.density === 'compact' ? 'agent_density_compact' : 'agent_density_standard'))
-            .constraintSize({ minHeight: Tokens.touch }).enabled(this.look.ready && this.appearanceCurrent(owner, revision, scope, generation))
-            .onSelect((index: number) => this.applyDensity(index, owner, revision, scope, generation)).id('appearance.agent-density')
-        }.constraintSize({ minHeight: Tokens.touch }).padding(Tokens.inset).width('100%')
+            .constraintSize({ minHeight: Tokens.touch }).enabled(this.look.ready && this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('density', this.appearanceRevision)).id('appearance.agent-density')
+        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
       }
-      this.agentGroupingRow(owner, workspace, revision, scope, generation)
-    }.width('100%').height('100%').backgroundColor(Colors.canvas)
-  }
-
-  @Builder agentGroupingRow(owner: ClientModel, workspace: AgentWorkspace, revision: number, scope: string, generation: number) {
     ListItem() {
       Row({ space: Tokens.gap }) {
         Text(tr('grouping')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
-        if (workspace.isBoundTo(owner) && !workspace.loading) {
+        if (this.agentWorkspace.isBoundTo(this.model) && !this.agentWorkspace.loading) {
           Select([{ value: tr('agent_group_flat') }, { value: tr('agent_filter_machine') },
             { value: tr('agent_filter_repository') }, { value: tr('agent_filter_worktree') }])
-            .selected(this.agentGroupingIndex(workspace))
-            .value(tr(['agent_group_flat', 'agent_filter_machine', 'agent_filter_repository', 'agent_filter_worktree'][this.agentGroupingIndex(workspace)]))
-            .constraintSize({ minHeight: Tokens.touch }).enabled(this.appearanceCurrent(owner, revision, scope, generation))
-            .onSelect((index: number) => this.applyAgentGrouping(index, owner, workspace, revision, scope, generation)).id('appearance.agent-grouping')
+            .selected(this.agentGroupingIndex(this.agentWorkspace))
+            .value(tr(['agent_group_flat', 'agent_filter_machine', 'agent_filter_repository', 'agent_filter_worktree'][this.agentGroupingIndex(this.agentWorkspace)]))
+            .constraintSize({ minHeight: Tokens.touch }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('group', this.appearanceRevision)).id('appearance.agent-grouping')
         } else LoadingProgress().width(Tokens.touch).height(Tokens.touch).accessibilityText(tr('loading'))
-      }.constraintSize({ minHeight: Tokens.touch }).padding(Tokens.inset).width('100%')
+      }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
     }
+    }.width('100%').height('100%').backgroundColor(Colors.canvas)
   }
 
   @Builder notificationsPage() {

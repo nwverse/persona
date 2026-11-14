@@ -114,6 +114,7 @@ struct Index {
   private defaultMainAttempt: string = '';
   private navigationRestoredScope: string = '';
   private navigationIntent: number = 0;
+  private mainReadWaiters: (() => void)[] = [];
   private defaultMainPending: boolean = false;
   private creatingConversations: Map<string, number> = new Map();
   private paths: Map<string, NavPathStack> = new Map();
@@ -190,7 +191,7 @@ struct Index {
       this.pushChat(row);
       this.defaultMainAttempt = JSON.stringify([owner.scope(), generation, owner.mainId, owner.mainMachineId]);
     } catch (error) { if (valid()) owner.reportError(error as Error); }
-    finally { this.defaultMainPending = false; if (scope !== this.model.scope() || generation !== this.model.connectionGeneration()) this.ensureMainDestination(); }
+    finally { this.defaultMainPending = false; const waiting = this.mainReadWaiters; this.mainReadWaiters = []; waiting.forEach((resolve: () => void) => resolve()); if (scope !== this.model.scope() || generation !== this.model.connectionGeneration()) this.ensureMainDestination(); }
   }
   private openAssistantCard(itemId: string, kind: string): void {
     const source = this.detailModel.selected;
@@ -366,7 +367,13 @@ struct Index {
     else this.stack.pushPath({ name: 'conversation', param: JSON.stringify(this.routeTarget(row, !this.stack.size())) });
     this.savePath();
   }
-  private openMain(): void { this.navigationIntent++; if (this.model.section !== 0) this.changeSection(0); this.resolveMainDestination(); }
+  private async openMain(): Promise<void> {
+    this.navigationIntent++; if (this.model.section !== 0) this.changeSection(0);
+    const owner = this.model, scope = owner.scope(), generation = owner.connectionGeneration(), intent = this.navigationIntent, revision = this.routeRevision, stack = this.stack;
+    const current = (): boolean => this.model === owner && owner.owns(generation, scope) && owner.section === 0 && intent === this.navigationIntent && revision === this.routeRevision && stack === this.stack;
+    while (this.defaultMainPending && current()) await new Promise<void>((resolve) => this.mainReadWaiters.push(resolve));
+    if (current()) await this.resolveMainDestination();
+  }
   private newConversation(): void {
     this.navigationIntent++;
     const scope = this.model.scope(), generation = this.model.connectionGeneration(), ownerKey = JSON.stringify([scope, generation]);

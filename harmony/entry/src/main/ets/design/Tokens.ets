@@ -10,6 +10,7 @@ export class Tokens {
   static readonly symbolFont: string = String(Tokens.symbol) + 'vp';
   static readonly chromeFontMaxScale: number = 2;
   static readonly avatar: number = 40;
+  static readonly avatarChoice: number = 56;
   static readonly caption: number = 13;
   static readonly readingMax: number = 680;
   static readonly footer: number = 4;

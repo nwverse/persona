@@ -1729,7 +1729,8 @@ height. Follow the application system font scale up to 3.2×; use 16 vp page edg
 section spacing, 20 vp business-surface corners and a 48 vp minimum response region. System controls own their
 internal dimensions and material. Fixed icon slots use 22 vp symbols, independently of the text scale.
 The compact Persona/Agents Select caps only its displayed value at 2× so both title actions remain reachable;
-its native option menu and content continue to follow the system text scale.
+its native option menu and content continue to follow the system text scale. Native Radio and Checkbox outlines
+use the secondary foreground when unselected; the control background is not an outline color.
 
 System is the default style for a fresh or unset preference. Existing explicit Glass, Brief and Board selections stay
 selected and remain available after update. Avatar, Accent, color mode and style are separate. Standard is the
