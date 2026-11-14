@@ -12,13 +12,13 @@ SCAN = ["Persona", "Shared", "PersonaWatch", "Vision"]
 ALLOWED = {
     "Persona/Recording/MeetingThreadView.swift": "stacks a transcript row's stamp and words at the reading size",
     "Persona/Recording/RecordingMinutesSummary.swift": "the same for minutes' points and transcript lines",
+    "Persona/Recording/RecordingMinutesOverview.swift": "puts a topic's icon tile above its title at the reading size (#6563)",
     "Persona/Recording/RecordingMinutesView.swift": "the same for the minutes' points",
     "Persona/Views/Chat/BubbleFold.swift": "the user bubble folds by the reading size it is given",
     "Shared/Design/RecordingTokens.swift": "the recording timer's own cap",
     "PersonaWatch/PersonaWatchApp.swift": "the watch's showLargeText launch switch",
     # Both files have another PR in flight (#6623, #5969); their branches go in a follow-up.
     "Persona/DesignSystem/Components.swift": "an AX branch left while #6623 is open",
-    "Persona/Views/Chats/ChatsView.swift": "AX branches left while #5969 is open",
 }
 
 USE = re.compile(r"isAccessibilitySize|\.accessibility[1-5]\b")

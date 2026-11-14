@@ -26,14 +26,17 @@ as an encoded pair. It decorates `session.title` on session lists and lookups, s
 Android, watch, Mac and Vision selectors all see the same name. Automatic naming never writes into the
 Agent's input or transcript, and never renames herdr/Orca tabs. `todo.title` and plan titles name separate work
 objects and are unchanged. Native-title comparisons ignore leading terminal spinner frames and whitespace;
-animation does not hide a saved name or discard an in-flight result (#5254). Explicit Claude sessions with
-proven `prompt` source also keep a saved name when switching between recognizable bad tool and first-message
-fallbacks (#5269). This exception does not treat another runtime/tool, a meaningful native title or unknown
-provenance as the same fallback, and it never resets the successful-change count.
+animation does not hide a saved name or discard an in-flight result (#5254). Explicit Claude sessions with proven `prompt` source also keep a saved name when switching between a tool
+label and a copied or truncated first-message title, including openings absent from the instruction-prefix
+list (#7337). The node's provenance proves the copy; it is not inferred from text alone. This exception does
+not treat another runtime/tool, a meaningful `auto`/`runtime` title or unknown provenance as the same fallback,
+and it never resets the successful-change count or pays for a replacement name.
 
 Candidates are empty names, tool-only names (including terminal spinners), plain directory names,
-new-chat placeholders, and instruction/template openings in Chinese, English or Japanese. A meaningful but
-out-of-date name is refreshed only with periodic naming enabled. Native custom titles are protected even
+new-chat placeholders, titles over 40 characters, common instruction/template openings in Chinese,
+English or Japanese, and titles whose `prompt` provenance proves they are copied from the first user message
+(including a short exact copy or a truncated one). Meaningful `auto`/`runtime` titles are refreshed only with
+periodic naming enabled. Native custom titles are protected even
 when they look like placeholders. Old nodes and runtimes that cannot establish title provenance are skipped
 rather than guessing that a title was not chosen by the user. Claude nodes provide `title_source`,
 `title_manual` and cached cumulative `output_tokens`; unknown sources do not establish eligibility.
@@ -45,6 +48,25 @@ name. A meaningful original title starts with an observation baseline when perio
 Changing the maximum does not erase the ledger. A native or app rename stops automatic naming permanently
 for that session; app/API rename intent is persisted before contacting the node, even when its reply is uncertain.
 
+**Named on request (#7432).** `POST /api/v1/sessions/{mid}/{sid}/autoname` is the same model call asked for by the
+user from an Agent's menu (**Auto Rename**), for one session, answered with the new title
+(`docs/protocol/protocol.md`, "Naming an Agent on request"). It shares the dialogue, prompt and validity check with
+the background pass (`agentNameFromModel`) and skips the background's guards, because the request is the user's own
+wish: the change limit, the placeholder test, the automatic-naming switch, and the protection of custom titles.
+The ledger record is marked `requested` and is no longer `manual`. Such a name also stands over a native custom
+title or a title of unknown provenance, and its row is published with `title_source: "auto"`; it holds until the
+native title changes, or until the user renames the session by hand, exactly as an automatic name does. The
+background's change count is left as it is (a request neither spends nor resets it), its failure count and
+cooldown are cleared by a successful request, and a failed request records nothing. Requests for one session
+share one model call. Persona's own conversations are refused.
+
+The assistant-only `agent_autoname` tool is a narrow second entry to that same request, for an explicitly requested
+name in a Persona conversation. It accepts only an exact machine and full session id, never a URL, credential or
+arbitrary request. The usual assistant-source check applies, so a task Agent cannot call it. Every invocation asks
+for phone confirmation before the model call, including when the title was hand-written; declining or leaving the
+card unanswered changes nothing. The result is the same title or coded refusal in a text JSON object. The assistant
+tool is not a client dependency: iOS and other clients use the HTTP endpoint above (`agent_naming_tool.go`).
+
 Cost controls: list events coalesce into one worker, dispatching at most one candidate per 30-second pass.
 Queue-local one-shot wakes drain existing matches even without another list event, then stop; they do not
 install a timer on any node. A successful check that keeps the name advances its interval baseline without
@@ -53,6 +75,12 @@ Input keeps at most 2000 characters of the first user message and 4000 of recent
 payloads are excluded. Calls time out after 45 seconds and request at most 256 output tokens on every protocol.
 Responses relays that refuse the output bound fail closed, without retrying unbounded. A persisted ten-minute
 lease precedes dispatch; failures back off from ten minutes and stop after three consecutive failures.
+Each failed attempt logs its computer/session and a static reason code (for example `no_dialogue`,
+`model_call_failed`, `invalid_name`, `model_output_truncated` or `naming_timeout`), even if a subsequent title
+or settings recheck discards the result. Provider error bodies, prompts and model replies never enter these
+logs. The ledger retains `last_failure` until a successful naming clears it; old silent failures have no
+recoverable reason. A deployed hub does not add missing provenance to old nodes: those nodes remain excluded
+until an explicitly authorized compatible node update reports it.
 Before committing, the worker checks settings, counters, current provenance, native title and eligibility again.
 
 Only web settings controls are added here. iOS and Android can read effective fields from

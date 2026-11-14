@@ -24,6 +24,7 @@ import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-termina
 import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
 import { KnowledgeSelection } from "./settings/KnowledgeSelection";
+import { SavedPrompts } from "./settings/SavedPrompts";
 import { SourcesUI } from "./subscriptions/SourcesUI";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
@@ -145,19 +146,6 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const phone = useMedia(SHEET_QUERY);
   // list pages (channels / connectors / extensions) keep their list beside the open item from this width
   const twoCol = useMedia("(min-width: 900px)");
-  // Keep the connection pill (App.tsx) below the page header, including at larger text sizes.
-  const header = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const el = header.current;
-    const box = el?.closest("main");
-    if (!el || !box || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => box.style.setProperty("--page-header", `${el.offsetHeight}px`));
-    ro.observe(el);
-    return () => {
-      ro.disconnect();
-      box.style.removeProperty("--page-header");
-    };
-  }, []);
   // The category (null: none named, the phone's list) and the purpose (model configuration) or extension ("Extensions") it has open.
   const [at, setAt] = useState(readSettingsLocation);
   // Back from a category opened from the list: the URL went back, the page follows it.
@@ -280,7 +268,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   };
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <header ref={header} className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
+      <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
         {phone && at.tab ? (
           <>
             <IconButton icon="chevronLeft" label={t("settings.back")} onClick={toList} />
@@ -313,6 +301,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               )}
               {tab === "notifications" && <NotificationSettings />}
               {tab === "knowledge" && <KnowledgeSelection />}
+              {tab === "prompts" && <SavedPrompts />}
               {tab === "sources" && <SourcesUI title={TAB_INFO.sources.label} onGraph={setSourcesGraph} />}
               {tab === "models" && <>
                 <section id="settings-providers" className="scroll-mt-4">
