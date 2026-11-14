@@ -209,15 +209,16 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
   or still isn't recorded after 10 minutes.
 - Rule: herdr `done` and `seen_at` earlier than the session's last update time (the transcript's modification time, i.e. when the turn ended) → `unread`, otherwise `idle`.
   So if it does another turn after you looked, it becomes Unread again.
-- **Manual mark as read** (#7356, off by default; web Settings › Hub › Unread, iOS Settings › Agent): for people who keep Unread as a to-do mark.
+- **Manual mark as read** (#7356, off by default; web Settings › Hub › Unread, iOS Settings › Agent, Android Settings › Agents): for people who keep Unread as a to-do mark.
   On, looking is not reading: opening a conversation or an Agent, watching its turn end, the page coming back to the front and the watch send no seen
   (or one the hub ignores), and only the user's **Mark as read** (the chat's header / More menu, a row's menu, Mark All as Seen, the swipe) clears Unread.
   Those carry `manual: true` (WS `seen`, or `POST …/seen` with `{"manual":true}`); the manager records any other seen only while the switch is off, so an
-  older app, Android's scroll-based seen and the watch cannot clear Unread behind the user's back. The switch is one value per hub (`GET/PUT /api/v1/read-settings`,
+  older app, Android's scroll-based seen and the watch cannot clear Unread behind the user's back. The switch is one value, kept by the default manager (`GET/PUT /api/v1/read-settings`,
   WS `read_settings`); the apps keep the last value so a chat reopened before the hub answers is not marked, and turning it on lets go of the marks made by
   looking that the hub had not recorded yet (their rows are Unread again). The rule above is unchanged, so a new turn after Mark as read is Unread again.
-  Known gaps: Android has no switch in its Settings yet, and its capsule's automatic acknowledgement goes through the same call as its Mark as read, so it still
-  clears Unread in manual mode; with several managers, the switch is the default manager's.
+  Android (Settings › Agents) keeps the user's own marks (`HubPreferences.markSeen`) apart from looks (`markLooked`: the
+  capsule's shown reply), which it drops while the switch is on. With several managers the switch is the default
+  manager's, so another manager's sessions are not covered yet (#7696).
 
 ### Ordering
 
