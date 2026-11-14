@@ -615,6 +615,15 @@ iPhone's side comes next.
   `TCP_CONNECTION_INFO`, Linux `TCP_INFO`), the phone's measure of loss. When macOS's application firewall is on and the
   node isn't explicitly allowed through it (read with `socketfilterfw`, at most once a minute, never changed), the node
   doesn't listen and `paths` says `unavailable: "firewall"`, so no prompt appears on the Mac.
+- **The phone's side** (`PersonaScreenKit`, pure and tested with `swift test`): `ScreenLinkMessage` frames the wire
+  exactly as the node does (both check `spec/fixtures/screen-link`); `LinkReceiver` / `LinkSender` keep each channel's
+  offsets (bytes once and in order, what the node hasn't acknowledged kept within a window); `VideoMessageAssembler`
+  hands the decoder whole video messages only and drops a partial one on `reset`; `LinkMeter` turns pongs into
+  `LinkStats`; `RouteEligibility` names the phone interface a candidate may be dialed on (a LAN address only from
+  Wi-Fi or Ethernet on its subnet, a Tailscale address only through the phone's own Tailscale tunnel, never cellular,
+  another VPN or a proxy); `PathPolicy` picks the route: by minimum round trip, a direct route winning a tie with the
+  relay; at the stream's start at once, later only after 10 s healthy, a clear gain and 20 s since the last move; a lost
+  route left at once and a degraded one (loss ≥ 5 %, or 50 ms over its own floor for 5 s) when another is healthy.
 - **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
   again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
   or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
