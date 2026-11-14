@@ -47,9 +47,13 @@ import { SubscriptionsEntry } from "../subscriptions/SubscriptionsEntry";
  * The tab's pages, by its `extension` parameter (lib/extension-market.ts extensionsRoute): the list, an extension, a page an extension
  * draws, and the market (its catalog, one extension of it, the markets).
  */
-export function Extensions({ open, onOpen, onChannel, onConnector }: {
+export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside }: {
   open: string | null;
   onOpen: (id: string | null) => void;
+  /** The page's top bar has the way back to the list (a phone): an extension's page draws no Back of its own. */
+  headerBack?: boolean;
+  /** The extension open beside the list (Settings' two columns), whose row the list marks. */
+  openBeside?: string | null;
   /** `manager`: another manager's channel / connector (its extension's page links to its own); none: the default's. */
   onChannel?: (id: string, manager?: string) => void;
   onConnector?: (id: string, manager?: string) => void;
@@ -69,6 +73,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector }: {
               id={r.id}
               manager={manager}
               onBack={() => onOpen(null)}
+              headerBack={headerBack}
               onPage={(ui) => go({ kind: "page", id: r.id, ui, manager })}
               onUpgrade={(market, id) => go({ kind: "item", market, id, manager })}
               onChannel={onChannel}
@@ -84,7 +89,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector }: {
         </OwnedExtension>
       );
     case "catalog":
-      return <MarketCatalog onBack={() => onOpen(null)} onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })} onMarkets={() => go({ kind: "markets" })} />;
+      return <MarketCatalog onBack={headerBack ? undefined : () => onOpen(null)} onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })} onMarkets={() => go({ kind: "markets" })} />;
     case "item":
       // another manager's upgrade goes back to that manager's extension: the catalog is the default's
       return (
@@ -100,7 +105,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector }: {
     case "markets":
       return <Markets onBack={() => go({ kind: "catalog" })} />;
     default:
-      return <ExtensionList onOpen={onOpen} onMarket={() => go({ kind: "catalog" })} onMarkets={() => go({ kind: "markets" })} />;
+      return <ExtensionList onOpen={onOpen} onMarket={() => go({ kind: "catalog" })} onMarkets={() => go({ kind: "markets" })} openBeside={openBeside} />;
   }
 }
 
@@ -154,7 +159,10 @@ function StateDot({ extension }: { extension?: HubExtension | null }) {
 
 // ── the list ────────────────────────────────────────────
 
-function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) => void; onMarket: () => void; onMarkets: () => void }) {
+/** `openBeside`: the extension open beside the list (Settings' two columns): its row is marked current, and every row
+ *  puts its state under its name (with a warning, when it has one, in place of the description), so the narrow column
+ *  shows the name whole. */
+function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (id: string) => void; onMarket: () => void; onMarkets: () => void; openBeside?: string | null }) {
   const [extensions, setExtensions] = useState<HubExtension[] | null>(null);
   const [markets, setMarkets] = useState(false);
   const [error, setError] = useState("");
@@ -268,15 +276,30 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
           const kept = drafts.has(unsavedKey(p.id, p.manager));
           // the kept edits' mark goes before what is still missing, not instead of it
           const needs = p.needs_setup?.length ? t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) }) : "";
-          const note = p.error || [kept ? t("settings-extensions.unsaved") : "", needs].filter(Boolean).join(" · ") || p.description;
+          const warning = p.error || [kept ? t("settings-extensions.unsaved") : "", needs].filter(Boolean).join(" · ");
+          const compact = openBeside !== undefined;
+          const note = warning || (compact ? "" : p.description);
+          const sub = routeSub({ kind: "extension", id: p.id, manager: p.manager && p.manager !== defaultManager() ? p.manager : undefined }) ?? p.id;
+          const current = openBeside != null && openBeside === sub;
+          const state = (
+            <span className={cx("flex items-center gap-1.5 whitespace-nowrap text-ink-2", compact ? "mt-0.5 min-w-0 text-[11.5px]" : "shrink-0 text-[12px]")}>
+              <StateDot extension={p} />
+              <span className={cx(compact && "truncate")}>
+                {extensionState(p)}
+                {listAuthNote(p.auth)}
+                {p.upgrade?.state === "needs_permission" && t("settings-extensions.upgrade_pending")}
+              </span>
+            </span>
+          );
           return (
             <button
               key={`${p.manager ?? ""}:${p.id}`}
               type="button"
               data-extension-row={p.id}
               data-manager={p.manager ?? ""}
-              onClick={() => onOpen(routeSub({ kind: "extension", id: p.id, manager: p.manager && p.manager !== defaultManager() ? p.manager : undefined }) ?? p.id)}
-              className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover"
+              aria-current={current || undefined}
+              onClick={() => onOpen(sub)}
+              className={cx("flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors", current ? "bg-accent-tint" : "hover:bg-hover")}
               style={{ animation: `fade-up 320ms ${EASE} ${Math.min(i, 8) * 30}ms both` }}
             >
               <ExtensionLogo url={p.icon_url} manager={p.manager ?? ""} iconSize={15} className={cx("flex size-8 shrink-0 items-center justify-center rounded-[8px]", TILE[extensionTone(p)])} />
@@ -285,6 +308,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
                   <span className="truncate text-[13px] text-ink">{p.name}</span>
                   {p.source !== "installed" && sourceText(p.source) && <Pill>{sourceText(p.source)}</Pill>}
                 </div>
+                {compact && state}
                 {note && (
                   <div className={cx("mt-0.5 truncate text-[11.5px]", p.error ? "text-red" : kept || needs ? "text-orange" : "text-ink-3")}>
                     {note}
@@ -292,12 +316,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
                 )}
                 {packageDownloads(p.downloads) !== null && <div className="mt-0.5"><ExtensionDownloads downloads={p.downloads} /></div>}
               </div>
-              <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[12px] text-ink-2">
-                <StateDot extension={p} />
-                {extensionState(p)}
-                {listAuthNote(p.auth)}
-                {p.upgrade?.state === "needs_permission" && t("settings-extensions.upgrade_pending")}
-              </span>
+              {!compact && state}
               <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
             </button>
           );
@@ -388,11 +407,13 @@ function useUnsaved(): ReadonlyMap<string, Unsaved> {
   return unsaved;
 }
 
-function ExtensionDetail({ id, manager, onBack: back, onPage, onUpgrade, onChannel, onConnector }: {
+function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgrade, onChannel, onConnector }: {
   id: string;
   /** Whose extension it is (several managers); none: the default's. */
   manager?: string;
   onBack: () => void;
+  /** The page's top bar has the way back (a phone): no Back of its own. */
+  headerBack?: boolean;
   onPage: (ui: string) => void;
   onUpgrade: (market: string, id: string) => void;
   onChannel?: (id: string, manager?: string) => void;
@@ -655,9 +676,11 @@ function ExtensionDetail({ id, manager, onBack: back, onPage, onUpgrade, onChann
     <div>
       <div className="relative mb-3 flex items-center gap-2">
         {/* unsaved edits stay (the list marks them); Revert in the save bar drops them */}
-        <Button tone="quiet" icon="chevronLeft" onClick={back} className="-ml-2">
-          {t("settings-extensions.title")}
-        </Button>
+        {!headerBack && (
+          <Button tone="quiet" icon="chevronLeft" onClick={back} className="-ml-2">
+            {t("settings-extensions.title")}
+          </Button>
+        )}
         <OwnerMark manager={manager} />
         <span className="flex-1" />
         <IconButton icon="retry" label={t("settings-extensions.reload")} onClick={load} disabled={loading} />

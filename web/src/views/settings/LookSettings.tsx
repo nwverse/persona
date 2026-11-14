@@ -41,7 +41,7 @@ export function ThemeColorPicker() {
   };
   const sub = (c: AccentChoice) => (c === "persona" ? (personaAccent ? persona.name : t("ui-look.persona_none")) : t(`ui-look.${c}_sub`));
   return (
-    <div className="px-4 py-3">
+    <div className="px-4 py-3" data-settings-row="theme-color">
       <div className="text-[13px] text-ink">{t("ui-look.accent")}</div>
       <div className="mt-0.5 text-[11.5px] text-ink-3">{t("ui-look.accent_hint")}</div>
       <div role="radiogroup" aria-label={t("ui-look.accent")} className="mt-3 grid grid-cols-4 gap-x-1 gap-y-3 sm:grid-cols-7">
@@ -82,7 +82,7 @@ export function ThemeColorPicker() {
 export function TextSizeRow() {
   const size = useTextSize();
   return (
-    <Row label={t("ui-look.text_size")} hint={t("ui-look.text_size_hint")}>
+    <Row label={t("ui-look.text_size")} hint={t("ui-look.text_size_hint")} wrapHint anchor="text-size">
       <Segmented<TextSize> label={t("ui-look.text_size")} value={size} options={TEXT_SIZES.map((v) => ({ v, label: t(`ui-look.${v}`) }))} onChange={setTextSize} />
     </Row>
   );
@@ -92,7 +92,7 @@ export function TextSizeRow() {
 export function RecentChatsRow() {
   const count = useRecentCount();
   return (
-    <Row label={t("ui-look.recent_chats")} hint={t("ui-look.recent_chats_hint")} wrapHint>
+    <Row label={t("ui-look.recent_chats")} hint={t("ui-look.recent_chats_hint")} wrapHint anchor="recent-chats">
       <Segmented label={t("ui-look.recent_chats")} value={String(count)} options={RECENT_COUNTS.map((n) => ({ v: String(n), label: String(n) }))} onChange={(v) => setRecentCount(Number(v))} />
     </Row>
   );

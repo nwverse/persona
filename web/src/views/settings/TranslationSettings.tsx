@@ -72,7 +72,7 @@ export function TranslationSettings({ onConfigure }: { onConfigure: () => void }
           )}
         </>
       )}
-      <p className="px-1 text-[11.5px] leading-relaxed text-ink-3">
+      <p className="mb-6 px-1 text-[11.5px] leading-relaxed text-ink-3">
         {t("settings-translationsettings.local_note")}
       </p>
       {lark && picking && <ChatPicker selected={prefs.chats} onClose={() => setPicking(false)} onSave={(chats) => setTranslatePrefs({ chats })} />}

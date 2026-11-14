@@ -91,7 +91,7 @@ export function NotificationSettings() {
   return (
     <>
       <Group title={t("settings-notifications.system_title")} anchor="system" footer={systemFooter(system.permission, systemActive, system.always)}>
-        <Row icon="bell" label={t("settings-notifications.system")} hint={permissionHint(system.permission, system.on, system.always)}>
+        <Row icon="bell" anchor="notify-system" label={t("settings-notifications.system")} hint={permissionHint(system.permission, system.on, system.always)}>
           {system.permission === "denied" && <Pill tone="orange">{t("settings-notifications.denied_pill")}</Pill>}
           <Switch
             on={systemActive}
@@ -107,7 +107,7 @@ export function NotificationSettings() {
       </Group>
 
       <Group footer={t("settings-notifications.sound_footer")}>
-        <Row icon="volume" label={t("settings-notifications.sound")} hint={t("settings-notifications.sound_hint")}>
+        <Row icon="volume" anchor="notify-sound" label={t("settings-notifications.sound")} hint={t("settings-notifications.sound_hint")}>
           <Switch on={sound} onChange={setAttentionSoundEnabled} label={t("settings-notifications.sound")} />
         </Row>
       </Group>

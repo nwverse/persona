@@ -28,12 +28,15 @@ import { OperationSteps, useOperation } from "./ExtensionOperation";
 // A paragraph of body text in the market's pages and dialogs, as each writes it.
 const BODY = "text-[12.5px] leading-relaxed text-ink-2";
 
-function Back({ label, onBack, right }: { label: string; onBack: () => void; right?: React.ReactNode }) {
+/** `onBack`: none where the page's top bar has the way back (a phone, Settings.tsx). */
+function Back({ label, onBack, right }: { label: string; onBack?: () => void; right?: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-center gap-2">
-      <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
-        {label}
-      </Button>
+      {onBack && (
+        <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
+          {label}
+        </Button>
+      )}
       <span className="flex-1" />
       {right}
     </div>
@@ -69,7 +72,7 @@ function TokenHint({ onFix }: { onFix: () => void }) {
 
 const askKey = (q: string, market: string) => `${market}\n${q}`;
 
-export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => void; onOpen: (it: CatalogItem) => void; onMarkets: () => void }) {
+export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack?: () => void; onOpen: (it: CatalogItem) => void; onMarkets: () => void }) {
   const [q, setQ] = useState("");
   const [market, setMarket] = useState("");
   const [data, setData] = useState<Catalog | null>(null);

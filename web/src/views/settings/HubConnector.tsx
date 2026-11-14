@@ -52,7 +52,9 @@ function Mark({ id, size }: { id: string; size: number }) {
 
 // ── the rows on Settings › Connectors ────────────────────
 
-export function ConnectorList({ onOpen, onLarkCli }: { onOpen: (id: string) => void; onLarkCli?: (connector: HubConnector | null) => void }) {
+/** `openBeside`: the connector open beside the list (Settings' two columns): its row is marked current, and every row
+ *  puts its state under its name, so the narrow column shows the name whole. */
+export function ConnectorList({ onOpen, onLarkCli, openBeside }: { onOpen: (id: string) => void; onLarkCli?: (connector: HubConnector | null) => void; openBeside?: string | null }) {
   const [all, setAll] = useState<HubConnector[] | null>(null);
   const [error, setError] = useState("");
   const lark = useLarkOn();
@@ -85,17 +87,33 @@ export function ConnectorList({ onOpen, onLarkCli }: { onOpen: (id: string) => v
     <Group title={t("settings-hubconnector.more_title")} footer={t("settings-hubconnector.more_footer")}>
       {!list && !error && <div className="px-4 py-3"><Loading /></div>}
       {error && <p className="px-4 py-3 text-[12.5px] text-red">{t("settings-hubconnector.list_failed", { error })}</p>}
-      {(list ?? []).map((c) => (
-        <button key={`${c.manager ?? ""}:${c.id}`} type="button" data-connector-row={c.id} data-manager={c.manager ?? ""} onClick={() => onOpen(ownedSub(c.id, c.manager))} className="flex w-full items-center gap-3 px-4 py-2.5 text-left whitespace-nowrap transition-colors hover:bg-hover">
-          <Mark id={c.id} size={32} />
-          <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{c.name}</span>
-          <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-ink-2">
+      {(list ?? []).map((c) => {
+        const current = openBeside != null && openBeside === ownedSub(c.id, c.manager);
+        const state = (
+          <span className={cx("flex min-w-0 items-center gap-1.5 text-ink-2", openBeside !== undefined ? "mt-0.5 text-[11.5px]" : "text-[12.5px]")}>
             <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT[connectorTone(c)])} />
             <span className="truncate">{connectorSummary(c)}</span>
           </span>
-          <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
-        </button>
-      ))}
+        );
+        return (
+          <button key={`${c.manager ?? ""}:${c.id}`} type="button" data-connector-row={c.id} data-manager={c.manager ?? ""} aria-current={current || undefined} onClick={() => onOpen(ownedSub(c.id, c.manager))}
+            className={cx("flex w-full items-center gap-3 px-4 py-2.5 text-left whitespace-nowrap transition-colors", current ? "bg-accent-tint" : "hover:bg-hover")}>
+            <Mark id={c.id} size={32} />
+            {openBeside !== undefined ? (
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13px] text-ink">{c.name}</span>
+                {state}
+              </span>
+            ) : (
+              <>
+                <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{c.name}</span>
+                {state}
+              </>
+            )}
+            <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
+          </button>
+        );
+      })}
     </Group>
   );
 }
@@ -104,7 +122,8 @@ export function ConnectorList({ onOpen, onLarkCli }: { onOpen: (id: string) => v
 
 /** `manager`: whose connector (another manager's, opened from its extension's page, docs/assistant/managers.md "Clients"): the
  *  merged list's copy of that manager, and every request of the page names it while it is open; none: the current assistant's (Connectors fills it in). */
-export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string; manager?: string; onBack: () => void; onChannel?: (id: string, manager?: string) => void }) {
+/** `onBack`: none where the page's top bar has the way back (a phone). */
+export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string; manager?: string; onBack?: () => void; onChannel?: (id: string, manager?: string) => void }) {
   useLayoutEffect(() => pinManagerAt(id === "imessage" ? [`/connectors/${encodeURIComponent(id)}`, "/imessage"] : [`/connectors/${encodeURIComponent(id)}`], otherManager(manager)), [id, manager]);
   const [c, setC] = useState<HubConnector | null>(null);
   const [failure, setFailure] = useState("");
@@ -167,7 +186,7 @@ export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string
   return (
     <div>
       <div className="mb-3 flex items-center gap-2">
-        <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-hubconnector.back")}</Button>
+        {onBack && <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-hubconnector.back")}</Button>}
         <OwnerMark manager={manager} />
         <span className="flex-1" />
         <IconButton icon="retry" label={t("settings-hubconnector.recheck")} onClick={() => void load()} disabled={loading} />

@@ -112,7 +112,7 @@ export function ShortcutSettings() {
         }
         footer={prefs.off ? t("settings-shortcutsettings.all_off_footer") : undefined}
       >
-        <Row label={t("settings-shortcutsettings.enable_all")} hint={t("settings-shortcutsettings.enable_all_hint")}>
+        <Row label={t("settings-shortcutsettings.enable_all")} hint={t("settings-shortcutsettings.enable_all_hint")} anchor="shortcuts-all">
           <Switch on={!prefs.off} onChange={setShortcutsOn} label={t("settings-shortcutsettings.enable_all")} />
         </Row>
       </Group>
