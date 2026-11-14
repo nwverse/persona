@@ -2,6 +2,7 @@ package node
 
 import (
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -194,6 +195,52 @@ func TestHeldFirstMessageGivesWayToAnotherMessage(t *testing.T) {
 	writeUserLine(t, home, cwd, startedID(f), "something else")
 	f.setScreens("w1:p2", screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi"))
 	startHerdr(f, "w1:p2", proto.StatusIdle)
+	n.dialogWait.Wait()
+	if got := f.trace("agent.prompt"); len(got) != 0 {
+		t.Errorf("held first message typed after another one: %v", got)
+	}
+}
+
+// A send that held the typing lock while the held first message waited for it, and left its own text in the box
+// (its delivery not confirmed, so the transcript has no new message), keeps the held message out: the box is looked at
+// again under the lock, and the first message is not pasted onto that draft and sent with it.
+func TestHeldFirstMessageRechecksTheBoxUnderTheTypingLock(t *testing.T) {
+	withFirstAfterDialog(t, 10*time.Second, 20*time.Millisecond)
+	n, f, home := herdrNode(t)
+	cwd := mkdir(t, filepath.Join(home, "proj"))
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	startHerdr(f, "w1:p2", proto.StatusBlocked)
+	f.setScreen("w1:p2", screenFixture(t, "claude-2.1.312-model-picker-162.txt"))
+	if _, err := request(t, n, "session.start", map[string]any{"cwd": cwd, "workspace_id": "w1",
+		"prompt": "fix the build"}); err != nil {
+		t.Fatal(err)
+	}
+	id := startedID(f)
+
+	// Another send takes the session's typing lock; then the dialog is answered and the box shows empty.
+	unlock := n.typing.lock(id)
+	reads := len(f.trace("pane.read"))
+	f.setScreens("w1:p2", screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi"))
+	startHerdr(f, "w1:p2", proto.StatusIdle)
+	for deadline := time.Now().Add(5 * time.Second); len(f.trace("pane.read")) == reads; runtime.Gosched() {
+		if time.Now().After(deadline) {
+			unlock()
+			t.Fatal("the held first message never looked at the box")
+		}
+	}
+	// The other send leaves its text in the box and lets go.
+	f.setScreens("w1:p2", screenFixture(t, "claude-2.1.312-typed-162.txt"), screenFixture(t, "claude-2.1.312-typed-162.ansi"))
+	unlock()
+	reads = len(f.trace("pane.read"))
+	for deadline := time.Now().Add(5 * time.Second); len(f.trace("pane.read")) < reads+3; runtime.Gosched() {
+		if time.Now().After(deadline) {
+			t.Fatal("the held first message stopped looking at the box")
+		}
+	}
+	if got := f.trace("agent.prompt"); len(got) != 0 {
+		t.Fatalf("held first message typed onto another draft: %v", got)
+	}
+	writeUserLine(t, home, cwd, id, "the other message") // it goes in after all: the held one gives way
 	n.dialogWait.Wait()
 	if got := f.trace("agent.prompt"); len(got) != 0 {
 		t.Errorf("held first message typed after another one: %v", got)

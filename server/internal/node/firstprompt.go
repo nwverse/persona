@@ -125,6 +125,20 @@ func (n *Node) firstAfterDialog(pane, id, prompt string, since time.Time, wait, 
 			unlock()
 			return
 		}
+		// Look again under the lock: a send that held it may have left its text in the box (its delivery not
+		// confirmed, so ours still holds), and the held message must not be pasted onto that draft and sent with it.
+		ctx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		ready, gone = n.boxFreeAfterDialog(ctx, pane)
+		cancel()
+		if gone {
+			unlock()
+			log.Printf("start %s: claude left the pane while its first message waited for a dialog", id)
+			return
+		}
+		if !ready {
+			unlock()
+			continue
+		}
 		why := n.typeFirstAfterDialog(pane, id, prompt)
 		unlock()
 		if why == errDialogBack {
