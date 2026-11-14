@@ -3348,6 +3348,10 @@ type ConnectorTool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 	// Words that run the tool in a shell instead (a gated command's); runtimes refuse them in an assistant conversation.
 	Shell []string `json:"shell,omitempty"`
+	// Set by Persona itself on an assistant conversation's tool list: a rarely used tool is sent by name only and loaded
+	// with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every list
+	// whatever a connector sent.
+	DeferLoading bool `json:"defer_loading,omitempty"`
 }
 
 // ConnectorTools: tools.list and actions.list.

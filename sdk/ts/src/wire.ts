@@ -3452,6 +3452,12 @@ export interface ConnectorTool {
    * conversation.
    */
   shell?: string[];
+  /**
+   * Set by Persona itself on an assistant conversation's tool list: a rarely used tool is sent by name only and
+   * loaded with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every
+   * list whatever a connector sent.
+   */
+  defer_loading?: boolean;
 }
 
 /**
