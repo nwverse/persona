@@ -286,6 +286,16 @@ var rpcFailureKeys = map[string]string{
 	proto.CodeSwitchBusy:            "rpc-errors.switch_busy",
 }
 
+// openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go
+// whereOpen). One without a known where (an older node, an Agent runtime's own refusal) keeps its words.
+var openElsewhereKeys = map[string]string{
+	"desktop":     "rpc-errors.open_elsewhere_desktop",
+	"terminal":    "rpc-errors.open_elsewhere_terminal",
+	"program":     "rpc-errors.open_elsewhere_program",
+	"other":       "rpc-errors.open_elsewhere_other",
+	"agents_list": "rpc-errors.open_elsewhere_agents_list",
+}
+
 func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	if l == "" {
 		return
@@ -299,6 +309,10 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	}
 	code, _ := body["code"].(string)
 	key := rpcFailureKeys[code]
+	if code == "open_elsewhere" {
+		where, _ := body["where"].(string)
+		key = openElsewhereKeys[where]
+	}
 	if errors.Is(err, ErrOffline) {
 		key = "rpc-errors.offline"
 	}
