@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.JsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -156,5 +158,57 @@ class AssistantSharedAgentShotsTest {
         val stopped = hasAnyAncestor(hasTestTag("assistant-progress-todo:tests"))
         rule.onNode(hasText("Stopped") and stopped, useUnmergedTree = true).assertIsDisplayed()
         rule.onNode(hasTestTag("assistant-work-spinner") and stopped, useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun anUnsharedRunningTaskKeepsItsProjectedBlockedAndStoppedAppearance() {
+        val at = Instant.now().toString()
+        val idle = Session("box", "solo", title = "Independent task", state = "idle", status = "idle")
+        val todo = Todo("solo", idle.title, origin = "main", agents = listOf(TodoAgent("box", "solo")), createdAt = at, updatedAt = at)
+        // An ask without a verdict is not an open decision, but the existing projection still draws it as blocked.
+        val blocked = todo.copy(ask = TodoAsk(askedAt = at))
+        val api = Api(listOf(blocked))
+        val connection = object : HubConnection {
+            override val state = MutableStateFlow(ConnectionState.WaitingForNetwork)
+            override val events = MutableSharedFlow<ServerEvent>()
+            override fun reconnect() = Unit
+            override fun send(message: JsonObject) = true
+        }
+        val tasks = TasksStore(api, connection, scope).also { it.reloadTodos(); it.loadTodayIfMain("main") }
+        val host = AssistantTaskHost(tasks, "main", listOf(idle), { it }, {}, { throw it }, {})
+        val tray = AssistantTrayState().also { it.expanded = AssistantTray.Running }
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            val configuration = Configuration(LocalConfiguration.current).apply {
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+            }
+            CompositionLocalProvider(LocalConfiguration provides configuration) {
+                PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
+                    Column(Modifier.width(400.dp).background(PersonaTheme.palette.background).testTag("shared-agent-trays")) {
+                        AssistantTrays(host, tray, emptyList(), emptyList(), emptyList(), 400.dp, busy = false, enabled = true,
+                            onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
+                    }
+                }
+            }
+        }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d; api.rows = listOf(blocked); tasks.reloadTodos(); settle()
+            val projection = trayProgress(api.rows, emptyList(), host).single()
+            assertTrue(projection.blocked); assertFalse(projection.stopped)
+            badge("running", 1)
+            val row = hasAnyAncestor(hasTestTag("assistant-progress-todo:solo"))
+            rule.onNode(hasText("Blocked") and row, useUnmergedTree = true).assertIsDisplayed()
+            rule.onNode(hasText("Stopped") and row, useUnmergedTree = true).assertDoesNotExist()
+            val suffix = "${s.name.lowercase()}-${if (d) "dark" else "light"}"
+            shot("unshared-blocked-$suffix")
+            api.rows = listOf(todo); tasks.reloadTodos(); settle()
+            val stopped = trayProgress(api.rows, emptyList(), host).single()
+            assertFalse(stopped.blocked); assertTrue(stopped.stopped)
+            rule.onNode(hasText("Stopped") and row, useUnmergedTree = true).assertIsDisplayed()
+            rule.onNode(hasText("Blocked") and row, useUnmergedTree = true).assertDoesNotExist()
+            shot("unshared-stopped-$suffix")
+        }
     }
 }

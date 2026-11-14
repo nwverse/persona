@@ -1,6 +1,7 @@
 package persona.core.domain.tasks
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import persona.core.contracts.Interaction
@@ -41,6 +42,7 @@ class AssistantEntriesSharedAgentTest {
         assertEquals(listOf("task:release"), got.needsYou.map { it.key })
         assertEquals(listOf("task:cache", "task:tests"), got.running.map { it.key }.sorted())
         assertTrue(got.running.all { (it as RunningEntry.Task).status == TriageStatus.Working })
+        assertTrue(got.running.all { (it as RunningEntry.Task).hasAgentsElsewhere })
         assertTrue(got.shelved.isEmpty())
     }
 
@@ -102,5 +104,12 @@ class AssistantEntriesSharedAgentTest {
             interactions = emptyList())
         assertEquals(listOf("task:tests"), got.needsYou.map { it.key })
         assertEquals(listOf("task:cache"), got.running.map { it.key })
+        assertTrue((got.running.single() as RunningEntry.Task).hasAgentsElsewhere)
+    }
+
+    @Test fun anUnsharedAgentsTaskDoesNotHaveAgentsElsewhere() {
+        val got = run(listOf(todo("only")), asking.copy(state = "idle", status = "idle"), interactions = emptyList())
+        assertEquals(listOf("task:only"), got.running.map { it.key })
+        assertFalse((got.running.single() as RunningEntry.Task).hasAgentsElsewhere)
     }
 }
