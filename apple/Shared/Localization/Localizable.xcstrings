@@ -195426,6 +195426,29 @@
           }
         }
       }
+    },
+    "On a Personal Hotspot" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On a Personal Hotspot"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "インターネット共有を使用中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在使用个人热点"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

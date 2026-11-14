@@ -79,13 +79,18 @@ struct VNCPage: View {
                 #if os(iOS) || os(visionOS)
                 if let f = fallback { fallbackBanner(f) }
                 #endif
-                #if os(iOS)
-                if mobileDataCard {
-                    ScreenMobileDataCard { choice in
-                        ScreenMobileData.choose(choice)
-                        withAnimation(Theme.Motion.standard) { mobileDataCard = false }
+                #if os(iOS) && canImport(PersonaScreenKit)
+                if mobileDataCard || session?.video.askMobileData == true {
+                    ScreenMobileDataCard(hotspot: session?.video.onHotspot == true) { choice in
+                        withAnimation(Theme.Motion.standard) {
+                            mobileDataCard = false
+                            if let s = session { s.video.chooseMobileData(choice) } else { ScreenMobileData.choose(choice) }
+                        }
                     } close: {
-                        withAnimation(Theme.Motion.standard) { mobileDataCard = false }
+                        withAnimation(Theme.Motion.standard) {
+                            mobileDataCard = false
+                            session?.video.dismissMobileData()
+                        }
                     }
                     .transition(.opacity)
                 }
@@ -127,12 +132,13 @@ struct VNCPage: View {
             if args.contains("-showScreenStatsDemo") { statsOn = true }
             if args.contains("-showScreenFallbackDemo") { fallbackDemo = .lost }
             // `-showScreenMobileData`: the mobile-data question, for screenshots (#6396).
-            #if os(iOS)
+            #if os(iOS) && canImport(PersonaScreenKit)
             if args.contains("-showScreenMobileData") { mobileDataCard = true }
             #endif
             #endif
             #endif
             #if os(iOS) && canImport(PersonaScreenKit)
+            session?.video.setQuality(quality) // before the stream opens: its first tier follows the choice (#6396)
             session?.video.want(videoWant)
             #endif
         }
@@ -399,7 +405,13 @@ struct VNCPage: View {
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("screen-picture")
                 if picture == .video, qualityOffered {
-                    Picker(selection: Binding(get: { quality }, set: { quality = $0; ScreenQuality.set($0, for: ref) })) {
+                    Picker(selection: Binding(get: { quality }, set: { q in
+                        quality = q
+                        ScreenQuality.set(q, for: ref)
+                        #if os(iOS) && canImport(PersonaScreenKit)
+                        session?.video.setQuality(q)
+                        #endif
+                    })) {
                         ForEach(ScreenQuality.allCases, id: \.self) { q in Text(q.label).tag(q) }
                     } label: {
                         Label("Quality", systemImage: Theme.Icon.pluginGauge)

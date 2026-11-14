@@ -586,6 +586,21 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   - **Simulated links** (`TierPolicySimulationTests`, the real types over a shaped link): a steady link never moves in
     10 minutes; the relay settles on 2×60 in 5 s; 25 → 3 Mbit/s steps down in 1 s to 1.5×30 and holds (queueing p50 32
     / p95 179 ms, against 543 / 1,033 with 2×60 fixed); a link jittering 5–9 Mbit/s for 10 minutes never moves.
+  - **The app** (`ScreenVideoTiers`, `ScreenVideoStream`, `ScreenVideoLink`): when the helper's `hello` lists `tiers`
+    with the display's points and pixels and this app has them (`ScreenTiers.appSupported`), the stream starts a policy
+    and sends its first tier as an `update` (`scale`, `fps`, `min_kbps`, `max_kbps`, `target_kbps`). The stream feeds it
+    every frame from its own task (arrival, the time a frame spread over several reads began, decode time, pictures
+    replaced before they showed) and ticks it every 250 ms; a new tier goes out as an `update` and to the link (the
+    overlay's tier and reason). ⋯ › Quality changes the bias on the running stream; a route change (#6398) restarts the
+    phone's delay floor and lets the policy look again; the tier each computer settles on, by kind of route, is where its
+    next stream starts in this app run. ⋯ › Quality shows only with tiers on both sides.
+  - **Mobile data** (`ScreenMobileData`, the user's choice, for every computer, Settings › Live Screen › Quality on Mobile
+    Data): on an expensive network (cellular or a personal hotspot, `NWPath.isExpensive`) with tiers, Clearer keeps the
+    4 Mbit/s cap (about 0.6 GB an hour of typical use on `screenbench`), Data Saver 1.5 Mbit/s at one pixel per point
+    (about 0.2–0.3 GB an hour, `TierPolicy`'s `maxScale`); Low Data Mode is always Data Saver. Until the user chooses, the
+    picture starts on Data Saver and the page asks once (`ScreenMobileDataCard`, titled for cellular or a hotspot by
+    whether the path uses the cellular interface); unanswered, it asks once more next time, then no more. Without tiers
+    the caps are as before.
 - **Switching**: RFB signs in first and shows until the first video frame decodes; the phone then stops asking RFB for
   updates (Screen Sharing encodes nothing meanwhile). It returns to RFB within about a second on any of: the stream
   closes, no frame or heartbeat for 3 s, a decoding error, or the Mac locks (`paused`), then retries video after 30 s
