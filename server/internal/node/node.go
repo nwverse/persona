@@ -31,6 +31,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/screenlink"
 	"github.com/nwverse/persona/server/internal/streams"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -299,8 +300,11 @@ type Node struct {
 	// screens: live-screen hardware video channel (#3954). Login binding per `pair` and the busy count (screen.go).
 	// screenStart starts the capture/encode helper (Persona Screen.app) for a stream: startScreenHelper on a Mac
 	// (screenhelper.go), nil elsewhere, where screen.dial returns video_unavailable and the screen stays RFB only.
+	// links: the screen sessions (#6398, screenlink): a live screen whose phone asked for one has its RFB and video
+	// streams as channels of one session, so they can move between routes without losing a byte. nil: never.
 	screens     *screenLogins
-	screenStart func(ctx context.Context, id, pair string, keepAwake bool, done func()) error
+	screenStart func(ctx context.Context, id, pair string, keepAwake, link bool, done func()) (linked bool, err error)
+	links       *screenlink.Registry
 }
 
 func New(version string) (*Node, error) {
@@ -359,6 +363,7 @@ func New(version string) (*Node, error) {
 	if runtime.GOOS == "darwin" {
 		n.screenStart = n.startScreenHelper // Persona Screen, the live screen's video helper (#3954)
 	}
+	n.links = screenlink.NewRegistry(screenlink.DefaultLimits, n.logger.Printf)
 	n.configureCodex(proto.CodexConfig{})
 	n.hosts = host.NewRegistry(nodeHosts(proto.EngineHerdr, false, n.logger.Printf)...) // herdr until engine.use, botmux until the hub says
 	n.resetSignals()
