@@ -55,6 +55,7 @@
   "retry": "Retry",
   "effort": "Reasoning effort",
   "save_note": "Saving only changes the configuration. It doesn't send a model request or interrupt running tasks.",
+  "main_other_kind": "The current main chat runs on {actual}. {configured} applies to a new main chat, not this one.",
   "reload_discard": "Reload (discard edits)",
   "save_note_plugin": "Saving only changes the configuration. It doesn't send a model request or interrupt running tasks. The voice model is Persona's default choice and doesn't change the extension's own provider or credentials.",
   "runtime": "Runtime",

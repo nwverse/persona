@@ -849,6 +849,12 @@ pills keep their existing single-line layout. A separate, labelled 44 px **?** c
 hover, focus or click, with Escape/outside-click dismissal. Why inline: explanations include environment and configuration
 details that must remain readable on phones and at larger text sizes; a short tooltip or a nested button would not fit.
 
+The Main-chat agent-kind notice (#4662, `MainChatAgentNotice`) reuses the compaction strip's neutral surface, spacing,
+caption text and info icon; its explanation wraps, and the quiet **New main chat…** button stays on one line, opens
+the existing dialog and has the existing `touch-hit` 44 px coarse-pointer target without changing its drawn height. It appears only when the loaded launcher list confirms that the current main chat and its configured
+default use different agent kinds, with no conversation pick. The Models editor uses the same rule in an inset explanation
+that follows the provider draft. Same-kind, unknown and unloaded states add no warning or new action.
+
 Assistant In progress activity marks (#3588) reuse the existing Working spinner (`TaskMark` on web, `JSpinner` on
 Android) for active background commands, Monitor, workflows and subagents. A waiting parent is not an idle task.
 The subtitle, not another icon vocabulary, explains what is running and its counts/phase; only a real wait with no

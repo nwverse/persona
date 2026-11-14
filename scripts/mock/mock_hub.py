@@ -13592,6 +13592,9 @@ def model_configuration(include_uses=False):
                       model=l.get("model"), hidden=l.get("hidden", False)) for l in LAUNCHERS if l["source"] != "builtin"]
     providers += [{"id": "launcher.claude", "name": "claude", "kind": "launcher", "model": "model-chat"},
                   {"id": "legacy.ai", "name": "轻量 API", "kind": "api", "api": "messages", "model": "model-fast"}]
+    if os.environ.get("MOCK_MODEL_PICK") == "otherkind":
+        # The current main chat runs Codex while Main chat still defaults to Claude (#4662).
+        next(p for p in providers if p["id"] == "launcher.codex").update(agent="codex", agent_type="codex")
     definitions = list(MODEL_DEFINITIONS if include_uses else MODEL_DEFINITIONS[:4])
     if include_uses:
         definitions += [("task." + t["id"], t.get("title") or "跟进任务", "主对话", "launcher") for t in SCHEDULE]
@@ -29103,8 +29106,11 @@ MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型
 # /api/v1/assistant/conversations/{id}/model keep or drop `model_pick` on the conversation (the out-of-scope one is 409
 # launcher_out_of_scope, an unknown one 409 launcher_missing, another agent than the chat's 409 launcher_other_kind, a
 # model with sonnetcc 400). =picked: the second chat starts
-# with a pick. GET /mock/model_pick: the requests; ?reset=1 drops every pick.
+# with a pick. =otherkind: the main chat already runs Codex while its default stays Claude (#4662). GET /mock/model_pick:
+# the requests; ?reset=1 drops every pick and restores the default; ?default=claude|codex|gone changes the launcher-list
+# default for the notice's positive, same-kind and unknown-default browser cases.
 MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
+MODEL_PICK_DEFAULT = "claude"
 MODEL_PICK_LOG = []
 MODEL_PICK_LAUNCHERS = [
     {"name": "claude", "model": "opus", "source": "builtin"},
@@ -29128,28 +29134,37 @@ if MODEL_PICK_MODE:
 
 
 def model_pick_reset():
+    global MODEL_PICK_DEFAULT
+    MODEL_PICK_DEFAULT = "claude"
     for s in ASSISTANT:
         s.pop("model_pick", None)
     if MODEL_PICK_MODE == "picked":
         for s in ASSISTANT:
             if s["session_id"] == ASK2:
                 s["model_pick"] = {"launcher": "team-api", "effort": "medium"}
+    elif MODEL_PICK_MODE == "otherkind":
+        for s in ASSISTANT:
+            if s["session_id"] == ASK1:
+                s.update(agent="codex", launcher="codex", model="gpt-5.5", effort="medium")
 
 
 def model_pick_route(handler, p, body):
     """MOCK_MODEL_PICK: the main chat's launchers with `unavailable`, PUT / DELETE …/conversations/{id}/model. False otherwise."""
     if not MODEL_PICK_MODE: return False
+    global MODEL_PICK_DEFAULT
     query = parse_qs(urlparse(handler.path).query)
     lang = cron_lang(handler.headers.get("Accept-Language"))
     if p == "/mock/model_pick":
         if query.get("reset"):
             model_pick_reset()
             push_machine(ASSISTANT_CONFIG["machine_id"])
-        return handler.send_json({"requests": MODEL_PICK_LOG}) or True
+        if query.get("default"):
+            MODEL_PICK_DEFAULT = query["default"][0]
+        return handler.send_json({"requests": MODEL_PICK_LOG, "default": MODEL_PICK_DEFAULT}) or True
     if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
         return handler.send_json({
             "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
-            "default": {"provider": "claude", "model": "opus", "effort": "high"},
+            "default": {"provider": MODEL_PICK_DEFAULT, "model": "gpt-5.5" if MODEL_PICK_DEFAULT == "codex" else "opus", "effort": "high"},
             "unavailable": [
                 {"name": "gpt-direct", "display_name": "GPT direct", "kind": "api", "api": "responses", "code": "api_protocol", "reason": MODEL_PICK_REASONS["api_protocol"][lang]},
                 {"name": "far-gw", "display_name": "Far gateway", "kind": "launcher", "code": "launcher_out_of_scope", "reason": MODEL_PICK_REASONS["launcher_out_of_scope"][lang]},
@@ -29197,9 +29212,10 @@ def features():
     return _features_without_model_pick() + (["assistant_model_pick", "assistant_start_service_tier"] if MODEL_PICK_MODE else [])
 
 
-MOCK_HELP.append("MOCK_MODEL_PICK=1|picked  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
+MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
                  "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
-                 "picked：第二个对话一开始就有自己的选择。GET /mock/model_pick 看请求，?reset=1 复原")
+                 "picked：第二个对话一开始就有自己的选择；otherkind：当前主对话跑 Codex、默认仍是 Claude（#4662）。"
+                 "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
 
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another

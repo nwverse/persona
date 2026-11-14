@@ -6,7 +6,9 @@ import {
   type ModelBinding, type ModelConfigurationBody, type ModelDraft, type ModelProvider, type ModelPurpose, type ModelPurposeBody,
 } from "../../lib/model-config";
 import { agentsOverride, catalogLists, chooseProvider, draftFor, executionForm, modelConfiguration, providersFor, purposeDescription, purposeGroups, purposeLaunch, runtimeChoices, saveModelPurpose, supportsField, withPurposeAfter } from "../../lib/model-config-execution";
+import { ASSISTANT_MODEL_PICK_FEATURE, mainChatAgentMismatch } from "../../lib/assistant-models";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
+import type { AssistantLaunchers } from "../../lib/session-models";
 import { effortChoices, providerModels, takesEffort } from "../../lib/launcher-models";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
@@ -155,6 +157,13 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
   const refreshNext = useRef(false);
   const search = useRef<HTMLInputElement>(null);
   const machines = useStore((s) => s.machines);
+  const mainSession = useStore((s) => {
+    const a = s.assistant;
+    if (!a?.main) return undefined;
+    return (s.sessions[a.machine_id] ?? []).find((row) => row.session_id === a.main)
+      ?? a.conversations.find((row) => row.machine_id === a.machine_id && row.session_id === a.main);
+  });
+  const kept = useStore((s) => s.features.includes(ASSISTANT_MODEL_PICK_FEATURE));
   const load = async () => {
     if (!id) return;
     try {
@@ -208,6 +217,22 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
   const effectiveProvider = data?.providers.find((v) => v.id === p?.effective?.provider);
   const effectiveAgent = providerAgent(effectiveProvider, p?.effective?.provider);
   const chosenAgent = (launcherList.provider === listProvider && launcherList.list?.agent) || providerAgent(chosen, draft.provider || p?.effective?.provider);
+  const mainDefaultProvider = draft.provider || p?.effective?.provider;
+  const mainInfo: AssistantLaunchers = {
+    launchers: (data?.providers ?? []).map((v) => ({ name: v.id, display_name: v.name, agent: providerAgent(v) })),
+    def: mainDefaultProvider ? { provider: mainDefaultProvider } : undefined,
+    unavailable: [],
+  };
+  const mainMismatch = p?.id === "assistant"
+    ? mainChatAgentMismatch({ session: mainSession, isMain: true, kept, config: mainDefaultProvider }, mainInfo)
+    : undefined;
+  const mainLauncherName = (launcher: string) => {
+    const all = data?.providers ?? [];
+    // A session names its launcher; Model configuration prefixes launcher providers. Prefer an exact managed-provider id.
+    return (all.find((v) => v.id === launcher) ?? all.find((v) => v.id === `launcher.${launcher}`))?.name ?? launcher;
+  };
+  const configuredMainName = mainMismatch ? mainLauncherName(mainMismatch.configuredLauncher) : "";
+  const actualMainName = mainMismatch ? mainLauncherName(mainMismatch.actualLauncher) : "";
   const runtimes = p ? runtimeChoices(p, chosenAgent) : [];
   const previewForm = p ? executionForm({ ...p, effective: { ...p.effective, provider: draft.provider || p.effective?.provider, runtime: draft.runtime || p.effective?.runtime } }, data?.providers, machines) : undefined;
   const listMachine = machines.find((m) => m.id === launcherList.machine)?.name ?? launcherList.machine;
@@ -309,6 +334,9 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
             onChange={(runtime) => { if (!busy && chosenAgent === "claude") setDraft((d) => ({ ...d, runtime })); }} />
           {chosenAgent === "claude" && <span className="mt-1 block text-[11px] text-ink-3">{t("settings-modelconfiguration.runtime_hint")}</span>}
         </div>}
+        {mainMismatch && <p data-main-chat-agent-setting className="rounded-control bg-inset px-3 py-2 text-[12px] leading-relaxed text-ink-2">
+          {t("settings-modelconfiguration.main_other_kind", { configured: configuredMainName, actual: actualMainName })}
+        </p>}
         <p className="text-[11.5px] leading-relaxed text-ink-3">{p.kind === "plugin" ? t("settings-modelconfiguration.save_note_plugin") : t("settings-modelconfiguration.save_note")}</p>
       </div>}
       {error && <p role="alert" className="mt-3 text-[12px] text-red">{error}</p>}
