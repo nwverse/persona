@@ -2,6 +2,19 @@ import BeautifulUI
 import PhotosUI
 import SwiftUI
 
+/// The Assistant stack's conversation-selection rules, pure so every launch and reconnect case can be tested.
+nonisolated enum AssistantCurrentNavigation {
+    /// An automatic nil-to-main selection leaves every page already pushed over the conversation alone.
+    static func keepsPushedPages(old: SessionKey?, new: SessionKey?, main: SessionKey?) -> Bool {
+        old == nil && new != nil && new == main
+    }
+
+    /// A real hub-group change clears pages belonging to the old hub; initial pairing and reconnects do not.
+    static func clearsPushedPages(oldHub: String?, newHub: String?) -> Bool {
+        oldHub != nil && newHub != nil && oldHub != newHub
+    }
+}
+
 /// The Persona tab: one personal assistant (a Claude session in ~/.persona/assistant on the hub's machine) that can reach the
 /// user's computers, iPhone data, mail, company data and the knowledge base. One conversation is the main one (where the
 /// user usually talks to it, and where other pages hand things to it); the others are side conversations.
@@ -26,10 +39,13 @@ struct AssistantView: View {
     @Environment(\.splitDetail) private var split
     @Environment(\.splitShowList) private var showList
     private var embedded: Bool { unified != nil && shell == nil && hostPath != nil }
+    /// The Sidebar layout on a phone: the page under the drawer (`SplitDetail.drawer`).
+    private var drawerPage: Bool { embedded && split?.drawer == true }
     /// The path this page's pages are pushed on: the page beside the sidebar's in the Sidebar layout, its own otherwise.
     private var navPath: Binding<NavigationPath> { hostPath ?? $path }
     #else
     private var embedded: Bool { false }
+    private var drawerPage: Bool { false }
     private var navPath: Binding<NavigationPath> { $path }
     #endif
     /// The last shell request shown (`ShellState.request`'s serial).
@@ -94,7 +110,7 @@ struct AssistantView: View {
             stack // the shell holds the drawer around both of its pages
         } else if embedded {
             // The Sidebar layout (#6332): the page beside the sidebar, whose stack and sidebar are the split's.
-            routed.environment(\.pushInboxChat, { navPath.wrappedValue.append($0) })
+            routed.environment(\.pushInboxChat, inboxChatPush)
         } else if widthClass == .regular {
             // The split keeps both columns clear of the fold when the device is partly folded.
             #if os(macOS)
@@ -205,7 +221,12 @@ struct AssistantView: View {
     }
 
     /// The drawer the page slides with: the shell's, or its own.
-    private var activeDrawer: AssistantDrawer { shell?.drawer ?? drawer }
+    private var activeDrawer: AssistantDrawer {
+        #if os(iOS)
+        if drawerPage, let unified { return unified.drawer } // the Sidebar layout's on a phone (#6332)
+        #endif
+        return shell?.drawer ?? drawer
+    }
 
     /// The stack's root page. Its own property so the stack's modifier chain stays within what Xcode 26.0 can
     /// type-check in time (#5333).
@@ -222,8 +243,9 @@ struct AssistantView: View {
                     .environment(\.messageLiftHost, liftHost)
                     #endif
                     // The iPad draws the shell's composer too (`ChatComposerKind.padCard`): the assistant's, as on the iPhone.
-                    .environment(\.shellChat, shell != nil || ChatComposerKind.padCard)
-            } else if shell != nil || pageTabSwitch {
+                    // The Sidebar layout's phone page too: the iPhone's conversation, as in the shell (#6332).
+                    .environment(\.shellChat, shell != nil || ChatComposerKind.padCard || drawerPage)
+            } else if shell != nil || pageTabSwitch || drawerPage {
                 // A phone's tabs too (iPhone Duo open, #3680): the iPhone's new conversation, with what needs the user
                 // over the composer. The iPad keeps `AssistantHome`.
                 ShellHome(pending: shownStart, error: shownFailure?.reason, launcher: $starterLauncher, mode: $starterMode,
@@ -248,7 +270,7 @@ struct AssistantView: View {
 
     /// The root with its top bar, the lift layer and the pages it pushes: split from `stack` for Xcode 26.0 (#5333).
     private var dressedRoot: some View {
-        root
+        AnyView(root)
         // No system bar: the top bar floats over the conversation with a fog under it (it scrolls beneath).
         .toolbarVisibility(.hidden, for: .navigationBar)
         #if os(iOS) || os(visionOS)
@@ -259,6 +281,7 @@ struct AssistantView: View {
                             sidebarIsColumn: widthClass == .regular,
                             sidebarShown: sidebarColumnShown,
                             sidebarCounts: embedded,
+                            drawerTitle: drawerPage,
                             openSidebar: toggleSidebar,
                             // In a health conversation New opens Health's new conversation page, whose list has the
                             // space's past ones (#4329); elsewhere the assistant's.
@@ -298,7 +321,7 @@ struct AssistantView: View {
                 Task { await start(text, images, space: Session.healthSpace) }
             }
         }
-        .modifier(ShellDestinations(path: $path, enabled: (shell != nil || padPlaces) && !embedded))
+        .modifier(ShellDestinations(path: $path, enabled: placesByValue && !embedded, inboxChat: inboxChatPush))
         .modifier(ClassicDestinations(enabled: shell == nil && !padPlaces && !embedded))
         #if os(iOS)
         .modifier(SidebarRouteDestinations(enabled: embedded, page: sidebarPage))
@@ -309,7 +332,7 @@ struct AssistantView: View {
         NavigationStack(path: $path) {
             routed
         }
-        .environment(\.pushInboxChat, shell == nil ? nil : { path.append($0) })
+        .environment(\.pushInboxChat, inboxChatPush)
         #if os(macOS)
         // Its pushed pages (Knowledge, Scheduled Tasks, To-dos…) go back from the title row, not the system's button (#2318).
         .environment(\.macSectionStack, true)
@@ -319,7 +342,9 @@ struct AssistantView: View {
     /// The root as the stack's (or, in the Sidebar layout, the split's page's) first page: what it does there (its routes,
     /// the requests from the shell or the sidebar, the debug pages).
     private var routed: some View {
-            dressedRoot
+            // Erased here and in `dressedRoot` (#6735): unoptimized, this getter reserved a stack slot for every
+            // modifier below, each holding the whole page (375 KB of an iPhone's 1 MB main-thread stack).
+            AnyView(dressedRoot)
             // Full Screen in an agent's sheet (TasksStore.expand): its page pushed here, as from the Agents tab.
             .onChange(of: TasksStore.shared.fullAgent, initial: true) { _, key in
                 guard let key else { return }
@@ -349,9 +374,17 @@ struct AssistantView: View {
             // ⇧⌘N, a quick action) leaves it behind.
             .onChange(of: model.assistantCurrent) { old, new in
                 // The app picking the main conversation by itself once the hub answers (none was open) is not the user
-                // opening one: Recordings, opened by a Control or the home screen's menu at launch, stays.
-                if showRecordings || places.current == .recordings, old == nil, new == model.assistantMain { return }
+                // opening one: any page already pushed at launch stays. User-driven changes leave the conversation but
+                // keep the place's stack for a later return (`ShellPlaces`).
+                if AssistantCurrentNavigation.keepsPushedPages(old: old, new: new, main: model.assistantMain) { return }
                 leavePlace()
+            }
+            .onChange(of: model.hub?.group) { old, new in
+                // A pushed inbox and its items belong to the old hub. Initial pairing (nil → a group) and reconnects stay.
+                if AssistantCurrentNavigation.clearsPushedPages(oldHub: old, newHub: new) {
+                    places.forget()
+                    backToRoot()
+                }
             }
             .onChange(of: model.assistantManagerID) {
                 starterLauncher = nil // a launcher of the assistant shown before
@@ -432,6 +465,18 @@ struct AssistantView: View {
 
     /// The sidebar's places push by value (`ShellRoute`, `ShellDestinations`): the iPhone shell and the iPad's column.
     private var placesByValue: Bool { shell != nil || padPlaces || embedded }
+
+    /// Offered at the stack and registered with its destinations, so a wide split does not depend on the outer stack
+    /// forwarding this environment value to its destination pages.
+    private var inboxChatPush: ((InboxChatRoute) -> Void)? {
+        guard placesByValue else { return nil }
+        return { route in
+            #if DEBUG
+            ShellTrace.shared.note("inbox chat push place=\(String(describing: places.current))")
+            #endif
+            navPath.wrappedValue.append(route)
+        }
+    }
 
     /// A page the shell asked for (the drawer, the home page): from the conversation's root, so back comes to it. A place
     /// comes back as it was left, the place in front is kept for coming back to it, and the place already in front goes
@@ -517,11 +562,13 @@ struct AssistantView: View {
     /// The Sidebar layout's pages by value (`SidebarRoute`), drawn as the flags draw them in the other layouts.
     @ViewBuilder private func sidebarPage(_ route: SidebarRoute) -> some View {
         switch route {
-        case .messages: LarkConversationsView()
+        case .messages:
+            LarkConversationsView().modifier(InboxDestinationEnvironment(chat: inboxChatPush, openFeishu: { navPath.wrappedValue.append($0) }))
         case .health:
             HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, mode: $starterMode, effort: $starterEffort) { text, images in
                 Task { await start(text, images, space: Session.healthSpace) }
             }
+            .modifier(InboxDestinationEnvironment(chat: inboxChatPush, openFeishu: { navPath.wrappedValue.append($0) }))
         }
     }
     #endif
