@@ -68,6 +68,9 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   const { groups, unread, markAllAt, quiet } = useMemo(() => homeOverview(sessions, interactions), [sessions, interactions]);
   // the list's read failed: the line under the greeting says so, with Retry (with no computer, adding one comes first)
   const failed = loaded && list === "failed" && !(quiet && noMachines);
+  // what the line under the greeting says while the agents are not known: connecting, loading, or the failure ("" once
+  // they are, and the counts sentence takes its place)
+  const lineState = failed ? t("home.agents_failed") : !loaded ? (online ? t("home.loading") : t("home.connecting")) : !(quiet && noMachines) && list === "loading" ? t("home.loading") : "";
   // every open task with where it stands (#6450, the web side of the Lark bot's /tasks)
   const todos = useScopedTodos();
   const taskRows = useStore((s) => s.taskRows);
@@ -111,9 +114,11 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
             <h1 className="text-[22px] font-semibold tracking-tight text-ink">{greeting()}</h1>
             <div className="mt-1 flex items-center gap-2">
               {failed && <Icon name="alertCircle" size={14} className="shrink-0 text-red" />}
-              {/* one live region for the whole line, mounted throughout: a screen reader hears it change, to the failure too */}
-              <p className={cx("min-w-0 text-[13.5px] text-ink-2", !failed && "flex-1")} role="status">
-                {failed ? t("home.agents_failed") : !loaded ? (online ? t("home.loading") : t("home.connecting")) : quiet && noMachines ? t("home.no_machines_summary") : list === "loading" ? t("home.loading") : quiet ? t("home.all_quiet") : summary(counts, interactions.length)}
+              {/* the line's state is a live region, mounted throughout so a screen reader hears it change, to the failure
+                  too; the counts sentence stays out of it, or each agent's start and finish would be read out again */}
+              <p className={cx("min-w-0 text-[13.5px] text-ink-2", !failed && "flex-1")}>
+                <span role="status">{lineState}</span>
+                {!lineState && (quiet ? (noMachines ? t("home.no_machines_summary") : t("home.all_quiet")) : summary(counts, interactions.length))}
               </p>
               {failed && <Button size="sm" icon="retry" onClick={retryAgentList}>{t("home.retry")}</Button>}
               {loaded && markAllAt === "summary" && markAll}

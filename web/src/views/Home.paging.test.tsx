@@ -41,7 +41,7 @@ const row = (session_id: string, state: Session["state"], patch: Partial<Session
 });
 // one working agent and one finished, seen: "1 working", and the computer runs 2
 const rows: Session[] = [row("m1", "working"), row("m2", "idle")];
-const counts = { total: rows.length, machine: { mac: 2 }, project: {}, group: {}, state: { working: 1, idle: 1 }, revision: "r1" };
+const counts = { total: rows.length, machine: { mac: 2 }, project: {}, group: {}, state: { working: 1, idle: 1 } as Record<string, number>, revision: "r1" };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const several: ManagerList = { default: "assistant", managers: [{ id: "assistant", name: "助手", online: true }, { id: "work", name: "工作", online: true }] } as ManagerList;
 
@@ -97,6 +97,8 @@ async function hello() {
 }
 const summary = () => host.querySelector("h1")?.nextElementSibling;
 const summaryText = () => summary()?.querySelector("p")?.textContent ?? "";
+// the line's live region: its state while the agents are not known, empty once the counts sentence is shown
+const liveRegion = () => summary()?.querySelector("[role=status]")?.textContent;
 const retry = () => [...(summary()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "重试");
 const machineLine = () => host.querySelector("[data-machine-line]")?.textContent;
 
@@ -135,13 +137,37 @@ describe("Overview on a hub that pages its Agents list, with one assistant", () 
     expect(summaryText()).toBe("1 个工作中。");
     expect(machineLine()).toBe("2 个 Agent · macOS 26.1");
     expect(reads.full).toBe(0); // one assistant: Overview reads no complete list
+    // the counts sentence is not in the live region, which a screen reader would read out at every agent's change
+    expect(liveRegion()).toBe("");
+  });
+
+  it("puts only its state in the live region: loading, then nothing once the counts are shown", async () => {
+    page = "hold";
+    await hello();
+    expect(liveRegion()).toBe("正在读取…");
+    await release("page", true);
+    expect(liveRegion()).toBe("");
+    expect(summaryText()).toBe("1 个工作中。");
+    // an agent finishes: the sentence changes, the live region (mounted throughout) stays quiet
+    rows[0] = row("m1", "unread");
+    const before = { ...counts.state };
+    counts.state = { unread: 1, idle: 1 };
+    try {
+      act(() => FakeSocket.last.onmessage?.({ data: JSON.stringify({ type: "sessions_list", revision: "r2" }) }));
+      await flush();
+      expect(summaryText()).toBe("1 个完成未看。");
+      expect(liveRegion()).toBe("");
+    } finally {
+      rows[0] = row("m1", "working");
+      counts.state = before;
+    }
   });
 
   it("says it couldn't read them, with Retry, and Retry brings the counts back", async () => {
     page = "fail";
     await hello();
     expect(summaryText()).toBe("没能读到 Agent 的状态。");
-    expect(summary()?.querySelector("p")?.getAttribute("role")).toBe("status");
+    expect(liveRegion()).toBe("没能读到 Agent 的状态。"); // a screen reader hears the failure
     expect(retry()).toBeDefined();
     expect(machineLine()).toBe("macOS 26.1"); // no "0 个 Agent"
     expect(host.textContent).not.toContain("一切就绪");

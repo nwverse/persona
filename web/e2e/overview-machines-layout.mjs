@@ -142,7 +142,8 @@ async function failedList(theme) {
   check(await summary() === "Couldn't load what your agents are doing.", `${theme} ${tag}: Overview says it couldn't read the agents`, await summary());
   const retry = await page.$("h1 + div button:has-text('Retry')");
   check(retry !== null, `${theme} ${tag}: with Retry`);
-  check(await page.$eval("h1 + div > p", (p) => p.getAttribute("role")) === "status", `${theme} ${tag}: the summary is a live region`);
+  const live = () => page.$eval("h1 + div > p", (p) => p.querySelector("[role=status]")?.textContent ?? null);
+  check(await live() === "Couldn't load what your agents are doing.", `${theme} ${tag}: the failure is in the line's live region`, String(await live()));
   const before = await lines();
   check(before.length > 0 && before.every((l) => !/\d+ agents?\b/.test(l.line)), `${theme} ${tag}: no computer gets a count it doesn't have`, before.map((l) => l.line).join(" | "));
   check(!(await page.textContent("body")).includes("All set"), `${theme} ${tag}: and no All set`);
@@ -154,6 +155,8 @@ async function failedList(theme) {
   await page.waitForFunction(() => !["Couldn't load what your agents are doing.", "Loading…"].includes(document.querySelector("h1 + div > p")?.textContent ?? ""), null, { timeout: 10_000 }).catch(() => {});
   const after = await summary();
   check(!/Couldn't load|Loading/.test(after) && after.trim() !== "。" && after.trim() !== ".", `${theme} ${tag}: Retry reads them again`, after);
+  // the counts sentence stays out of the live region, which would read it out again at each agent's change
+  check(await live() === "", `${theme} ${tag}: the counts are not in the live region`, String(await live()));
   await page.waitForTimeout(300);
   for (const { id, line } of await lines()) {
     const m = machines.find((x) => x.id === id);
