@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import persona.core.contracts.Machine
 import persona.core.contracts.api.NewPaneTab
 import persona.core.contracts.api.FinishedPanes
+import persona.core.contracts.api.PaneItem
 import persona.core.contracts.api.PanesResponse
 import persona.core.contracts.api.SessionsRepository
 import persona.core.contracts.api.TerminalAddress
@@ -19,7 +20,7 @@ data class MachinePanes(val response: PanesResponse? = null, val error: String? 
 data class TerminalMachine(val machine: Machine, val listing: MachinePanes?, val spaces: List<TermSpace>)
 
 /** The exact preview the user is confirming; new panes discovered later are never added to this batch. */
-data class FinishedConfirmation(val machineId: String, val preview: FinishedPanes, val titles: List<String>)
+data class FinishedConfirmation(val machineId: String, val preview: FinishedPanes, val rows: List<TermPane>)
 
 data class TerminalPanesUiState(
     val machines: List<TerminalMachine> = emptyList(),
@@ -77,8 +78,14 @@ class TerminalPanesViewModel(private val panes: TerminalPanes, private val sessi
         val preview = panes.closeFinished(machineId, preview = true)
         if (preview.closed.isEmpty()) _events.emit(TerminalPanesEvent.NoFinished)
         else {
-            val titles = sessions.sessions.value.filter { it.machineId == machineId }.associate { it.sessionId to it.displayTitle }
-            _confirmation.value = FinishedConfirmation(machineId, preview, preview.closed.map { titles[it.sessionId].orEmpty() })
+            val bySession = sessions.sessions.value.filter { it.machineId == machineId }.associateBy { it.sessionId }
+            val listed = listing.value[machineId]?.response?.hosts.orEmpty().flatMap { it.panes }.associateBy { it.pane }
+            val rows = preview.closed.map { candidate ->
+                val item = (listed[candidate.pane] ?: PaneItem(candidate.pane)).copy(
+                    agent = null, sessionId = null, agentSession = candidate.sessionId)
+                pane(machineId, item, bySession[candidate.sessionId], null)
+            }
+            _confirmation.value = FinishedConfirmation(machineId, preview, rows)
         }
     }
 

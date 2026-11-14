@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -51,11 +52,59 @@ class StoppedAgentShotsTest {
     private val sender = object : MessageSender {
         override val outbox = MutableStateFlow(emptyList<OutboxMessage>())
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = error("stopped Agent must not send")
+        override suspend fun cancel(clientMessageId: String): Boolean {
+            outbox.value = outbox.value.filterNot { it.clientMessageId == clientMessageId }
+            return true
+        }
     }
     private val interactions = object : InteractionCenter {
         override val pending = MutableStateFlow(emptyList<Interaction>())
         override suspend fun refresh() = Unit
         override suspend fun resolve(id: String, resolution: Resolution) = error("stopped Agent must not answer")
+    }
+
+    @Test fun refusedStoppedChatHasNoRetryOrEditButKeepsDeleteAndTerminal() {
+        sender.outbox.value = listOf(OutboxMessage("refused", key, "Check the examples too.", DeliveryState.Refused, error = "agent_stopped"))
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var terminals = 0
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("shot")) {
+                    ChatScreen(key, chats, sender, interactions, sessions, onBack = {}, onTerminal = { terminals++ }, onResumeInTerminal = {})
+                }
+            }
+        }
+        val out = File(System.getProperty("persona.shots") ?: "build/stopped-agent-shots").also { it.mkdirs() }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            rule.runOnIdle { style = s; dark = d }
+            rule.waitForIdle()
+            rule.onNodeWithTag("chat-stopped").assertExists()
+            rule.onNodeWithText("Check the examples too.").assertExists()
+            for (label in listOf("Retry", "Retry now", "Resend", "Edit")) rule.onNodeWithText(label).assertDoesNotExist()
+            rule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+            rule.onNodeWithText("Open terminal").assertExists()
+            if (s != AppStyle.Glass) rule.onNodeWithText("Delete").assertExists()
+            File(out, "stopped-refused-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream().use {
+                assertTrue(rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))
+            }
+        }
+        rule.onNodeWithText("Open terminal").performClick()
+        assertEquals(1, terminals)
+        rule.onNodeWithText("Delete").performClick()
+        rule.onNodeWithText("Check the examples too.").assertDoesNotExist()
+        assertTrue(sender.outbox.value.isEmpty())
+    }
+
+    @Test fun anOfflineComputerKeepsTheDisabledComposerInsteadOfTheStoppedNote() {
+        sessions.machines.value = sessions.machines.value.map { it.copy(online = false) }
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                ChatScreen(key, chats, sender, interactions, sessions, onBack = {}, onTerminal = {}, onResumeInTerminal = {})
+            }
+        }
+        rule.onNodeWithTag("chat-stopped").assertDoesNotExist()
+        rule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText), useUnmergedTree = true).assertIsNotEnabled()
     }
 
     @Test fun stoppedChatEveryStyleAndAppearance() {
