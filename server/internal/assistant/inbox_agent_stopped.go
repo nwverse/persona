@@ -77,7 +77,7 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 	b := &s.inbox
 	now := time.Now().UTC()
 	var writes []*inboxWrite
-	wake := map[*inboxWrite]bool{}
+	deliver := map[*inboxWrite]bool{}
 	b.mu.Lock()
 	for _, it := range b.items {
 		linked, duplicate := inboxAgentStopDuplicate(it, sess)
@@ -103,14 +103,22 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 				if a.Back == HandlingAgent {
 					a.Back = ""
 				}
-				if it.Handling != nil && it.Handling.State == HandlingAgent {
-					// Set Looking before tell: otherwise tell would save Agent in Back and a recap-only turn would restore it.
-					b.setHandling(it, HandlingLooking, "", now)
+				if it.Handling != nil {
+					switch it.Handling.State {
+					case HandlingAgent:
+						// Set Looking before tell: otherwise tell would save Agent in Back and a recap-only turn would restore it.
+						b.setHandling(it, HandlingLooking, "", now)
+					case HandlingWaiting:
+						// A follow outcome may wait behind the current Agent. Its stop still wakes the processing conversation,
+						// with waiting kept as the restoration point for a recap-only result.
+						a.Back = HandlingWaiting
+						b.setHandling(it, HandlingLooking, "", now)
+					}
 				}
 			}
 			b.tell(it, inboxNote{Name: prompts.NoteAgentStopped, Text: detail, Failed: failed,
 				Machine: sess.MachineID, Session: sess.SessionID}, current, now)
-			wake[w] = current
+			deliver[w] = true
 		}
 		b.settle(w)
 		writes = append(writes, w)
@@ -124,7 +132,7 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 			saved = false
 			continue
 		}
-		if wake[w] {
+		if deliver[w] {
 			s.tellSoon(ctx, w.it)
 		}
 	}

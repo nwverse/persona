@@ -86,11 +86,14 @@ func (s *Service) applyGroupStates(ctx context.Context, src assistantwire.InboxS
 					if at.IsZero() {
 						at = now
 					}
+					agentStartedAt := it.Agent.StartedAt
 					b.tell(it, inboxNote{Name: prompts.NoteSelfReplied, Text: at.In(loc).Format("2006-01-02 15:04")}, true, now)
 					if restoreWaiting {
 						it.Agent.Back = HandlingWaiting
 					}
-					if !wasAgent {
+					if wasAgent {
+						it.Agent.StartedAt = agentStartedAt
+					} else {
 						b.setHandling(it, HandlingLooking, "", now)
 					}
 				}

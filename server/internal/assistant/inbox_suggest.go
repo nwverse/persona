@@ -294,7 +294,12 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 			it.SuggestSeq = max(it.SuggestSeq, 1)
 			it.Suggestion = g
 		}
+		keepAgent := from == nil && it.Handling != nil && it.Handling.State == HandlingAgent
 		b.waitForOtherSide(it, follow, ViaAssistant, now, loc, true)
+		if keepAgent {
+			// The follow is this turn's outcome, but the current Agent still owns the matter until it stops.
+			b.setHandling(it, HandlingAgent, "", now)
+		}
 	}
 	id := it.ID
 	b.settle(w)

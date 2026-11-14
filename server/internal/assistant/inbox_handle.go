@@ -283,8 +283,11 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		case err == nil:
 			a.keepToldSince(told) // the notes told while it was sent go next time
 			if wake {
-				t := now.UTC()
-				a.Wake, a.StartedAt = false, &t
+				a.Wake = false
+				if it.Handling == nil || it.Handling.State != HandlingAgent {
+					t := now.UTC()
+					a.StartedAt = &t
+				}
 			}
 		case gone:
 			a.Lost = append(a.Lost, sid)
