@@ -67,14 +67,15 @@
     <string name="phonetools_contact_new">New contact “%1$s”</string>
     <string name="phonetools_contact_change">Change contact “%1$s”</string>
     <string name="phonetools_contact_field_change">%1$s: %2$s → %3$s</string>
+    <string name="phonetools_contact_field_value">%1$s: %2$s</string>
     <string name="phonetools_contact_given_name">First name</string>
     <string name="phonetools_contact_family_name">Last name</string>
     <string name="phonetools_contact_company">Company</string>
     <string name="phonetools_contact_job_title">Job title</string>
+    <string name="phonetools_contact_phones">Phone numbers</string>
+    <string name="phonetools_contact_emails">Emails</string>
     <string name="phonetools_contact_phones_add">Add phone: %1$s</string>
-    <string name="phonetools_contact_phones_replace">Replace phone numbers with: %1$s</string>
     <string name="phonetools_contact_emails_add">Add email: %1$s</string>
-    <string name="phonetools_contact_emails_replace">Replace emails with: %1$s</string>
     <string name="phonetools_health_rationale_title">Health data</string>
     <string name="phonetools_health_rationale_how">How Persona uses your health data</string>
     <string name="phonetools_health_rationale_read">Only when you ask Claude a health question on your computer does Claude read the daily totals once through Persona: steps, distance, active energy, heart rate, resting heart rate, sleep time and weight.</string>

@@ -166,31 +166,35 @@ internal data class ContactEdit(
 
     fun after(key: String): String? = fields.firstOrNull { it.key == key }?.after
 
-    private fun fieldLines(res: Resources): List<String> = fields.map { field ->
-        res.getString(R.string.phonetools_contact_field_change, fieldName(res, field.key),
+    private fun fieldLines(res: Resources, creating: Boolean): List<String> = fields.map { field ->
+        // A new contact has no earlier value to show.
+        if (creating) res.getString(R.string.phonetools_contact_field_value, fieldName(res, field.key), field.after)
+        else res.getString(R.string.phonetools_contact_field_change, fieldName(res, field.key),
             field.before.ifEmpty { res.getString(R.string.phonetools_not_set) }, field.after)
     }
 
-    fun lines(res: Resources): List<String> = buildList {
-        addAll(fieldLines(res))
-        if (replacePhones) add(res.getString(R.string.phonetools_contact_phones_replace,
-            phones.joinToString(", ") { it.value }.ifEmpty { res.getString(R.string.phonetools_not_set) }))
+    /** [current] is the contact before the edit: a replaced list is shown old → new so the overwritten values are visible. */
+    fun lines(res: Resources, creating: Boolean = false, current: ContactFields? = null): List<String> = buildList {
+        fun joined(values: List<String>) = values.joinToString(", ").ifEmpty { res.getString(R.string.phonetools_not_set) }
+        addAll(fieldLines(res, creating))
+        if (replacePhones) add(res.getString(R.string.phonetools_contact_field_change, res.getString(R.string.phonetools_contact_phones),
+            joined(current?.phones.orEmpty()), joined(phones.map { it.value })))
         else if (phones.isNotEmpty()) add(res.getString(R.string.phonetools_contact_phones_add,
             phones.joinToString(", ") { it.value }))
-        if (replaceEmails) add(res.getString(R.string.phonetools_contact_emails_replace,
-            emails.joinToString(", ") { it.value }.ifEmpty { res.getString(R.string.phonetools_not_set) }))
+        if (replaceEmails) add(res.getString(R.string.phonetools_contact_field_change, res.getString(R.string.phonetools_contact_emails),
+            joined(current?.emails.orEmpty()), joined(emails.map { it.value })))
         else if (emails.isNotEmpty()) add(res.getString(R.string.phonetools_contact_emails_add,
             emails.joinToString(", ") { it.value }))
     }
 
     fun createSummary(res: Resources): String {
         val name = ContactFields(after("given_name").orEmpty(), after("family_name").orEmpty(), after("company").orEmpty()).name
-        return (listOf(res.getString(R.string.phonetools_contact_new, name)) + lines(res)).joinToString("\n")
+        return (listOf(res.getString(R.string.phonetools_contact_new, name)) + lines(res, creating = true)).joinToString("\n")
     }
 
     fun updateSummary(res: Resources, current: ContactFields): String {
         val name = current.name.ifEmpty { res.getString(R.string.phonetools_untitled) }
-        return (listOf(res.getString(R.string.phonetools_contact_change, name)) + lines(res)).joinToString("\n")
+        return (listOf(res.getString(R.string.phonetools_contact_change, name)) + lines(res, current = current)).joinToString("\n")
     }
 
     companion object {
