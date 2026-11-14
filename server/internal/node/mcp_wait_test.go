@@ -494,3 +494,116 @@ func TestLCUElicitForwardsOnlyAnOptedInCallID(t *testing.T) {
 		}
 	}
 }
+
+// mcpWaitFinalSignalConn reports when the final response enters its write, before the real socket can block it.
+type mcpWaitFinalSignalConn struct {
+	net.Conn
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (c *mcpWaitFinalSignalConn) Write(p []byte) (int, error) {
+	var line map[string]json.RawMessage
+	if json.Unmarshal(p, &line) == nil && line["content"] != nil {
+		c.once.Do(func() { close(c.entered) })
+	}
+	return c.Conn.Write(p)
+}
+
+func mcpWaitSocketPair(t *testing.T) (nodeSide, client *net.UnixConn) {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "pn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "n.sock")
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	clientConn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = clientConn.Close() })
+	serverConn, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = serverConn.Close() })
+	return serverConn.(*net.UnixConn), clientConn.(*net.UnixConn)
+}
+
+func TestMCPWaitUpdateDoesNotWaitBehindFinalWrite(t *testing.T) {
+	nodeSide, client := mcpWaitSocketPair(t)
+	conn := &mcpWaitFinalSignalConn{Conn: nodeSide, entered: make(chan struct{})}
+	n := &Node{}
+	n.hubMCPWait.Store(true)
+	id, pending := n.beginMCPWait(conn)
+	if pending == nil {
+		t.Fatal("the opted-in call was not registered")
+	}
+	// Keep the pointer from an event lookup that won the race just before finish removed the call.
+	n.mcpWaitMu.Lock()
+	held := n.mcpWaits[id]
+	n.mcpWaitMu.Unlock()
+
+	// A large final response blocks until the client reads, as a screenshot-sized result can.
+	big := proto.TextResult(string(make([]byte, 4<<20)), false)
+	finished := make(chan struct{})
+	go func() {
+		n.finishMCPWait(id, pending, big)
+		close(finished)
+	}()
+	select {
+	case <-conn.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the final write did not start")
+	}
+
+	updated := make(chan struct{})
+	go func() {
+		held.update(proto.MCPWaitApproval)
+		close(updated)
+	}()
+	blocked := false
+	select {
+	case <-updated:
+	case <-time.After(2 * time.Second):
+		blocked = true
+	}
+
+	// Drain the client: exactly one complete final line may follow any earlier interim lines.
+	lines := 0
+	scanner := bufio.NewScanner(client)
+	scanner.Buffer(make([]byte, 0, 64<<10), 64<<20)
+	_ = client.SetReadDeadline(time.Now().Add(20 * time.Second))
+	for scanner.Scan() {
+		lines++
+		var line map[string]json.RawMessage
+		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+			t.Fatalf("corrupt local line (%d bytes): %v", len(scanner.Bytes()), err)
+		}
+		if line["content"] != nil {
+			break
+		}
+	}
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the final response did not complete after the client resumed")
+	}
+	select {
+	case <-updated:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the held update did not return after the final response completed")
+	}
+	if lines != 1 {
+		t.Fatalf("%d local lines, want only the final response", lines)
+	}
+	if blocked {
+		t.Fatal("an interim update waited behind the final write to a client that was not reading")
+	}
+}

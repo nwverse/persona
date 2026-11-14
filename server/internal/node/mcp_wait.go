@@ -33,7 +33,11 @@ func (p *pendingMCPWait) writeLocked(v any) error {
 }
 
 func (p *pendingMCPWait) update(kind proto.MCPWaitKind) {
-	p.mu.Lock()
+	// Updates are serial on the hub read loop, so only finish can hold the lock here. Drop the optional interim line
+	// rather than waiting behind a final write that a non-reading client may hold open without a deadline.
+	if !p.mu.TryLock() {
+		return
+	}
 	defer p.mu.Unlock()
 	if p.done || p.interimFailed {
 		return
