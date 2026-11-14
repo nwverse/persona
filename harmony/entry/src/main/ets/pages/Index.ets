@@ -23,7 +23,7 @@ import { deviceFeatures } from '../models/DeviceFeatures';
 import { SessionTools } from '../components/SessionTools';
 import { SessionWorkspace } from '../models/SessionWorkspace';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial } from '@kit.ArkUI';
+import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial } from '@kit.ArkUI';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { ClientModel, client } from '../models/ClientModel';
 import { ResourceRow, HubProfile, Wire } from '../models/Wire';
@@ -150,12 +150,17 @@ struct Index {
     if (!Number.isFinite(width) || width <= 0 || Math.abs(width - (main ? this.mainPeerWidth : this.shellPeerWidth)) <= 1) return;
     if (main) this.mainPeerWidth = width; else this.shellPeerWidth = width;
   }
+  private peerLabelStyle(): TextModifier {
+    const maximum = String(Tokens.body * Math.min(this.environment.fontScale, Tokens.chromeFontMaxScale)) + 'vp';
+    return new TextModifier().fontSize(maximum).minFontSize(String(Tokens.body) + 'vp').maxFontSize(maximum)
+      .maxLines(1).heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST).fontColor(Colors.ink);
+  }
   @Builder peerTitle(main: boolean = false) {
     Row({ space: Tokens.gap }) {
       Row() {
       if (this.peerUsesSelect(main)) {
         Select([{ value: tr('persona') }, { value: tr('agents') }]).selected(this.peer()).value(tr(this.peer() === 1 ? 'agents' : 'persona'))
-          .font({ size: String(Tokens.body * Math.min(this.environment.fontScale, Tokens.chromeFontMaxScale)) + 'vp' }).width('100%').onSelect((index: number) => this.selectPeer(index)).id('shell.peer')
+          .textModifier(this.peerLabelStyle()).width('100%').onSelect((index: number) => this.selectPeer(index)).id('shell.peer')
       } else {
         CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items([{ text: tr('persona') }, { text: tr('agents') }]),
           selectedIndex: this.peer(), $selectedIndex: (index: number) => this.selectPeer(index),
