@@ -4,7 +4,8 @@ import persona.core.contracts.CoreText.Key
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.domain.ContinuityReducer
-import persona.core.domain.ContinuitySync
+import persona.core.data.ContinuityAdapter.Input
+import persona.core.data.ContinuityAdapter.Batch
 import persona.core.domain.ContinuitySync.Action
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -35,11 +36,17 @@ class HubChatRepository(
     private val awaitingTranscript: Flow<Set<SessionKey>> = emptyFlow(),
     /** How long a closed chat stays subscribed; 0 unsubscribes at once. */
     private val releaseAfterMillis: Long = 0,
+    private val continuityFactory: (String, (ContinuityAdapter.Applied) -> Unit) -> ContinuityAdapter = ContinuityAdapters::create,
 ) : ChatRepository {
     private class Entry(val key: SessionKey, val scope: CoroutineScope) {
-        val reducer = ContinuityReducer()
+        lateinit var continuity: ContinuityAdapter
+        var appliedContinuity = ContinuityAdapter.State()
+        val reducer get() = if (continuity.asynchronous) appliedContinuity else continuity.state
+        val patches = kotlinx.coroutines.channels.Channel<ContinuityAdapter.Applied>(kotlinx.coroutines.channels.Channel.UNLIMITED)
         val realtime = ChatRealtimeState(key)
-        val sync = ContinuitySync(reducer)
+        val rangeRequests = kotlinx.coroutines.channels.Channel<Action>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val olderRequests = kotlinx.coroutines.channels.Channel<Action>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val dispatchedFolds = mutableSetOf<String>()
         val lock = Mutex()
         val requests = Mutex()
         val saving = Mutex()
@@ -91,12 +98,12 @@ class HubChatRepository(
                         entry.ready.await()
                         synchronized(entries) { if (entry.subscribed) entry.subscriptionReady.complete(Unit) }
                         val actions = entry.lock.withLock {
-                            val gap = entry.reducer.apply(event.items, event.history, event.fromSeq, event.toSeq,
-                                event.backlog, event.hasMore, event.moreAfter)
+                            val result = entry.continuity.accept(Input.Push(Batch(event.items, event.history,
+                                event.fromSeq, event.toSeq, event.backlog, event.hasMore, event.moreAfter)))
                             entry.eventError = null
-                            publish(entry, verified = gap == ContinuityReducer.Gap.None &&
+                            if (result != null) publish(entry, verified = result?.gap == ContinuityReducer.Gap.None &&
                                 (event.backlog || entry.state.value.verified))
-                            entry.sync.settle(gap)
+                            result?.requests.orEmpty()
                         }
                         dispatch(entry, actions)
                         if (entry.persistPending.compareAndSet(false, true)) entry.scope.launch { persist(entry) }
@@ -152,7 +159,7 @@ class HubChatRepository(
                 if (state == ConnectionState.Online) {
                     active.forEach { entry -> entry.scope.launch {
                         entry.ready.await()
-                        dispatch(entry, entry.lock.withLock { entry.reconnected = true; entry.sync.reconnect() })
+                        dispatch(entry, entry.lock.withLock { entry.reconnected = true; entry.continuity.accept(Input.Reconnect)?.requests.orEmpty() })
                         catchUp(entry)
                     } }
                 } else retainedEntries().forEach { entry ->
@@ -205,9 +212,9 @@ class HubChatRepository(
             entry.timer?.cancelAndJoin()
             synchronized(entries) { entry.subscribed = false }
             entry.lock.withLock {
-                entry.sync.finishFill()
+                entry.continuity.accept(Input.FillFailed)
                 publish(entry, verified = false)
-                dispatch(entry, entry.sync.reconnect())
+                dispatch(entry, entry.continuity.accept(Input.Reconnect)?.requests.orEmpty())
             }
             catchUp(entry)
             entry.state.first { it.verified }
@@ -284,7 +291,7 @@ class HubChatRepository(
                         // Cold opens always verify against a folded latest page, including when cache exists.
                         entry.lock.withLock { entry.reconnected = true }
                         latest(entry, initial = true)
-                        dispatch(entry, entry.lock.withLock { entry.sync.reconnect() })
+                        dispatch(entry, entry.lock.withLock { entry.continuity.accept(Input.Reconnect)?.requests.orEmpty() })
                     }
                 }
                 entry
@@ -334,25 +341,25 @@ class HubChatRepository(
         val entry = existing(session) ?: return
         entry.ready.await()
         entry.requests.withLock {
-            val action = entry.lock.withLock {
-                entry.sync.loadOlder().firstOrNull()?.also {
-                    entry.state.update { it.copy(loadingOlder = true, error = null) }
-                }
-            } as? Action.FetchOlder ?: return
             try {
+                val result = entry.lock.withLock { entry.continuity.accept(Input.LoadOlder) }
+                val action = result?.requests?.firstOrNull() as? Action.FetchOlder
+                    ?: (if (result == null) withTimeoutOrNull(3_000) { entry.olderRequests.receive() as Action.FetchOlder } else null)
+                    ?: return@withLock
+                entry.state.update { it.copy(loadingOlder = true, error = null) }
                 val history = entry.lock.withLock { entry.reducer.history }
                 val page = transport.items(session, ItemsQuery(beforeSeq = action.beforeSeq))
                 entry.lock.withLock {
                     if (history != entry.reducer.history || page.history != null && history != null && page.history != history) {
-                        entry.sync.finishOlder()
-                    } else entry.sync.older(page.items, page.hasMore)
+                        entry.continuity.accept(Input.OlderFailed)
+                    } else entry.continuity.accept(Input.Older(page.items, page.hasMore))
                     publish(entry)
                 }
                 persist(entry)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { entry.lock.withLock { entry.state.update { it.copy(error = DataText.of(Key.ChatHistoryFailed)) } } }
             finally { withContext(NonCancellable) { entry.lock.withLock {
-                entry.sync.finishOlder()
+                entry.continuity.accept(Input.OlderFailed)
                 entry.state.update { it.copy(loadingOlder = false) }
             } } }
         }
@@ -367,25 +374,36 @@ class HubChatRepository(
                 it.kind == "fold" && it.seq == fromSeq && it.fold?.throughSeq == toSeq
             } } ?: return@withLock emptyList()
             val history = entry.lock.withLock { entry.reducer.history }
-            var actions = entry.lock.withLock { entry.sync.openFold(fold.id) }
+            if (entry.continuity.asynchronous && !entry.dispatchedFolds.add(fold.id)) return@withLock emptyList()
             val work = mutableListOf<Item>()
+            var pages = 0
+            var completed = false
             try {
+                var actions = entry.lock.withLock { entry.continuity.accept(Input.OpenFold(fold.id))?.requests }
+                    ?: withTimeoutOrNull(3_000) { listOf(entry.rangeRequests.receive()) }
+                    ?: return@withLock emptyList()
                 while (actions.isNotEmpty()) {
                     val action = actions.single() as Action.FetchRange
                     val page = transport.items(session, ItemsQuery(fromSeq = action.fromSeq, throughSeq = action.throughSeq))
+                    pages++
                     check(page.items.none { it.kind == "fold" } && (!page.more ||
                         page.items.lastOrNull()?.seq?.let { it >= action.fromSeq && it < action.throughSeq } == true))
                     actions = entry.lock.withLock {
                         check(history == entry.reducer.history)
                         check(page.history == null || history == null || page.history == history)
                         work += page.items
-                        entry.sync.range(page.items, page.more)
-                    }
+                        entry.continuity.accept(Input.Range(page.items, page.more))?.requests
+                    } ?: if (page.more && page.items.isNotEmpty() && pages < 100)
+                        withTimeout(3_000) { listOf(entry.rangeRequests.receive()) } else emptyList()
                 }
                 entry.lock.withLock { publish(entry) }
                 persist(entry)
+                completed = true
                 work.distinctBy { it.id }
-            } finally { withContext(NonCancellable) { entry.lock.withLock { entry.sync.cancelFold() } } }
+            } finally { withContext(NonCancellable) { entry.lock.withLock {
+                entry.continuity.accept(Input.RangeFailed)
+                if (!completed) entry.dispatchedFolds.remove(fold.id)
+            } } }
         }
     }
 
@@ -428,11 +446,30 @@ class HubChatRepository(
                 victim.ready.complete(Unit)
                 victim.scope.cancel()
             }
-            Entry(key, CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))).also { entry -> entry.scope.launch {
+            Entry(key, CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))).also { entry ->
+                entry.continuity = continuityFactory(key.path) { result -> entry.patches.trySend(result) }
+                entry.scope.launch {
+                    for (result in entry.patches) {
+                        entry.lock.withLock {
+                            entry.appliedContinuity = result.state
+                            entry.eventError = null
+                            entry.dispatchedFolds.removeAll { id -> result.state.items.none { it.id == id } }
+                            val overtaken = result.state.items.any { it.seq > result.state.covered }
+                            publish(entry, verified = result.gap == ContinuityReducer.Gap.None &&
+                                result.state.loadedOnce && !overtaken)
+                            dispatch(entry, result.requests)
+                            if (overtaken && result.requests.none { it is Action.FetchAfter || it is Action.FetchLatest })
+                                entry.continuity.accept(Input.ContinueFill)
+                        }
+                        if (entry.persistPending.compareAndSet(false, true)) entry.scope.launch { persist(entry) }
+                    }
+                }
+                entry.scope.coroutineContext[Job]?.invokeOnCompletion { entry.continuity.close() }
+                entry.scope.launch {
                 try {
                     val cached = cache.load(key)
                     entry.lock.withLock {
-                        entry.reducer.restore(cached.items, cached.history, cached.covered, cached.hasMore)
+                        entry.continuity.accept(Input.Restore(ContinuityAdapter.State(cached.items, cached.history, cached.covered, cached.hasMore)))
                         publish(entry, verified = false)
                     }
                 } catch (cancelled: CancellationException) { throw cancelled }
@@ -480,7 +517,7 @@ class HubChatRepository(
         }
         entry.scope.launch {
             entry.ready.await()
-            val actions = entry.lock.withLock { entry.sync.settle(ContinuityReducer.Gap.Fill) }
+            val actions = entry.lock.withLock { entry.continuity.accept(Input.HubChanged)?.requests.orEmpty() }
             dispatch(entry, actions)
         }
     }
@@ -501,14 +538,16 @@ class HubChatRepository(
                 do {
                     catchUp(entry, first)
                     first = null
-                } while (entry.lock.withLock { entry.sync.behind })
+                } while (!entry.continuity.asynchronous && entry.lock.withLock { entry.continuity.behind })
             }
             is Action.FetchLatest -> entry.scope.launch { latest(entry) }
-            else -> error("Unexpected standalone continuity action: $action")
+            is Action.FetchRange -> entry.rangeRequests.trySend(action)
+            is Action.FetchOlder -> entry.olderRequests.trySend(action)
         } }
     }
 
     private suspend fun latest(entry: Entry, initial: Boolean = false) = entry.requests.withLock {
+        var completed = false
         try {
             val history = entry.lock.withLock { entry.reducer.history }
             val page = transport.items(entry.key, ItemsQuery())
@@ -517,24 +556,29 @@ class HubChatRepository(
                     dispatch(entry, listOf(Action.FetchLatest()))
                     return@withLock
                 }
-                if (initial) entry.reducer.latest(page.items, page.history, page.toSeq, page.hasMore)
-                else entry.sync.reload(page.items, page.history, page.toSeq, page.hasMore)
+                val result = if (initial) entry.continuity.accept(Input.Latest(Batch(page.items, page.history, toSeq = page.toSeq, hasMore = page.hasMore)))
+                else entry.continuity.accept(Input.Reload(page.items, page.history, page.toSeq, page.hasMore))
+                completed = true
+                if (result == null) return@withLock
                 val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
                 entry.eventError = null
                 publish(entry, verified = !overtaken)
-                if (overtaken || entry.sync.behind) dispatch(entry, entry.sync.settle(ContinuityReducer.Gap.Fill))
+                if (!entry.continuity.asynchronous && (overtaken || entry.continuity.behind)) dispatch(entry, entry.continuity.accept(Input.HubChanged)?.requests.orEmpty())
             }
             persist(entry)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { entry.lock.withLock {
             entry.state.update { it.copy(loading = false, error = DataText.of(Key.ChatSyncFailed), verified = false) }
         } }
-        finally { withContext(NonCancellable) { entry.lock.withLock { entry.sync.finishFill() } } }
+        finally { withContext(NonCancellable) { entry.lock.withLock {
+            if (!entry.continuity.asynchronous || !completed) entry.continuity.accept(Input.FillFailed)
+        } } }
     }
 
-    /** [first]: a read the continuity already issued; without it, [ContinuitySync.continueFill] opens one. */
+    /** [first]: a read the continuity already issued; without it, [ContinuityAdapter.Input.ContinueFill] opens one. */
     private suspend fun catchUp(entry: Entry, first: List<Action>? = null) = entry.requests.withLock {
-        var actions = first ?: entry.lock.withLock { entry.sync.continueFill() }
+        var actions = first ?: entry.lock.withLock { entry.continuity.accept(Input.ContinueFill)?.requests.orEmpty() }
+        var completed = false
         try {
             while (actions.isNotEmpty()) {
                 actions = when (val action = actions.single()) {
@@ -545,11 +589,13 @@ class HubChatRepository(
                             if (history != entry.reducer.history && page.history != entry.reducer.history) {
                                 return@withLock listOf(Action.FetchLatest())
                             }
-                            val result = entry.sync.after(page.items, page.history, page.fromSeq, page.toSeq, page.moreAfter)
+                            val result = entry.continuity.accept(Input.After(Batch(page.items, page.history, page.fromSeq, page.toSeq, moreAfter = page.moreAfter)))
+                            completed = true
+                            if (result == null) return@withLock emptyList<Action>()
                             val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
                             entry.eventError = null
-                            publish(entry, verified = result.gap == ContinuityReducer.Gap.None && !overtaken)
-                            if (result.actions.isEmpty() && overtaken) entry.sync.continueFill() else result.actions
+                            publish(entry, verified = result?.gap == ContinuityReducer.Gap.None && !overtaken)
+                            if (result?.requests.orEmpty().isEmpty() && overtaken) entry.continuity.accept(Input.ContinueFill)?.requests.orEmpty() else result?.requests.orEmpty()
                         }
                     }
                     is Action.FetchLatest -> {
@@ -559,11 +605,13 @@ class HubChatRepository(
                             if (history != entry.reducer.history && page.history != entry.reducer.history) {
                                 return@withLock listOf(Action.FetchLatest())
                             }
-                            entry.sync.reload(page.items, page.history, page.toSeq, page.hasMore)
+                            val result = entry.continuity.accept(Input.Reload(page.items, page.history, page.toSeq, page.hasMore))
+                            completed = true
+                            if (result == null) return@withLock emptyList<Action>()
                             val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
                             entry.eventError = null
                             publish(entry, verified = !overtaken)
-                            if (overtaken || entry.sync.behind) entry.sync.continueFill() else emptyList()
+                            if (!entry.continuity.asynchronous && (overtaken || entry.continuity.behind)) entry.continuity.accept(Input.ContinueFill)?.requests.orEmpty() else emptyList()
                         }
                     }
                     else -> error("Unexpected catch-up action: $action")
@@ -574,7 +622,9 @@ class HubChatRepository(
         catch (_: Exception) { entry.lock.withLock {
             entry.state.update { it.copy(error = DataText.of(Key.ChatSyncFailed), verified = false) }
         } }
-        finally { withContext(NonCancellable) { entry.lock.withLock { entry.sync.finishFill() } } }
+        finally { withContext(NonCancellable) { entry.lock.withLock {
+            if (!entry.continuity.asynchronous || !completed) entry.continuity.accept(Input.FillFailed)
+        } } }
     }
 
     private suspend fun persist(entry: Entry) = entry.saving.withLock {

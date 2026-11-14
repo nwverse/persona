@@ -1,5 +1,14 @@
 # Lessons: Android
 
+## Rust continuity frames are not input acknowledgements (#7448)
+
+A worker can emit a fetch before it publishes a patch, and unchanged inputs can emit neither a fetch nor a wake.
+A version-only wake therefore cannot complete one submitted input or identify its chat. Keep per-owner effects,
+coalesce frame drains, consume applied snapshots in callback order, and publish the same snapshot used to verify
+coverage. Never clear a later input's uncertainty just because an earlier frame arrived. Transport failures must
+release the core's request gate; stale older/fold requests need bounded effect waits and cancellation cleanup.
+Immediate test-only flush/drain schedulers preserve fixture timing but do not prove these worker/frame races.
+
 ## Verify intermittent test failures with the whole module
 
 An intermittent test is not verified by repeatedly running only its own class. In the hand-off recording tests, background work wrote the reply journal on `Dispatchers.IO` while the test deleted its directory, and the race appeared only under whole-module concurrency; `advanceUntilIdle()` drains the test scheduler but not those IO threads, so `cancelAndJoin()` the repository's scope before cleanup and run the whole module.

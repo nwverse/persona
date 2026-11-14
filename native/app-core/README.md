@@ -39,6 +39,19 @@ NDK 29.0.14206865 / direct LLVM build, ABI sizes, uncompressed 16 KB packaging a
 described in `android/core/rustcore-android/README.md`. `scripts/build-android.sh` produces both ABIs without
 `cargo-ndk`; the Gradle task declares the core inputs so unchanged sources do not recompile Rust.
 
+## Android continuity adapter (#7448)
+
+`:core:data` routes native chat transport through `ContinuityAdapter`. Kotlin wraps the existing reducer and sync
+and remains the production default; `-PpersonaContinuity=rust` selects Rust for repository unit tests. Rust owns one
+lazy process-wide core, starts it on a worker after a frame, and applies patches and chat-owned fetch effects on
+coalesced frame drains. Only the JVM test scheduler waits with `flush`; the app returns after dispatch, not after a
+patch acknowledgement. Version-only wakes conservatively drain all owners until targeted wakes land in #7401.
+
+The adapter does not change Rust, JNI or codecs. The boundary omits the gap, a native hub-change input and no-op input
+acknowledgements; Android derives scalar gap rules and conservatively re-reads hub changes heard in flight. Folds keep
+the existing serialized native request flow: different folds do not run in parallel as on iOS, because the core has
+one opening per chat and range responses carry no fold ID. These gaps remain follow-up work, not production parity.
+
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes
