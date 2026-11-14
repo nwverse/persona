@@ -93,11 +93,27 @@ APPLE_VISUAL_MARKERS = re.compile(
     r"foregroundColor|opacity|offset|position|lineLimit|minimumScaleFactor)\s*\(")
 
 
+APPLE_NON_UI_SHARED = (
+    "native/app-core/",
+    "schema/",
+    "spec/",
+    "scripts/ci/",
+    "scripts/app/",
+    "docs/",
+)
+APPLE_ANDROID_SHARED = (
+    "android/core/rustcore/",
+)
+
+
 def non_ui_apple_change(worktree, base, head, names):
-    """Apple-only changes without a production visual change need no screenshots."""
-    if not names or not all(name.startswith(APPLE_NON_UI_PATHS) for name in names):
+    """Shared backend/schema changes can use the Linux non-visual policy too."""
+    if not names or not all(name.startswith(APPLE_NON_UI_PATHS + APPLE_NON_UI_SHARED + APPLE_ANDROID_SHARED)
+                            for name in names):
         return False
     for path in names:
+        if not path.startswith("apple/"):
+            continue
         parts = path.split("/")
         test_path = (len(parts) >= 2 and parts[1] in ("PersonaTests", "PersonaUITests")) or (
             len(parts) >= 5 and parts[1] == "Packages" and parts[3] == "Tests") or (

@@ -476,7 +476,7 @@ class VerifyTests(unittest.TestCase):
         with patch.object(pr_watch_verify, "checked", return_value="+.padding(8)"):
             self.assertFalse(pr_watch_verify.non_ui_apple_change(
                 ".", SHA_BASE, SHA_A, ["apple/PersonaUITests/MinutesTests.swift", "apple/Persona/Views/Session/FilesPane.swift"]))
-        for names in ([path, "server/internal/node/session.go"],
+        for names in ([path, "web/src/views/ChatView.tsx"],
                       ["apple/Shared/Localization/Localizable.xcstrings"]):
             self.assertFalse(pr_watch_verify.non_ui_apple_change(".", SHA_BASE, SHA_A, names))
         with patch.object(pr_watch_verify, "checked", return_value="+import SwiftUI"):
@@ -491,6 +491,12 @@ class VerifyTests(unittest.TestCase):
         with patch.object(pr_watch_verify, "checked", return_value="+chunks.removeFirst()\n"):
             self.assertTrue(pr_watch_verify.non_ui_apple_change(
                 ".", SHA_BASE, SHA_A, ["apple/Persona/App/TasksStore.swift"]))
+        self.assertTrue(pr_watch_verify.non_ui_apple_change(
+            ".", SHA_BASE, SHA_A, ["native/app-core/crates/persona-core-runtime/src/lib.rs",
+                                    "android/core/rustcore/src/main/kotlin/persona/core/rustcore/Codec.kt",
+                                    "schema/extension/manifest.json"]))
+        self.assertFalse(pr_watch_verify.non_ui_apple_change(
+            ".", SHA_BASE, SHA_A, ["web/src/views/ChatView.tsx"]))
 
     def test_eligible_non_ui_apple_change_runs_remaining_lanes(self):
         names = "apple/Packages/PersonaKit/Sources/PersonaKit/StreamChunks.swift\n"
