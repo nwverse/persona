@@ -1,7 +1,6 @@
 import Foundation
 import XCTest
 @testable import PersonaScreenKit
-import PersonaWire
 
 /// The iPhone's client frames every session message as the node does: spec/fixtures/screen-link, also checked by
 /// server/internal/screenlink.
