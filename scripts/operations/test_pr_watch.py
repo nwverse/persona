@@ -496,6 +496,10 @@ class VerifyTests(unittest.TestCase):
                                     "android/core/rustcore/src/main/kotlin/persona/core/rustcore/Codec.kt",
                                     "schema/extension/manifest.json"]))
         self.assertFalse(pr_watch_verify.non_ui_apple_change(
+            ".", SHA_BASE, SHA_A, ["native/app-core/crates/persona-core-ffi/src/lib.rs"]))
+        self.assertFalse(pr_watch_verify.non_ui_apple_change(
+            ".", SHA_BASE, SHA_A, ["native/app-core/crates/persona-core-typegen/src/main.rs"]))
+        self.assertFalse(pr_watch_verify.non_ui_apple_change(
             ".", SHA_BASE, SHA_A, ["web/src/views/ChatView.tsx"]))
 
     def test_eligible_non_ui_apple_change_runs_remaining_lanes(self):
@@ -509,6 +513,26 @@ class VerifyTests(unittest.TestCase):
                                     ("CI scripts", ["bash", "scripts/ci/scripts.sh"]),
                                     ("Apple non-UI review policy", ["true"])])
         classifier.assert_called_once()
+
+    def test_shared_core_lane_is_not_dropped(self):
+        names = "native/app-core/crates/persona-core-runtime/src/lib.rs\n"
+        with patch.object(pr_watch_verify, "checked", return_value=names), \
+                patch.object(pr_watch_verify, "non_ui_apple_change", return_value=True), \
+                patch.object(pr_watch_verify, "load_paths") as selector:
+            selector.return_value.select.return_value = {"apple": True, "core": True, "android": True, "scripts": True}
+            commands = pr_watch_verify.persona_checks(".", pr(), 1, {})
+        self.assertEqual(commands, [("CI android", ["bash", "scripts/ci/android.sh"]),
+                                    ("CI scripts", ["bash", "scripts/ci/scripts.sh"]),
+                                    ("CI core", ["bash", "scripts/ci/core.sh"]),
+                                    ("Apple non-UI review policy", ["true"])])
+
+    def test_apple_ffi_does_not_use_the_shared_non_ui_exception(self):
+        names = "native/app-core/crates/persona-core-ffi/src/lib.rs\n"
+        with patch.object(pr_watch_verify, "checked", return_value=names), \
+                patch.object(pr_watch_verify, "load_paths") as selector:
+            selector.return_value.select.return_value = {"apple": True, "core": True, "scripts": True}
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_verify.persona_checks(".", pr(), 1, {})
 
     def test_extension_shared_changes_use_full_ci(self):
         with patch.object(pr_watch_verify, "extension_modules", return_value=None), \
