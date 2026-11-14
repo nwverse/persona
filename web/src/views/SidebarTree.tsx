@@ -175,7 +175,7 @@ function GroupTitle({ name, onToggle }: { name: string; onToggle: () => void }) 
  *  the most urgent of its agents' states, and, where its name does not say it (`hint`), an ⓘ saying what it holds, which
  *  is also what an open, empty group says. `section`: drawn as the section headings around it are (the "By pinned"
  *  grouping's). */
-export function GroupBranch({ branch, name, hint, icon, n, state, folded, onToggle, section, children }: { branch: string; name: string; hint?: string; icon: IconName; n: number; state: TreeState; folded: boolean; onToggle: () => void; section?: boolean; children?: React.ReactNode }) {
+export function GroupBranch({ branch, name, hint, icon, n, state, label, folded, onToggle, section, children }: { branch: string; name: string; hint?: string; icon: IconName; n: number; state: TreeState; /** said in place of `state`'s word (agentGroupLabel) */ label?: string; folded: boolean; onToggle: () => void; section?: boolean; children?: React.ReactNode }) {
   const said = n > 0 ? state : undefined;
   const info = hint ? <InfoTip name={name} text={hint} /> : null;
   const body = n > 0 ? children : undefined;
@@ -185,14 +185,14 @@ export function GroupBranch({ branch, name, hint, icon, n, state, folded, onTogg
         title={<SectionTitle icon={icon} name={name} />}
         folded={folded}
         onToggle={onToggle}
-        right={<span className="flex shrink-0 items-center gap-1.5">{info}<BranchEnd n={n} state={said} /></span>}
+        right={<span className="flex shrink-0 items-center gap-1.5">{info}<BranchEnd n={n} state={said} label={label} /></span>}
       >
         {body ?? (hint ? <EmptyHint text={hint} /> : null)}
       </Section>
     );
   }
   return (
-    <TreeBranch branch={branch} top folded={folded} onToggle={onToggle} toggleLabel={name} icon={icon} title={<GroupTitle name={name} onToggle={onToggle} />} info={info} end={<><span className="flex-1" /><BranchEnd n={n} state={said} /></>} empty={hint}>
+    <TreeBranch branch={branch} top folded={folded} onToggle={onToggle} toggleLabel={name} icon={icon} title={<GroupTitle name={name} onToggle={onToggle} />} info={info} end={<><span className="flex-1" /><BranchEnd n={n} state={said} label={label} /></>} empty={hint}>
       {body}
     </TreeBranch>
   );
@@ -203,7 +203,7 @@ export function GroupBranch({ branch, name, hint, icon, n, state, folded, onTogg
 const LooseBranch = memo(function LooseBranch({ g, section, ...p }: { g: LooseGroup; section?: boolean } & TreeRowProps) {
   const [folded, toggle] = useFolded(g.key, g.folded, { follow: true, holds: holdsRow(g.sessions, p.activeKey) });
   return (
-    <GroupBranch branch={g.key} name={g.name} hint={g.hint} icon="layers" n={g.sessions.length} state={g.state} folded={folded} onToggle={toggle} section={section}>
+    <GroupBranch branch={g.key} name={g.name} hint={g.hint} icon="layers" n={g.sessions.length} state={g.state} label={g.label} folded={folded} onToggle={toggle} section={section}>
       {g.agents.map((a) => <TreeAgentRows key={a.key} a={a} depth={0} {...p} activeKey={withinAgent(a, p.activeKey)} />)}
     </GroupBranch>
   );

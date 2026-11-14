@@ -232,13 +232,11 @@ green.
 
 ## Small CI selection follow-up
 
-`scripts/ci/paths.py` currently selects desktop only for `desktop/**`, `scripts/ci/desktop*.sh` and its workflow. A local
-selection probe returned `desktop: false` for `web/src/main.tsx`, `scripts/mock/mock_hub.py`,
-`scripts/mock/test_desktops_mock.py` and `spec/desktop-bridge.d.ts`, even though the desktop lane builds/loads those
-inputs. A narrowly scoped follow-up should include `web/**`, the mock hub/test files and `spec/desktop-bridge.d.ts` in the
-desktop filter, with a regression in `scripts/ci/test_ci.py`. This does not mean those inputs are untested: default full CI
-runs every lane, and an explicitly dispatched `desktop-test.yml` tests its branch. The gap affects path-filtered `auto`
-selection; this audit does not redesign or change that scheduling.
+`scripts/ci/paths.py` selects the desktop lane for `desktop/**`, `web/**`, the synthetic hub and its stream helper
+and desktop test, `spec/desktop-bridge.d.ts`, the desktop CI scripts and its workflow. The web build also compiles the
+sign-in WebAssembly, so `server/cmd/password-wasm/**`, `server/internal/passwordpake/**` and `server/go.mod`/`go.sum`
+are inputs too. These are the inputs the lane builds, loads or compiles. A regression in `scripts/ci/test_ci.py` checks each one. This does not change the default full-CI run or
+explicit `desktop-test.yml` dispatch.
 
 ## Independent-review provenance
 
