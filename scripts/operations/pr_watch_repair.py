@@ -102,7 +102,7 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
             output = result.stdout + "\n" + result.stderr
             ids = failure_test_ids(output)
             reproduced = (result.returncode != 0 and ids and ids == failure_test_ids(failure)
-                          and bool(failure_signature(output)) and failure_signature(output) == failure_signature(failure))
+                          and bool(failure_signature(output) & failure_signature(failure)))
             return {"reproduced": reproduced, "command": command,
                     "output": bounded(output, 6000),
                     "reason": "The same failure signature reproduces on clean main." if reproduced else
@@ -352,7 +352,9 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     if not pr.get("isCrossRepository"):
         checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
         remote_output = checked(["git", "ls-remote", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180).strip()
-        if remote_output and remote_output.split()[0] != pr["headRefOid"]:
+        if not remote_output:
+            raise WatchError("contributor branch is absent; refusing to recreate it without an unchanged-head guarantee")
+        if remote_output.split()[0] != pr["headRefOid"]:
             raise WatchError("PR head moved before the repair push; nothing was pushed")
             raise WatchError("PR head moved before the repair push; nothing was pushed")
         checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
