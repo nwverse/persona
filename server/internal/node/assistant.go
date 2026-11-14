@@ -403,7 +403,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	execution.IsMain = isMain && guest == nil
 	execution.MainCompactWindow = 0
-	if execution.IsMain && mainWindow > 0 {
+	// Only a managed launcher's start applies it (capMain): on another one it would only change the fingerprint and
+	// restart the main conversation for nothing.
+	if _, managed := n.managedLauncher(launcher); execution.IsMain && mainWindow > 0 && managed {
 		execution.MainCompactWindow = mainWindow
 	}
 	agent, err := n.assistantAgent(ctx, launcher)

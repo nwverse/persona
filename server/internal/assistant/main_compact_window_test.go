@@ -89,7 +89,7 @@ func TestMainCompactWindowSetting(t *testing.T) {
 	if key == "" || settingTitles[key] != "title_main_compact_window" {
 		t.Fatal("assistant.main_compact_window is not offered with its title")
 	}
-	for _, bad := range []string{`99999`, `10000001`, `-1`, `"400000"`, `1.5`} {
+	for _, bad := range []string{`99999`, `10000001`, `-1`, `"400000"`, `1.5`, `null`} {
 		if _, err := s.setMainCompactWindow(ctx, json.RawMessage(bad)); err == nil {
 			t.Fatalf("%s accepted", bad)
 		}

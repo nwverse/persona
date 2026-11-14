@@ -86,8 +86,9 @@ func TestAssistantMainCompactWindowFingerprint(t *testing.T) {
 	}
 }
 
-// End to end on a managed launcher: the main conversation starts with the window and keeps it for the node's own
-// messages (no options: the conversation's record), and a message with another window starts it again on that one.
+// End to end on a managed launcher: the main conversation starts with the window and keeps it for a start with no
+// options (the conversation's record, which a manual compaction uses), and a message with another window starts it
+// again on that one.
 func TestAssistantMainCompactWindowStart(t *testing.T) {
 	f := sdkTest(t)
 	f.n.setManaged([]proto.ManagedLauncher{{Name: "gw", Model: "big", Models: []proto.ProviderModel{{ID: "big", ContextWindow: 1_000_000}}}})
@@ -111,7 +112,7 @@ func TestAssistantMainCompactWindowStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f.proc(id) != first {
-		t.Fatal("the node's own message restarted the main conversation without its window")
+		t.Fatal("a send with no options restarted the main conversation without its window")
 	}
 	f.idle(t, id)
 	execution.MainCompactWindow = 0
@@ -123,5 +124,54 @@ func TestAssistantMainCompactWindowStart(t *testing.T) {
 	}
 	if st, _ := f.n.state.get(id); st.MainCompactWindow != 0 {
 		t.Fatalf("recorded window %d", st.MainCompactWindow)
+	}
+}
+
+// Through the node's RPC (Node.handle): assistant.send and session.send carry main_compact_window into the main
+// conversation's process. A session.send with the same window reuses it, and one without (an older manager) starts it
+// again on the launcher's window. On a launcher Persona does not manage the window changes nothing, so a manager that
+// starts sending it restarts nothing there either.
+func TestAssistantMainCompactWindowRPC(t *testing.T) {
+	f := sdkTest(t)
+	f.n.setManaged([]proto.ManagedLauncher{{Name: "gw", Model: "big", Models: []proto.ProviderModel{{ID: "big", ContextWindow: 1_000_000}}}})
+	send := func(method string, p map[string]any) string {
+		t.Helper()
+		p["text"], p["is_main"], p["runtime"], p["model_fingerprint"] = "hello", true, proto.AssistantRuntimeAgentSDK, "fp"
+		raw, err := nodeCall(t, f.n, method, p)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		var out struct {
+			SessionID string `json:"session_id"`
+		}
+		_ = json.Unmarshal(raw, &out)
+		return out.SessionID
+	}
+	id := send("assistant.send", map[string]any{"launcher": "gw", "cwd": t.TempDir(), "main_compact_window": 400_000})
+	env := f.start(t)["settings"].(map[string]any)["env"].(map[string]any)
+	first := f.proc(id)
+	if env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "400000" || first.compactIdleAt != 300_000 {
+		t.Fatalf("assistant.send: %v, idle %d", env, first.compactIdleAt)
+	}
+	f.idle(t, id)
+	send("session.send", map[string]any{"session_id": id, "launcher": "gw", "main_compact_window": 400_000})
+	if f.proc(id) != first {
+		t.Fatal("session.send with the same window restarted the main conversation")
+	}
+	f.idle(t, id)
+	send("session.send", map[string]any{"session_id": id, "launcher": "gw"})
+	if p := f.proc(id); p == first || p.compactIdleAt != 750_000 {
+		t.Fatalf("session.send without a window: same process %v, idle %d", p == first, p.compactIdleAt)
+	}
+
+	shell := send("assistant.send", map[string]any{"launcher": "claude", "cwd": t.TempDir()})
+	f.idle(t, shell)
+	plain := f.proc(shell)
+	send("session.send", map[string]any{"session_id": shell, "launcher": "claude", "main_compact_window": 400_000})
+	if f.proc(shell) != plain {
+		t.Fatal("the window restarted a main conversation on a launcher Persona does not manage")
+	}
+	if st, _ := f.n.state.get(shell); !st.IsMain || st.MainCompactWindow != 0 {
+		t.Fatalf("recorded %+v", st)
 	}
 }

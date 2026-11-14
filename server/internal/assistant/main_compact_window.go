@@ -47,10 +47,11 @@ func putMainCompactWindow(cfg Settings, p map[string]any) {
 }
 
 func (s *Service) setMainCompactWindow(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	var w int
-	if err := json.Unmarshal(v, &w); err != nil || !validMainCompactWindow(w) {
+	var n *int // null is refused, not read as 0: that would turn the cap off
+	if err := json.Unmarshal(v, &n); err != nil || n == nil || !validMainCompactWindow(*n) {
 		return nil, errors.New("value must be 0 (follow the launcher) or a whole number of tokens, 100000–10000000")
 	}
+	w := *n
 	before := mainCompactWindowOf(s.settings(ctx))
 	if w == before {
 		return &ownChange{summary: "assistant.main_compact_window is unchanged"}, nil

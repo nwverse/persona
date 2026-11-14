@@ -38,8 +38,9 @@ type sessionState struct {
 	Cwd              string    `json:"cwd"`
 	IsMain           bool      `json:"is_main,omitempty"`
 	StartedAt        time.Time `json:"started_at"`
-	// MainCompactWindow: the window the main conversation last ran with (modelExecution.MainCompactWindow), kept
-	// like IsMain for a message the node sends by itself.
+	// MainCompactWindow: the window the main conversation last ran with (modelExecution.MainCompactWindow), kept like
+	// IsMain (the hub's copy keeps neither, so until the node restarts) for a start that carries no execution: a manual
+	// compaction with no process running (assistant_compact.go).
 	MainCompactWindow int `json:"main_compact_window,omitempty"`
 	// AppMode / AppEffort: the permission mode and effort set on an assistant conversation (modes.go). AppMode
 	// also retains a terminal Codex start constraint for later resumes. They
