@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 const zoomButton = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("ui-mermaid.zoom")}"]`)!;
-const dialog = () => host.querySelector<HTMLElement>('[role="dialog"]');
+const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
 
 function open() {
   zoomButton().focus();
@@ -65,11 +65,24 @@ describe("Mermaid zoom", () => {
     expect(document.activeElement).toBe(zoomButton());
   });
 
-  it("keeps Tab on the dialog when the diagram has nothing to focus", () => {
+  it("wraps Tab around the viewer controls and returns focus after Close", () => {
     open();
-    const e = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
-    act(() => void dialog()!.dispatchEvent(e));
-    expect(e.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(dialog());
+    const buttons = [...dialog()!.querySelectorAll("button")];
+    for (const button of buttons) vi.spyOn(button, "getClientRects").mockReturnValue({ length: 1 } as DOMRectList);
+    const close = buttons.at(-1)!;
+    const first = buttons[0];
+    const tab = (target: HTMLElement, shiftKey: boolean) => {
+      const event = new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true });
+      act(() => target.dispatchEvent(event));
+      expect(event.defaultPrevented).toBe(true);
+    };
+    close.focus();
+    tab(close, false);
+    expect(document.activeElement).toBe(first);
+    tab(first, true);
+    expect(document.activeElement).toBe(close);
+    act(() => close.click());
+    expect(dialog()).toBeNull();
+    expect(document.activeElement).toBe(zoomButton());
   });
 });
