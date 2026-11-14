@@ -60,6 +60,47 @@ class InboxReturnRound5Test {
         )
     }
 
+    @Test fun legacyProvenanceSurvivesTheNextAutomaticShellSaveAndColdRestore() {
+        val scope = "inbox-return-round5-second-restore"
+        val file = File(context.noBackupFilesDir, "hub-data/$scope/shell-position.json")
+        file.parentFile!!.mkdirs()
+        file.writeText(
+            """{"tab":"Agents","chats":{"Agents":{"machineId":"machine","sessionId":"agent","kind":"Agent",""" +
+                """"source":{"type":"persona.core.navigation.RouteSource.InboxItem","itemId":"item"}}}}""",
+        )
+        val store = ShellPositionStore(context, scope)
+        val legacy = store.load()
+        val agent = legacy.chats.getValue(AppTab.Agents)
+        var selected = AppTab.Agents
+        val firstStacks = mapOf<AppTab, MutableList<NavKey>>(
+            AppTab.Persona to mutableListOf(AssistantRoute),
+            AppTab.Agents to mutableListOf(AgentsRoute, agent),
+        )
+        val first = AppNavigator(
+            firstStacks, { selected }, { selected = it }, chatTab = { AppTab.Agents },
+            inboxReturns = legacy.inboxReturns,
+        )
+
+        // Root's initial snapshotFlow collection saves this value without requiring another navigation action.
+        store.save(legacy.copy(inboxReturns = first.inboxReturns()))
+        val restored = store.load()
+        val secondStacks = mapOf<AppTab, MutableList<NavKey>>(
+            AppTab.Persona to mutableListOf(AssistantRoute),
+            AppTab.Agents to mutableListOf(AgentsRoute, agent),
+        )
+        val second = AppNavigator(
+            secondStacks, { selected }, { selected = it }, chatTab = { AppTab.Agents },
+            inboxReturns = restored.inboxReturns,
+        )
+        second.back()
+
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(
+            listOf<NavKey>(AssistantRoute, InboxRoute, InboxItemRoute("item")),
+            secondStacks.getValue(AppTab.Persona),
+        )
+    }
+
     @Test fun aDirectKindlessReopenBeforeMetadataKeepsTheRestoredAgentKey() {
         val retained = ChatRoute("machine", "agent", source = RouteSource.InboxItem("old-item"))
         val stacks = mapOf<AppTab, MutableList<NavKey>>(

@@ -305,7 +305,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
     }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns) }
     fun openResolved(route: ResolvedRoute): AppTab {
-        navigator.noteOpened(route.key)
+        navigator.noteDirectOpen(route.key)
         return if (openAssistant(route.key, true)) AppTab.Persona else route.open(stacks)
     }
     /** Opens [route]; a card outside any session (#4808) also has Agents open its sheet, as its notification does. */
@@ -315,7 +315,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     }
     remember {
         initialRoute?.let { route ->
-            navigator.noteOpened(route.key)
+            navigator.noteDirectOpen(route.key)
             // The first frame already shows the requested conversation, not the home's default one.
             assistantTarget(route.key)?.let { assistantRequest = it } ?: route.open(stacks)
             route.pairingLink?.let { MainActivity.pendingPairLink.value = it }

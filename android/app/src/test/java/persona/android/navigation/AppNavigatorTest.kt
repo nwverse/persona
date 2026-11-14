@@ -3,8 +3,9 @@ package persona.android.navigation
 import androidx.navigation3.runtime.NavKey
 import persona.core.contracts.SessionKey
 import persona.core.navigation.*
-import persona.feature.inbox.InboxEventRoute
+import persona.feature.inbox.*
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 class AppNavigatorTest {
@@ -584,6 +585,154 @@ class AppNavigatorTest {
         assertEquals(AppTab.Agents, selected)
         assertEquals(listOf(AgentsRoute), stacks.getValue(AppTab.Agents))
         assertEquals(listOf(AssistantRoute), stacks.getValue(AppTab.Persona))
+    }
+
+    @Test fun aColdRestoredAgentRebuildsTheLatestDetailAboveAnOldDetailOrTheInboxList() {
+        val existing = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("first"))
+        val latest = RouteSource.InboxItem("second")
+        val persisted = listOf(existing.copy(source = latest))
+        val personaStarts = listOf(
+            listOf<NavKey>(InboxRoute, InboxEventRoute("first")),
+            listOf<NavKey>(InboxRoute),
+        )
+
+        for (start in personaStarts) {
+            stacks.values.forEach { stack -> while (stack.size > 1) stack.removeAt(stack.lastIndex) }
+            stacks.getValue(AppTab.Persona).addAll(start)
+            stacks.getValue(AppTab.Agents).add(existing)
+            selected = AppTab.Agents
+            val restored = assistantNavigator({ ConversationKind.Agent }, persisted)
+
+            restored.back()
+
+            assertEquals(AppTab.Persona, selected)
+            assertEquals(listOf(AgentsRoute), stacks.getValue(AppTab.Agents))
+            assertEquals(listOf(AssistantRoute) + start + InboxItemRoute("second"), stacks.getValue(AppTab.Persona))
+        }
+    }
+
+    @Test fun aColdRestoredAgentDoesNotDuplicateAnyCurrentPageOfItsItem() {
+        val existing = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("first"))
+        val latest = RouteSource.InboxItem("second")
+        val persisted = listOf(existing.copy(source = latest))
+        val processing = ChatRoute("machine", "handling", ConversationKind.Assistant, latest)
+        val currentPages = listOf<NavKey>(
+            InboxEventRoute("second"),
+            InboxItemRoute("second"),
+            InboxItemUiRoute("second", "extension", "item"),
+            MailRoute("second"),
+            InboxItemDetailRoute("second"),
+            ConnectorThreadRoute("second"),
+            LarkRoute("feed", "second"),
+            LarkMomentRoute("post", "second"),
+            processing,
+            InteractionRoute(processing, "request"),
+        )
+
+        for (current in currentPages) {
+            stacks.values.forEach { stack -> while (stack.size > 1) stack.removeAt(stack.lastIndex) }
+            stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, current))
+            stacks.getValue(AppTab.Agents).add(existing)
+            selected = AppTab.Agents
+            val restored = assistantNavigator({ ConversationKind.Agent }, persisted)
+
+            restored.back()
+
+            assertEquals("Current page: $current", AppTab.Persona, selected)
+            assertEquals(
+                "Current page: $current",
+                listOf<NavKey>(AssistantRoute, InboxRoute, current),
+                stacks.getValue(AppTab.Persona),
+            )
+        }
+    }
+
+    @Test fun aKindlessSourcedPersonaChatReopenedFromAgentsKeepsItsExactNavKey() {
+        val existing = ChatRoute("machine", "handling", source = RouteSource.InboxItem("first"))
+        val second = RouteSource.InboxItem("second")
+        val detail = InboxEventRoute("second")
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, detail, existing))
+        selected = AppTab.Agents
+
+        navigator.navigate(existing.copy(source = second))
+
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(listOf(AgentsRoute), stacks.getValue(AppTab.Agents))
+        assertEquals(
+            listOf<NavKey>(AssistantRoute, InboxRoute, detail, existing),
+            stacks.getValue(AppTab.Persona),
+        )
+        assertSame(existing, stacks.getValue(AppTab.Persona).last())
+        assertEquals(second, navigator.inboxReturns().single().source)
+    }
+
+    @Test fun aDirectTerminalDeepLinkClearsTheChatsInboxOriginBeforeTwoBacks() {
+        val detail = InboxEventRoute("item")
+        val chat = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("item"))
+        val router = agentsOwnAgentChats()
+        selected = AppTab.Persona
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, detail))
+        router.navigate(chat)
+        assertEquals(AppTab.Agents, selected)
+        val deepLink = terminalLink("persona://open?target=terminal&machine=machine&session=agent")!!
+
+        // Root records a direct ResolvedRoute before restoring its synthetic Agent chat and terminal.
+        router.noteDirectOpen(deepLink.key)
+        assertEquals(emptyList<ChatRoute>(), router.inboxReturns())
+        assertEquals(AppTab.Agents, deepLink.open(stacks))
+        assertEquals(
+            listOf<NavKey>(AgentsRoute, chat, TerminalRoute("machine", "agent")),
+            stacks.getValue(AppTab.Agents),
+        )
+
+        router.back()
+        assertEquals(AppTab.Agents, selected)
+        assertEquals(listOf<NavKey>(AgentsRoute, chat), stacks.getValue(AppTab.Agents))
+        router.back()
+
+        assertEquals(AppTab.Agents, selected)
+        assertEquals(listOf<NavKey>(AgentsRoute), stacks.getValue(AppTab.Agents))
+        assertEquals(listOf<NavKey>(AssistantRoute, InboxRoute, detail), stacks.getValue(AppTab.Persona))
+    }
+
+    @Test fun anInAppTerminalKeepsTheSourcedChatsReturn() {
+        val detail = InboxEventRoute("item")
+        val chat = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("item"))
+        val terminal = TerminalRoute("machine", "agent")
+        val router = agentsOwnAgentChats()
+        selected = AppTab.Persona
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, detail))
+
+        router.navigate(chat)
+        router.navigate(terminal)
+        assertEquals(listOf<NavKey>(AgentsRoute, chat, terminal), stacks.getValue(AppTab.Agents))
+        assertEquals(chat.source, router.inboxReturns().single().source)
+        router.back()
+        assertEquals(AppTab.Agents, selected)
+        assertEquals(listOf<NavKey>(AgentsRoute, chat), stacks.getValue(AppTab.Agents))
+        router.back()
+
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(listOf<NavKey>(AgentsRoute), stacks.getValue(AppTab.Agents))
+        assertEquals(listOf<NavKey>(AssistantRoute, InboxRoute, detail), stacks.getValue(AppTab.Persona))
+    }
+
+    @Test fun aSourcedAssistantBackPrefersItsItemOverAnAgentsOrigin() {
+        val detail = InboxEventRoute("item")
+        val chat = ChatRoute("machine", "assistant", ConversationKind.Assistant, RouteSource.InboxItem("item"))
+        val router = embeddedAssistantNavigator { ConversationKind.Assistant }
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, detail, chat))
+        selected = AppTab.Agents
+
+        // Reopening the visible sourced page from Agents would ordinarily record openedFrom = Agents.
+        router.navigate(chat)
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(listOf<NavKey>(AssistantRoute, InboxRoute, detail, chat), stacks.getValue(AppTab.Persona))
+        router.back()
+
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(listOf<NavKey>(AgentsRoute), stacks.getValue(AppTab.Agents))
+        assertEquals(listOf<NavKey>(AssistantRoute, InboxRoute, detail), stacks.getValue(AppTab.Persona))
     }
 
     /** Uses Root's production decision; only its selection side effect is reproduced here. */

@@ -1,9 +1,17 @@
 package persona.android.navigation
 
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateSetOf
 import androidx.navigation3.runtime.NavKey
 import persona.core.navigation.*
 import persona.core.contracts.SessionKey
 import persona.core.hub.errors.ErrorBreadcrumbs
+import persona.feature.inbox.ConnectorThreadRoute
+import persona.feature.inbox.InboxEventRoute
+import persona.feature.inbox.InboxItemDetailRoute
+import persona.feature.inbox.LarkMomentRoute
+import persona.feature.inbox.LarkRoute
+import persona.feature.inbox.MailRoute
 
 internal class AppNavigator(
     private val stacks: Map<AppTab, MutableList<NavKey>>,
@@ -22,13 +30,24 @@ internal class AppNavigator(
     private val openedFrom = mutableMapOf<NavKey, AppTab>()
     /** Null is legacy construction; an explicit empty restore must not revive a retained NavKey's source. */
     private val hasExplicitInboxReturns = inboxReturns != null
-    private val inboxSources = mutableMapOf<SessionKey, RouteSource.InboxItem>().apply {
+    private val inboxSources = mutableStateMapOf<SessionKey, RouteSource.InboxItem>().apply {
+        // A legacy position has no separate ledger. Seed it before Root's first automatic save, then let an explicitly
+        // persisted latest source win over the source retained by the visible NavKey.
+        if (inboxReturns == null) {
+            stacks.values.forEach { stack ->
+                stack.filterIsInstance<ChatRoute>().forEach { route ->
+                    (route.source as? RouteSource.InboxItem)?.let {
+                        this[SessionKey(route.machineId, route.sessionId)] = it
+                    }
+                }
+            }
+        }
         inboxReturns.orEmpty().forEach { route ->
             (route.source as? RouteSource.InboxItem)?.let { this[SessionKey(route.machineId, route.sessionId)] = it }
         }
     }
     /** An explicit non-inbox open supersedes provenance retained by an existing NavKey. */
-    private val inboxSourceSuppressions = mutableSetOf<SessionKey>()
+    private val inboxSourceSuppressions = mutableStateSetOf<SessionKey>()
 
     init { stacks.values.forEach(::restoreSecondaryParents) }
 
@@ -82,26 +101,43 @@ internal class AppNavigator(
         }
     }
 
+    /**
+     * Record a notification, deep-link or sidebar open. Unlike an in-app chat-to-terminal navigation, a direct terminal
+     * open starts a new return chain for the whole session, including the synthetic conversation below the terminal.
+     */
+    fun noteDirectOpen(key: NavKey) {
+        val terminal = key as? TerminalRoute ?: return noteOpened(key)
+        val session = SessionKey(terminal.machineId, terminal.sessionId)
+        openedFrom.keys.removeAll { page -> page.session() == session }
+        inboxSources.remove(session)
+        inboxSourceSuppressions.add(session)
+    }
+
     /** Returns the actual key opened, which may have inherited the visible inbox conversation's source. */
     private fun open(key: NavKey): NavKey {
         val route = inheritVisibleInboxSource(key)
         if (route == ConnectionSettingsRoute) return open(SettingsPageRoute(SettingsPage.Diagnostics))
         val chat = when (route) { is ChatRoute -> route; is InteractionRoute -> route.chat; else -> null }
+        val existingTab = chat?.let { target ->
+            stacks.entries.firstOrNull { (_, stack) ->
+                stack.any { page -> page.chat()?.let { sameConversation(it, target) } == true }
+            }?.key
+        }
         noteOpened(route)
         if (chat != null && openAssistant(chat, true)) return route
         // A sourced assistant conversation belongs above the item that opened it, even when its kind is already known.
-        // Router.restore would instead pop to an earlier copy and retain that copy's provenance. Agents keep that path.
+        // A kindless conversation reopened from the other tab instead restores its existing page and saved UI state.
         val fromInbox = chat != null && chat.source is RouteSource.InboxItem &&
             (chat.kind == ConversationKind.Assistant || chatTab(chat) == AppTab.Persona)
         val resolved = when {
-            chat == null || fromInbox -> null
+            chat == null -> null
+            chat.kind == null && existingTab != null && existingTab != selectedTab() -> ResolvedRoute(existingTab, route)
+            fromInbox -> null
             chat.kind != null -> Router().parse(RouteInput.Internal(route))
             // Keep the kindless key itself: normalizing it would replace the existing page and lose its saved UI state.
             else -> {
-                val target = chatTab(chat)
-                    ?: stacks.entries.firstOrNull { (_, stack) ->
-                        stack.any { page -> page.chat()?.let { sameConversation(it, chat) } == true }
-                    }?.key
+                val target = existingTab
+                    ?: chatTab(chat)
                     ?: selectedTab().takeIf { it == AppTab.Persona }
                     ?: AppTab.Agents
                 ResolvedRoute(target, route).takeIf { chat.source !is RouteSource.InboxItem || target == AppTab.Agents }
@@ -121,7 +157,8 @@ internal class AppNavigator(
             onSelectTab(rootTab)
             return route
         }
-        val target = if (route is ChatRoute || fromInbox) chatTab(requireNotNull(chat))
+        val target = if (route is ChatRoute || fromInbox) existingTab?.takeIf { chat?.kind == null }
+            ?: chatTab(requireNotNull(chat))
             ?: stacks.entries.firstOrNull { route in it.value }?.key
             ?: selectedTab().takeIf { it == AppTab.Persona }
             ?: AppTab.Agents else selectedTab()
@@ -163,6 +200,11 @@ internal class AppNavigator(
                         if (owner == selectedTab() && visible != chat) destination.add(1, chat)
                         else destination.add(chat)
                     }
+                    // The restored Agent used to live under Agents. Remember that cross-tab return even after late
+                    // metadata moves its unchanged key to Persona; Back must rebuild the source detail, not the list.
+                    if (tab == AppTab.Agents && owner == AppTab.Persona && inboxSource(chat) != null) {
+                        openedFrom[chat] = tab
+                    }
                     if (visible == chat) onSelectTab(owner)
                 }
             }
@@ -170,20 +212,24 @@ internal class AppNavigator(
     }
 
     override fun back() {
-        val stack = stacks.getValue(selectedTab())
+        val from = selectedTab()
+        val stack = stacks.getValue(from)
         if (stack.size <= 1) return
         val page = stack.removeAt(stack.lastIndex)
         val origin = openedFrom.remove(page)
-        if (origin != null) onSelectTab(origin)
-        else if (selectedTab() == AppTab.Agents) {
-            val source = inboxSource(page) ?: return
+        val source = inboxSource(page)
+        if (source != null && (from == AppTab.Agents || origin == AppTab.Agents)) {
             val persona = stacks.getValue(AppTab.Persona)
-            // A cold restore may have only the Agent left. Reuse item-link resolution to rebuild its detail, not a blank home.
-            if (persona.size <= 1) {
+            // A retained Persona stack may belong to an older item, or contain only the list. Return to the latest
+            // item's actual detail unless its detail, native source page or processing conversation is already on top.
+            if (persona.lastOrNull()?.inboxItemId() != source.itemId) {
                 persona.add(InboxItemRoute(source.itemId))
                 restoreSecondaryParents(persona)
             }
+            // A real inbox source takes precedence over a stale openedFrom=Agents origin.
             onSelectTab(AppTab.Persona)
+        } else if (origin != null) {
+            onSelectTab(origin)
         }
     }
 
@@ -249,6 +295,28 @@ internal class AppNavigator(
 private fun NavKey.chat(): ChatRoute? = when (this) {
     is ChatRoute -> this
     is InteractionRoute -> chat
+    else -> null
+}
+
+private fun NavKey.session(): SessionKey? = when (this) {
+    is ChatRoute -> SessionKey(machineId, sessionId)
+    is InteractionRoute -> SessionKey(chat.machineId, chat.sessionId)
+    is TerminalRoute -> SessionKey(machineId, sessionId)
+    else -> null
+}
+
+/** The item this page displays or processes, without treating an unrelated non-root page as its return target. */
+private fun NavKey.inboxItemId(): String? = when (this) {
+    is InboxItemRoute -> itemId
+    is InboxItemUiRoute -> itemId
+    is InboxEventRoute -> itemId
+    is InboxItemDetailRoute -> itemId
+    is ConnectorThreadRoute -> itemId
+    is LarkRoute -> itemId
+    is LarkMomentRoute -> itemId
+    is MailRoute -> itemId
+    is ChatRoute -> (source as? RouteSource.InboxItem)?.itemId
+    is InteractionRoute -> (chat.source as? RouteSource.InboxItem)?.itemId
     else -> null
 }
 
