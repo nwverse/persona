@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -81,6 +83,129 @@ func TestMCPWaitLocalLinesStopAtFinalResponse(t *testing.T) {
 	n.mcpWaitMu.Unlock()
 	if remaining != 0 {
 		t.Fatalf("%d pending calls remained after the final response", remaining)
+	}
+}
+
+func TestMCPWaitNonReadingClientDoesNotBlockHub(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "pd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "n.sock")
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	client, err := net.Dial("unix", path) // a suspended MCP process: no reads until the hub input is exhausted
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	nodeSide, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nodeSide.Close()
+	if err := nodeSide.(*net.UnixConn).SetWriteBuffer(4096); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.(*net.UnixConn).SetReadBuffer(4096); err != nil {
+		t.Fatal(err)
+	}
+
+	n := &Node{}
+	n.hubMCPWait.Store(true)
+	id, pending := n.beginMCPWait(nodeSide)
+	if pending == nil {
+		t.Fatal("the opted-in call was not registered")
+	}
+	hubR, hubW := io.Pipe()
+	n.peer = rpc.New("n", io.Discard)
+	n.peer.OnEvent = func(event string, params json.RawMessage) {
+		if !n.onMCPWait(event, params) {
+			// The unrelated event stands for terminal input and stream traffic on the same read loop.
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- n.peer.Serve(ctx, hubR) }()
+	defer func() {
+		_ = hubW.Close()
+		_ = nodeSide.Close()
+		select {
+		case <-serveDone:
+		case <-time.After(5 * time.Second):
+			t.Error("the hub read loop did not stop")
+		}
+	}()
+
+	params, err := json.Marshal(proto.MCPWaitEvent{CallID: id, Kind: proto.MCPWaitApproval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLine, err := json.Marshal(map[string]any{"event": proto.EventMCPWait, "params": json.RawMessage(params)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLine = append(waitLine, '\n')
+	otherLine := []byte("{\"event\":\"terminal.input\",\"params\":{}}\n")
+	const updates = 20000
+	wrote := make(chan error, 1)
+	go func() {
+		for range updates {
+			if _, err := hubW.Write(waitLine); err != nil {
+				wrote <- err
+				return
+			}
+			if _, err := hubW.Write(otherLine); err != nil {
+				wrote <- err
+				return
+			}
+		}
+		wrote <- nil
+	}()
+	select {
+	case err := <-wrote:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("an interim update to the non-reading client stopped the hub read loop")
+	}
+
+	finished := make(chan struct{})
+	go func() {
+		n.finishMCPWait(id, pending, proto.TextResult("done", false))
+		close(finished)
+	}()
+	scanner := bufio.NewScanner(client)
+	interim := 0
+	for {
+		if !scanner.Scan() {
+			t.Fatalf("the local socket ended before the final response: %v", scanner.Err())
+		}
+		var line map[string]json.RawMessage
+		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+			t.Fatalf("invalid local line %q: %v", scanner.Text(), err)
+		}
+		if line["content"] != nil {
+			break
+		}
+		if line["wait_kind"] == nil {
+			t.Fatalf("unexpected local line %q", scanner.Text())
+		}
+		interim++
+	}
+	if interim >= updates {
+		t.Fatalf("all %d interim lines reached a client that stopped reading; a failed write did not stop later updates", updates)
+	}
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the final response remained blocked after the client resumed")
 	}
 }
 

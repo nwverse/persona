@@ -4,36 +4,52 @@ import (
 	"encoding/json"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// Interim lines are optional: a suspended local client may delay one update only briefly, and loses later updates
+// after a failed write. The final response retains the local protocol's original blocking behavior.
+const mcpWaitInterimWriteTimeout = 100 * time.Millisecond
+
 // pendingMCPWait is one explicitly opted-in local socket call. Its mutex orders interim updates with the final
 // response: once finish starts, no update can follow that response.
 type pendingMCPWait struct {
-	mu   sync.Mutex
-	conn net.Conn
-	done bool
+	mu            sync.Mutex
+	conn          net.Conn
+	done          bool
+	interimFailed bool
 }
 
-func (p *pendingMCPWait) writeLocked(v any) {
+func (p *pendingMCPWait) writeLocked(v any) error {
 	b, err := json.Marshal(v)
-	if err == nil {
-		_, _ = p.conn.Write(append(b, '\n'))
+	if err != nil {
+		return err
 	}
+	_, err = p.conn.Write(append(b, '\n'))
+	return err
 }
 
 func (p *pendingMCPWait) update(kind proto.MCPWaitKind) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.done {
+	if p.done || p.interimFailed {
+		return
+	}
+	if err := p.conn.SetWriteDeadline(time.Now().Add(mcpWaitInterimWriteTimeout)); err != nil {
+		p.interimFailed = true
 		return
 	}
 	// The local response is deliberately smaller than the relayed event: one enum, no correlator or other content.
-	p.writeLocked(struct {
+	err := p.writeLocked(struct {
 		WaitKind proto.MCPWaitKind `json:"wait_kind"`
 	}{WaitKind: proto.NormalizeMCPWaitKind(kind)})
+	if clearErr := p.conn.SetWriteDeadline(time.Time{}); err == nil {
+		err = clearErr
+	}
+	p.interimFailed = err != nil
 }
 
 func (p *pendingMCPWait) finish(response any) {
