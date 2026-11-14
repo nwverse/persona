@@ -2529,8 +2529,9 @@ Demo mode (viewable without a hub) is not done on the web: the hub hosts the web
 
 The full Agents sidebar nests explicit host workers (`parent_agent_id`) and provider-native children
 (`parent_session_id`) within each existing repository, project, machine, state, to-do, pinned or recent group.
-Orca terminal workers can belong to different tabs of the same workspace: the machine grouping renders their
-agent forest across those tabs. The paged Agents list draws the same `parent_agent_id` rows under their parent
+Orca terminal workers can belong to different tabs of the same workspace: the machine grouping keeps every tab
+(its row, panes, menu and route) and puts a worker's tab under its coordinator's tab when all of that tab's
+coordinators sit in one other tab (`nestTabs`); split coordinators or a loop leave the tab at the top. The paged Agents list draws the same `parent_agent_id` rows under their parent
 always open ("Side sessions under their parent", #5935); the chat-list layout retains its existing ordering.
 A parent filtered out or in another group is never fetched or inserted merely to draw a tree; its children stay
 visible at the top. Parent lookup uses machine, manager and host/provider scope, never a title or directory.

@@ -62,9 +62,15 @@ try {
       await groups.getByRole("radio").filter({ hasText: new RegExp(`^${mode}$`) }).click();
       const expand = surface.getByRole("button", { name: "Expand all", exact: true });
       if (await expand.count()) await expand.click();
-      const leader = surface.locator(`[data-agent-parent="s:macbook/${prefix}leader"]`);
+      // By machine nests the Orca tabs themselves (each fixture Agent is a tab of its own): a worker's tab under its
+      // coordinator's, every tab keeping its row; the other groupings nest the Agents' rows
+      const byTab = mode === "Machine";
+      const branch = (scope, title, id) => byTab
+        ? scope.locator('[data-agent-parent^="t:"]').filter({ has: page.getByRole("link", { name: new RegExp(title) }) }).first()
+        : scope.locator(`[data-agent-parent="s:macbook/${prefix}${id}"]`);
+      const leader = branch(surface, "Hierarchy leader", "leader");
       await leader.waitFor();
-      const worker = leader.locator(`[data-agent-parent="s:macbook/${prefix}worker-a"]`);
+      const worker = branch(leader, "Worker A", "worker-a");
       assert.equal(await worker.getByRole("link", { name: /Nested worker/ }).count(), 1);
       assert.equal(await leader.getByRole("link", { name: /Worker B/ }).count(), 1);
       for (const title of ["Hierarchy leader", "Worker A", "Worker B", "Nested worker"]) {

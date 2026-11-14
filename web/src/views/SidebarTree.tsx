@@ -12,7 +12,7 @@ import { baseName } from "../lib/format";
 import { href, navigate, useRoute, type Route } from "../lib/router";
 import { terminalTarget } from "../lib/session-view";
 import { useStore } from "../lib/store";
-import { nestAgents, treeStateLabel, type LooseGroup, type TodoTree, type TreeProject, type TreeAgent, type TreeState, type TreeTodo } from "../lib/todo-tree";
+import { nestAgents, nestTabs, treeStateLabel, type LooseGroup, type TabBranchNode, type TodoTree, type TreeProject, type TreeAgent, type TreeState, type TreeTodo } from "../lib/todo-tree";
 import { findTodoForSpace, openTodoFromTag } from "../lib/todos";
 import type { AgentState, Machine, Session } from "../lib/types";
 import { Collapse, cx, sidebarFoldMotion } from "../ui/atoms";
@@ -614,7 +614,7 @@ function TreeBlock({ foldKey, sessions, activeKey, state, title, right, children
 }
 
 function WorkspaceBlock({ sp, ...p }: { sp: HerdrSpace } & TreeProps) {
-  const orcaForest = sp.sessions.some((s) => (s.host || sessionHost(s)) === "orca" && s.parent_agent_id);
+  const tabRoots = useMemo(() => nestTabs(sp.tabs), [sp.tabs]);
   const looseRoots = useAgentForest(sp.loose);
   const looseRow = (s: Session) => <TreeSessionRow s={s} {...p} />;
   const tabs = sp.tabs.length;
@@ -642,17 +642,13 @@ function WorkspaceBlock({ sp, ...p }: { sp: HerdrSpace } & TreeProps) {
         </>
       )}
     >
-      {/* a workspace with hundreds of tabs is drawn a part at a time, as the other groupings' long groups are; an Orca
-          workspace whose workers name their coordinator draws its agent forest across tabs instead */}
-      {orcaForest ? (
-        <AgentTreeRows sessions={sp.sessions} activeKey={p.activeKey} scope={sp.foldKey} row={(s) => <TreeSessionRow s={s} {...p} />} />
-      ) : (
-        <WindowedRows<HerdrTab | TreeAgent>
-          items={sp.tabs.length && looseRoots.length ? [...sp.tabs, ...looseRoots] : sp.tabs.length ? sp.tabs : looseRoots}
-          holds={(x) => ("lead" in x ? holdsRow(x.sessions, p.activeKey) : holdsAgent(x, p.activeKey))}
-          render={(x) => ("lead" in x ? <TabRow key={x.key} t={x} {...p} /> : <AgentBranch key={x.key} a={x} row={looseRow} activeKey={p.activeKey} scope={sp.foldKey} />)}
-        />
-      )}
+      {/* a workspace with hundreds of tabs is drawn a part at a time, as the other groupings' long groups are; a worker's
+          tab sits under its coordinator's tab, each tab keeping its own row, panes and menu */}
+      <WindowedRows<TabBranchNode<HerdrTab> | TreeAgent>
+        items={tabRoots.length && looseRoots.length ? [...tabRoots, ...looseRoots] : tabRoots.length ? tabRoots : looseRoots}
+        holds={(x) => ("tab" in x ? holdsRow(tabBranchSessions(x), p.activeKey) : holdsAgent(x, p.activeKey))}
+        render={(x) => ("tab" in x ? <TabBranch key={x.tab.key} n={x} {...p} /> : <AgentBranch key={x.key} a={x} row={looseRow} activeKey={p.activeKey} scope={sp.foldKey} />)}
+      />
       {sp.children.length > 0 && <ChildSpaces sp={sp} {...p} />}
     </TreeBlock>
   );
@@ -723,6 +719,33 @@ function tabNode(t: HerdrTab, machines: Machine[]): MenuNode {
 // among its panes (the hub folds them under the lead, lib/team.ts): they are in the lead's Team panel. A tab with one pane has that agent's ⋯, one with several the tab's own. A tab with several
 // agents (#2320) opens up to them, in pane order: the "Lead" (the first pane, the others split from it) on top, its
 // branches under it; the choice is kept per tab like the sidebar's other folds, and folded it is the one row it always was.
+/** A tab's Agents and every tab nested under it. */
+const tabBranchSessions = (n: TabBranchNode<HerdrTab>): Session[] => [...n.tab.sessions, ...n.children.flatMap(tabBranchSessions)];
+
+/** A tab and, under it, the tabs whose workers it coordinates (#4575): the tab's own row, panes and menu are TabRow's,
+ *  unchanged; the chevron before it folds only the nested tabs, as an Agent's does its children (AgentBranch). */
+function TabBranch({ n, ...p }: { n: TabBranchNode<HerdrTab> } & TreeProps) {
+  const nested = useMemo(() => n.children.flatMap(tabBranchSessions), [n]);
+  const [folded, toggle] = useFolded(`${n.tab.foldKey}:tabs`, false, { holds: holdsRow(nested, p.activeKey) });
+  if (!n.children.length) return <TabRow t={n.tab} {...p} />;
+  return (
+    <div data-agent-parent={`t:${n.tab.key}`}>
+      <div className="flex min-w-0 items-start">
+        <button type="button" aria-expanded={!folded} aria-label={t("lib-todo-tree.spawned_agents", { count: nested.length })} onClick={toggle} className="sidebar-row touch-hit relative z-10 -mr-1 flex w-4 shrink-0 items-center justify-center text-ink-3">
+          <Icon name="chevron" size={9} stroke={2.4} className="opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
+        </button>
+        <div className="min-w-0 flex-1"><TabRow t={n.tab} {...p} /></div>
+        {folded && <span className="sidebar-row flex items-center"><SessionTally sessions={nested} folded /></span>}
+      </div>
+      <Collapse open={!folded} sidebarFold>
+        <div className="ml-2 flex flex-col gap-px border-l border-line pl-3" inert={folded || undefined}>
+          {n.children.map((c) => <TabBranch key={c.tab.key} n={c} {...p} />)}
+        </div>
+      </Collapse>
+    </div>
+  );
+}
+
 function TabRow({ t: tab, ...p }: { t: HerdrTab } & TreeProps) {
   const { reg, hover, activeKey, go, onRowMenu, onNodeMenu, machines } = p;
   const n = tab.sessions.length;
