@@ -393,7 +393,7 @@ struct ChatsView: View {
 
     /// The list column: its own property, so Xcode 26.0 type-checks it apart from the split around it (#5333, #7173).
     /// Erased at its base (#6735): unoptimized, this getter reserves a stack slot for every modifier below, each holding
-    /// the whole column (`AgentsListStackTests`).
+    /// the whole column (`MainPagesStackTests`).
     private var listColumn: some View {
         AnyView(agentsColumn)
             #if os(iOS) || os(visionOS)
@@ -1029,7 +1029,7 @@ private struct AgentsList: View {
         // entry for every opaque intermediate of a modifier chain, each holding everything before it: ~45 modifiers
         // over the List made `observedAgentList` reserve 422 KB, and a Debug build on an iPhone (a 1 MB main-thread
         // stack, the simulator's is 8 MB) overflowed on every launch into Agents. An erased type is the same on every
-        // update, so the list keeps its identity and state. `AgentsListStackTests` measures the page.
+        // update, so the list keeps its identity and state. `MainPagesStackTests` measures the page.
         observedAgentList(
             AnyView(agentList(base: base, filtered: filtered, unpinned: unpinned, pinnedAgents: pinnedAgents,
                               needsYou: needsYou, unreadShown: unreadShown, active: active, quiet: quiet,
