@@ -155,12 +155,14 @@ def repair_worker_argv(argv, worktree):
                       "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
                       "http_proxy", "https_proxy", "all_proxy", "no_proxy") or key.startswith("ANTHROPIC_")}
     env.update({"HOME": str(home), "GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "CI": "1"})
-    tool_roots = [Path.home() / ".npm-global", Path.home() / ".local", Path.home() / ".goenv"]
+    tool_roots = []
+    executable = shutil.which(argv[0])
     result = [sandbox, "--unshare-all", "--share-net", "--die-with-parent", "--new-session",
               "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib",
               "--ro-bind-try", "/lib64", "/lib64", "--ro-bind-try", "/opt", "/opt"]
-    for root in tool_roots:
-        result.extend(["--ro-bind-try", str(root), str(root)])
+    if executable:
+        result.extend(["--ro-bind", str(Path(executable).resolve()), "/" + Path(executable).name])
+        argv = ["/" + Path(executable).name] + list(argv[1:])
     result.extend(["--bind", str(worktree), str(worktree), "--chdir", str(worktree)])
     for key, value in env.items():
         result.extend(["--setenv", key, value])
