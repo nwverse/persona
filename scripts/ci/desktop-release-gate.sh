@@ -38,14 +38,14 @@ else
     mac=true
     say "macOS desktop packages: building signed and notarized, version $version."
   else
-    say "macOS desktop packages skipped: repository secrets not configured: $missing."
+    say "macOS desktop packages skipped: Environment secrets not configured: $missing."
   fi
   missing="$(missing_for PERSONA_DESKTOP_APP_ID WIN_CSC_LINK WIN_CSC_KEY_PASSWORD)"
   if [[ -z "$missing" ]]; then
     win=true
     say "Windows desktop package: building signed, version $version."
   else
-    say "Windows desktop package skipped: repository secrets not configured: $missing."
+    say "Windows desktop package skipped: Environment secrets not configured: $missing."
   fi
 fi
 out version "$version"
