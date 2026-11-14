@@ -38,6 +38,8 @@ export interface OutboxEntry {
   /** sent: the hub has it (or it started the conversation); the bubble waits for the transcript. */
   state: "sending" | "sent" | "failed";
   error?: string;
+  /** The code its failed send was refused with (dialog_open: a dialog had the terminal, #7343). */
+  code?: string;
   /** The computer's input box holds text (input_draft): what "Clear and send" clears, when it can. */
   clearable?: string;
   /** The hub could not tell whether it went in: a retry is a new message. */
@@ -187,12 +189,13 @@ export function settleOutbox(mid: string, sid: string, users: Seen[]) {
 }
 
 /** A failed entry's fields for the error its send ended with. */
-function failedWith(err: unknown): Pick<OutboxEntry, "state" | "error" | "clearable" | "newId" | "inDoubt"> {
+function failedWith(err: unknown): Pick<OutboxEntry, "state" | "error" | "code" | "clearable" | "newId" | "inDoubt"> {
   return {
     // the hub stopped waiting (delivered "unknown"): it may have gone in, and its copy in the transcript settles it (settle)
     inDoubt: err instanceof ApiError && err.body.delivered === "unknown",
     state: "failed",
     error: failureText(err),
+    code: err instanceof ApiError ? err.code : undefined,
     clearable: err instanceof ApiError && err.code === "input_draft" && typeof err.body.clearable === "string" ? err.body.clearable : undefined,
     // the hub answered: it keeps that answer for this id, so a retry is another operation; a gap it never
     // answered is retried with the same id (the hub does it at most once)
