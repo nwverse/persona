@@ -659,12 +659,17 @@ metadata; the app never guesses it.
   `scripts/release/android_release_worker.py` (the full sha of the checkout it builds, for main and version-tag builds alike);
   `scripts/app/android.sh release` (this repository's `HEAD`, `unknown` when it cannot be read). Debug, test, lint and shots builds
   pass nothing and show Unknown, unless the caller sets the property or variable. A working tree with uncommitted changes still shows
-  its `HEAD`; the local release does not add a dirty mark.
+  its `HEAD`; the local release does not add a dirty mark. CI passes it on its one Gradle invocation, which runs lint, tests and
+  `:app:assembleDebug` together, so it is not injected only where the APK is produced; doing that would take a second invocation per
+  lane. Whether the changing value costs build or configuration cache hits is not measured.
 - **About**: the row's title is Commit. With a commit it shows the first 12 characters in the code font on one line (no chevron);
   tapping the row copies the whole commit through `rememberCopy()`, with a "Build commit copied" notice. Without one it shows the
   localized Unknown and does nothing on tap. Strings: `strings_about.xml` in `values`, `values-zh`, `values-ja`.
 - **Checking an APK**: read `persona_build_commit` from the built APK's resources (`aapt2 dump resources <apk>`) and compare it with the
-  commit that was injected; an uninjected build must carry `unknown`.
+  commit that was injected; an uninjected build must carry `unknown`. For a release APK `scripts/release/check_android_build_commit.py <apk> <sha>`
+  does this and exits 1 on a missing, different or unknown value (the release worker runs it).
+- **Guard test**: `scripts/ci/test_android_build_commit.py` holds only the commit's own statements to these rules (never `BuildConfig` or
+  the manifest, no git read in its block). Another change turning on `buildFeatures { buildConfig = true }` in the same file does not fail it.
 
 ## Cache size budgets
 
