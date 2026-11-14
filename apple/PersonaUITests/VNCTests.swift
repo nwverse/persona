@@ -1019,6 +1019,17 @@ final class VNCTests: XCTestCase {
         shot(app, "vnc-video-lost")
     }
 
+    /// #6398: a phone that asks the hub for a screen session (direct routes on, `-showScreenRoutes`) and a hub that
+    /// doesn't offer one (the mock, like an older hub or node) keep today's live screen through the same raw streams:
+    /// RFB signs in and, with the mock's video channel, video takes the picture and reports frames.
+    @MainActor func testAskingForAScreenSessionKeepsTheRawStreams() throws {
+        let (app, _) = try signedInMachinePage(["-showScreenRoutes", "YES"])
+        guard ProcessInfo.processInfo.environment["PERSONA_SCREEN_VIDEO"] == "1" else { return }
+        let screen = app.descendants(matching: .any)["vnc-screen"].firstMatch
+        XCTAssertTrue(picture(screen, "video"), "video took the picture: \(screen.value ?? "")")
+        XCTAssertGreaterThan(try mockJSON("/mock/screen-video")["reports"] as? Int ?? 0, 0, "the phone reports frames")
+    }
+
     /// #3954: the not-allowed line at the largest text size: the words and "How to turn it on" wrap, nothing cut off.
     @MainActor func testVideoNotAllowedAtTheLargestText() throws {
         guard ProcessInfo.processInfo.environment["PERSONA_SCREEN_VIDEO"] == "1" else {
@@ -1078,6 +1089,25 @@ final class VNCTests: XCTestCase {
                       "a window will show: \(alert.debugDescription)")
         shot(app, "vnc-video-not-asked")
         alert.buttons.firstMatch.tap()
+    }
+
+    /// #6558: Connection Stats over VNC shows the round trip to the hub on a line of its own, timed on the app's own
+    /// hub connection (the mock answers its pings), as the web's overlay does.
+    @MainActor func testTheOverlayShowsTheRoundTripToTheHub() throws {
+        let (app, _) = try signedInMachinePage()
+        app.buttons["vnc-more"].tap()
+        let toggle = app.descendants(matching: .any)["screen-stats-toggle"].firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "Connection Stats in ⋯:\n\(app.debugDescription)")
+        toggle.tap()
+        let stats = app.descendants(matching: .any)["screen-stats"].firstMatch
+        XCTAssertTrue(stats.waitForExistence(timeout: 5), "the overlay:\n\(app.debugDescription)")
+        let words = ["VNC", "经 hub 中转", "到 hub 往返"]
+        let deadline = Date.now.addingTimeInterval(10)
+        while Date.now < deadline, !words.allSatisfy(stats.label.contains) { usleep(250_000) }
+        XCTAssertTrue(words.allSatisfy(stats.label.contains), "the round trip to the hub: \(stats.label)")
+        shot(app, "vnc-stats-hub")
+        app.buttons["screen-stats-close"].firstMatch.tap() // kept per Mac: off again for the other tests
+        XCTAssertTrue(stats.waitForNonExistence(timeout: 5))
     }
 
     /// The picture the screen shows, as its DEBUG value says (`picture=video|vnc`), within 20 s.

@@ -689,6 +689,10 @@ extension Theme {
         static let search = "magnifyingglass"
         /// The knowledge base (~/.persona/data).
         static let knowledge = "books.vertical"
+        /// A knowledge-base topic (#7251): what Persona learned on one subject.
+        static let topic = "lightbulb.2"
+        /// The knowledge map (#7251): topics and projects as one outline.
+        static let knowledgeMap = "map"
         /// Health: the health space (docs/assistant/health.md), its entry and its conversations' mark.
         static let health = "heart"
         static let healthFilled = "heart.fill"
@@ -736,6 +740,8 @@ extension Theme {
         static let glossary = "character.book.closed"
         /// Hub transcription on Wi-Fi only (#3862 phase 5): Wi-Fi.
         static let wifiOnly = pluginWifi
+        /// Mobile data (#6396): the live screen's picture on cellular or a personal hotspot.
+        static let mobileData = "cellularbars"
         /// The calendar event a meeting recording is named after (docs/apple/recording.md).
         static let calendarEvent = "calendar.day.timeline.left"
         /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).
