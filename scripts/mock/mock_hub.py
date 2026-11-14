@@ -3253,6 +3253,10 @@ TODO_ORPHANED_SINCE = ago(hours=5)
 # seen by another team (two taps, no default). POST …/accept with `response` "explain_first" keeps the round open
 # with `response` set, as the hub does; any other response or an option ends it.
 MOCK_DECISIONS = os.environ.get("MOCK_DECISIONS") == "1"
+# MOCK_ACCEPT_DIALOG=1 (#7343, docs/assistant/todos.md): every answer to a decision is refused as the hub refuses one a
+# dialog in its Agent's terminal holds back (423 dialog_open, with the dialog's first line and that Agent), so the
+# decision row says so and offers its terminal; nothing is taken.
+MOCK_ACCEPT_DIALOG = os.environ.get("MOCK_ACCEPT_DIALOG") == "1"
 DECISION_RESPONSES = ["decide_yourself", "not_what_i_asked", "explain_first"]
 DECISION_FIELDS = {
     "todo_review": {
@@ -8833,6 +8837,10 @@ def tasks_area(h, method, p, raw):
         expected = current_ask.get("asked_at") if current_ask is not None else (brief or {}).get("asked_at")
         if tid in BRIEF_ACCEPTED or expected is None or sent.get("asked_at") != expected:
             h.send_json({"error": "已经处理过了"}, 409)
+        elif MOCK_ACCEPT_DIALOG:
+            h.send_json({"code": "dialog_open", "error": "终端正在等待选择，请先到终端处理。", "delivered": "none",  # i18n-ignore
+                         "retryable": False, "dialog": "Approaching rate limits", "machine_id": "macbook",
+                         "session_id": "a1f3c2d4-0000-4000-8000-000000000002"}, 423)
         elif MOCK_DECISIONS and sent.get("response") == "explain_first" and tid in TODO_ASKS:
             DECISION_KEPT[tid] = "explain_first"  # the round stays open, no longer taken by default (decision.go)
             h.send_json({"ok": True})
