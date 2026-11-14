@@ -27,6 +27,9 @@ typedef struct PersonaCoreHost {
     void (*changed)(void *context, uint64_t version);
     void (*run)(void *context, const uint8_t *effect, size_t length);
     void (*release)(void *context);
+    // Optional targeted wake. When non-null, `changed_chat` identifies the chat; the legacy `changed` remains the
+    // version-only compatibility path. Both are called on the worker and must return promptly.
+    void (*changed_chat)(void *context, const uint8_t *chat, size_t length, uint64_t version);
 } PersonaCoreHost;
 
 // Bytes the core allocated; give them back with persona_core_bytes_free.

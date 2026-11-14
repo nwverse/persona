@@ -22,6 +22,19 @@ mod binding {
     }
 
     #[napi(catch_unwind)]
+    pub fn core_create_with_chat(
+        config: Buffer,
+        changed: ThreadsafeFunction<i64>,
+        changed_chat: ThreadsafeFunction<(String, i64)>,
+        effects: ThreadsafeFunction<Vec<u8>>,
+    ) -> Result<i64> {
+        registry::create(
+            config.as_ref(),
+            CoreHost::with_changed_chat(changed, changed_chat, effects),
+        )
+    }
+
+    #[napi(catch_unwind)]
     pub fn core_dispatch(handle: i64, action: Buffer) -> Result<bool> {
         registry::dispatch(handle, action.as_ref())
     }

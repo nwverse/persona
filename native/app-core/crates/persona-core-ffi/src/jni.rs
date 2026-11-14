@@ -22,19 +22,19 @@ struct JHost {
     vm: JavaVM,
     host: GlobalRef,
     changed: JMethodID,
+    changed_chat: Option<JMethodID>,
     run: JMethodID,
 }
 
 impl JHost {
-    /// Calls a `void` method of the host with one argument, on the core's worker thread.
-    fn call(&self, env: &mut JNIEnv, method: JMethodID, argument: jvalue) {
-        // The method ids were looked up on this object's class, with these signatures.
+    /// Calls a `void` method on the worker thread. Arguments must match the method's signature.
+    fn call(&self, env: &mut JNIEnv, method: JMethodID, arguments: &[jvalue]) {
         let _ = unsafe {
             env.call_method_unchecked(
                 self.host.as_obj(),
                 method,
                 ReturnType::Primitive(Primitive::Void),
-                &[argument],
+                arguments,
             )
         };
         if env.exception_check().unwrap_or(false) {
@@ -48,7 +48,23 @@ impl Host for JHost {
         let Ok(mut env) = self.vm.attach_current_thread_permanently() else {
             return;
         };
-        self.call(&mut env, self.changed, jvalue { j: version as jlong });
+        self.call(&mut env, self.changed, &[jvalue { j: version as jlong }]);
+    }
+    fn changed_chat(&self, chat: &str, version: u64) {
+        let Some(method) = self.changed_chat else {
+            self.changed(version);
+            return;
+        };
+        let Ok(mut env) = self.vm.attach_current_thread_permanently() else {
+            return;
+        };
+        let Ok(chat) = env.new_string(chat) else { return };
+        self.call(
+            &mut env,
+            method,
+            &[jvalue { l: chat.as_raw() }, jvalue { j: version as jlong }],
+        );
+        let _ = env.delete_local_ref(chat);
     }
     fn run(&self, effect: &[u8]) {
         let Ok(mut env) = self.vm.attach_current_thread_permanently() else {
@@ -57,7 +73,7 @@ impl Host for JHost {
         let Ok(array) = env.byte_array_from_slice(effect) else {
             return;
         };
-        self.call(&mut env, self.run, jvalue { l: array.as_raw() });
+        self.call(&mut env, self.run, &[jvalue { l: array.as_raw() }]);
         // The worker never returns to Java, so its local references are freed by hand.
         let _ = env.delete_local_ref(array);
     }
@@ -85,11 +101,13 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_create(
         let config = env.convert_byte_array(&config).ok()?;
         let class = env.get_object_class(&host).ok()?;
         let changed = env.get_method_id(&class, "changed", "(J)V").ok()?;
+        let changed_chat = env.get_method_id(&class, "changedChat", "(Ljava/lang/String;J)V").ok();
         let run = env.get_method_id(&class, "run", "([B)V").ok()?;
         let host = JHost {
             vm: env.get_java_vm().ok()?,
             host: env.new_global_ref(&host).ok()?,
             changed,
+            changed_chat,
             run,
         };
         create(&config, Arc::new(host))

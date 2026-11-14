@@ -45,6 +45,31 @@ final class PersonaCoreContinuityTests: XCTestCase {
         client.close()
     }
 
+    func testChatTargetedWakeKeepsIndependentChatIdentity() throws {
+        let wakes = Mutex<[(String, UInt64)]>([])
+        let client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(changedChat: { chat, version in
+            wakes.withLock { $0.append((chat, version)) }
+        }, run: { _ in }))
+        for chat in ["a", "b"] {
+            try client.dispatch(.openChat(chat: chat, snapshot: ChatSnapshot(
+                itemsJson: #"[{"id":"1#0","seq":1,"role":"assistant","kind":"text","text":"old"}]"#,
+                history: "h", covered: 1, hasMore: false, loadedOnce: true
+            )))
+        }
+        try client.flush()
+        XCTAssertEqual(wakes.withLock { $0.map(\.0) }, ["a", "b"])
+        let patch = try client.drain(chat: "a")
+        XCTAssertEqual(patch.ops.count, 1)
+        try client.dispatch(.chat(chat: "b", event: .pushed(batch: WireBatch(
+            itemsJson: #"[{"id":"1#0","seq":1,"role":"assistant","kind":"text","text":"newest"}]"#,
+            history: "h", fromSeq: 0, toSeq: 1, backlog: false, hasMore: nil, moreAfter: false
+        ))))
+        try client.flush()
+        XCTAssertEqual(wakes.withLock { $0.last?.0 }, "b")
+        XCTAssertEqual(try client.drain(chat: "b").ops.count, 1)
+        client.close()
+    }
+
     func testCallbackErrorAppearsInItsFlushAndMainThreadCloseReturns() async throws {
         let client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(run: { _ in
             struct CallbackFailure: Error {}

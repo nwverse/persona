@@ -22,6 +22,7 @@ pub struct PersonaCoreHost {
     pub changed: Option<unsafe extern "C" fn(*mut c_void, u64)>,
     pub run: Option<unsafe extern "C" fn(*mut c_void, *const u8, usize)>,
     pub release: Option<unsafe extern "C" fn(*mut c_void)>,
+    pub changed_chat: Option<unsafe extern "C" fn(*mut c_void, *const u8, usize, u64)>,
 }
 
 /// The header requires `changed` and `run` to be callable from any thread with this context.
@@ -33,6 +34,13 @@ impl Host for CHost {
     fn changed(&self, version: u64) {
         if let Some(changed) = self.0.changed {
             unsafe { changed(self.0.context, version) }
+        }
+    }
+    fn changed_chat(&self, chat: &str, version: u64) {
+        if let Some(changed) = self.0.changed_chat {
+            unsafe { changed(self.0.context, chat.as_ptr(), chat.len(), version) }
+        } else {
+            self.changed(version);
         }
     }
     fn run(&self, effect: &[u8]) {
