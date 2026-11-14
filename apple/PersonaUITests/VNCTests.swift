@@ -1019,6 +1019,24 @@ final class VNCTests: XCTestCase {
         shot(app, "vnc-video-lost")
     }
 
+    /// #6398: the stats overlay's Route row (the demo's numbers: a direct LAN route, its round trip and loss, and why the
+    /// live screen moved, on its own line), for review in light and dark, at the default size and at xxxLarge.
+    @MainActor func testTheOverlayShowsTheRoute() throws {
+        for (scheme, size) in [("light", "L"), ("dark", "L"), ("light", "XXXL"), ("dark", "XXXL")] {
+            let (app, _) = try signedInMachinePage(["-showScreenStatsDemo", "YES", "-ui.scheme", scheme,
+                                                    "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory\(size)"])
+            let overlay = app.descendants(matching: .any)["screen-stats"].firstMatch
+            XCTAssertTrue(overlay.waitForExistence(timeout: 10), "the overlay:\n\(app.debugDescription)")
+            XCTAssertTrue(overlay.label.contains("6 ms"), "the route's round trip: \(overlay.label)")
+            for source in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] { // the icon follows the look
+                let alert = source.alerts.containing(NSPredicate(format: "label CONTAINS[c] 'icon' OR label CONTAINS '图标'")).firstMatch
+                if alert.exists, alert.buttons.firstMatch.exists { alert.buttons.firstMatch.tap() }
+            }
+            shot(app, "vnc-overlay-route-\(scheme)-\(size == "L" ? "default" : "xxxl")")
+            app.terminate()
+        }
+    }
+
     /// #6398: a phone that asks the hub for a screen session (direct routes on, `-showScreenRoutes`) and a hub that
     /// doesn't offer one (the mock, like an older hub or node) keep today's live screen through the same raw streams:
     /// RFB signs in and, with the mock's video channel, video takes the picture and reports frames.

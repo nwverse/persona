@@ -313,6 +313,39 @@ struct ScreenVideoTests {
         o.close()
     }
 
+    /// Connection Stats' tier line (#6396): the Quality choice, the scale and frame rate; and why it last changed, in
+    /// plain words, with how long ago.
+    @MainActor @Test func theTierInPlainWords() {
+        let t = TierLadder.Tier(scale: 1.5, fps: 60, width: 2268, height: 1472, minKbps: 4_006, maxKbps: 12_000)
+        #expect(ScreenTierText.value(.auto, t) == "\(ScreenQuality.auto.label) · 1.5× · 60 fps")
+        let one = TierLadder.Tier(scale: 1, fps: 15, width: 1512, height: 982, minKbps: 200, maxKbps: 1_782)
+        #expect(ScreenTierText.value(.sharper, one).hasSuffix(" · 1× · 15 fps"))
+        let at = Date(timeIntervalSince1970: 1_000)
+        #expect(ScreenTierText.reason(.linkSlowed, at: at, now: at.addingTimeInterval(12))
+            == ScreenTierText.words(.linkSlowed) + " · " + String(localized: "\(12) s ago"))
+        #expect(ScreenTierText.reason(.choice, at: at, now: at.addingTimeInterval(150)).hasSuffix(String(localized: "\(2) min ago")))
+        for r in [TierReason.start, .linkSlowed, .linkSteady, .networkChanged, .phoneWarm, .phoneBehind, .choice] {
+            #expect(!ScreenTierText.words(r).isEmpty)
+        }
+    }
+
+    /// After a size change in place (#6396), the overlay's resolution is what the encoder runs at (`encoding`), not
+    /// what `hello` said.
+    @MainActor @Test func theSizeFollowsEncoding() async throws {
+        let link = ScreenVideoLink()
+        let t = VideoScript([try Self.prefix(messages: 4)], holds: true)
+        link.transport = { _ in t }
+        link.want(.init(display: nil, rect: nil))
+        link.rfb(.init(group: "", machine: "macbook", pair: "0123"))
+        try await Self.until { link.showing }
+        let before = link.size
+        t.feed(Array(ScreenVideoMessage.encoding(EncodingMessage(width: 1512, height: 982, fps: 30, scale: 1, minKbps: 891,
+                                                                  maxKbps: 3_563)).framed()))
+        try await Self.until { link.size == CGSize(width: 1512, height: 982) }
+        #expect(before != link.size)
+        link.want(nil)
+    }
+
     /// Retries that fail as the first drop did keep the same line: it never blinks off and on between them.
     @MainActor @Test func aRetryThatFailsKeepsTheLineSteady() async throws {
         let link = ScreenVideoLink(backoff: .init(first: .milliseconds(40), longest: .milliseconds(80)))
@@ -400,6 +433,7 @@ private final class Events: @unchecked Sendable {
         case let .timing(t): word = "timing encode \(t.encodeMs ?? -1) network \(t.networkMs ?? -1)"
         case let .tier(c):
             word = "tier \(c.tier.width)x\(c.tier.height)@\(c.tier.fps) band \(c.tier.minKbps)-\(c.tier.maxKbps) target \(c.targetKbps) \(c.reason.rawValue)"
+        case let .encoding(e): word = "encoding \(e.width)x\(e.height)@\(e.fps)"
         case let .ended(why): word = "ended \(why)"
         }
         lock.withLock { events.append(word) }
