@@ -85,6 +85,8 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 			continue
 		}
 		w := beginWrite(it)
+		latest := inboxLatestAgentLink(it)
+		current := latest != nil && latest.MachineID == sess.MachineID && latest.SessionID == sess.SessionID
 		turnAt := sess.UpdatedAt.UTC()
 		key := "assistant-inbox_chain.agent_stopped"
 		if failed {
@@ -96,13 +98,15 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 
 		a := it.Agent
 		if enabled && a != nil && a.SessionID != "" {
-			// A stopped Agent is never a state to restore; an earlier waiting restoration point stays intact.
-			if a.Back == HandlingAgent {
-				a.Back = ""
-			}
-			if it.Handling != nil && it.Handling.State == HandlingAgent {
-				// Set Looking before tell: otherwise tell would save Agent in Back and a recap-only turn would restore it.
-				b.setHandling(it, HandlingLooking, "", now)
+			if current {
+				// A stopped current Agent is never a state to restore; an earlier waiting restoration point stays intact.
+				if a.Back == HandlingAgent {
+					a.Back = ""
+				}
+				if it.Handling != nil && it.Handling.State == HandlingAgent {
+					// Set Looking before tell: otherwise tell would save Agent in Back and a recap-only turn would restore it.
+					b.setHandling(it, HandlingLooking, "", now)
+				}
 			}
 			b.tell(it, inboxNote{Name: prompts.NoteAgentStopped, Text: detail, Failed: failed,
 				Machine: sess.MachineID, Session: sess.SessionID}, true, now)
