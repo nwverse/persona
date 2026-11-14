@@ -265,6 +265,15 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
                 probe["statistics"]["view_appearance_ms"] = {"values": values, "median": statistics.median(values)}
                 probe["medians"]["view_appearance_ms"] = statistics.median(values)
             probe["trust"] = "native_view_appearance_not_presented_frame"
+            if expected_iterations is not None:
+                if len(samples) != expected_iterations + 1:
+                    issues.append(f"expected {expected_iterations}+1 launch observations, got {len(samples)}")
+                warmups = [sample for sample in samples if sample.get("warm_up") is True]
+                if len(warmups) != 1:
+                    issues.append("exactly one launch warmup is required")
+                ids = [sample.get("run_id") for sample in samples]
+                if any(not isinstance(value, str) or not value for value in ids) or len(set(ids)) != len(ids):
+                    issues.append("every launch observation needs a distinct run_id")
         else:
             required = 12  # one warmed baseline, ten real closes, one bounded settling sample
             if len(samples) != required:
@@ -276,23 +285,46 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
             if values:
                 probe["statistics"]["phys_footprint_bytes"] = {"values": values}
                 probe["statistics"]["final_minus_warmed_bytes"] = {"value": values[-1] - values[0]}
+                probe["medians"]["final_minus_warmed_bytes"] = values[-1] - values[0]
+            residents = [sample.get("resident_size_bytes") for sample in samples]
+            if all(finite(value) and value > 0 for value in residents):
+                probe["statistics"]["resident_size_bytes"] = {"values": residents}
+                probe["statistics"]["resident_final_minus_warmed_bytes"] = {"value": residents[-1] - residents[0]}
+            else:
+                issues.append("missing or invalid resident_size_bytes")
             probe["trust"] = "native_ten_open_close_phys_footprint"
         probe.update(raw_count=len(samples), measured_count=len(samples), excluded_warm_up_indices=[],
-                     statistic_sample_indices=list(range(len(samples))))
+                     statistic_sample_indices=list(range(len(samples))), acceptance_eligible=not issues)
         probe["complete"] = not issues
         return probe
     if samples and all(isinstance(sample, dict) and sample.get("cycles") == 10 for sample in samples):
+        if len(samples) != 1:
+            issues.append("multiple core lifecycle attachments need explicit separate runs")
         for sample in samples:
             rows = sample.get("samples")
+            baseline = sample.get("baseline_phys_footprint_bytes")
+            if not finite(baseline) or baseline <= 0 or sample.get("warmup_cycles") != 1:
+                issues.append("core lifecycle must have one warmup and a positive baseline")
+                continue
             if not isinstance(rows, list) or len(rows) != 10:
                 issues.append("core lifecycle must contain ten samples")
                 continue
-            if not all(isinstance(row, dict) and finite(row.get("phys_footprint_bytes"))
-                       and finite(row.get("delta_from_warmed_bytes")) for row in rows):
-                issues.append("invalid core lifecycle footprint")
+            if [row.get("cycle") for row in rows] != list(range(1, 11)):
+                issues.append("core lifecycle cycles must be unique and ordered 1...10")
+            for row in rows:
+                if not isinstance(row, dict) or not finite(row.get("phys_footprint_bytes")) \
+                        or not finite(row.get("delta_from_warmed_bytes")):
+                    issues.append("invalid core lifecycle footprint")
+                elif row["phys_footprint_bytes"] - baseline != row["delta_from_warmed_bytes"]:
+                    issues.append("core lifecycle delta is inconsistent with its baseline")
+            if finite(sample.get("final_delta_bytes")) and sample["final_delta_bytes"] != rows[-1].get("delta_from_warmed_bytes"):
+                issues.append("final_delta_bytes does not match the last cycle")
+            probe["statistics"]["final_minus_warmed_bytes"] = {"value": rows[-1].get("delta_from_warmed_bytes")}
+            probe["medians"]["final_minus_warmed_bytes"] = rows[-1].get("delta_from_warmed_bytes")
         probe["trust"] = "core_ten_create_open_close_phys_footprint"
         probe["complete"] = not issues
-        probe.update(raw_count=10, measured_count=10, excluded_warm_up_indices=[], statistic_sample_indices=[])
+        probe.update(raw_count=10, measured_count=10, excluded_warm_up_indices=[], statistic_sample_indices=[],
+                     acceptance_eligible=not issues)
         return probe
     if samples and all(isinstance(sample, dict) and (isinstance(sample.get("raw_samples"), list)
                                                     or isinstance(sample.get("samples"), list)) for sample in samples):
@@ -323,7 +355,7 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
                 "max_us": ordered[-1]}
         probe["trust"] = "synthetic_binding_microbenchmark"
         probe.update(raw_count=sum(len(values) for values in grouped.values()), measured_count=len(grouped),
-                     excluded_warm_up_indices=[], statistic_sample_indices=[])
+                     excluded_warm_up_indices=[], statistic_sample_indices=[], acceptance_eligible=not issues)
         probe["complete"] = not issues
         return probe
     tagged = any(isinstance(sample, dict) and any(key in sample for key in TAG_KEYS) for sample in samples)
@@ -340,6 +372,9 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
             continue
         if sample.get("kind") in ("first_frame", "memory"):
             issues.append(f"{prefix}: process observation has no frame fields")
+            continue
+        if isinstance(sample.get("kind"), str):
+            issues.append(f"{prefix}: unexpected process observation kind")
             continue
         numeric_issues = [f"{prefix}: non-finite value at {path}" for path in nonfinite_paths(sample)]
         for key in ("frames", "seconds") + PROBE_KEYS:

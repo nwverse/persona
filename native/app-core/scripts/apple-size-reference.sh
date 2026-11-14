@@ -9,6 +9,7 @@ CONFIGURATION=${CONFIGURATION:-Release}
 [ ! -e "$OUT" ] || { printf 'apple-size-reference: FAIL output already exists: %s\n' "$OUT" >&2; exit 2; }
 [ -x "$HOME/.local/bin/xcode-slot" ] || { printf 'apple-size-reference: FAIL xcode-slot required\n' >&2; exit 2; }
 mkdir -p "$OUT"
+"$HOME/.local/bin/xcode-slot" "$ROOT/native/app-core/scripts/build-apple.sh" > "$OUT/core-build.log" 2>&1
 python3 -I "$ROOT/native/app-core/scripts/apple-no-core-spec.py" --root "$ROOT" --output-dir "$OUT/spec"
 eval "$(python3 "$ROOT/scripts/persona_config.py" env)"
 xcodegen generate -q --spec "$OUT/spec/project.yml" --project "$OUT/no-core" --project-root "$ROOT/apple"

@@ -62,6 +62,7 @@ class PerfTestCase: XCTestCase {
     @MainActor func preparePairingIfNeeded() {
         if !Self.pairedHubs.contains(hub) {
             let first = XCUIApplication()
+            app = first
             first.launchArguments = ["-pairURL", pair, "-dev.openChat", ""]
             first.launchPinned()
             acceptIconAlert()
@@ -89,13 +90,21 @@ class PerfTestCase: XCTestCase {
         var iteration = 0
         measure(metrics: metrics, options: options) {
             let id = UUID().uuidString
-            _ = mock("frames_context?name=" + name + "&run_id=" + id
-                     + "&warm_up=" + (iteration == 0 ? "1" : "0")
-                     + "&action=" + action + "&expected_iterations=" + String(iterations))
+            app.launchArguments += ["-perfRunID", id, "-perfRunName", name, "-perfRunWarmup", iteration == 0 ? "YES" : "NO",
+                                    "-perfRunAction", action, "-perfRunIterations", String(iterations)]
+            darwinPost("com.persona.perf.frames.context")
             darwinPost("com.persona.perf.frames.start")
             block()
             usleep(300_000) // the last frames of a fling or an animation
             darwinPost("com.persona.perf.frames.stop")
+            let deadline = Date.now.addingTimeInterval(20)
+            var found: [[String: Any]] = []
+            repeat {
+                let rows = (mock("frames?run_id=" + id)["runs"] as? [[String: Any]]) ?? []
+                found = rows.filter { ($0["run_id"] as? String) == id }
+                if found.isEmpty { usleep(200_000) }
+            } while found.isEmpty && Date.now < deadline
+            XCTAssertEqual(found.count, 1, "missing or duplicate tagged frame sample for \(id)")
             iteration += 1
         }
         sleep(1)
@@ -106,7 +115,7 @@ class PerfTestCase: XCTestCase {
             a.lifetime = .keepAlways
             add(a)
         }
-        let kept = runs.count > 1 ? Array(runs.dropFirst()) : runs
+        let kept = runs.filter { ($0["warm_up"] as? Bool) != true }
         func median(_ key: String) -> Double {
             let v = kept.compactMap { ($0[key] as? NSNumber)?.doubleValue }.sorted()
             return v.isEmpty ? .nan : v[v.count / 2]
@@ -125,7 +134,8 @@ class PerfTestCase: XCTestCase {
                          median("text_gap_p50_ms"), median("text_gap_p95_ms"), median("text_gap_max_ms"), median("text_added_p50"),
                          median("text_added_p95"), median("text_added_max"), median("main_cpu_ms_per_s"), median("busy_ms_per_s")))
         }
-        XCTAssertFalse(runs.isEmpty, "the app sent no frames (is -showFrameProbe in this build?)")
+        XCTAssertEqual(runs.count, iterations + 1, "one warm-up and every measured iteration must arrive")
+        XCTAssertEqual(runs.filter { $0["warm_up"] as? Bool == true }.count, 1)
         if assertMainThreadBudget {
             for run in runs {
                 let blocks = run["main_thread_blocks"] as? [String: Any]
@@ -159,7 +169,7 @@ class PerfTestCase: XCTestCase {
 
     var options: XCTMeasureOptions {
         let o = XCTMeasureOptions()
-        o.iterationCount = iterations + 1 // the explicitly tagged warmup, then the requested measured runs
+        o.iterationCount = iterations // XCTest adds its own warmup; this is the number of measured iterations
         return o
     }
 

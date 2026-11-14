@@ -127,6 +127,39 @@ class ProbeTests(unittest.TestCase):
         self.assertNotIn("run_id", result["raw_samples"][1]["sample"])
         self.assertTrue(result["complete"])
 
+    def test_single_benchmark_object_is_one_sample_not_an_attachment_error(self):
+        report = {"cycles": 10, "warmup_cycles": 1, "baseline_phys_footprint_bytes": 100,
+                  "final_delta_bytes": 0, "samples": [{"cycle": i, "phys_footprint_bytes": 100,
+                                                          "delta_from_warmed_bytes": 0} for i in range(1, 11)]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "core.xcresult").mkdir()
+            exporter = FakeExporter({TEST: report})
+            result = reporter.collect(root, runner=exporter)
+            self.assertTrue(result["complete"], result)
+            self.assertEqual(result["tests"][TEST]["probe"]["trust"], "core_ten_create_open_close_phys_footprint")
+            self.assertEqual(result["tests"][TEST]["probe"]["raw_count"], 10)
+            self.assertTrue(result["acceptance_eligible"], result)
+
+    def test_memory_sequence_detects_late_or_duplicate_observations(self):
+        rows = [{"kind": "memory", "source": "native-ios-process", "phys_footprint_bytes": 100 + i,
+                 "resident_size_bytes": 200 + i, "sequence": i} for i in range(1, 13)]
+        result = self.summary(rows)
+        self.assertTrue(result["complete"], result["issues"])
+        self.assertTrue(result["acceptance_eligible"], result["issues"])
+        self.assertEqual(result["statistics"]["final_minus_warmed_bytes"]["value"], 11)
+        rows[0], rows[-1] = rows[-1], rows[0]
+        self.assertFalse(self.summary(rows)["complete"])
+
+    def test_core_timing_and_large_page_raw_samples_are_preserved(self):
+        rows = [{"metric": "core_dispatch_encode_and_queue", "value_us": 1.25,
+                 "measured_on_main_thread": True}] * 1_000
+        page = {"scope": "100-item diagnostic", "samples": [40.0] * 1_000,
+                "worker_flush_is_outside_timed_span": True}
+        result = self.summary([{"raw_samples": rows}, page])
+        self.assertTrue(result["complete"], result["issues"])
+        self.assertEqual(result["statistics"]["large_page_core_drain_decode_apply"]["count"], 1_000)
+
     def test_absent_and_empty_samples(self):
         for attached in (True, False):
             with self.subTest(attached=attached):
@@ -319,7 +352,9 @@ class CollectionTests(unittest.TestCase):
 
     def test_bad_exporter_shape_missing_and_unsafe_files(self):
         for shape in ("object_manifest", "object_samples", "missing", "traversal"):
-            fake = FakeExporter()
+            fake = FakeExporter({TEST: {"cycles": 10, "warmup_cycles": 1, "baseline_phys_footprint_bytes": 100,
+                                      "final_delta_bytes": 0, "samples": [{"cycle": i, "phys_footprint_bytes": 100,
+                                      "delta_from_warmed_bytes": 0} for i in range(1, 11)]}})
             def runner(command, **kwargs):
                 result = fake(command, **kwargs)
                 if "export" in command:
@@ -328,7 +363,7 @@ class CollectionTests(unittest.TestCase):
                     if shape == "object_manifest":
                         (path / "manifest.json").write_text("{}")
                     elif shape == "object_samples":
-                        (path / "attachment-0.json").write_text("{}")
+                        (path / "attachment-0.json").write_text("null")
                     elif shape == "missing":
                         (path / "attachment-0.json").unlink()
                     else:

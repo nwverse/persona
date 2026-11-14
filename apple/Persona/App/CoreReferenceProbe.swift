@@ -42,6 +42,14 @@ enum CoreReferenceProbe {
         var payload = result
         payload["source"] = "native-ios-process"
         payload["observation_id"] = UUID().uuidString
+        let d = UserDefaults.standard
+        if let id = d.string(forKey: "perfRunID") {
+            payload["run_id"] = id
+            payload["name"] = d.string(forKey: "perfRunName")
+            payload["warm_up"] = d.bool(forKey: "perfRunWarmup")
+            payload["action"] = d.string(forKey: "perfRunAction")
+            payload["expected_iterations"] = d.integer(forKey: "perfRunIterations")
+        }
         payload["phys_footprint_bytes"] = FullPageMemory.footprint()
         var info = mach_task_basic_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info_data_t>.size / MemoryLayout<natural_t>.size)

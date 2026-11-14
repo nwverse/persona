@@ -166,49 +166,62 @@ import UIKit
     static let stop = "com.persona.perf.frames.stop"
     static let glideNotice = "com.persona.perf.frames.glide"
 
+    private static var activeRun: [String: Any]?
+
     static func listenIfAsked() {
         guard UserDefaults.standard.bool(forKey: "showFrameProbe") else { return }
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         // Darwin notifications come on the run loop that registered them, the main one.
         let callback: CFNotificationCallback = { @Sendable _, _, name, _, _ in
             let n = name?.rawValue as String?
-            DispatchQueue.main.async { MainActor.assumeIsolated { FrameProbe.handle(n) } }
+            let d = UserDefaults.standard
+            let run = ["run_id": d.string(forKey: "perfRunID") ?? "",
+                       "name": d.string(forKey: "perfRunName") ?? "",
+                       "warm_up": d.bool(forKey: "perfRunWarmup"),
+                       "action": d.string(forKey: "perfRunAction") ?? "",
+                       "expected_iterations": d.integer(forKey: "perfRunIterations")] as [String: Any]
+            DispatchQueue.main.async { MainActor.assumeIsolated { FrameProbe.handle(n, run: run) } }
         }
-        for name in [start, stop, glideNotice] {
+        for name in [start, stop, glideNotice, "com.persona.perf.frames.context"] {
             CFNotificationCenterAddObserver(center, nil, callback, name as CFString, nil, .deliverImmediately)
         }
     }
 
-    private static func handle(_ name: String?) {
+    private static func handle(_ name: String?, run: [String: Any]) {
         let stats = FrameStats.shared
-        if name == glideNotice {
+        if name == "com.persona.perf.frames.context" {
+            activeRun = run
+        } else if name == glideNotice {
             Task { await runGlide() }
         } else if name == start {
+            activeRun = run
             if stats.running { stats.stop(label: "probe") }
             stats.start()
         } else if name == stop, stats.running {
-            let result = stats.stop(label: "probe")
-            guard let hub = AppModel.shared.api?.config,
-                  let body = try? JSONSerialization.data(withJSONObject: result) else { return }
-            var r = URLRequest(url: hub.url.appending(path: "mock/frames"))
-            r.httpMethod = "POST"
-            r.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            hub.authorize(&r)
-            r.httpBody = body
-            Task { _ = try? await URLSession.shared.data(for: r) }
+            let run = activeRun
+            activeRun = nil
+            Task { await uploadStop(stats.stop(label: "probe"), run: run) }
         }
+    }
+
+    private static func uploadStop(_ result: [String: Any], run: [String: Any]?) async {
+        guard let hub = AppModel.shared.api?.config else { return }
+        var result = result
+        if let run { result.merge(run) { _, new in new } }
+        guard let body = try? JSONSerialization.data(withJSONObject: result) else { return }
+        var request = URLRequest(url: hub.url.appending(path: "mock/frames"), timeoutInterval: 10)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        hub.authorize(&request)
+        request.httpBody = body
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     /// Holds the actual UIKit scroll view for the entire run. The UI test only polls the mock; it never requests
     /// accessibility snapshots while frames are recorded. Tagged results are custom display-link cadence, not GPU FPS.
     private static func runGlide() async {
         guard let hub = AppModel.shared.api?.config else { return }
-        var request = URLRequest(url: hub.url.appending(path: "mock/frames_glide_context"), timeoutInterval: 10)
-        hub.authorize(&request)
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              var context = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              context["run_id"] is String, context["name"] is String else { return }
+        guard var context = activeRun, context["run_id"] is String, context["name"] is String else { return }
         context["sample_source"] = "app-list-glide"
         let stats = FrameStats.shared
         if stats.running {

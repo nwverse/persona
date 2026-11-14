@@ -32,6 +32,7 @@ For the real C binding, build and run only the optimized benchmark target, with 
 
 ```sh
 eval "$(python3 scripts/persona_config.py env)"
+~/.local/bin/xcode-slot native/app-core/scripts/build-apple.sh
 ~/.local/bin/xcode-slot timeout 1800 xcodebuild test -project apple/Persona.xcodeproj -scheme Persona \
   -destination id="$SIM" -derivedDataPath /tmp/persona-6871-core-dd \
   SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule \
