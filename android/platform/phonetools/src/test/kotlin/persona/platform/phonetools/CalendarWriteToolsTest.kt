@@ -261,6 +261,8 @@ class CalendarWriteToolsTest {
     @Test fun anUntilRuleKeepsItsEndAndAnAllDaySeriesEndsOnADate() {
         val until = daily.copy(rrule = "FREQ=DAILY;UNTIL=20261110T070000Z")
         seedDaily(until)
+        // The new series the split inserts is read back after the batch (the fake's first fresh id is 900).
+        backend.events[900] = until.copy(id = 900, location = "Room 9", start = fourth)
         tools.update(tools.prepareUpdate(args("id" to "2", "occurrence_start" to fourthIso, "span" to "future", "location" to "Room 9")))
         val created = backend.batches.single()[0]
         assertEquals("FREQ=DAILY;UNTIL=20261110T070000Z", created.values[CalendarContract.Events.RRULE])
@@ -296,6 +298,104 @@ class CalendarWriteToolsTest {
         assertEquals("20261102T070000Z", split.oldExdate)
         assertEquals("20261201T080000Z", split.newRdate)
         assertEquals("20261107T080000Z", split.newExdate)
+    }
+
+    @Test fun floatingRecurrenceDatesAreReadInTheSeriesZoneNotThePhones() {
+        // Berlin is UTC+1 in November, so 10:00 local is 09:00Z; the phone (Shanghai) must not be used to read the dates.
+        val berlin = daily.copy(timezone = "Europe/Berlin", rrule = "FREQ=DAILY", exdate = "20261102T100000,20261107T100000")
+        val selected = ms("2026-11-04T09:00:00Z")
+        val split = RecurrenceEdit.split(berlin, selected, selected + 3_600_000L, zone)
+        assertEquals("20261102T100000", split.oldExdate)
+        assertEquals("20261107T110000", split.newExdate)
+    }
+
+    @Test fun aZonePrefixedDateListKeepsItsPrefixWhateverIsDropped() {
+        val selected = ms("2026-11-04T09:00:00Z")
+        val shifted = selected + 3_600_000L
+        // "ZONE;dates" is how the Android provider stores a zoned list; "TZID=ZONE:dates" is the iCalendar form.
+        val provider = daily.copy(timezone = "Europe/Berlin", rrule = "FREQ=DAILY",
+            exdate = "Europe/Berlin;20261102T100000,20261107T100000")
+        val providerSplit = RecurrenceEdit.split(provider, selected, shifted, zone)
+        assertEquals("Europe/Berlin;20261102T100000", providerSplit.oldExdate)
+        assertEquals("Europe/Berlin;20261107T110000", providerSplit.newExdate)
+
+        val icalendar = daily.copy(timezone = "Europe/Berlin", rrule = "FREQ=DAILY",
+            rdate = "TZID=Europe/Berlin:20261201T100000,20261103T100000")
+        val icalendarSplit = RecurrenceEdit.split(icalendar, selected, shifted, zone)
+        // The first item belongs to the future and is dropped from the past list: the prefix must stay with the survivor.
+        assertEquals("TZID=Europe/Berlin:20261103T100000", icalendarSplit.oldRdate)
+        assertEquals("TZID=Europe/Berlin:20261201T110000", icalendarSplit.newRdate)
+
+        val unknown = daily.copy(rrule = "FREQ=DAILY", exdate = "Nowhere/Land;20261102T100000")
+        val failure = runCatching { RecurrenceEdit.split(unknown, selected, selected, zone) }.exceptionOrNull() as PhoneToolFailure
+        assertTrue(failure.message, failure.message!!.contains("time zone"))
+    }
+
+    @Test fun anAllDaySeriesReadsItsDateListsAsUtcDates() {
+        val allDay = daily.copy(start = ms("2026-11-01T00:00:00Z"), timezone = "UTC", allDay = true, duration = "P1D",
+            rrule = "FREQ=DAILY", exdate = "20261102,20261107")
+        val selected = ms("2026-11-04T00:00:00Z")
+        val split = RecurrenceEdit.split(allDay, selected, selected, ZoneId.of("America/New_York"))
+        assertEquals("20261102", split.oldExdate)
+        assertEquals("20261107", split.newExdate)
+    }
+
+    @Test fun aDateOnlyUntilOnATimedSeriesIncludesThatWholeDay() {
+        // UNTIL=20261104 still allows the 15:00 occurrence on the 4th: it must be cut, not kept next to the new series.
+        val includesSelected = daily.copy(rrule = "FREQ=DAILY;UNTIL=20261104")
+        assertEquals("FREQ=DAILY;UNTIL=20261104T065959Z", RecurrenceEdit.split(includesSelected, fourth, fourth, zone).oldRrule)
+        assertEquals("FREQ=DAILY;UNTIL=20261104T065959Z", RecurrenceEdit.truncateOnly(includesSelected, fourth, zone).oldRrule)
+        // A date before the selected occurrence already ends the series earlier: left alone.
+        val earlier = daily.copy(rrule = "FREQ=DAILY;UNTIL=20261103")
+        assertEquals("FREQ=DAILY;UNTIL=20261103", RecurrenceEdit.split(earlier, fourth, fourth, zone).oldRrule)
+    }
+
+    @Test fun anAllDayEventKeepsItsNumberOfDaysWhenOnlyTheStartMovesAcrossAClockChange() {
+        val newYork = ZoneId.of("America/New_York")
+        val local = CalendarTools(ApplicationProvider.getApplicationContext<Context>(), backend, newYork)
+        fun midnight(day: String) = ms("${day}T00:00:00Z")
+        fun allDayEvent(from: String, to: String) =
+            plain.copy(start = midnight(from), end = midnight(to), timezone = "UTC", allDay = true)
+        fun moved(event: CalendarEventRecord, newStart: String): Map<String, Any?> {
+            backend.events[1] = event
+            backend.batches.clear()
+            local.update(local.prepareUpdate(args("id" to "1", "start" to newStart)))
+            return backend.batches.single().single().values
+        }
+        // Two days, shifted onto the day the US clocks go back (a 25 hour day): still two days.
+        val fallBack = moved(allDayEvent("2026-11-10", "2026-11-12"), "2026-10-31T00:00:00-04:00")
+        assertEquals(midnight("2026-10-31"), fallBack[CalendarContract.Events.DTSTART])
+        assertEquals(midnight("2026-11-02"), fallBack[CalendarContract.Events.DTEND])
+        // Two days that include the 23 hour spring day, shifted to ordinary days: two days.
+        val springForward = moved(allDayEvent("2026-03-07", "2026-03-09"), "2026-03-20T00:00:00-04:00")
+        assertEquals(midnight("2026-03-20"), springForward[CalendarContract.Events.DTSTART])
+        assertEquals(midnight("2026-03-22"), springForward[CalendarContract.Events.DTEND])
+        // A single day moved onto the 25 hour day stays one day instead of being refused as ending before it begins.
+        val single = moved(allDayEvent("2026-11-10", "2026-11-11"), "2026-11-01T00:00:00-04:00")
+        assertEquals(midnight("2026-11-01"), single[CalendarContract.Events.DTSTART])
+        assertEquals(midnight("2026-11-02"), single[CalendarContract.Events.DTEND])
+        // Several single days one after another, each moved onto or off a clock change.
+        for ((from, newStart, expectedStart) in listOf(
+            Triple("2026-03-06", "2026-03-08T00:00:00-05:00", "2026-03-08"),
+            Triple("2026-03-08", "2026-03-15T00:00:00-04:00", "2026-03-15"),
+            Triple("2026-11-02", "2026-11-01T00:00:00-04:00", "2026-11-01"),
+        )) {
+            val next = java.time.LocalDate.parse(expectedStart).plusDays(1).toString()
+            val values = moved(allDayEvent(from, java.time.LocalDate.parse(from).plusDays(1).toString()), newStart)
+            assertEquals(from, midnight(expectedStart), values[CalendarContract.Events.DTSTART])
+            assertEquals(from, midnight(next), values[CalendarContract.Events.DTEND])
+        }
+    }
+
+    @Test fun aClippedNoteOnTheCardSaysHowLongItReallyIs() {
+        backend.events[1] = plain.copy(notes = "n".repeat(300))
+        val prepared = tools.prepareUpdate(args("id" to "1", "notes" to "x".repeat(250) + "tail"))
+        val text = prepared.text(ApplicationProvider.getApplicationContext<Context>().resources)
+        assertTrue(text, text.contains("300") && text.contains("254"))
+        assertFalse(text, text.contains("tail"))
+        // A note that fits is shown whole, with no length.
+        val short = tools.prepareUpdate(args("id" to "1", "notes" to "short"))
+        assertTrue(short.text(ApplicationProvider.getApplicationContext<Context>().resources).contains("short"))
     }
 
     @Test fun aRuleThatCannotBeSplitExactlyIsRefusedNotApproximated() {

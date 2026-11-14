@@ -60,6 +60,7 @@
     <string name="phonetools_calendar_title_change">Title: %1$s → %2$s</string>
     <string name="phonetools_calendar_location_change">Location: %1$s → %2$s</string>
     <string name="phonetools_calendar_notes_change">Notes: %1$s → %2$s</string>
+    <string name="phonetools_text_clipped">%1$s… (%2$d characters in total)</string>
     <string name="phonetools_calendar_all_day_on">Becomes an all-day event</string>
     <string name="phonetools_calendar_all_day_off">No longer all-day</string>
     <string name="phonetools_calendar_this_occurrence">Only this occurrence</string>

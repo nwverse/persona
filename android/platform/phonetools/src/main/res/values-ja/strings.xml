@@ -60,6 +60,7 @@
     <string name="phonetools_calendar_title_change">件名：%1$s → %2$s</string>
     <string name="phonetools_calendar_location_change">場所：%1$s → %2$s</string>
     <string name="phonetools_calendar_notes_change">メモ：%1$s → %2$s</string>
+    <string name="phonetools_text_clipped">%1$s…（全%2$d文字）</string>
     <string name="phonetools_calendar_all_day_on">終日の予定に変更</string>
     <string name="phonetools_calendar_all_day_off">終日の予定ではなくなります</string>
     <string name="phonetools_calendar_this_occurrence">この回のみ</string>

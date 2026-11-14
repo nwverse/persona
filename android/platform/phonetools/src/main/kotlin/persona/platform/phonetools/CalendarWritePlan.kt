@@ -145,6 +145,16 @@ internal data class CalendarEventChange(
     val allDay: Boolean? = null,
 ) {
     companion object {
+        /**
+         * The end that keeps the event's length when only a new start is given. An all-day event keeps its number of
+         * calendar days (a day is not always 24 hours across a clock change); a timed one keeps its elapsed time.
+         */
+        private fun keptLength(from: Instant, currentStart: Instant, currentEnd: Instant, allDay: Boolean, zone: ZoneId): Instant {
+            if (!allDay) return from + Duration.between(currentStart, currentEnd)
+            val days = ChronoUnit.DAYS.between(currentStart.atZone(zone).toLocalDate(), currentEnd.atZone(zone).toLocalDate())
+            return from.atZone(zone).toLocalDate().plusDays(maxOf(days, 1L)).atStartOfDay(zone).toInstant()
+        }
+
         fun parse(args: JsonObject, current: CalendarEventRecord, zone: ZoneId): Pair<CalendarEventChange, CalendarEventAfter> {
             val currentStart = displayEventTime(current.start, current.allDay, zone)
             val currentEnd = displayEventTime(current.effectiveEnd, current.allDay, zone)
@@ -156,7 +166,7 @@ internal data class CalendarEventChange(
             var end = parseTime(rawEnd, zone)
             if (start != null || end != null) {
                 val from = start ?: currentStart
-                val to = end ?: if (start != null) from + Duration.between(currentStart, currentEnd) else currentEnd
+                val to = end ?: if (start != null) keptLength(from, currentStart, currentEnd, newAllDay, zone) else currentEnd
                 if (!to.isAfter(from)) invalid("end must be after start")
                 start = from; end = to
             } else if (requestedAllDay != null && requestedAllDay != current.allDay) {
@@ -234,6 +244,16 @@ internal fun calendarRange(
     return if (allDay) res.getString(R.string.phonetools_calendar_all_day, range) else range
 }
 
+private const val NOTES_PREVIEW_LENGTH = 200
+
+/** A long text cut for the card says so and how long it really is: a replaced note is approved as a whole. */
+private fun clipped(res: Resources, text: String): String {
+    if (text.length <= NOTES_PREVIEW_LENGTH) return text
+    var cut = NOTES_PREVIEW_LENGTH
+    if (Character.isHighSurrogate(text[cut - 1])) cut--
+    return res.getString(R.string.phonetools_text_clipped, text.substring(0, cut), text.length)
+}
+
 internal data class CalendarUpdatePreparation(
     val args: JsonObject,
     val snapshot: CalendarTargetSnapshot,
@@ -264,8 +284,8 @@ internal data class CalendarUpdatePreparation(
         }
         change.notes?.let {
             lines += res.getString(R.string.phonetools_calendar_notes_change,
-                (current.notes?.takeIf(String::isNotEmpty) ?: res.getString(R.string.phonetools_not_set)).take(200),
-                it.ifEmpty { res.getString(R.string.phonetools_not_set) }.take(200))
+                clipped(res, current.notes?.takeIf(String::isNotEmpty) ?: res.getString(R.string.phonetools_not_set)),
+                clipped(res, it.ifEmpty { res.getString(R.string.phonetools_not_set) }))
         }
         if (snapshot.recurring) lines += res.getString(if (span == EventSpan.Future)
             R.string.phonetools_calendar_future_occurrences else R.string.phonetools_calendar_this_occurrence)
@@ -311,6 +331,10 @@ internal object RecurrenceEdit {
         }
     }
 
+    /** Floating recurrence dates belong to the series' own zone (UTC for an all-day one), not to the phone's. */
+    private fun seriesZone(series: CalendarEventRecord, phone: ZoneId): ZoneId =
+        if (series.allDay) ZoneOffset.UTC else runCatching { ZoneId.of(series.timezone) }.getOrElse { phone }
+
     fun split(series: CalendarEventRecord, selected: Long, newStart: Long, zone: ZoneId): Split {
         requireSplittable(series)
         val rule = series.rrule?.let(::parts)
@@ -319,22 +343,24 @@ internal object RecurrenceEdit {
             // A pattern anchored on named days would keep its days while the first occurrence moved: not the same series.
             unavailable("这条重复规则带有固定的星期 / 日期，不能把这次及以后移到另一天，未写入 / The repeat rule names fixed days, so this and later occurrences cannot move to another day; nothing was written.")  // i18n-ignore: tool result for the model
         }
-        val oldRrule = series.rrule?.let { truncateRule(it, selected, series.allDay) }
-        val oldRdate = filterDates(series.rdate, selected, keepFuture = false, shiftMillis = 0, zone = zone)
-        val oldExdate = filterDates(series.exdate, selected, keepFuture = false, shiftMillis = 0, zone = zone)
+        val dateZone = seriesZone(series, zone)
+        val oldRrule = series.rrule?.let { truncateRule(it, selected, series.allDay, dateZone) }
+        val oldRdate = filterDates(series.rdate, selected, keepFuture = false, shiftMillis = 0, zone = dateZone)
+        val oldExdate = filterDates(series.exdate, selected, keepFuture = false, shiftMillis = 0, zone = dateZone)
         val delta = newStart - selected
         val newRrule = series.rrule?.let { remainingRule(it, series, selected, zone) }
-        val newRdate = filterDates(series.rdate, selected, keepFuture = true, shiftMillis = delta, zone = zone)
-        val newExdate = filterDates(series.exdate, selected, keepFuture = true, shiftMillis = delta, zone = zone)
+        val newRdate = filterDates(series.rdate, selected, keepFuture = true, shiftMillis = delta, zone = dateZone)
+        val newExdate = filterDates(series.exdate, selected, keepFuture = true, shiftMillis = delta, zone = dateZone)
         val noPast = selected <= series.start && oldRdate.isNullOrBlank()
         return Split(oldRrule, oldRdate, oldExdate, newRrule, newRdate, newExdate, noPast)
     }
 
     fun truncateOnly(series: CalendarEventRecord, selected: Long, zone: ZoneId): Split {
         requireSplittable(series)
-        val oldRrule = series.rrule?.let { truncateRule(it, selected, series.allDay) }
-        val oldRdate = filterDates(series.rdate, selected, keepFuture = false, shiftMillis = 0, zone = zone)
-        val oldExdate = filterDates(series.exdate, selected, keepFuture = false, shiftMillis = 0, zone = zone)
+        val dateZone = seriesZone(series, zone)
+        val oldRrule = series.rrule?.let { truncateRule(it, selected, series.allDay, dateZone) }
+        val oldRdate = filterDates(series.rdate, selected, keepFuture = false, shiftMillis = 0, zone = dateZone)
+        val oldExdate = filterDates(series.exdate, selected, keepFuture = false, shiftMillis = 0, zone = dateZone)
         return Split(oldRrule, oldRdate, oldExdate, null, null, null,
             selected <= series.start && oldRdate.isNullOrBlank())
     }
@@ -353,15 +379,27 @@ internal object RecurrenceEdit {
     private fun localDate(millis: Long, allDay: Boolean, zone: ZoneId): LocalDate =
         Instant.ofEpochMilli(millis).atZone(if (allDay) ZoneOffset.UTC else zone).toLocalDate()
 
-    private fun truncateRule(rule: String, selected: Long, allDay: Boolean): String {
+    private fun truncateRule(rule: String, selected: Long, allDay: Boolean, seriesZone: ZoneId): String {
         val parts = parts(rule)
         parts.remove("COUNT")
         // An all-day series ends on a date, a timed one an instant before the selected occurrence.
         val cutoff = if (allDay) basicDate.format(Instant.ofEpochMilli(selected).atZone(ZoneOffset.UTC).toLocalDate().minusDays(1))
             else basicUtc.format(Instant.ofEpochMilli(selected - 1))
-        val existing = parts["UNTIL"]?.let { parseRuleTime(it, ZoneOffset.UTC) }
-        if (existing == null || existing.toEpochMilli() >= selected) parts["UNTIL"] = cutoff
+        val existing = parts["UNTIL"]?.let { untilEnd(it, allDay, seriesZone) }
+        if (existing == null || existing >= selected) parts["UNTIL"] = cutoff
         return render(parts)
+    }
+
+    /**
+     * The last instant an UNTIL still allows. A date-only UNTIL on a timed series includes that whole day, so it is read
+     * as the end of the day in the later of UTC and the series zone: reading it too early would keep an UNTIL that still
+     * produces the selected occurrence next to the new series, while reading it too late only rewrites it to the cutoff.
+     */
+    private fun untilEnd(raw: String, allDay: Boolean, seriesZone: ZoneId): Long? {
+        val start = parseRuleDate(raw.trim(), seriesZone) ?: return null
+        if (allDay || raw.trim().length != 8) return start
+        val date = Instant.ofEpochMilli(start).atZone(ZoneOffset.UTC).toLocalDate().plusDays(1)
+        return maxOf(date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(), date.atStartOfDay(seriesZone).toInstant().toEpochMilli()) - 1
     }
 
     private fun remainingRule(rule: String, series: CalendarEventRecord, selected: Long, zone: ZoneId): String {
@@ -376,7 +414,7 @@ internal object RecurrenceEdit {
         } else {
             // An RDATE-only selected occurrence cannot re-anchor a separate RRULE without changing its phase.
             val onRule = occurrenceOrdinal(parts, series, selected, zone, 10_000)
-            if (onRule == null && containsDate(series.rdate, selected, zone)) {
+            if (onRule == null && containsDate(series.rdate, selected, seriesZone(series, zone))) {
                 unavailable("无法把额外日期与其余重复规则安全拆分，未写入 / The extra date cannot be safely split from the recurrence rule; nothing was written.")  // i18n-ignore: tool result for the model
             }
         }
@@ -450,43 +488,60 @@ internal object RecurrenceEdit {
         else -> null
     }
 
-    private fun filterDates(
-        raw: String?, selected: Long, keepFuture: Boolean, shiftMillis: Long, zone: ZoneId,
-    ): String? {
+    /**
+     * A stored RDATE / EXDATE value: comma separated dates with an optional leading zone, either `ZONE;dates` (the
+     * Android provider's form) or `TZID=ZONE:dates` (iCalendar). The prefix is kept as written and written back once.
+     */
+    private class DateList(val prefix: String, val zone: ZoneId, val items: List<String>) {
+        fun render(kept: List<String>): String? = kept.takeIf { it.isNotEmpty() }?.joinToString(",", prefix)
+    }
+
+    private fun dateList(raw: String, fallback: ZoneId): DateList {
+        val colon = raw.indexOf(':')
+        val semicolon = raw.indexOf(';')
+        val split = when {
+            colon >= 0 -> colon
+            semicolon >= 0 -> semicolon
+            else -> return DateList("", fallback, raw.split(',').map(String::trim).filter(String::isNotEmpty))
+        }
+        val head = raw.substring(0, split)
+        val tzid = if (split == colon) head.split(';').firstOrNull { it.startsWith("TZID=", ignoreCase = true) }?.substring(5) else head
+        val zone = tzid?.let { id -> runCatching { ZoneId.of(id.trim()) }.getOrNull()
+            ?: unavailable("无法读取重复日期的时区，未写入 / The time zone of a recurrence date cannot be read; nothing was written.") }  // i18n-ignore: tool result for the model
+            ?: fallback
+        return DateList(raw.substring(0, split + 1), zone, raw.substring(split + 1).split(',').map(String::trim).filter(String::isNotEmpty))
+    }
+
+    private fun filterDates(raw: String?, selected: Long, keepFuture: Boolean, shiftMillis: Long, zone: ZoneId): String? {
         if (raw.isNullOrBlank()) return raw
-        val output = raw.split(',').mapNotNull { item ->
+        val list = dateList(raw, zone)
+        val output = list.items.mapNotNull { item ->
             if (item.contains('/')) unavailable("含 PERIOD 的 RDATE 暂不能安全拆分 / RDATE periods cannot be split safely.")  // i18n-ignore: tool result for the model
-            val parsed = parseRuleDate(item, zone) ?: unavailable("无法读取重复日期，未写入 / A recurrence date cannot be read; nothing was written.")  // i18n-ignore: tool result for the model
+            val parsed = parseRuleDate(item, list.zone) ?: unavailable("无法读取重复日期，未写入 / A recurrence date cannot be read; nothing was written.")  // i18n-ignore: tool result for the model
             val keep = if (keepFuture) parsed >= selected else parsed < selected
             if (!keep) return@mapNotNull null
-            formatRuleDate(item, parsed + shiftMillis, zone)
+            formatRuleDate(item, parsed + shiftMillis, list.zone)
         }
-        return output.takeIf { it.isNotEmpty() }?.joinToString(",")
+        return list.render(output)
     }
 
-    private fun containsDate(raw: String?, selected: Long, zone: ZoneId): Boolean =
-        raw?.split(',')?.any { parseRuleDate(it, zone) == selected } == true
-
-    private fun parseRuleDate(raw: String, zone: ZoneId): Long? {
-        val value = raw.substringAfterLast(':')
-        return when {
-            value.length == 8 -> runCatching { LocalDate.parse(value, basicDate).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() }.getOrNull()
-            value.endsWith('Z') -> runCatching { ZonedDateTime.parse(value, basicUtc).toInstant().toEpochMilli() }.getOrNull()
-            else -> runCatching { LocalDateTime.parse(value, basicLocal).atZone(zone).toInstant().toEpochMilli() }.getOrNull()
-        }
+    private fun containsDate(raw: String?, selected: Long, zone: ZoneId): Boolean {
+        if (raw.isNullOrBlank()) return false
+        val list = dateList(raw, zone)
+        return list.items.any { parseRuleDate(it, list.zone) == selected }
     }
 
-    private fun parseRuleTime(raw: String, zone: ZoneId): Instant? = parseRuleDate(raw, zone)?.let(Instant::ofEpochMilli)
+    /** A bare value is a date (UTC), a UTC instant (`Z`) or a floating time in [zone]. */
+    private fun parseRuleDate(raw: String, zone: ZoneId): Long? = when {
+        raw.length == 8 -> runCatching { LocalDate.parse(raw, basicDate).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() }.getOrNull()
+        raw.endsWith('Z') -> runCatching { ZonedDateTime.parse(raw, basicUtc).toInstant().toEpochMilli() }.getOrNull()
+        else -> runCatching { LocalDateTime.parse(raw, basicLocal).atZone(zone).toInstant().toEpochMilli() }.getOrNull()
+    }
 
-    private fun formatRuleDate(original: String, millis: Long, zone: ZoneId): String {
-        val value = original.substringAfterLast(':')
-        val formatted = when {
-            value.length == 8 -> Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate().format(basicDate)
-            value.endsWith('Z') -> basicUtc.format(Instant.ofEpochMilli(millis))
-            else -> basicLocal.format(Instant.ofEpochMilli(millis).atZone(zone))
-        }
-        return original.substringBeforeLast(':', "").takeIf { original.contains(':') && !original.startsWith("VALUE=") }
-            ?.let { "$it:$formatted" } ?: formatted
+    private fun formatRuleDate(original: String, millis: Long, zone: ZoneId): String = when {
+        original.length == 8 -> Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate().format(basicDate)
+        original.endsWith('Z') -> basicUtc.format(Instant.ofEpochMilli(millis))
+        else -> basicLocal.format(Instant.ofEpochMilli(millis).atZone(zone))
     }
 }
 
