@@ -6,6 +6,13 @@ import Testing
 @MainActor
 struct InboxTimelineFixtureTests {
     private static let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    private static let liveStateNames: [String: StateName] = [
+        "needs_you": .needsYou,
+        "working": .working,
+        "unread": .unread,
+        "idle": .seen,
+        "offline": .notRunning,
+    ]
 
     private struct ChainOnly: Decodable { var chain: [InboxItem.ChainEntry] }
 
@@ -25,11 +32,17 @@ struct InboxTimelineFixtureTests {
                 var folded: [String]
                 var expanded: [String]
                 var steps: [Step]
+                var live_state: [LiveState]?
 
                 struct Step: Decodable {
                     var id: String
                     var icon: String
                     var reported: Bool
+                }
+
+                struct LiveState: Decodable {
+                    var id: String
+                    var session_state: String
                 }
             }
         }
@@ -51,6 +64,21 @@ struct InboxTimelineFixtureTests {
                 #expect((entry.kind == "reported") == step.reported, "\(c.name): \(step.id)")
                 #expect(!InboxEventText.symbol(entry).isEmpty, "\(c.name): \(step.id)")
             }
+            if let liveStates = c.expected.live_state {
+                #expect(InboxEventText.liveStateEntries(chain) == Set(liveStates.map(\.id)), "\(c.name)")
+                for liveState in liveStates {
+                    let state = try #require(AgentState(rawValue: liveState.session_state), "\(c.name): \(liveState.id)")
+                    let stateName = try #require(Self.liveStateNames[liveState.session_state], "\(c.name): \(liveState.id)")
+                    #expect(state.label == stateName.text, "\(c.name): \(liveState.id)")
+                }
+            }
+        }
+    }
+
+    @Test func liveAgentStatesUseTheAgentsListNames() throws {
+        for (rawState, stateName) in Self.liveStateNames {
+            let state = try #require(AgentState(rawValue: rawState), "\(rawState)")
+            #expect(state.label == stateName.text, "\(rawState)")
         }
     }
 
@@ -70,6 +98,34 @@ struct InboxTimelineFixtureTests {
         let reported = InboxItem.ChainEntry(id: "r", kind: "reported", text: "Sent it", via: "agent")
         #expect(InboxEventText.iconMeaning(reported) == fixture.reported_icon)
         #expect(InboxEventText.symbol(reported) == Theme.Icon.reported)
+    }
+
+    @Test func reportedShowsTheOriginalWordsWithoutRepeatingAssistantSays() {
+        let current = InboxItem.ChainEntry(id: "r1", kind: "reported", text: "Assistant says: Sent it", detail: "Sent it")
+        #expect(InboxEventText.chainText(current) == "Sent it")
+        let old = InboxItem.ChainEntry(id: "r2", kind: "reported", text: "Sent it")
+        #expect(InboxEventText.chainText(old) == "Sent it")
+        let empty = InboxItem.ChainEntry(id: "r3", kind: "reported", text: "Assistant says: Sent it", detail: "")
+        #expect(InboxEventText.chainText(empty) == "Assistant says: Sent it")
+        let program = InboxItem.ChainEntry(id: "p", kind: "agent", text: "Opened an Agent", detail: "More context")
+        #expect(InboxEventText.chainText(program) == "Opened an Agent")
+    }
+
+    @Test func reportedDetailIsNotRepeatedInAnExpansion() {
+        let plain = InboxItem.ChainEntry(id: "r1", kind: "reported", text: "Assistant says: Sent it", detail: "Sent it")
+        #expect(plain.detailIsInLine && !plain.expandable)
+        #expect(InboxChainTarget.of(plain) == .nothing)
+        #expect(InboxEventText.expansionDetail(plain) == nil)
+
+        let messages = [InboxItem.ChainEntry.Message(sender: "Agent", text: "A note", at: nil)]
+        let withMessages = InboxItem.ChainEntry(id: "r2", kind: "reported", text: "Assistant says: Sent it",
+                                                detail: "Sent it", messages: messages)
+        #expect(withMessages.expandable)
+        #expect(InboxChainTarget.of(withMessages) == .inline)
+        #expect(InboxEventText.expansionDetail(withMessages) == nil)
+
+        let program = InboxItem.ChainEntry(id: "p", kind: "agent", text: "Opened an Agent", detail: "More context")
+        #expect(program.expandable && InboxEventText.expansionDetail(program) == "More context")
     }
 
     @Test func emptyViaFallsBackToTheKindAndBadViaDoesNotLoseTheEntry() throws {

@@ -376,4 +376,19 @@
     <string name="settings_ext_notification_expired">この通知は有効期限切れです。拡張機能のページで再試行してください。</string>
     <string name="settings_ext_notification_wrong_scope">元のハブまたはアシスタントが見つかりません。再接続して拡張機能のページで再試行してください。</string>
     <string name="settings_ext_notification_unlock">この通知の操作を実行するには、スマートフォンのロックを解除してください。</string>
+    <plurals name="settings_ext_node_running">
+        <item quantity="other">%1$d台のマシンで実行中</item>
+    </plurals>
+    <plurals name="settings_ext_node_abnormal">
+        <item quantity="other">%1$d台のマシンに異常があります</item>
+    </plurals>
+    <plurals name="settings_ext_node_offline">
+        <item quantity="other">%1$d台がオフライン</item>
+    </plurals>
+    <plurals name="settings_ext_node_starting">
+        <item quantity="other">%1$d台のマシンで起動中</item>
+    </plurals>
+    <plurals name="settings_ext_node_stopped">
+        <item quantity="other">%1$d台のマシンで停止中</item>
+    </plurals>
 </resources>

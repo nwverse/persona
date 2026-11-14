@@ -386,4 +386,24 @@
     <string name="settings_ext_notification_expired">This notification has expired. Retry from the extension page.</string>
     <string name="settings_ext_notification_wrong_scope">Can\'t find the original hub or assistant. Reconnect, then retry from the extension page.</string>
     <string name="settings_ext_notification_unlock">Unlock your phone to run this notification action.</string>
+    <plurals name="settings_ext_node_running">
+        <item quantity="one">Running on %1$d machine</item>
+        <item quantity="other">Running on %1$d machines</item>
+    </plurals>
+    <plurals name="settings_ext_node_abnormal">
+        <item quantity="one">%1$d machine has an issue</item>
+        <item quantity="other">%1$d machines have an issue</item>
+    </plurals>
+    <plurals name="settings_ext_node_offline">
+        <item quantity="one">%1$d machine offline</item>
+        <item quantity="other">%1$d machines offline</item>
+    </plurals>
+    <plurals name="settings_ext_node_starting">
+        <item quantity="one">Starting on %1$d machine</item>
+        <item quantity="other">Starting on %1$d machines</item>
+    </plurals>
+    <plurals name="settings_ext_node_stopped">
+        <item quantity="one">Stopped on %1$d machine</item>
+        <item quantity="other">Stopped on %1$d machines</item>
+    </plurals>
 </resources>

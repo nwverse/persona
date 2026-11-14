@@ -560,9 +560,12 @@ func (t *Tree) check(validated []byte) error {
 	if err != nil {
 		return err
 	}
-	// CheckViewJSON uses the source, not Component.MarshalJSON: normalized is
-	// canonical(raw, true), made by the same decode, projection and encoding.
-	if err := wire.CheckViewJSON(normalized); err != nil {
+	// CheckViewJSON's checks on the source, not Component.MarshalJSON:
+	// normalized is canonical(raw, true), made by the same decode, projection
+	// and encoding. The frame above held to UIStreamSnapshot, whose view is
+	// View narrowed, and normalized only writes integral numbers as integers,
+	// so its View schema walk is not repeated.
+	if err := wire.CheckValidatedViewJSON(normalized); err != nil {
 		return err
 	}
 	if err := checkBindings(&v); err != nil {

@@ -569,6 +569,8 @@ export class TranscriptSync {
     return { gap, actions };
   }
 
+  get behind(): boolean { return this.heard > this.asked; }
+
   finishFill(): void {
     this.filling = false;
     this.fillPages = 0;

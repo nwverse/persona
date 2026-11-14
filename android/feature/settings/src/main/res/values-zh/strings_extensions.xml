@@ -376,4 +376,19 @@
     <string name="settings_ext_notification_expired">通知已过期，请在扩展页重试。</string>
     <string name="settings_ext_notification_wrong_scope">找不到原 hub 或助手，请重新连接后在扩展页重试。</string>
     <string name="settings_ext_notification_unlock">请先解锁手机，再执行这条通知的操作。</string>
+    <plurals name="settings_ext_node_running">
+        <item quantity="other">在 %1$d 台机器上运行</item>
+    </plurals>
+    <plurals name="settings_ext_node_abnormal">
+        <item quantity="other">%1$d 台机器异常</item>
+    </plurals>
+    <plurals name="settings_ext_node_offline">
+        <item quantity="other">%1$d 台机器离线</item>
+    </plurals>
+    <plurals name="settings_ext_node_starting">
+        <item quantity="other">正在 %1$d 台机器上启动</item>
+    </plurals>
+    <plurals name="settings_ext_node_stopped">
+        <item quantity="other">%1$d 台机器已停止</item>
+    </plurals>
 </resources>

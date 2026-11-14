@@ -482,7 +482,8 @@ func TestMinutesHeadingsAreTheWebsSections(t *testing.T) {
 			t.Fatal(err)
 		}
 		for hub, page := range map[string]string{"kb-minutes.points": "minutes_points", "kb-minutes.decisions": "minutes_decisions",
-			"kb-minutes.actions": "minutes_actions", "kb-minutes.open": "minutes_open", "kb-day-recap.actions": "recap_actions"} {
+			"kb-minutes.actions": "minutes_actions", "kb-minutes.open": "minutes_open", "kb-day-recap.actions": "recap_actions",
+			"kb-minutes.conclusions": "minutes_conclusions", "kb-minutes.ai_note": "minutes_ai_note"} {
 			if got := i18n.T(l, hub); got != web[page] {
 				t.Errorf("%s: %s is %q, the web's %s %q", l, hub, got, page, web[page])
 			}
