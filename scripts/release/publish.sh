@@ -1,7 +1,8 @@
 #!/bin/bash
 # Publish personad for anyone to install (docs/operations/release.md "Publishing personad"): build the four binaries with the web client
 # inside (no skills in them: those live in each machine's ~/.persona/skills), and the connector persona-link for the
-# same four (the node service, docs/operations/link.md), check them for private values, write the release manifest latest.json
+# same four, plus Windows amd64 and arm64 (the node service, docs/operations/link.md), check them for private values,
+# write the release manifest latest.json
 # (every file's sha256, docs/operations/hub-update.md "Public publishing"), then deploy the site/ worker with dl/ and install.sh added, at the
 # config's publish.site_url. Every hub of the release channel updates itself to it. The worker also runs the push
 # relay (/relay/*): it is deployed with it.
@@ -213,6 +214,12 @@ for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
   # persona-node from dl/<version>/ for a device that runs it, docs/operations/node-update.md "Node packages").
   (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/persona-node-${t%/*}-${t#*/}" ./cmd/persona-node)
+done
+# The independent connector also runs on Windows. The hub, manager and node programs keep their existing platforms;
+# their update feeds do not acquire Windows entries along with the connector (docs/operations/windows.md).
+for t in windows/amd64 windows/arm64; do
+  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
+    -o "../$OUT/bin/persona-link-${t%/*}-${t#*/}.exe" ./cmd/persona-link)
 done
 # The hub and manager programs are released and swapped together with personad (update.ProgramNames).
 for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
