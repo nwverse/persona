@@ -571,8 +571,8 @@ func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 // a cancelled task or one the user closed (done by hand while its agent still started, #2954), not one whose start failed (that goes
 // through Retry), not one the agent was released or dismissed from, and not when the agent works for an open todo now. An
 // accepted one only when its conversation or supervisor sent the agent more since, whether or not its plan started the
-// agent: any other turn of it is other work (#6726, #7539). The send is the one on record (noteAgentSend), for a turn that
-// starts before the send returns.
+// agent: any other turn of it is other work (#6726, #7539). The send goes through noteAgentSend, and its turn starts before
+// the send returns: the task stays closed until the send's answer is in, and reopens then.
 func TestWhichClosedTaskReopens(t *testing.T) {
 	done := time.Now().Add(-time.Hour)
 	released := done.Add(time.Minute)
@@ -619,21 +619,25 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 		{"another agent", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s2"})}, "", false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
 			s, f := newTaskService(t)
+			var note *agentSendNote
+			if c.from != "" && c.early { // sent while the task was open still
+				note = s.noteAgentSend(ctx, c.from, "box", "s1", "", "More for it")
+			}
 			for _, td := range c.todos {
 				putTodo(s, td)
 			}
-			if c.from != "" {
-				s.noteAgentSend(context.Background(), c.from, "box", "s1") // its turn starts before the send returns
-				if c.early {
-					s.tasks.mu.Lock()
-					sent := s.tasks.sentBy[[2]string{"box", "s1"}]
-					sent.at = done.Add(-time.Minute)
-					s.tasks.sentBy[[2]string{"box", "s1"}] = sent
-					s.tasks.mu.Unlock()
-				}
+			if c.from != "" && !c.early {
+				note = s.noteAgentSend(ctx, c.from, "box", "s1", "", "More for it")
 			}
-			agentTurn(s, f, proto.StatusWorking, "", 0)
+			agentTurn(s, f, proto.StatusWorking, "", 0) // its turn starts before the send returns
+			if note != nil {
+				if got := todoNow(s, "todo_a"); got.DoneAt == nil {
+					t.Fatalf("reopened before the send's answer was in: %+v", got)
+				}
+				note.sent(ctx, nil)
+			}
 			got := todoNow(s, "todo_a")
 			if reopened := got.DoneAt == nil && got.ReopenedAt != nil; reopened != c.reopens {
 				t.Fatalf("reopened = %v, want %v: %+v", reopened, c.reopens, got)

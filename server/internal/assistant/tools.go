@@ -337,7 +337,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			handed = s.handAttachments(ctx, machine, am.ID, atts, mentioned)
 			params["text"] = withAttachments(text, handed)
 		}
-		note := s.noteAgentSend(ctx, self, am.ID, c.SessionID) // more from its task's conversation reopens an accepted task (#6726, #7539)
+		sending, _ := params["text"].(string)
+		note := s.noteAgentSend(ctx, self, am.ID, c.SessionID, "", sending) // more from its task's conversation reopens an accepted task (#6726, #7539)
 		if c.Status != proto.StatusOffline {
 			err := s.call(ctx, am.ID, DeviceSessionSend, params, nil)
 			note.sent(ctx, err) // an unknown answer counts as sent: it may still arrive and start the turn
