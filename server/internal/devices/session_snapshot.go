@@ -30,6 +30,7 @@ func (m *Machine) setInitialSessions(peer *rpc.Peer, revision uint64, list []pro
 		list[i].MachineID = m.cfg.ID
 	}
 	m.sessions = list
+	m.sessionsListed = true
 	m.lastSeen = time.Now().UTC()
 	return true
 }

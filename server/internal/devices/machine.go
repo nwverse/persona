@@ -101,6 +101,8 @@ type Machine struct {
 	dialErrAt       time.Time
 	lastSeen        time.Time
 	sessions        []proto.Session
+	sessionsListed  bool                     // the current connection has really supplied a snapshot, successful empty ones included
+	sessionsReady   chan struct{}            // closed once the current connection's first sessions.list has been handled
 	lists           proto.SessionListDecoder // decodes the node's lists, only the sessions whose bytes changed (onEvent)
 	sessionRevision uint64                   // advanced by sessions.changed, independent of node transcript revisions
 	// sessionsEventMu serializes sessions.list response and sessions.changed cache application and forwarding.
@@ -715,6 +717,7 @@ func (m *Machine) setSessions(list []proto.Session) {
 	}
 	m.mu.Lock()
 	m.sessions = list
+	m.sessionsListed = true
 	m.sessionRevision++
 	m.lastSeen = time.Now().UTC()
 	m.mu.Unlock()
