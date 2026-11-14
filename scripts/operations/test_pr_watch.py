@@ -728,6 +728,37 @@ class WatcherTests(unittest.TestCase):
                 self.watcher.state.data["prs"]["example/one#8"].update(
                     {"retry_after": 0, "outcome": "failed", "blocking": False})
 
+    def test_portable_two_repository_example_has_no_private_configuration(self):
+        path = HERE / "pr-watch.persona.example.json"
+        config = pr_watch.load_config(path)
+        self.assertEqual(config["workers"], 10)
+        self.assertEqual(config["reviewer"]["timeout_seconds"], 2700)
+        self.assertEqual([item["name"] for item in config["repositories"]],
+                         ["nwverse/persona", "nwverse/persona-extensions"])
+        self.assertEqual([item["verify"]["profile"] for item in config["repositories"]],
+                         ["persona", "extensions"])
+        self.assertTrue(all(item["merge"] is False for item in config["repositories"]))
+        text = path.read_text()
+        self.assertNotIn("/home/", text)
+        self.assertNotIn("/data00/", text)
+        self.assertNotIn("token", text.lower())
+        service = (HERE / "persona-pr-watch.example.service").read_text()
+        self.assertIn("EnvironmentFile=-%h/.config/persona/pr-watch.env", service)
+        self.assertNotIn("Environment=ANTHROPIC", service)
+        self.assertNotIn("/home/", service)
+
+    def test_ten_workers_start_and_stop_cleanly(self):
+        self.config["workers"] = 10
+        watcher = pr_watch.Watcher(self.config, verbose=False)
+        watcher.start_workers()
+        self.addCleanup(watcher.stopping.set)
+        self.assertEqual(len(watcher.workers), 10)
+        for _ in watcher.workers:
+            watcher.tasks.put((2, -1, ("", 0)))
+        for worker in watcher.workers:
+            worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+
     def test_config_has_no_implicit_merge_or_repositories(self):
         path = self.root / "config.json"
         path.write_text(json.dumps({"repositories": [{"name": "example/one", "checkout": str(self.root), "verify": {}}]}))
