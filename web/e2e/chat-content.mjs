@@ -1,8 +1,9 @@
 // Chat content in a real browser against the mock hub (audit items 7, 50, 73, 77, 80 and 90): layout, focus and timing
 // that jsdom cannot show. Synthetic data only; it writes nothing to the hub.
 //
-// Default run: start the mock with MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 and Vite (or
-// `vite preview`) pointing at it (PERSONA_HUB_URL). `--big`: the mock with MOCK_BIG=1 instead (item 90's long fold).
+// Default run: start the mock with MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1
+// MOCK_TASKS_SENT=1 and Vite (or `vite preview`) pointing at it (PERSONA_HUB_URL). `--big`: the mock with MOCK_BIG=1
+// instead (item 90's long fold).
 // node web/e2e/chat-content.mjs <loopback web URL> <artifact directory> [--big] [Chromium executable]
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -71,6 +72,16 @@ try {
         const detail = line.locator('[data-testid="sent-detail"]');
         check(`7 ${theme}: the opened text is drawn as Markdown`, (await detail.locator("strong").count()) > 0 && (await detail.locator("code").count()) > 0 && !/\*\*|`/.test(await detail.innerText()));
         await line.screenshot({ path: join(shots, `item7-sent-line-${theme}.png`) });
+        // the supervisor's rework note (MOCK_TASKS_SENT): written a line per point, drawn a line per point, as
+        // Persona's replies are, not run together into one paragraph or one bullet
+        const rework = p.locator('[data-testid="sent-line"]').filter({ hasText: "督办" }).first();
+        await rework.waitFor({ timeout: 20_000 });
+        await into(p, rework);
+        await rework.locator('[aria-expanded="false"]').click();
+        await p.waitForTimeout(500);
+        const html = (await rework.locator('[data-testid="sent-detail"]').innerHTML()).replaceAll("\n", "");
+        check(`7 ${theme}: the rework note keeps its lines`, html.includes("轮）<br>逐条验收：") && html.includes("只有竖屏截图<br>要你做的：<br>补一张"), html.slice(0, 200));
+        await rework.screenshot({ path: join(shots, `item7-rework-${theme}.png`) });
         // 80: nothing about where the main chat runs is known on the mock: no line at all
         check(`80 ${theme}: no "not reported" line when the runtime is unknown`, (await p.locator("[data-main-runtime]").count()) === 0);
         await p.context().close();
@@ -83,17 +94,29 @@ try {
           localStorage.setItem("persona.language", "zh-Hans");
         }, theme);
         await context.route("**/*", (route) => (new URL(route.request().url()).origin === new URL(root).origin ? route.continue() : route.abort()));
-        await context.route("**/api/v1/assistant?view=main-runtime*", async (route) => {
-          const assistant = await (await context.request.get(`${root}/api/v1/assistant`, { headers: { Authorization: "Bearer mock" } })).json();
-          return route.fulfill({ json: { session_id: assistant.main, state: "running", source: "native", harness: "claude", location: { host: "my-computer" } } });
-        });
+        // the mock's main chat, read once: the page reads the report again on every visit and every 15 s
+        const main = (await (await context.request.get(`${root}/api/v1/assistant`, { headers: { Authorization: "Bearer mock" } })).json()).main;
+        await context.route("**/api/v1/assistant?view=main-runtime*", (route) =>
+          route.fulfill({ json: { session_id: main, state: "running", source: "native", harness: "claude", location: { host: "my-computer" } } }));
         const p = await context.newPage();
         await p.goto(`${root}/?token=mock`);
         const badge = p.locator("[data-main-runtime]");
         await badge.waitFor({ timeout: 20_000 });
         const label = await badge.getAttribute("aria-label");
-        check(`80 ${theme}: a known runtime reads 主对话 · 运行中 · …`, label === "主对话 · 运行中 · my-computer · Claude Code", label);
+        check(`80 ${theme}: a known runtime reads 主对话 · 运行中, no engine or place`, label === "主对话 · 运行中", label);
         await p.screenshot({ path: join(shots, `item80-known-390-${theme}.png`), clip: { x: 0, y: 0, width: 390, height: 160 } });
+        // where and with what it runs: in Settings › Assistant's Runs on group instead. MOCK_TASKS_SENT gives the mock's
+        // MEMORY name to a session id, so its memory list is not a list there and the page's memory group would fail:
+        // an empty list stands in
+        await context.route("**/api/v1/assistant/memory*", (route) => route.fulfill({ json: { files: [] } }));
+        await p.goto(`${root}/settings?tab=persona`);
+        const where = p.locator("[data-main-runtime-place]");
+        await where.waitFor({ timeout: 20_000 });
+        const tool = await p.locator("[data-main-runtime-tool]").innerText();
+        check(`80 ${theme}: Settings › Assistant says where and with what the main chat runs`, (await where.innerText()) === "my-computer" && tool === "Claude Code", { where: await where.innerText(), tool });
+        await into(p, where);
+        const group = where.locator("xpath=ancestor::section[1]");
+        await ((await group.count()) ? group : where).screenshot({ path: join(shots, `item80-settings-390-${theme}.png`) });
         await context.close();
       }
       // 50: the model pill takes the width its name needs under a 600 px composer; on a phone the tile and chevron (64 px)
@@ -156,6 +179,26 @@ try {
         await p.waitForTimeout(400);
         const takes = await p.evaluate(({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest("[data-side-bar]")), { x: r.x + r.width / 2, y: r.y + r.height / 2 });
         check(`73 ${theme}: hidden again, it takes no clicks meant for what is under it`, !takes);
+        await p.context().close();
+      }
+      // 73: a wide window: the bar stays beside the bubble, to its left, as before
+      {
+        const p = await page({ path: WIDGET, width: 1440, height: 900, theme });
+        const bubble = p.locator("[data-user-bubble]").first();
+        await bubble.waitFor({ timeout: 20_000 });
+        await p.waitForTimeout(800);
+        await into(p, bubble);
+        const b = await bubble.boundingBox();
+        await p.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+        await p.waitForTimeout(400);
+        const bar = p.locator("[data-user-bubble] [data-side-bar]").first();
+        const r = await bar.boundingBox();
+        const place = await bar.getAttribute("data-side-bar");
+        // the bubble itself: the bar's row ([data-user-bubble] also holds the column's left padding)
+        const left = await bar.evaluate((e) => e.parentElement.getBoundingClientRect().left);
+        const shown = await bar.evaluate((e) => getComputedStyle(e).opacity);
+        check(`73 ${theme} 1440: the bar sits beside the bubble, left of it`, place === "beside" && shown === "1" && r && r.x >= 0 && r.x + r.width <= left && r.y < b.y + b.height, { place, opacity: shown, bar: r && Math.round(r.x + r.width), bubble: Math.round(left) });
+        await p.screenshot({ path: join(shots, `item73-1440-${theme}.png`), clip: { x: Math.max(0, r.x - 40), y: Math.max(0, b.y - 20), width: Math.min(1440 - Math.max(0, r.x - 40), b.x + b.width - r.x + 80), height: Math.min(300, b.height + 60) } });
         await p.context().close();
       }
       // 77: on a phone, narrow columns are as narrow as their words, and the copy button is off header words
