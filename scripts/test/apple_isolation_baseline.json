@@ -10,21 +10,6 @@
       "main" : 1
     }
   },
-  "apple/Mac/App/MacDemoSnapshotBatch.swift" : {
-    "file-read" : {
-      "main" : 1
-    }
-  },
-  "apple/Mac/App/MacExtensionSnapshotBatch.swift" : {
-    "file-read" : {
-      "main" : 1
-    }
-  },
-  "apple/Mac/App/MacRichSnapshotBatch.swift" : {
-    "file-read" : {
-      "main" : 1
-    }
-  },
   "apple/Persona/App/DemoHub.swift" : {
     "file-read" : {
       "main" : 1
