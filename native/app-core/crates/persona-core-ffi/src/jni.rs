@@ -122,7 +122,11 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_create(
             changed_chat,
             run,
         };
-        create(&config, Arc::new(host))
+        let handle = crate::next_handle();
+        if handle == u64::MAX {
+            return None;
+        }
+        create(&config, Arc::new(host), handle)
     }))
     .ok()
     .flatten()

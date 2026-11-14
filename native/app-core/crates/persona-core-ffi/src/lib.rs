@@ -152,14 +152,17 @@ unsafe fn slice<'a>(pointer: *const u8, length: usize) -> &'a [u8] {
     }
 }
 
-pub(crate) fn create(config: &[u8], host: Arc<dyn Host>) -> Option<*mut PersonaCore> {
+pub(crate) fn next_handle() -> u64 {
+    NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
+}
+
+pub(crate) fn create(config: &[u8], host: Arc<dyn Host>, handle: u64) -> Option<*mut PersonaCore> {
     let _: Config = wire::decode(config).ok()?;
     let runtime = Arc::new_cyclic(|_| {
         let mut runtime = Runtime::new(host);
         runtime.set_explicit_shutdown();
         runtime
     });
-    let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     if handle == u64::MAX {
         // Reserve zero for null and never wrap an ID while a client may still hold it.
         NEXT_HANDLE.store(u64::MAX, Ordering::Relaxed);
@@ -173,14 +176,14 @@ pub(crate) fn create(config: &[u8], host: Arc<dyn Host>) -> Option<*mut PersonaC
 /// `config` is valid for `length` bytes; the host's callbacks follow `persona_core.h`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn persona_core_new(host: PersonaCoreHost, config: *const u8, length: usize) -> *mut PersonaCore {
-    let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+    let handle = crate::next_handle();
     if handle == u64::MAX {
         NEXT_HANDLE.store(u64::MAX, Ordering::Relaxed);
         return std::ptr::null_mut();
     }
     let host = CHost { host, handle };
     let config = unsafe { slice(config, length) };
-    catch_unwind(AssertUnwindSafe(|| create(config, Arc::new(host))))
+    catch_unwind(AssertUnwindSafe(|| create(config, Arc::new(host), handle)))
         .ok()
         .flatten()
         .unwrap_or(std::ptr::null_mut())
