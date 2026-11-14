@@ -57,3 +57,23 @@ Xcode 26.0, physical devices and actual store-download sizes remain separate ope
 
 Stop the owned mock by its recorded port and the owned simulator after each suite. Keep small JSON evidence, not large
 DerivedData or compiled libraries, in the PR.
+
+## Recorded evidence
+
+The selected raw arrays, original XCTest export manifests, exact build provenance and verification commands are in
+`docs/archive/apple/reference-measurements-6871/README.md`. It distinguishes the original simulator
+`FD14ED31-119A-4415-BF8D-5DBE25967622` from the recreated `58B70B19-21DA-4051-B017-0D828579958A`; they are not
+pooled into one launch median. Current build SHA, dirty-harness state and toolchain are explicit for every record.
+The archived JSON files are unmodified exports, not hand-entered statistics. Both variants in the package comparison
+use Release + PERF_SIGNPOST; this is a performance-configuration linkage diagnostic, not a default Release/store build.
+
+The ordinary Release compilation failure at the measurement base was `AssistantProfileView.swift:49`: an unguarded
+`screenProbe` call whose implementation requires DEBUG or PERF_SIGNPOST. Both size variants therefore used the same
+PERF_SIGNPOST condition; this PR did not silently patch production code to obtain a comparison. Origin/main later
+addressed that call site independently in `745617e273`.
+
+Physical-device acceptance is blocked by the maintainer's 2026-11-14 decision; it is not inferred from a simulator.
+Xcode 26.0 is not installed here (only Xcode 27.1 is), and store-processed/thinned/download bytes were not measured.
+The HarmonyOS inventory found no `devecocli`, `hdc`, `ohpm` or `hvigorw` on PATH and no DevEco/API26 SDK at the
+ordinary `/Applications/DevEco-Studio.app`, `~/Library/Huawei` or `~/Library/OpenHarmony` locations. No credentials,
+installation, sign-in, license acceptance or device run was attempted.

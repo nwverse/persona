@@ -72,6 +72,7 @@ Place necessary historical text under its module directory and list it below.
 | `redesign/research/persona-protocol.md` | Persona hub protocol research (for a new Android client) |
 | `redesign/research/public-direct-ipv6.md` | Direct public connectivity, IPv6, TLS, and persistent-connection keepalive: research notes |
 | `redesign/ux.md` | Interaction and UI specification (shared by both platforms) |
+| `apple/reference-measurements-6871/README.md` | Phase-1 native iOS, real-C binding and package linkage raw evidence and provenance (#6871) |
 | `apple/2026-11-09-ios-idle-energy.md` | Six synthetic before/after energy-workload windows, single-flight boundaries, lifecycle regressions and preserved Instruments/device acceptance gaps (#1634 / #1633) |
 | `native-rewind-5878/acceptance.md` | Native conversation rewind for Codex and Antigravity in the web app: native runtime runs, browser checks in both themes at large text, and synthetic completion latency (#5878 / #5919) |
 | `worktree-mark-6644/acceptance.md` | Worktree rows in the By-repository sidebar without the bare branch glyph: web browser and Android Robolectric screenshots in both themes; iOS not captured (#6644 / #6701) |

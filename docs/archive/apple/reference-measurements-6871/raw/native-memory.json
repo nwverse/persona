@@ -1,0 +1,122 @@
+[
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "62F2FEF4-1F97-445C-B930-94B9964EE4E6",
+    "phys_footprint_bytes" : 84118528,
+    "resident_size_bytes" : 628326400,
+    "sequence" : 1,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  },
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "F1BBA808-528A-4311-B44B-4217CF4B6BA3",
+    "phys_footprint_bytes" : 84446208,
+    "resident_size_bytes" : 630243328,
+    "sequence" : 2,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  },
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "276A3FED-AE26-4265-B0C0-65A1A11CD048",
+    "phys_footprint_bytes" : 84446208,
+    "resident_size_bytes" : 630521856,
+    "sequence" : 3,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  },
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "E383078B-B4F1-4AB9-9B01-6ED0658D1B84",
+    "phys_footprint_bytes" : 84347904,
+    "resident_size_bytes" : 630718464,
+    "sequence" : 4,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  },
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "C5CE4A16-F3A5-4DC0-824A-86FEE0C10C4C",
+    "phys_footprint_bytes" : 84364288,
+    "resident_size_bytes" : 630915072,
+    "sequence" : 5,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  },
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "B35463C2-03F6-4535-BDD9-4664F24C26B0",
+    "phys_footprint_bytes" : 84446208,
+    "resident_size_bytes" : 631111680,
+    "sequence" : 6,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  },
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "60185416-1E24-48F9-BEF4-57BCCDE9D2B0",
+    "phys_footprint_bytes" : 84577280,
+    "resident_size_bytes" : 631324672,
+    "sequence" : 7,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  },
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "7FDE3FF0-C6DC-44C1-B9A3-673BC6DF4BF2",
+    "phys_footprint_bytes" : 84560896,
+    "resident_size_bytes" : 631521280,
+    "sequence" : 8,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  },
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "FE972F15-E639-4108-9864-675AC73E7A62",
+    "phys_footprint_bytes" : 84691968,
+    "resident_size_bytes" : 632078336,
+    "sequence" : 9,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  },
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "28BB2363-D4FC-4044-B55E-B8BBA4930FB1",
+    "phys_footprint_bytes" : 84610048,
+    "resident_size_bytes" : 632193024,
+    "sequence" : 10,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  },
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "A153AB36-80BE-4939-A8B7-6BF5ED0E6BDE",
+    "phys_footprint_bytes" : 84708352,
+    "resident_size_bytes" : 632422400,
+    "sequence" : 11,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  },
+  {
+    "is_main_thread" : true,
+    "kind" : "memory",
+    "observation_id" : "22345B3E-5EEE-4D37-8DFF-5C9585E52496",
+    "phys_footprint_bytes" : 84724736,
+    "resident_size_bytes" : 632455168,
+    "sequence" : 12,
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeChatTenOpenCloseMemory"
+  }
+]

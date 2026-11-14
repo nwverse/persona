@@ -78,27 +78,31 @@ The measurement commands, timing boundaries and non-comparability rules are in `
 The first named-simulator reference used an Apple M5 Pro Mac with Xcode **27.1 (27A9275), Swift 6.4**, Rust 1.98.0,
 and an arm64 **iPhone 17 Pro / iOS 27.0** simulator (`FD14ED31-119A-4415-BF8D-5DBE25967622`). The app was optimized
 Debug, wholemodule, `PERF_SIGNPOST`, not Release. Source base `cf119132e9be23c6921424c93d72ce88401de2e7` plus
-measurement harness `64130151ec49ab7264a467abed55629ee331bc66`; production does not construct the core.
+measurement harness `64130151ec49ab7264a467abed55629ee331bc66`; production does not construct the core. Raw arrays and
+build provenance are retained in `docs/archive/apple/reference-measurements-6871/`.
 
 | Native iOS simulator workload | Samples and result |
 | --- | --- |
-| Welcome launch, `XCTApplicationLaunchMetric` | 2.542693 / 2.599955 / 2.529024 s; median **2.542693 s**. Separate root-view-appearance samples, including initial warmup: 454.291 / 381.413 / 420.303 / 390.035 ms, median 405.169 ms. Different boundaries; no core construction or no-core launch regression comparison. |
-| Recorded Markdown stream | One warmup + three runs: cadence 57.044 / 56.953 / 56.591, custom hitch 49.939 / 49.913 / 57.035 ms/s, longest frame 97.317 / 82.389 / 95.127 ms. Visible text-change gap p50 / p95 33 / 51 ms. Cadence is not presented GPU FPS. |
-| Long native conversation, verified app-driven glide | One warmup + three runs: cadence 57.198 / 56.694 / 57.190, custom hitch 42.606 / 55.211 / 43.170 ms/s, longest frame 47.764 / 55.589 / 48.905 ms. Viewport 717 pt, actual offset 6033–6067 pt; not an accessibility-gesture FPS measurement. |
-| Native heavy chat, ten open/back cycles | `phys_footprint` warmed 82,775,040 → final 83,004,416 B, delta **229,376 B**; `resident_size` 623,788,032 → 627,277,824 B, delta **3,489,792 B**. Twelve observations include warmup and final settling. `AppModel` intentionally retains up to eight native stores; this is not a core lifecycle. |
+| Welcome launch, `XCTApplicationLaunchMetric` | Earlier run: 2.542693 / 2.599955 / 2.529024 s, median 2.542693 s. A later run on recreated simulator `58B70B19-21DA-4051-B017-0D828579958A`, base `84a5a314c55340118980eb43067084ef8f0eff2b` plus the then-uncommitted run-ID harness, measured 5.269960 / 5.611702 / 6.161564 s; separate root-view appearance: warmup 1479.259 ms, then 635.704 / 1328.504 / 1689.306 ms, measured median 1328.504 ms. Different builds, shared-machine load and timing boundaries are not a core/no-core regression comparison. |
+| Recorded Markdown stream | One warmup + three runs: cadence 57.085 / 56.706 / 56.789, custom hitch 48.218 / 53.997 / 53.946 ms/s, longest frame 82.466 / 97.304 / 104.829 ms. Visible text-change gap p50 33.333 ms, p95 53.109 / 52.587 / 53.309 ms. Cadence is not presented GPU FPS. |
+| Long native conversation, verified app-driven glide | One warmup + three runs: cadence 56.188 / 56.188 / 56.188, custom hitch 59.437 / 60.547 / 61.007 ms/s, longest frame 58.613 / 53.400 / 57.230 ms. Viewport 717 pt, actual offset 6000 / 5999.333 / 6000 pt; not an accessibility-gesture FPS measurement. |
+| Native heavy chat, ten open/back cycles | `phys_footprint` warmed 84,118,528 → final 84,724,736 B, delta **606,208 B**; `resident_size` 628,326,400 → 632,455,168 B, delta **4,128,768 B**. Twelve observations include warmup and final settling. `AppModel` intentionally retains up to eight native stores; this is not a core lifecycle. |
 
-Real-C binding benchmarks used the same simulator and optimized build, with 100 warmups and 1,000 samples per metric;
-all samples are retained. Flush is outside dispatch/drain spans. `loadOlder` is dispatched to an opened chat, not a
-rejected event. p50 / p99 / max (microseconds): dispatch encoding + queue **1.375 / 2.250 / 4.167**; one-item drain +
-bincode decode + string-list apply **1.375 / 2.208 / 3.916**; separate patch JSON to native Item apply
-**3.375 / 5.250 / 232.042**. A 100-item patch costs **41.875 / 58.542 / 190.458** µs for drain/decode/string-list
+Real-C binding benchmarks on the recreated simulator `58B70B19-21DA-4051-B017-0D828579958A` used the optimized
+build described above, with 100 warmups and 1,000 samples per metric; all samples are retained. Flush is outside
+dispatch/drain spans. `loadOlder` is dispatched to an opened chat, not a rejected event. p50 / p99 / max
+(microseconds): dispatch encoding + queue **3.625 / 6.750 / 15.500**; one-item drain +
+bincode decode + string-list apply **3.125 / 6.958 / 15.791**; separate patch JSON to native Item apply
+**6.625 / 19.375 / 73.167**. A 100-item patch costs **83.667 / 183.667 / 563.333** µs for drain/decode/string-list
 apply. These satisfy small fixed synthetic simulator limits, not a physical-device or future production-adapter
-claim. Native JSON decode + `ChatStore.apply` was **4.083 / 4.917 / 13.875** µs but has a different output contract
+claim. Native JSON decode + `ChatStore.apply` was **7.334 / 8.209 / 12.709** µs but has a different output contract
 and asynchronous row rebuild, so it is not an equivalent core comparison. Ten create/open/drain/background-close
-cycles with weak-release checks end at the same 63,867,616-byte `phys_footprint` as their warmed baseline (delta 0).
+cycles with weak-release checks go from 62,851,952 to 62,868,336-byte `phys_footprint` (delta **16,384 B**).
 
 An unsigned, generic-iOS **Release + PERF_SIGNPOST** payload comparison used the same build settings except removal of
-the two PersonaCore target dependencies. The link command contains `-lpersona_core`. The with-core App adds
+the two PersonaCore target dependencies. The link command contains `-lpersona_core`. This is a
+performance-configuration diagnostic, not a default Release/store build: PERF_SIGNPOST includes diagnostic paths.
+The with-core App adds
 **763,344 B** to the executable and 763,346 B to logical payload; its local ZIP adds **355,744 B** (60,856,673 versus
 60,500,929 B). These are actual local linkage and compression diagnostics, not App Store processed, thinned or
 store-download measurements; the ≤1 MB download gate remains open. Xcode 26.0, physical devices and real store

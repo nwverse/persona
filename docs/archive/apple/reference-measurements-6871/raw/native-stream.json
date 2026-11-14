@@ -1,0 +1,339 @@
+[
+  {
+    "action" : "stream",
+    "bodies" : {
+
+    },
+    "busy_max_ms" : 264.46374994702637,
+    "busy_ms_per_s" : 243.37433262803003,
+    "busy_over_8ms" : 304,
+    "busy_over_16ms" : 59,
+    "busy_p50_ms" : 0.29654172249138355,
+    "busy_p95_ms" : 15.599541598930955,
+    "expected_iterations" : 3,
+    "frames" : 1368,
+    "hitch_ms_per_s" : 49.702312463547059,
+    "hitches" : 38,
+    "label" : "probe",
+    "long" : [
+      [
+        4.6000000000931323,
+        51.619708305224776
+      ],
+      [
+        5.6666666667442769,
+        281.5027916803956
+      ],
+      [
+        6.6333333334187046,
+        53.10949997510761
+      ],
+      [
+        6.8333333333721384,
+        55.619583348743618
+      ],
+      [
+        10.933333333348855,
+        179.90491667296737
+      ],
+      [
+        21.416666666744277,
+        101.0719999903813
+      ]
+    ],
+    "main_cpu_ms_per_s" : 221.79981931839734,
+    "main_thread_blocks" : {
+      "count" : 2,
+      "longest" : [
+        {
+          "backtrace" : [
+            "0   libsystem_kernel.dylib              0x0000000110d516e0 __open_nocancel + 8",
+            "1   libsystem_kernel.dylib              0x0000000110d647ac open$NOCANCEL + 72",
+            "2   libsystem_c.dylib                   0x00000001c825ff8c fopen + 128",
+            "3   libc++.1.dylib                      0x00000001d41dbb6c _ZNSt3__113basic_filebufIcNS_11char_traitsIcEEE4openEPKcj + 80",
+            "4   libmecab.dylib                      0x000000025d44031c _ZNSt3__114basic_ifstreamIcNS_11char_traitsIcEEEC1EPKcj + 156",
+            "5   libmecab.dylib                      0x000000025d46714c _ZN5MeCab5Param4loadEPKc + 72",
+            "6   libmecab.dylib                      0x000000025d471fbc _ZN5MeCab24load_dictionary_resourceEPNS_5ParamE + 1044",
+            "7   libmecab.dylib                      0x000000025d468c24 _ZN5MeCab9ModelImpl4openEPKc + 68",
+            "8   libmecab.dylib                      0x000000025d469288 _ZN5MeCab10TaggerImpl4openEPKc + 96",
+            "9   libmecab.dylib                      0x000000025d46ba28 _ZN5MeCab12createTaggerEPKc + 120",
+            "10  CoreNLP                             0x00000001e9452ba8 _ZN7CoreNLP9MeCabImpl4initERKNSt3__112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEEb + 216",
+            "11  CoreNLP                             0x00000001e94880d0 _ZN7CoreNLP17MeCabSubTokenizer4initENS0_8LanguageE + 928",
+            "12  CoreNLP                             0x00000001e9487cec _ZN7CoreNLP17MeCabSubTokenizer15createTokenizerENS0_8LanguageE + 68",
+            "13  CoreNLP                             0x00000001e9494994 _ZN7CoreNLP21JapaneseSubWordTaggerC2ERKNS_13TaggerContextERKNS_12StringBufferE + 48",
+            "14  CoreNLP                             0x00000001e9465214 _ZN7CoreNLP18WordDispatchTagger16getSubWordTaggerE12NLLanguageID + 144",
+            "15  CoreNLP                             0x00000001e9465694 _ZN7CoreNLP18WordDispatchTagger9setStringEPK10__CFString7CFRange12NLLanguageID + 348",
+            "16  UIFoundation                        0x00000001d2292130 -[NSParagraphArbitrator _firstFitLineBreakContextBeforeIndex:lineFragmentWidth:range:] + 1300",
+            "17  UIFoundation                        0x00000001d22aea54 -[NSCoreTypesetter _createLineRefForParentLineRef:range:availableWidth:offset:paragraphArbitrator:lineBreakMode:hyphenated:forcedClusterBreak:] + 644",
+            "18  UIFoundation                        0x00000001d22b10d0 -[NSCoreTypesetter _stringDrawingCoreTextEngineWithOriginalString:rect:padding:graphicsContext:forceClipping:attributes:stringDrawingOptions:drawingContext:stringDrawingInterface:] + 7136",
+            "19  UIKit                               0x00000001c8ca3318 -[NSCoreTypesetterAccessibility__UIKit__UIFoundation _stringDrawingCoreTextEngineWithOriginalString:rect:padding:graphicsContext:forceClipping:attributes:stringDrawingOptions:drawingContext:stringDrawingInterface:] + 260",
+            "20  UIFoundation                        0x00000001d22a9c70 __NSStringDrawingEngine + 1684",
+            "21  UIFoundation                        0x00000001d22aacbc -[NSAttributedString(NSExtendedStringDrawing) boundingRectWithSize:options:context:] + 648",
+            "22  SwiftUICore                         0x00000001c748c3f0 $sSo18NSAttributedStringC7SwiftUIE12MetricsCacheV7metrics13requestedSize13layoutMargins26wantsNumberOfLineFragments7contextAbCE0E0VSo6CGSizeV_AC10EdgeInsetsVSbAC18TextDrawingContextCtF + 1524",
+            "23  SwiftUICore                         0x00000001c748d350 $s7SwiftUI18ResolvedStyledTextC13StringDrawingC12sizeThatFitsySo6CGSizeVAA13_ProposedSizeVF + 176",
+            "24  SwiftUICore                         0x00000001c7281800 $s7SwiftUI22StyledTextLayoutEngineV12sizeThatFitsySo6CGSizeVAA13_ProposedSizeVF + 192",
+            "25  SwiftUICore                         0x00000001c7803668 $s7SwiftUI15LayoutEngineBox33_91FCB5522C30220AE13689E45789FEF2LLC12sizeThatFitsySo6CGSizeVAA13_ProposedSizeVF + 76",
+            "26  SwiftUICore                         0x00000001c745248c $s7SwiftUI13LayoutSubviewV12sizeThatFitsySo6CGSizeVAA16ProposedViewSizeVF + 200",
+            "27  Persona                             0x000000010324bc60 $s7Persona14MaxWidthLayoutV12sizeThatFits8proposal8subviews5cacheSo6CGSizeV7SwiftUI16ProposedViewSizeV_AJ0D8SubviewsVytztF + 272",
+            "28  SwiftUICore                         0x00000001c745b7e4 $s7SwiftUI16ViewLayoutEngineV12sizeThatFitsySo6CGSizeVAA13_ProposedSizeVFAFyXEfU_ + 164",
+            "29  SwiftUICore                         0x00000001c745b68c $s7SwiftUI16ViewLayoutEngineV12sizeThatFitsySo6CGSizeVAA13_ProposedSizeVF + 664",
+            "30  SwiftUICore                         0x00000001c7803668 $s7SwiftUI15LayoutEngineBox33_91FCB5522C30220AE13689E45789FEF2LLC12sizeThatFitsySo6CGSizeVAA13_ProposedSizeVF + 76",
+            "31  SwiftUICore                         0x00000001c70f2db0 $s7SwiftUI14_PaddingLayoutV12sizeThatFits2in7context5childSo6CGSizeVAA13_ProposedSizeV_AA0M17AndSpacingContextVAA0D5ProxyVtF + 316"
+          ],
+          "duration_ms" : 257.37658340949565
+        },
+        {
+          "backtrace" : [
+            "0   libsystem_kernel.dylib              0x0000000110d51574 __open + 8",
+            "1   libsystem_kernel.dylib              0x0000000110d5b988 open + 60",
+            "2   libFontParser.dylib                 0x00000001ecbd8b98 _ZN22TFileDescriptorContextC2EPKc + 68",
+            "3   libFontParser.dylib                 0x00000001ecbf8b90 _ZN18TFileDataReference3MapEPKc + 32",
+            "4   libFontParser.dylib                 0x00000001ecbd8a24 _ZN18TFileDataReferenceC2EPKc + 96",
+            "5   libFontParser.dylib                 0x00000001ecbf8de4 _ZN18TFileDataSurrogateC2EPKc8timespec + 148",
+            "6   libFontParser.dylib                 0x00000001ecc43dd0 _ZN5TFont18CreateFontEntitiesEPKc8timespecRbsS1_P8FontKind + 184",
+            "7   libFontParser.dylib                 0x00000001ecc44b50 _ZN5TFont25CreateFontEntitiesForFileEPKc8timespecbsS1_ + 252",
+            "8   libFontParser.dylib                 0x00000001ecc504ac FPFontCreateWithPathAndName + 180",
+            "9   CoreGraphics                        0x00000001c355299c create_private_data_with_path_and_name + 16",
+            "10  CoreGraphics                        0x00000001c31e082c CGFontCreateWithPathAndName + 60",
+            "11  CoreText                            0x00000001d6783e70 _Z21CreateFontWithFontURLPK7__CFURLPK10__CFStringS4_ + 56",
+            "12  CoreText                            0x00000001d6786754 _ZN12TCGFontCache8CopyFontEPK7__CFURLPK10__CFStringS5_ + 136",
+            "13  CoreText                            0x00000001d67533a8 _ZNK9TBaseFont14CopyNativeFontEv + 172",
+            "14  CoreText                            0x00000001d66729e8 _ZNK9TBaseFont26GetInitializedGraphicsFontEv + 84",
+            "15  CoreText                            0x00000001d672effc _ZNK10TcmapTable8MapRangeE7CFRangePt + 36",
+            "16  CoreText                            0x00000001d674d2d4 _ZNK9TBaseFont26GetGlyphsForCharacterRangeE7CFRangePt + 60",
+            "17  CoreText                            0x00000001d67588a0 _ZNK14TComponentFont26GetGlyphsForCharacterRangeE7CFRangePt + 104",
+            "18  CoreText                            0x00000001d66b02cc _ZN15TASCIIDataCacheC2EPK5TFont + 64",
+            "19  CoreText                            0x00000001d66c2440 _ZNK5TFont18InitASCIIDataCacheEv + 56",
+            "20  CoreText                            0x00000001d668c848 _ZN13TASCIIEncoder6EncodeEb + 88",
+            "21  CoreText                            0x00000001d668f854 _ZN13TGlyphEncoder11EncodeCharsE7CFRangeRK11TAttributesNS_9FallbacksE + 1384",
+            "22  CoreText                            0x00000001d66af4c4 _ZN21TTypesetterAttrString10InitializeEPK20__CFAttributedStringb + 2808",
+            "23  CoreText                            0x00000001d66ae9b0 _ZN21TTypesetterAttrStringC2EPK20__CFAttributedStringPK14__CFDictionaryb + 176",
+            "24  CoreText                            0x00000001d6695880 CTLineCreateWithAttributedString + 80",
+            "25  UIFoundation                        0x00000001d22aca60 __NSCoreTypesetterCreateBaseLineFromAttributedString + 676",
+            "26  UIFoundation                        0x00000001d22affc0 -[NSCoreTypesetter _stringDrawingCoreTextEngineWithOriginalString:rect:padding:graphicsContext:forceClipping:attributes:stringDrawingOptions:drawingContext:stringDrawingInterface:] + 2768",
+            "27  UIKit                               0x00000001c8ca3318 -[NSCoreTypesetterAccessibility__UIKit__UIFoundation _stringDrawingCoreTextEngineWithOriginalString:rect:padding:graphicsContext:forceClipping:attributes:stringDrawingOptions:drawingContext:stringDrawingInterface:] + 260",
+            "28  UIFoundation                        0x00000001d22a9c70 __NSStringDrawingEngine + 1684",
+            "29  UIFoundation                        0x00000001d22aacbc -[NSAttributedString(NSExtendedStringDrawing) boundingRectWithSize:options:context:] + 648",
+            "30  SwiftUICore                         0x00000001c748c3f0 $sSo18NSAttributedStringC7SwiftUIE12MetricsCacheV7metrics13requestedSize13layoutMargins26wantsNumberOfLineFragments7contextAbCE0E0VSo6CGSizeV_AC10EdgeInsetsVSbAC18TextDrawingContextCtF + 1524",
+            "31  SwiftUICore                         0x00000001c748d350 $s7SwiftUI18ResolvedStyledTextC13StringDrawingC12sizeThatFitsySo6CGSizeVAA13_ProposedSizeVF + 176"
+          ],
+          "duration_ms" : 150.10391664691269
+        }
+      ],
+      "max_ms" : 257.37658340949565
+    },
+    "max_ms" : 281.5027916803956,
+    "name" : "PerfReferenceTests\/testNativeStreamingTrace",
+    "p50_ms" : 16.666666720993817,
+    "p95_ms" : 16.666666720993817,
+    "p99_ms" : 36.292499979026616,
+    "push_ms" : 0,
+    "push_passes" : 0,
+    "run_id" : "A0282194-CEC9-4DFA-90E8-DCDA72E7B634",
+    "seconds" : 23.983333333395422,
+    "test" : "PerfReferenceTests\/testNativeStreamingTrace",
+    "text_added_max" : 64,
+    "text_added_p50" : 4,
+    "text_added_p95" : 10,
+    "text_changes" : 549,
+    "text_gap_max_ms" : 788.14733331091702,
+    "text_gap_p50_ms" : 33.333333325572312,
+    "text_gap_p95_ms" : 50.000000046566129,
+    "warm_up" : true
+  },
+  {
+    "action" : "stream",
+    "bodies" : {
+
+    },
+    "busy_max_ms" : 56.399374967440963,
+    "busy_ms_per_s" : 248.61580685712386,
+    "busy_over_8ms" : 326,
+    "busy_over_16ms" : 90,
+    "busy_p50_ms" : 0.35695836413651705,
+    "busy_p95_ms" : 17.863624962046742,
+    "expected_iterations" : 3,
+    "frames" : 1371,
+    "hitch_ms_per_s" : 48.217557397698343,
+    "hitches" : 58,
+    "label" : "probe",
+    "long" : [
+      [
+        0.033333333325572312,
+        68.280625040642917
+      ],
+      [
+        6.3333333333721384,
+        52.411041688174009
+      ],
+      [
+        6.6333333334187046,
+        52.662458270788193
+      ],
+      [
+        6.8666666666977108,
+        56.819166638888419
+      ],
+      [
+        21.466666666674428,
+        82.465874962508678
+      ]
+    ],
+    "main_cpu_ms_per_s" : 237.6804857732306,
+    "main_thread_blocks" : {
+      "count" : 0,
+      "longest" : [
+
+      ],
+      "max_ms" : 0
+    },
+    "max_ms" : 82.465874962508678,
+    "name" : "PerfReferenceTests\/testNativeStreamingTrace",
+    "p50_ms" : 16.666666720993817,
+    "p95_ms" : 16.666666720993817,
+    "p99_ms" : 39.337791735306382,
+    "push_ms" : 0,
+    "push_passes" : 0,
+    "run_id" : "B97D98EA-B258-49E3-A11E-05141C35CD6C",
+    "seconds" : 24.016666666720994,
+    "test" : "PerfReferenceTests\/testNativeStreamingTrace",
+    "text_added_max" : 20,
+    "text_added_p50" : 4,
+    "text_added_p95" : 10,
+    "text_changes" : 560,
+    "text_gap_max_ms" : 789.07233336940408,
+    "text_gap_p50_ms" : 33.333333325572312,
+    "text_gap_p95_ms" : 53.109458298422396,
+    "warm_up" : false
+  },
+  {
+    "action" : "stream",
+    "bodies" : {
+
+    },
+    "busy_max_ms" : 63.64533316809684,
+    "busy_ms_per_s" : 249.0951738790624,
+    "busy_over_8ms" : 318,
+    "busy_over_16ms" : 101,
+    "busy_p50_ms" : 0.31691661570221186,
+    "busy_p95_ms" : 18.490833346731961,
+    "expected_iterations" : 3,
+    "frames" : 1360,
+    "hitch_ms_per_s" : 53.996751065630022,
+    "hitches" : 65,
+    "label" : "probe",
+    "long" : [
+      [
+        0,
+        61.50258332490921
+      ],
+      [
+        6.3166666666511446,
+        50.691250013187528
+      ],
+      [
+        6.6166666665812954,
+        50.601916736923158
+      ],
+      [
+        6.8499999999767169,
+        60.230208327993751
+      ],
+      [
+        21.433333333348855,
+        97.304333234205842
+      ]
+    ],
+    "main_cpu_ms_per_s" : 238.07904100123423,
+    "main_thread_blocks" : {
+      "count" : 0,
+      "longest" : [
+
+      ],
+      "max_ms" : 0
+    },
+    "max_ms" : 97.304333234205842,
+    "name" : "PerfReferenceTests\/testNativeStreamingTrace",
+    "p50_ms" : 16.666666720993817,
+    "p95_ms" : 23.730874992907047,
+    "p99_ms" : 39.943291689269245,
+    "push_ms" : 0,
+    "push_passes" : 0,
+    "run_id" : "603F92A3-B75C-4621-9A83-48EB74B4BB22",
+    "seconds" : 23.983333333279006,
+    "test" : "PerfReferenceTests\/testNativeStreamingTrace",
+    "text_added_max" : 20,
+    "text_added_p50" : 4,
+    "text_added_p95" : 10,
+    "text_changes" : 558,
+    "text_gap_max_ms" : 920.13270838651806,
+    "text_gap_p50_ms" : 33.333333325572312,
+    "text_gap_p95_ms" : 52.58691671770066,
+    "warm_up" : false
+  },
+  {
+    "action" : "stream",
+    "bodies" : {
+
+    },
+    "busy_max_ms" : 71.08458352740854,
+    "busy_ms_per_s" : 254.43915199504079,
+    "busy_over_8ms" : 327,
+    "busy_over_16ms" : 103,
+    "busy_p50_ms" : 0.37129176780581474,
+    "busy_p95_ms" : 19.283124944195151,
+    "expected_iterations" : 3,
+    "frames" : 1362,
+    "hitch_ms_per_s" : 53.945530021049436,
+    "hitches" : 64,
+    "label" : "probe",
+    "long" : [
+      [
+        0,
+        74.012541677802801
+      ],
+      [
+        6.3000000000465661,
+        51.115208305418491
+      ],
+      [
+        6.6000000000931323,
+        52.562124910764396
+      ],
+      [
+        6.8333333333721384,
+        56.895166635513306
+      ],
+      [
+        21.416666666744277,
+        104.82912498991936
+      ]
+    ],
+    "main_cpu_ms_per_s" : 244.53085475961717,
+    "main_thread_blocks" : {
+      "count" : 0,
+      "longest" : [
+
+      ],
+      "max_ms" : 0
+    },
+    "max_ms" : 104.82912498991936,
+    "name" : "PerfReferenceTests\/testNativeStreamingTrace",
+    "p50_ms" : 16.666666720993817,
+    "p95_ms" : 16.666666720993817,
+    "p99_ms" : 39.07258331310004,
+    "push_ms" : 0,
+    "push_passes" : 0,
+    "run_id" : "D06770CD-A83F-4C4B-A87F-7DF4820836D9",
+    "seconds" : 23.983333333395422,
+    "test" : "PerfReferenceTests\/testNativeStreamingTrace",
+    "text_added_max" : 20,
+    "text_added_p50" : 4,
+    "text_added_p95" : 10,
+    "text_changes" : 559,
+    "text_gap_max_ms" : 787.17045835219324,
+    "text_gap_p50_ms" : 33.333333325572312,
+    "text_gap_p95_ms" : 53.3094999846071,
+    "warm_up" : false
+  }
+]

@@ -1,0 +1,60 @@
+{
+  "baseline_phys_footprint_bytes" : 62851952,
+  "budget_final_delta_bytes" : 5242880,
+  "cycles" : 10,
+  "final_delta_bytes" : 16384,
+  "samples" : [
+    {
+      "cycle" : 1,
+      "delta_from_warmed_bytes" : 32768,
+      "phys_footprint_bytes" : 62884720
+    },
+    {
+      "cycle" : 2,
+      "delta_from_warmed_bytes" : 0,
+      "phys_footprint_bytes" : 62851952
+    },
+    {
+      "cycle" : 3,
+      "delta_from_warmed_bytes" : 0,
+      "phys_footprint_bytes" : 62851952
+    },
+    {
+      "cycle" : 4,
+      "delta_from_warmed_bytes" : 0,
+      "phys_footprint_bytes" : 62851952
+    },
+    {
+      "cycle" : 5,
+      "delta_from_warmed_bytes" : 0,
+      "phys_footprint_bytes" : 62851952
+    },
+    {
+      "cycle" : 6,
+      "delta_from_warmed_bytes" : 0,
+      "phys_footprint_bytes" : 62851952
+    },
+    {
+      "cycle" : 7,
+      "delta_from_warmed_bytes" : 16384,
+      "phys_footprint_bytes" : 62868336
+    },
+    {
+      "cycle" : 8,
+      "delta_from_warmed_bytes" : 16384,
+      "phys_footprint_bytes" : 62868336
+    },
+    {
+      "cycle" : 9,
+      "delta_from_warmed_bytes" : 16384,
+      "phys_footprint_bytes" : 62868336
+    },
+    {
+      "cycle" : 10,
+      "delta_from_warmed_bytes" : 16384,
+      "phys_footprint_bytes" : 62868336
+    }
+  ],
+  "scope" : "ten create\/open\/drain\/close cycles, C destruction completed off the main thread",
+  "warmup_cycles" : 1
+}

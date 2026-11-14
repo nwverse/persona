@@ -1,0 +1,226 @@
+[
+  {
+    "action" : "glide",
+    "bodies" : {
+
+    },
+    "busy_max_ms" : 71.424374938942492,
+    "busy_ms_per_s" : 238.8844555771727,
+    "busy_over_8ms" : 30,
+    "busy_over_16ms" : 15,
+    "busy_p50_ms" : 2.3571249330416322,
+    "busy_p95_ms" : 10.670458199456334,
+    "content_height_pt" : 44163,
+    "expected_iterations" : 3,
+    "frames" : 341,
+    "hitch_ms_per_s" : 59.246935128063996,
+    "hitches" : 12,
+    "label" : "probe-glide",
+    "long" : [
+      [
+        0.066666666651144624,
+        88.401708286255598
+      ],
+      [
+        1.3833333333022892,
+        50.993749988265336
+      ],
+      [
+        4.2999999999301508,
+        52.064500050619245
+      ]
+    ],
+    "main_cpu_ms_per_s" : 237.65421487877691,
+    "main_thread_blocks" : {
+      "count" : 0,
+      "longest" : [
+
+      ],
+      "max_ms" : 0
+    },
+    "max_ms" : 88.401708286255598,
+    "name" : "PerfReferenceTests\/testNativeMainConversationGlide",
+    "p50_ms" : 16.666666720993817,
+    "p95_ms" : 16.666666720993817,
+    "p99_ms" : 49.926833366043866,
+    "push_ms" : 0,
+    "push_passes" : 0,
+    "run_id" : "C402A1DE-A033-4AB3-A334-C266B0EEBF6B",
+    "sample_source" : "app-list-glide",
+    "scroll_offset_delta_pt" : 6033.333333333333,
+    "seconds" : 6.0499999999301508,
+    "test" : "PerfReferenceTests\/testNativeMainConversationGlide",
+    "text_added_max" : 0,
+    "text_added_p50" : 0,
+    "text_added_p95" : 0,
+    "text_changes" : 0,
+    "text_gap_max_ms" : 0,
+    "text_gap_p50_ms" : 0,
+    "text_gap_p95_ms" : 0,
+    "viewport_height_pt" : 717,
+    "warm_up" : true
+  },
+  {
+    "action" : "glide",
+    "bodies" : {
+
+    },
+    "busy_max_ms" : 58.143874863162637,
+    "busy_ms_per_s" : 235.66807336615901,
+    "busy_over_8ms" : 29,
+    "busy_over_16ms" : 16,
+    "busy_p50_ms" : 2.5975831085816026,
+    "busy_p95_ms" : 14.543333323672414,
+    "content_height_pt" : 44182,
+    "expected_iterations" : 3,
+    "frames" : 339,
+    "hitch_ms_per_s" : 59.436726627062839,
+    "hitches" : 14,
+    "label" : "probe-glide",
+    "long" : [
+      [
+        0.066666666651144624,
+        58.612874941900373
+      ],
+      [
+        1.3833333333022892,
+        50.034583313390613
+      ]
+    ],
+    "main_cpu_ms_per_s" : 237.12530386770834,
+    "main_thread_blocks" : {
+      "count" : 0,
+      "longest" : [
+
+      ],
+      "max_ms" : 0
+    },
+    "max_ms" : 58.612874941900373,
+    "name" : "PerfReferenceTests\/testNativeMainConversationGlide",
+    "p50_ms" : 16.666666720993817,
+    "p95_ms" : 21.508416743017733,
+    "p99_ms" : 47.816166654229164,
+    "push_ms" : 0,
+    "push_passes" : 0,
+    "run_id" : "2EF4F803-CD75-456A-8F58-0D7ED4145550",
+    "sample_source" : "app-list-glide",
+    "scroll_offset_delta_pt" : 6000,
+    "seconds" : 6.0333333333255723,
+    "test" : "PerfReferenceTests\/testNativeMainConversationGlide",
+    "text_added_max" : 0,
+    "text_added_p50" : 0,
+    "text_added_p95" : 0,
+    "text_changes" : 0,
+    "text_gap_max_ms" : 0,
+    "text_gap_p50_ms" : 0,
+    "text_gap_p95_ms" : 0,
+    "viewport_height_pt" : 717,
+    "warm_up" : false
+  },
+  {
+    "action" : "glide",
+    "bodies" : {
+
+    },
+    "busy_max_ms" : 52.996708313003182,
+    "busy_ms_per_s" : 231.02918498309523,
+    "busy_over_8ms" : 31,
+    "busy_over_16ms" : 14,
+    "busy_p50_ms" : 2.832000027410686,
+    "busy_p95_ms" : 11.926333303563297,
+    "content_height_pt" : 44208,
+    "expected_iterations" : 3,
+    "frames" : 339,
+    "hitch_ms_per_s" : 60.547444897457552,
+    "hitches" : 15,
+    "label" : "probe-glide",
+    "long" : [
+      [
+        0.066666666651144624,
+        53.400291712023318
+      ]
+    ],
+    "main_cpu_ms_per_s" : 232.95696132626637,
+    "main_thread_blocks" : {
+      "count" : 0,
+      "longest" : [
+
+      ],
+      "max_ms" : 0
+    },
+    "max_ms" : 53.400291712023318,
+    "name" : "PerfReferenceTests\/testNativeMainConversationGlide",
+    "p50_ms" : 16.666666720993817,
+    "p95_ms" : 21.115000010468066,
+    "p99_ms" : 47.377541661262512,
+    "push_ms" : 0,
+    "push_passes" : 0,
+    "run_id" : "FD3C4BD6-1E0E-48BC-A45B-166EC097C3C7",
+    "sample_source" : "app-list-glide",
+    "scroll_offset_delta_pt" : 5999.333333333333,
+    "seconds" : 6.0333333333255723,
+    "test" : "PerfReferenceTests\/testNativeMainConversationGlide",
+    "text_added_max" : 0,
+    "text_added_p50" : 0,
+    "text_added_p95" : 0,
+    "text_changes" : 0,
+    "text_gap_max_ms" : 0,
+    "text_gap_p50_ms" : 0,
+    "text_gap_p95_ms" : 0,
+    "viewport_height_pt" : 717,
+    "warm_up" : false
+  },
+  {
+    "action" : "glide",
+    "bodies" : {
+
+    },
+    "busy_max_ms" : 55.363916675560176,
+    "busy_ms_per_s" : 235.2550830849442,
+    "busy_over_8ms" : 30,
+    "busy_over_16ms" : 15,
+    "busy_p50_ms" : 2.4714167229831219,
+    "busy_p95_ms" : 10.298041743226349,
+    "content_height_pt" : 44163,
+    "expected_iterations" : 3,
+    "frames" : 339,
+    "hitch_ms_per_s" : 61.006830266925121,
+    "hitches" : 15,
+    "label" : "probe-glide",
+    "long" : [
+      [
+        0.066666666651144624,
+        57.229999918490648
+      ]
+    ],
+    "main_cpu_ms_per_s" : 236.94977900582955,
+    "main_thread_blocks" : {
+      "count" : 0,
+      "longest" : [
+
+      ],
+      "max_ms" : 0
+    },
+    "max_ms" : 57.229999918490648,
+    "name" : "PerfReferenceTests\/testNativeMainConversationGlide",
+    "p50_ms" : 16.666666720993817,
+    "p95_ms" : 20.064791664481163,
+    "p99_ms" : 47.593666706234217,
+    "push_ms" : 0,
+    "push_passes" : 0,
+    "run_id" : "9F23675A-E633-4996-8F94-778240E0D839",
+    "sample_source" : "app-list-glide",
+    "scroll_offset_delta_pt" : 6000,
+    "seconds" : 6.0333333333255723,
+    "test" : "PerfReferenceTests\/testNativeMainConversationGlide",
+    "text_added_max" : 0,
+    "text_added_p50" : 0,
+    "text_added_p95" : 0,
+    "text_changes" : 0,
+    "text_gap_max_ms" : 0,
+    "text_gap_p50_ms" : 0,
+    "text_gap_p95_ms" : 0,
+    "viewport_height_pt" : 717,
+    "warm_up" : false
+  }
+]

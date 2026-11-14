@@ -1,0 +1,62 @@
+[
+  {
+    "action" : "launch",
+    "expected_iterations" : 3,
+    "is_main_thread" : true,
+    "kind" : "first_frame",
+    "name" : "PerfReferenceTests\/testNativeFirstFrame",
+    "observation_id" : "582AC834-41A9-44BA-BB21-E7F5B3CD94DF",
+    "phys_footprint_bytes" : 37734944,
+    "resident_size_bytes" : 366510080,
+    "run_id" : "01F32306-AD44-409C-B1F2-E6425CB5C3D1",
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeFirstFrame",
+    "view_appearance_ms" : 1479.2590416036546,
+    "warm_up" : true
+  },
+  {
+    "action" : "launch",
+    "expected_iterations" : 3,
+    "is_main_thread" : true,
+    "kind" : "first_frame",
+    "name" : "PerfReferenceTests\/testNativeFirstFrame",
+    "observation_id" : "A8B91716-5FBE-4538-8AD7-88BE9CD831D0",
+    "phys_footprint_bytes" : 39881296,
+    "resident_size_bytes" : 370802688,
+    "run_id" : "AF6E7089-65C6-449E-AA85-0F89A86B6DDF",
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeFirstFrame",
+    "view_appearance_ms" : 635.70391666144133,
+    "warm_up" : false
+  },
+  {
+    "action" : "launch",
+    "expected_iterations" : 3,
+    "is_main_thread" : true,
+    "kind" : "first_frame",
+    "name" : "PerfReferenceTests\/testNativeFirstFrame",
+    "observation_id" : "96D941DC-17E0-4256-89F6-1BD1500D74AF",
+    "phys_footprint_bytes" : 39815760,
+    "resident_size_bytes" : 371277824,
+    "run_id" : "45C9258B-BA02-4C13-91E4-D1EA77C54D09",
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeFirstFrame",
+    "view_appearance_ms" : 1328.5042501520365,
+    "warm_up" : false
+  },
+  {
+    "action" : "launch",
+    "expected_iterations" : 3,
+    "is_main_thread" : true,
+    "kind" : "first_frame",
+    "name" : "PerfReferenceTests\/testNativeFirstFrame",
+    "observation_id" : "EB48B36D-9DFD-4E14-BDBF-1ED8E49F6F56",
+    "phys_footprint_bytes" : 40258128,
+    "resident_size_bytes" : 371982336,
+    "run_id" : "ABE54E83-E804-4C26-B13B-3F2A50BAFB12",
+    "source" : "native-ios-process",
+    "test" : "PerfReferenceTests\/testNativeFirstFrame",
+    "view_appearance_ms" : 1689.3055418040603,
+    "warm_up" : false
+  }
+]
