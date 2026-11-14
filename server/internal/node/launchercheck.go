@@ -39,6 +39,12 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 		return proto.LauncherCheck{Agent: "codex", Error: codexAppCheckMsg}
 	}
 	agent := n.launcherAgent(ctx, name)
+	if argv, ok := n.codexArgv(name); ok && n.codexOnSharedDaemon(argv) {
+		// codex exec runs in its own process and passes while a start, which joins the shared daemon, cannot.
+		if err := codexDaemonSocketGone(n.codexHome()); err != nil {
+			return proto.LauncherCheck{Agent: "codex", Error: err.Error()}
+		}
+	}
 	dir, err := os.MkdirTemp("", launcherCheckDir)
 	if err != nil {
 		return proto.LauncherCheck{Error: err.Error()}

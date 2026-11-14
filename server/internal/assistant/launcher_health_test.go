@@ -302,6 +302,38 @@ func TestLauncherHealthStaggersMachines(t *testing.T) {
 	}
 }
 
+// A check that times out is asked once more at once: a gateway can leave one request silent while the account
+// answers the next. Only a second timeout in a row is recorded; other errors are recorded without a second check.
+func TestLauncherHealthRetriesATimeoutOnce(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	f.checks["server/work"] = proto.LauncherCheck{Error: "90 秒内没有回答；signal: killed"} // answers the next time
+	f.checks["box/work"] = proto.LauncherCheck{Error: "90 秒内没有回答"}                   // silent twice
+	f.onCheck = func(f *fakeHub) {
+		if n := len(f.checked); n > 0 && f.checked[n-1] == "server/work" && slices.Contains(f.checked[:n-1], "server/work") {
+			delete(f.checks, "server/work")
+		}
+	}
+	s.healthRound(context.Background(), true)
+	count := func(key string) int {
+		n := 0
+		for _, c := range f.checked {
+			if c == key {
+				n++
+			}
+		}
+		return n
+	}
+	if r := healthState(s, "server", "work"); r.State != healthOK || r.Fails != 0 || count("server/work") != 2 {
+		t.Fatalf("server: %+v after %d checks (%v)", r, count("server/work"), f.checked)
+	}
+	if r := healthState(s, "box", "work"); r.State != healthFailing || r.Kind != errKindTimeout || r.Fails != 1 || count("box/work") != 2 {
+		t.Fatalf("box: %+v after %d checks (%v)", r, count("box/work"), f.checked)
+	}
+	if r := healthState(s, "l4", "work"); r.Kind != errKindModelRoute || count("l4/work") != 1 {
+		t.Fatalf("l4: %+v after %d checks (%v)", r, count("l4/work"), f.checked)
+	}
+}
+
 // Off unless hub.json turns it on: no checks, no repairs; a failed start still counts.
 func TestLauncherHealthOffByDefault(t *testing.T) {
 	s, f := launcherHealthHub(t)

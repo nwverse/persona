@@ -21,6 +21,7 @@ runtime errors. Shell launchers, managed launchers and older runtimes keep their
 - When: it looks every 5 minutes (`healthTick`); on computers that are online (`Reachable`), any launcher last checked longer ago than the interval (default 30 minutes) is rerun.
   When a computer goes from offline to online, all its launchers are checked right away. Launchers on one computer run one after another (no burst of claude processes); computers run in parallel, 12 seconds apart.
   Every computer runs the same probe prompt, and a model gateway can pin the same prompt to one upstream account: without the gap a round sent all computers' identical requests at once and the account served them behind one another until each timed out (2026-11-13). The gap also lets the later computers find the cache the first one wrote.
+- A check that times out is asked once more right away, and only a second timeout in a row is recorded (`probeLauncherWithRetry`). A gateway can leave a single request without a first token while the same upstream account answers its other requests in seconds (2026-11-14: one shared account left a few percent of its requests silent for 90 seconds and longer); one such request used to mark a working launcher `failing` until the next round, half an hour later. Other errors (a 401, a model the gateway refuses) are recorded at once.
 - What is checked: launchers this computer can start (`machineLaunchers`: those from ~/.zshrc minus hidden ones, plus Persona-managed ones; `kind: api` launchers do not run on a computer and are not checked).
   Runtime launchers (DSH and others, whose `source` is not `zshrc` / `persona`) are not checked.
 - A failed Agent start is recorded too: when `agent_start`, a task plan starting an Agent (`startTaskAgent`) or a repair Agent's start gets an error from `session.start`, it is recorded as a failure (source `start`),
@@ -54,7 +55,7 @@ runtime errors. Shell launchers, managed launchers and older runtimes keep their
 | `model_route` | `Bare Claude model name`, `cannot be routed`, `no account match`, model does not exist / not supported | Repair Agent (reconfigure the gateway's model) |
 | `auth` | 401 / 403, `invalid … api key`, `authentication_error`, `Not logged in`, expired token | Repair Agent (reconfigure the gateway's key) |
 | `cli_outdated` | `unknown option`, asks to upgrade / version too old / no longer supported | First the node upgrades itself (`claude update`); if that fails, a repair Agent |
-| `timeout` | `context deadline exceeded`, no answer within 150 seconds | Counts only after two in a row; handed to a repair Agent |
+| `timeout` | `context deadline exceeded`, no answer within 150 seconds (twice: a timed-out check is asked again at once) | Counts only after two in a row; handed to a repair Agent |
 | `other` | Everything else | Same: repaired only after two in a row |
 | `not_in_terminal` | A start's new terminal tab could not run the launcher or its claude (`launcher_missing` / `claude_missing` with `where: "terminal"`, #1642, `docs/integrations/launchers.md` "The terminal's shell is another environment") | None: `blocked` at once, the reason says to define the launcher where the terminal's shell reads it or add it as a model provider |
 
