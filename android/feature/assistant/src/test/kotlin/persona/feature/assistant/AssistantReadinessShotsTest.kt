@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -31,12 +32,15 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import persona.core.contracts.ModelPick
+import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import persona.core.navigation.AppTab
 import persona.core.navigation.ModelPurposeRoute
 import persona.core.navigation.Navigator
+import persona.feature.chat.LocalMainChatGuidance
 import java.io.File
 
 /**
@@ -101,6 +105,70 @@ class AssistantReadinessShotsTest {
 
     @Test fun connectModelOpensMainChatForTheShownManager() {
         assertEquals(ModelPurposeRoute("assistant", "work"), ReadinessActionId.ConnectModel.destination(null, manager = "work"))
+    }
+
+    @Test fun anExistingMainChatOffersSetupOnlyWhileItsModelIsBlocked() {
+        val main = SessionKey("mbp", "existing-main")
+        val other = SessionKey("mbp", "other-chat")
+        var requested by mutableStateOf(main)
+        val session = Session(machineId = main.machineId, sessionId = main.sessionId, state = "idle")
+        val snapshot = AssistantSnapshot(mainSession = main, conversations = listOf(session))
+        val hub = Hub(notLoggedIn, refused = false).also { it.assistant.value = snapshot }
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf(AssistantReadinessFeature)) {
+                AssistantScreen(navigator, hub, hub, startConversation = { main }, management = hub,
+                    machines = emptyList(), requestedSession = requested, composerService = null,
+                    assistantChatContent = { _, _ ->
+                        androidx.compose.foundation.layout.Column {
+                            Text("Not logged in · Please run /login")
+                            LocalMainChatGuidance.current?.invoke()
+                        }
+                    })
+            }
+        }
+
+        rule.onNodeWithText("助手还没接上模型").assertExists()
+        rule.onNodeWithText("接上模型").performClick()
+        rule.runOnIdle { assertEquals(ModelPurposeRoute("assistant", "assistant"), opened.last()) }
+        rule.runOnIdle { requested = other }
+        rule.onNodeWithText("助手还没接上模型").assertDoesNotExist()
+
+        rule.runOnIdle {
+            requested = main
+            hub.assistant.value = snapshot.copy(conversations = listOf(session.copy(modelPick = ModelPick("another-launcher"))))
+        }
+        rule.onNodeWithText("助手还没接上模型").assertDoesNotExist()
+
+        rule.runOnIdle {
+            hub.readiness = notLoggedIn.copy(machine = ReadinessMachine("other-machine", "另一台电脑"))
+            hub.assistant.value = snapshot
+        }
+        rule.onNodeWithText("助手还没接上模型").assertDoesNotExist()
+
+        rule.runOnIdle {
+            hub.readiness = notLoggedIn
+            hub.assistant.value = snapshot.copy(conversations = listOf(session.copy(turnErrorCode = "not_logged_in")))
+        }
+        rule.onNodeWithText("助手还没接上模型").assertExists()
+
+        rule.runOnIdle {
+            hub.readiness = notLoggedIn.copy(machine = null)
+            hub.assistant.value = snapshot
+        }
+        rule.onNodeWithText("接上模型").assertDoesNotExist()
+
+        rule.runOnIdle {
+            hub.readiness = notLoggedIn.copy(machine = ReadinessMachine(" ", "工作电脑"))
+            hub.assistant.value = snapshot.copy(conversations = listOf(session.copy(turnErrorCode = "not_logged_in")))
+        }
+        rule.onNodeWithText("接上模型").assertDoesNotExist()
+
+        rule.runOnIdle {
+            hub.readiness = AssistantReadiness()
+            hub.assistant.value = snapshot
+        }
+        rule.onNodeWithText("助手还没接上模型").assertDoesNotExist()
+        rule.onNodeWithText("Not logged in · Please run /login").assertExists()
     }
 
     @Test fun light() = shots("light", interact = true)

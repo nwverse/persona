@@ -304,11 +304,15 @@ fun AssistantScreen(
     val mainActions = if (pageManagement != null && !demo) MainActions.of(LocalHubFeatures.current) else MainActions(false, false)
     // What the main conversation still needs (docs/assistant/onboarding.md 4.4), on hubs that work it out: asked when the tab
     // shows, when a computer comes or goes and after the hub refused to start it.
+    val onMain = active != null && active == snapshot.mainSession
+    val mainSession = if (onMain) snapshot.conversations.firstOrNull { it.key == active } else null
     val readinessOn = pageManagement != null && !demo && AssistantReadinessFeature in LocalHubFeatures.current
     val mainReadiness = remember(pageManagement) { MainReadiness { probe -> requireNotNull(pageManagement).readiness(probe) } }
     var readinessHelp by remember { mutableStateOf<ReadinessHelp?>(null) }
     val machinesSeen = machines.joinToString(",") { "${it.id}:${it.online}" }
-    LaunchedEffect(mainReadiness, readinessOn, machinesSeen) { if (readinessOn) mainReadiness.refresh() }
+    LaunchedEffect(mainReadiness, readinessOn, machinesSeen, mainSession?.state, mainSession?.turnErrorCode, mainSession?.modelPick) {
+        if (readinessOn) mainReadiness.refresh()
+    }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
         if (readinessOn) scope.launch { mainReadiness.refresh() }
     }
@@ -322,8 +326,24 @@ fun AssistantScreen(
         val machine = readiness?.steps?.firstOrNull { it.id == ReadinessStep.COMPUTER }?.machine
         action.destination(launcher, machine, managerChoice.shown)?.let(navigator::navigate)
     }
-    val onMain = active != null && active == snapshot.mainSession
-    val shownCompaction = if (onMain) snapshot.conversations.firstOrNull { it.key == active }?.compaction else null
+    // The hub checks the assistant's default model and computer. An existing chat can use a different one.
+    val modelProblem = blocking?.takeIf {
+        onMain && it.id == ReadinessStep.MODEL && managers.offline == null && mainSession?.modelPick == null &&
+            readiness?.machine?.id?.takeIf(String::isNotBlank)?.let { id -> id == active?.machineId } == true
+    }
+    val mainChatGuidance: (@Composable () -> Unit)? = modelProblem?.let { step ->
+        {
+            val machine = readiness?.machine?.name?.takeIf(String::isNotBlank)
+            val guidance = if (step.code == "not_logged_in" && machine != null) step.copy(
+                title = stringResource(R.string.assistant_model_setup_title),
+                detail = stringResource(R.string.assistant_model_setup_detail, machine),
+                altActions = emptyList(),
+            ) else step
+            ReadinessStepCard(guidance, { runReadinessAction(it) },
+                Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs))
+        }
+    }
+    val shownCompaction = mainSession?.compaction
     var compaction by remember(active) { mutableStateOf(CompactionStatus()) }
     var compacting by remember { mutableStateOf(false) }
     var newMainOpen by remember { mutableStateOf(false) }
@@ -1008,6 +1028,7 @@ fun AssistantScreen(
                             CompositionLocalProvider(persona.feature.chat.LocalNewMainChat provides
                                 (if (onMain && mainActions.newMain) ({ newMainOpen = true }) else null),
                                 persona.feature.chat.LocalMainChatClear provides (if (onMain && mainActions.clear) persona.feature.chat.MainChatClear(::clearMain) else null),
+                                persona.feature.chat.LocalMainChatGuidance provides mainChatGuidance,
                                 persona.feature.chat.LocalComposerFocusAsk provides focusAsk) {
                                 if (assistantChatContent != null) assistantChatContent(active, AssistantChatOptions(readOnlyNote = managers.offline))
                                 else chatContent?.invoke(active)
