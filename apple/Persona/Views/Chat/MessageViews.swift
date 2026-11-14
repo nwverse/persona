@@ -1353,11 +1353,9 @@ final class StreamRevealClock {
 
     private func start() {
         guard timer == nil else { return }
-        let timer = Timer(timeInterval: Self.step, repeats: true) { [weak self] t in
-            MainActor.assumeIsolated {
-                guard let self else { return t.invalidate() }
-                self.tick()
-            }
+        let timer = Timer(timeInterval: Self.step, repeats: true) { @Sendable [weak self] t in
+            guard let self else { return t.invalidate() } // the view went without onDisappear
+            MainActor.assumeIsolated { self.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
