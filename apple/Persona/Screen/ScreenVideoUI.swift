@@ -94,7 +94,7 @@ struct ScreenStats: Equatable {
 
     /// A bitrate as the overlay writes it, in Mbps: one decimal, two below 1 Mbps so a small stream that was measured
     /// doesn't read as 0.0 (the web overlay's rule, `mbpsText`).
-    static func mbpsText(_ mbps: Double) -> String {
+    nonisolated static func mbpsText(_ mbps: Double) -> String {
         String(format: mbps < 1 ? "%.2f Mbps" : "%.1f Mbps", mbps)
     }
 
@@ -116,7 +116,7 @@ struct ScreenStats: Equatable {
 /// The recent round trips to the hub (#6558), timed on the app's own hub connection while the stats overlay is shown.
 /// The overlay draws the median of the last `kept` from the last `fresh` seconds, as the web does, so one slow answer
 /// doesn't make it jump and an old one (the app was in the background) isn't shown.
-struct HubRoundTrips: Equatable {
+nonisolated struct HubRoundTrips: Equatable, Sendable {
     static let kept = 5
     static let fresh: TimeInterval = 20
     private struct Sample: Equatable { var ms: Double; var at: Date }
