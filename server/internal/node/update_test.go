@@ -89,6 +89,17 @@ func TestUpdateWaitsOnlyForWhatTheRestartCuts(t *testing.T) {
 	}
 }
 
+// The host can list an agent before its asynchronous start finishes. The start record still holds the update back.
+func TestUpdateWouldCutIncludesHostVisibleStarts(t *testing.T) {
+	visible := []proto.Session{{SessionID: "new", Status: proto.StatusWorking, State: proto.StateWorking}}
+	if !updateWouldCut(false, visible, []proto.Session{{SessionID: "new", Starting: true}}) {
+		t.Fatal("a host-visible unfinished start did not hold the update back")
+	}
+	if updateWouldCut(false, visible, []proto.Session{{SessionID: "new"}}) {
+		t.Fatal("a finished start held the update back")
+	}
+}
+
 // sessions.list carries the commit check as update_busy: the manager waits on it, since a headless conversation's row
 // does not say it is busy (#6364).
 func TestSessionsListReportsUpdateBusy(t *testing.T) {
