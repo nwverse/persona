@@ -152,10 +152,14 @@ impl Runtime {
         }
     }
 
-    /// Waits until every queued action is applied, up to `timeout`. For tests and shutdown; never on a main thread.
+    /// Waits until every queued action is applied, up to `timeout`. Zero checks once without waiting. For tests and
+    /// shutdown; never on a main thread.
     pub fn flush(&self, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
         let mut pending = lock(&self.shared.pending);
+        if timeout.is_zero() {
+            return *pending == 0;
+        }
+        let deadline = Instant::now() + timeout;
         while *pending > 0 {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -602,6 +606,26 @@ mod tests {
         let new = items(r#"[{"id":"1#0","seq":1,"text":"new"},{"id":"2#0","seq":2}]"#);
         assert_eq!(diff(&old, &new), vec![update(0, &new[0])]);
         assert_eq!(replay(&old, &diff(&old, &new)), vec!["1#0", "2#0"]);
+    }
+
+    #[test]
+    fn zero_timeout_is_a_nonblocking_probe() {
+        struct NoopHost;
+        impl Host for NoopHost {
+            fn changed(&self, _version: u64) {}
+            fn run(&self, _effect: &[u8]) {}
+        }
+        let runtime = Runtime::new(Arc::new(NoopHost));
+        assert!(runtime.flush(Duration::ZERO));
+        let action = wire::encode(&Action::OpenChat {
+            chat: "probe".into(),
+            snapshot: ChatSnapshot::default(),
+        });
+        for _ in 0..128 {
+            assert!(runtime.dispatch(&action));
+        }
+        assert!(!runtime.flush(Duration::ZERO));
+        assert!(runtime.flush(Duration::from_secs(5)));
     }
 
     #[test]

@@ -76,8 +76,12 @@ pub fn flush(handle: i64, timeout_ms: u32) -> Result<bool> {
 }
 
 pub fn close(handle: i64) -> Result<()> {
-    let mut map = lock();
-    map.as_mut().and_then(|map| map.remove(&handle));
+    let removed = {
+        let mut map = lock();
+        map.as_mut().and_then(|map| map.remove(&handle))
+    };
+    // A final lease may join the worker and release the host; do not hold the registry lock across either callback.
+    drop(removed);
     Ok(())
 }
 
