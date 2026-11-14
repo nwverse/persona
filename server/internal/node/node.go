@@ -635,6 +635,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.doctor(ctx, params, false)
 	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
 		return n.doctor(ctx, params, true)
+	case proto.MethodRoutineCheck:
+		return routineCheck(ctx, params)
 	case proto.MethodSecretRun: // the password card's commands (secretrun.go); its params never reach the decoding below
 		return n.secretRun(ctx, params)
 	case proto.MethodSecretStage: // a hand-off's values, kept for its start's ticket (secretenv.go); the same
