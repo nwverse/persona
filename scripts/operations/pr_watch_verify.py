@@ -115,6 +115,8 @@ def non_ui_apple_change(worktree, base, head, names):
                                           APPLE_PORTABLE_CORE + APPLE_ANDROID_SHARED) for name in names):
         return False
     for path in names:
+        if path == "native/app-core/crates/persona-core-runtime/src/wire.rs":
+            return False
         if not path.startswith("apple/"):
             continue
         parts = path.split("/")

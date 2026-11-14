@@ -500,6 +500,8 @@ class VerifyTests(unittest.TestCase):
         self.assertFalse(pr_watch_verify.non_ui_apple_change(
             ".", SHA_BASE, SHA_A, ["native/app-core/crates/persona-core-typegen/src/main.rs"]))
         self.assertFalse(pr_watch_verify.non_ui_apple_change(
+            ".", SHA_BASE, SHA_A, ["native/app-core/crates/persona-core-runtime/src/wire.rs"]))
+        self.assertFalse(pr_watch_verify.non_ui_apple_change(
             ".", SHA_BASE, SHA_A, ["web/src/views/ChatView.tsx"]))
 
     def test_eligible_non_ui_apple_change_runs_remaining_lanes(self):
