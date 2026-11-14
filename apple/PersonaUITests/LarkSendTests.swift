@@ -45,11 +45,18 @@ final class LarkSendTests: XCTestCase {
         slowedSend = true
     }
 
+    @MainActor private func expandSource(_ app: XCUIApplication) {
+        let source = app.buttons["inbox.detail.source"]
+        XCTAssertTrue(source.waitForExistence(timeout: 20), "the original-source control did not appear")
+        source.tap()
+    }
+
     @MainActor private func openChat() -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", "mention", "-inbox.source", "", "-openInboxFirst", "YES"] + Self.fresh
         app.launchPinned()
+        expandSource(app)
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "The new icon set")).firstMatch.waitForExistence(timeout: 20),
                       "the 设计评审 chat did not open")
         return app
@@ -155,6 +162,7 @@ final class LarkSendTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-openInboxItem", "lark:f1:100"] + Self.fresh
         app.launchPinned()
+        expandSource(app)
         XCTAssertTrue(app.staticTexts["能赶上，下午三点前给你确认"].waitForExistence(timeout: 20), "the 韩梅梅 chat did not open")
         // The list's own row, not the quote bar's summary of it (the bar is outside the list).
         let list = app.scrollViews.containing(NSPredicate(format: "label == %@", "能赶上，下午三点前给你确认")).firstMatch
@@ -322,6 +330,7 @@ final class LarkSendTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-openInboxItem", "lark:f3:300"] + (fresh ? Self.fresh : [])
         app.launchPinned()
+        expandSource(app)
         let target = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "那我也带一个")).firstMatch
         XCTAssertTrue(target.waitForExistence(timeout: 20), "the 周末徒步群 chat did not open")
         if sendingLeftover, app.buttons["lark.send"].exists { app.buttons["lark.send"].tap() }
@@ -468,6 +477,7 @@ final class LarkSendTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         thread.launchArguments = ["-pairURL", pair, "-tab", "mail", "-openInboxItem", "lark:f3:300"] + Self.fresh
         thread.launchPinned()
+        expandSource(thread)
         let open = thread.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "条回复")).firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 20), "the 周末徒步群 chat did not open at its thread")
         open.tap()
@@ -516,6 +526,7 @@ final class LarkSendTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-openInboxItem", "lark:f3:300"] + Self.fresh
         app.launchPinned()
+        expandSource(app)
         let thread = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "条回复")).firstMatch
         XCTAssertTrue(thread.waitForExistence(timeout: 20), "the 周末徒步群 chat did not open at its thread")
         thread.tap()

@@ -21,6 +21,9 @@ final class TranslationTests: XCTestCase {
                                "-translate.enabled", "YES", "-translate.target", "zh-Hans", "-translate.mail", "YES",
                                "-translate.larkChats", chats]
         app.launchPinned()
+        let source = app.buttons["inbox.detail.source"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 20), "the original source control did not appear")
+        source.tapCenter()
         return app
     }
 
