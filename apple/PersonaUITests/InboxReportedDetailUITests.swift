@@ -70,7 +70,7 @@ final class InboxReportedDetailUITests: XCTestCase {
         XCTAssertTrue(marker.waitForExistence(timeout: 5), "the reported row's messages did not expand")
         reveal(marker, in: app)
         sleep(1)
-        let openMessages = entry(app, "reported-messages").frame.height
+        let openMessages = marker.frame.maxY - expand.frame.minY
         XCTAssertGreaterThan(openMessages, try XCTUnwrap(heights["reported-messages"]) + 8,
                              "opening messages must add their expansion below the still-capped row")
 
@@ -106,11 +106,24 @@ final class InboxReportedDetailUITests: XCTestCase {
     }
 
     @MainActor private func entry(_ app: XCUIApplication, _ id: String) -> XCUIElement {
-        app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", id)).firstMatch
+        let chain = app.descendants(matching: .any)["inbox.chain"]
+        return chain.descendants(matching: .any)
+            .matching(NSPredicate(format: "value == %@", id))
+            .matching(NSPredicate(format: "elementType == %d OR (elementType == %d AND label CONTAINS %@)",
+                                  XCUIElement.ElementType.button.rawValue,
+                                  XCUIElement.ElementType.staticText.rawValue, "\n"))
+            .firstMatch
     }
 
     @MainActor private func detailText(_ app: XCUIApplication, row id: String, lines: [String]) -> XCUIElement {
-        var texts = entry(app, id).staticTexts
+        let row = entry(app, id)
+        var texts: XCUIElementQuery
+        if row.elementType == .button {
+            texts = row.staticTexts
+        } else {
+            texts = app.descendants(matching: .any)["inbox.chain"].staticTexts
+                .matching(NSPredicate(format: "value == %@", id))
+        }
         for line in lines {
             texts = texts.matching(NSPredicate(format: "label CONTAINS %@", line))
         }
