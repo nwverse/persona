@@ -2,7 +2,7 @@
 // search found, the Agents on a project, the timeline, the profile, Moments, related entries by kind, code directories,
 // a chat's last 7 days and the folder (docs/apple/ios.md "Information architecture", knowledge base). "Tag" in the header.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { api, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
+import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
 import { MANAGER_HEADER, shownManager, useChosenManager, useKnownDefault } from "../../lib/manager-choice";
 import { ConfirmedFacts } from "./ConfirmedFacts";
 import { RecordingMinutes } from "./RecordingMinutes";
@@ -111,6 +111,8 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   const request = useRef(0);
   const [resp, setResp] = useState<KBDetailResponse | null>(null);
   const [error, setError] = useState("");
+  // the hub has no such entry (deleted, renamed, or an old link): said plainly, with nothing to retry
+  const [gone, setGone] = useState(false);
   // The page's own read (opening, after a save elsewhere on the page, Retry) failed while an earlier detail is shown:
   // the detail stays and this says it may be out of date. Sections reading it again themselves show their own errors.
   const [reloadError, setReloadError] = useState("");
@@ -151,11 +153,14 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
       remember(r.detail.links ?? []);
       setResp(r);
       setError("");
+      setGone(false);
       setReloadError("");
       return true;
     } catch (err) {
       if (!valid()) return false;
-      if (!isAbort(err)) setError(errorText(err));
+      const missing = err instanceof ApiError && err.status === 404;
+      setGone(missing);
+      if (!isAbort(err)) setError(missing ? t("not-found.kb_gone") : errorText(err));
       throw err;
     }
   }, [kind, id, query, auth, current]);
@@ -165,7 +170,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
     setReloadError("");
     const ac = new AbortController();
     void load(ac.signal).catch((err) => {
-      if (!ac.signal.aborted && !isAbort(err)) setReloadError(errorText(err));
+      if (!ac.signal.aborted && !isAbort(err)) setReloadError(err instanceof ApiError && err.status === 404 ? t("not-found.kb_gone") : errorText(err));
     });
     return () => { ac.abort(); request.current++; };
   }, [load, reloadKey, retry]);
@@ -262,7 +267,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
           )}
           {(d ? reloadError : error) && (
             <div className="mt-6">
-              <ErrorBox text={d ? reloadError : error} onRetry={() => setRetry((x) => x + 1)} />
+              <ErrorBox text={d ? reloadError : error} onRetry={!d && gone ? undefined : () => setRetry((x) => x + 1)} />
             </div>
           )}
 

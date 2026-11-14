@@ -20,7 +20,7 @@ import {
   type AgentMessage,
   type Outgoing,
 } from "../../lib/agents";
-import { errorText } from "../../lib/api";
+import { ApiError, errorText } from "../../lib/api";
 import { ago, clock, uuid } from "../../lib/format";
 import { href, onLinkClick } from "../../lib/router";
 import { Button, Collapse, cx, EASE, IconButton, Loading, Spinner } from "../../ui/atoms";
@@ -196,6 +196,8 @@ function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar
   const [hasMore, setHasMore] = useState(false);
   const [older, setOlder] = useState(false);
   const [error, setError] = useState("");
+  // the hub has no such conversation (an old or mistyped link, or one removed since): said plainly, with the way back
+  const [missing, setMissing] = useState(false);
   const [out, setOut] = useState<Outgoing[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -214,12 +216,14 @@ function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar
           setHasMore(p.hasMore);
         }
         setError("");
+        setMissing(false);
         const tail = p.messages.at(-1)?.externalId ?? "";
         if (first || tail !== readTail.current) {
           readTail.current = tail;
           void markRead(id).then(() => setLocalRead(id)).catch(() => {});
         }
       } catch (e) {
+        if (e instanceof ApiError && e.status === 404) setMissing(true);
         setError(errorText(e));
       }
     },
@@ -274,6 +278,7 @@ function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar
   };
 
   const canSend = session?.canSend ?? false;
+  if (missing && !session) return <MissingAgent onToggleSidebar={onToggleSidebar} />;
   return (
     <div className="flex h-full flex-col">
       <Header title={session?.title || t("lib-format.untitled_session")} sub={session ? providerLabel(session.provider) : undefined} avatar={session ?? undefined} onToggleSidebar={onToggleSidebar} />
@@ -316,6 +321,27 @@ function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar
         </div>
       </div>
       <AgentComposer disabled={!canSend} reason={session ? t("agents-agentsview.cannot_send") : t("agents-agentsview.loading")} onSend={(text) => void deliver({ clientId: uuid(), text, at: Date.now(), status: "sending" })} />
+    </div>
+  );
+}
+
+/** A personal agent's link to a conversation the hub doesn't have: what happened in plain words and the way back to the
+ *  list, as a computer's page that isn't there does (machines/MachineDetail.tsx), with no box that waits forever. */
+function MissingAgent({ onToggleSidebar }: { onToggleSidebar: () => void }) {
+  return (
+    <div className="flex h-full flex-col">
+      <Header title={t("not-found.agent_title")} onToggleSidebar={onToggleSidebar} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex max-w-[760px] flex-col px-5 py-6 sm:px-8">
+          <div role="status" className="flex flex-col items-start gap-3 rounded-card bg-surface p-4 shadow-card">
+            <p className="text-[13.5px] font-medium text-ink">{t("not-found.agent_title")}</p>
+            <p className="text-[12.5px] text-ink-2">{t("not-found.agent_detail")}</p>
+            <a href={href({ name: "agents" })} onClick={(e) => onLinkClick(e, { name: "agents" })} className="text-[12.5px] font-medium text-accent-ink hover:underline">
+              {t("not-found.agent_back")}
+            </a>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

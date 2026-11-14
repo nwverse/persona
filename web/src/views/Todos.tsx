@@ -230,6 +230,15 @@ export function TodosView({
   useEffect(() => {
     if (selectedId) setActiveId(selectedId);
   }, [selectedId]);
+  // A link to a to-do the list doesn't have (deleted, or an old link): said once, and the address loses it, so another
+  // to-do is not shown under it (web usability audit item 42)
+  const linkGone = todosLoaded && !todosError && Boolean(selectedId) && !todos.some((td) => td.id === selectedId);
+  useEffect(() => {
+    if (!linkGone) return;
+    toast(t("not-found.todo_gone"));
+    navigate(calendarOn ? calendarRoute(calendarMode, anchor) : { name: "todos" }, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per link that is gone
+  }, [linkGone]);
 
   // Separate uncompleted and completed todos
   const { uncompleted, completed } = useMemo(() => {

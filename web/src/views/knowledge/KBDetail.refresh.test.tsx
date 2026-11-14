@@ -98,3 +98,11 @@ it("shows nothing extra after a successful read following the save", async () =>
   expect(host.textContent).not.toContain(unavailable());
   expect(retry()).toBeUndefined();
 });
+
+it("says an entry the hub doesn't have isn't there, with nothing to retry (web usability audit item 42)", async () => {
+  render();
+  await json(reads()[0], { code: "not_found", error: "not found" }, 404);
+  expect(host.textContent).toContain(t("not-found.kb_gone"));
+  expect(host.textContent).not.toContain("404");
+  expect(retry()).toBeUndefined();
+});
