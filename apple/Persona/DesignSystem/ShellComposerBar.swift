@@ -134,7 +134,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("ShellComposerBar")
         #endif
-        VStack(alignment: .leading, spacing: 0) {
+        let box = VStack(alignment: .leading, spacing: 0) {
             VStack(spacing: 0) {
                 if expanded, let quotes, !quotes.wrappedValue.isEmpty {
                     QuoteBar(refs: quotes)
@@ -250,6 +250,8 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
+        // Erased (#6735): generic, so every intermediate of the chain below took a run-time-sized stack slot holding the box.
+        AnyView(box)
         .padding(.horizontal, expanded ? 0 : Theme.Space.xs)
         .padding(.vertical, expanded ? 0 : Theme.Space.xxs)
         .modifier(ComposerSurface())
