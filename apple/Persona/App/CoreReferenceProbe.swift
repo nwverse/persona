@@ -11,6 +11,7 @@ enum CoreReferenceProbe {
     private static var launchedAt: CFTimeInterval?
     private static var firstFrame: Double?
     private static var memorySequence = 0
+    private static let processID = UUID().uuidString
 
     static func launchStarted() {
         guard UserDefaults.standard.bool(forKey: "showCoreReference") else { return }
@@ -42,6 +43,7 @@ enum CoreReferenceProbe {
         var payload = result
         payload["source"] = "native-ios-process"
         payload["observation_id"] = UUID().uuidString
+        payload["process_id"] = processID
         let d = UserDefaults.standard
         if let id = d.string(forKey: "perfRunID") {
             payload["run_id"] = id

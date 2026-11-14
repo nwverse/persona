@@ -13288,6 +13288,9 @@ LARK_CHURN = {"rounds": 0}
 # GET /mock/frames?name=<test> lists them (all of them without a name).
 FRAMES = {"label": "", "runs": []}
 FRAME_GLIDE_CONTEXT = {}
+# Test-only stream lifecycle: a requested recorded trace, its target conversation, final text and completed subscribers.
+# A frame upload carries its own run_id; this state is never merged into that upload.
+STREAM_RUNS = {}
 
 
 def lark_churn(feed, rounds, ms, new=False, inbox=False):
@@ -21501,16 +21504,19 @@ def narrate(step, words, answer, steps=8, ms=250, line=True, ask="帮我把网�
     return {"error": "step is start or finish"}
 
 
-def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0, plan=None):
+def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0, plan=None, run_id=None):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
     transcript grows and the session list says so (updated_at), but the items push is lost: the page has to notice (#3139).
     `upto` (with `stream`): the reply streams only to its first `upto` characters and stays open there, unwritten."""
     import time
+    state = STREAM_RUNS.get(run_id) if run_id else None
     for send, subscribed in list(LIVE):
         for sid in list(subscribed):
             items = ITEMS.get(sid)
             if not items: continue
+            if state is not None and state["session_id"] == sid:
+                state["subscribed"] = True
             CHURN_ITEMS.setdefault(sid, list(items))  # /mock/reset takes the replies away again
             mid = next((x["machine_id"] for x in all_sessions() if x["session_id"] == sid), "macbook")
             if stream:
@@ -21534,6 +21540,8 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upt
                 if late:
                     # As a real hub can: the turn's end clears the stream before the transcript line is read (&late=ms).
                     send({"type": "delta", "machine_id": mid, "session_id": sid, "text": ""})
+                    if state is not None:
+                        state["live_cleared"] = True
                     time.sleep(late / 1000)
                 items = ITEMS[sid]
             before = items[-1]["seq"]
@@ -21544,6 +21552,8 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upt
             ITEMS[sid] = items + new
             LOG.write("  SAY: %d items to %s after seq %d%s\n" % (len(new), sid, before, " (push dropped)" if drop else "")); LOG.flush()
             if drop:
+                if state is not None:
+                    state["dropped"] = True
                 row = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == sid), None)
                 if row is not None:
                     DROPPED_AT.setdefault(sid, row.get("updated_at"))
@@ -21552,6 +21562,9 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upt
                 continue
             try:
                 send({"type": "items", "machine_id": mid, "session_id": sid, "items": new, **span(new, before)})
+                if state is not None and state["session_id"] == sid and new[-1].get("text") == text:
+                    state["completed"] = True
+                    state["completion_count"] += 1
             except Exception:
                 pass
             sync_moved(sid)
@@ -24282,6 +24295,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/sessions/touch" and os.environ.get("MOCK_SESSIONS_MANY"):  # #4410: expire the paged list's cursors
             SESSIONS[[s["session_id"] for s in SESSIONS].index("e4410a00-0000-4000-8000-000000000001")]["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             return self.send_json({"ok": True})
+        if p == "/mock/stream_run":
+            state = STREAM_RUNS.get(q.get("run_id", [""])[0])
+            return self.send_json(state if state is not None else {"run_id": q.get("run_id", [""])[0], "completed": False})
         if p == "/mock/say":  # ChatFollowTests: a reply arrives in every open conversation (?text=…, ?user=… a message before it)
             # &steps=50&ms=80: the hub's own pace (a delta every 80 ms, node/assistant.go).
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,
@@ -24294,7 +24310,13 @@ class H(BaseHTTPRequestHandler):
                     q.get("stream", ["0"])[0] == "1" or trace is not None,
                     int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1",
                     int(q.get("upto", ["0"])[0]), plan)
-            threading.Thread(target=say, args=args, daemon=True).start()
+            if trace and q.get("run_id", [""])[0] and q.get("session_id", [""])[0]:
+                STREAM_RUNS[q["run_id"][0]] = {"run_id": q["run_id"][0], "trace": q["trace"][0],
+                    "session_id": q["session_id"][0], "expected_utf16": len(trace["text"].encode("utf-16-le")) // 2,
+                    "subscribed": False, "completed": False, "completion_count": 0, "live_cleared": False}
+                threading.Thread(target=say, args=args + (q["run_id"][0],), daemon=True).start()
+            else:
+                threading.Thread(target=say, args=args, daemon=True).start()
             return self.send_json({"ok": True})
         if MOCK_LARK and (p.startswith("/api/v1/lark/") or p == "/mock/lark") and fs_get(self, p, q): return  # area: feishu chat page
         if not p.startswith("/mock/") and self.bad_network(): return

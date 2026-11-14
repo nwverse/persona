@@ -65,10 +65,16 @@ are not substituted for this passing serial run.
 
 ## Package payload and compressed transport
 
-The unsigned generic-iOS Release + PERF_SIGNPOST comparison used source base
+The unsigned generic-iOS Release + PERF_SIGNPOST comparison used the dirty measurement tree based on
 `cf119132e9be23c6921424c93d72ce88401de2e7` plus harness `64130151ec49ab7264a467abed55629ee331bc66`, Xcode 27.1
-and the two PersonaCore target dependencies as its only intentional difference. The real link command contains
-`-lpersona_core`. This is not a default Release/store measurement because PERF_SIGNPOST includes diagnostic paths.
+and the two PersonaCore target dependencies as its intended difference. The with-core link command contains
+`-lpersona_core`; the actual no-core link does not. `package-with-core-build.log.gz` and
+`package-without-core-build.log.gz` retain both complete original build logs byte for byte after decompression, and
+`package-no-core-project.yml.gz` plus `package-no-core-manifest.json.gz` retain the exact generated spec and its
+source-project hash. The manifest's source SHA
+matches the measurement commit's `apple/project.yml`. The complete dirty source diff and original DerivedData were not
+retained, so this is a preserved binary/linkage observation, not a claim of complete source-snapshot reproducibility.
+This is not a default Release/store measurement because PERF_SIGNPOST includes diagnostic paths.
 
 The original report is `/tmp/persona-6871-package-report/package-size.json`; the original link-command excerpt and
 no-core source manifest are sibling files. Its retained with-core and without-core ZIPs have SHA-256 respectively

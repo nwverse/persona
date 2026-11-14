@@ -28,5 +28,11 @@ python3 -I "$ROOT/native/app-core/scripts/apple-package-report.py" \
   --without-core "$OUT/without-dd/Build/Products/$CONFIGURATION-iphoneos/Persona.app" \
   --xcframework "$ROOT/apple/Packages/PersonaCore/build/PersonaCoreC.xcframework" --output "$OUT/report"
 grep -n -A4 -B4 -- '-lpersona_core' "$OUT/with-build.log" > "$OUT/report/link-command.txt"
+if grep -E -- '-lpersona_core|libpersona_core' "$OUT/without-build.log" > "$OUT/report/without-core-unexpected-link.txt"; then
+  printf 'apple-size-reference: FAIL no-core link contains PersonaCore\n' >&2
+  exit 1
+fi
+grep -n -A4 -B4 'Ld .*Persona.app/Persona normal' "$OUT/without-build.log" > "$OUT/report/without-core-link-command.txt"
+[ -s "$OUT/report/without-core-link-command.txt" ] || { printf 'apple-size-reference: FAIL no-core link command missing\n' >&2; exit 1; }
 "$ROOT/scripts/app/reference-metadata.sh" "$OUT/metadata"
 printf 'apple-size-reference: ok local payload report %s; store download not measured\n' "$OUT/report/package-size.json"

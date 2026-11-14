@@ -90,9 +90,10 @@ class PerfTestCase: XCTestCase {
         var iteration = 0
         measure(metrics: metrics, options: options) {
             let id = UUID().uuidString
-            app.launchArguments += ["-perfRunID", id, "-perfRunName", name, "-perfRunWarmup", iteration == 0 ? "YES" : "NO",
-                                    "-perfRunAction", action, "-perfRunIterations", String(iterations)]
-            darwinPost("com.persona.perf.frames.context")
+            let setup = mock("frames_context?name=" + name + "&run_id=" + id
+                             + "&warm_up=" + (iteration == 0 ? "1" : "0")
+                             + "&action=" + action + "&expected_iterations=" + String(iterations))
+            XCTAssertEqual(setup["run_id"] as? String, id, "the mock did not accept the frame run context")
             darwinPost("com.persona.perf.frames.start")
             block()
             usleep(300_000) // the last frames of a fling or an animation

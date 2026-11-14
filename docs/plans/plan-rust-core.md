@@ -77,9 +77,10 @@ The measurement commands, timing boundaries and non-comparability rules are in `
 
 The first named-simulator reference used an Apple M5 Pro Mac with Xcode **27.1 (27A9275), Swift 6.4**, Rust 1.98.0,
 and an arm64 **iPhone 17 Pro / iOS 27.0** simulator (`FD14ED31-119A-4415-BF8D-5DBE25967622`). The app was optimized
-Debug, wholemodule, `PERF_SIGNPOST`, not Release. Source base `cf119132e9be23c6921424c93d72ce88401de2e7` plus
-measurement harness `64130151ec49ab7264a467abed55629ee331bc66`; production does not construct the core. Raw arrays and
-build provenance are retained in `docs/archive/apple/reference-measurements-6871/`.
+Debug, wholemodule, `PERF_SIGNPOST`, not Release. The original measurement tree was based on
+`cf119132e9be23c6921424c93d72ce88401de2e7` with successive harness commits and dirty working-tree changes; it was not
+one immutable source snapshot. Raw arrays, per-run labels and the retained source/linkage records are in
+`docs/archive/apple/reference-measurements-6871/`; production does not construct the core.
 
 | Native iOS simulator workload | Samples and result |
 | --- | --- |

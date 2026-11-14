@@ -170,11 +170,14 @@ class ProbeTests(unittest.TestCase):
             self.assertTrue(result["complete"], result)
             self.assertEqual(result["tests"][TEST]["probe"]["trust"], "core_ten_create_open_close_phys_footprint")
             self.assertEqual(result["tests"][TEST]["probe"]["raw_count"], 10)
-            self.assertTrue(result["acceptance_eligible"], result)
+            self.assertTrue(result["complete"], result)
+            self.assertFalse(result["acceptance_eligible"], "final acceptance is glide-only")
 
     def test_memory_sequence_detects_late_or_duplicate_observations(self):
         rows = [{"kind": "memory", "source": "native-ios-process", "phys_footprint_bytes": 100 + i,
-                 "resident_size_bytes": 200 + i, "sequence": i} for i in range(1, 13)]
+                 "resident_size_bytes": 200 + i, "sequence": i, "name": TEST.removesuffix("()"),
+                 "action": "memory", "run_id": "memory-run", "process_id": "process-one",
+                 "observation_id": f"observation-{i}"} for i in range(1, 13)]
         result = self.summary(rows)
         self.assertTrue(result["complete"], result["issues"])
         self.assertTrue(result["acceptance_eligible"], result["issues"])
@@ -182,14 +185,71 @@ class ProbeTests(unittest.TestCase):
         rows[0], rows[-1] = rows[-1], rows[0]
         self.assertFalse(self.summary(rows)["complete"])
 
+    def test_process_observations_require_run_and_process_identity(self):
+        rows = [{"kind": "memory", "source": "native-ios-process", "phys_footprint_bytes": 100 + i,
+                 "resident_size_bytes": 200 + i, "sequence": i, "name": TEST.removesuffix("()"),
+                 "action": "memory", "run_id": "memory-run", "process_id": "process-one",
+                 "observation_id": f"observation-{i}"} for i in range(1, 13)]
+        for field, value in (("run_id", None), ("process_id", None), ("name", "other-test"),
+                             ("action", "launch"), ("observation_id", "duplicate")):
+            with self.subTest(field=field):
+                invalid = copy.deepcopy(rows)
+                if value is None:
+                    del invalid[2][field]
+                else:
+                    invalid[2][field] = value
+                if field == "observation_id":
+                    invalid[3][field] = value
+                result = self.summary(invalid)
+                self.assertFalse(result["complete"])
+                self.assertFalse(result["acceptance_eligible"])
+
+    def test_launch_requires_expected_count_and_tagged_observations(self):
+        rows = [{"kind": "first_frame", "source": "native-ios-process", "phys_footprint_bytes": 100,
+                 "resident_size_bytes": 200, "view_appearance_ms": 300, "warm_up": i == 0,
+                 "run_id": f"launch-{i}", "name": TEST.removesuffix("()"), "action": "launch",
+                 "expected_iterations": 2, "process_id": f"process-{i}"} for i in range(3)]
+        self.assertTrue(self.summary(rows, expected_iterations=2)["acceptance_eligible"])
+        self.assertEqual(self.summary(rows, expected_iterations=2)["medians"]["view_appearance_ms"], 300)
+        self.assertEqual(self.summary(rows, expected_iterations=2)["statistic_sample_indices"], [1, 2])
+        self.assertFalse(self.summary(rows)["acceptance_eligible"])
+        for field, value in (("run_id", "launch-0"), ("name", "other-test"), ("action", "memory"),
+                             ("expected_iterations", 4), ("process_id", None)):
+            with self.subTest(field=field):
+                invalid = copy.deepcopy(rows)
+                if value is None:
+                    del invalid[1][field]
+                else:
+                    invalid[1][field] = value
+                result = self.summary(invalid, expected_iterations=2)
+                self.assertFalse(result["complete"])
+                self.assertFalse(result["acceptance_eligible"])
+        invalid = copy.deepcopy(rows)
+        invalid[1]["warm_up"] = True
+        self.assertFalse(self.summary(invalid, expected_iterations=2)["complete"])
+
     def test_core_timing_and_large_page_raw_samples_are_preserved(self):
-        rows = [{"metric": "core_dispatch_encode_and_queue", "value_us": 1.25,
-                 "measured_on_main_thread": True}] * 1_000
+        metrics = ("core_dispatch_encode_and_queue", "core_drain_decode", "core_apply", "core_drain_decode_apply",
+                   "core_patch_json_decode_item_apply", "native_json_decode", "native_store_apply",
+                   "native_json_decode_store_apply")
+        rows = [{"metric": metric, "sample": index, "value_us": 1.25,
+                 "measured_on_main_thread": True} for metric in metrics for index in range(1_000)]
         page = {"scope": "100-item diagnostic", "samples": [40.0] * 1_000,
-                "worker_flush_is_outside_timed_span": True}
-        result = self.summary([{"raw_samples": rows}, page])
+                "worker_flush_is_outside_timed_span": True, "patch_op_count": 100}
+        boundary = {"raw_samples": rows, "warmups_per_metric": 100, "samples_per_metric": 1_000,
+                    "worker_flush_is_outside_timed_spans": True, "patch_op_counts": [1] * 1_000}
+        result = self.summary([boundary, page])
         self.assertTrue(result["complete"], result["issues"])
         self.assertEqual(result["statistics"]["large_page_core_drain_decode_apply"]["count"], 1_000)
+
+    def test_empty_or_incomplete_microbenchmark_is_not_complete(self):
+        for report in ({"raw_samples": []}, {"raw_samples": [], "warmups_per_metric": 0},
+                       {"samples": [1.0] * 999, "scope": "100-item diagnostic",
+                        "worker_flush_is_outside_timed_span": True, "patch_op_count": 100}):
+            with self.subTest(report=report):
+                result = self.summary([report])
+                self.assertFalse(result["complete"])
+                self.assertFalse(result["acceptance_eligible"])
 
     def test_absent_and_empty_samples(self):
         for attached in (True, False):

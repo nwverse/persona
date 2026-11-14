@@ -50,7 +50,7 @@ def main():
                     "source_sha256": hashlib.sha256(original).hexdigest(),
                     "removed": [{"target": "Persona", "dependency": "PersonaCore"},
                                 {"target": "PersonaTests", "dependency": "PersonaCore"}],
-                    "production_project_modified": False,
+                    "production_project_unchanged_after_generation": project.read_bytes() == original,
                     "project_root": str(root / "apple"),
                     "note": "package paths are absolute for the external generated project; sources are unchanged"}
         (args.output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

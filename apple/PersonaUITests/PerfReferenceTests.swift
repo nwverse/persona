@@ -65,20 +65,49 @@ final class PerfReferenceTests: PerfTestCase {
         preparePairingIfNeeded()
         referenceLaunch(["-dev.openChat", "", "-openChatsFresh", "YES", "-tab", "assistant", "-openAssistant", Self.streaming])
         var iteration = 0
+        var traceRuns: [[String: Any]] = []
         measure(metrics: metrics(), options: options) {
             beginRun(warmUp: iteration == 0, action: "stream")
             referenceLaunch(["-dev.openChat", "", "-openChatsFresh", "YES", "-tab", "assistant", "-openAssistant", Self.streaming])
             darwinPost("com.persona.perf.frames.context")
             darwinPost("com.persona.perf.frames.start")
-            _ = mock("say?trace=markdown&user=%E5%86%99%E4%B8%80%E4%B8%8B&node=trail")
-            sleep(24)
+            let response = mock("say?trace=markdown&user=%E5%86%99%E4%B8%80%E4%B8%8B&node=trail&late=1"
+                                + "&run_id=" + (currentRun?.id ?? "") + "&session_id=" + Self.streaming)
+            XCTAssertEqual(response["ok"] as? Bool, true)
+            var stream: [String: Any] = [:]
+            let deadline = Date.now.addingTimeInterval(27)
+            repeat {
+                stream = mock("stream_run?run_id=" + (currentRun?.id ?? ""))
+                if stream["completed"] as? Bool != true { usleep(200_000) }
+            } while stream["completed"] as? Bool != true && Date.now < deadline
+            XCTAssertEqual(stream["trace"] as? String, "markdown")
+            XCTAssertEqual(stream["session_id"] as? String, Self.streaming)
+            XCTAssertEqual(stream["subscribed"] as? Bool, true)
+            XCTAssertEqual(stream["completed"] as? Bool, true)
+            XCTAssertEqual(stream["live_cleared"] as? Bool, true)
+            XCTAssertEqual(stream["completion_count"] as? Int, 1)
+            if let run = currentRun { stream["run_id"] = run.id }
+            traceRuns.append(stream)
             darwinPost("com.persona.perf.frames.stop")
             endRun()
             app.terminate()
             iteration += 1
         }
         let rows = (mock("frames?name=" + testName)["runs"] as? [[String: Any]]) ?? []
-        attach(runs: rows)
+        attach(runs: rows.map { row in
+            var row = row
+            if let trace = traceRuns.first(where: { ($0["run_id"] as? String) == (row["run_id"] as? String) }) {
+                row["sample_source"] = "mock-recorded-markdown-trace"
+                row["trace_id"] = trace["trace"]
+                row["trace_session_id"] = trace["session_id"]
+                row["trace_expected_utf16"] = trace["expected_utf16"]
+                row["trace_completed"] = trace["completed"]
+                row["trace_completion_count"] = trace["completion_count"]
+                row["trace_subscribed"] = trace["subscribed"]
+                row["trace_live_cleared"] = trace["live_cleared"]
+            }
+            return row
+        })
         XCTAssertEqual(rows.count, iterations + 1)
         XCTAssertEqual(rows.filter { $0["warm_up"] as? Bool == true }.count, 1)
         for row in rows {
@@ -131,6 +160,8 @@ final class PerfReferenceTests: PerfTestCase {
     @MainActor func testNativeChatTenOpenCloseMemory() throws {
         mock("frames_clear?kind=memory")
         mock("frames_label?name=" + testName)
+        preparePairingIfNeeded()
+        beginRun(warmUp: false, action: "memory")
         referenceLaunch(["-app.tab", "chats", "-tab", "dev", "-dev.openChat", "", "-openAgentsFresh", "YES"], observing: true)
         see(app.buttons["agents.filter.all"], "the native Agents list", timeout: 30)
         app.revealAgentsSearch()
@@ -161,6 +192,11 @@ final class PerfReferenceTests: PerfTestCase {
         sleep(5)
         darwinPost("com.persona.perf.memory")
         attachObservations("memory", minimum: 12)
+        if let run = currentRun {
+            let rows = (mock("frames?run_id=" + run.id + "&kind=memory")["runs"] as? [[String: Any]]) ?? []
+            XCTAssertEqual(rows.count, 12, "every memory observation must belong to the tagged run")
+            XCTAssertEqual(Set(rows.compactMap { $0["process_id"] as? String }).count, 1)
+        }
     }
 
     private func attachObservations(_ kind: String, minimum: Int = 1) {

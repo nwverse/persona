@@ -261,22 +261,32 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
         if any(not finite(sample.get("phys_footprint_bytes")) or sample["phys_footprint_bytes"] <= 0 for sample in samples):
             issues.append("missing or invalid phys_footprint_bytes")
         if kind == "first_frame":
-            values = [sample.get("view_appearance_ms") for sample in samples]
+            measured = [sample for sample in samples if sample.get("warm_up") is False]
+            values = [sample.get("view_appearance_ms") for sample in measured]
             if not all(finite(value) and value >= 0 for value in values):
                 issues.append("invalid first-frame view-appearance value")
-            else:
+            elif values:
                 probe["statistics"]["view_appearance_ms"] = {"values": values, "median": statistics.median(values)}
                 probe["medians"]["view_appearance_ms"] = statistics.median(values)
             probe["trust"] = "native_view_appearance_not_presented_frame"
-            if expected_iterations is not None:
+            if expected_iterations is None:
+                issues.append("first-frame acceptance needs a positive expected iteration count")
+            else:
                 if len(samples) != expected_iterations + 1:
                     issues.append(f"expected {expected_iterations}+1 launch observations, got {len(samples)}")
-                warmups = [sample for sample in samples if sample.get("warm_up") is True]
-                if len(warmups) != 1:
-                    issues.append("exactly one launch warmup is required")
-                ids = [sample.get("run_id") for sample in samples]
-                if any(not isinstance(value, str) or not value for value in ids) or len(set(ids)) != len(ids):
-                    issues.append("every launch observation needs a distinct run_id")
+            warmups = [sample for sample in samples if sample.get("warm_up") is True]
+            if len(warmups) != 1 or samples[0].get("warm_up") is not True:
+                issues.append("exactly one initial launch warmup is required")
+            ids = [sample.get("run_id") for sample in samples]
+            if any(not isinstance(value, str) or not value for value in ids) or len(set(ids)) != len(ids):
+                issues.append("every launch observation needs a distinct run_id")
+            for sample in samples:
+                if sample.get("name") != ident.removesuffix("()") or sample.get("action") != "launch":
+                    issues.append("launch observation has the wrong test name or action")
+                if sample.get("expected_iterations") != expected_iterations:
+                    issues.append("launch observation has missing or conflicting expected_iterations")
+                if not isinstance(sample.get("process_id"), str) or not sample["process_id"]:
+                    issues.append("launch observation needs its process identity")
         else:
             required = 12  # one warmed baseline, ten real closes, one bounded settling sample
             if len(samples) != required:
@@ -284,6 +294,16 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
             sequences = [sample.get("sequence") for sample in samples]
             if sequences != list(range(1, required + 1)):
                 issues.append("memory observations must have unique, ordered sequence numbers 1...12")
+            identities = [(sample.get("run_id"), sample.get("process_id")) for sample in samples]
+            if any(not isinstance(value, str) or not value for identity in identities for value in identity):
+                issues.append("every memory observation needs run_id and process_id")
+            elif len(set(identities)) != 1:
+                issues.append("memory observations must share one run and process identity")
+            for sample in samples:
+                if sample.get("name") != ident.removesuffix("()") or sample.get("action") != "memory":
+                    issues.append("memory observation has the wrong test name or action")
+                if len({sample.get("observation_id") for sample in samples}) != len(samples):
+                    issues.append("memory observations need distinct observation_id values")
             values = [sample["phys_footprint_bytes"] for sample in samples if finite(sample.get("phys_footprint_bytes"))]
             if values:
                 probe["statistics"]["phys_footprint_bytes"] = {"values": values}
@@ -296,8 +316,10 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
             else:
                 issues.append("missing or invalid resident_size_bytes")
             probe["trust"] = "native_ten_open_close_phys_footprint"
-        probe.update(raw_count=len(samples), measured_count=len(samples), excluded_warm_up_indices=[],
-                     statistic_sample_indices=list(range(len(samples))), acceptance_eligible=not issues)
+        probe.update(raw_count=len(samples), measured_count=len(samples) - (1 if kind == "first_frame" else 0),
+                     excluded_warm_up_indices=[0] if kind == "first_frame" else [],
+                     statistic_sample_indices=list(range(1 if kind == "first_frame" else 0, len(samples))),
+                     acceptance_eligible=not issues)
         probe["complete"] = not issues
         return probe
     if samples and all(isinstance(sample, dict) and sample.get("cycles") == 10 for sample in samples):
@@ -331,8 +353,22 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
         return probe
     if samples and all(isinstance(sample, dict) and (isinstance(sample.get("raw_samples"), list)
                                                     or isinstance(sample.get("samples"), list)) for sample in samples):
+        required_metrics = {"core_dispatch_encode_and_queue", "core_drain_decode", "core_apply",
+                            "core_drain_decode_apply", "core_patch_json_decode_item_apply", "native_json_decode",
+                            "native_store_apply", "native_json_decode_store_apply"}
         grouped = {}
+        has_boundary = any("raw_samples" in sample for sample in samples)
         for sample in samples:
+            if "raw_samples" in sample:
+                if sample.get("warmups_per_metric") != 100 or sample.get("samples_per_metric") != 1_000 \
+                        or sample.get("worker_flush_is_outside_timed_spans") is not True:
+                    issues.append("binding report needs 100 warmups, 1000 samples and excluded flush")
+                if sample.get("patch_op_counts") != [1] * 1_000:
+                    issues.append("binding drain needs 1000 nonempty one-item patches")
+                for metric in required_metrics:
+                    rows = [row for row in sample["raw_samples"] if isinstance(row, dict) and row.get("metric") == metric]
+                    if [row.get("sample") for row in rows] != list(range(1_000)):
+                        issues.append(f"{metric}: raw sample indices must be ordered 0...999")
             for row in sample.get("raw_samples", []):
                 if not isinstance(row, dict) or not finite(row.get("value_us")) or row["value_us"] < 0:
                     issues.append("invalid raw microbenchmark timing")
@@ -340,14 +376,20 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
                 if row.get("measured_on_main_thread") is not True:
                     issues.append("microbenchmark sample was not measured on the main thread")
                 grouped.setdefault(row.get("metric"), []).append(row["value_us"])
-            if isinstance(sample.get("samples"), list):
-                if sample.get("scope") is None or sample.get("worker_flush_is_outside_timed_span") is not True:
-                    issues.append("large-page sample lacks timing-boundary metadata")
+            if "samples" in sample:
+                if not isinstance(sample.get("scope"), str) or "100-item" not in sample["scope"] \
+                        or sample.get("worker_flush_is_outside_timed_span") is not True \
+                        or sample.get("patch_op_count") != 100:
+                    issues.append("large-page sample lacks its 100-item timing-boundary metadata")
                 values = sample["samples"]
                 if len(values) != 1_000 or not all(finite(value) and value >= 0 for value in values):
                     issues.append("large-page workload must retain exactly 1000 nonnegative samples")
                 else:
                     grouped["large_page_core_drain_decode_apply"] = values
+        if not grouped:
+            issues.append("microbenchmark contains no valid raw samples")
+        if has_boundary and not required_metrics.issubset(grouped):
+            issues.append("binding report must contain every dispatch/drain/apply/native-input metric")
         for metric, values in grouped.items():
             if len(values) != 1_000:
                 issues.append(f"{metric}: expected 1000 raw samples, got {len(values)}")
@@ -421,6 +463,15 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
                 issues.append(f"{prefix}: content_height_pt must exceed viewport_height_pt")
             if not finite(movement) or movement <= 24:
                 issues.append(f"{prefix}: scroll_offset_delta_pt must exceed 24 pt")
+        if action == "stream":
+            if sample.get("sample_source") != "mock-recorded-markdown-trace":
+                issues.append(f"{prefix}: stream requires its recorded trace source")
+            if sample.get("trace_id") != "markdown" or sample.get("trace_completed") is not True \
+                    or sample.get("trace_subscribed") is not True or sample.get("trace_live_cleared") is not True \
+                    or sample.get("trace_completion_count") != 1 or not finite(sample.get("trace_expected_utf16")) \
+                    or sample["trace_expected_utf16"] <= 0 or not finite(sample.get("text_changes")) \
+                    or sample["text_changes"] <= 0:
+                issues.append(f"{prefix}: recorded Markdown trace must subscribe and complete exactly once")
         if "expected_iterations" in sample:
             try:
                 sample_expected.add(positive_integer(sample["expected_iterations"]))
@@ -612,7 +663,7 @@ def collect(root, expected_iterations=None, runner=None):
         entry["complete"] = not entry["issues"] and probe["complete"]
         entry["acceptance_eligible"] = entry["complete"] and probe["acceptance_eligible"] and not issues
     complete = bool(tests) and not issues and all(entry["complete"] for entry in tests.values())
-    glide_entries = [entry for ident, entry in tests.items() if not ident.startswith(LAUNCH_TEST_PREFIX)]
+    glide_entries = [entry for entry in tests.values() if entry["probe"].get("trust") == "tagged_glide"]
     eligible = complete and bool(glide_entries) and all(entry["acceptance_eligible"] for entry in glide_entries)
     return safe_json({"schema_version": 2, "input_directory": str(root), "expected_iterations": expected_iterations,
         "extraction": extraction, "issues": issues, "tests": tests, "complete": complete,

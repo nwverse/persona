@@ -34,6 +34,8 @@ class AppleMeasurementTests(unittest.TestCase):
             self.assertEqual(manifest["removed"], [
                 {"target": "Persona", "dependency": "PersonaCore"},
                 {"target": "PersonaTests", "dependency": "PersonaCore"}])
+            self.assertTrue(manifest["production_project_unchanged_after_generation"])
+            self.assertEqual((root / "apple" / "project.yml").read_bytes(), original)
 
     def test_no_core_refuses_to_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:

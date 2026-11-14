@@ -170,8 +170,10 @@ import UIKit
     /// before it taps and again for every wait, 55–70 ms each on the `assistant` suite's data, some of them while the
     /// strip moves (#5438). With this cue the measured frames are the app's.
     static let switchPages = "com.persona.perf.shell.switch"
+    private static let contextNotice = "com.persona.perf.frames.context"
 
     private static var activeRun: [String: Any]?
+    private static var runUsesLaunchArguments = false
 
     static func listenIfAsked() {
         guard UserDefaults.standard.bool(forKey: "showFrameProbe") else { return }
@@ -187,14 +189,17 @@ import UIKit
                        "expected_iterations": d.integer(forKey: "perfRunIterations")] as [String: Any]
             DispatchQueue.main.async { MainActor.assumeIsolated { FrameProbe.handle(n, run: run) } }
         }
-        for name in [start, stop, glideNotice, switchPages, "com.persona.perf.frames.context"] {
+        for name in [start, stop, glideNotice, switchPages, contextNotice] {
             CFNotificationCenterAddObserver(center, nil, callback, name as CFString, nil, .deliverImmediately)
         }
     }
 
     private static func handle(_ name: String?, run: [String: Any]) {
         let stats = FrameStats.shared
-        if name == "com.persona.perf.frames.context" {
+        if name == contextNotice {
+            // Reference launches carry immutable identity in their launch arguments; already-running suites use the
+            // synthetic hub's authenticated context because changing XCUIApplication.launchArguments is not a bridge.
+            runUsesLaunchArguments = !run.isEmpty
             activeRun = run
         } else if name == glideNotice {
             Task { await runGlide() }
@@ -229,7 +234,16 @@ import UIKit
     /// accessibility snapshots while frames are recorded. Tagged results are custom display-link cadence, not GPU FPS.
     private static func runGlide() async {
         guard let hub = AppModel.shared.api?.config else { return }
-        guard var context = activeRun, context["run_id"] is String, context["name"] is String else { return }
+        var context = activeRun ?? [:]
+        if !runUsesLaunchArguments || context["run_id"] == nil {
+            var request = URLRequest(url: hub.url.appending(path: "mock/frames_context"), timeoutInterval: 10)
+            hub.authorize(&request)
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  let fetched = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            context = fetched
+        }
+        guard !runUsesLaunchArguments || context["run_id"] != nil else { return }
         context["sample_source"] = "app-list-glide"
         let stats = FrameStats.shared
         if stats.running {
