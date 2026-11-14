@@ -2,7 +2,7 @@
 // (lib/terminals.ts, the /terminal page's data). `>` first (or ⌘⇧P) is command mode: the registered commands with their
 // shortcuts, and whatever other modules add through registerContextCommands (lib/palette.ts). docs/web/web.md"Keyboard shortcuts".
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { enc, api } from "../lib/api";
+import { enc, api, errorText } from "../lib/api";
 import { machineWithHub } from "../lib/mesh";
 import { createPortal } from "react-dom";
 import { ago, sessionTitle, shortPath, stateOf, tabLabel } from "../lib/format";
@@ -35,6 +35,7 @@ import { copyFileMention, FilesHeading, FilesNotice, FileResultRow, openFileHit,
 import { AgentConditions } from "./palette/AgentConditions";
 import { useSavedSearches, type SavedSearchPanel } from "./palette/SavedSearches";
 import type { SavedAgentSearch } from "../lib/saved-agent-searches";
+import { runtimeSearchKey, useRuntimeSearch } from "./palette/RuntimeSearch";
 import { t } from "../i18n";
 import { byTime } from "../lib/times";
 import { STATE_LABEL } from "../lib/state-labels";
@@ -150,13 +151,19 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   useEffect(() => { if (savedPanel && !managing) setSavedPanel(null); }, [savedPanel, managing]);
   // the Agents list's matcher (#6589), loaded with the first query typed as the manager's chat search is: the palette is
   // idle-tier (src/startup-preload.ts IDLE_TIER_BUDGET); until then an Agent matches as a Persona chat does
-  const [agentSearch, setAgentSearch] = useState<typeof import("../lib/agent-search") | null>(null);
+  const [agentSearch, setAgentSearch] = useState<typeof import("./palette/SearchSupport") | null>(null);
+  const [searchLoadError, setSearchLoadError] = useState("");
+  const [searchAttempt, setSearchAttempt] = useState(0);
+  const retrySearchImport = () => { setSearchLoadError(""); setSearchAttempt((value) => value + 1); };
   // the Filter beside the field asks for it too, its first click before anything is typed
   const [conditions, wantConditions] = useState(false);
-  const wantsAgentSearch = open && mode === "jump" && (text !== "" || conditions) && !agentSearch;
+  const wantsAgentSearch = open && !managing && mode === "jump" && (text !== "" || conditions) && !agentSearch;
   useEffect(() => {
-    if (wantsAgentSearch) void import("../lib/agent-search").then(setAgentSearch, () => {}); // a failed load keeps the titles
-  }, [wantsAgentSearch]);
+    if (!wantsAgentSearch) return;
+    let live = true;
+    void import("./palette/SearchSupport").then((loaded) => { if (live) setAgentSearch(loaded); }, (error) => { if (live) setSearchLoadError(errorText(error)); });
+    return () => { live = false; };
+  }, [wantsAgentSearch, searchAttempt]);
   // `machine:`, `project:`, `is:pinned`, `since:`… speak of Agent sessions: with one, only they are listed (#6589)
   const operators = mode === "jump" && Boolean(agentSearch?.hasSearchOperators(text));
   const [selection, setSelection] = useState<{ query: string; key: string }>({ query: q, key: "" });
@@ -172,6 +179,8 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   // "Filter Agents list" narrows the complete list with what was typed, the hub's paged list with its words alone (the
   // hub matches the query as text; its operators are the complete list's)
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  const runtimeSearchOn = useStore((s) => s.features.includes("sessions_search"));
+  const runtimeSearch = useRuntimeSearch({ open: open && !managing, jump: mode === "jump", query: text, capable: runtimeSearchOn, bounded, module: agentSearch, loadError: searchLoadError, retryImport: retrySearchImport });
   const byTodo = useStore((s) => s.features.includes(SESSIONS_TODO_FEATURE));
   const todosSupported = useStore((s) => s.todosSupported);
   const several = useScope().several;
@@ -193,9 +202,9 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
       ...pages.map((p) => ({ key: p.k, title: p.label, icon: p.icon, to: p.to })),
       // the Sessions and Terminal page's Terminals list (#4754): every plain terminal, to open one and type
       ...(panesOn ? [{ key: "terminals", title: t("palette.place_terminals"), icon: "terminal" as const, to: { name: "terminal", view: "terminals" } as Route }] : []),
-    ].map((p) => ({ ...p, words: saved.module?.placeWords(p.key) ?? "" })),
+    ].map((p) => ({ ...p, words: saved.module?.placeWords(p.key) ?? agentSearch?.placeWords(p.key) ?? "" })),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `pages` is new each render; pagesKey says what it holds
-    [hasAssistant, pagesKey, panesOn, saved.module],
+    [hasAssistant, pagesKey, panesOn, saved.module, agentSearch],
   );
   const rows = useRef<(HTMLButtonElement | null)[]>([]);
   const list = useRef<HTMLDivElement>(null);
@@ -238,7 +247,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const [found, setFound] = useState<{ q: string; answer?: AssistantSearchAnswer; marks?: typeof import("../lib/assistant-search").markParts }>({ q: "" });
   // a found chat's line starts just before its match, as much of a lead-in as the row's width holds (#7045)
   const phone = useMedia(PHONE);
-  const asked = open && mode === "jump" && !operators && searchOn && Boolean(assistant) ? text.trim() : "";
+  const asked = open && !managing && mode === "jump" && !operators && searchOn && Boolean(assistant) ? text.trim() : "";
   useEffect(() => {
     if (!asked) return;
     const ctrl = new AbortController();
@@ -256,13 +265,17 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const hits = useMemo((): Row[] => {
     if (mode !== "jump") return [];
     const query = text.toLowerCase();
-    const out: Hit[] = [];
+    let out: Hit[] = [];
     // an Agent as the list's search found it: its operators, then its name, its project or computer, what is inside it
     const ctx = { machines, pins, interactions, now: Date.now() };
     for (const s of sessions) {
       const found = agentSearch ? agentSearch.agentSearchHit(s, text, ctx) : { score: score(s, query, machineWithHub(s.machine_id, machines)), snippet: undefined };
-      if (found.score) out.push({ key: `s:${s.machine_id}/${s.session_id}`, s, to: { name: "session", mid: s.machine_id, sid: s.session_id }, score: found.score + (stateOf(s) === "offline" ? 0 : 5), evidence: found.snippet });
+      if (found.score) out.push({ key: `s:${runtimeSearchKey(s)}`, s, to: { name: "session", mid: s.machine_id, sid: s.session_id }, score: found.score + (stateOf(s) === "offline" ? 0 : 5), evidence: found.snippet });
     }
+    // The server's grouped matches and evidence are never matched again against truncated summaries.
+    const merged = runtimeSearch.mergeHits?.(out, sessions, runtimeSearch);
+    const remoteKeys = merged?.remoteKeys ?? new Set<string>();
+    out = merged?.hits ?? out;
     for (const s of operators ? [] : assistant?.conversations ?? []) {
       const sc = score(s, query, "persona", true);
       if (sc) out.push({ key: `j:${s.session_id}`, s, to: conversationPage(s.session_id, s.machine_id, s.manager), assistant: true, score: sc });
@@ -285,19 +298,26 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     }
     // nothing typed: the conversations opened here come first, newest first, without the one on the page (#2191); the
     // first is the one before it, picked already, so ⌘K ⏎ goes back to it
-    const byKey = new Map(out.map((h) => [h.key, h]));
+    // The recent-chat ledger predates tuple render identities. Resolve its existing keys without changing what
+    // was recorded; result keys themselves stay stable when a remote-only match later enters the local cache.
+    const byKey = new Map(out.map((h) => [h.assistant ? h.key : `s:${h.s.machine_id}/${h.s.session_id}`, h]));
     const recent = query ? [] : shownChats(recentChats.entries, recentChats.current, (k) => byKey.has(k), PALETTE_RECENT_CHATS);
-    const recentRows: Row[] = recent.map((k, i) => ({ kind: "session" as const, key: k, hit: byKey.get(k)!, recent: true, previous: i === 0 }));
+    const recentRows: Row[] = recent.map((k, i) => ({ kind: "session" as const, key: byKey.get(k)!.key, hit: byKey.get(k)!, recent: true, previous: i === 0 }));
+    const recentKeys = new Set(recentRows.map((row) => row.key));
     const all: (Row & { score: number; at: string })[] = [
-      ...out.filter((h) => !recent.includes(h.key)).map((h) => ({ kind: "session" as const, key: h.key, hit: h, score: h.score, at: h.s.updated_at ?? "" })),
+      ...out.filter((h) => !recentKeys.has(h.key)).map((h) => ({ kind: "session" as const, key: h.key, hit: h, score: h.score, at: h.s.updated_at ?? "" })),
       ...(operators ? [] : terminalHits(machinePanes, text)).map((h) => ({ kind: "pane" as const, key: h.key, hit: h, score: h.score, at: "" })),
     ];
-    all.sort((a, b) => b.score - a.score || byTime(b.at, a.at));
+    all.sort((a, b) => b.score - a.score || (agentSearch && a.kind === "session" && b.kind === "session" && !a.hit.assistant && !b.hit.assistant
+      ? agentSearch.runtimeOrder(a.hit.s, b.hit.s) : byTime(b.at, a.at)));
     const mail = (operators ? [] : inboxHits(inboxItems.filter((it) => !isDone(it)), text)).map((h) => ({ kind: "inbox" as const, key: h.key, hit: h, score: h.score }));
     const go = (operators ? [] : placeHits(places, text)).map((h) => ({ kind: "place" as const, key: h.key, hit: h, score: h.score }));
     const savedRows: Row[] = !query && !saved.state.unsupported ? (saved.state.document?.searches ?? []).slice(0, 5).map((item) => ({ kind: "saved", key: `saved:${item.id}`, item })) : [];
-    return [...recentRows, ...savedRows, ...orderGroups<Row & { score: number }>([all.slice(0, 40), mail, go]).flat()];
-  }, [mode, text, operators, agentSearch, sessions, assistant, machines, pins, interactions, machinePanes, inboxItems, places, recentChats, said.answer, saved.state.document, saved.state.unsupported]);
+    // Loaded runtime pages stay reachable; unrelated local groups retain their existing cap.
+    let others = 0;
+    const window = all.filter((row) => remoteKeys.has(row.key) || others++ < 40);
+    return [...recentRows, ...savedRows, ...orderGroups<Row & { score: number }>([window, mail, go]).flat()];
+  }, [mode, text, operators, agentSearch, sessions, assistant, machines, pins, interactions, machinePanes, inboxItems, places, recentChats, said.answer, saved.state.document, saved.state.unsupported, runtimeSearch.hits, runtimeSearch.loaded, runtimeSearch.supported, runtimeSearch.loading, runtimeSearch.loadingMore, runtimeSearch.hasMore, runtimeSearch.error, runtimeSearch.moreError, runtimeSearch.mergeHits]);
 
   // command mode: what other modules offer for here, then the registered commands with their shortcuts
   const commands = useMemo((): Row[] => {
@@ -317,7 +337,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `route` is parsed anew each render; its path says it all
   }, [open, mode, text, bindings, machines, pane?.mid, pane?.sid, href(route), onNewAgent, recentChats, sessions, assistant]);
   // the files under the directory of the page (#2438): listed after the conversations and panes
-  const files = usePaletteFiles({ open, jump: mode === "jump" && !operators, text, route, pane, machinePanes });
+  const files = usePaletteFiles({ open: open && !managing, jump: mode === "jump" && !operators, text, route, pane, machinePanes });
   const shown = useMemo(() => (mode === "command" ? commands : [...hits, ...files.rows]), [mode, commands, hits, files.rows]);
 
   // Saved shortcuts can arrive or move while the palette is open. Keep the highlighted identity rather than
@@ -330,7 +350,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   useLayoutEffect(() => {
     const el = rows.current[active];
     setBox(el ? { top: el.offsetTop, height: el.offsetHeight } : null);
-    el?.scrollIntoView({ block: "nearest" });
+    if (input.current === document.activeElement) el?.scrollIntoView({ block: "nearest" });
   }, [active, shown]);
 
   // It leaves as Dialog does (ui/atoms.tsx useExit): a fade and the card back down, showing what it last showed.
@@ -570,8 +590,10 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
               <p className="mt-0.5 text-[12px] text-ink-3">{t("palette.no_commands_hint")}</p>
             </div>
           )}
+          {!command && runtimeSearch.Notice && <runtimeSearch.Notice search={runtimeSearch} onReturnFocus={() => input.current?.focus({ preventScroll: true })} />}
+          {!command && !runtimeSearch.Notice && searchLoadError && <div role="alert" className="relative z-10 px-2.5 py-2 text-xs text-red">{searchLoadError}<button type="button" className="ml-2 text-accent-ink underline" onClick={retrySearchImport}>{t("runtime-search.retry")}</button></div>}
           {!command && <FilesNotice status={files.status} text={text} count={files.rows.length} />}
-          {shown.length === 0 && !command && files.status !== "loading" && (
+          {shown.length === 0 && !command && files.status !== "loading" && !runtimeSearch.loading && !runtimeSearch.error && !runtimeSearch.moreError && (
             <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
               <span className="flex size-9 items-center justify-center rounded-full bg-field text-ink-3 shadow-hairline">
                 <Icon name="search" size={15} />

@@ -114,6 +114,7 @@ describe("the palette's 前往 (the Mac's quick open)", () => {
     const html = render("设置");
     expect(html).toContain("前往");
     expect(html).toContain("设置");
+    // Alias matching loads on the first typed query; mounted coverage lives in Palette.runtime-search.test.tsx.
     const places = ["machines", "todos"].map((key) => ({ key, title: key, words: placeWords(key), icon: "list" as const, to: { name: "home" } as const }));
     expect(placeHits(places, "cpu").map((hit) => hit.key)).toEqual(["p:machines"]);
     expect(placeHits(places, "todo").map((hit) => hit.key)).toEqual(["p:todos"]);
