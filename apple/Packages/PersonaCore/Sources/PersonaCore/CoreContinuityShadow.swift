@@ -22,8 +22,10 @@ public struct CoreContinuityShadow: ~Copyable, Sendable {
 
     public init(chat: String) throws {
         self.chat = chat
-        let changes = self.changes
-        let effects = self.effects
+        let changes = Mutex<[(String, UInt64)]>([])
+        let effects = Mutex<[Effect]>([])
+        self.changes = changes
+        self.effects = effects
         client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(changedChat: { chat, version in
             changes.withLock { $0.append((chat, version)) }
         }, run: { effect in
