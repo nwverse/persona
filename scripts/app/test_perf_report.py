@@ -242,6 +242,37 @@ class ProbeTests(unittest.TestCase):
         self.assertTrue(result["complete"], result["issues"])
         self.assertEqual(result["statistics"]["large_page_core_drain_decode_apply"]["count"], 1_000)
 
+    def test_stream_requires_trace_completion_and_cannot_replace_glide_acceptance(self):
+        rows = [sample(60, i == 0, f"stream-{i}", action="stream", sample_source="mock-recorded-markdown-trace",
+                       text_changes=100, trace_id="markdown", trace_completed=True, trace_subscribed=True,
+                       trace_live_cleared=True, trace_completion_count=1, trace_expected_utf16=2578)
+                for i in range(3)]
+        result = self.summary(rows, expected_iterations=2)
+        self.assertTrue(result["complete"], result["issues"])
+        for field in ("trace_id", "trace_completed", "trace_subscribed", "trace_live_cleared",
+                      "trace_completion_count", "trace_expected_utf16", "text_changes"):
+            with self.subTest(field=field):
+                invalid = copy.deepcopy(rows)
+                del invalid[1][field]
+                self.assertFalse(self.summary(invalid, expected_iterations=2)["complete"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "stream.xcresult").mkdir()
+            collected = reporter.collect(root, runner=FakeExporter({TEST: rows}), expected_iterations=2)
+            self.assertTrue(collected["complete"], collected["issues"])
+            self.assertFalse(collected["acceptance_eligible"], "a stream is not a tagged glide")
+
+    def test_binding_and_lifecycle_do_not_replace_glide_final_acceptance(self):
+        lifecycle = {"cycles": 10, "warmup_cycles": 1, "baseline_phys_footprint_bytes": 100,
+                     "final_delta_bytes": 0, "samples": [{"cycle": i, "phys_footprint_bytes": 100,
+                     "delta_from_warmed_bytes": 0} for i in range(1, 11)]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "core.xcresult").mkdir()
+            result = reporter.collect(root, runner=FakeExporter({TEST: lifecycle}), expected_iterations=2)
+            self.assertTrue(result["complete"], result["issues"])
+            self.assertFalse(result["acceptance_eligible"])
+
     def test_empty_or_incomplete_microbenchmark_is_not_complete(self):
         for report in ({"raw_samples": []}, {"raw_samples": [], "warmups_per_metric": 0},
                        {"samples": [1.0] * 999, "scope": "100-item diagnostic",

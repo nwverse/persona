@@ -24531,6 +24531,7 @@ class H(BaseHTTPRequestHandler):
             PINS.update(spaces=["macbook/weather"], sessions=[])
             for sid, items in CHURN_ITEMS.items(): ITEMS[sid] = list(items)  # LiveUpdateTests, ChatFollowTests: what churn / say added goes
             NARRATED.clear(); NARRATED_WORDS.clear(); LIVE_TEXT.clear()  # an AssistantLiveTextTests turn that died mid-stream
+            STREAM_RUNS.clear()
             for row in SESSIONS + ASSISTANT:
                 if row["session_id"] in DROPPED_AT: row["updated_at"] = DROPPED_AT[row["session_id"]]
             DROPPED_AT.clear()

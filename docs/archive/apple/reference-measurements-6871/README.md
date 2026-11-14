@@ -13,8 +13,10 @@ configuration was optimized Debug (`SWIFT_OPTIMIZATION_LEVEL=-O`, `SWIFT_COMPILA
 and remains unverified. Simulator results do not satisfy physical-device gates.
 
 The UI stream, glide and native-memory records use the named iPhone 17 Pro / iOS 27.0
-simulator `FD14ED31-119A-4415-BF8D-5DBE25967622`, source base `cf119132e9be23c6921424c93d72ce88401de2e7` and
-measurement harness `64130151ec49ab7264a467abed55629ee331bc66`, with subsequent harness corrections as described below.
+simulator `FD14ED31-119A-4415-BF8D-5DBE25967622`. Their measurement tree began with
+`cf119132e9be23c6921424c93d72ce88401de2e7` and `64130151ec49ab7264a467abed55629ee331bc66` and then had harness
+corrections through `f75271ea9c5b9ed835cc777125600cad09934e4c`, `bdc575e809d1915178441f8c441231fbe421372e`
+and later merges into `84a5a314c55340118980eb43067084ef8f0eff2b`; it was a dirty tree, not one immutable build.
 The newer launch and final serial binding/lifecycle run use recreated simulator
 `58B70B19-21DA-4051-B017-0D828579958A`, source base `84a5a314c55340118980eb43067084ef8f0eff2b` and the
 then-uncommitted per-run launch identity changes. These are separate shared-machine observations, not comparisons
@@ -31,6 +33,12 @@ against no-core builds. Raw arrays are retained exactly as exported; local Deriv
 
 The glide screenshot was inspected: it shows the synthetic long native conversation and its real scroll content. No
 visual or navigation changes are part of the harness. Performance diagnostics are guarded by DEBUG/PERF_SIGNPOST.
+
+The retained launch predates `process_id`, the retained memory predates its single run/process identity, and the
+retained stream predates explicit trace-completion metadata. They are historical raw observations, not eligible final
+acceptance under the strengthened reporter. The current harness requires those identities and validates the recorded
+Markdown subscription, terminal transcript and clear signal; any new measured result must replace the corresponding
+old row below before it can be called verified. No historical value is silently edited to look current.
 
 An earlier valid launch on the original simulator recorded XCTApplicationLaunchMetric 2.54269325 / 2.599955042 /
 2.529024083 s, with view appearance 454.290667 / 381.413000 / 420.302792 / 390.034625 ms including warmup. Those
@@ -53,15 +61,18 @@ benchmark test. All three tests passed serially, with 1,000 raw samples after 10
 | Native JSON decode + `ChatStore.apply` (non-equivalent diagnostic) | 7.334 / 8.209 / 12.709 |
 
 Worker execution and flush are outside the dispatch/drain timing spans. `loadOlder` is dispatched to an opened chat.
-The drain workload has a nonempty patch, not an empty drain. The patch consumer and `ChatStore.apply` have different
-output contracts and asynchronous row/block rebuilding, so this table does not claim an equivalent core speedup or
-slowdown. `ChatPatch` lacks original event-span/backlog/moreAfter/opened-fold semantics; an adapter is phase-2 work.
+The drain workload has a nonempty patch, not an empty drain. Dispatch measures bincode encoding and queueing only;
+the fixture's `hasMore: nil` makes `loadOlder` a normal no-request worker event, not a claimed FetchOlder effect
+workload. Worker effects and reducer time are outside the measured span. The patch consumer and `ChatStore.apply`
+have different output contracts and asynchronous row/block rebuilding, so this table does not claim an equivalent
+core speedup or slowdown. `ChatPatch` lacks original event-span/backlog/moreAfter/opened-fold semantics; an adapter
+is phase-2 work.
 
 `raw/core-lifecycle.json` contains one warmup and ten create/open/drain/background-close cycles with weak-release
 assertions. Baseline `phys_footprint` is 62,851,952 B and final is 62,868,336 B (delta **16,384 B**). The final
-independent report is `/tmp/persona-6871-binding-current-report-second/report.json`: all three tests are complete and
-acceptance-eligible for their synthetic sample integrity. The earlier failed disk-full build and old lifecycle export
-are not substituted for this passing serial run.
+independent report is `/tmp/persona-6871-binding-current-report-second/report.json`: all three tests have complete raw
+samples. Final acceptance remains glide-only; these binding/lifecycle reports do not replace that gate. The earlier
+failed disk-full build and old lifecycle export are not substituted for this passing serial run.
 
 ## Package payload and compressed transport
 
@@ -79,7 +90,11 @@ This is not a default Release/store measurement because PERF_SIGNPOST includes d
 The original report is `/tmp/persona-6871-package-report/package-size.json`; the original link-command excerpt and
 no-core source manifest are sibling files. Its retained with-core and without-core ZIPs have SHA-256 respectively
 `29df55283674ada57586576bee80acdda16f1eee0f7418f33991de123f7a7cc0` and
-`aae48553d05749052092f133cc458be71cdbe9e8ea6e47a29bbe5c06622ceef3`.
+`aae48553d05749052092f133cc458be71cdbe9e8ea6e47a29bbe5c06622ceef3`. Compressed original-log SHA-256 values are
+`363f0f8a5d324b7b4640152633a4b296b9076ad3857fe27b16cc4181ef5870aa` (with core) and
+`f4f18995aaa944b1c0eb1eb0d176f7ef638136c52eb6d35c120de4edfc97c70c` (without core). The no-core spec and manifest
+GZIP hashes are `c544c98877d875f927fe06318548bc54187dd2fa8c80c77bf5f6bb7197b2354e` and
+`77d2dd5c362091f2644893757fea359abe1e76ed6f4f62041b811ac0ce9cd47d`.
 
 | Local quantity | With core | Without core | Delta |
 | --- | ---: | ---: | ---: |

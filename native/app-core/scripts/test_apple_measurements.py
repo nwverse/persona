@@ -77,6 +77,21 @@ class AppleMeasurementTests(unittest.TestCase):
             self.assertNotEqual(report["delta_bytes"]["logical_payload_bytes"], report["delta_bytes"]["compressed_zip_bytes"])
             self.assertEqual(report["with_core"]["files"][0]["sha256"], hashlib.sha256(b"persona-core-reference" * 10).hexdigest())
 
+    def test_no_core_build_log_rejects_core_linkage(self):
+        script = (ROOT / "native/app-core/scripts/apple-size-reference.sh").read_text()
+        guard = script[script.index("if grep -E -- '-lpersona_core|libpersona_core'"):script.index("grep -n -A4 -B4 'Ld .*Persona.app/Persona normal'")]
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            report = root / "report"
+            report.mkdir()
+            log = root / "without-build.log"
+            command = "set -e; OUT=" + str(root) + "; " + guard
+            for content, expected in (("clang -lpersona_core -o Persona", 1), ("clang -o Persona", 0)):
+                with self.subTest(content=content):
+                    log.write_text(content + "\n")
+                    result = subprocess.run(["bash", "-c", command], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, expected, result.stderr)
+
     def test_package_rejects_existing_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
