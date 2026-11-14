@@ -132,6 +132,7 @@ func (g superviseSignal) immediate() bool { return g.Kind == sigFailed }
 type superviseBook struct {
 	mu            sync.Mutex
 	writeMu       sync.Mutex // one ledger write at a time (updateSupervision)
+	ownerPushMu   sync.Mutex // one owner-wait push and its delivered receipt at a time
 	dedupMu       sync.Mutex // serializes digest reservations and delivery
 	dedup         map[string]superviseFingerprint
 	pending       map[string]superviseSignal   // by todo|kind

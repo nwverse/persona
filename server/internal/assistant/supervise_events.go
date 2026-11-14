@@ -130,10 +130,10 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 var verdictWords = map[string]string{verdictNotDone: "没做完", verdictWaiting: "在等别人或别的事", verdictNeedsUser: "要用户决定",
 	verdictUnsure: "看不出做没做完", verdictUndelivered: "做完了但还没上线"}
 
-// noteOwnerWait makes the owner's action the task's visible state and tells the supervisor at once. The push is sent
-// only for a new stretch of work; a repeated judgment of the same stretch cannot notify twice (#5732).
+// noteOwnerWait makes the owner's action the task's visible state and tells the supervisor at once. A stretch pushes
+// once after delivery; an undelivered push may retry when its conversation route recovers (#5732).
 func (s *Service) noteOwnerWait(ctx context.Context, t Todo, work time.Time, reason string) {
-	_, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+	v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 		if v.Waits != nil && v.Waits.Work.Equal(work) && v.State == reviewNeedsUser {
 			return false
 		}
@@ -146,26 +146,59 @@ func (s *Service) noteOwnerWait(ctx context.Context, t Todo, work time.Time, rea
 		return
 	}
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigIdle, Key: work.UTC().Format(time.RFC3339Nano), Detail: "要用户决定：" + reason}) // i18n-ignore: the supervision message is the assistant's prompt
-	if changed {
-		// Quiet suppresses routine notices, not an action only the owner can take (#5732).
-		go s.notifyTaskNeedsUser(context.WithoutCancel(ctx), t, work, reason)
+	if changed || (v.Waits != nil && v.Waits.NotifiedAt == nil) {
+		// Quiet suppresses routine notices, not an action only the owner can take. An undelivered wait (for example,
+		// its conversation was not configured yet) may retry; a delivered one is suppressed by NotifiedAt.
+		go s.deliverOwnerWait(context.WithoutCancel(ctx), t, work, reason)
+	}
+}
+
+// deliverOwnerWait serializes a push with its durable receipt. A repeated judgment can arrive while the first push is
+// in flight: rechecking the current wait under ownerPushMu keeps that race from producing a second notification.
+func (s *Service) deliverOwnerWait(ctx context.Context, t Todo, work time.Time, reason string) {
+	b := &s.supervise
+	b.ownerPushMu.Lock()
+	defer b.ownerPushMu.Unlock()
+	current, ok := s.todoNow(t.ID)
+	if !ok || current.Supervision == nil || current.Supervision.Waits == nil || current.Supervision.State != reviewNeedsUser ||
+		!current.Supervision.Waits.Work.Equal(work) || current.Supervision.Waits.NotifiedAt != nil {
+		return
+	}
+	if !s.notifyTaskNeedsUser(ctx, current, work, reason) {
+		return
+	}
+	if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+		if v.Waits == nil || v.State != reviewNeedsUser || !v.Waits.Work.Equal(work) || v.Waits.NotifiedAt != nil {
+			return false
+		}
+		at := time.Now().UTC()
+		v.Waits.NotifiedAt = &at
+		return true
+	}); err != nil {
+		// The stable notification id still deduplicates a later retry at the real hub if this receipt cannot be saved.
+		s.logf("task %s: owner-wait push receipt: %v", t.ID, err)
 	}
 }
 
 // notifyTaskNeedsUser pushes an action only the owner can take. Its stable id deduplicates delivery retries, and its
 // body names the reason and the task's web link. Quiet tasks receive this push too; their routine notices stay quiet.
-func (s *Service) notifyTaskNeedsUser(ctx context.Context, t Todo, work time.Time, reason string) {
-	here := s.settings(ctx).MachineID
+func (s *Service) notifyTaskNeedsUser(ctx context.Context, t Todo, work time.Time, reason string) bool {
+	cfg := s.settings(ctx)
+	here := cfg.MachineID
 	conversation := t.Origin
-	if t.Supervision != nil && s.settings(ctx).Main != "" {
-		// Owner decisions escalate to main from a manual leader, a task-leader Agent and the legacy background too.
-		// In particular, never use a worker's machine/session supervisor reference as an assistant conversation id.
-		conversation = s.settings(ctx).Main
-	} else if t.Supervision != nil && t.Supervision.Supervisor != "" {
-		conversation = t.Supervision.Supervisor
+	if t.Supervision != nil {
+		if cfg.Main != "" {
+			// Owner decisions escalate to main from a manual leader, a task-leader Agent and the legacy background too.
+			conversation = cfg.Main
+		} else if supervisor := t.Supervision.Supervisor; supervisor != "" {
+			if _, _, worker := parseLeaderRef(supervisor); !worker {
+				conversation = supervisor
+			}
+		}
 	}
-	if conversation == "" || s.muted(here, conversation) {
-		return
+	_, _, worker := parseLeaderRef(conversation)
+	if conversation == "" || worker || s.muted(here, conversation) {
+		return false // a machine/session worker reference is never an assistant conversation id
 	}
 	l := s.lang(ctx)
 	title := i18n.T(l, "assistant-tasks.task_needs_user_title", i18n.Args{"name": t.Title})
@@ -180,7 +213,9 @@ func (s *Service) notifyTaskNeedsUser(ctx context.Context, t Todo, work time.Tim
 		Subtitle: "Persona", DeviceID: here, SessionID: conversation, Title: title, Body: body}
 	if err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 		s.logf("task %s: needs-user push: %v", t.ID, err)
+		return false
 	}
+	return true
 }
 
 // supervisedWorking: one of supervised task t's agents started a turn: a review waiting is moot (the work goes on),

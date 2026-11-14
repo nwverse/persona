@@ -119,6 +119,40 @@ func TestNeedsUserPushGoesToMainForEverySupervisedTopology(t *testing.T) {
 	}
 }
 
+// With no main configured, a task leader's machine/session reference is not an addressable conversation. Once main is
+// restored, the same owner wait can retry its still-undelivered push; a later duplicate judgment does not send it again.
+func TestNeedsUserPushRecoversAfterMainIsConfigured(t *testing.T) {
+	s, f := newQuietService(t)
+	work := time.Now().UTC()
+	todo := Todo{ID: "leader-worker-no-main", Title: "等待 owner", Origin: "box/s1",
+		Supervision: &Supervision{Supervisor: "box/s1", State: reviewNeedsUser, Waits: &OwnerWait{Work: work, At: work, Reason: "需要用户本人处理"}}}
+	putTodo(s, todo)
+	setSettings(t, s, func(v *Settings) { v.Main = "" })
+	s.notifyTaskNeedsUser(context.Background(), todo, work, "需要用户本人处理")
+	if got := f.pushed(); len(got) != 0 {
+		t.Errorf("a worker reference was used as a push conversation: %+v", got)
+	}
+	f.mu.Lock()
+	f.pushes = nil // keep the route-restoration half independent after recording the bad-address assertion above
+	f.mu.Unlock()
+
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
+	before := todoNow(s, todo.ID).Supervision.UpdatedAt
+	s.noteOwnerWait(context.Background(), todoNow(s, todo.ID), work, "需要用户本人处理")
+	waitFor(t, "the pending push after main is restored", func() bool { return len(f.pushed()) == 1 })
+	pushes := f.pushed()
+	if len(pushes) != 1 || pushes[0].SessionID != "conv1" {
+		t.Fatalf("restored needs-user push = %+v", pushes)
+	}
+	waitFor(t, "the delivered receipt on the same owner wait", func() bool {
+		return todoNow(s, todo.ID).Supervision.UpdatedAt.After(before)
+	})
+	s.noteOwnerWait(context.Background(), todoNow(s, todo.ID), work, "需要用户本人处理")
+	if got := len(f.pushed()); got != 1 {
+		t.Fatalf("the delivered owner wait pushed %d times", got)
+	}
+}
+
 // The explicit owner-action safety net still becomes the visible wait and one push when the model itself failed.
 func TestOwnerWaitSurvivesJudgeFailure(t *testing.T) {
 	s, f := newQuietService(t)
@@ -257,9 +291,11 @@ func TestCancelledWhileTheWorkWaitsOnTheOwner(t *testing.T) {
 // The wait is kept in the database with the ledger, so a manager restart does not let the task be accepted.
 func TestOwnerWaitSurvivesTheLedgerRow(t *testing.T) {
 	at := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
-	v := &Supervision{Supervisor: "conv1", DoneWhen: []string{}, Waits: &OwnerWait{Work: at.Add(-time.Hour), At: at, Reason: "等用户挑一版"}}
+	notified := at.Add(time.Minute)
+	v := &Supervision{Supervisor: "conv1", DoneWhen: []string{}, Waits: &OwnerWait{Work: at.Add(-time.Hour), At: at, Reason: "等用户挑一版", NotifiedAt: &notified}}
 	back := supervisionFromRow(v.row("todo_x"))
-	if back.Waits == nil || !back.Waits.At.Equal(at) || !back.Waits.Work.Equal(at.Add(-time.Hour)) || back.Waits.Reason != "等用户挑一版" {
+	if back.Waits == nil || !back.Waits.At.Equal(at) || !back.Waits.Work.Equal(at.Add(-time.Hour)) || back.Waits.Reason != "等用户挑一版" ||
+		back.Waits.NotifiedAt == nil || !back.Waits.NotifiedAt.Equal(notified) {
 		t.Fatalf("waits back from its row = %+v", back.Waits)
 	}
 	c := v.clone()
