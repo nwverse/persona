@@ -150,7 +150,8 @@ async function failedList(theme) {
   await page.unroute(counted);
   if (!retry) return context.close();
   await retry.click();
-  await page.waitForFunction(() => document.querySelector("h1 + div > p")?.textContent !== "Couldn't load what your agents are doing.", null, { timeout: 10_000 }).catch(() => {});
+  // Retry says "Loading…" until the answer
+  await page.waitForFunction(() => !["Couldn't load what your agents are doing.", "Loading…"].includes(document.querySelector("h1 + div > p")?.textContent ?? ""), null, { timeout: 10_000 }).catch(() => {});
   const after = await summary();
   check(!/Couldn't load|Loading/.test(after) && after.trim() !== "。" && after.trim() !== ".", `${theme} ${tag}: Retry reads them again`, after);
   await page.waitForTimeout(300);
