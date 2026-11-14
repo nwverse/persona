@@ -214,10 +214,12 @@ type tasksState struct {
 	// limitLooks: when a task agent's usage-limit wait is looked at again (taskTurnEndedAfter), one look per agent
 	// however many turns the wait's wakes end.
 	limitLooks map[SessionRef]time.Time
-	// sentBy: by agent (machine, session), the conversation that last sent it text for a task and when (noteAgentSend:
-	// agent_send, the owner's message on a task's card). A task its supervisor accepted opens again on its agent's new
-	// turn only after its own conversation sent it more (closedTurnReopens, #6726). In memory only: after a restart
-	// such a task stays closed until its conversation sends again or the owner reopens it.
+	// sentBy: by agent (machine, session), the conversation that last sent it text for a task, when, and the accepted
+	// task that send asks for more (noteAgentSend: agent_send, agent_interrupt with then, the owner's message on a
+	// task's card). A task its supervisor accepted opens again on its agent's new turn only after its own conversation
+	// (or its supervisor) sent it more (closedTurnReopens, #6726). In memory only, for a turn that starts before the
+	// send returns: once the node took the send, the send reopens the task itself, and that is stored
+	// (agentSendNote.sent, #7539).
 	sentBy map[[2]string]agentSent
 	// retrying: the tasks whose agent is starting again after a failed start (one start at a time, #1396).
 	retrying map[string]bool
