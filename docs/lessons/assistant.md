@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A terminal review covers its criteria, not every later scope (#6880). Explicitly replacing criteria on an open, previously accepted or cancelled task must invalidate its terminal supervision state; otherwise unfinished or unjudged follow-up work is silently suppressed. Keep review history and unchanged criteria's evidence. Metadata-only changes and ordinary follow-up conversation do not invalidate the review, and existing stale records still need a real supervisor review rather than an automatic migration.
+
 - A presence window is not an owner-turn guarantee (#6394). The two-minute `ownerPresentFor` hold and the
   five-minute `relayDecisionMax` cap let queued relayed/decision messages start new rounds behind the owner's back
   once the window expires, even while the owner is still waiting on their own round. Keep the ranked queue and the
