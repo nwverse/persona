@@ -13,7 +13,8 @@ sealed class Action {
                 0 -> OpenChat.load(deserializer)
                 1 -> CloseChat.load(deserializer)
                 2 -> Chat.load(deserializer)
-                3 -> ContinueFill.load(deserializer)
+                3 -> WirePayload.load(deserializer)
+                4 -> ContinueFill.load(deserializer)
                 else -> throw com.novi.serde.DeserializationError("Unknown variant index for Action: " + index)
             }
         }
@@ -111,6 +112,32 @@ sealed class Action {
         }
     }
 
+    data class WirePayload(
+        val chat: String,
+        val payload: persona.core.rustcore.wire.Payload
+    ) : Action() {
+
+        @Throws(com.novi.serde.SerializationError::class)
+        override fun serialize(serializer: com.novi.serde.Serializer) {
+            serializer.increase_container_depth()
+            serializer.serialize_variant_index(3)
+            serializer.serialize_str(this.chat)
+            this.payload.serialize(serializer)
+            serializer.decrease_container_depth()
+        }
+
+        companion object {
+            @Throws(com.novi.serde.DeserializationError::class)
+            fun load(deserializer: com.novi.serde.Deserializer): WirePayload {
+                deserializer.increase_container_depth()
+                val chat = deserializer.deserialize_str()
+                val payload = persona.core.rustcore.wire.Payload.deserialize(deserializer)
+                deserializer.decrease_container_depth()
+                return WirePayload(chat, payload)
+            }
+        }
+    }
+
     data class ContinueFill(
         val chat: String
     ) : Action() {
@@ -118,7 +145,7 @@ sealed class Action {
         @Throws(com.novi.serde.SerializationError::class)
         override fun serialize(serializer: com.novi.serde.Serializer) {
             serializer.increase_container_depth()
-            serializer.serialize_variant_index(3)
+            serializer.serialize_variant_index(4)
             serializer.serialize_str(this.chat)
             serializer.decrease_container_depth()
         }
