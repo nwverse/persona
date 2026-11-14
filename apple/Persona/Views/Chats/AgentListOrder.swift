@@ -64,13 +64,47 @@ nonisolated struct AgentListOrder {
     }
 
     /// The rows of a space or a working tree (`ordered`), each tab's agents together where its first one ranks
-    /// (`TabPanes.entries`, #2320): those that stay out of the idle fold (a tab when any of its agents does) and the
-    /// idle ones; with `all` off (a quick filter), every row stays.
-    func tabEntries(_ list: [Session], all: Bool = true) -> (busy: [TabPanes.Entry], idle: [TabPanes.Entry]) {
-        let entries = TabPanes.entries(ordered(list))
-        guard all else { return (entries, []) }
-        let stays = { (e: TabPanes.Entry) in e.sessions.contains(where: self.stays) }
-        return (entries.filter(stays), entries.filter { !stays($0) })
+    /// (`TabPanes.entries`, #2320) and each side session right under the row of the session that started it
+    /// (`nestSideSessions`, #5935): those that stay out of the idle fold (a tab when any of its agents does, a side
+    /// session's group when any of it does) and the idle ones; with `all` off (a quick filter), every row stays.
+    func rows(_ list: [Session], all: Bool = true) -> AgentListProjection.Rows {
+        let arranged = Self.nestSideSessions(TabPanes.entries(ordered(list)))
+        let nested = Self.nestedSessions(arranged), sides = SideSessions.Groups(arranged, key: \.id, sessions: \.sessions)
+        guard all else { return .init(all: arranged.rows, busy: arranged.rows, idle: [], nested: nested, sides: sides) }
+        let parts = arranged.split { $0.sessions.contains(where: self.stays) }
+        return .init(all: arranged.rows, busy: parts.stay, idle: parts.fold, nested: nested, sides: sides)
+    }
+
+    /// `rows`, as the busy and the idle ones and the side sessions drawn a level in.
+    func tabEntries(_ list: [Session], all: Bool = true) -> (busy: [TabPanes.Entry], idle: [TabPanes.Entry], nested: Set<SessionKey>) {
+        let rows = rows(list, all: all)
+        return (rows.busy, rows.idle, rows.nested)
+    }
+
+    /// A section drawn one session a row (By Status, By Machine): `ordered`, each side session right under the session
+    /// that started it when that one is in the section too (`SideSessions`, #5935).
+    func arranged(_ list: [Session]) -> SideSessions.Arranged<Session, SessionKey> { SideSessions.arrange(ordered(list)) }
+
+    /// `entries` with each side session's row right under the row that holds its parent (#5935): its parent's own, or
+    /// the tab's its parent is in. A tab's row stays where its agents put it.
+    static func nestSideSessions(_ entries: [TabPanes.Entry]) -> SideSessions.Arranged<TabPanes.Entry, String> {
+        let wanted = Set(entries.compactMap { e -> SessionKey? in if case .agent(let s) = e { s.sideParent } else { nil } })
+        guard !wanted.isEmpty else { return .init(rows: entries) }
+        var holder: [SessionKey: String] = [:] // a named parent → the row it is in
+        for e in entries { for s in e.sessions where wanted.contains(s.key) { holder[s.key] = e.id } }
+        return SideSessions.nestUnderParents(entries, key: \.id) { e in
+            guard case .agent(let s) = e, let parent = s.sideParent else { return nil }
+            return holder[parent]
+        }
+    }
+
+    /// The side sessions `arranged` draws a level in.
+    private static func nestedSessions(_ arranged: SideSessions.Arranged<TabPanes.Entry, String>) -> Set<SessionKey> {
+        guard !arranged.nested.isEmpty else { return [] }
+        return Set(arranged.rows.compactMap { e -> SessionKey? in
+            guard arranged.nested.contains(e.id), case .agent(let s) = e else { return nil }
+            return s.key
+        })
     }
 
     /// A space that folds into Idle Spaces: every agent in it quiet, none awaiting the user's reply, and not the held

@@ -265,10 +265,28 @@ nonisolated struct AgentListProjection: Sendable {
         var workspaces: [HostWorkspace] = []
     }
 
+    /// A space's or a working tree's rows (`AgentListOrder.rows`).
     struct Rows: Sendable {
         var all: [TabPanes.Entry]
         var busy: [TabPanes.Entry]
         var idle: [TabPanes.Entry]
+        /// The side sessions drawn a level in, under the session that started them (#5935).
+        var nested: Set<SessionKey> = []
+        /// Them by the row they are under, for its Side sessions row (#7755).
+        var sides = SideSessions.Groups()
+
+        /// The agents of `all`, in order.
+        var sessions: [Session] { all.flatMap(\.sessions) }
+        /// Levels a row goes in past its section's: 1 for a side session under its parent, else 0.
+        func level(_ s: Session) -> Int { nested.contains(s.key) ? 1 : 0 }
+        /// How many busy rows show before "Show All": `cap`, or past the side sessions right after it, so the cap
+        /// splits no group.
+        func unsplit(_ cap: Int) -> Int {
+            guard !nested.isEmpty, cap > 0, cap < busy.count else { return cap }
+            var end = cap
+            while end < busy.count, case .agent(let s) = busy[end], nested.contains(s.key) { end += 1 }
+            return end
+        }
     }
 
     struct Repository: Sendable {
@@ -307,6 +325,8 @@ nonisolated struct AgentListProjection: Sendable {
     /// By App's sections, their projects in them (`AppGroups`); empty under any other grouping.
     var apps: [AppGroup] = []
     var menuSections: [String] = []
+    /// The folds of the parents listed with side sessions (`SideSessions.foldIDs`): Collapse All folds them too (#7755).
+    var sideFolds: [String] = []
     var searchPlan = AgentSearchPlan(code: "session.where(s => true)", parsed: .init())
     /// Searching can match an Agent-free worktree even when no session matches the query.
     var hasSearchResults: Bool { !base.isEmpty || !tree.isEmpty }
@@ -387,6 +407,7 @@ nonisolated struct AgentListProjection: Sendable {
             .map { (session: $0, rank: settings.preferences[$0.group]?.pins.sessions.firstIndex(of: "\($0.machineID)/\($0.sessionID)") ?? 0) }
             .sorted { $0.rank < $1.rank }.map(\.session)
         result.unread = result.filtered.filter { $0.state == .unread }.map(\.key)
+        result.sideFolds = SideSessions.foldIDs(result.unpinned)
         result.byHost = settings.machine.isEmpty && Set(result.base.lazy.filter { $0.state.isLive }.map(\.machineRef)).count > 1
         for machine in input.machines {
             result.scopes["machine/" + machine.ref.path] = settings.scope(machine: machine.id, hub: machine.group)
@@ -471,11 +492,8 @@ nonisolated struct AgentListProjection: Sendable {
         AgentListOrder.latestFirst(groups, date: \.sortDate, id: \.id)
     }
 
+    /// A section's rows in order, side sessions under their parents and the idle ones apart (`AgentListOrder.rows`).
     private static func partition(_ sessions: [Session], settings: Settings) -> Rows {
-        let order = settings.order
-        let entries = TabPanes.entries(order.ordered(sessions))
-        guard settings.filter == .all else { return Rows(all: entries, busy: entries, idle: []) }
-        let stays = { (entry: TabPanes.Entry) in entry.sessions.contains(where: order.stays) }
-        return Rows(all: entries, busy: entries.filter(stays), idle: entries.filter { !stays($0) })
+        settings.order.rows(sessions, all: settings.filter == .all)
     }
 }

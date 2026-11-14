@@ -18,10 +18,16 @@ nonisolated struct AppGroup: Identifiable, Sendable {
     /// Its agents by project, as the desktop apps' sidebars list them: the latest project first (the Codex App's in its
     /// own order first), Other last.
     var projects: [AppProject] = []
+    /// The side sessions `sessions` draws a level in, under the session that started them (#5935).
+    var nested: Set<SessionKey> = []
+    /// Them by the row they are under, for its Side sessions row (#7755).
+    var sides = SideSessions.Groups()
 
     /// Its projects have headings: a desktop app's or an engine's section, unless every agent of it is in Other (then they
     /// are listed as before). Other's section is not by project: its agents are other terminals' and the like.
     var showsProjects: Bool { !projects.isEmpty && !(projects.count == 1 && projects[0].isOther) }
+    func level(_ s: Session) -> Int { nested.contains(s.key) ? 1 : 0 }
+    func unsplit(_ cap: Int) -> Int { SideSessions.Arranged(rows: sessions, nested: nested).unsplit(cap) }
 
     /// The app as the rest of the list names it: "Claude desktop app" (a session's source), "Codex App" (the node's
     /// `agent_name`), else "<agent> desktop app"; "Other".
@@ -81,6 +87,14 @@ nonisolated enum AppGroups {
             var group = group
             group.sessions = AgentListOrder.recent(group.sessions)
             group.projects = group.id == otherID ? [] : projects(of: group)
+            // A side session under the session that started it in its section or project, the group where its latest
+            // member is (#5935): after the projects, which go by their latest agent.
+            let arranged = SideSessions.arrange(group.sessions)
+            (group.sessions, group.nested, group.sides) = (arranged.rows, arranged.nested, arranged.sides)
+            for i in group.projects.indices {
+                let arranged = SideSessions.arrange(group.projects[i].sessions)
+                (group.projects[i].sessions, group.projects[i].nested, group.projects[i].sides) = (arranged.rows, arranged.nested, arranged.sides)
+            }
             return group
         }
     }
@@ -192,9 +206,15 @@ nonisolated struct AppProject: Identifiable, Sendable {
     var sessions: [Session]
     /// Where its app's sidebar lists it, from 1 (`AppGroups.place`); nil when the app does not say.
     var place: Int? = nil
+    /// The side sessions `sessions` draws a level in, under the session that started them (#5935).
+    var nested: Set<SessionKey> = []
+    /// Them by the row they are under, for its Side sessions row (#7755).
+    var sides = SideSessions.Groups()
 
     var isOther: Bool { name.isEmpty }
     var title: String { isOther ? String(localized: "Other") : name }
+    func level(_ s: Session) -> Int { nested.contains(s.key) ? 1 : 0 }
+    func unsplit(_ cap: Int) -> Int { SideSessions.Arranged(rows: sessions, nested: nested).unsplit(cap) }
 }
 
 /// A By App section's title, laid out as a machine's (`MachineSectionHeader`): the app's mark (a terminal for an engine's,

@@ -38,7 +38,7 @@ struct AgentListRows {
     func spaces(active: [SpaceGroup], quiet: [SpaceGroup], hosts: [MachineRef]?) -> [Session] {
         func section(_ active: [SpaceGroup], _ quiet: [SpaceGroup]) -> [Session] {
             active.flatMap { g in folded(g.id) ? [] : agentRows(g.sessions, key: g.id) }
-                + quiet.flatMap { g in searching || expandedQuiet.contains(g.id) ? TabPanes.grouped(order.ordered(g.sessions)) : [] }
+                + quiet.flatMap { g in searching || expandedQuiet.contains(g.id) ? order.rows(g.sessions, all: false).sessions : [] }
         }
         guard let hosts else { return section(active, quiet) }
         return hosts.flatMap { ref in
@@ -56,7 +56,7 @@ struct AgentListRows {
                 if r.flat { return agentRows(r.worktrees[0].sessions, key: r.worktrees[0].id) }
                 return r.worktrees.flatMap(worktree)
             }
-            return busy + quiet.flatMap { r in searching || expandedQuiet.contains(r.id) ? TabPanes.grouped(order.ordered(r.sessions)) : [] }
+            return busy + quiet.flatMap { r in searching || expandedQuiet.contains(r.id) ? order.rows(r.sessions, all: false).sessions : [] }
         }
     }
 
@@ -72,7 +72,7 @@ struct AgentListRows {
         let quiet = all && w.treeSessions.allSatisfy { !order.stays($0) }
         let open = searching || (quiet ? expandedQuiet.contains(w.id) : !isFolded(w.id))
         guard open else { return [] }
-        let own = quiet ? entryRows(TabPanes.entries(order.ordered(w.sessions))) : agentRows(w.sessions, key: w.id)
+        let own = quiet ? entryRows(order.rows(w.sessions, all: false).all) : agentRows(w.sessions, key: w.id)
         guard !w.children.isEmpty, !folded(w.childrenFoldID) else { return own }
         return own + w.children.flatMap(worktree)
     }
@@ -81,18 +81,18 @@ struct AgentListRows {
     func states(_ live: [Session]) -> [Session] {
         let byRank = Dictionary(grouping: live, by: order.rank)
         return AgentListOrder.stateKeys.indices.flatMap { i in
-            folded("state/" + AgentListOrder.stateKeys[i]) ? [] : order.ordered(byRank[i] ?? [])
+            folded("state/" + AgentListOrder.stateKeys[i]) ? [] : order.arranged(byRank[i] ?? []).rows
         }
     }
 
     /// By Machine: per machine, its busy rows and its idle ones while Idle is open.
     func machines(_ live: [Session], order refs: [MachineRef]) -> [Session] {
         refs.flatMap { ref -> [Session] in
-            let rows = order.ordered(live.filter { $0.machineRef == ref })
+            let arranged = order.arranged(live.filter { $0.machineRef == ref })
             if folded("machine/" + ref.path) { return [] }
-            guard all else { return rows }
-            let idle = rows.filter { !order.stays($0) }
-            return rows.filter(order.stays) + (searching || expandedIdle.contains("machine-" + ref.path) ? idle : [])
+            guard all else { return arranged.rows }
+            let parts = arranged.split(order.stays) // a side session's group in or out of Idle together (#5935)
+            return parts.stay + (searching || expandedIdle.contains("machine-" + ref.path) ? parts.fold : [])
         }
     }
 
@@ -105,7 +105,7 @@ struct AgentListRows {
 
     /// By To-do: a section per todo, Unassigned last; `isFolded` per group (Unassigned has its own default, `TodoAgentGroup.folded`).
     func todos(_ groups: [TodoAgentGroup], isFolded: (TodoAgentGroup) -> Bool) -> [Session] {
-        groups.flatMap { g in !searching && isFolded(g) ? [] : g.sessions }
+        groups.flatMap { g in !searching && isFolded(g) ? [] : SideSessions.arrange(g.sessions).rows }
     }
 
     /// By Pinned (#4352): per direction while its section is open, its to-dos' Agents in the tree's order (those the list
