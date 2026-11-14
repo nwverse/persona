@@ -553,6 +553,52 @@ describe("Assistant Needs you / In progress trays", () => {
     }
   });
 
+  it("leaves Esc in a tray card to the card: the tray stays open and an answer being typed is kept", async () => {
+    moreSessions = [{ machine_id: "demo", session_id: "worker", title: "Demo agent", cwd: "/demo", state: "needs_you", status: "blocked", updated_at: at, pending_interactions: 1 } as Session];
+    moreInteractions = [{ id: "ix-1", machine_id: "demo", session_id: "worker", kind: "question", created_at: at, questions: [{ question: "Which port?", options: [{ label: "8080" }, { label: "9090" }] }] } as Interaction];
+    await act(async () => {
+      await refresh();
+      await refreshTodos();
+      upsertSession(moreSessions[0]);
+    });
+    const windowEsc = vi.fn();
+    window.addEventListener("keydown", windowEsc);
+    const esc = (el: Element) => act(() => void el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    const field = () => host.querySelector<HTMLInputElement>(`section input[aria-label="${t("chat-interactions.custom_answer")}"]`);
+    try {
+      act(() => entry("needs").click());
+      await openRows();
+      const typed = field()!;
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(typed, "8081");
+        typed.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      act(() => typed.focus());
+      esc(typed);
+      expect(host.querySelector("section")).not.toBeNull();
+      expect(field()?.value).toBe("8081");
+      // the card's own Esc took it: on to neither the tray nor the window (the chat's interrupt)
+      expect(windowEsc).not.toHaveBeenCalled();
+
+      // from a waiting card's own buttons as well: the card's Esc, not the tray's
+      const pick = host.querySelector<HTMLElement>("section [data-card-keys] button")!;
+      act(() => pick.focus());
+      esc(pick);
+      expect(host.querySelector("section")).not.toBeNull();
+      expect(field()?.value).toBe("8081");
+
+      // the tray's own controls still close it
+      const close = host.querySelector<HTMLButtonElement>(`section button[aria-label="${t("ui-atoms.close")}"]`)!;
+      close.focus();
+      esc(close);
+      expect(host.querySelector("section")).toBeNull();
+      expect(document.activeElement).toBe(entry("needs"));
+      expect(windowEsc).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", windowEsc);
+    }
+  });
+
   it("lists every open task that does not wait on the user in In progress, and the one that does in Needs you", async () => {
     const mk = (id: string, title: string, sid: string | undefined, extra: Partial<Todo> = {}): Todo => ({ id, title, origin: conversation, created_at: at, updated_at: at, agents: sid ? [{ machine_id: "demo", session_id: sid, linked_at: at }] : [], ...extra });
     moreTodos = [

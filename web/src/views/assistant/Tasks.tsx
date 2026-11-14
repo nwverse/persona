@@ -94,6 +94,7 @@ import { UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
 import { requestHome } from "../../lib/child-sessions";
 import { stateName } from "../../lib/state-labels";
+import { EDITABLE } from "../../lib/shortcuts";
 
 // ── what a task is now ──
 
@@ -1389,12 +1390,15 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
   const entryKeys: AssistantTray[] = ["needs", "running"];
   const entryButtons = useRef<Partial<Record<AssistantTray, HTMLButtonElement | null>>>({});
-  // Esc closes the open tray, wherever in it or on its entry the focus is, and hands the focus back to the entry (a card
-  // in it included: in the tray its Esc is the tray's). Not while a menu or dialog is open over it (theirs), and never
-  // on to the window, where the chat's Esc would stop a working turn.
+  // Esc closes the open tray from its entry, its header and its rows, and hands the focus back to the entry; it stops
+  // there, never on to the window, where the chat's Esc would stop a working turn. Not while a menu or dialog is open
+  // over it (theirs), and not from a field being typed in or a waiting card in the tray: a card's Esc goes back to the
+  // composer (lib/card-keys.ts) and closing the tray under it would throw away an answer being written.
   const onTrayKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== "Escape" || !tray || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node)) return;
     if (document.querySelector("[role=dialog],[role=menu]")) return;
+    const target = e.target instanceof HTMLElement ? e.target : null;
+    if (target && (target.isContentEditable || target.closest(`${EDITABLE}, [data-card-keys]`))) return;
     e.preventDefault();
     e.stopPropagation();
     const entry = entryButtons.current[tray];
