@@ -26,6 +26,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/node/clipshare"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -236,6 +237,8 @@ type Node struct {
 
 	// codexStarting: panes a Codex start is opening (codex_start.go): no thread is guessed for them meanwhile.
 	codexStarting map[string]bool
+	// codexClaims: public thread ids claimed by starting panes until bindPane and the initial state.put.
+	codexClaims map[string]string
 	// codexWaiting: Codex panes opened with no first message, by pane, until their thread is known (codex_waiting.go);
 	// codexAttached: such a row's id → the thread it became; codexWaitLooking: the look for their threads runs.
 	codexWaiting     map[string]*codexWait
@@ -654,11 +657,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
 	}
-	switch method { // sharing the clipboard with the phone (clipshare.go)
+	switch method { // sharing the clipboard with the phone (clipshare/)
 	case "clipboard.get":
-		return clipboardGet(ctx)
+		return clipshare.Get(ctx)
 	case "clipboard.set":
-		return clipboardSet(ctx, params)
+		return clipshare.Set(ctx, params)
 	}
 	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
 		return n.codexTakeoverCall(ctx, method, params)
@@ -2109,7 +2112,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		EngineHosts:        &choice, // this node takes sets in engine.use (the hub then sends it hosts and default)
 		MachineUID:         n.uid,
 		BuiltinPrograms:    builtinProgramIDs,
-		Clipboard:          clipboardSupport(),
+		Clipboard:          clipshare.Support(),
 	}
 }
 
