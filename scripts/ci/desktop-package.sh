@@ -21,7 +21,7 @@ esac
 args=(--"$platform" --publish never)
 if [[ "$target" == win ]]; then
   # Keep the same unpacked app for the first-run gate. electron-builder target names follow the platform option.
-  args+=(nsis dir)
+  args+=(--dir)
 fi
 if [[ -n "${PERSONA_DESKTOP_VERSION:-}" ]]; then
   if [[ ! "$PERSONA_DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then

@@ -87,10 +87,11 @@ class DesktopPackageScriptTests(unittest.TestCase):
         self.assertIn("not a semantic version", result.stderr)
 
     def test_windows_packages_include_the_same_unpacked_app_for_first_run(self):
-        # electron-builder target names belong after --win; a bare `dir` is an unknown CLI argument.
+        # --dir is electron-builder's boolean unpacked target; NSIS remains in the inherited config.
         script = PACKAGE.read_text()
-        self.assertIn('args+=(nsis dir)', script)
+        self.assertIn('args+=(--dir)', script)
         self.assertNotIn('args+=(dir)', script)
+        self.assertNotIn('args+=(nsis dir)', script)
 
     def test_no_registered_identity_is_written_into_the_repository(self):
         production = yaml.load((ROOT / "desktop/electron-builder.yml").read_text(), Loader=yaml.BaseLoader)

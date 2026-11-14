@@ -165,7 +165,7 @@ async function packageCheck(file) {
   const allowed = new Set(publicResources);
   const missing = publicResources.filter(name => !files.includes(name));
   const unexpected = files.filter(name => name.startsWith("/dist/setup/") && !allowed.has(name));
-  step("packaged setup resource listing", true, { archive, setup: files.filter(name => name.startsWith("/dist/setup")) });
+  step("packaged setup resource listing", true, { archive, setup: files.filter(name => name.startsWith("/dist/setup")), sample: files.slice(0, 40) });
   need("only the three public resources enter the setup directory", missing.length === 0 && unexpected.length === 0, { missing, unexpected, archive });
   need("no test driver or privileged preload enters the public resource directory", !files.some(name => name.includes("first-run")) && !files.includes("/dist/setup/setup-preload.cjs") && files.includes("/dist/setup-preload.cjs"));
 }
