@@ -17,6 +17,7 @@ import { SESSIONS_TODO_FEATURE } from "../lib/session-groups";
 import { GROUPING_KEY, pagedAgentList } from "../lib/sidebar-api";
 import { filterAgentList } from "../lib/agent-list-filters";
 import { conversationPage } from "../lib/conversation-page";
+import { conversationTitle } from "./assistant/conversations";
 import { href, navigate, type Route } from "../lib/router";
 import { composing } from "../lib/send-history";
 import { useAgentSessions } from "../lib/sessions";
@@ -142,11 +143,15 @@ function sections(items: Section[], listId: string): ReactNode[] {
   });
 }
 
+/** What a row calls a chat: a Persona chat by its readable title as the sidebar does (a `<persona-context>` tag read,
+ *  "New chat" for none), an Agent by its session's. */
+const chatTitle = (s: Session, persona: boolean) => (persona ? conversationTitle(s) : sessionTitle(s));
+
 /** A chat's match by its title (starting with what was typed 100, containing it 80), then every word in its folder,
  *  computer or last line (40): a Persona chat's, and an Agent's until lib/agent-search.ts has loaded. */
-function score(s: Session, q: string, machine: string): number {
+function score(s: Session, q: string, machine: string, persona = false): number {
   if (!q) return 1;
-  const title = sessionTitle(s).toLowerCase();
+  const title = chatTitle(s, persona).toLowerCase();
   if (title.startsWith(q)) return 100;
   if (title.includes(q)) return 80;
   const hay = [s.cwd, s.space_name, s.slot_name, machine, s.last_text].join(" ").toLowerCase();
@@ -289,7 +294,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
       if (found.score) out.push({ key: `s:${s.machine_id}/${s.session_id}`, s, to: { name: "session", mid: s.machine_id, sid: s.session_id }, score: found.score + (stateOf(s) === "offline" ? 0 : 5), evidence: found.snippet });
     }
     for (const s of operators ? [] : assistant?.conversations ?? []) {
-      const sc = score(s, query, "persona");
+      const sc = score(s, query, "persona", true);
       if (sc) out.push({ key: `j:${s.session_id}`, s, to: conversationPage(s.session_id, s.machine_id, s.manager), assistant: true, score: sc });
     }
     // what the manager found: a chat found by a message opens at it (not one found by its title); one not listed here
@@ -332,7 +337,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     // Go back to the previous conversation (#2191): the newest opened here other than the one on the page that still exists
     const back = previousChat(recentChats, sessions, assistant?.conversations ?? []);
     const extra: PaletteCommand[] = [
-      ...(back ? [{ id: "app:previous-chat", title: t("palette.previous_chat"), detail: sessionTitle(back.s), section: SCOPE_LABEL.global, icon: "undo" as const, keywords: "back previous last recent 返回 上一个 最近", run: () => navigate(back.to) }] : []), // i18n-ignore: search words in both languages, as PLACE_WORDS
+      ...(back ? [{ id: "app:previous-chat", title: t("palette.previous_chat"), detail: chatTitle(back.s, back.to.name === "persona"), section: SCOPE_LABEL.global, icon: "undo" as const, keywords: "back previous last recent 返回 上一个 最近", run: () => navigate(back.to) }] : []), // i18n-ignore: search words in both languages, as PLACE_WORDS
       { id: "app:new-agent", title: t("palette.new_agent"), section: SCOPE_LABEL.global, icon: "plus", keywords: "new agent", run: onNewAgent },
       { id: "app:new-conversation", title: t("palette.new_conversation"), section: SCOPE_LABEL.global, icon: "chat", keywords: "persona new", run: () => navigate({ name: "persona-new" }) },
     ];
@@ -545,7 +550,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
                 <span className="flex size-5 shrink-0 items-center justify-center">{h.assistant ? <Icon name="spark" size={13} className="text-ink-3" /> : <StatusMark state={st} />}</span>
                 <span className="min-w-0 flex-1">
                   <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate text-[13px] font-medium text-ink">{sessionTitle(h.s)}</span>
+                    <span className="truncate text-[13px] font-medium text-ink">{chatTitle(h.s, Boolean(h.assistant))}</span>
                     {r.previous && <span className="shrink-0 rounded-[5px] bg-field px-1.5 text-[10.5px] text-ink-3 shadow-hairline">{t("palette.previous")}</span>}
                   </span>
                   {h.evidence ? (
