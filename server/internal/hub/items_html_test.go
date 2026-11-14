@@ -15,10 +15,11 @@ import (
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-// htmlToolInput is an MCP call's input of 200 HTML snippets: 61,011 bytes as Claude wrote it, 160,011 when every hop
-// wrote < > & as six bytes each.
+// htmlToolInput is an MCP call's input of 50 HTML snippets: 15,261 bytes as Claude wrote it, 40,011 when every hop
+// wrote < > & as six bytes each. Staying under the input budget keeps this wire test on the unchanged-input path;
+// transcript's clipping tests cover the marked prefix when more snippets require structural clipping.
 func htmlToolInput() string {
-	rows := make([]string, 200)
+	rows := make([]string, 50)
 	for i := range rows {
 		rows[i] = `{"text":"` + strings.Repeat("<b>&amp;</b> ", 22) + `<p></p>"}`
 	}
@@ -27,7 +28,7 @@ func htmlToolInput() string {
 
 // A tool input of HTML reaches the apps no longer than it was written, and as the same value: no hop on the way (the
 // transcript's clip, the node's rpc reply and push, the hub's page, full item, push and subscribe backlog) writes
-// < > & as six bytes each (#2907). It went out at 160,011 bytes for these 61,011.
+// < > & as six bytes each (#2907). It went out at 40,011 bytes for these 15,261.
 func TestItemsKeepHTMLCharactersOnTheWire(t *testing.T) {
 	in := htmlToolInput()
 	line := `{"type":"assistant","uuid":"a1","timestamp":"2026-11-10T12:00:00Z","message":{"id":"m","role":"assistant",` +
