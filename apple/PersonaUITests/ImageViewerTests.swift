@@ -463,7 +463,7 @@ final class ImageViewerTests: XCTestCase {
         return nil
     }
 
-    private func waitUntil(_ timeout: TimeInterval = 5, _ ok: @escaping () -> Bool) -> Bool {
+    @MainActor private func waitUntil(_ timeout: TimeInterval = 5, _ ok: () -> Bool) -> Bool {
         let end = Date().addingTimeInterval(timeout)
         while Date() < end {
             if ok() { return true }
