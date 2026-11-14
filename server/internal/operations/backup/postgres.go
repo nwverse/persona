@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
@@ -112,8 +113,68 @@ func (b *postgresBackend) Identity(ctx context.Context, target Target, part, dat
 				return DatabaseIdentity{}, targetError(target, "read the encryption-key identity", err)
 			}
 		}
+		if identity.SealingKey == "" {
+			if identity.SealedValues, err = sealedValues(ctx, conn); err != nil {
+				return DatabaseIdentity{}, targetError(target, "read the sealed secrets", err)
+			}
+		}
 	}
 	return identity, nil
+}
+
+// sealedValues mirrors db.SealedValues over one connection (db.DB would open a
+// pool of its own), skipping tables and columns an older schema lacks.
+func sealedValues(ctx context.Context, conn *pgx.Conn) ([]string, error) {
+	var out []string
+	collect := func(query string, args ...any) error {
+		rows, err := conn.Query(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		values, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		for _, value := range values {
+			if value != "" {
+				out = append(out, value)
+			}
+		}
+		return nil
+	}
+	hasColumn := func(table, column string) (bool, error) {
+		var ok bool
+		err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass($1) AND attname = $2 AND attnum > 0 AND NOT attisdropped)`, table, column).Scan(&ok)
+		return ok, err
+	}
+	for _, sealed := range db.SealedColumns() {
+		table, column, _ := strings.Cut(sealed, ".")
+		if ok, err := hasColumn(table, column); err != nil || !ok {
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := collect(`SELECT coalesce(` + pgx.Identifier{column}.Sanitize() + `::text, '') FROM ` + pgx.Identifier{table}.Sanitize()); err != nil {
+			return nil, err
+		}
+	}
+	if ok, err := hasColumn("settings", "value"); err != nil || !ok {
+		return out, err
+	}
+	for _, setting := range db.SealedSettings() {
+		for _, field := range setting.Fields {
+			query := `SELECT coalesce(value->>$2, '') FROM settings WHERE key = $1 AND jsonb_typeof(value) = 'object'`
+			if setting.List {
+				query = `SELECT coalesce(e.elem->>$2, '') FROM settings s, jsonb_array_elements(s.value) AS e(elem)
+					WHERE s.key = $1 AND jsonb_typeof(s.value) = 'array' AND jsonb_typeof(e.elem) = 'object'`
+			}
+			if err := collect(query, setting.Key, field); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return out, nil
 }
 
 func (b *postgresBackend) Quiesced(ctx context.Context, target Target, database string, missingOK bool) error {
@@ -286,7 +347,11 @@ func clientEnvironment(target Target, database string, docker bool) []string {
 	username := ""
 	if u.User != nil {
 		username = u.User.Username()
-		password, _ = u.User.Password()
+	}
+	// The password pgx authenticates with, whether it came from the user
+	// info, a password= query parameter, or the libpq environment/passfile.
+	if cfg, err := pgx.ParseConfig(target.URL); err == nil {
+		password = cfg.Password
 	}
 	if docker {
 		u.Host = "127.0.0.1:5432"

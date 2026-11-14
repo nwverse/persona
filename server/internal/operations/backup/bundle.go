@@ -23,7 +23,8 @@ import (
 const maxManifestSize = 8 << 20
 
 func validMemberName(name string) bool {
-	return name != "" && name != "." && !strings.Contains(name, "\\") && !strings.HasPrefix(name, "/") && path.Clean(name) == name && name != ".."
+	return name != "" && name != "." && !strings.Contains(name, "\\") && !strings.HasPrefix(name, "/") && path.Clean(name) == name &&
+		name != ".." && !strings.HasPrefix(name, "../")
 }
 
 func validFingerprint(value string) bool {

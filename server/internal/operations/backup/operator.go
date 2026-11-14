@@ -62,6 +62,8 @@ func (o *Operator) Create(ctx context.Context, opts Options) (_ Result, err erro
 	if err != nil {
 		return Result{}, err
 	}
+	// Sealed values are only for verification, not part of the identity kept.
+	managerIdentity.SealedValues = nil
 	manifest := &Manifest{
 		Format: formatVersion, CreatedAt: o.now().UTC(), Hub: sortedIdentities(hubIdentity), Manager: sortedIdentities(managerIdentity),
 		HubDatabase: hub.Database, ManagerDatabase: manager.Database,
@@ -165,17 +167,21 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (Result, error) {
 	if err := verifyPayloadKeyFiles(staging, manifest); err != nil {
 		return Result{}, err
 	}
+	managerKeys, err := bundledManagerKeys(staging)
+	if err != nil {
+		return Result{}, err
+	}
 	for _, target := range []Target{hub, manager} {
 		if err := o.backend.Quiesced(ctx, target, target.Database, true); err != nil {
 			return Result{}, err
 		}
 	}
-	hubStage, err := o.stageDatabase(ctx, hub, filepath.Join(staging, hubDumpPath), manifest.Hub, manifest.ManagerKeyFingerprint, "h")
+	hubStage, err := o.stageDatabase(ctx, hub, filepath.Join(staging, hubDumpPath), manifest.Hub, manifest.ManagerKeyFingerprint, nil, "h")
 	if err != nil {
 		return Result{}, err
 	}
 	defer o.discardStage(hub, hubStage)
-	managerStage, err := o.stageDatabase(ctx, manager, filepath.Join(staging, managerDumpPath), manifest.Manager, manifest.ManagerKeyFingerprint, "m")
+	managerStage, err := o.stageDatabase(ctx, manager, filepath.Join(staging, managerDumpPath), manifest.Manager, manifest.ManagerKeyFingerprint, managerKeys, "m")
 	if err != nil {
 		return Result{}, err
 	}
@@ -214,7 +220,7 @@ func (o *Operator) discardStage(target Target, staged *stagedDatabase) {
 	_ = o.backend.Drop(ctx, target, staged.name)
 }
 
-func (o *Operator) stageDatabase(ctx context.Context, target Target, dump string, expected DatabaseIdentity, keyFingerprint, role string) (*stagedDatabase, error) {
+func (o *Operator) stageDatabase(ctx context.Context, target Target, dump string, expected DatabaseIdentity, keyFingerprint string, keys [][]byte, role string) (*stagedDatabase, error) {
 	name, err := o.uniqueName(ctx, target, "persona_staged_"+role+"_")
 	if err != nil {
 		return nil, err
@@ -236,7 +242,7 @@ func (o *Operator) stageDatabase(ctx context.Context, target Target, dump string
 	if err != nil {
 		return nil, err
 	}
-	if err := compareIdentity(expected, actual, target.Part, keyFingerprint); err != nil {
+	if err := compareIdentity(expected, actual, target.Part, keyFingerprint, keys); err != nil {
 		return nil, err
 	}
 	keep = true
@@ -258,8 +264,27 @@ func verifyPayloadKeyFiles(staging string, manifest *Manifest) error {
 	return nil
 }
 
+// bundledManagerKeys are the keys the built-in manager opens its secrets with:
+// its secret.key and, while a rotation keeps them, the ones in secret.key.prev
+// (secretkey.NewWithFallback).
+func bundledManagerKeys(staging string) ([][]byte, error) {
+	current, err := secretkey.ReadKey(filepath.Join(staging, managerKeyPath))
+	if err != nil {
+		return nil, errors.New("the bundled built-in manager secret.key is invalid")
+	}
+	previous, err := secretkey.ReadKeys(secretkey.PrevPath(filepath.Join(staging, managerKeyPath)))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.New("the bundled built-in manager secret.key.prev is invalid")
+	}
+	return append([][]byte{current}, previous...), nil
+}
+
 func (o *Operator) verifyPayload(ctx context.Context, hub, manager Target, staging string, manifest *Manifest) error {
 	if err := verifyPayloadKeyFiles(staging, manifest); err != nil {
+		return err
+	}
+	managerKeys, err := bundledManagerKeys(staging)
+	if err != nil {
 		return err
 	}
 	for _, item := range []struct {
@@ -267,19 +292,20 @@ func (o *Operator) verifyPayload(ctx context.Context, hub, manager Target, stagi
 		dump     string
 		expected DatabaseIdentity
 		key      string
+		keys     [][]byte
 		role     string
 	}{
-		{hub, hubDumpPath, manifest.Hub, manifest.HubKeyFingerprint, "h"},
-		{manager, managerDumpPath, manifest.Manager, manifest.ManagerKeyFingerprint, "m"},
+		{hub, hubDumpPath, manifest.Hub, manifest.HubKeyFingerprint, nil, "h"},
+		{manager, managerDumpPath, manifest.Manager, manifest.ManagerKeyFingerprint, managerKeys, "m"},
 	} {
-		if err := o.verifyOne(ctx, item.target, filepath.Join(staging, item.dump), item.expected, item.key, item.role); err != nil {
+		if err := o.verifyOne(ctx, item.target, filepath.Join(staging, item.dump), item.expected, item.key, item.keys, item.role); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (o *Operator) verifyOne(ctx context.Context, target Target, dump string, expected DatabaseIdentity, key, role string) (returnErr error) {
+func (o *Operator) verifyOne(ctx context.Context, target Target, dump string, expected DatabaseIdentity, key string, keys [][]byte, role string) (returnErr error) {
 	name, err := o.uniqueName(ctx, target, "persona_verify_"+role+"_")
 	if err != nil {
 		return err
@@ -299,10 +325,16 @@ func (o *Operator) verifyOne(ctx context.Context, target Target, dump string, ex
 	if err != nil {
 		return err
 	}
-	return compareIdentity(expected, actual, target.Part, key)
+	return compareIdentity(expected, actual, target.Part, key, keys)
 }
 
-func compareIdentity(expected, actual DatabaseIdentity, part, keyFingerprint string) error {
+// compareIdentity checks the restored schema, and for the built-in manager that
+// the bundled key is the one its secrets are sealed with: by the sealing_key
+// record when there is one, otherwise (before its first rotation) by opening the
+// sealed values themselves. Values that open with no key are already unreadable
+// on the source install, as a rotation leaves them, so one that opens suffices;
+// none opening means the bundle carries the wrong key.
+func compareIdentity(expected, actual DatabaseIdentity, part, keyFingerprint string, keys [][]byte) error {
 	expected, actual = sortedIdentities(expected), sortedIdentities(actual)
 	if !reflect.DeepEqual(expected.Schema, actual.Schema) {
 		return fmt.Errorf("%s schema identity differs after restore", part)
@@ -314,8 +346,25 @@ func compareIdentity(expected, actual DatabaseIdentity, part, keyFingerprint str
 		if actual.SealingKey != "" && actual.SealingKey != keyFingerprint {
 			return errors.New("the restored built-in manager database does not match the bundled current secret.key")
 		}
+		if actual.SealingKey == "" && !anySealedValueOpens(actual.SealedValues, keys) {
+			return fmt.Errorf("the built-in manager database records no encryption key, and none of its %d sealed secret(s) opens with the bundled secret.key", len(actual.SealedValues))
+		}
 	}
 	return nil
+}
+
+func anySealedValueOpens(values []string, keys [][]byte) bool {
+	if len(values) == 0 {
+		return true
+	}
+	for _, value := range values {
+		for _, key := range keys {
+			if _, err := secretkey.OpenWith(key, value); err == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubStage, managerStage *stagedDatabase) ([2]string, error) {

@@ -39,6 +39,10 @@ type DatabaseIdentity struct {
 	ServerVersion string      `json:"server_version"`
 	Schema        []Migration `json:"schema"`
 	SealingKey    string      `json:"sealing_key_fingerprint,omitempty"`
+	// SealedValues are the manager's sealed secrets, read only when no
+	// sealing_key record names its key: verification then proves the bundled
+	// key opens them. Never serialized.
+	SealedValues []string `json:"-"`
 }
 
 // FileEntry authenticates one payload member. Payload is regular and

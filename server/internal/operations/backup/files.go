@@ -20,6 +20,11 @@ var optionalRootFiles = []string{
 
 var optionalRuntimeDirectories = []string{"extensions", "skills", "hub.machines_kept"}
 
+// userContentDirectories hold the owner's files (installed extensions and
+// skills), copied in full like the knowledge base: a name such as yarn.lock or
+// meeting.log there is content, not a runtime artifact.
+var userContentDirectories = map[string]bool{"extensions": true, "skills": true}
+
 func collectPayload(home, staging string, manifest *Manifest) error {
 	home, err := filepath.Abs(home)
 	if err != nil {
@@ -29,7 +34,7 @@ func collectPayload(home, staging string, manifest *Manifest) error {
 	if own := managerSecretFile(home); !samePath(own, managerconf.OwnFile(home, managerconf.SecretKey)) {
 		return errors.New("the built-in manager still reads the hub's secret.key; finish its key-file migration before backup")
 	}
-	if err := copyTree(managerDir, filepath.Join(staging, "runtime", "managers", "assistant")); err != nil {
+	if err := copyTree(managerDir, filepath.Join(staging, "runtime", "managers", "assistant"), true); err != nil {
 		return fmt.Errorf("collect the built-in manager files: %w", err)
 	}
 	manifest.RuntimeDirectories = append(manifest.RuntimeDirectories, "managers/assistant")
@@ -65,7 +70,7 @@ func collectPayload(home, staging string, manifest *Manifest) error {
 		if !info.IsDir() {
 			return fmt.Errorf("runtime path %s is not a directory", name)
 		}
-		if err := copyTree(source, filepath.Join(staging, "runtime", name)); err != nil {
+		if err := copyTree(source, filepath.Join(staging, "runtime", name), !userContentDirectories[name]); err != nil {
 			return fmt.Errorf("collect %s: %w", name, err)
 		}
 		manifest.RuntimeDirectories = append(manifest.RuntimeDirectories, name)
@@ -83,7 +88,7 @@ func collectPayload(home, staging string, manifest *Manifest) error {
 		return errors.New("the knowledge-base path is not a directory")
 	} else {
 		manifest.KnowledgeBase.Present = true
-		if err := copyTree(kbDir, filepath.Join(staging, "kb")); err != nil {
+		if err := copyTree(kbDir, filepath.Join(staging, "kb"), false); err != nil {
 			return fmt.Errorf("collect the knowledge base: %w", err)
 		}
 	}
@@ -144,7 +149,11 @@ func ephemeralRuntimeFile(name string) bool {
 		strings.HasSuffix(base, ".sock") || strings.HasSuffix(base, ".log") || strings.Contains(base, ".tmp-")
 }
 
-func copyTree(source, destination string) error {
+// copyTree copies the regular files under source. Sockets are skipped
+// everywhere (live endpoints, not data); skipRuntime also skips lock, pid, log
+// and temporary files, and is only for directories the product itself writes,
+// never for the owner's files.
+func copyTree(source, destination string, skipRuntime bool) error {
 	info, err := os.Lstat(source)
 	if err != nil {
 		return err
@@ -172,7 +181,7 @@ func copyTree(source, destination string) error {
 			}
 			return os.MkdirAll(filepath.Join(destination, rel), 0o700)
 		}
-		if ephemeralRuntimeFile(name) {
+		if entry.Type()&os.ModeSocket != 0 || (skipRuntime && ephemeralRuntimeFile(name)) {
 			return nil
 		}
 		info, err := entry.Info()
@@ -328,6 +337,10 @@ func restoreItems(home, staging string, manifest *Manifest, allowExternal bool) 
 			rel = "data"
 		}
 		kbTarget = filepath.Join(home, filepath.FromSlash(rel))
+		// Only an approved external knowledge base may lie outside the runtime directory.
+		if inside, err := filepath.Rel(home, kbTarget); err != nil || inside == "." || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
+			return nil, errors.New("the knowledge-base relative path leaves the runtime directory")
+		}
 	}
 	if samePath(kbTarget, home) || samePath(kbTarget, filepath.Dir(home)) || filepath.Clean(kbTarget) == string(filepath.Separator) {
 		return nil, errors.New("refusing an unsafe knowledge-base restore target")
@@ -429,7 +442,7 @@ func copyRecursive(source, destination string) error {
 	if !info.IsDir() {
 		return errors.New("staged restore input is not a regular file or directory")
 	}
-	return copyTree(source, destination)
+	return copyTree(source, destination, false)
 }
 
 func emptyDirectory(name string) bool {
