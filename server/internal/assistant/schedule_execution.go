@@ -226,9 +226,7 @@ func (s *Service) taskRunSnapshot(ctx context.Context, t Task) (Task, ModelBindi
 		return t, ModelBinding{}, err
 	}
 	if i := sc.indexLocked(t.ID); i >= 0 {
-		cadence := t.cadenceEvery
 		t = sc.tasks[i]
-		t.cadenceEvery = cadence
 	}
 	sc.mu.Unlock()
 	b, err := s.resolveModel(ctx, "task."+t.ID)

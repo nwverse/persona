@@ -12,10 +12,9 @@ import (
 
 // Live-screen hardware video channel (#3954), node side.
 //
-// This file wires `screen.dial` and the login binding; the capture/encode helper (Persona Screen.app, ScreenCaptureKit
-// + VideoToolbox) and the Unix-socket bridge to it are an injectable seam (`screenStart`) filled in by the PoC on a
-// real Mac. With no helper, `screen.dial` returns `video_unavailable`, so an old node or a node without the helper
-// keeps today's RFB-only behaviour.
+// This file wires `screen.dial` and the login binding; starting the capture/encode helper (Persona Screen.app,
+// ScreenCaptureKit + VideoToolbox) and bridging its Unix socket is `screenStart` (screenhelper.go on a Mac). Without
+// the helper, `screen.dial` returns `video_unavailable`, so an old node or a node without it keeps RFB only.
 
 // maxScreenStreams caps concurrent video streams per node (the design's `busy`).
 const maxScreenStreams = 2
@@ -30,7 +29,8 @@ type screenLogins struct {
 
 type screenPair struct {
 	result rfbLoginResult
-	open   bool // the RFB (5900) stream is still open
+	open   bool        // the RFB (5900) stream is still open
+	video  []io.Closer // the video streams bound to this pair: they end when its RFB stream does
 }
 
 func newScreenLogins() *screenLogins { return &screenLogins{byID: map[string]*screenPair{}} }
@@ -62,12 +62,30 @@ func (s *screenLogins) observe(pair string, c net.Conn) net.Conn {
 		server.close()
 		client.close()
 		s.mu.Lock()
+		var video []io.Closer
 		if st, ok := s.byID[pair]; ok {
 			st.open = false
+			video = st.video
 		}
 		delete(s.byID, pair)
 		s.mu.Unlock()
+		for _, v := range video { // video needs the signed-in screen-sharing stream: it ends with it
+			_ = v.Close()
+		}
 	}}
+}
+
+// attach binds a video stream to pair, so it closes when the pair's screen-sharing stream does. It reports false, and
+// binds nothing, when that stream is no longer open and signed in.
+func (s *screenLogins) attach(pair string, video io.Closer) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.byID[pair]
+	if !ok || !st.open || st.result != rfbLoginSignedIn {
+		return false
+	}
+	st.video = append(st.video, video)
+	return true
 }
 
 // signedIn reports whether the pair's RFB stream is open and Screen Sharing accepted its login.
@@ -186,9 +204,17 @@ func (n *Node) screenDial(ctx context.Context, params json.RawMessage) (any, err
 		ID        string `json:"id"`
 		Pair      string `json:"pair"`
 		KeepAwake bool   `json:"keep_awake"`
+		// Link: the video joins the pair's screen session as a channel (#6398); Attach: a relay rejoining the
+		// session's live video channel, as for port.dial.
+		Link   bool `json:"link"`
+		Attach bool `json:"attach"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil || p.ID == "" || p.Pair == "" {
 		return nil, &rpc.Error{Code: "video_unavailable", Message: "screen.dial: need id and pair"}
+	}
+	link := p.Link && n.links != nil && n.links.Get(p.Pair) != nil
+	if link && p.Attach {
+		return n.reattachScreen(p.ID, p.Pair, true)
 	}
 	if n.screenStart == nil {
 		return nil, &rpc.Error{Code: "video_unavailable", Message: "no live-screen video helper on this node"}
@@ -200,9 +226,13 @@ func (n *Node) screenDial(ctx context.Context, params json.RawMessage) (any, err
 		return nil, &rpc.Error{Code: "busy", Message: "two live-screen video streams are already open"}
 	}
 	// screenStart owns the stream until it closes, then calls the done callback so the busy counter is released.
-	if err := n.screenStart(ctx, p.ID, p.Pair, p.KeepAwake, n.screens.leave); err != nil {
+	linked, err := n.screenStart(ctx, p.ID, p.Pair, p.KeepAwake, link, n.screens.leave)
+	if err != nil {
 		n.screens.leave()
 		return nil, err
+	}
+	if linked {
+		return map[string]any{"link": 1}, nil
 	}
 	return map[string]any{}, nil
 }

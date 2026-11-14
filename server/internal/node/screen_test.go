@@ -40,7 +40,7 @@ func TestScreenDialErrorTaxonomy(t *testing.T) {
 
 	t.Run("unsigned pair is not_signed_in", func(t *testing.T) {
 		n := &Node{screens: newScreenLogins()}
-		n.screenStart = func(context.Context, string, string, bool, func()) error { return nil }
+		n.screenStart = func(context.Context, string, string, bool, bool, func()) (bool, error) { return false, nil }
 		// pair K present but login not accepted
 		n.screens.byID["K"] = &screenPair{result: rfbLoginFailed, open: true}
 		_, err := dial(t, n, "K")
@@ -55,7 +55,7 @@ func TestScreenDialErrorTaxonomy(t *testing.T) {
 
 	t.Run("at the cap it is busy", func(t *testing.T) {
 		n := &Node{screens: newScreenLogins()}
-		n.screenStart = func(context.Context, string, string, bool, func()) error { return nil }
+		n.screenStart = func(context.Context, string, string, bool, bool, func()) (bool, error) { return false, nil }
 		n.screens.byID["K"] = &screenPair{result: rfbLoginSignedIn, open: true}
 		n.screens.count = maxScreenStreams
 		_, err := dial(t, n, "K")
@@ -67,9 +67,9 @@ func TestScreenDialErrorTaxonomy(t *testing.T) {
 	t.Run("signed in and free starts the helper", func(t *testing.T) {
 		n := &Node{screens: newScreenLogins()}
 		var gotID, gotPair string
-		n.screenStart = func(_ context.Context, id, pair string, _ bool, _ func()) error {
+		n.screenStart = func(_ context.Context, id, pair string, _, _ bool, _ func()) (bool, error) {
 			gotID, gotPair = id, pair
-			return nil
+			return false, nil
 		}
 		n.screens.byID["K"] = &screenPair{result: rfbLoginSignedIn, open: true}
 		if _, err := dial(t, n, "K"); err != nil {
@@ -85,8 +85,8 @@ func TestScreenDialErrorTaxonomy(t *testing.T) {
 
 	t.Run("a failed start releases the slot", func(t *testing.T) {
 		n := &Node{screens: newScreenLogins()}
-		n.screenStart = func(context.Context, string, string, bool, func()) error {
-			return &rpc.Error{Code: "video_unavailable", Message: "no permission"}
+		n.screenStart = func(context.Context, string, string, bool, bool, func()) (bool, error) {
+			return false, &rpc.Error{Code: "video_unavailable", Message: "no permission"}
 		}
 		n.screens.byID["K"] = &screenPair{result: rfbLoginSignedIn, open: true}
 		if _, err := dial(t, n, "K"); dialErrCode(t, err) != "video_unavailable" {
@@ -124,13 +124,7 @@ func TestScreenLoginObserveTee(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for !logins.signedIn("K") {
-		if time.Now().After(deadline) {
-			t.Fatalf("pair never became signed-in")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	waitWithin(t, 2*time.Second, "pair to become signed-in", func() bool { return logins.signedIn("K") })
 
 	wrapped.Close()
 	if !sc.closed {
