@@ -47,14 +47,21 @@ final class DispatchedTaskCardTests: XCTestCase {
         try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/iphone-\(appearance)-\(name).png"))
     }
 
+    /// The first card can sit under the Assistant tabs. `isHittable` is then true while a tap lands on the tab, so
+    /// keep scrolling until the whole card is between the tabs and the dock.
     @MainActor private func link(_ app: XCUIApplication, _ id: String) -> XCUIElement {
         let link = app.buttons["dispatch.task.\(id)"]
         let deadline = Date.now.addingTimeInterval(30)
-        while !(link.exists && link.isHittable) && Date.now < deadline {
-            usleep(500_000)
-            if !(link.exists && link.isHittable) { app.swipeDown(velocity: .slow) }
+        while Date.now < deadline {
+            if link.exists {
+                let frame = link.frame
+                if link.isHittable, frame.minY > 130, frame.maxY < 720 { return link }
+                // Below the tabs the card is too low (or still off the bottom); above them it is under the tabs.
+                if frame.minY > 130 { app.swipeUp(velocity: .slow) } else { app.swipeDown(velocity: .slow) }
+            }
+            usleep(400_000)
         }
-        XCTAssertTrue(link.exists && link.isHittable, "no dispatch link for \(id):\n\(app.debugDescription)")
+        XCTFail("no dispatch link for \(id):\n\(app.debugDescription)")
         return link
     }
 
