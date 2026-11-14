@@ -137,6 +137,16 @@ class CalendarWriteToolsTest {
         assertTrue(backend.batches.isEmpty())
     }
 
+    @Test fun anExceptionOfASeriesWithoutASyncIdIsRefusedBeforeAnyWrite() {
+        // The provider links an exception to its series through the sync id; a local calendar has none (measured on a device).
+        seedDaily(daily.copy(hasSyncId = false))
+        val change = runCatching { tools.prepareUpdate(args("id" to "2", "occurrence_start" to fourthIso, "title" to "Moved")) }.exceptionOrNull() as PhoneToolFailure
+        assertTrue(change.message!!.contains("does not sync"))
+        val cancel = runCatching { tools.prepareDelete(args("id" to "2", "occurrence_start" to fourthIso)) }.exceptionOrNull() as PhoneToolFailure
+        assertTrue(cancel.message!!.contains("does not sync"))
+        assertTrue(backend.batches.isEmpty())
+    }
+
     @Test fun twoInstancesAtTheSameStartAreAmbiguousAndRefused() {
         seedDaily()
         backend.instances[2] = backend.instances.getValue(2) + CalendarInstance(fourth, fourth + 1_800_000L)
@@ -144,7 +154,7 @@ class CalendarWriteToolsTest {
         assertTrue(failure.message!!.contains("more than one occurrence"))
     }
 
-    @Test fun changingOneOccurrenceCreatesAnExceptionWithTheSeriesRowsCopied() {
+    @Test fun changingOneOccurrenceCreatesAnExceptionAndLeavesTheSeriesRowsToTheProvider() {
         seedDaily()
         val attendee = CalendarAttendee("Guest", "guest@example.com", 0, 1, 1)
         backend.attendeeRows[2] = listOf(attendee)
@@ -153,23 +163,22 @@ class CalendarWriteToolsTest {
             end = fourth + 3_600_000L, originalId = 2, originalInstanceTime = fourth)
         val result = tools.update(tools.prepareUpdate(args("id" to "2", "occurrence_start" to fourthIso, "title" to "Moved")))
         val writes = backend.batches.single()
-        assertEquals(3, writes.size)
+        // The provider copies attendees and reminders onto an exception by itself (measured on the AOSP provider): writing
+        // them again would double them, so the batch is the exception alone.
+        assertEquals(1, writes.size)
         val exception = writes[0]
         assertEquals(ProviderWrite.Kind.Insert, exception.kind)
         assertEquals(ContentUris.withAppendedId(CalendarContract.Events.CONTENT_EXCEPTION_URI, 2), exception.uri)
         assertEquals(fourth, exception.values[CalendarContract.Events.ORIGINAL_INSTANCE_TIME])
         assertEquals("Moved", exception.values[CalendarContract.Events.TITLE])
         assertEquals(fourth, exception.values[CalendarContract.Events.DTSTART])
-        assertEquals(fourth + 3_600_000L, exception.values[CalendarContract.Events.DTEND])
-        // The exception stands alone for one day: no recurrence keys, and no series-wide DURATION.
+        // The exception stands alone for one occurrence: no recurrence keys. The provider refuses a DTEND on an exception
+        // ("Exceptions can't overwrite dtend") and an explicit calendar id, so it carries its length as a DURATION.
+        assertEquals("PT1H", exception.values[CalendarContract.Events.DURATION])
         for (key in listOf(CalendarContract.Events.RRULE, CalendarContract.Events.RDATE, CalendarContract.Events.EXDATE,
-            CalendarContract.Events.EXRULE)) assertFalse(key, exception.values.containsKey(key))
-        assertNull(exception.values[CalendarContract.Events.DURATION])
-        assertEquals(CalendarContract.Attendees.CONTENT_URI, writes[1].uri)
-        assertEquals(mapOf(CalendarContract.Attendees.EVENT_ID to 0), writes[1].backReferences)
-        assertEquals("guest@example.com", writes[1].values[CalendarContract.Attendees.ATTENDEE_EMAIL])
-        assertEquals(CalendarContract.Reminders.CONTENT_URI, writes[2].uri)
-        assertEquals(mapOf(CalendarContract.Reminders.EVENT_ID to 0), writes[2].backReferences)
+            CalendarContract.Events.EXRULE, CalendarContract.Events.DTEND, CalendarContract.Events.CALENDAR_ID)) {
+            assertFalse(key, exception.values.containsKey(key))
+        }
         // The answer reads the new exception back.
         val body = Json.parseToJsonElement(result.content.single().jsonObject.getValue("text").jsonPrimitive.content).jsonObject
         assertEquals("900", body.getValue("id").jsonPrimitive.content)

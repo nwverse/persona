@@ -75,6 +75,8 @@ internal data class CalendarEventRecord(
     val calendarName: String? = null,
     val ownerAccount: String? = null,
     val calendarAccess: Int? = null,
+    /** False for an event of a calendar that never syncs (a local calendar): the provider cannot link an exception to its series. */
+    val hasSyncId: Boolean = true,
 ) {
     val recurring: Boolean get() = !rrule.isNullOrBlank() || !rdate.isNullOrBlank() || originalId != null
     val effectiveEnd: Long get() = end ?: (start + ((durationSeconds(duration.orEmpty()) ?: 0L) * 1000))
@@ -588,15 +590,25 @@ internal object CalendarWrites {
 
     private fun exceptionUri(seriesId: Long) = android.content.ContentUris.withAppendedId(Calendar.Events.CONTENT_EXCEPTION_URI, seriesId)
 
+    /**
+     * The provider hides a replaced or cancelled occurrence by matching the exception's original sync id to the series' sync id.
+     * A series without one (a local calendar) gets the exception row but keeps showing the old occurrence, and the exception
+     * insert even empties the series' expanded occurrences until the provider next re-expands them: refuse instead.
+     */
+    private fun requireExceptionSupport(series: CalendarEventRecord) {
+        if (series.hasSyncId) return
+        unavailable("这条重复日程所在的日历不同步，系统日历无法单独改动或取消其中一次，未写入 / This repeating event is in a calendar that does not sync, so the system calendar cannot change or cancel a single occurrence of it; nothing was written. Change or delete the whole series, or this and later occurrences, instead.")  // i18n-ignore: tool result for the model
+    }
+
     fun update(p: CalendarUpdatePreparation): CalendarWritePlan {
         val s = p.snapshot
         if (!s.recurring) return partial(s.series, p)
         if (p.span == EventSpan.This) {
             s.exception?.let { return partial(it, p) }
-            val writes = mutableListOf(ProviderWrite(ProviderWrite.Kind.Insert, exceptionUri(s.series.id),
-                exceptionValues(s.occurrence, p) + (Calendar.Events.ORIGINAL_INSTANCE_TIME to s.originalInstanceTime)))
-            writes += copiedRows(s, 0)
-            return CalendarWritePlan(writes, resultInsertIndex = 0)
+            requireExceptionSupport(s.series)
+            // The provider copies the series' attendees and reminders onto the exception itself; copying them again doubles them.
+            return CalendarWritePlan(listOf(ProviderWrite(ProviderWrite.Kind.Insert, exceptionUri(s.series.id),
+                exceptionValues(s.occurrence, p) + (Calendar.Events.ORIGINAL_INSTANCE_TIME to s.originalInstanceTime))), resultInsertIndex = 0)
         }
         // this and future
         if (s.laterExceptions.isNotEmpty()) {
@@ -617,6 +629,7 @@ internal object CalendarWrites {
         if (!s.recurring) return CalendarWritePlan(listOf(ProviderWrite(ProviderWrite.Kind.Delete, events, id = s.series.id)))
         if (p.span == EventSpan.This) {
             val cancel = Calendar.Events.STATUS to Calendar.Events.STATUS_CANCELED
+            if (s.exception == null) requireExceptionSupport(s.series)
             return CalendarWritePlan(listOf(s.exception?.let {
                 ProviderWrite(ProviderWrite.Kind.Update, events, mapOf(cancel), id = it.id)
             } ?: ProviderWrite(ProviderWrite.Kind.Insert, exceptionUri(s.series.id),
@@ -633,10 +646,11 @@ internal object CalendarWrites {
     private fun truncation(series: CalendarEventRecord, split: RecurrenceEdit.Split): List<ProviderWrite> =
         if (split.deleteWholeOldSeries) listOf(ProviderWrite(ProviderWrite.Kind.Delete, events, id = series.id))
         else listOf(ProviderWrite(ProviderWrite.Kind.Update, events, mapOf(
-            Calendar.Events.RRULE to split.oldRrule, Calendar.Events.RDATE to split.oldRdate,
-            Calendar.Events.EXDATE to split.oldExdate), id = series.id))
+            // The AOSP provider re-expands a shortened series only when DTSTART is written with its new rule.
+            Calendar.Events.DTSTART to series.start, Calendar.Events.RRULE to split.oldRrule,
+            Calendar.Events.RDATE to split.oldRdate, Calendar.Events.EXDATE to split.oldExdate), id = series.id))
 
-    /** Attendees and reminders do not follow a new event by themselves: copy them with back references to [index]. */
+    /** A new series does not get the old series' attendees and reminders by itself: copy them with back references to [index]. */
     private fun copiedRows(s: CalendarTargetSnapshot, index: Int): List<ProviderWrite> =
         s.attendees.map { ProviderWrite(ProviderWrite.Kind.Insert, Calendar.Attendees.CONTENT_URI, it.values(),
             backReferences = mapOf(Calendar.Attendees.EVENT_ID to index)) } +
@@ -682,9 +696,11 @@ internal object CalendarWrites {
     /** An exception is a standalone event for one occurrence: it carries no recurrence of its own. */
     private fun exceptionValues(occurrence: CalendarEventRecord, p: CalendarUpdatePreparation): Map<String, Any?> {
         val values = fullValues(occurrence, p)
+        // The exception URI inherits the series calendar; setting it explicitly is rejected by the AOSP provider.
+        values.remove(Calendar.Events.CALENDAR_ID)
         for (key in recurrenceKeys) values.remove(key)
-        values[Calendar.Events.DTEND] = storedEventTime(p.after.end, p.after.allDay, p.zone)
-        values[Calendar.Events.DURATION] = null
+        values.remove(Calendar.Events.DTEND)
+        values[Calendar.Events.DURATION] = durationString(p.after.start, p.after.end, p.after.allDay, p.zone)
         return values
     }
 
