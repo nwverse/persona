@@ -25,7 +25,7 @@ internal fun scopedAgentList(
         AgentRange.All -> { row -> row.session.runsInAll && allRunning.draws(row, preferences.pins) }
         AgentRange.History -> null
     }
-    val tree = codexTaskForest(foldRows(rows), ownRows, runs)
+    val tree = codexTaskForest(foldRows(rows, settings.hierarchy), ownRows, runs)
     return scopedRootAgentList(tree.roots, machines, preferences, tree.searchSettings(settings), todos, directions)
         .let { it.copy(children = tree.children.plusChildren(it.children)) }
 }

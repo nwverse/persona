@@ -15,6 +15,8 @@ import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.LocalHubFeatures
 import persona.core.domain.lines.ChildSessionCards
+import persona.core.domain.lines.ChildSessionDetail
+import persona.core.domain.lines.ChildSessionDetailReader
 import persona.core.domain.lines.LineItem
 import persona.core.domain.lines.SubagentStatus
 import persona.core.domain.lines.ToolCall
@@ -85,10 +87,17 @@ internal fun ChildSessionCard(sessionId: String, assistant: Boolean) {
         if (opened) children.repository.observe(row.key) else flowOf(ChatSnapshot())
     }
     val snapshot by source.collectAsStateWithLifecycle(ChatSnapshot())
-    val items = snapshot.items
-    val result = items.lastOrNull { it.role == "assistant" && it.kind == "text" && !it.text.isNullOrBlank() }
-    val prompt = items.firstOrNull { it.role == "user" && it.kind == "text" }?.text
-    val lastTool = items.lastOrNull { it.kind == "tool_use" }?.toolName
+    val detailReader = remember(row.key, opened, children.repository) {
+        ChildSessionDetailReader { from, to -> children.repository.loadRange(row.key, from, to) }
+    }
+    var detail by remember(row.key, opened) { mutableStateOf(ChildSessionDetail.of(snapshot.items)) }
+    LaunchedEffect(detailReader, snapshot.items, snapshot.hasOlder, opened) {
+        detail = ChildSessionDetail.of(snapshot.items)
+        if (opened) detail = detailReader.read(snapshot)
+    }
+    val result = detail.result
+    val prompt = detail.prompt
+    val lastTool = detail.lastTool
     val title = persona.core.domain.lines.Subagents.compact(row.title, 96)
         .ifEmpty { LocalResources.current.getString(R.string.chat_subagent_untitled) }
     val status = ChildSessionCards.status(row)

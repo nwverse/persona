@@ -10,6 +10,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
@@ -65,7 +66,8 @@ class FoldedSessionsShotsTest {
                 repeat(3) { rule.mainClock.advanceTimeByFrame() }
                 rule.onNodeWithText(parent.title).assertIsDisplayed()
                 rule.onNodeWithText(child.title).assertDoesNotExist()
-                rule.onNodeWithText("Which sign-in method should I test?", substring = true).assertExists()
+                rule.onNode(hasText("Which sign-in method should I test?", substring = true) and
+                    SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult), useUnmergedTree = true).assertIsDisplayed()
                 rule.onNodeWithText("Subagents running: 3", substring = true).assertExists()
                 val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
                 colors += bitmap.getPixel(2, 2)

@@ -32,6 +32,8 @@ private fun <T> GroupStack.mapped(flow: Flow<T>, transform: GroupNames.(T) -> T)
     if (names.plain) flow else flow.map { names.transform(it) }
 
 internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : SessionsRepository, VerifiedSessionsRepository {
+    override fun supportsFeature(machineId: String, feature: String) =
+        feature in stacks.of(machineId)?.connection?.serverFeatures?.value.orEmpty()
     private val listNamespaces = MutableStateFlow<Set<String?>?>(null)
     private fun selected(stack: GroupStack) = listNamespaces.value?.contains(stack.names.namespace) != false
     override suspend fun setListNamespaces(namespaces: Set<String?>?) { listNamespaces.value = namespaces }

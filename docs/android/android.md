@@ -271,12 +271,14 @@ without opening sockets. JVM Native-rendered component captures are separate evi
 
 ## Aligning the Agents list and the Machines page (#3038)
 
-### Child sessions (#5140)
+**Child sessions (#5140)**
 
 For Agents readers, `folded_under` is the hub's authoritative parent on the same machine. `foldRows` leaves a child
 out of the Agents list, dock and their counts while that parent is listed; missing parents stay rows. The parent uses
 `Session.foldedState`: Needs you wins, then a working child, except the parent's own unread result or unanswered reply.
-Its preview speaks for its own request first, else its child's. The running-subagent count is the larger of the own
+Its preview speaks for its own request first, else its child's. Board keeps that child's question on a visible preview
+line even with metadata; an accessibility-only preview would hide what needs the reader. Other rows keep their layout.
+The running-subagent count is the larger of the own
 and child rollups, never their sum. Bounded root pages and counts request `roots=1` only with `sessions_hierarchy`;
 complete membership retains child rows for local projections. Fleet and Live Activity counts keep the protocol's
 separate definition (`docs/protocol/protocol.md`, "Session hierarchy"). Older hubs retain the Subtasks behavior below.

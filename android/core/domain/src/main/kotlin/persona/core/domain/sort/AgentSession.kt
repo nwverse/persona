@@ -12,6 +12,8 @@ data class AgentSession(
     val session: Session,
     val stateSince: String? = null,
     val hasRunningSubagent: Boolean = false,
+    /** The hub supplies the authoritative hierarchy; parent-id inference belongs only to older hubs. */
+    val hierarchyKnown: Boolean = false,
 ) {
     val id: String get() = session.key.path
     val state: AgentState get() = session.foldedState

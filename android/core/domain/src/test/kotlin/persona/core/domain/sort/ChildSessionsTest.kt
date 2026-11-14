@@ -35,6 +35,11 @@ class ChildSessionsTest {
         assertEquals(2, foldedSessions(listOf(parent.copy(machineId = "other"), working)).size)
         assertEquals(2, foldedSessions(listOf(parent, working.copy(foldedUnder = null, parentSessionId = "p"))).size)
         assertEquals(3, childSessions(rows, parent.key).size)
+        val orphan = Session("m", "orphan", agent = "codex", sourceKind = "codex_app_server", isSubagent = true,
+            parentSessionId = "gone", state = "working")
+        val listed = buildAgentList(listOf(AgentSession(orphan)), settings = AgentListSettings(hierarchy = true))
+        assertEquals(1, listed.counts[AgentQuickFilter.Working])
+        assertEquals("orphan", listed.groups.flatMap { it.rows }.single().session.sessionId)
     }
 
     @Test fun listsDockCountsProjectsAndRequestsHaveOneParentHome() {
@@ -53,6 +58,7 @@ class ChildSessionsTest {
         assertEquals(1, waiting.size)
         assertEquals(parent.key, waiting.single().key)
         assertEquals(2, waiting.single().cards.size)
+        assertEquals(listOf(parent.key), needsYouRows(listOf(card), needsYouWaiting(listOf(asking))).map { it.key })
         assertEquals("ask", card.sessionKey.sessionId)
         assertEquals("own", listOf(card, own).firstBySession()[parent.key]?.id)
         assertNotNull(parent.askingLine(listOf(card).firstBySession()[parent.key]))
@@ -67,5 +73,17 @@ class ChildSessionsTest {
         assertEquals(3, s.backgroundWork()?.subagents)
         assertEquals(4, s.copy(children = SessionChildren(4, working = 4)).backgroundWork()?.subagents)
         assertEquals(1, parent.copy(children = SessionChildren(1, working = 1)).backgroundWork()?.subagents)
+    }
+
+    @Test fun anAuthoritativeGroupDoesNotDisableAnotherHubsLegacyHierarchy() {
+        val legacyParent = Session("old", "lead", state = "working")
+        val legacyChild = Session("old", "child", sourceKind = "runtime", agent = "claude", isSubagent = true,
+            parentSessionId = "lead", state = "working")
+        val modern = parent.copy(machineId = GroupKeys.machine("m", "g12345678"))
+        val list = buildAgentList(listOf(modern, legacyParent, legacyChild).map(::AgentSession))
+        assertEquals(setOf(modern.key, legacyParent.key), list.groups.flatMap { it.rows }.map { it.session.key }.toSet())
+        assertEquals(listOf(legacyChild.key), list.children[legacyParent.key.path].orEmpty().map { it.session.key })
+        val cycle = listOf(legacyParent.copy(parentSessionId = "child", sourceKind = "runtime", agent = "claude", isSubagent = true), legacyChild)
+        assertEquals(2, dockAgents("main", "main", cycle, emptyList(), hierarchy = true).size)
     }
 }

@@ -58,9 +58,13 @@ internal class ShellCounts(
     fun todos(todos: List<Todo>): Int = todos.count { !it.isDone && !it.quiet && current.owns(it.manager) }
 
     /** What waits at each assistant ([waiting]): the switcher's badges. */
-    fun waiting(roster: ManagerRoster?, pending: List<Interaction>): Map<String, Int> =
-        roster?.waiting(pending.map { it.copy(sessionId = it.homeKey.sessionId) }, persona.core.domain.sort.foldedSessions(sessions),
-            current.group, ::countsCard, ::countsSession).orEmpty()
+    fun waiting(roster: ManagerRoster?, pending: List<Interaction>): Map<String, Int> {
+        // A paged window may not hold the parent yet: its children's cards still count as one session there.
+        val missing = pending.filter { !it.foldedUnder.isNullOrBlank() && it.homeKey !in byKey }.distinctBy { it.homeKey }
+            .map { Session(it.machineId, it.homeKey.sessionId, state = "needs_you", manager = it.manager ?: byKey[it.sessionKey]?.manager) }
+        return roster?.waiting(pending.map { it.copy(sessionId = it.homeKey.sessionId) },
+            persona.core.domain.sort.foldedSessions(sessions + missing), current.group, ::countsCard, ::countsSession).orEmpty()
+    }
 
     /** The dot on the sidebar's button: something waits at another assistant than the current one. */
     fun othersWaiting(roster: ManagerRoster?, pending: List<Interaction>): Boolean = current.othersWaiting(waiting(roster, pending))
