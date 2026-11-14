@@ -88,7 +88,7 @@ func directOwnerMarker(lower, marker string) bool {
 		}
 		if strings.HasSuffix(before, ",") {
 			clause := before
-			if end := strings.LastIndexAny(clause, ".!?"); end >= 0 {
+			if end := strings.LastIndexAny(clause, ".!?:;"); end >= 0 {
 				clause = strings.TrimSpace(clause[end+1:])
 			}
 			direct = !strings.HasPrefix(clause, "if ") || strings.HasSuffix(clause, "otherwise,")
@@ -138,8 +138,8 @@ func ownerActionLine(text string) string {
 			marker    string
 			negations []string
 		}{
-			{"you need to", []string{"you don't need to", "you do not need to", "no need for you to"}},
-			{"you'll need to", []string{"you won't need to", "you will not need to"}},
+			{"you need to", nil},
+			{"you'll need to", nil},
 			{"would you like me to", nil},
 			{"do you want me to", nil},
 			{"should i proceed", nil},
@@ -149,10 +149,11 @@ func ownerActionLine(text string) string {
 				continue
 			}
 			if p.marker == "you need to" || p.marker == "you'll need to" {
-				// Inspect every occurrence: a subordinate first use does not hide a later direct owner requirement (#5732).
-				if !directOwnerMarker(lower, p.marker) {
-					continue
+				// Negation is occurrence-local: its own prefix is not direct, and it never hides a later direct requirement.
+				if directOwnerMarker(lower, p.marker) {
+					return line
 				}
+				continue
 			}
 			negated := false
 			for _, n := range p.negations {
