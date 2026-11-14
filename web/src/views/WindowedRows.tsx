@@ -14,7 +14,7 @@
 // no box, so no gap) starts each drawn part, keyed by its first row so it moves with the rows rather than the rows
 // around it; the observers find a part's rows between two marks. The groups inside the rows (a to-do's spawned Agents,
 // a tab's panes) take a "Collapse / Expand all" they missed while their part was not drawn (`FoldMissed`).
-import { useContext, useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { isValidElement, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { foldAllSeq, FoldMissed, type FoldRegion } from "../lib/fold-all";
 import { SESSION_LIST_METRICS } from "../ui/list-metrics";
 
@@ -42,6 +42,20 @@ export const partOf = (index: number, n: number) => (index < HEAD ? 0 : index >=
 export const partRows = (i: number, n: number): [number, number] =>
   i === 0 ? [0, HEAD] : i === partCount(n) - 1 ? [n - 1, n] : [HEAD + (i - 1) * PART, Math.min(n - 1, HEAD + i * PART)];
 
+/** The parts of a long list of `items` that hold the rows drawn before (`had`, keyed elements), found by key. */
+function partsHolding<T>(had: readonly ReactNode[], items: readonly T[], render: (item: T) => ReactElement): ReadonlySet<number> {
+  const keys = new Set<string>();
+  for (const el of had) if (isValidElement(el) && el.key !== null) keys.add(el.key);
+  const out = new Set<number>();
+  for (let i = 0, found = 0; i < items.length && found < keys.size; i++) {
+    const key = render(items[i]!).key;
+    if (key === null || !keys.has(key)) continue;
+    found++;
+    out.add(partOf(i, items.length));
+  }
+  return out;
+}
+
 /** A drawn part's rows in the page (between its mark and the next), or a part's empty box. */
 type Laid = { rows: Element[]; gap?: Element };
 /** Where an element is against the observer's view: in it (with the screen around it), above or below. */
@@ -54,10 +68,14 @@ export function WindowedRows<T>({ items, render, holds }: WindowedProps<T>) {
   const [region] = useState<FoldRegion>(() => ({ since: around.since }));
   const [near, setNear] = useState<ReadonlySet<number>>(() => new Set());
   const [wasLong, setWasLong] = useState(long);
+  // the rows the list drew last while it was short (at most the bound), read when it grows past it
+  const shortRows = useRef<readonly ReactNode[]>([]);
   if (wasLong !== long) {
     setWasLong(long);
-    // a list growing past the bound keeps every row it had until the observer says which parts are far
-    if (long) setNear(new Set(Array.from({ length: partCount(n) }, (_, i) => i)));
+    // a list growing past the bound keeps drawing the parts that hold the rows it had (so they keep their elements, a
+    // focus among them), and the observer adds the parts near the view: from 10 rows to 400 in one update it draws
+    // those and its first and last rows, not all 400 for a commit
+    if (long) setNear(partsHolding(shortRows.current, items, render));
   }
   // the part holding the keyboard's focus, drawn with the two beside it: Tab from a part's last row finds the next
   // part's first, and a focused row scrolled away is not taken out from under the focus
@@ -100,6 +118,7 @@ export function WindowedRows<T>({ items, render, holds }: WindowedProps<T>) {
   useEffect(() => {
     if (!undrawn) region.since = null;
     else region.since ??= foldAllSeq();
+    shortRows.current = long ? [] : out;
   });
 
   // what the observers watch, read from the page after each commit: no layout, only the marks and their siblings

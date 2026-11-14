@@ -253,6 +253,31 @@ describe("WindowedRows", () => {
     expect(row(10)).toBe(focused);
     expect(document.activeElement).toBe(focused);
   });
+
+  it("draws only the parts holding the rows it had when it grows far past the bound in one update", async () => {
+    act(() => root.render(<WindowedRows items={rows(10)} render={render} />));
+    await settle();
+    act(() => root.render(<WindowedRows items={rows(400)} render={render} />));
+    // its first rows (holding the ten it had) and its last, not all 400 for a commit; the observer adds the rest
+    expect(drawn()).toEqual([...rows(HEAD), 399]);
+    await settle();
+    expect(drawn()).toEqual([...rows(HEAD), 399]);
+  });
+
+  it("keeps the rows it had, and the focus among them, when hundreds arrive above them", async () => {
+    act(() => root.render(<WindowedRows items={rows(10)} render={render} />));
+    await settle();
+    const focused = row(5)!;
+    act(() => focused.focus());
+    // 390 Agents come in above the ten: those are now the list's last rows
+    const grown = [...Array.from({ length: 390 }, (_, i) => 1000 + i), ...rows(10)];
+    act(() => root.render(<WindowedRows items={grown} render={render} />));
+    await settle();
+    expect(row(5)).toBe(focused);
+    expect(document.activeElement).toBe(focused);
+    for (const i of rows(10)) expect(row(i)).not.toBeNull();
+    expect(drawn().length).toBeLessThanOrEqual(HEAD + 3 * PART + 1);
+  });
 });
 
 describe("a group heading", () => {

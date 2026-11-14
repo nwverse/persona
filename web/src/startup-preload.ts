@@ -309,8 +309,8 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // first screen before raising this.
 // #7459 (Web Push) takes about 90 B of that room in each language: the client_hello's device_id (lib/device-id.ts), the
 // switch that says Web Push is on here (lib/web-push-flag.ts) and the two imports of lib/web-push.ts, a chunk of its own.
-// #7440 takes 1,270 B of that room in each language, measured in one environment against main at 70abf2b3ed (ja
-// 471,783 B to 473,053 B; en 468,579 B to 469,849 B, zh-Hans 469,429 B to 470,699 B): the sidebar's long groups drawn
+// #7440 takes 1,363 B of that room in each language, measured in one environment against main at edf0b5fbab (ja
+// 472,259 B to 473,622 B; en 469,068 B to 470,431 B, zh-Hans 469,901 B to 471,264 B): the sidebar's long groups drawn
 // a part at a time (views/WindowedRows.tsx), the fold-all a group missed while it was not drawn (lib/fold-all.ts) and
 // the headings' heights from one ResizeObserver (views/SidebarSection.tsx). WindowedRows is not a chunk of its own: the
 // sidebar has no error boundary, so a failed download of it would leave the whole app blank.
