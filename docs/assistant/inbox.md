@@ -695,7 +695,7 @@ which users saw as one action: clear this batch they do not need to handle now. 
   Do not compare message times: Lark / mail messages may predate list viewing but be collected afterward.
 - **Undo**: response `ids` are changed items; `undo` is `{action:"reopen", ids}`. Send it unchanged to reopen only those items. Toast's 5-second Undo sends this.
 - **Confirmation**: 10 or more items require confirmation ("Clean up N items (scope). New messages arriving later are unaffected; you can undo afterward."); fewer act directly with Undo. Scope / count are from the list at tap time.
-- **Entry points (one per client)**: web has Clean up all to the filter row's right (hidden at narrow widths), and one Clean up all item in ⋯ with scope / count below.
+- **Entry points (one per client)**: web has Clean up all to the filter row's right (hidden at narrow widths), and one Clean up all item in ⋯ with scope / count below. With nothing open under filters or a search the web names the scope without a count ("Lark · Mail", not "Nothing to do"), and before the list has loaded, or after a failed read, it shows no scope (the Inbox entry in `docs/web/web.md`).
   Android top-bar More has one item; iOS More has one item with scope / count below ("All · 12 items", "Lark · Mentions · 3 items", "Search ‘weekly report’ · 2 items").
   Mac has one toolbar button (scope on hover) and one Inbox-menu item, ⇧⌘E while Inbox is active. Apple passes `items` (ID + version) for current filtered / searched unhandled items, not `filter`.
   Section Mark All Seen / Clear All still use `/done`. Watch has only single-item done, no bulk entry, and reply-only devices cannot call `/bulk`; extensions need `inbox.write`.
@@ -736,7 +736,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
     matching items, counted as loaded and "n+" until complete, and Show Older under Done loads the newest group the hub counts that hasn't all come.
   - **Without them** (a hub from before #2967: 404 / 405): the first page from the newest when the list is shown, the next from Show Older at the end of Done; the last
     group's count reads "n+" while older pages remain. Old hubs without the history (404 / 405) quietly have none.
-- **Selection** (web, iOS / iPad): Select in the header (iPhone hides the tab bar meanwhile; Esc ends it on the web); rows get a tick. Select All picks only rows in sight;
+- **Selection** (web, iOS / iPad): Select in the header (iPhone hides the tab bar meanwhile; Esc ends it on the web, and on the web Select and Done are one button, so the keyboard focus stays on it); rows get a tick. Select All picks only rows in sight;
   a folded group is picked through its title's tick (none / some / all of it), which picks or unpicks the whole group, folded or not, and its title says how many are picked.
   The web's bar also says how many picked rows are folded away. The one action is Mark as Done: `POST /api/v1/inbox/bulk` `action: done` per manager, with Undo ("Clean up all").
   There is no Mark as Read: Done stays Persona-only.
