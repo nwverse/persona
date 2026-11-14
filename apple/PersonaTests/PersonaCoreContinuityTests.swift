@@ -13,7 +13,7 @@ final class PersonaCoreContinuityTests: XCTestCase {
     }
 
     func testNativeAndCoreShadowReplayMatchesFoldAndReloadRules() throws {
-        let cases = try ContinuityCase.all()
+        let cases = try ContinuityCase.all(in: ContinuityCase.repositoryDirectory)
         for `case` in cases {
             try NativeChatStoreContinuityReplay.replayShadow(`case`)
         }
