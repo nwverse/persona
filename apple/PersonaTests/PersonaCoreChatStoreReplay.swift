@@ -14,6 +14,65 @@ public struct NativeChatStoreContinuityReplay {
         return (cases.count, cases.reduce(0) { $0 + $1.events.count })
     }
 
+    /// Test-only shadow comparison: the same fixture reaches native ChatStore and the real C adapter. No production
+    /// selector or default implementation is changed; diagnostics identify the rule and input shape, not item text.
+    public static func replayShadow(_ case: ContinuityCase) throws {
+        try replay(`case`)
+        let shadow = try CoreContinuityShadow(chat: "fixture/continuity")
+        defer { shadow.close() }
+        let initial = `case`.initial
+        let snapshot = ChatSnapshot(
+            itemsJson: try initial.itemsJSON(), history: initial.text("history"),
+            covered: Int64(initial.number("covered") ?? 0), hasMore: initial.boolean("has_more"),
+            loadedOnce: initial.flag("loaded_once")
+        )
+        try shadow.dispatch(.openChat(chat: shadow.chat, snapshot: snapshot))
+        var list: [String] = []
+        try shadow.flush()
+        func apply(_ patch: ChatPatch) {
+            for operation in patch.ops {
+                switch operation {
+                case let .remove(index: index): list.remove(at: Int(index))
+                case let .insert(index: index, id: _, json: json): list.insert(json, at: Int(index))
+                case let .update(index: index, id: _, json: json): list[Int(index)] = json
+                }
+            }
+        }
+        apply(try shadow.drain())
+        _ = shadow.drainEffects()
+        for (index, event) in `case`.events.enumerated() {
+            let action: Action
+            if let event = try event.chatEvent() {
+                action = .chat(chat: shadow.chat, event: event)
+            } else {
+                action = .continueFill(chat: shadow.chat)
+            }
+            try shadow.dispatch(action)
+            try shadow.flush()
+            apply(try shadow.drain())
+            let effects = shadow.drainEffects()
+            let requests = try effects.map { effect -> ContinuityJSON in
+                switch effect {
+                case let .fetch(chat: effectChat, request: _):
+                    guard effectChat == shadow.chat else {
+                        throw CoreContinuityShadow.Mismatch(rule: "effect-chat", inputShape: "another-chat")
+                    }
+                    return try effect.requestJSON ?? .null
+                case let .rejected(reason: reason):
+                    throw CoreContinuityShadow.Mismatch(rule: "rejected", inputShape: reason)
+                }
+            }
+            try check(.array(requests) == expected["actions"], "\(index) shadow actions", requests, expected["actions"] as Any)
+            let expected = `case`.expected[index]
+            let actualItems = ContinuityJSON.array(try list.map { try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data($0.utf8))) })
+            try check(actualItems == expected["items"], "\(index) shadow items", actualItems, expected["items"])
+            try check(.number(Double(patch.covered)) == expected["covered"], "\(index) shadow covered", patch.covered, expected["covered"])
+            try check((patch.history.map(ContinuityJSON.string) ?? .null) == expected["history"], "\(index) shadow history", patch.history as Any, expected["history"] as Any)
+            try check((patch.hasMore.map(ContinuityJSON.bool) ?? .null) == expected["has_more"], "\(index) shadow has_more", patch.hasMore as Any, expected["has_more"] as Any)
+            try check(.bool(patch.loadedOnce) == expected["loaded_once"], "\(index) shadow loaded_once", patch.loadedOnce, expected["loaded_once"] as Any)
+        }
+    }
+
     private static func replay(_ case: ContinuityCase) throws {
         let initial = `case`.initial
         let key = SessionKey(machineID: "fixture", sessionID: "continuity-\(UUID())")

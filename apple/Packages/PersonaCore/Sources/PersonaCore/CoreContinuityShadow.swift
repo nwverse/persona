@@ -1,5 +1,4 @@
 import Foundation
-import PersonaCore
 import Synchronization
 
 /// Test-only shadow of the iOS continuity adapter. It never selects the production implementation or carries message
@@ -36,6 +35,10 @@ public struct CoreContinuityShadow: Sendable {
     public func drain() throws -> ChatPatch { try client.drain(chat: chat) }
     public func flush() throws { try client.flush() }
     public func wakeChatIDs() -> [String] { changes.withLock { $0.map(\.0) } }
-    public func effects() -> [Effect] { effects.withLock { $0 } }
+    public func effectsSnapshot() -> [Effect] { effects.withLock { $0 } }
+    public func drainEffects() -> [Effect] { effects.withLock { current in
+        defer { current.removeAll() }
+        return current
+    } }
     public func close() { client.close() }
 }
