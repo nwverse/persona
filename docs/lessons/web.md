@@ -1024,7 +1024,7 @@ Writes without items (titles, modes) also advance `updated_at`, returning empty 
 ## Wrap horizontal rows when they do not fit; do not rely on horizontal scrolling (#3594)
 
 Scrollbars are globally hidden, and mouse wheels scroll vertically only. Overflowing horizontal rows (Settings categories) hide later items from mouse users, who cannot scroll to them. Wrap the row (button text stays single-line) or use a menu.
-If the header grows, elements below it (App.tsx connection-status pill) cannot assume 56px; Settings writes actual header height to `<main>` `--page-header`.
+Nothing may float under a page's header assuming its height: the connection-status pill once sat at `--page-header` (Settings wrote its taller header's height there) and still covered fields and titles, so it is now a strip above the page that pushes it down (`App.tsx`, web usability audit item 87).
 
 ## Do not fade answers in again after remounting (2026-11-06, #4107)
 
@@ -1269,6 +1269,30 @@ px, while `offsetHeight` and the computed height say 44. Reduced motion only sho
 frame is still drawn. Wait for the panel's animations before measuring:
 `await dialog.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished)))`
 (`web/e2e/standing-authorizations.mjs`).
+
+## A focus trap that lists only controls misses Chrome's focusable scrollers
+
+Chrome lets the keyboard focus a scrolling element with no focusable child of its own (the shortcut help's list). A
+modal's Tab trap that only knows the controls from `focusables()` sees the focus "outside" its list there and jumps back
+to the first control, so the controls after the scroller are never reached by Tab. Decide from where the focus is in
+the document instead: inside the modal but on no listed control, let the browser's order go on and wrap only past either
+end (`trapTabIn` in `web/src/ui/overlay.ts`). Check a trap with Tab in a real browser, not only in jsdom, which has no such
+focus stops.
+
+## Uppercase label styles rewrite names
+
+A heading styled as a label (`uppercase tracking-[0.06em]`) also capitalizes whatever is put in it. A menu header or a
+palette section that holds a space, project or computer name then shows "weather" as "WEATHER", a name the user never
+typed. Give those headings their text as written (`Menu`'s `headerAsWritten`, the palette's `sectionAsWritten`) and
+keep the label style for label words.
+
+## A reload another tab asks for waits for a calm page
+
+A `storage` listener that reloads the page (a language picked in another tab) runs whatever the page holds: a half-typed
+dialog or field is lost, and a page with a `beforeunload` guard pops a leave-page prompt from a background tab. Reuse
+the calm test a new build waits for (`mayReload(pageCalm())` in `web/src/lib/new-version.ts`: no draft, no open dialog or
+menu, the page hidden or left alone) and offer the reload in a toast meanwhile (`web/src/lib/language-sync.ts`). Its
+words come from the catalog's rest, which `main.tsx`'s own imports do not wait for: wait for `i18nRest()` before `t()`.
 
 ## Testing Web Push in Playwright needs a real profile (2026-11-14, #7459)
 
