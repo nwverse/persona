@@ -1502,13 +1502,14 @@ struct InboxDetailView: View {
     /// Only the expanded branch mentions the source views: `InboxItemSlotContent` can evaluate its plain content eagerly,
     /// so neither a chat nor a mail reader may be constructed while this row is collapsed.
     @ViewBuilder private var collapsibleSource: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.flush) {
-            sourceDisclosure
+        Group {
             if showsOriginalSource {
                 originalSource
+            } else {
+                Spacer()
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .safeAreaInset(edge: .top, spacing: Theme.Space.flush) { sourceDisclosure }
         // The chat owns its title only while expanded; the collapsed detail must keep naming the item.
         .navigationTitle(current.title)
         .navigationBarTitleDisplayMode(.inline)
