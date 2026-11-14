@@ -1,10 +1,10 @@
 import XCTest
 
-/// The to-do stage bar at the default and the accessibility text sizes (#5892), against scripts/mock/mock_hub.py with
+/// The to-do stage bar at the default and the largest system text sizes (#5892), against scripts/mock/mock_hub.py with
 /// MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 (PERSONA_MOCK_HUB): on the chat's task card (the widget task, on Develop) and on
 /// the detail page of the to-do 「天气 App 发 1.3 版」 (on Develop), in zh-Hans, English and Japanese, light and dark. At the
-/// default size the bar is one element as before; at the largest size each of its six dots is one, labeled in full, and
-/// the bar lies within the window. `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps the screenshots
+/// default size and at the largest the bar is one element (the interface stops at xxxLarge, so it is the same bar), and
+/// it lies within the window. `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps the screenshots
 /// (`stagebar-<place>-<language>-<size>-<scheme>.png`); `TEST_RUNNER_PERSONA_PHASE=before` takes them on an older build,
 /// checking nothing.
 final class TodoStageBarUITests: XCTestCase {
@@ -62,7 +62,7 @@ final class TodoStageBarUITests: XCTestCase {
                             sleep(1)
                         }
                         if !before {
-                            check(app, bar, window: window, largest: size == "largest", language: language, name: name)
+                            check(app, bar, window: window, language: language, name: name)
                         }
                         if let dir = env["PERSONA_SHOTS"] {
                             // The app icon follows the color scheme, and the system says so in an alert over the page: closed first.
@@ -89,26 +89,13 @@ final class TodoStageBarUITests: XCTestCase {
                      thenHoldForDuration: 0.3)
     }
 
-    /// At the default size: one element that says the stage, no dot of its own. At the largest: the six dots, each
-    /// labeled with its name, place and state (in zh-Hans word for word), all within the window.
-    @MainActor private func check(_ app: XCUIApplication, _ bar: XCUIElement, window: CGRect, largest: Bool, language: String, name: String) {
+    /// At every size, the interface stops at xxxLarge: one element that says the stage, no dot of its own, all within the
+    /// window.
+    @MainActor private func check(_ app: XCUIApplication, _ bar: XCUIElement, window: CGRect, language: String, name: String) {
         let dots = ["plan", "develop", "review", "merge", "deploy", "verify"].map { app.descendants(matching: .any)["todo.stage.\($0)"].firstMatch }
         XCTAssertGreaterThanOrEqual(bar.frame.minX, window.minX - 0.5, "\(name): the bar starts left of the screen")
         XCTAssertLessThanOrEqual(bar.frame.maxX, window.maxX + 0.5, "\(name): the bar ends right of the screen")
-        guard largest else {
-            XCTAssertFalse(dots[1].exists, "\(name): a dot of its own at the default size")
-            if language == "zh-Hans" { XCTAssertEqual(bar.label, "阶段：开发（第 2 步，共 6 步）", name) } // i18n-ignore: the app's words
-            return
-        }
-        for dot in dots {
-            XCTAssertTrue(dot.exists, "\(name): a dot without its own element:\n\(app.debugDescription)")
-            XCTAssertTrue(window.contains(dot.frame.insetBy(dx: 0.5, dy: 0.5)), "\(name): \(dot.label) off the screen")
-        }
-        XCTAssertTrue(dots[1].label.contains("2"), "\(name): \(dots[1].label)")
-        if language == "zh-Hans" { // i18n-ignore: the app's words
-            XCTAssertEqual(dots[0].label, "方案，第 1 步，共 6 步，已完成", name) // i18n-ignore
-            XCTAssertEqual(dots[1].label, "开发，第 2 步，共 6 步，当前步骤", name) // i18n-ignore
-            XCTAssertEqual(dots[5].label, "已验证，第 6 步，共 6 步，还没到", name) // i18n-ignore
-        }
+        XCTAssertFalse(dots[1].exists, "\(name): a dot of its own")
+        if language == "zh-Hans" { XCTAssertEqual(bar.label, "阶段：开发（第 2 步，共 6 步）", name) } // i18n-ignore: the app's words
     }
 }
