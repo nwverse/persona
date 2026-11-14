@@ -266,9 +266,7 @@ struct SplitColumnControl: UIViewControllerRepresentable {
             var settled = d
             settled.line = shows ? d.width : 0
             let distance = settled.line - d.line
-            UIView.animate(springDuration: Theme.Split.settle, bounce: 0, initialSpringVelocity: distance == 0 ? 0 : velocity / distance) {
-                self.place(settled)
-            } completion: { _ in
+            let fade = {
                 UIView.animate(withDuration: Theme.Split.fade) {
                     d.overlay.alpha = 0
                 } completion: { _ in
@@ -277,6 +275,15 @@ struct SplitColumnControl: UIViewControllerRepresentable {
                     self.drag = nil
                 }
             }
+            // Reduce Motion: the line where it settles at once, no spring; the pictures only fade.
+            guard !UIAccessibility.isReduceMotionEnabled else {
+                place(settled)
+                fade()
+                return
+            }
+            UIView.animate(springDuration: Theme.Split.settle, bounce: 0, initialSpringVelocity: distance == 0 ? 0 : velocity / distance) {
+                self.place(settled)
+            } completion: { _ in fade() }
         }
 
         /// The pictures where the line is: the column's from the window's leading edge to the line; the page's from the
