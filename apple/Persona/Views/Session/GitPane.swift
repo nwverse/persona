@@ -176,7 +176,7 @@ struct GitPane: View {
         } label: {
             HStack(spacing: Theme.Space.xs) {
                 if pullModel.isPulling { ProgressView().controlSize(.mini) }
-                Chip(text: pullModel.isPulling ? String(localized: "Pulling") : s.behind > 0 ? String(localized: "Pull \(s.behind)") : String(localized: "Pull"),
+                Chip(text: pullModel.isPulling ? String(localized: "Pulling") : s.behind > 0 ? String(localized: "Pull \(s.behind)") : String(localized: "git.pull", defaultValue: "Pull"),
                      symbol: pullModel.isPulling ? nil : Theme.Icon.down,
                      look: .tint(s.behind > 0 ? Theme.cautionText : Theme.accent))
                     .monospacedDigit()

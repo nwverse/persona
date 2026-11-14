@@ -323,7 +323,7 @@ struct GitPRSheet: View {
                 }
             }
         } header: {
-            Text("Merge")
+            Text(String(localized: "git.pr.merge", defaultValue: "Merge"))
         }
     }
 
