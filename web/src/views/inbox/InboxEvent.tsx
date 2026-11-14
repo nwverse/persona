@@ -1,6 +1,5 @@
-// An inbox item as an event (docs/assistant/inbox.md "Events and handling chain", docs/web/web.md "Inbox"): the row's mark ("In progress"'s state
-// word, "AI is preparing a suggestion", the suggestion's kind and first line) and the detail's body — ✦ summary, recap, the
-// suggestion card
+// An inbox item as an event (docs/assistant/inbox.md "Events and handling chain", docs/web/web.md "Inbox"): the row's mark (the
+// manager's current state, or an older hub's handling / suggestion line) and the detail's body — ✦ summary, recap, the suggestion card
 // with its buttons right under it, then the handling chain folded to its three newest entries, each entry going where its link says.
 // Drawn only for an item that carries this phase's fields (lib/inbox-events.ts `hasEvent`).
 import { useEffect, useRef, useState } from "react";
@@ -22,6 +21,7 @@ import { t } from "../../i18n";
 import { Button, cx, Shimmer, Spinner, Switch, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
+import { StatusMark } from "../../ui/StatusMark";
 import { useFoldScroll } from "../chat/fold-scroll";
 import { useInboxView } from "../../lib/inbox-view-memory";
 import { InboxLine } from "./InboxLine";
@@ -39,16 +39,36 @@ function useConversation(): (mid: string, sid: string) => Route {
 
 // ── the row ──────────────────────────────────────────────
 
-/** Under a row: what the AI is doing ("In progress"), "AI is preparing a suggestion" (urgent), a failed handling, or the suggestion's kind + first line. */
+/** Under a row: a known manager state always has its own line; an older hub keeps the handling or suggestion line. */
 export function EventMark({ it }: { it: InboxItem }) {
   const now = nowText(it);
-  if (isDone(it)) {
-    // A known state key says how it was filed; an older hub keeps the manager-done line alone.
-    if (!now && it.done_by !== "manager") return null;
+  if (now !== undefined) {
+    const key = it.now!;
+    const needsYou = key === "confirm_reply" || key === "confirm_agent" || key === "decide" || key === "follow_up_ask" || key === "check_due" || key === "failed" || key === "needs_you";
+    const working = key === "queued" || key === "looking" || key === "agent_working";
+    const icon = key === "waiting" ? "clock" : working ? "spinner" : needsYou ? "needs-you" : key.startsWith("done_") ? "check" : "none";
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-ink-3" data-event-mark={now ? "now" : "manager-done"}>
+      <p className={cx("flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap", key === "failed" ? "text-red" : isDone(it) ? "text-ink-3" : "text-ink-2")} data-event-mark="now" data-event-icon={icon}>
+        {icon === "clock" && <Icon name="clock" size={12} className="shrink-0 text-ink-3" />}
+        {icon === "spinner" && <Spinner size={11} />}
+        {/* failed keeps the Needs-you shape, but both its mark and its words use the danger color */}
+        {icon === "needs-you" && (
+          <span className={cx("inline-flex shrink-0", key === "failed" && "[&_.status-mark]:![--mark-color:var(--red)]")}>
+            <StatusMark state="needs_you" size="sm" label={false} />
+          </span>
+        )}
+        {icon === "check" && <Icon name="check" size={12} stroke={2.4} className="shrink-0" />}
+        {key === "looking" ? <Shimmer className="truncate">{now}</Shimmer> : <span className="truncate">{now}</span>}
+      </p>
+    );
+  }
+  if (isDone(it)) {
+    // An older hub keeps the manager-done line alone.
+    if (it.done_by !== "manager") return null;
+    return (
+      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-ink-3" data-event-mark="manager-done">
         <Icon name="check" size={12} stroke={2.4} className="shrink-0" />
-        <span className="truncate">{now ?? t("inbox-inboxevent.manager_done")}</span>
+        <span className="truncate">{t("inbox-inboxevent.manager_done")}</span>
       </p>
     );
   }
@@ -65,7 +85,7 @@ export function EventMark({ it }: { it: InboxItem }) {
     return (
       <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap" data-event-mark="preparing">
         <Spinner size={11} />
-        <Shimmer className="truncate">{now ?? t("inbox-inboxevent.preparing")}</Shimmer>
+        <Shimmer className="truncate">{t("inbox-inboxevent.preparing")}</Shimmer>
       </p>
     );
   }
@@ -73,18 +93,17 @@ export function EventMark({ it }: { it: InboxItem }) {
     return (
       <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-red" data-event-mark="failed">
         <Icon name="warning" size={12} className="shrink-0" />
-        <span className="truncate">{now ?? t("inbox-inboxevent.failed_short")}</span>
+        <span className="truncate">{t("inbox-inboxevent.failed_short")}</span>
       </p>
     );
   }
   const oldWord = handlingWord(it);
-  const word = now ?? oldWord;
-  if (!word) return null;
-  const waiting = it.handling?.state === "waiting" || !oldWord;
+  if (!oldWord) return null;
+  const waiting = it.handling?.state === "waiting";
   return (
     <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-ink-2" data-event-mark="working">
       {waiting ? <Icon name="clock" size={12} className="shrink-0 text-ink-3" /> : <Spinner size={11} />}
-      <span className="truncate">{word}</span>
+      <span className="truncate">{oldWord}</span>
     </p>
   );
 }
@@ -123,7 +142,7 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
             {item.recap && (
               <div>
                 <p className="text-[11.5px] font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
-                <p className="mt-0.5 text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2" data-event-recap>{item.recap}</p>
+                <p className="mt-0.5 text-meta leading-relaxed whitespace-pre-wrap text-ink-2" data-event-recap>{item.recap}</p>
               </div>
             )}
           </section>
@@ -172,7 +191,7 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
     }
   };
   const open = to && (
-    <button type="button" onClick={() => openFromInbox(to)} className="-mx-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1 text-[12px] font-medium whitespace-nowrap text-accent-ink transition-colors hover:bg-hover">
+    <button type="button" onClick={() => openFromInbox(to)} className="-mx-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1 text-label font-medium whitespace-nowrap text-accent-ink transition-colors hover:bg-hover">
       {t("inbox-inboxevent.open_conversation")}
       <Icon name="chevronRight" size={11} stroke={2.4} />
     </button>
@@ -267,7 +286,7 @@ function TodoSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
     await suggestionAct(item, action, action === "confirm" && title.trim() !== s.text ? title.trim() : undefined, action === "confirm" ? dueOf(day, allDay ? "" : time) : undefined);
     setActing("");
   };
-  const field = "h-8 rounded-control bg-field px-2.5 text-[13px] text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
+  const field = "h-8 rounded-control bg-field px-2.5 text-meta text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
   return (
     <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion="todo">
       <p className="flex items-center gap-1.5 text-[11.5px] font-medium whitespace-nowrap text-accent-ink"><span><Spark />{suggestionTitle(s)}</span></p>
@@ -282,7 +301,7 @@ function TodoSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
           </label>
         )}
       </div>
-      {s.note && <p className="mt-1.5 text-[12px] leading-relaxed text-ink-3">{s.note}</p>}
+      {s.note && <p className="mt-1.5 text-label leading-relaxed text-ink-3">{s.note}</p>}
       <div className="mt-3 flex flex-wrap justify-end gap-2">
         <Button tone="quiet" disabled={busy && acting !== "reject"} busy={acting === "reject"} onClick={() => void act("reject")}>{t("inbox-inboxevent.reject")}</Button>
         <Button tone="accent" icon="check" disabled={!title.trim() || (busy && acting !== "confirm")} busy={acting === "confirm"} onClick={() => void act("confirm")}>{t("lib-inbox-events.add_todo")}</Button>
@@ -337,7 +356,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
             onChange={(e) => setText(e.target.value)}
             aria-label={t("inbox-inboxevent.edit_text")}
             rows={Math.min(8, Math.max(3, text.split("\n").length + 1))}
-            className="w-full resize-y rounded-control bg-field px-2.5 py-2 text-[13px] leading-relaxed text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]"
+            className="w-full resize-y rounded-control bg-field px-2.5 py-2 text-meta leading-relaxed text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]"
             data-suggestion-editor
           />
           <label className="flex h-8 items-center gap-2 rounded-control bg-field px-2.5 focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
@@ -366,14 +385,14 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
         </div>
       ) : (
         <>
-          <p className="mt-1.5 text-[13px] leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{s.text}</p>
+          <p className="mt-1.5 text-meta leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{s.text}</p>
           {(s.changes ?? []).map((c) => (
             <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-[11.5px] text-ink-2">
               <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />
               <span className="truncate">{docChangeLine(c, item.doc)}</span>
             </p>
           ))}
-          {s.note && <p className="mt-1.5 text-[12px] leading-relaxed text-ink-3">{s.note}</p>}
+          {s.note && <p className="mt-1.5 text-label leading-relaxed text-ink-3">{s.note}</p>}
           <div className="mt-3 flex flex-wrap justify-end gap-2">
             <Button tone="quiet" disabled={busy && acting !== "reject"} busy={acting === "reject"} onClick={() => void act("reject")}>{t("inbox-inboxevent.reject")}</Button>
             {b.edit && <Button tone="secondary" icon="pencil" disabled={busy} onClick={() => setEditing(true)}>{t("inbox-inboxevent.edit")}</Button>}
@@ -400,6 +419,7 @@ export function chainIconMeaning(e: Pick<ChainEntry, "kind" | "via">): string {
     handling: "persona",
     sent: "sendMail",
     agent: "agents",
+    agent_stopped: "agents",
     confirmed: "success",
     rejected: "rejected",
     instructed: "instructed",
@@ -416,7 +436,7 @@ const CHAIN_ICON: Record<string, { icon?: IconName; glyph?: "reply" | "question"
   triaged: { icon: "filter" },
   persona: { icon: "spark" },
   sendMail: { icon: "send" },
-  agents: { icon: "agent" },
+  agents: { icon: "code" },
   success: { icon: "check" },
   rejected: { icon: "x" },
   instructed: { icon: "chat" },
@@ -434,10 +454,12 @@ function ChainIcon({ item, e }: { item: InboxItem; e: ChainEntry }) {
   const source = e.via || item.source;
   const brand = meaning === "source" ? connectorBrand(source) : undefined;
   const c = CHAIN_ICON[meaning] ?? CHAIN_ICON.info;
+  // Reported owns the chat-circle glyph; an unbranded source keeps the generic link so the two are not the same bubble.
+  const glyph = brand ? `brand:${brand}` : meaning === "source" ? (source === "mail" ? "mail" : "link") : (c.glyph ?? c.icon);
   const tone = meaning === "error" ? "text-red" : meaning === "persona" || meaning === "concluded" ? "text-accent" : "text-ink-3";
   return (
-    <span className={cx("flex size-5 shrink-0 items-center justify-center rounded-full bg-field", tone)} aria-hidden data-chain-icon={meaning}>
-      {brand ? <BrandMark brand={brand} size={18} fit="tile" /> : meaning === "source" ? <Icon name={source === "mail" ? "mail" : source === "chat" ? "chat" : "link"} size={11} stroke={2.2} /> : c.glyph ? <Glyph name={c.glyph} size={11} stroke={2.2} /> : <Icon name={c.icon!} size={11} stroke={2.2} />}
+    <span className={cx("flex size-5 shrink-0 items-center justify-center rounded-full bg-field", tone)} aria-hidden data-chain-icon={meaning} data-chain-glyph={glyph}>
+      {brand ? <BrandMark brand={brand} size={18} fit="tile" /> : meaning === "source" ? <Icon name={source === "mail" ? "mail" : "link"} size={11} stroke={2.2} /> : c.glyph ? <Glyph name={c.glyph} size={11} stroke={2.2} /> : <Icon name={c.icon!} size={11} stroke={2.2} />}
     </span>
   );
 }
@@ -497,6 +519,7 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
   const expandable = canExpand(e);
   const goes = tap.kind === "source" || tap.kind === "route";
   const reported = e.kind === "reported";
+  const text = reported ? (e.detail?.trim() || e.text) : e.text;
   const press = () => (goes ? onTap(tap) : expandable && setOpen((o) => !o));
   return (
     <li data-chain-entry={e.kind} data-chain-id={e.id} data-chain-reported={reported ? "" : undefined}>
@@ -511,7 +534,7 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
           <span className="min-w-[34px] shrink-0 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums">{chainTime(e.at)}</span>
           <ChainIcon item={item} e={e} />
           {reported && <Tag>{t("inbox-inboxdetail.assistant_says")}</Tag>}
-          <span className="min-w-0 flex-1 truncate">{e.text}</span>
+          <span className="min-w-0 flex-1 truncate">{text}</span>
           {agentState && <span className="shrink-0 text-[11.5px] whitespace-nowrap text-ink-3" data-chain-agent-state>{agentState}</span>}
           {goes && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />}
           {!goes && expandable && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />}
