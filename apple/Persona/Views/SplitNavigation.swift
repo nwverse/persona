@@ -45,7 +45,7 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     /// above the columns there (`topPad`, #4853).
     @Environment(\.splitSideBars) private var sideBars
     /// Each column's own top safe area, outside the margin it is given (the page's has the system's bar room under side
-    /// bars, the list's does not).
+    /// bars, the list's does not). Read under side bars only, where `topPad` uses them (`readsSafeTop`).
     @State private var listSafeTop: CGFloat = 0
     @State private var pageSafeTop: CGFloat = 0
     #endif
@@ -116,7 +116,7 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                 sidebar.modifier(destinations)
                     #if os(iOS)
                     .safeAreaPadding(.top, topPad(listSafeTop))
-                    .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { listSafeTop = $0 }
+                    .background { readsSafeTop { listSafeTop = $0 } }
                     #endif
                     // Last, on the column's root: under the top margin's padding the column's width no longer reached
                     // the split (on the Duo on its side).
@@ -129,7 +129,7 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                 // The stack's root page only: the pages opened on it carry their own (`SplitDetailPage`, #3680).
                 .safeAreaInset(edge: .top, spacing: 0) { if pageSwitch { PageTabSwitchRow() } }
                 .safeAreaPadding(.top, topPad(pageSafeTop))
-                .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { pageSafeTop = $0 }
+                .background { readsSafeTop { pageSafeTop = $0 } }
                 .background { columnControl }
                 .modifier(SplitPageMin())
                 #endif
@@ -199,6 +199,16 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     private func topPad(_ own: CGFloat) -> CGFloat {
         guard sideBars else { return 0 }
         return max(0, max(Theme.Space.l, listSafeTop, pageSafeTop) - own)
+    }
+
+    /// A column's own top safe area, for `topPad`: read under side bars only, by a clear view behind the column, which comes
+    /// and goes with them while the column's content stays as it is. Read on the column itself everywhere, the column was
+    /// laid out once more as it went and as it came, its list's rows too: about 40 ms of main thread in an extra frame at
+    /// each fold's end and show's start on the iPad (#4206).
+    @ViewBuilder private func readsSafeTop(_ read: @escaping (CGFloat) -> Void) -> some View {
+        if sideBars {
+            Color.clear.onGeometryChange(for: CGFloat.self, of: { $0.safeAreaInsets.top }, action: read)
+        }
     }
 
     /// The list column's control from UIKit (`SplitColumnControl`): slid by a finger where the list's shown state is kept
