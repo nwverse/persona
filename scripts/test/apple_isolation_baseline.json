@@ -143,21 +143,6 @@
       "main" : 1
     }
   },
-  "apple/PersonaLink/Sources/PersonaLink/LinkModel.swift" : {
-    "file-read" : {
-      "main" : 1
-    }
-  },
-  "apple/PersonaLink/Sources/PersonaLink/LinkStatePaths.swift" : {
-    "file-read" : {
-      "main" : 1
-    }
-  },
-  "apple/PersonaLink/Sources/PersonaLink/NativeCompatibility.swift" : {
-    "keychain-read" : {
-      "main" : 1
-    }
-  },
   "apple/PersonaWatch/WatchPetView.swift" : {
     "directory-listing" : {
       "main" : 1
