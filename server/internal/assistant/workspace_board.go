@@ -120,9 +120,10 @@ func (s *Service) writeBoard(w http.ResponseWriter, r *http.Request, state works
 	_, activity := s.store().(workspaceBoardActivityStore)
 	apierr.WriteJSON(w, struct {
 		workspaceboard.State
-		CanWrite bool `json:"can_write"`
-		Activity bool `json:"activity"`
-	}{s.presentBoard(state), fullRole(r), activity})
+		CanWrite   bool `json:"can_write"`
+		BatchCards bool `json:"batch_cards"`
+		Activity   bool `json:"activity"`
+	}{s.presentBoard(state), fullRole(r), true, activity})
 }
 
 func (s *Service) getWorkspaceBoard(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +148,7 @@ func (s *Service) mutateWorkspaceBoard(w http.ResponseWriter, r *http.Request) {
 	if store == nil {
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
 	var fields map[string]json.RawMessage
 	if err != nil || json.Unmarshal(body, &fields) != nil || fields["revision"] == nil || strings.TrimSpace(string(fields["revision"])) == "null" {
 		writeBodyErr(w, err, i18n.Err("hub-workspace_board.err_bad_request"))
@@ -158,6 +159,23 @@ func (s *Service) mutateWorkspaceBoard(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&op); err != nil {
 		apierr.Write(w, 400, err)
+		return
+	}
+	// Keep single-card writes at their original bound. Batches can include up to
+	// 1000 card IDs, column IDs and anchors, each bounded by the domain model.
+	if op.Action != "batch_cards" && len(body) > 64<<10 {
+		writeBodyErr(w, &http.MaxBytesError{Limit: 64 << 10}, nil)
+		return
+	}
+	if op.Action == "batch_cards" {
+		for key := range fields {
+			if key != "revision" && key != "action" && key != "changes" {
+				apierr.Write(w, 400, workspaceboard.ErrInvalid)
+				return
+			}
+		}
+	} else if _, hasChanges := fields["changes"]; hasChanges {
+		apierr.Write(w, 400, workspaceboard.ErrInvalid)
 		return
 	}
 	state, err := store.WorkspaceBoard(r.Context())
