@@ -325,7 +325,7 @@ struct ChatsView: View {
         // drawn here: drawn by the list alone, the chat came up under the system navigation bar again (SearchOpenTests).
         let _ = searching
         SplitNavigation(path: pushing, listKey: unified == nil ? "agents.list" : "sidebar.list",
-                        destinations: AgentsDestinations(unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch) {
+                        destinations: AgentsDestinations(path: pushing, unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch) {
             listColumn
         } empty: {
             if unified != nil {
