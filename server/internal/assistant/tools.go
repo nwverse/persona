@@ -943,6 +943,9 @@ func (s *Service) Action(ctx context.Context, a Action) (ActionResult, error) {
 		return ActionResult{}, errInvalidQuestionCancel
 	}
 	r = honest(q.ix, r)
+	if !r.Cancel {
+		s.ownerHeard(q.ix.SessionID) // the owner's answer is their word in that conversation (ownerHeard)
+	}
 	// Whether a call waits on it is read, and the answer handed to that call, under the lock a question that lets go of
 	// its turn takes to do so (ask_release.go): the answer goes to the call or is told as a message, never lost between.
 	s.questions.mu.Lock()

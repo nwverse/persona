@@ -366,7 +366,7 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 	if err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
-	session := "persona-" + convID(sessionID)
+	session := cuaConversationLabel(sessionID)
 	lcu := h.callBackend(m) == "lcu"
 	if a.PID != 0 || a.WindowID != 0 {
 		switch {
@@ -616,8 +616,8 @@ func (h *Manager) callBackend(m *Machine) string {
 	}
 }
 
-// computerCall runs one computer-use tool on m's node.
-func (h *Manager) computerCall(ctx context.Context, m *Machine, session, conversation, tool string, args map[string]any) (*proto.ComputerResult, error) {
+// computerCallOnce runs one computer-use tool on m's node, as it is (computerCall handles a session that ended).
+func (h *Manager) computerCallOnce(ctx context.Context, m *Machine, session, conversation, tool string, args map[string]any) (*proto.ComputerResult, error) {
 	var res proto.ComputerResult
 	s := h.cua()
 	backend := h.callBackend(m)
