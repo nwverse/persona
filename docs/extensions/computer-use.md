@@ -550,6 +550,13 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   25% after each calm second until the first cut; the phone moves to another tier when the band no longer fits.
   `update.path` (with or without a band) starts the 10 s delay floor, the delivered rate and the calm stretch over
   (`RateController.pathChanged`): the new route's one-way delay is its own, not a queue.
+- **Idle refinement** (`Refinement`, `frame` flag 2; for a phone that sets a band): 300 ms after the screen stops
+  changing, the latest captured picture (even one skipped while a queue drained) is encoded again at four times the
+  target bitrate, then twice more 200 ms apart, so text sharpens at any tier. A pass goes only while the link is calm
+  (not skipping, the last frame's queueing under 150 ms) and the encoder holds nothing; one that comes back queued past
+  150 ms ends the passes until the next change. Its report changes nothing in `RateController` but a keyframe request,
+  and `timing` counts only its bytes. A still screen after a size change gets its keyframe through the first pass.
+  ScreenCaptureKit's queue depth is 4 for such a stream, since refinement holds one picture.
   `timing` adds `target_kbps` (the bitrate asked of the encoder; `kbps` is what went out), `skipped` (frames left out
   over the 500 ms queue), `blocked_ms` (time frames waited to be written to the stream) and `pending` (the most frames
   the encoder held at once). An app without tiers sends none of the new fields and gets the adaptation above unchanged;
@@ -641,6 +648,17 @@ iPhone's side comes next.
   another VPN or a proxy); `PathPolicy` picks the route: by minimum round trip, a direct route winning a tie with the
   relay; at the stream's start at once, later only after 10 s healthy, a clear gain and 20 s since the last move; a lost
   route left at once and a degraded one (loss ≥ 5 %, or 50 ms over its own floor for 5 s) when another is healthy.
+- **The iPhone** (`apple/Persona/Screen/ScreenLinkRoutes.swift`, for now only in a DEBUG build launched with
+  `-showScreenRoutes`): the RFB and video relays offer the subprotocol beside `binary`; `ScreenLinkRFBStream` /
+  `ScreenLinkVideoStream` (`PersonaScreenKit`) read the first message, and when the hub selected the subprotocol the
+  stream is the session's channel (`ScreenLinkSession`, an actor holding the channels, the transports, the pings and
+  `PathPolicy`), else the same raw stream as before, so the RFB client and the video stream don't change. A session
+  starts a `ScreenLinkProber` (its own actor): it reads the phone's interfaces (`NWPathMonitor`, `getifaddrs`), dials each
+  candidate `RouteEligibility` allows on that interface (`NWParameters.requiredInterface`, TLS 1.3 with the ALPN, the
+  certificate accepted only by its SHA-256 from `paths`) as `ProbePlan` says (at once, then 30 s doubling to 5 min after a
+  failure, again at once when the phone's networks change), and hands what connects to the session, which pings and
+  measures every route and runs the policy once a second. In this stage the picture and input stay on the relay; the
+  choice is only logged (category `screen-link`, route kinds and reasons, never addresses).
 - **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
   again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
   or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
