@@ -43,6 +43,16 @@ public enum TierLadder {
     public static let floorBitsPerPixel = 0.02
     public static let ceilingBitsPerPixel = 0.08
 
+    /// How many more bits per pixel a codec needs than HEVC for the same picture (#6558: a browser without HEVC gets
+    /// H.264). 1 for both until the encoding bench measures H.264 against the floor's SSIM; spec/fixtures/screen-tiers
+    /// carries the codec, so the browser's ladder follows when it changes.
+    public static func bitsFactor(_ codec: String) -> Double {
+        switch codec.lowercased() {
+        case "h264": 1.0
+        default: 1.0
+        }
+    }
+
     /// The ladder's steps for a bias, best first, before a display and the phone's caps shape them.
     public static func steps(_ bias: Bias) -> [(scale: Double, fps: Int)] {
         switch bias {
@@ -53,19 +63,20 @@ public enum TierLadder {
     }
 
     /// The ladder for a display `points` in size and `pixels` in pixels, under the phone's long-edge cap `maxSize`,
-    /// bitrate cap `capKbps` and frame-rate cap `maxFps`. Never empty: the last tier stays even when its floor is above
-    /// the cap (its floor is then the cap).
+    /// bitrate cap `capKbps` and frame-rate cap `maxFps`, for the stream's `codec` (`bitsFactor`). Never empty: the last
+    /// tier stays even when its floor is above the cap (its floor is then the cap).
     public static func make(points: (width: Int, height: Int), pixels: (width: Int, height: Int), maxSize: Int,
-                            bias: Bias, capKbps: Int, maxFps: Int) -> [Tier] {
+                            bias: Bias, capKbps: Int, maxFps: Int, codec: String = "hevc") -> [Tier] {
         let cap = CapturePlan.capKbps(capKbps)
+        let factor = bitsFactor(codec)
         var tiers: [Tier] = []
         for step in steps(bias) {
             let size = CapturePlan.size(points: points, pixels: pixels, scale: step.scale, maxSize: maxSize)
             let fps = CapturePlan.fps(min(step.fps, maxFps))
             if tiers.contains(where: { $0.width == size.width && $0.height == size.height && $0.fps == fps }) { continue }
             let perSecond = Double(size.width * size.height * fps)
-            let floor = max(CapturePlan.minKbps, Int((perSecond * floorBitsPerPixel / 1000).rounded()))
-            let ceiling = min(cap, max(floor, Int((perSecond * ceilingBitsPerPixel / 1000).rounded())))
+            let floor = max(CapturePlan.minKbps, Int((perSecond * floorBitsPerPixel * factor / 1000).rounded()))
+            let ceiling = min(cap, max(floor, Int((perSecond * ceilingBitsPerPixel * factor / 1000).rounded())))
             tiers.append(Tier(scale: step.scale, fps: fps, width: size.width, height: size.height, minKbps: floor,
                               maxKbps: ceiling))
         }

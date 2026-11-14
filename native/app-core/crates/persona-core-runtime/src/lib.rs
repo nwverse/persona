@@ -7,6 +7,8 @@
 
 pub mod wire;
 
+pub use persona_core::transport;
+
 #[cfg(any(target_os = "android", feature = "test-support"))]
 mod diagnostics;
 #[cfg(any(target_os = "android", feature = "test-support"))]
@@ -23,7 +25,8 @@ use std::time::{Duration, Instant};
 
 use persona_core::Item;
 use persona_core::continuity::{Batch, Session, Step};
-use wire::{Action, ChatEvent, ChatPatch, ChatSnapshot, Effect, ListOp, WireBatch};
+use persona_core::transport::{DecodeError, Frame, LatestPage};
+use wire::{Action, ChatEvent, ChatPatch, ChatSnapshot, Effect, ListOp, Payload, WireBatch};
 
 /// The client's side: called on the core's worker thread, so implementations must be thread-safe and quick.
 pub trait Host: Send + Sync + 'static {
@@ -422,7 +425,7 @@ impl Worker {
             }
             Action::Chat { chat, event } => {
                 let Some(state) = self.chats.get_mut(&chat) else {
-                    return self.reject(format!("event for a chat that is not open: {chat}"));
+                    return self.reject("event for a chat that is not open".into());
                 };
                 let step = match apply(&mut state.session, event) {
                     Ok(step) => step,
@@ -430,9 +433,20 @@ impl Worker {
                 };
                 self.after_step(&chat, step);
             }
+            Action::WirePayload { chat, payload } => {
+                let Some(state) = self.chats.get_mut(&chat) else {
+                    return self.reject("payload for a chat that is not open".into());
+                };
+                let step = match payload_step(&mut state.session, &chat, payload) {
+                    Ok(Some(step)) => step,
+                    Ok(None) => return,
+                    Err(error) => return self.reject(error),
+                };
+                self.after_step(&chat, step);
+            }
             Action::ContinueFill { chat } => {
                 let Some(state) = self.chats.get_mut(&chat) else {
-                    return self.reject(format!("fill for a chat that is not open: {chat}"));
+                    return self.reject("fill for a chat that is not open".into());
                 };
                 let step = state.session.continue_fill();
                 self.after_step(&chat, step);
@@ -511,6 +525,64 @@ impl Worker {
             self.host.changed(version);
         }
     }
+}
+
+/// A refused payload, reported without any of its content: a reason code, and key names or positions only
+/// (`transport::DecodeError`). The chat id is not content either, but it is not part of the decoder's errors.
+fn refused(error: DecodeError) -> String {
+    format!("refused payload: {error}")
+}
+
+/// Applies a transport payload to its chat. `Ok(None)` is a frame that is not an `items` frame or one iOS would
+/// drop, so it is not an error and changes nothing.
+fn payload_step(session: &mut Session, chat: &str, payload: Payload) -> Result<Option<Step>, String> {
+    let step = match payload {
+        Payload::Latest { body } => {
+            session.received(transport::decode_latest(body.as_bytes()).map_err(refused)?.into_batch())
+        }
+        Payload::Newer { body } => {
+            session.after(transport::decode_newer(body.as_bytes()).map_err(refused)?.into_batch())
+        }
+        Payload::Reloaded { body } => {
+            let LatestPage {
+                items,
+                has_more,
+                history,
+                to_seq,
+            } = transport::decode_latest(body.as_bytes()).map_err(refused)?;
+            session.reload(items, history, to_seq, has_more)
+        }
+        Payload::Older { body } => {
+            let page = transport::decode_latest(body.as_bytes()).map_err(refused)?;
+            session.older(page.items, page.has_more)
+        }
+        Payload::Range { body } => {
+            let (items, more) = transport::decode_range(body.as_bytes()).map_err(refused)?.into_parts();
+            session.range(items, more)
+        }
+        Payload::Frame { body } => match transport::decode_frame(body.as_bytes()) {
+            Ok(Frame::Other) => return Ok(None),
+            // iOS's `ServerEvent.decode` drops a frame it cannot decode; that is not a failure of the chat.
+            Err(_) => return Ok(None),
+            Ok(Frame::Items(frame)) => {
+                // The frame names its own machine and session but no hub group, so the client's chat id may be
+                // `machine_id/session_id`, iOS's `group|machine_id/session_id` for a non-default group, or either
+                // bare id. Anything else routed the frame wrongly: report it rather than apply another chat's items.
+                let full = format!("{}/{}", frame.machine_id, frame.session_id);
+                let routed = chat == full
+                    || chat
+                        .strip_suffix(full.as_str())
+                        .is_some_and(|prefix| prefix.ends_with('|'))
+                    || frame.machine_id == chat
+                    || frame.session_id == chat;
+                if !routed {
+                    return Err("payload frame is for another chat".into());
+                }
+                session.received(frame.into_batch())
+            }
+        },
+    };
+    Ok(Some(step))
 }
 
 fn items_from(json: &str) -> Result<Vec<Item>, String> {
