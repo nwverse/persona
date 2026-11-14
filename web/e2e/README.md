@@ -16,6 +16,14 @@ node web/e2e/ask-card-dock.mjs <loopback-web-origin> <artifact-directory> [--chr
 
 Opens the real app against a loopback web server (Vite or a preview build) with every hub request and the socket answered in the browser by invented data. The main conversation shows an ask_user card with four described options in the Pending tray at 1280 × 600, 1024 × 520, 390 × 664 and 360 × 560 (touch), light and dark. It checks the card's send button and the three tray entries are not under the composer before any scrolling, and that "Or write your own" is fully visible (not under the sticky answer row or the tray's title) once tapped and typed into. Writes `results.json` and before/after-typing screenshots; exits nonzero on failure or the four-minute timeout.
 
+## Waiting cards cut off below the dock (audit item 10)
+
+```sh
+node web/e2e/pending-cards-cut.mjs <loopback-web-origin> <artifact-directory> [--chromium <executable>]
+```
+
+Opens the real app on an Agent's session page against a loopback web server (Vite or a preview build) with every hub request and the socket answered in the browser by invented data (an Agent with a question and a Bash approval at once); no card is answered. At 1440 × 900 and 1280 × 820 the approval's answers stand at the bottom edge of the dock's box (its 55% cap) while its title and command are above it; at 1024 × 700 the question alone fills the box; 1440 × 1600 fits both. Light and dark. It checks that wherever the approval's Allow is in view, its title and command are too (in the card, or on the answer row's `data-card-answers` line), that the first card says "2 pending" while the stack is cut off, that the line brings the whole approval into view with the focus on it, that scrolling the box brings an approval wholly below it into view, and that neither the line nor the count is drawn when both cards fit. Writes `results.json` and screenshots; a four-minute watchdog ends the run with a timeout verdict, and the last line is the verdict.
+
 ## Chat content: sent lines, tables, bubble actions, model pill, runtime line, long folds
 
 ```sh
@@ -207,6 +215,28 @@ checked and sends nothing, that Auto is posted and shown at once, and that Full 
 asks first. It then checks that the session waits (`bypass_pending`, the chip still on the mode it runs in) until the
 mock's restart comes up in Full access. It prints one line per check and a verdict, and exits nonzero on a failure or
 its five-minute timeout.
+
+## The app shell's connection states, dead links and keyboard focus (web usability audit)
+
+```sh
+MOCK_TASKS=1 MOCK_SESSIONS_LIST=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/shell-connection.mjs http://127.0.0.1:<web port> http://127.0.0.1:<port> <artifact directory>
+```
+
+Needs a fake hub of its own: the runner takes it down (`/mock/down`) and refuses this browser's credential for a while
+(`/mock/reject`), and puts both back at the end. In Chrome, light and dark, it checks that folding the sidebar to its
+rail by the keyboard leaves the focus on the rail's expand button and opening it again on the collapse button; that an
+Agent's page names its browser tab after the session's title; that an unknown address says **Page not found** and
+keeps the address, a knowledge entry the hub doesn't have says **Entry not found** in the shared empty state (no
+title made of its id, no disabled buttons), and `/a/<missing>` says the conversation isn't there once, under the list's
+name, with no message box left loading; that the
+first key press makes no `AudioContext` while the alert sound is off and one when it is on; that the reconnect pill
+covers none of the to-dos' fields, buttons or titles at 390 px and 1280 px, and its details open over the page; that
+the English Offline line wraps only between words; and that a credential refused while the page is open reaches the
+sign-in page with "signed out" within 25 seconds. Each block of checks fails on its own and the run goes on; it prints
+one line per check and a verdict, saves screenshots in the artifact directory, and exits 1 on a failure and 2 on its
+five-minute timeout.
 
 ## Keyboard around the overlays
 
