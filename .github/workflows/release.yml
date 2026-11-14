@@ -118,6 +118,9 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Environment secrets are visible only in this protected context. Keep the existence check here, not in an
+    # unbound job: the documented environment-only configuration would otherwise report every credential missing.
+    environment: persona-desktop-release
     outputs:
       version: ${{ steps.gate.outputs.version }}
       mac: ${{ steps.gate.outputs.mac }}

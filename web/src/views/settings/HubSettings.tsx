@@ -181,7 +181,7 @@ function HubUpdates() {
         <Row label={t("settings-hubsettings.version")} mono>
           <span className="max-w-[320px] truncate" title={status.version}>{status.version}</span>
         </Row>
-        <Row label={t("settings-hubsettings.channel")}>{status.version.startsWith("web-dev-") ? t("settings-hubsettings.web_dev") : channelTitle(status.channel)}</Row>
+        <Row label={t("settings-hubsettings.channel")} anchor="hub-channel">{status.version.startsWith("web-dev-") ? t("settings-hubsettings.web_dev") : channelTitle(status.channel)}</Row>
         {status.development && <>
           <Row label={t("settings-hubsettings.source")} stackOnNarrow>
             <select aria-label={t("settings-hubsettings.source")} className={settingsInputClass}
@@ -270,7 +270,7 @@ function HubUpdates() {
       </Group>
 
       {status.can_update && (
-        <Group footer={t(status.source === "web-dev" ? "settings-hubsettings.dev_auto_footer" : "settings-hubsettings.auto_footer")}>
+        <Group footer={t(status.source === "web-dev" ? "settings-hubsettings.dev_auto_footer" : "settings-hubsettings.auto_footer")} anchor="hub-auto-update">
           <Row label={t("settings-hubsettings.auto_update")}>
             <Switch on={status.auto} disabled={savingAuto || savingSource} onChange={(on) => void setAuto(on)} label={t("settings-hubsettings.auto_update")} />
           </Row>
