@@ -47,6 +47,11 @@ jobs:
           node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+      # The web build compiles the password-login WebAssembly client from server/.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
       - name: Desktop checks
         run: scripts/ci/desktop.sh
       - name: Build web for the desktop smoke hub
@@ -95,6 +100,11 @@ jobs:
           node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+      # The web build compiles the password-login WebAssembly client from server/.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
       - name: Desktop checks
         shell: bash
         run: scripts/ci/desktop.sh
