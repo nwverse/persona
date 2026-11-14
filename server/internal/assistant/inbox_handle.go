@@ -111,19 +111,21 @@ func (b *inboxBook) admitInboxSourceWake(it *InboxItem, now time.Time) {
 		switch n.Name {
 		case prompts.NoteAgentStopped:
 			// Only a current Agent's stop is a capped wake. Older stops remain non-waking informational notes.
-			if it.Handling != nil {
-				switch it.Handling.State {
-				case HandlingAgent:
-					if a.Back == HandlingAgent {
-						a.Back = ""
+			if inboxCurrentAgentStopNote(it, n) {
+				if it.Handling != nil {
+					switch it.Handling.State {
+					case HandlingAgent:
+						if a.Back == HandlingAgent {
+							a.Back = ""
+						}
+						b.setHandling(it, HandlingLooking, "", now)
+					case HandlingWaiting:
+						a.Back = HandlingWaiting
+						b.setHandling(it, HandlingLooking, "", now)
 					}
-					b.setHandling(it, HandlingLooking, "", now)
-				case HandlingWaiting:
-					a.Back = HandlingWaiting
-					b.setHandling(it, HandlingLooking, "", now)
 				}
+				b.wakeInboxConversation(it, now)
 			}
-			b.wakeInboxConversation(it, now)
 		case prompts.NoteSelfReplied:
 			if it.Handling != nil && it.Handling.State == HandlingAgent {
 				// The current Agent keeps its state and timeout clock. Back remembers a pre-existing wait exactly as
@@ -168,6 +170,13 @@ func (b *inboxBook) flushInboxWakes(it *InboxItem, now time.Time) {
 	a.DeferredAt, a.WakeSlot = nil, false
 }
 
+// inboxCurrentAgentStopNote reports whether a stop belongs to the latest Agent link, rather than an older Agent whose
+// result is informational only. Under b.mu.
+func inboxCurrentAgentStopNote(it *InboxItem, n inboxNote) bool {
+	latest := inboxLatestAgentLink(it)
+	return latest != nil && latest.MachineID == n.Machine && latest.SessionID == n.Session
+}
+
 // inboxDeferredAgentStop reports a settled current-Agent result whose notification is still held for capacity. Only
 // current stops enter the deferred queue; an older Agent's stop is informational and is queued by tell instead.
 // Under b.mu.
@@ -176,7 +185,7 @@ func inboxDeferredAgentStop(it *InboxItem) bool {
 		return false
 	}
 	for _, n := range it.Agent.Pending {
-		if n.Deferred && n.Name == prompts.NoteAgentStopped {
+		if n.Deferred && n.Name == prompts.NoteAgentStopped && inboxCurrentAgentStopNote(it, n) {
 			return true
 		}
 	}

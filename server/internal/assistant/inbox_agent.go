@@ -550,10 +550,11 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 						continue // known unsettled work (or an undone stop): wait for the next pass, never time it out now
 					}
 					b.mu.Lock()
-					stillAgent := it.Agent != nil && it.Agent.SessionID == a.SessionID && it.Handling != nil && it.Handling.State == HandlingAgent
+					stillAgent := it.Agent != nil && it.Agent.SessionID == a.SessionID && it.Handling != nil && it.Handling.State == HandlingAgent &&
+						!inboxDeferredAgentStop(it)
 					b.mu.Unlock()
 					if !stillAgent {
-						continue // the stop returned the item to its processing conversation
+						continue // the stop returned the item to its processing conversation or is held for capacity
 					}
 				}
 			}
@@ -578,7 +579,7 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 		b.mu.Lock()
 		// A wake queued during the session read can keep the same session and handling state; only settle the turn we read.
 		if it.Agent != nil && it.Agent.SessionID == a.SessionID && (it.Handling == nil || it.Handling.State == state) &&
-			a.Back == it.Agent.Back && sameTime(a.StartedAt, it.Agent.StartedAt) {
+			a.Back == it.Agent.Back && sameTime(a.StartedAt, it.Agent.StartedAt) && !inboxDeferredAgentStop(it) {
 			w := beginWrite(it)
 			if it.Suggestion != nil { // new messages left its suggestion standing: it still holds
 				b.setHandling(it, HandlingDone, "", now)
