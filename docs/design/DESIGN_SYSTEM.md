@@ -1563,6 +1563,25 @@ Claude Code's AskUserQuestion, the assistant's ask_user and Codex's questions.
   review as not answered, and its main button opens the card at that question with every answer kept.
 - **The plan pill folds** while a card asks something, so it never sits over the card's buttons.
 
+### 4.12 Keyboard in web lists and forms
+
+For people who work from the keyboard on the web (web audit, 2026-11-14). Every list-and-detail page and every form
+follows these; the To-dos page is the reference (`web/src/views/Todos.tsx`, checked by `Todos.narrow-keyboard.test.tsx`,
+`Todos.plan-fields.test.tsx` and `web/e2e/todos-keyboard-layout.mjs`).
+
+- **A list and its detail at a phone's width** take turns (the list is hidden under the detail). A row opened with Enter
+  or a click moves the focus to the detail's Back, as a page pushed on iOS does. Esc goes back as Back does, except from a
+  field being edited or under a dialog or a menu, which own Esc. Back on the list, by Back, Esc or the browser's Back,
+  the list is scrolled where it was and the focus is on the row that was open, a detail opened by a link too. Side by
+  side, nothing moves: the focus stays on the row and Esc does nothing. Why: hiding the list with `display: none` drops
+  the focused row's focus to `<body>`, and the next Tab starts from the top of the page.
+- **Date and time fields** (`<input type="date">`, `time`, `datetime-local`) save once the value is entered: on leaving
+  the field or on Enter, once however soon the field is left after Enter, and at once for a pick from the browser's
+  picker. Never per typed segment (the "1" of a day "15" is already a valid date), and never disable a field while it
+  saves, which takes the focus away mid-edit (`PlanField`). A half-typed field goes back to the saved value.
+- **⌘↩ / Ctrl+↩ submits** a dialog or a box from its multi-line field, as the composer and New Agent do; Enter alone is
+  a new line, and the Enter that ends an IME composition does neither.
+
 ## 5. Content
 
 ### 5.1 Voice and tone
