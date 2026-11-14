@@ -12,6 +12,8 @@ mkdir -p "$OUT"
 "$HOME/.local/bin/xcode-slot" "$ROOT/native/app-core/scripts/build-apple.sh" > "$OUT/core-build.log" 2>&1
 python3 -I "$ROOT/native/app-core/scripts/apple-no-core-spec.py" --root "$ROOT" --output-dir "$OUT/spec"
 eval "$(python3 "$ROOT/scripts/persona_config.py" env)"
+xcodegen generate -q --spec "$ROOT/apple/project.yml" --project "$OUT/with-core" --project-root "$ROOT/apple"
+ln -s "$ROOT/apple/Config.xcconfig" "$OUT/with-core/Config.xcconfig"
 xcodegen generate -q --spec "$OUT/spec/project.yml" --project "$OUT/no-core" --project-root "$ROOT/apple"
 ln -s "$ROOT/apple/Config.xcconfig" "$OUT/no-core/Config.xcconfig"
 COMMON=(-scheme Persona -configuration "$CONFIGURATION" -destination generic/platform=iOS
@@ -19,7 +21,7 @@ COMMON=(-scheme Persona -configuration "$CONFIGURATION" -destination generic/pla
   'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PERF_SIGNPOST')
 # PERF_SIGNPOST is a repository-supported performance build condition. It also satisfies the current source's
 # screenProbe condition. Both variants use exactly the same setting; normal Release without it is not measured here.
-"$HOME/.local/bin/xcode-slot" timeout 3600 xcodebuild build -project "$ROOT/apple/Persona.xcodeproj" \
+"$HOME/.local/bin/xcode-slot" timeout 3600 xcodebuild build -project "$OUT/with-core/Persona.xcodeproj" \
   -derivedDataPath "$OUT/with-dd" "${COMMON[@]}" > "$OUT/with-build.log" 2>&1
 "$HOME/.local/bin/xcode-slot" timeout 3600 xcodebuild build -project "$OUT/no-core/PersonaReferenceNoCore.xcodeproj" \
   -derivedDataPath "$OUT/without-dd" "${COMMON[@]}" > "$OUT/without-build.log" 2>&1

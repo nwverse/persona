@@ -77,6 +77,8 @@ def main():
     try:
         if args.output.exists():
             raise ValueError("output directory already exists: " + str(args.output))
+        if args.with_core.resolve() == args.without_core.resolve():
+            raise ValueError("with-core and without-core payload paths must be distinct")
         args.output.mkdir(parents=True)
         before = payload(args.without_core.resolve())
         after = payload(args.with_core.resolve())

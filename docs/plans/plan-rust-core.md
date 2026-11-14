@@ -80,7 +80,9 @@ and an arm64 **iPhone 17 Pro / iOS 27.0** simulator (`FD14ED31-119A-4415-BF8D-5D
 Debug, wholemodule, `PERF_SIGNPOST`, not Release. The original measurement tree was based on
 `cf119132e9be23c6921424c93d72ce88401de2e7` with successive harness commits and dirty working-tree changes; it was not
 one immutable source snapshot. Raw arrays, per-run labels and the retained source/linkage records are in
-`docs/archive/apple/reference-measurements-6871/`; production does not construct the core.
+`docs/archive/apple/reference-measurements-6871/`; production does not construct the core. In the table below, launch,
+recorded stream and native-memory are **legacy non-acceptance observations** pending current process/run identity and
+trace-completion evidence. They are not verified current baselines or a newest-build regression comparison.
 
 | Native iOS simulator workload | Samples and result |
 | --- | --- |

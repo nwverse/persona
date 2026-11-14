@@ -214,27 +214,34 @@ import UIKit
                 activeRun = launchRun
             } else {
                 activeRun = nil
-                Task { await captureMockRun(launchRun) }
+                Task { await captureMockRun() }
             }
         } else if name == stop, stats.running {
             let run = activeRun
             activeRun = nil
-            Task { await uploadStop(stats.stop(label: "probe"), run: run) }
+            Task { await uploadStopWhenIdentified(stats.stop(label: "probe"), run: run) }
         }
     }
 
-    private static func captureMockRun(_ fallback: [String: Any]) async {
+    private static func uploadStopWhenIdentified(_ result: [String: Any], run: [String: Any]?) async {
+        guard let hub = AppModel.shared.api?.config else { return }
+        if let id = run?["run_id"] as? String, !id.isEmpty {
+            await uploadStop(result, run: run)
+            return
+        }
+        var request = URLRequest(url: hub.url.appending(path: "mock/frames_context"), timeoutInterval: 10)
+        hub.authorize(&request)
+        guard let identified = try? await mockContext(request) else { return }
+        await uploadStop(result, run: identified)
+    }
+
+    private static func captureMockRun() async {
         guard let hub = AppModel.shared.api?.config else { return }
         var request = URLRequest(url: hub.url.appending(path: "mock/frames_context"), timeoutInterval: 10)
         hub.authorize(&request)
         guard let run = try? await mockContext(request) else { return }
         if FrameStats.shared.running {
             activeRun = run
-        } else if activeRun == nil {
-            // A very short interaction can stop before the context arrives. Keep the same identity for its upload;
-            // never merge the mutable hub context into a later run.
-            activeRun = fallback
-            activeRun?.merge(run) { _, current in current }
         }
     }
 

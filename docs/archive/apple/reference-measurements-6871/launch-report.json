@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "input_directory": "/private/tmp/persona-6871-final-launch-second",
+  "input_directory": "/private/tmp/persona-6871-launch-report-current",
   "expected_iterations": 3,
   "extraction": [
     {
-      "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+      "bundle": "/private/tmp/persona-6871-launch-report-current/reference.xcresult",
       "statuses": {
         "command": [
           "xcrun",
@@ -13,7 +13,7 @@
           "test-results",
           "tests",
           "--path",
-          "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+          "/private/tmp/persona-6871-launch-report-current/reference.xcresult",
           "--compact"
         ],
         "status": "ok",
@@ -29,7 +29,7 @@
           "test-results",
           "metrics",
           "--path",
-          "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+          "/private/tmp/persona-6871-launch-report-current/reference.xcresult",
           "--compact"
         ],
         "status": "ok",
@@ -44,7 +44,7 @@
           "export",
           "attachments",
           "--path",
-          "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+          "/private/tmp/persona-6871-launch-report-current/reference.xcresult",
           "--output-path",
           "<fresh temporary directory>"
         ],
@@ -72,7 +72,7 @@
           ],
           "runs": [
             {
-              "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+              "bundle": "/private/tmp/persona-6871-launch-report-current/reference.xcresult",
               "device": {
                 "deviceId": "58B70B19-21DA-4051-B017-0D828579958A",
                 "deviceName": "Persona 6871 Reference Measurements"
@@ -105,7 +105,7 @@
       },
       "issues": [],
       "bundles": [
-        "/private/tmp/persona-6871-final-launch-second/reference.xcresult"
+        "/private/tmp/persona-6871-launch-report-current/reference.xcresult"
       ],
       "probe": {
         "source": "frames_attachment",
@@ -128,7 +128,7 @@
               "warm_up": true
             },
             "provenance": {
-              "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+              "bundle": "/private/tmp/persona-6871-launch-report-current/reference.xcresult",
               "test_identifier": "PerfReferenceTests/testNativeFirstFrame()",
               "attachment": {
                 "configurationName": "Test Scheme Action",
@@ -159,7 +159,7 @@
               "warm_up": false
             },
             "provenance": {
-              "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+              "bundle": "/private/tmp/persona-6871-launch-report-current/reference.xcresult",
               "test_identifier": "PerfReferenceTests/testNativeFirstFrame()",
               "attachment": {
                 "configurationName": "Test Scheme Action",
@@ -190,7 +190,7 @@
               "warm_up": false
             },
             "provenance": {
-              "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+              "bundle": "/private/tmp/persona-6871-launch-report-current/reference.xcresult",
               "test_identifier": "PerfReferenceTests/testNativeFirstFrame()",
               "attachment": {
                 "configurationName": "Test Scheme Action",
@@ -221,7 +221,7 @@
               "warm_up": false
             },
             "provenance": {
-              "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+              "bundle": "/private/tmp/persona-6871-launch-report-current/reference.xcresult",
               "test_identifier": "PerfReferenceTests/testNativeFirstFrame()",
               "attachment": {
                 "configurationName": "Test Scheme Action",
@@ -237,43 +237,48 @@
           }
         ],
         "log_fallback": [],
-        "issues": [],
+        "issues": [
+          "launch observation needs its process identity",
+          "launch observation needs its process identity",
+          "launch observation needs its process identity",
+          "launch observation needs its process identity"
+        ],
         "warnings": [],
         "statistics": {
           "view_appearance_ms": {
             "values": [
-              1479.2590416036546,
               635.7039166614413,
               1328.5042501520365,
               1689.3055418040603
             ],
-            "median": 1403.8816458778456
+            "median": 1328.5042501520365
           }
         },
         "medians": {
-          "view_appearance_ms": 1403.8816458778456
+          "view_appearance_ms": 1328.5042501520365
         },
         "expected_iterations": 3,
-        "complete": true,
+        "complete": false,
         "acceptance_eligible": false,
         "raw_count": 4,
-        "measured_count": 4,
-        "excluded_warm_up_indices": [],
+        "measured_count": 3,
+        "excluded_warm_up_indices": [
+          0
+        ],
         "statistic_sample_indices": [
-          0,
           1,
           2,
           3
         ]
       },
-      "complete": true,
+      "complete": false,
       "acceptance_eligible": false
     }
   },
-  "complete": true,
+  "complete": false,
   "acceptance_eligible": false,
-  "acceptance_scope": "tagged glide sample integrity only; not presented FPS",
-  "status": "diagnostic_complete",
+  "acceptance_scope": "tagged glide sample integrity only; launch metrics are diagnostic completeness, not presented FPS or a launch-budget gate",
+  "status": "incomplete",
   "expected_iterations_source": "cli",
   "mode": "diagnostic"
 }

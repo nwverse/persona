@@ -92,6 +92,16 @@ class AppleMeasurementTests(unittest.TestCase):
                     result = subprocess.run(["bash", "-c", command], capture_output=True, text=True)
                     self.assertEqual(result.returncode, expected, result.stderr)
 
+    def test_size_wrapper_generates_distinct_projects_and_payloads(self):
+        script = (ROOT / "native/app-core/scripts/apple-size-reference.sh").read_text()
+        self.assertIn('xcodegen generate -q --spec "$ROOT/apple/project.yml" --project "$OUT/with-core"', script)
+        self.assertIn('xcodebuild build -project "$OUT/with-core/Persona.xcodeproj"', script)
+        self.assertIn('xcodebuild build -project "$OUT/no-core/PersonaReferenceNoCore.xcodeproj"', script)
+        self.assertIn('--with-core "$OUT/with-dd/Build/Products/$CONFIGURATION-iphoneos/Persona.app"', script)
+        self.assertIn('--without-core "$OUT/without-dd/Build/Products/$CONFIGURATION-iphoneos/Persona.app"', script)
+        self.assertIn("with-core and without-core payload paths must be distinct",
+                      (SCRIPTS / "apple-package-report.py").read_text())
+
     def test_package_rejects_existing_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

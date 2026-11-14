@@ -99,6 +99,12 @@ class ReferenceEvidenceTests(unittest.TestCase):
         test = report["tests"]["PerfReferenceTests/testNativeFirstFrame()"]
         metric = test["metrics"]["com.apple.dt.XCTMetric_ApplicationLaunch-AppLaunch.duration"]
         self.assertEqual(metric["values"], [5.26995975, 5.611702416, 6.161564292])
+        appearance = test["probe"]
+        self.assertEqual(appearance["excluded_warm_up_indices"], [0])
+        self.assertEqual(appearance["statistic_sample_indices"], [1, 2, 3])
+        self.assertEqual(appearance["measured_count"], 3)
+        self.assertEqual(appearance["statistics"]["view_appearance_ms"]["median"], 1328.5042501520365)
+        self.assertFalse(appearance["complete"], "legacy launch lacks process_id and is not current acceptance")
         manifest = json.loads((ARCHIVE / "launch-export-manifest.json").read_text())
         self.assertEqual(manifest[0]["attachments"][0]["deviceId"], "58B70B19-21DA-4051-B017-0D828579958A")
         environment = gzip.decompress((ARCHIVE / "launch-environment.txt.gz").read_bytes()).decode()
