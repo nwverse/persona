@@ -93,9 +93,12 @@ pub fn config() -> Vec<u8> {
 }
 
 #[cfg(feature = "ohos")]
+type ChangedChatCallback = ThreadsafeFunction<FnArgs<(String, i64)>>;
+
+#[cfg(feature = "ohos")]
 pub struct CoreHost {
     changed: Arc<ThreadsafeFunction<i64>>,
-    changed_chat: Option<Arc<ThreadsafeFunction<FnArgs<(String, i64)>>>>,
+    changed_chat: Option<Arc<ChangedChatCallback>>,
     effects: Arc<ThreadsafeFunction<Vec<u8>>>,
 }
 
@@ -111,7 +114,7 @@ impl CoreHost {
 
     pub fn with_changed_chat(
         changed: ThreadsafeFunction<i64>,
-        changed_chat: ThreadsafeFunction<FnArgs<(String, i64)>>,
+        changed_chat: ChangedChatCallback,
         effects: ThreadsafeFunction<Vec<u8>>,
     ) -> Arc<Self> {
         Arc::new(CoreHost {
