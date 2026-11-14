@@ -359,6 +359,7 @@ export function Menu({
   side = "bottom",
   width = 208,
   header,
+  headerAsWritten = false,
   container,
 }: {
   items: MenuItem[];
@@ -370,6 +371,9 @@ export function Menu({
   side?: "top" | "bottom";
   width?: number;
   header?: string;
+  /** The header is or holds a name (a space's, a tab's, a worktree's): drawn as written. A label header is drawn in
+   *  capitals, which would rewrite the name ("weather" as "WEATHER"). */
+  headerAsWritten?: boolean;
   /** Where the menu is put instead of the page's body: a full-screen layer above the menus' own (the image editor),
    *  whose look (its `dark`) the menu then takes. */
   container?: Element | null;
@@ -583,6 +587,7 @@ export function Menu({
     onChoose: (i: number) => choose(depth, i, false),
     onRename: (it: MenuItem, name: string) => void commitRename(depth, it, name),
     onCancelRename: () => {
+      handBack(); // the input had it: the menu stays open, its Rename row highlighted, and the next key is the menu's
       setRenaming(null);
       setFailure(null);
     },
@@ -590,7 +595,7 @@ export function Menu({
 
   return createPortal(
     <>
-      <MenuPanel {...panelProps(0)} place={{ anchor, point, align, side, width }} header={header} />
+      <MenuPanel {...panelProps(0)} place={{ anchor, point, align, side, width }} header={header} headerAsWritten={headerAsWritten} />
       {subs.map((s, i) => (
         <MenuPanel key={`${s.from}-${i}`} {...panelProps(i + 1)} place={{ rect: s.rect, width }} loading={s.loading} loadError={s.error} />
       ))}
@@ -605,7 +610,7 @@ type Place =
 
 /** One level of a menu: the rows, the highlight gliding under them, a rename input or a failure where they call for it. */
 function MenuPanel({
-  id, depth, items, active, confirming, renaming, busy, failure, rows: report, place, header, loading, loadError,
+  id, depth, items, active, confirming, renaming, busy, failure, rows: report, place, header, headerAsWritten, loading, loadError,
   onHover, onEnter, onLeave, onChoose, onRename, onCancelRename,
 }: {
   id: string;
@@ -619,6 +624,7 @@ function MenuPanel({
   rows: (list: (HTMLElement | null)[]) => void;
   place: Place;
   header?: string;
+  headerAsWritten?: boolean;
   loading?: boolean;
   loadError?: string;
   onHover: (i: number) => void;
@@ -632,6 +638,9 @@ function MenuPanel({
   const els = useRef<(HTMLElement | null)[]>([]);
   const [box, setBox] = useState<{ top: number; height: number } | null>(null);
   const [pos, setPos] = useState<React.CSSProperties>({ visibility: "hidden" });
+  // Rows past what shows (a window too short for the whole menu): a fade at that edge says there is more to scroll to,
+  // where a cut falling between two rows looked like the menu's end
+  const [more, setMore] = useState({ up: false, down: false });
   const narrow = useMedia(NARROW_QUERY);
   report(els.current);
   // only lines to read (#4054): a popover that explains something, not a menu to choose from
@@ -662,12 +671,13 @@ function MenuPanel({
       else if (place.point) {
         const { x, y } = place.point;
         const right = x + Math.min(place.width, innerWidth - 16) + 8 > innerWidth; // no room on the right: it opens leftwards
-        at = placeMenu({ left: x, right: x, top: y, bottom: y }, h, { width: place.width, align: right ? "right" : "left", side: "bottom", screenW: innerWidth, screenH: innerHeight, view, gap: 0 });
+        at = placeMenu({ left: x, right: x, top: y, bottom: y }, h, { width: place.width, align: right ? "right" : "left", side: "bottom", screenW: innerWidth, screenH: innerHeight, view, gap: 0, beside: !narrow });
       } else if (place.anchor) {
-        at = placeMenu(place.anchor.getBoundingClientRect(), h, { width: place.width, align: place.align, side: place.side, screenW: innerWidth, screenH: innerHeight, view });
+        at = placeMenu(place.anchor.getBoundingClientRect(), h, { width: place.width, align: place.align, side: place.side, screenW: innerWidth, screenH: innerHeight, view, beside: !narrow });
       } else return;
       const { maxHeight, ...rest } = at;
-      setPos(maxHeight === undefined ? rest : { ...rest, maxHeight: `min(70vh, 520px, ${maxHeight}px)` });
+      // as tall as the window (or what the keyboard leaves) allows, 8px inside it, as placeMenu keeps it (the class's cap)
+      setPos(maxHeight === undefined ? rest : { ...rest, maxHeight: `${maxHeight}px` });
     };
     reposition();
     // An open menu keeps to where it belongs when the window or the visual viewport (a phone keyboard) resizes.
@@ -686,18 +696,30 @@ function MenuPanel({
     setBox(el ? { top: el.offsetTop, height: el.offsetHeight } : null);
   }, [active]);
 
+  const measureMore = () => {
+    const el = ref.current;
+    if (!el) return;
+    const up = el.scrollTop > 0;
+    const down = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+    setMore((m) => (m.up === up && m.down === down ? m : { up, down }));
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- measured again once placed, and when its rows change height
+  useLayoutEffect(measureMore, [pos, items.length, renaming, failure, loading, loadError]);
+
   return (
     <div
       ref={ref}
       role={reading ? "dialog" : "menu"}
       aria-label={reading ? (header ?? items[0].label) : undefined}
       data-menu={id}
-      className="fixed z-50 max-h-[min(70vh,520px)] overflow-y-auto rounded-[10px] bg-surface p-1 shadow-overlay"
+      className="fixed z-50 max-h-[calc(100dvh-(--spacing(4)))] overflow-y-auto rounded-[10px] bg-surface p-1 shadow-overlay"
       style={{ ...pos, animation: `pop-in 160ms ${EASE} both`, transformOrigin: origin }}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
+      onScroll={measureMore}
     >
-      {header && <div className="px-2 pt-1.5 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{header}</div>}
+      {more.up && <div aria-hidden data-menu-more="up" className="pointer-events-none sticky top-0 z-20 -mb-6 h-6 bg-linear-to-b from-surface to-transparent" />}
+      {header && <div className={cx("px-2 pt-1.5 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3", !headerAsWritten && "uppercase")}>{header}</div>}
       <div className="relative">
         <span
           aria-hidden
@@ -764,6 +786,7 @@ function MenuPanel({
           {failure}
         </div>
       )}
+      {more.down && <div aria-hidden data-menu-more="down" className="pointer-events-none sticky bottom-0 z-20 -mt-6 h-6 bg-linear-to-t from-surface to-transparent" />}
     </div>
   );
 }

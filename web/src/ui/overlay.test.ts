@@ -17,6 +17,18 @@ describe("Tab inside a dialog", () => {
   it("keeps it on the dialog when there is nothing to land on", () => {
     expect(trapTab(0, -1, false)).toBe(-1);
   });
+  // Chrome lets the keyboard focus a scrolling body with no control inside (the shortcut help's list): Tab went from it
+  // back to the first control, so the footer's button after it was never reached going forward
+  it("goes on in the browser's order from something inside that is no control, wrapping only past either end", () => {
+    // Close, the body, Edit in Settings: the body sits before control 1
+    expect(trapTab(2, -1, false, 1)).toBeNull(); // on to Edit in Settings
+    expect(trapTab(2, -1, true, 1)).toBeNull(); // back to Close
+    // a body after every control: Tab wraps to the first, Shift+Tab goes back as usual
+    expect(trapTab(2, -1, false, 2)).toBe(0);
+    expect(trapTab(2, -1, true, 2)).toBeNull();
+    // one before every control: Shift+Tab wraps to the last
+    expect(trapTab(2, -1, true, 0)).toBe(1);
+  });
 });
 
 const wide = { width: 208, align: "left" as const, side: "bottom" as const, screenW: 1280, screenH: 800 };
@@ -27,7 +39,18 @@ describe("menu placement", () => {
   });
   it("flips above when there is no room below, and never above the window's top", () => {
     expect(placeMenu({ left: 100, right: 130, top: 700, bottom: 730 }, 200, wide).top).toBe(494);
-    expect(placeMenu({ left: 100, right: 130, top: 100, bottom: 130 }, 760, wide).top).toBe(8);
+    expect(placeMenu({ left: 100, right: 130, top: 140, bottom: 160 }, 290, { ...wide, screenH: 300 }).top).toBe(8);
+  });
+  it("opens a menu too tall for either side on the roomier one, as tall as that room, not over its button", () => {
+    const beside = { ...wide, beside: true };
+    // the session header's ⋯ in a short window: under it, scrolling inside
+    expect(placeMenu({ left: 470, right: 496, top: 14, bottom: 40 }, 610, { ...beside, screenH: 560 })).toEqual({ left: 470, top: 46, width: 208, maxHeight: 506 });
+    // a button low on the page: above it, from the window's top margin
+    expect(placeMenu({ left: 100, right: 130, top: 600, bottom: 630 }, 700, beside)).toEqual({ left: 100, top: 8, width: 208, maxHeight: 586 });
+    // with little room on both sides it opens over the button, as tall as the window allows
+    expect(placeMenu({ left: 100, right: 130, top: 150, bottom: 170 }, 300, { ...beside, screenH: 320 })).toEqual({ left: 100, top: 8, width: 208 });
+    // a card that does not scroll (the turn's cost, an info tip), or a menu on a phone, is placed as before: over the button
+    expect(placeMenu({ left: 470, right: 496, top: 14, bottom: 40 }, 610, { ...wide, screenH: 560 })).toEqual({ left: 470, top: 8, width: 208 });
   });
   it("keeps to the screen's width and the right edge for a right-aligned one", () => {
     expect(placeMenu({ left: 300, right: 380, top: 0, bottom: 30 }, 100, { ...wide, align: "right", screenW: 390 })).toMatchObject({ left: 172, width: 208 });
