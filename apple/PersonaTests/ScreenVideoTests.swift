@@ -281,19 +281,27 @@ struct ScreenVideoTests {
     }
 
     /// A helper with tiers (#6396): its hello starts the policy, whose first tier goes to the helper as an update
-    /// (scale, frame rate, band and target) and to the link as an event. An older helper gets no tier at all.
-    @Test func aHelperWithTiersGetsATier() async throws {
+    /// (scale, frame rate, band and target) and to the link as an event, once the first frame says capture runs
+    /// (#7842). An older helper gets no tier at all.
+    @Test func aHelperWithTiersGetsATierOnceCaptureRuns() async throws {
         guard case var .hello(h) = try Self.messages()[0] else { Issue.record("the fixture starts with hello"); return }
         h.features = ["tiers"]
         h.points = [1512, 982]
         h.pixels = [3024, 1964]
         let rest = try Self.messages().dropFirst().prefix(3).flatMap { Array($0.framed()) }
-        let t = VideoScript([Array(ScreenVideoMessage.hello(h).framed()) + rest], holds: true)
+        let t = VideoScript([Array(ScreenVideoMessage.hello(h).framed())], holds: true)
         let seen = Events()
         let context = ScreenVideoTiers.Context(bias: .auto, budget: .init(maxKbps: 12_000, fps: 60), maxSize: 2868,
                                                link: LinkStats(kind: .relay, via: .wifi), remembered: nil)
         let s = ScreenVideoStream(transport: t, start: Self.start, tiers: ScreenVideoTiers(context)) { seen.add($0) }
         s.run()
+        // The start tier waits for the first frame (#7842): before it, the helper's capture hasn't started, and
+        // ScreenCaptureKit drops a configuration change made then.
+        try await seen.until { $0.contains { $0.hasPrefix("hello") } }
+        try await Task.sleep(for: .milliseconds(600)) // the stream's 250 ms ticks run meanwhile
+        #expect(!seen.all.contains { $0.hasPrefix("tier") }, "\(seen.all)")
+        #expect(!t.sent.contains { $0.count > 4 && $0[4] == ScreenVideoWire.Kind.update.rawValue }, "nothing before a frame")
+        t.feed(rest)
         try await seen.until { $0.contains { $0.hasPrefix("tier") } }
         #expect(seen.all.contains("tier 2268x1472@60 band 4006-12000 target 4006 start"), "\(seen.all)")
         let updates = t.sent.filter { $0.count > 4 && $0[4] == ScreenVideoWire.Kind.update.rawValue }

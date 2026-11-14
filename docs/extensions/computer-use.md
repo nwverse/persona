@@ -662,7 +662,10 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
     20.5 s after the cap lifts.
   - **The app** (`ScreenVideoTiers`, `ScreenVideoStream`, `ScreenVideoLink`): when the helper's `hello` lists `tiers`
     with the display's points and pixels and this app has them (`ScreenTiers.appSupported`), the stream starts a policy
-    and sends its first tier as an `update` (`scale`, `fps`, `min_kbps`, `max_kbps`, `target_kbps`). The stream feeds it
+    and sends its first tier as an `update` (`scale`, `fps`, `min_kbps`, `max_kbps`, `target_kbps`) once the first frame
+    arrives: on `hello` the helper's capture hasn't really started, and ScreenCaptureKit drops a configuration change
+    made then, so capture stayed at 60 fps (#7842). Every tier change waits the same way after `hello` and after
+    `paused`, the latest one kept. The stream feeds it
     every frame from its own task (arrival, the time a frame spread over several reads began, decode time, pictures
     replaced before they showed) and ticks it every 250 ms; a new tier goes out as an `update` and to the link (the
     overlay's tier and reason). ⋯ › Quality changes the bias on the running stream; a route change (#6398) restarts the
