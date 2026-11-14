@@ -3,10 +3,12 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/mcpwait"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -67,6 +69,15 @@ func requireMCPWaitTestDone(t *testing.T, done <-chan error) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the MCP wait interaction did not return")
+	}
+}
+
+func TestMCPWaitBusHelloCapability(t *testing.T) {
+	b := NewBusHub(BusOptions{Hub: "http://[fd00::20]:18660", Token: "t"})
+	p, _ := b.client.HelloParams().(map[string]any)
+	caps, _ := p["capabilities"].([]string)
+	if !slices.Contains(caps, assistantwire.CapabilityMCPWait) {
+		t.Fatalf("manager does not advertise MCP wait updates: %v", caps)
 	}
 }
 
