@@ -160,6 +160,7 @@ export function Button({
   expanded,
   testId,
   size,
+  ref,
   ...aria
 }: {
   children: React.ReactNode;
@@ -184,6 +185,8 @@ export function Button({
   /** "sm": 28 px tall (a row of actions inside a card, as the error notice's). A height in `className` does not win
    *  over the 32 px one here: the classes are joined, not merged, and the stylesheet's order decides. */
   size?: "sm";
+  /** The button, for a page that hands the focus back to it (not the link's: `href` draws an <a>). */
+  ref?: React.Ref<HTMLButtonElement>;
 }) {
   const base = cx("inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150", size === "sm" ? "h-7" : "h-8");
   if (href && !disabled && !busy) {
@@ -213,6 +216,7 @@ export function Button({
   return (
     <button
       {...aria}
+      ref={ref}
       type={type}
       title={title}
       disabled={disabled || busy}

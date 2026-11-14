@@ -206,6 +206,28 @@ asks first. It then checks that the session waits (`bypass_pending`, the chip st
 mock's restart comes up in Full access. It prints one line per check and a verdict, and exits nonzero on a failure or
 its five-minute timeout.
 
+## The app shell's connection states, dead links and keyboard focus (web usability audit)
+
+```sh
+MOCK_TASKS=1 MOCK_SESSIONS_LIST=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/shell-connection.mjs http://127.0.0.1:<web port> http://127.0.0.1:<port> <artifact directory>
+```
+
+Needs a fake hub of its own: the runner takes it down (`/mock/down`) and refuses this browser's credential for a while
+(`/mock/reject`), and puts both back at the end. In Chrome, light and dark, it checks that folding the sidebar to its
+rail by the keyboard leaves the focus on the rail's expand button and opening it again on the collapse button; that an
+Agent's page names its browser tab after the session's title; that an unknown address says **Page not found** and
+keeps the address, a knowledge entry the hub doesn't have says **Entry not found** in the shared empty state (no
+title made of its id, no disabled buttons), and `/a/<missing>` says the conversation isn't there once, under the list's
+name, with no message box left loading; that the
+first key press makes no `AudioContext` while the alert sound is off and one when it is on; that the reconnect pill
+covers none of the to-dos' fields, buttons or titles at 390 px and 1280 px, and its details open over the page; that
+the English Offline line wraps only between words; and that a credential refused while the page is open reaches the
+sign-in page with "signed out" within 25 seconds. Each block of checks fails on its own and the run goes on; it prints
+one line per check and a verdict, saves screenshots in the artifact directory, and exits 1 on a failure and 2 on its
+five-minute timeout.
+
 ## Keyboard around the overlays
 
 ```sh
@@ -215,3 +237,25 @@ node web/e2e/keyboard-overlays.mjs <loopback-web-origin> [--shots <dir>] [--exec
 ```
 
 Run against an exclusively owned mock-backed web server, in Chinese, light and dark, a fresh browser context each. It checks that the session ⋯ menu shows every row at 1280 × 820, and at 1280 × 560 (too short for it) opens beside its button (not over it) with a fade at the edge where rows are cut and End scrolling the last row into view; that Escape anywhere in the ⌘K palette closes it and gives the focus back to the composer it was opened from; that ⌘/ and ⌘K replace one another instead of stacking two dialogs; that Tab in the shortcut help reaches "Change in Settings" after the scrolling list and wraps to Close; that Escape out of a menu's Rename leaves the focus on the row with the Rename row highlighted, so Enter renames again; that Escape clears the To-dos search; and that a theme, theme color or language picked in one tab reaches the other, the language's reload waiting (with a toast) while that tab holds a draft. Every hub write except the sign-in is answered in the browser. It prints one line per check and a verdict, and exits nonzero on a failure or its three-minute timeout.
+
+## The Inbox by keyboard, its filtered empty state and long lists (web usability audit)
+
+```sh
+PORT=<port> MOCK_INBOX_EXTRA=300 MOCK_INBOX_HISTORY=busy python3 scripts/mock/mock_hub.py &
+(cd web && npx vite build --outDir <scratch>/dist && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite preview --outDir <scratch>/dist --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/inbox-keyboard-long-list.mjs http://127.0.0.1:<web port> <artifact-directory>
+```
+
+Run against an exclusively owned web server backed by the mock hub with the flags above (`npx vite` works too; a
+production build is what the timings mean). It uses only the mock's invented data and answers the read failure in the
+browser. In English, light and dark, at 1280 x 820 unless named: chips that leave nothing show the neutral filtered
+empty state with no green check and **Clean up all** without "Nothing to do", and **Clear filters** brings the rows
+back with the keyboard on the **All** chip; a failed read has its own **Retry** and a Clean up all with no scope; the detail's small line has the time right
+after its words, not at the line's end; **Edit** on a drafted reply puts the caret at the end of the text; Select and
+Done keep the keyboard on the one button, also after Esc on a row's tick; at 390 x 844 a row opened by keyboard moves
+the focus to the item's title, with its focus ring, and Esc or the browser's Back returns it to that row. With Done
+open, **Done** in an opened item's header leaves the list where it was (it used to jump to the row filed under Done), at
+1280 and at 390, and at 390 the focus lands on the row now in the item's place. Last, a 390 x 844 touch phone at CPU 4x
+opens the long Inbox and records how many rows were there at the first draw (at most 100), that all of them come in the
+end, the elements under `main` and the long tasks. Screenshots and `results.json` go to the artifact directory; a
+four-minute watchdog ends the run, and it prints a final pass / fail / timeout line.
