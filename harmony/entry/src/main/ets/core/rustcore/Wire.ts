@@ -44,6 +44,7 @@ export type Action =
   | { readonly kind: "open_chat"; readonly chat: string; readonly snapshot: ChatSnapshot }
   | { readonly kind: "close_chat"; readonly chat: string }
   | { readonly kind: "chat"; readonly chat: string; readonly event: ChatEvent }
+  | { readonly kind: "wire_payload"; readonly chat: string; readonly payload: Payload }
   | { readonly kind: "continue_fill"; readonly chat: string };
 
 export type ChatEvent =
@@ -89,6 +90,14 @@ export type ListOp =
   | { readonly kind: "insert"; readonly index: number; readonly id: string; readonly json: string }
   | { readonly kind: "update"; readonly index: number; readonly id: string; readonly json: string };
 
+export type Payload =
+  | { readonly kind: "latest"; readonly body: string }
+  | { readonly kind: "newer"; readonly body: string }
+  | { readonly kind: "reloaded"; readonly body: string }
+  | { readonly kind: "older"; readonly body: string }
+  | { readonly kind: "range"; readonly body: string }
+  | { readonly kind: "frame"; readonly body: string };
+
 export type Request =
   | { readonly kind: "fetch_after"; readonly after_seq: number }
   | { readonly kind: "fetch_latest"; readonly fold_work: boolean }
@@ -126,8 +135,13 @@ function writeAction(writer: Writer, value: Action): void {
       writer.string(value.chat);;
       writer.ChatEvent(value.event);;
       break;
-    case "continue_fill":
+    case "wire_payload":
       writer.u32(3);
+      writer.string(value.chat);;
+      writer.Payload(value.payload);;
+      break;
+    case "continue_fill":
+      writer.u32(4);
       writer.string(value.chat);;
       break;
   }
@@ -139,7 +153,8 @@ function readAction(reader: Reader): Action {
     case 0: return { kind: "open_chat", chat: reader.string(), snapshot: reader.ChatSnapshot() };
     case 1: return { kind: "close_chat", chat: reader.string() };
     case 2: return { kind: "chat", chat: reader.string(), event: reader.ChatEvent() };
-    case 3: return { kind: "continue_fill", chat: reader.string() };
+    case 3: return { kind: "wire_payload", chat: reader.string(), payload: reader.Payload() };
+    case 4: return { kind: "continue_fill", chat: reader.string() };
     default: throw new Error('unknown Action variant: ' + variant);
   }
 }
@@ -337,6 +352,52 @@ function readListOp(reader: Reader): ListOp {
   }
 }
 
+function registerPayload(writer: Writer, reader: Reader): void {
+  writer.register('Payload', (value: Payload) => writePayload(writer, value));
+  reader.register('Payload', () => readPayload(reader));
+}
+function writePayload(writer: Writer, value: Payload): void {
+  switch (value.kind) {
+    case "latest":
+      writer.u32(0);
+      writer.string(value.body);;
+      break;
+    case "newer":
+      writer.u32(1);
+      writer.string(value.body);;
+      break;
+    case "reloaded":
+      writer.u32(2);
+      writer.string(value.body);;
+      break;
+    case "older":
+      writer.u32(3);
+      writer.string(value.body);;
+      break;
+    case "range":
+      writer.u32(4);
+      writer.string(value.body);;
+      break;
+    case "frame":
+      writer.u32(5);
+      writer.string(value.body);;
+      break;
+  }
+}
+
+function readPayload(reader: Reader): Payload {
+  const variant = reader.u32();
+  switch (variant) {
+    case 0: return { kind: "latest", body: reader.string() };
+    case 1: return { kind: "newer", body: reader.string() };
+    case 2: return { kind: "reloaded", body: reader.string() };
+    case 3: return { kind: "older", body: reader.string() };
+    case 4: return { kind: "range", body: reader.string() };
+    case 5: return { kind: "frame", body: reader.string() };
+    default: throw new Error('unknown Payload variant: ' + variant);
+  }
+}
+
 function registerRequest(writer: Writer, reader: Reader): void {
   writer.register('Request', (value: Request) => writeRequest(writer, value));
   reader.register('Request', () => readRequest(reader));
@@ -415,6 +476,7 @@ function register(writer: Writer, reader: Reader): void {
   registerConfig(writer, reader);
   registerEffect(writer, reader);
   registerListOp(writer, reader);
+  registerPayload(writer, reader);
   registerRequest(writer, reader);
   registerWireBatch(writer, reader);
 }
@@ -432,6 +494,8 @@ export function encodeEffect(value: Effect): Uint8Array { const writer = new Wri
 export function decodeEffect(bytes: Uint8Array): Effect { const reader = new Reader(bytes); register(new Writer(), reader); const value = reader.Effect(); reader.finish(); return value; }
 export function encodeListOp(value: ListOp): Uint8Array { const writer = new Writer(); register(writer, new Reader(new Uint8Array())); writer.ListOp(value); return writer.finish(); }
 export function decodeListOp(bytes: Uint8Array): ListOp { const reader = new Reader(bytes); register(new Writer(), reader); const value = reader.ListOp(); reader.finish(); return value; }
+export function encodePayload(value: Payload): Uint8Array { const writer = new Writer(); register(writer, new Reader(new Uint8Array())); writer.Payload(value); return writer.finish(); }
+export function decodePayload(bytes: Uint8Array): Payload { const reader = new Reader(bytes); register(new Writer(), reader); const value = reader.Payload(); reader.finish(); return value; }
 export function encodeRequest(value: Request): Uint8Array { const writer = new Writer(); register(writer, new Reader(new Uint8Array())); writer.Request(value); return writer.finish(); }
 export function decodeRequest(bytes: Uint8Array): Request { const reader = new Reader(bytes); register(new Writer(), reader); const value = reader.Request(); reader.finish(); return value; }
 export function encodeWireBatch(value: WireBatch): Uint8Array { const writer = new Writer(); register(writer, new Reader(new Uint8Array())); writer.WireBatch(value); return writer.finish(); }
