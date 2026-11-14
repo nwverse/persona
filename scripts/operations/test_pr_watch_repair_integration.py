@@ -76,14 +76,13 @@ class RepairIntegrationTests(unittest.TestCase):
             self.assertNotEqual(Path(copy), self.repo)
         self.assertTrue(self.repo.exists())
         self.assertTrue(Path(self.repo, ".git").exists())
-
-
+    def test_head_change_before_repair_push_is_refused(self):
         (self.repo / "repair.txt").write_text("repair\n")
         with patch.object(pr_watch_repair, "verify", return_value=[]), \
                 patch.object(pr_watch_repair, "checked", side_effect=lambda argv, **kwargs: self.git(*argv[1:], cwd=kwargs.get("cwd")) if argv[0] == "git" else ""), \
                 patch.object(pr_watch_repair, "pr_snapshot", return_value=dict(self.pr, headRefOid="d" * 40)):
             with self.assertRaises(Exception):
-                pr_watch_repair.commit_and_push_repair("example/one", self.pr, str(self.repo), self.base, "failure")
+                pr_watch_repair.commit_and_push_repair("example/one", self.pr, str(self.repo), self.base, "failure", {"profile": "commands", "commands": [["true"]]})
         self.assertEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.head)
 
 

@@ -424,9 +424,7 @@ class Watcher:
         evidence_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + head
         if old.get("evidence_key") != evidence_key:
             previous = old
-            old = {"repair_rounds": int(previous.get("repair_rounds", 0)),
-                   "repair_exhausted": bool(previous.get("repair_exhausted")),
-                   "repair_attempts": int(previous.get("repair_attempts", 0))}
+            old = {"repair_rounds": int(previous.get("repair_rounds", 0))}
         if old.get("head") == head and old.get("retry_after", 0) > time.time():
             return
         if old.get("outcome") == "continuation":

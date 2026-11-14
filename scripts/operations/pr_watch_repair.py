@@ -345,5 +345,5 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
         actual = pr_snapshot(repo, created["number"])
         if actual["headRefOid"] != head:
             raise WatchError("continuation PR head does not match the verified repair")
-        return head, results
+        return created["number"], results
     return pr["number"], results
