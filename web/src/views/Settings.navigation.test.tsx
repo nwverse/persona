@@ -300,7 +300,8 @@ describe("Settings category navigation", () => {
     expect(host.querySelector('[data-settings-group="sent"]')).toBeNull();
     const own = [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === t("settings-hubconnector.back"));
     // a phone's top bar has the one Back (audit item 64); wider, the page has its own
-    const header = host.querySelector<HTMLButtonElement>(`header button[aria-label="${t("settings.back")}"]`);
+    // named for where it goes: Connectors
+    const header = host.querySelector<HTMLButtonElement>(`header button[aria-label="${t("settings.back_to", { name: t("settings-nav.tab_connectors") })}"]`);
     expect(!!own).toBe(!phone);
     await popped(() => (phone ? header! : own!).click());
     expect(location.search).toBe("?tab=connectors");
@@ -317,11 +318,15 @@ describe("Settings category navigation", () => {
     expect(location.search).toBe("?tab=connectors&connector=github");
     expect(host.querySelector('[data-page="connector-detail"]')).not.toBeNull();
     expect(host.querySelector("[data-own-back]")).toBeNull();
-    const back = () => host.querySelector<HTMLButtonElement>(`header button[aria-label="${t("settings.back")}"]`)!;
-    expect(host.querySelectorAll(`button[aria-label="${t("settings.back")}"]`)).toHaveLength(1);
+    // one way back, named for where it goes: Connectors, then (from Connectors) Settings
+    const back = () => host.querySelector<HTMLButtonElement>("header button:first-child")!;
+    const toConnectors = t("settings.back_to", { name: t("settings-nav.tab_connectors") });
+    expect(back().getAttribute("aria-label")).toBe(toConnectors);
+    expect(host.querySelectorAll(`button[aria-label="${toConnectors}"], button[aria-label="${t("settings.back")}"]`)).toHaveLength(1);
     await popped(() => back().click());
     expect(location.search).toBe("?tab=connectors");
     expect(host.querySelector('[data-page="connector-list"]')).not.toBeNull();
+    expect(back().getAttribute("aria-label")).toBe(t("settings.back"));
     await popped(() => back().click());
     expect(location.search).toBe("");
     expect(host.querySelector("nav")).not.toBeNull();
@@ -370,7 +375,7 @@ describe("Settings category navigation", () => {
     { name: "phone: the header's Back goes from an extension to the extension list, then to the Settings list", phone: true, url: "/settings", steps: [
       { go: () => act(async () => category(t("settings-nav.tab_extensions")).click()), at: "?tab=extensions", entries: 1 },
       { go: () => act(async () => item("open").click()), at: "?tab=extensions&extension=example", entries: 2 },
-      { go: () => popped(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back")}"]`)!.click()), at: "?tab=extensions", entries: 2 },
+      { go: () => popped(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back_to", { name: t("settings-nav.tab_extensions") })}"]`)!.click()), at: "?tab=extensions", entries: 2 },
       { go: () => popped(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back")}"]`)!.click()), at: "", entries: 2 },
     ] },
     { name: "switching categories adds no entries", phone: false, url: "/settings?tab=extensions", steps: [

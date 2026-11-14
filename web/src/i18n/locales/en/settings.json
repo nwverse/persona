@@ -1,6 +1,7 @@
 {
   "retry": "Retry",
   "back": "Back to Settings",
+  "back_to": "Back to {name}",
   "sidebar": "Sidebar",
   "title": "Settings",
   "about_persona": "About Persona",

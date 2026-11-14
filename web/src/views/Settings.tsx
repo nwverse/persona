@@ -311,7 +311,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       <header ref={header} className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
         {phone && at.tab ? (
           <>
-            <IconButton icon="chevronLeft" label={t("settings.back")} onClick={itemOpen ? () => pick(tab) : toList} />
+            <IconButton icon="chevronLeft" label={itemOpen ? t("settings.back_to", { name: TAB_INFO[tab].label }) : t("settings.back")} onClick={itemOpen ? () => pick(tab) : toList} />
             <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{TAB_INFO[tab].label}</h1>
           </>
         ) : (

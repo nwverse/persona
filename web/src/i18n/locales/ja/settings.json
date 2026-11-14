@@ -1,6 +1,7 @@
 {
   "retry": "再試行",
   "back": "設定に戻る",
+  "back_to": "{name}に戻る",
   "sidebar": "サイドバー",
   "title": "設定",
   "about_persona": "Personaについて",

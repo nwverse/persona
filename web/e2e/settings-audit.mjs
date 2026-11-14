@@ -263,7 +263,8 @@ for (const theme of ["light", "dark"]) {
     let n = await backs();
     check(`64 ${theme}: a connector's page on a phone has one Back`, n === 1, `${n} found`);
     await shoot(page, `64-connector-phone-${theme}`);
-    await page.getByRole("button", { name: zh.settings.back, exact: true }).click();
+    // named for where it goes
+    await page.getByRole("button", { name: zh.settings.back_to.replace("{name}", zh.nav.tab_connectors), exact: true }).click();
     const toCategory = await page.waitForURL((u) => u.searchParams.get("tab") === "connectors" && !u.searchParams.get("connector"), { timeout: 3000 }).then(() => true, () => false);
     check(`64 ${theme}: that Back goes to Connectors`, toCategory, page.url());
     await page.goto(new URL("/settings?tab=connectors&connector=-sent", base).href);

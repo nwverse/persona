@@ -1,6 +1,7 @@
 {
   "retry": "重试",
   "back": "返回设置",
+  "back_to": "返回{name}",
   "sidebar": "侧边栏",
   "title": "设置",
   "about_persona": "关于 Persona",
