@@ -344,12 +344,23 @@ func TestMCPWaitComputerTargetCapability(t *testing.T) {
 	if len(kinds) != 2 {
 		t.Errorf("old-target wait transitions = %d, want unknown then the enclosing approval", len(kinds))
 	} else {
-		if first := <-kinds; first != proto.MCPWaitUnknown {
-			t.Errorf("old-target kind = %q, want unknown", first)
+		for _, want := range []proto.MCPWaitKind{proto.MCPWaitUnknown, proto.MCPWaitApproval} {
+			select {
+			case got := <-kinds:
+				if got != want {
+					t.Errorf("old-target kind = %q, want %q", got, want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("old-target kind %q did not arrive", want)
+			}
 		}
-		if restored := <-kinds; restored != proto.MCPWaitApproval {
-			t.Errorf("restored kind = %q, want approval", restored)
-		}
+	}
+
+	m.mu.Lock()
+	m.info.Protocol, m.info.Capabilities = 0, []string{nodeproto.MCPWait}
+	m.mu.Unlock()
+	if m.mcpWaitCapable() {
+		t.Error("a capability without a handshake protocol must not enable call_id forwarding")
 	}
 
 	m.mu.Lock()

@@ -435,8 +435,15 @@ func TestMCPWaitSocketRequiresClientOptIn(t *testing.T) {
 			if final["wait_kind"] != nil || final["content"] == nil {
 				t.Fatalf("the client's final response = %v", final)
 			}
-			if callID != "" && !<-handled {
-				t.Fatal("the wait update was not handled")
+			if callID != "" {
+				select {
+				case ok := <-handled:
+					if !ok {
+						t.Fatal("the wait update was not handled")
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("the wait update did not return")
+				}
 			}
 		})
 	}

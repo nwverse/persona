@@ -58,6 +58,18 @@ func nextMCPWaitEvent(t *testing.T, events chan devicewire.NodeEvent, callID str
 	}
 }
 
+func requireMCPWaitTestDone(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the MCP wait interaction did not return")
+	}
+}
+
 func TestMCPWaitPermissionPublishesApprovalThenComputer(t *testing.T) {
 	ft, events := newMCPWaitTest(t)
 	ctx := ft.s.mcpWaitContext(context.Background(), "mac", "10000000-0000-4000-8000-000000000001", true)
@@ -76,9 +88,7 @@ func TestMCPWaitPermissionPublishesApprovalThenComputer(t *testing.T) {
 		t.Fatal(err)
 	}
 	nextMCPWaitEvent(t, events, "10000000-0000-4000-8000-000000000001", proto.MCPWaitComputer)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
+	requireMCPWaitTestDone(t, done)
 	select {
 	case event := <-events:
 		t.Fatalf("unexpected event after the permission resolved: %s", event.Params)
@@ -111,9 +121,7 @@ func TestMCPWaitDirectPermissionPublishesApprovalThenComputer(t *testing.T) {
 	allow := true
 	answer <- proto.Resolution{Allow: &allow}
 	nextMCPWaitEvent(t, events, "10000000-0000-4000-8000-000000000002", proto.MCPWaitComputer)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
+	requireMCPWaitTestDone(t, done)
 }
 
 func TestMCPWaitQuestionPublishesAnswerThenComputer(t *testing.T) {
@@ -141,9 +149,7 @@ func TestMCPWaitQuestionPublishesAnswerThenComputer(t *testing.T) {
 	})
 	answer <- proto.Resolution{Answers: map[string]string{ix.Questions[0].Question: "private answer"}}
 	nextMCPWaitEvent(t, events, "10000000-0000-4000-8000-000000000003", proto.MCPWaitComputer)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
+	requireMCPWaitTestDone(t, done)
 	select {
 	case event := <-events:
 		t.Fatalf("unexpected event after the question resolved: %s", event.Params)

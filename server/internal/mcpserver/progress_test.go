@@ -114,6 +114,14 @@ func waitingNode(t *testing.T) *waitingCall {
 }
 
 func (c *waitingCall) stop() { c.once.Do(func() { close(c.release) }) }
+func (c *waitingCall) waitStopped(t *testing.T) {
+	t.Helper()
+	select {
+	case <-c.tick.stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the progress ticker did not stop")
+	}
+}
 func (c *waitingCall) ready() bool {
 	return c.requested.Load()
 }
@@ -153,8 +161,13 @@ func serve(t *testing.T) (send func(string), out *syncBuf, end func()) {
 	end = func() {
 		once.Do(func() {
 			_ = w.Close()
-			if err := <-done; err != nil {
-				t.Fatal(err)
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Serve did not stop")
 			}
 		})
 	}
@@ -255,7 +268,7 @@ func TestServeSendsProgressWhileACallWaits(t *testing.T) {
 		}
 		return false
 	})
-	<-call.tick.stopped
+	call.waitStopped(t)
 	send(`{"jsonrpc":"2.0","id":9,"method":"ping"}`) // a later response fences every write the tool goroutine could still make
 	waitFor(t, "the post-answer ping", func() bool {
 		for _, line := range lines(t, out.String()) {
@@ -368,7 +381,7 @@ func TestServeStopsProgressWhenACallIsCancelled(t *testing.T) {
 	send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3,"reason":"interrupted"}}`)
 	send(`{"jsonrpc":"2.0","id":4,"method":"ping"}`)
 	waitFor(t, "ping", func() bool { return strings.Contains(out.String(), `"id":4`) })
-	<-call.tick.stopped
+	call.waitStopped(t)
 	n := progressCount(t, out)
 	call.tick.beat()
 	end()

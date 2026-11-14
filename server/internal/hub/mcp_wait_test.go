@@ -13,6 +13,18 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+func receiveMCPWaitTest[T any](t *testing.T, ch <-chan T, description string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+		var zero T
+		return zero
+	}
+}
+
 func TestMCPWaitReporterUsesCurrentManagerCapability(t *testing.T) {
 	h := newTestHub(t)
 	var notices bytes.Buffer
@@ -94,30 +106,36 @@ func TestMCPWaitReporterChecksMachineOwnership(t *testing.T) {
 
 func TestHubApprovalWaitReportsApprovalThenComputer(t *testing.T) {
 	h := newTestHub(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	started := make(chan struct{})
 	release := make(chan struct{})
-	h.askVia = func(context.Context, proto.Interaction) (proto.Resolution, error) {
+	h.askVia = func(ctx context.Context, _ proto.Interaction) (proto.Resolution, error) {
 		close(started)
-		<-release
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return proto.Resolution{}, ctx.Err()
+		}
 		allow := true
 		return proto.Resolution{Allow: &allow}, nil
 	}
 	kinds := make(chan proto.MCPWaitKind, 2)
 	done := make(chan proto.Resolution, 1)
 	go func() {
-		res, _ := h.waitMCPApproval(context.Background(), proto.Interaction{ID: "ix_settings", Kind: proto.IxPermission},
+		res, _ := h.waitMCPApproval(ctx, proto.Interaction{ID: "ix_settings", Kind: proto.IxPermission},
 			func(kind proto.MCPWaitKind) { kinds <- kind })
 		done <- res
 	}()
-	<-started
-	if kind := <-kinds; kind != proto.MCPWaitApproval {
+	receiveMCPWaitTest(t, started, "the settings approval to start")
+	if kind := receiveMCPWaitTest(t, kinds, "the pending settings kind"); kind != proto.MCPWaitApproval {
 		t.Fatalf("pending settings card kind = %q", kind)
 	}
 	close(release)
-	if kind := <-kinds; kind != proto.MCPWaitComputer {
+	if kind := receiveMCPWaitTest(t, kinds, "the restored settings kind"); kind != proto.MCPWaitComputer {
 		t.Fatalf("resolved settings card kind = %q", kind)
 	}
-	if res := <-done; !res.UserAllowed() {
+	if res := receiveMCPWaitTest(t, done, "the settings result"); !res.UserAllowed() {
 		t.Fatalf("settings resolution = %+v", res)
 	}
 }
